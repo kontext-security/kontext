@@ -1,0 +1,239 @@
+{
+  "version": 1,
+  "smokeRequests": [
+    {
+      "evaluationPrincipal": {
+        "entityType": "Kontext::User",
+        "entityId": "validation@example.invalid"
+      },
+      "toolName": "Read",
+      "toolInput": {}
+    },
+    {
+      "evaluationPrincipal": {
+        "entityType": "Kontext::User",
+        "entityId": "validation@example.invalid"
+      },
+      "toolName": "Bash",
+      "toolInput": { "command": "pwd" }
+    }
+  ],
+  "fixtures": [
+    {
+      "version": 1,
+      "name": "permit-any-tool",
+      "description": "A minimal permit over every tool is the smallest valid request-contract v1 policy.",
+      "policyText": "@id(\"permit-any-tool\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource);",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "permit-exact-tool",
+      "description": "Resource scope may name one exact runtime tool.",
+      "policyText": "@id(\"permit-read\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Read\");",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "ask-annotated-permit",
+      "description": "ASK and description annotations are valid on permit policies.",
+      "policyText": "@id(\"ask-bash\")\n@ask(\"prompt\")\n@description(\"ask before Bash runs\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Bash\");",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "guarded-optional-context",
+      "description": "Optional context access is valid when a has-guard dominates every evaluation path.",
+      "policyText": "@id(\"guarded-git\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Bash\") when { context has command && context.command like \"git*\" };",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "nested-context-guard",
+      "description": "Path-aware guards support nested context records.",
+      "policyText": "@id(\"nested-guard\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource) when { context has repository && context.repository has owner && context.repository.owner == \"kontext-security\" };",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "fail-closed-forbid",
+      "description": "A forbid reading optional context is valid when it explicitly matches the absent case.",
+      "policyText": "@id(\"forbid-curl\")\nforbid(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Bash\") when { !(context has command) || (context has command && context.command like \"curl*\") };",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "multi-policy-set",
+      "description": "A set combining permit and fail-closed forbid policies with distinct ids is valid.",
+      "policyText": "@id(\"allow-tools\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource);\n@id(\"forbid-rm\")\nforbid(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Bash\") when { !(context has command) || (context has command && context.command == \"rm -rf /\") };",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "invalid-utf8",
+      "description": "Policy text containing an unpaired UTF-16 surrogate is rejected before parsing.",
+      "policyText": "@id(\"lonely\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource);\n\ud800",
+      "expected": { "valid": false, "diagnosticCodes": ["invalid_utf8"] }
+    },
+    {
+      "version": 1,
+      "name": "policy-too-large",
+      "description": "Policy text above the byte ceiling is rejected before parsing.",
+      "policyTextGenerator": {
+        "kind": "repeated-text",
+        "text": " ",
+        "count": 1048577
+      },
+      "expected": { "valid": false, "diagnosticCodes": ["policy_too_large"] }
+    },
+    {
+      "version": 1,
+      "name": "parse-error",
+      "description": "Text that is not a Cedar policy set is rejected.",
+      "policyText": "@id(\"broken\")\npermit(principal,",
+      "expected": { "valid": false, "diagnosticCodes": ["parse_error"] }
+    },
+    {
+      "version": 1,
+      "name": "too-many-policies",
+      "description": "A policy set above the policy-count ceiling is rejected before per-policy analysis.",
+      "policyTextGenerator": { "kind": "repeated-policies", "count": 1001 },
+      "expected": { "valid": false, "diagnosticCodes": ["too_many_policies"] }
+    },
+    {
+      "version": 1,
+      "name": "policy-too-complex",
+      "description": "A policy above the AST node or depth ceiling is rejected before recursive analysis.",
+      "policyTextGenerator": { "kind": "repeated-conjunction", "count": 1100 },
+      "expected": { "valid": false, "diagnosticCodes": ["policy_too_complex"] }
+    },
+    {
+      "version": 1,
+      "name": "templates-unsupported",
+      "description": "Policy templates and slots are outside request-contract v1.",
+      "policyText": "@id(\"template\")\npermit(principal == ?principal, action, resource);",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["templates_unsupported"]
+      }
+    },
+    {
+      "version": 1,
+      "name": "missing-policy-id",
+      "description": "Every policy requires a stable @id annotation.",
+      "policyText": "permit(principal, action == Kontext::Action::\"ToolUse\", resource);",
+      "expected": { "valid": false, "diagnosticCodes": ["missing_policy_id"] }
+    },
+    {
+      "version": 1,
+      "name": "invalid-policy-id",
+      "description": "Policy ids must be 1-128 portable identifier characters starting alphanumerically.",
+      "policyText": "@id(\"-invalid\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource);",
+      "expected": { "valid": false, "diagnosticCodes": ["invalid_policy_id"] }
+    },
+    {
+      "version": 1,
+      "name": "duplicate-policy-id",
+      "description": "Policy ids must be unique across the set.",
+      "policyText": "@id(\"same\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource);\n@id(\"same\")\nforbid(principal, action == Kontext::Action::\"ToolUse\", resource);",
+      "expected": { "valid": false, "diagnosticCodes": ["duplicate_policy_id"] }
+    },
+    {
+      "version": 1,
+      "name": "unsupported-annotation",
+      "description": "Annotations outside the id/description/ask vocabulary are rejected.",
+      "policyText": "@id(\"annotated\")\n@owner(\"security-team\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource);",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["unsupported_annotation"]
+      }
+    },
+    {
+      "version": 1,
+      "name": "unsupported-ask-value",
+      "description": "The ask annotation accepts only the literal prompt value.",
+      "policyText": "@id(\"ask-value\")\n@ask(\"always\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource);",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["unsupported_ask_value"]
+      }
+    },
+    {
+      "version": 1,
+      "name": "ask-on-forbid",
+      "description": "ASK annotations are valid only on permit policies.",
+      "policyText": "@id(\"ask-forbid\")\n@ask(\"prompt\")\nforbid(principal, action == Kontext::Action::\"ToolUse\", resource);",
+      "expected": { "valid": false, "diagnosticCodes": ["ask_on_forbid"] }
+    },
+    {
+      "version": 1,
+      "name": "unsupported-entity-scope",
+      "description": "Entity types outside the request-contract v1 vocabulary are rejected.",
+      "policyText": "@id(\"foreign-entity\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Files::Doc::\"readme\");",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["unsupported_entity_scope"]
+      }
+    },
+    {
+      "version": 1,
+      "name": "unsupported-action-scope",
+      "description": "The only action in request-contract v1 is ToolUse.",
+      "policyText": "@id(\"foreign-action\")\npermit(principal, action == Kontext::Action::\"Delete\", resource);",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["unsupported_action_scope"]
+      }
+    },
+    {
+      "version": 1,
+      "name": "principal-policy-scope",
+      "description": "Principal-bound scopes are rejected while identity is descriptive.",
+      "policyText": "@id(\"bound-principal\")\npermit(principal == Kontext::User::\"alice@example.com\", action == Kontext::Action::\"ToolUse\", resource);",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["principal_policy_unsupported"]
+      }
+    },
+    {
+      "version": 1,
+      "name": "principal-policy-condition",
+      "description": "Principal references in conditions are rejected while identity is descriptive.",
+      "policyText": "@id(\"principal-attr\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource) when { principal.department == \"engineering\" };",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["principal_policy_unsupported"]
+      }
+    },
+    {
+      "version": 1,
+      "name": "unguarded-optional-context",
+      "description": "Optional context access without a dominating has-guard is rejected.",
+      "policyText": "@id(\"unguarded\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource) when { context.command == \"pwd\" };",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["unguarded_optional_context"]
+      }
+    },
+    {
+      "version": 1,
+      "name": "forbid-may-fail-open",
+      "description": "A forbid reading optional context without matching its absence can fail open and is rejected.",
+      "policyText": "@id(\"fail-open\")\nforbid(principal, action == Kontext::Action::\"ToolUse\", resource) when { context has command && context.command == \"rm -rf /\" };",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["forbid_may_fail_open"]
+      }
+    },
+    {
+      "version": 1,
+      "name": "corpus-evaluation-error",
+      "description": "A policy that errors against the smoke request corpus is rejected.",
+      "policyText": "@id(\"type-confused\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource) when { context has command && context.command > 5 };",
+      "expected": {
+        "valid": false,
+        "diagnosticCodes": ["validation_corpus_error"]
+      }
+    }
+  ]
+}
