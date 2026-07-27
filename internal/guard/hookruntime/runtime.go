@@ -86,15 +86,7 @@ func normalizeResult(result hook.Result) hook.Result {
 
 func effectiveResult(event hook.Event, result hook.Result, mode Mode) hook.Result {
 	if mode == ModeRemote {
-		// The runtime stamped enforce only on decisions the policy
-		// distribution made authoritative; everything else is observe.
-		if result.Mode == string(ModeEnforce) {
-			if !event.HookName.CanBlock() {
-				result.Decision = hook.DecisionAllow
-			}
-			return result
-		}
-		mode = ModeObserve
+		return ApplyRemote(event, result)
 	}
 	result.Mode = string(mode)
 	if mode == ModeObserve {

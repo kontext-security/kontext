@@ -173,8 +173,7 @@ func (l Lifecycle) processIfAvailable(ctx context.Context, event hook.Event, bud
 // deployment claims enforcement — and treats everything else as observe.
 func (l Lifecycle) finalize(event hook.Event, result hook.Result) hook.Result {
 	if l.enforcing() {
-		if result.Mode != managedconfig.ModeEnforce ||
-			(result.Decision != hook.DecisionAllow && result.Decision != hook.DecisionDeny) {
+		if !guardhookruntime.AuthoritativeEnforce(result) {
 			return l.daemonUnavailable(event)
 		}
 		if !event.HookName.CanBlock() {
@@ -182,15 +181,10 @@ func (l Lifecycle) finalize(event hook.Event, result hook.Result) hook.Result {
 		}
 		return result
 	}
-	if l.remote() &&
-		result.Mode == managedconfig.ModeEnforce &&
-		(result.Decision == hook.DecisionAllow || result.Decision == hook.DecisionDeny) {
-		if !event.HookName.CanBlock() {
-			result.Decision = hook.DecisionAllow
-		}
-		return result
+	if l.remote() {
+		return guardhookruntime.ApplyRemote(event, result)
 	}
-	return observeResult(event, result)
+	return guardhookruntime.ObserveResult(event, result)
 }
 
 // daemonUnavailable is the fail path when the managed daemon cannot be reached.
@@ -223,7 +217,7 @@ func (l Lifecycle) daemonUnavailable(event hook.Event) hook.Result {
 			Reason:   "Kontext enforce: managed policy daemon unavailable",
 		}
 	}
-	return observeResult(event, hook.Result{Decision: hook.DecisionAllow, Reason: "managed observe daemon unavailable"})
+	return guardhookruntime.ObserveResult(event, hook.Result{Decision: hook.DecisionAllow, Reason: "managed observe daemon unavailable"})
 }
 
 func (l Lifecycle) probe(ctx context.Context) bool {
@@ -263,26 +257,6 @@ func (l Lifecycle) call(ctx context.Context, event hook.Event) (hook.Result, err
 		return hook.Result{}, err
 	}
 	return result, nil
-}
-
-func observeResult(event hook.Event, result hook.Result) hook.Result {
-	result.Mode = string(guardhookruntime.ModeObserve)
-	if result.Decision == "" {
-		result.Decision = hook.DecisionAllow
-	}
-	if event.HookName.CanBlock() {
-		decision := result.Decision
-		if result.Reason == "" {
-			result.Reason = "no reason provided"
-		}
-		if decision != hook.DecisionAllow {
-			result.Reason = "Kontext observe mode: would " + string(decision) + "; " + result.Reason
-		}
-		result.Decision = hook.DecisionAllow
-		return result
-	}
-	result.Decision = hook.DecisionAllow
-	return result
 }
 
 func deadlineOr(ctx context.Context, fallback time.Time) time.Time {

@@ -336,7 +336,7 @@ func TestLifecycleEnforceUnavailableNonBlockingHookDoesNotDeny(t *testing.T) {
 }
 
 func TestObserveResultFormatsBlockingPromptSubmit(t *testing.T) {
-	result := observeResult(hook.Event{HookName: hook.HookUserPromptSubmit}, hook.Result{
+	result := guardhookruntime.ObserveResult(hook.Event{HookName: hook.HookUserPromptSubmit}, hook.Result{
 		Decision: hook.DecisionDeny,
 		Reason:   "prompt policy",
 	})
