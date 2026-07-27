@@ -87,6 +87,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err := requireManagedHooksForLegacyCowork(loadedConfig.Config); err != nil {
 		return err
 	}
+	loadedConfig = migrateSelfServeModeToRemote(loadedConfig, opts.Diagnostic)
 	installationState, err := installation.EnsureFile(installationPathForScope(loadedConfig.Scope))
 	if err != nil {
 		return fmt.Errorf("ensure installation identity: %w", err)
@@ -577,4 +578,30 @@ func cleanupInterval(idleTimeout time.Duration) time.Duration {
 		return time.Nanosecond
 	}
 	return interval
+}
+
+// migrateSelfServeModeToRemote rewrites a self-serve (user-scope) managed
+// config still carrying the pre-remote "observe" default to "remote", so the
+// policy deployment's rollout mode controls the posture without a reinstall.
+// Only user-scope configs are touched: those were written by `kontext setup`
+// with the era's default, not by an admin choosing a static pin. MDM
+// (system-scope) and env-override configs are an explicit posture choice and
+// are never rewritten. Migration failure is not fatal — the daemon runs with
+// the config it loaded and retries on next start.
+func migrateSelfServeModeToRemote(loaded managedconfig.LoadedConfig, log diagnostic.Logger) managedconfig.LoadedConfig {
+	if loaded.Scope != managedconfig.ScopeUser || loaded.Config.Mode != managedconfig.Mode {
+		return loaded
+	}
+	if err := managedconfig.RewriteMode(loaded, managedconfig.ModeRemote); err != nil {
+		log.Printf("migrate self-serve managed mode to remote: %v\n", err)
+		return loaded
+	}
+	logAlways(log, "migrated self-serve managed mode %q -> %q\n", managedconfig.Mode, managedconfig.ModeRemote)
+	reloaded, err := managedconfig.LoadFile(loaded.Path)
+	if err != nil {
+		log.Printf("reload managed config after mode migration: %v\n", err)
+		return loaded
+	}
+	reloaded.Scope = loaded.Scope
+	return reloaded
 }

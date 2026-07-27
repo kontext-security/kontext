@@ -866,3 +866,77 @@ func waitForSession(t *testing.T, store *sqlite.Store, sessionID string) sqlite.
 	t.Fatalf("Session(%s) error = %v", sessionID, lastErr)
 	return sqlite.SessionRecord{}
 }
+
+func TestMigrateSelfServeModeToRemote(t *testing.T) {
+	writeConfig := func(t *testing.T, mode string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "managed.json")
+		content := `{
+  "version": "managed-install-v1",
+  "cloud_url": "https://api.kontext.dev",
+  "mode": "` + mode + `",
+  "agent": "claude",
+  "credentials": {
+    "install_token_ref": "env:KONTEXT_INSTALL_TOKEN"
+  }
+}`
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	load := func(t *testing.T, path string, scope managedconfig.Scope) managedconfig.LoadedConfig {
+		t.Helper()
+		loaded, err := managedconfig.LoadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded.Scope = scope
+		return loaded
+	}
+
+	t.Run("user-scope observe migrates to remote", func(t *testing.T) {
+		path := writeConfig(t, managedconfig.Mode)
+		migrated := migrateSelfServeModeToRemote(load(t, path, managedconfig.ScopeUser), diagnostic.Logger{})
+		if migrated.Config.Mode != managedconfig.ModeRemote {
+			t.Fatalf("returned mode = %q, want remote", migrated.Config.Mode)
+		}
+		onDisk, err := managedconfig.LoadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if onDisk.Config.Mode != managedconfig.ModeRemote {
+			t.Fatalf("on-disk mode = %q, want remote", onDisk.Config.Mode)
+		}
+	})
+
+	t.Run("static pins and non-user scopes are untouched", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			mode  string
+			scope managedconfig.Scope
+		}{
+			{name: "user enforce pin", mode: managedconfig.ModeEnforce, scope: managedconfig.ScopeUser},
+			{name: "user already remote", mode: managedconfig.ModeRemote, scope: managedconfig.ScopeUser},
+			{name: "system observe", mode: managedconfig.Mode, scope: managedconfig.ScopeSystem},
+			{name: "env observe", mode: managedconfig.Mode, scope: managedconfig.ScopeEnv},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				path := writeConfig(t, tc.mode)
+				loaded := load(t, path, tc.scope)
+				migrated := migrateSelfServeModeToRemote(loaded, diagnostic.Logger{})
+				if migrated.Config.Mode != tc.mode {
+					t.Fatalf("returned mode = %q, want untouched %q", migrated.Config.Mode, tc.mode)
+				}
+				onDisk, err := managedconfig.LoadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if onDisk.Config.Mode != tc.mode {
+					t.Fatalf("on-disk mode = %q, want untouched %q", onDisk.Config.Mode, tc.mode)
+				}
+			})
+		}
+	})
+}
