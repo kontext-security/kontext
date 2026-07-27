@@ -14,6 +14,11 @@ type Mode string
 const (
 	ModeObserve Mode = "observe"
 	ModeEnforce Mode = "enforce"
+	// ModeRemote defers the posture to the policy distribution: a decision the
+	// runtime marked enforce (Mode on the result) passes through unchanged,
+	// everything else gets observe semantics. Neither the hook edge nor the
+	// daemon start-up pins the posture; the fetched deployment does.
+	ModeRemote Mode = "remote"
 )
 
 type Adapter interface {
@@ -64,8 +69,10 @@ func ParseMode(value string) (Mode, error) {
 		return ModeObserve, nil
 	case ModeEnforce:
 		return ModeEnforce, nil
+	case ModeRemote:
+		return ModeRemote, nil
 	default:
-		return "", fmt.Errorf("unknown hook mode %q; use observe or enforce", value)
+		return "", fmt.Errorf("unknown hook mode %q; use observe, enforce, or remote", value)
 	}
 }
 
@@ -78,6 +85,9 @@ func normalizeResult(result hook.Result) hook.Result {
 }
 
 func effectiveResult(event hook.Event, result hook.Result, mode Mode) hook.Result {
+	if mode == ModeRemote {
+		return ApplyRemote(event, result)
+	}
 	result.Mode = string(mode)
 	if mode == ModeObserve {
 		result.Reason = formatObserveReason(result.Decision, result.Reason)

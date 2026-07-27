@@ -154,3 +154,32 @@ func (a *stubAdapter) Encode(_ io.Writer, _ hook.Event, result hook.Result) erro
 func (a *stubAdapter) MalformedHookName() hook.HookName {
 	return hook.HookPreToolUse
 }
+
+func TestParseModeRemote(t *testing.T) {
+	mode, err := ParseMode(" Remote ")
+	if err != nil {
+		t.Fatalf("ParseMode() error = %v", err)
+	}
+	if mode != ModeRemote {
+		t.Fatalf("mode = %q, want remote", mode)
+	}
+}
+
+func TestEffectiveResultRemotePassesThroughEnforceStamp(t *testing.T) {
+	event := hook.Event{HookName: hook.HookPreToolUse}
+	result := effectiveResult(event, hook.Result{Decision: hook.DecisionDeny, Mode: string(ModeEnforce), Reason: "policy deny"}, ModeRemote)
+	if result.Decision != hook.DecisionDeny || result.Mode != string(ModeEnforce) {
+		t.Fatalf("result = %+v, want authoritative deny passed through", result)
+	}
+}
+
+func TestEffectiveResultRemoteDowngradesUnstampedToObserve(t *testing.T) {
+	event := hook.Event{HookName: hook.HookPreToolUse}
+	result := effectiveResult(event, hook.Result{Decision: hook.DecisionDeny, Reason: "would deny"}, ModeRemote)
+	if result.Decision != hook.DecisionAllow || result.Mode != string(ModeObserve) {
+		t.Fatalf("result = %+v, want observe downgrade", result)
+	}
+	if result.Reason != "Kontext observe mode: would deny; would deny" {
+		t.Fatalf("reason = %q, want observe would-note", result.Reason)
+	}
+}

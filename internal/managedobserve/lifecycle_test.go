@@ -336,7 +336,7 @@ func TestLifecycleEnforceUnavailableNonBlockingHookDoesNotDeny(t *testing.T) {
 }
 
 func TestObserveResultFormatsBlockingPromptSubmit(t *testing.T) {
-	result := observeResult(hook.Event{HookName: hook.HookUserPromptSubmit}, hook.Result{
+	result := guardhookruntime.ObserveResult(hook.Event{HookName: hook.HookUserPromptSubmit}, hook.Result{
 		Decision: hook.DecisionDeny,
 		Reason:   "prompt policy",
 	})
@@ -368,5 +368,90 @@ func TestActiveRequiresValidManagedConfig(t *testing.T) {
 	t.Setenv("KONTEXT_MANAGED_CONFIG", path)
 	if !Active() {
 		t.Fatal("Active() = false for valid config")
+	}
+}
+
+func TestLifecycleRemotePassesThroughEnforceStampedDecisions(t *testing.T) {
+	t.Parallel()
+
+	lifecycle := Lifecycle{Mode: "remote"}
+	event := hook.Event{HookName: hook.HookPreToolUse}
+
+	deny := lifecycle.finalize(event, hook.Result{Decision: hook.DecisionDeny, Mode: "enforce", Reason: "policy deny"})
+	if deny.Decision != hook.DecisionDeny || deny.Mode != "enforce" {
+		t.Fatalf("finalize(deny) = %+v, want authoritative deny passed through", deny)
+	}
+
+	allow := lifecycle.finalize(event, hook.Result{Decision: hook.DecisionAllow, Mode: "enforce"})
+	if allow.Decision != hook.DecisionAllow || allow.Mode != "enforce" {
+		t.Fatalf("finalize(allow) = %+v, want authoritative allow passed through", allow)
+	}
+}
+
+func TestLifecycleRemoteDowngradesUnstampedDecisionsToObserve(t *testing.T) {
+	t.Parallel()
+
+	lifecycle := Lifecycle{Mode: "remote"}
+	event := hook.Event{HookName: hook.HookPreToolUse}
+	tests := []struct {
+		name   string
+		result hook.Result
+	}{
+		{name: "unstamped deny", result: hook.Result{Decision: hook.DecisionDeny, Reason: "would deny"}},
+		{name: "observe stamped deny", result: hook.Result{Decision: hook.DecisionDeny, Mode: "observe", Reason: "would deny"}},
+		{name: "enforce stamp without decision", result: hook.Result{Mode: "enforce"}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			result := lifecycle.finalize(event, test.result)
+			if result.Decision != hook.DecisionAllow || result.Mode != string(guardhookruntime.ModeObserve) {
+				t.Fatalf("finalize() = %+v, want observe allow", result)
+			}
+		})
+	}
+}
+
+func TestLifecycleRemoteNormalizesEnforceStampOnNonBlockingHook(t *testing.T) {
+	t.Parallel()
+
+	lifecycle := Lifecycle{Mode: "remote"}
+	result := lifecycle.finalize(hook.Event{HookName: hook.HookPostToolUse}, hook.Result{Decision: hook.DecisionDeny, Mode: "enforce"})
+	if result.Decision != hook.DecisionAllow || result.Mode != "enforce" {
+		t.Fatalf("finalize() = %+v, want allow for non-blocking hook", result)
+	}
+}
+
+func TestLifecycleRemoteUnavailableFailsClosedWhileEnforcing(t *testing.T) {
+	t.Parallel()
+
+	lifecycle := Lifecycle{Mode: "remote", RemoteEnforce: func() bool { return true }}
+	result := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookPreToolUse})
+	if result.Decision != hook.DecisionDeny || result.Mode != "enforce" {
+		t.Fatalf("daemonUnavailable() = %+v, want fail-closed deny while distribution claims enforce", result)
+	}
+
+	nonBlocking := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookPostToolUse})
+	if nonBlocking.Decision != hook.DecisionAllow {
+		t.Fatalf("daemonUnavailable(non-blocking) = %+v, want allow", nonBlocking)
+	}
+}
+
+func TestLifecycleRemoteUnavailableFailsOpenWithoutEnforceClaim(t *testing.T) {
+	t.Parallel()
+
+	for name, lifecycle := range map[string]Lifecycle{
+		"no enforce claim": {Mode: "remote", RemoteEnforce: func() bool { return false }},
+		"no probe":         {Mode: "remote"},
+	} {
+		lifecycle := lifecycle
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			result := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookPreToolUse})
+			if result.Decision != hook.DecisionAllow || result.Mode != string(guardhookruntime.ModeObserve) {
+				t.Fatalf("daemonUnavailable() = %+v, want observe fail-open", result)
+			}
+		})
 	}
 }
