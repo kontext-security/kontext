@@ -9,8 +9,15 @@ name: Auto-merge
 # into its parent on CI green alone, with no human approval.
 # `edited` re-checks when a stacked child gets retargeted to main after its
 # parent merges — arming is idempotent, spurious title/body edits are cheap.
+#
+# pull_request_target (not pull_request) so the job also works on
+# Dependabot-opened PRs: pull_request runs those as the Dependabot actor,
+# which cannot read repository Actions secrets, so the app-token step failed
+# on every Dependabot PR and auto-merge never armed. Safe here because the
+# job never checks out or executes PR code — it only arms auto-merge via
+# the API, and merging still requires approval plus required checks.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, ready_for_review, edited]
 
 permissions: {}
