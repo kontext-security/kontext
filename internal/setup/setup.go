@@ -491,8 +491,11 @@ func writeUserManagedConfig(cloudURL, label string) (string, error) {
 	cfg := managedconfig.Config{
 		Version:  managedconfig.Version,
 		CloudURL: cloudURL,
-		Mode:     managedconfig.Mode,
-		Agent:    managedconfig.Agent,
+		// Self-serve installs follow the policy deployment's rollout mode, so
+		// the posture is controlled from the dashboard. Static observe/enforce
+		// pins remain an MDM (system-scope) concern.
+		Mode:  managedconfig.ModeRemote,
+		Agent: managedconfig.Agent,
 		Credentials: managedconfig.Credentials{
 			InstallTokenRef: managedconfig.TokenRef{Source: "keychain", Name: KeychainItemName},
 		},
@@ -512,28 +515,33 @@ func writeUserManagedConfig(cloudURL, label string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".managed-*.tmp")
-	if err != nil {
-		return "", err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(0o600); err != nil {
-		temp.Close()
-		return "", err
-	}
-	if _, err := temp.Write(data); err != nil {
-		temp.Close()
-		return "", err
-	}
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return "", err
-	}
-	if err := temp.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tempPath, path); err != nil {
+	// Same write lock the daemon's mode migration takes, so the two
+	// cooperating writers of this file can never interleave a
+	// read-verify-replace sequence.
+	if err := managedconfig.WithWriteLock(path, func() error {
+		temp, err := os.CreateTemp(filepath.Dir(path), ".managed-*.tmp")
+		if err != nil {
+			return err
+		}
+		tempPath := temp.Name()
+		defer os.Remove(tempPath)
+		if err := temp.Chmod(0o600); err != nil {
+			temp.Close()
+			return err
+		}
+		if _, err := temp.Write(data); err != nil {
+			temp.Close()
+			return err
+		}
+		if err := temp.Sync(); err != nil {
+			temp.Close()
+			return err
+		}
+		if err := temp.Close(); err != nil {
+			return err
+		}
+		return os.Rename(tempPath, path)
+	}); err != nil {
 		return "", err
 	}
 	return path, nil
