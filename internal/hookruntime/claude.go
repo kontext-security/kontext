@@ -24,6 +24,7 @@ type claudeHookInput struct {
 	ToolUseID        string          `json:"tool_use_id"`
 	ToolUseIDAlt     string          `json:"toolUseId"`
 	ToolUseIDUpper   string          `json:"toolUseID"`
+	Prompt           *string         `json:"prompt"`
 	CWD              string          `json:"cwd"`
 	PermissionMode   *string         `json:"permission_mode"`
 	DurationMs       *int64          `json:"duration_ms"`
@@ -58,7 +59,7 @@ func DecodeClaudeEvent(input []byte, agentName string) (hook.Event, error) {
 		Agent:          agentName,
 		HookName:       hook.HookName(hookName),
 		ToolName:       firstString(h.ToolName, h.ToolNameAlt),
-		ToolInput:      firstMap(h.ToolInput, h.ToolInputAlt),
+		ToolInput:      normalizeClaudeToolInput(hookName, h),
 		ToolResponse:   normalizeToolResponse(h.ToolResponse, h.ToolResponseAlt),
 		ToolUseID:      firstString(h.ToolUseID, h.ToolUseIDAlt, h.ToolUseIDUpper),
 		CWD:            h.CWD,
@@ -67,6 +68,23 @@ func DecodeClaudeEvent(input []byte, agentName string) (hook.Event, error) {
 		Error:          stringPtrValue(h.Error),
 		IsInterrupt:    h.IsInterrupt,
 	}, nil
+}
+
+// normalizeClaudeToolInput carries the UserPromptSubmit payload's top-level
+// prompt into tool input, where the rest of the pipeline reads it (same shape
+// the Codex adapter produces).
+func normalizeClaudeToolInput(hookName string, h claudeHookInput) map[string]any {
+	toolInput := firstMap(h.ToolInput, h.ToolInputAlt)
+	if hookName != hook.HookUserPromptSubmit.String() || h.Prompt == nil {
+		return toolInput
+	}
+	if toolInput == nil {
+		toolInput = map[string]any{}
+	}
+	if _, exists := toolInput["prompt"]; !exists {
+		toolInput["prompt"] = *h.Prompt
+	}
+	return toolInput
 }
 
 func firstString(values ...string) string {

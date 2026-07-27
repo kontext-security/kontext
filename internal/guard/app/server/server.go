@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"mime"
@@ -16,6 +17,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/policy"
 	"github.com/kontext-security/kontext-cli/internal/guard/policyconfig"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	dashboardassets "github.com/kontext-security/kontext-cli/internal/guard/web/assets"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
@@ -37,6 +39,7 @@ type Server struct {
 	mux              *http.ServeMux
 	currentSessionID string
 	mode             string
+	classifier       *riskclassifier.Observer
 }
 
 type ProcessResponse struct {
@@ -54,6 +57,19 @@ type Options struct {
 	EndpointID           string
 	CurrentSessionID     string
 	Mode                 string
+	// RiskClassifier enables observe-mode risk-classifier logging for
+	// intercepted bash commands. Nil disables it; the guardrail LLM inside is
+	// optional independently.
+	RiskClassifier *RiskClassifierOptions
+}
+
+// RiskClassifierOptions configure the observe-mode risk classifier. The SVM is
+// embedded and always available; the guardrail LLM reuses the local judge's
+// llama-server endpoint when one is running.
+type RiskClassifierOptions struct {
+	GuardrailBaseURL string
+	GuardrailModel   string
+	GuardrailTimeout time.Duration
 }
 
 type PolicyProfileResponse struct {
@@ -71,6 +87,12 @@ type PolicyProfileResponse struct {
 
 type ActivatePolicyProfileRequest struct {
 	Profile policy.Profile `json:"profile"`
+}
+
+// ClassifierFeedbackRequest is the dashboard's ground-truth label for one
+// observe-mode verdict: "should_allow" (false alarm) or "should_block" (miss).
+type ClassifierFeedbackRequest struct {
+	UserFeedback string `json:"user_feedback"`
 }
 
 func NewServer(store *sqlite.Store) (*Server, error) {
@@ -141,9 +163,11 @@ func NewServerWithPolicyConfigAndOptions(store *sqlite.Store, policy PolicyProvi
 	if currentSessionID != "" && mode == "" {
 		mode = "observe"
 	}
-	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode)
+	classifier := newRiskClassifierObserver(store, opts.RiskClassifier)
+	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier)
 	core, err := runtimecore.New(runtime)
 	if err != nil {
+		classifier.Close()
 		return nil, fmt.Errorf("create runtime core: %w", err)
 	}
 	server := &Server{
@@ -153,9 +177,52 @@ func NewServerWithPolicyConfigAndOptions(store *sqlite.Store, policy PolicyProvi
 		mux:              http.NewServeMux(),
 		currentSessionID: currentSessionID,
 		mode:             mode,
+		classifier:       classifier,
 	}
 	server.routes()
 	return server, nil
+}
+
+// newRiskClassifierObserver builds the observe-mode classifier pipeline. Every
+// failure here degrades to nil (classifier off) rather than blocking startup:
+// this path only collects feedback data and must never keep Guard from running.
+func newRiskClassifierObserver(store *sqlite.Store, opts *RiskClassifierOptions) *riskclassifier.Observer {
+	if opts == nil || store == nil {
+		return nil
+	}
+	svm, err := riskclassifier.LoadSVM()
+	if err != nil {
+		return nil
+	}
+	var guardrail *riskclassifier.Guardrail
+	if strings.TrimSpace(opts.GuardrailBaseURL) != "" && strings.TrimSpace(opts.GuardrailModel) != "" {
+		guardrail, err = riskclassifier.NewGuardrail(riskclassifier.GuardrailOptions{
+			BaseURL: opts.GuardrailBaseURL,
+			Model:   opts.GuardrailModel,
+			Timeout: opts.GuardrailTimeout,
+		})
+		if err != nil {
+			guardrail = nil
+		}
+	}
+	return riskclassifier.NewObserver(riskclassifier.ObserverOptions{
+		SVM:       svm,
+		Guardrail: guardrail,
+		Redact:    risk.RedactCredentials,
+		Sink: func(ctx context.Context, record riskclassifier.Record) error {
+			_, err := store.SaveClassifierVerdict(ctx, record)
+			return err
+		},
+	})
+}
+
+// CloseRiskClassifier stops the observe-mode classifier, draining queued
+// records. Safe on a nil server or a disabled classifier.
+func (s *Server) CloseRiskClassifier() {
+	if s == nil {
+		return
+	}
+	s.classifier.Close()
 }
 
 func (s *Server) Handler() http.Handler {
@@ -185,6 +252,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/sessions/", s.handleSession)
 	s.mux.HandleFunc("GET /api/policy/profile", s.handlePolicyProfile)
 	s.mux.HandleFunc("POST /api/policy/profile", s.handleActivatePolicyProfile)
+	s.mux.HandleFunc("POST /api/verdicts/{action_id}/feedback", s.handleClassifierFeedback)
 	s.mux.HandleFunc("GET /", s.handleDashboard)
 }
 
@@ -361,9 +429,56 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, dashboardDecisionRecords(events))
+	case "verdicts":
+		verdicts, err := s.store.ClassifierVerdictsForSession(r.Context(), sessionID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, verdicts)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+// handleClassifierFeedback records the user's ground-truth label on an
+// observe-mode verdict. Same trusted-origin gate as policy activation: the
+// dashboard is the only writer.
+func (s *Server) handleClassifierFeedback(w http.ResponseWriter, r *http.Request) {
+	if !trustedPolicyProfileRequest(r) {
+		writeError(w, http.StatusForbidden, untrustedProfileOrigin)
+		return
+	}
+	if !hasJSONContentType(r) {
+		writeError(w, http.StatusUnsupportedMediaType, "classifier feedback requires application/json")
+		return
+	}
+	actionID := r.PathValue("action_id")
+	if strings.TrimSpace(actionID) == "" {
+		writeError(w, http.StatusBadRequest, "action id is required")
+		return
+	}
+	var req ClassifierFeedbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid classifier feedback request")
+		return
+	}
+	switch req.UserFeedback {
+	case riskclassifier.FeedbackShouldAllow, riskclassifier.FeedbackShouldBlock:
+	default:
+		writeError(w, http.StatusBadRequest, "unknown classifier feedback")
+		return
+	}
+	record, err := s.store.SetClassifierFeedback(r.Context(), actionID, req.UserFeedback)
+	if errors.Is(err, sqlite.ErrClassifierVerdictNotFound) {
+		writeError(w, http.StatusNotFound, "classifier verdict not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
 }
 
 func dashboardDecisionRecords(records []sqlite.DecisionRecord) []sqlite.DecisionRecord {

@@ -129,7 +129,7 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 		}
 	}
 	ui := startupui.New(out)
-	localJudge, closeJudge, _, err := judgeruntime.Configure(ctx, judgeruntime.Config{
+	judgeRuntime, err := judgeruntime.ConfigureRuntime(ctx, judgeruntime.Config{
 		URL:              *judgeURL,
 		Model:            *judgeModel,
 		Timeout:          *judgeTimeout,
@@ -147,12 +147,19 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer closeJudge()
+	localJudge := judgeRuntime.Judge
+	if judgeRuntime.Close != nil {
+		defer judgeRuntime.Close()
+	}
 	if err := ui.Err(); err != nil {
 		return fmt.Errorf("write startup output: %w", err)
 	}
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(*dbPath, server.Options{
 		Judge: localJudge,
+		RiskClassifier: &server.RiskClassifierOptions{
+			GuardrailBaseURL: judgeRuntime.BaseURL,
+			GuardrailModel:   judgeRuntime.Model,
+		},
 	})
 	if err != nil {
 		return err
@@ -160,6 +167,8 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	defer func() {
 		_ = closeStore()
 	}()
+	// Drain queued classifier records before the store closes.
+	defer localServer.CloseRiskClassifier()
 	if err := ensureGuardSocketDir(*socketPath); err != nil {
 		return err
 	}

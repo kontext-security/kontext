@@ -48,6 +48,8 @@ Claude Code
   -> probabilistic risk when deterministic policy allows
   -> local SQLite
   -> local dashboard
+       \
+        -> risk classifier (async, observe only: SVM + guardrail LLM -> verdict log)
 ```
 
 ## Risk layers
@@ -56,6 +58,8 @@ Guard uses two layers:
 
 1. Deterministic policy for obvious risk, such as credential access, direct provider API calls with credential material, production mutations, and destructive persistent-resource operations.
 2. Probabilistic risk for cases deterministic policy allows.
+
+Alongside those, the observe-mode risk classifier logs a verdict per bash command without participating in the decision. See [Risk classifier](#risk-classifier-observe-mode).
 
 ## Local authorization ledger
 
@@ -89,7 +93,7 @@ kontext guard start --judge-managed
 
 Use `--judge-port` or a loopback `--judge-url` such as `http://127.0.0.1:18081` to choose a different managed `llama-server` port.
 
-The managed default is `Qwen/Qwen3-0.6B-GGUF` with `Qwen3-0.6B-Q8_0.gguf`. Override it with either a local model path:
+The managed default is `Qwen/Qwen2.5-0.5B-Instruct-GGUF` with `qwen2.5-0.5b-instruct-q8_0.gguf`. One `llama-server` serves both local LLM signals: the JSON judge above and the risk-classifier guardrail below. Override it with either a local model path:
 
 ```bash
 kontext guard start \
@@ -102,8 +106,8 @@ Or a specific Hugging Face GGUF:
 ```bash
 kontext guard start \
   --judge-managed \
-  --judge-hf-repo Qwen/Qwen3-0.6B-GGUF \
-  --judge-hf-file Qwen3-0.6B-Q8_0.gguf
+  --judge-hf-repo Qwen/Qwen2.5-0.5B-Instruct-GGUF \
+  --judge-hf-file qwen2.5-0.5b-instruct-q8_0.gguf
 ```
 
 Use `--judge-hf-revision` when the GGUF is on a Hugging Face branch, tag, commit, or ref other than `main`.
@@ -117,12 +121,44 @@ Evaluate a local judge against the launch fixtures:
 ```bash
 kontext guard judge eval \
   --judge-url http://127.0.0.1:8080 \
-  --judge-model Qwen/Qwen3-0.6B-GGUF \
+  --judge-model Qwen/Qwen2.5-0.5B-Instruct-GGUF \
   --fixtures internal/guard/judge/testdata/launch-v0.jsonl
 ```
 
 The eval command is for local model and prompt iteration. It skips fixtures
 where deterministic policy is expected to deny before the judge is called.
+
+## Risk classifier (observe mode)
+
+Guard logs a second-opinion risk verdict for every intercepted bash command, from the two models in the sibling `authz-bench` serving contract (`authz-bench/serve/SERVING.md`). This is **observe mode only**: verdicts are recorded for feedback collection and never affect a decision. Deterministic rules stay in front and own known-bad; the classifier is a fuzzy signal for the long tail, and its job in v1 is to generate data.
+
+Both models run on every command and both are logged:
+
+1. **char n-gram + LinearSVM** — the benchmark winner, ported natively to Go and embedded in the binary (no Python at runtime). `scripts/riskclassifier/export_portable.py` flattens `authz-bench/serve/model/classifier.joblib` into `internal/guard/riskclassifier/model/svm.json.gz` and regenerates the golden fixtures that lock the port to the reference predictor. Run it after any upstream model change:
+
+```bash
+../authz-bench/.venv/bin/python scripts/riskclassifier/export_portable.py --authz ../authz-bench
+```
+
+2. **Guardrail LLM** — the `RISKY`/`SAFE` prompt from the serving contract, sent to the same managed `llama-server` as the judge. Enabled only when a local judge is running; otherwise records carry `llm_error` and the SVM verdict alone.
+
+`normalize_command` (IP → `1.1.1.1`, URL → `example.com`, long base64 → `BASE64`) is applied before both models, identically to training. `TestNormalizeCommandGoldenParity` and `TestSVMGoldenParity` fail on any drift — never edit the normalizer without regenerating fixtures.
+
+Verdicts land in the `risk_classifier_verdicts` table, one row per decided action:
+
+- `svm_verdict` / `svm_score` / `svm_model_version`, `llm_verdict` / `llm_raw` / `llm_model`, `enforced` (always `0` in v1)
+- `command_redacted` — credential-redacted, capped at 8 KB. Classification runs on the raw command in memory; only the redacted form is persisted, because this dataset is exported back to authz-bench.
+- `agent_task` — the session's latest user prompt, captured from `UserPromptSubmit`. Only the `kontext start` wrapper path registers that hook, so daemon-only `kontext guard start` sessions leave it empty.
+- `user_feedback` — `should_allow` or `should_block`, written by the dashboard. This is the ground-truth label the whole pipeline exists to collect.
+
+Two endpoints serve the feedback UI:
+
+```text
+GET  /api/sessions/{session_id}/verdicts
+POST /api/verdicts/{action_id}/feedback   {"user_feedback": "should_allow" | "should_block"}
+```
+
+Classification is asynchronous and bounded: a small worker pool behind a 256-record queue, verbatim repeats served from an LRU so the LLM is not re-asked, and records dropped (counted, never queued indefinitely) under sustained overload. Nothing on this path can delay or change a tool call.
 
 ## Public/private boundary
 

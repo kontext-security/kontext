@@ -97,15 +97,21 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	closeJudge := func() {}
 	var localJudge judge.Judge
 	var judgeStatus string
+	var judgeRuntime judgeruntime.Runtime
 	if opts.JudgeConfigFromEnv {
 		judgeConfig, err := judgeruntime.ConfigFromEnv(dbPath, opts.JudgeManagedDefault)
 		if err != nil {
 			return nil, err
 		}
 		judgeConfig.DownloadProgress = opts.JudgeDownloadProgress
-		localJudge, closeJudge, judgeStatus, err = judgeruntime.Configure(ctx, judgeConfig)
+		judgeRuntime, err = judgeruntime.ConfigureRuntime(ctx, judgeConfig)
 		if err != nil {
 			return nil, err
+		}
+		localJudge = judgeRuntime.Judge
+		judgeStatus = judgeRuntime.Status
+		if judgeRuntime.Close != nil {
+			closeJudge = judgeRuntime.Close
 		}
 	}
 	serverSessionID := sessionID
@@ -118,6 +124,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		EndpointID:       opts.EndpointID,
 		CurrentSessionID: serverSessionID,
 		Mode:             string(mode),
+		RiskClassifier:   riskClassifierOptions(judgeRuntime),
 	})
 	if err != nil {
 		closeJudge()
@@ -216,6 +223,19 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	return host, nil
 }
 
+// riskClassifierOptions enables observe-mode risk-classifier logging. The
+// embedded SVM runs regardless; the guardrail LLM is wired only when a local
+// llama-server is actually serving, so both LLM signals share one process.
+func riskClassifierOptions(judgeRuntime judgeruntime.Runtime) *server.RiskClassifierOptions {
+	if judgeRuntime.BaseURL == "" || judgeRuntime.Model == "" {
+		return &server.RiskClassifierOptions{}
+	}
+	return &server.RiskClassifierOptions{
+		GuardrailBaseURL: judgeRuntime.BaseURL,
+		GuardrailModel:   judgeRuntime.Model,
+	}
+}
+
 func clientResultTransform(mode guardhookruntime.Mode) func(hook.Event, hook.Result) hook.Result {
 	if mode != guardhookruntime.ModeObserve {
 		return nil
@@ -271,6 +291,11 @@ func (h *Host) Close(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 		h.sessionCloseOnce = true
+	}
+	// Drain queued classifier records before the store and llama-server go
+	// away, or in-flight verdicts are lost.
+	if h.server != nil {
+		h.server.CloseRiskClassifier()
 	}
 	if h.closeStore != nil {
 		if err := h.closeStore(); err != nil {

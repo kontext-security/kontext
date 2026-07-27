@@ -198,6 +198,13 @@ func commandFromInput(input map[string]any) string {
 	return ""
 }
 
+// CommandFromInput extracts the raw shell command from a tool input payload,
+// using the same keys the normalizer recognizes. Empty when the input carries
+// no command.
+func CommandFromInput(input map[string]any) string {
+	return commandFromInput(input)
+}
+
 func pathFromInput(input map[string]any) string {
 	for _, key := range []string{"file_path", "path", "filename"} {
 		if value, ok := input[key].(string); ok {
@@ -308,14 +315,22 @@ func summarizeRequest(toolName, path, command string) string {
 }
 
 func redact(value string) string {
-	value = credentialAssignment.ReplaceAllString(value, "$1=[redacted-credential]")
-	value = credentialHeader.ReplaceAllString(value, "${1}${2}[redacted-credential]")
-	value = credentialBearer.ReplaceAllString(value, "Bearer [redacted-credential]")
-	value = credentialShape.ReplaceAllString(value, "[redacted-credential]")
+	value = RedactCredentials(value)
 	if len(value) > 240 {
 		return value[:240] + "..."
 	}
 	return value
+}
+
+// RedactCredentials masks credential material without the summary length cap
+// redact applies. Callers that persist full-length command text (the risk
+// classifier feedback records) use this so long commands survive while
+// secrets never reach storage.
+func RedactCredentials(value string) string {
+	value = credentialAssignment.ReplaceAllString(value, "$1=[redacted-credential]")
+	value = credentialHeader.ReplaceAllString(value, "${1}${2}[redacted-credential]")
+	value = credentialBearer.ReplaceAllString(value, "Bearer [redacted-credential]")
+	return credentialShape.ReplaceAllString(value, "[redacted-credential]")
 }
 
 func observesCredential(command string, eventType EventType) bool {
