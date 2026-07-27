@@ -59,6 +59,9 @@ func writeClaudeSettings(sessionDir, hookCmd string) (string, error) {
 		Hooks: map[string][]hookGroup{
 			"PreToolUse":  commandHookGroups(hookCmd),
 			"PostToolUse": commandHookGroups(hookCmd),
+			// UserPromptSubmit supplies the agent task recorded alongside
+			// observe-mode risk-classifier verdicts.
+			"UserPromptSubmit": commandHookGroups(hookCmd),
 		},
 	}
 

@@ -1172,7 +1172,7 @@ func TestGenerateSettingsWritesClaudeHooks(t *testing.T) {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 
-	wantEvents := []string{"PreToolUse", "PostToolUse"}
+	wantEvents := []string{"PreToolUse", "PostToolUse", "UserPromptSubmit"}
 	if len(settings.Hooks) != len(wantEvents) {
 		t.Fatalf("settings.Hooks len = %d, want %d", len(settings.Hooks), len(wantEvents))
 	}

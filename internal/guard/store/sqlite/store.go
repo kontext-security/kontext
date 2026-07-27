@@ -339,6 +339,9 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if _, err := s.db.ExecContext(ctx, classifierVerdictsDDL); err != nil {
+		return err
+	}
 	return nil
 }
 
