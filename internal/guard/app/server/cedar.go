@@ -13,10 +13,28 @@ import (
 
 const cedarEvaluatorVersion = "cedar-go/v1.8.0"
 
+// CedarEnforcementSource selects who decides whether Cedar decisions are
+// authoritative (real denies) or evidence-only (dry run).
+type CedarEnforcementSource string
+
+const (
+	// CedarEnforcementOff keeps Cedar evidence-only regardless of the
+	// deployment's rollout mode. This is the static observe posture.
+	CedarEnforcementOff CedarEnforcementSource = ""
+	// CedarEnforcementStatic makes Cedar authoritative whenever a policy is
+	// distributed, with fail-closed unknown-state semantics (the local
+	// cutover gate). This is the static enforce posture.
+	CedarEnforcementStatic CedarEnforcementSource = "static"
+	// CedarEnforcementRemote follows the fetched deployment's rollout mode:
+	// Cedar is authoritative exactly when the deployment says enforce, and
+	// evidence-only otherwise or while no deployment is cached.
+	CedarEnforcementRemote CedarEnforcementSource = "remote"
+)
+
 type cedarPolicyProvider struct {
-	current            PolicyProvider
-	snapshots          cedarpolicy.SnapshotProvider
-	enforcementEnabled bool
+	current     PolicyProvider
+	snapshots   cedarpolicy.SnapshotProvider
+	enforcement CedarEnforcementSource
 
 	mu        sync.Mutex
 	identity  string
@@ -24,11 +42,11 @@ type cedarPolicyProvider struct {
 	parseErr  error
 }
 
-func newCedarPolicyProvider(current PolicyProvider, snapshots cedarpolicy.SnapshotProvider, enforcementEnabled bool) PolicyProvider {
+func newCedarPolicyProvider(current PolicyProvider, snapshots cedarpolicy.SnapshotProvider, enforcement CedarEnforcementSource) PolicyProvider {
 	if snapshots == nil {
 		return current
 	}
-	return &cedarPolicyProvider{current: current, snapshots: snapshots, enforcementEnabled: enforcementEnabled}
+	return &cedarPolicyProvider{current: current, snapshots: snapshots, enforcement: enforcement}
 }
 
 func (p *cedarPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
@@ -61,26 +79,31 @@ func (p *cedarPolicyProvider) DecideHook(ctx context.Context, event risk.HookEve
 }
 
 func (p *cedarPolicyProvider) claimsAuthority(snapshot cedarpolicy.Snapshot) bool {
-	if !p.enforcementEnabled {
+	switch p.enforcement {
+	case CedarEnforcementStatic:
+		if snapshot.State == cedarpolicy.StateDisabled || snapshot.State == cedarpolicy.StateNoActivePolicy {
+			return false
+		}
+		if snapshot.Status.Invalid {
+			return true
+		}
+		deployment := snapshot.Deployment
+		if deployment == nil {
+			deployment = snapshot.LastKnownGood
+		}
+		if deployment == nil {
+			// Once the local cutover gate is enabled, absence and untrusted
+			// response states cannot silently restore the previous evaluator.
+			// Only explicit disabled/no-active-policy states relinquish Cedar
+			// authority.
+			return true
+		}
+		return deployment.RolloutMode == cedareval.RolloutModeEnforce
+	case CedarEnforcementRemote:
+		return cedarpolicy.DeploymentClaimsEnforce(snapshot)
+	default:
 		return false
 	}
-	if snapshot.State == cedarpolicy.StateDisabled || snapshot.State == cedarpolicy.StateNoActivePolicy {
-		return false
-	}
-	if snapshot.Status.Invalid {
-		return true
-	}
-	deployment := snapshot.Deployment
-	if deployment == nil {
-		deployment = snapshot.LastKnownGood
-	}
-	if deployment == nil {
-		// Once the local cutover gate is enabled, absence and untrusted response
-		// states cannot silently restore the previous evaluator. Only explicit
-		// disabled/no-active-policy states relinquish Cedar authority.
-		return true
-	}
-	return deployment.RolloutMode == cedareval.RolloutModeEnforce
 }
 
 func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk.HookEvent, current cedareval.EffectiveExecutionAction, claimsAuthority bool) risk.CedarEvidence {

@@ -41,7 +41,7 @@ type Options struct {
 	JudgeDownloadProgress     judge.DownloadProgressHandler
 	ProviderPolicies          []server.ProviderPolicyBinding
 	CedarPolicies             cedarpolicy.SnapshotProvider
-	CedarEnforcement          bool
+	CedarEnforcement          server.CedarEnforcementSource
 	EndpointID                string
 	Mode                      guardhookruntime.Mode
 	Diagnostic                diagnostic.Logger
@@ -222,24 +222,43 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 }
 
 func clientResultTransform(mode guardhookruntime.Mode) func(hook.Event, hook.Result) hook.Result {
-	if mode != guardhookruntime.ModeObserve {
-		return nil
-	}
-	return func(event hook.Event, result hook.Result) hook.Result {
-		result.Mode = string(mode)
-		if result.Decision == "" {
-			result.Decision = hook.DecisionAllow
+	switch mode {
+	case guardhookruntime.ModeEnforce:
+		// The whole pipeline is authoritative under a static enforce posture;
+		// stamp results so hook edges recognize them as such.
+		return func(event hook.Event, result hook.Result) hook.Result {
+			result.Mode = string(guardhookruntime.ModeEnforce)
+			return result
 		}
-		if event.HookName.CanBlock() {
-			decision := result.Decision
-			if result.Reason == "" {
-				result.Reason = "no reason provided"
+	case guardhookruntime.ModeRemote:
+		// Only decisions the runtime already marked enforce (a Cedar decision
+		// applied under an enforce rollout) are authoritative; everything else
+		// gets observe semantics.
+		return func(event hook.Event, result hook.Result) hook.Result {
+			if result.Mode == string(guardhookruntime.ModeEnforce) {
+				return result
 			}
-			result.Reason = "Kontext observe mode: would " + string(decision) + "; " + result.Reason
+			return observeResultTransform(event, result)
 		}
-		result.Decision = hook.DecisionAllow
-		return result
+	default:
+		return observeResultTransform
 	}
+}
+
+func observeResultTransform(event hook.Event, result hook.Result) hook.Result {
+	result.Mode = string(guardhookruntime.ModeObserve)
+	if result.Decision == "" {
+		result.Decision = hook.DecisionAllow
+	}
+	if event.HookName.CanBlock() {
+		decision := result.Decision
+		if result.Reason == "" {
+			result.Reason = "no reason provided"
+		}
+		result.Reason = "Kontext observe mode: would " + string(decision) + "; " + result.Reason
+	}
+	result.Decision = hook.DecisionAllow
+	return result
 }
 
 func (h *Host) SetPayloadCaptureConfiguration(config payloadcapture.RuntimeConfiguration) {

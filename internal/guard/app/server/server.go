@@ -54,7 +54,7 @@ type Options struct {
 	ProviderPolicies     []ProviderPolicyBinding
 	EndpointID           string
 	CedarPolicies        cedarpolicy.SnapshotProvider
-	CedarEnforcement     bool
+	CedarEnforcement     CedarEnforcementSource
 	CurrentSessionID     string
 	Mode                 string
 }

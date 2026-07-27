@@ -294,3 +294,13 @@ func replacementFor(field string) string {
 		}[field] + `"`
 	}
 }
+
+func TestParseModeRemote(t *testing.T) {
+	cfg, err := Parse([]byte(strings.Replace(validConfigJSON(), `"mode": "observe"`, `"mode": "remote"`, 1)))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.Mode != ModeRemote {
+		t.Fatalf("Mode = %q, want %q", cfg.Mode, ModeRemote)
+	}
+}

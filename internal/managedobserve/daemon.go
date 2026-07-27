@@ -126,10 +126,19 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 
 	// The deployment-level mode from managed.json drives every hook edge:
-	// observe records would-decisions, enforce returns real denies.
+	// observe records would-decisions, enforce returns real denies, remote
+	// defers to the fetched policy deployment's rollout mode so the posture
+	// can be flipped from the dashboard without touching the install.
 	mode, err := guardhookruntime.ParseMode(loadedConfig.Config.Mode)
 	if err != nil {
 		return fmt.Errorf("parse managed mode: %w", err)
+	}
+	cedarEnforcement := server.CedarEnforcementOff
+	switch mode {
+	case guardhookruntime.ModeEnforce:
+		cedarEnforcement = server.CedarEnforcementStatic
+	case guardhookruntime.ModeRemote:
+		cedarEnforcement = server.CedarEnforcementRemote
 	}
 
 	githubCache := newProviderPolicyCache(opts.GithubPolicyCachePath, dbPath, githubpolicy.Config, opts.Diagnostic)
@@ -171,7 +180,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		},
 		EndpointID:         installationState.InstallationID,
 		CedarPolicies:      cedarCache,
-		CedarEnforcement:   mode == guardhookruntime.ModeEnforce,
+		CedarEnforcement:   cedarEnforcement,
 		Mode:               mode,
 		Diagnostic:         opts.Diagnostic,
 		SkipInitialSession: true,

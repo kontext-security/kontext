@@ -24,8 +24,13 @@ const (
 	Version = "managed-install-v1"
 	// Mode is the default posture; ModeEnforce turns daemon decisions into
 	// real denies at every hook edge (Claude Code and Cowork alike).
+	// ModeRemote delegates the posture to the fetched policy deployment's
+	// rollout mode: the endpoint observes until the deployment says enforce,
+	// with no local reinstall needed to flip. Observe and enforce remain
+	// static pins for deployments that must not change posture remotely.
 	Mode        = "observe"
 	ModeEnforce = "enforce"
+	ModeRemote  = "remote"
 	Agent       = "claude"
 
 	DefaultPath  = "/Library/Application Support/Kontext/managed.json"
@@ -282,8 +287,8 @@ func normalizeAndValidate(cfg Config) (Config, error) {
 	if err := validateCloudURL(cfg.CloudURL); err != nil {
 		return Config{}, err
 	}
-	if cfg.Mode != Mode && cfg.Mode != ModeEnforce {
-		return Config{}, fmt.Errorf("mode must be %q or %q", Mode, ModeEnforce)
+	if cfg.Mode != Mode && cfg.Mode != ModeEnforce && cfg.Mode != ModeRemote {
+		return Config{}, fmt.Errorf("mode must be %q, %q, or %q", Mode, ModeEnforce, ModeRemote)
 	}
 	if cfg.Agent != Agent {
 		return Config{}, fmt.Errorf("agent must be %q", Agent)
