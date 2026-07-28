@@ -1,4 +1,4 @@
-import type { Event, PolicyProfile, RiskEvent, Session } from "./types";
+import type { Event, RiskEvent, Session } from "./types";
 
 export const SAMPLE_SESSION_ID = "session-local-guard-preview";
 const SAMPLE_POLICY_VERSION = "guard-policy-v1";
@@ -10,13 +10,6 @@ const SAMPLE_RISK_POLICY = {
   policy_rule_pack: SAMPLE_RULE_PACK,
 } satisfies Pick<RiskEvent, "policy_version" | "policy_profile" | "policy_rule_pack">;
 
-export const SAMPLE_POLICY: PolicyProfile = {
-  profile: SAMPLE_POLICY_PROFILE,
-  recommended_profile: SAMPLE_POLICY_PROFILE,
-  version: SAMPLE_POLICY_VERSION,
-  rule_pack: SAMPLE_RULE_PACK,
-  loaded_at: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
-};
 
 export const SAMPLE_SESSIONS: Session[] = [
   {

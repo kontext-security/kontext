@@ -1,6 +1,6 @@
 import { API } from "./config";
-import { isDecision, isGuardMode, isPolicyProfileID } from "./types";
-import type { Decision, Event, GuardMode, PolicyProfile, PolicyProfileID, RiskEvent, Session } from "./types";
+import { isDecision, isGuardMode } from "./types";
+import type {Decision, Event, GuardMode, RiskEvent, Session} from "./types";
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -56,9 +56,6 @@ function decision(value: unknown): Decision | undefined {
   return undefined;
 }
 
-function policyProfileID(value: unknown): PolicyProfileID | undefined {
-  return isPolicyProfileID(value) ? value : undefined;
-}
 
 function guardMode(value: unknown): GuardMode | undefined {
   return isGuardMode(value) ? value : undefined;
@@ -143,23 +140,6 @@ function parseEvent(value: unknown): Event | undefined {
   };
 }
 
-function parsePolicyProfile(value: unknown): PolicyProfile {
-  if (!isObject(value)) throw new Error("invalid policy profile response");
-  const profile = policyProfileID(value.profile);
-  if (!profile) throw new Error("invalid policy profile response");
-  return {
-    profile,
-    recommended_profile: policyProfileID(value.recommended_profile),
-    version: optionalString(value.version),
-    rule_pack: optionalString(value.rule_pack),
-    rule_pack_version: optionalString(value.rule_pack_version),
-    config_digest: optionalString(value.config_digest),
-    activation_id: optionalString(value.activation_id),
-    source: optionalString(value.source),
-    status: optionalString(value.status),
-    loaded_at: optionalString(value.loaded_at),
-  };
-}
 
 function parseList<T>(value: unknown, parse: (item: unknown) => T | undefined): T[] {
   if (value == null) return [];
@@ -184,15 +164,3 @@ export async function fetchEvents(sessionID: string): Promise<Event[]> {
   );
 }
 
-export async function fetchPolicy(): Promise<PolicyProfile> {
-  return parsePolicyProfile(await fetch(`${API}/api/policy/profile`).then(ok));
-}
-
-export async function activatePolicy(profile: PolicyProfileID): Promise<PolicyProfile> {
-  const response = await fetch(`${API}/api/policy/profile`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profile }),
-  }).then(ok);
-  return parsePolicyProfile(response);
-}

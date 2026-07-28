@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	guardpolicy "github.com/kontext-security/kontext-cli/internal/guard/policy"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 )
 
@@ -14,29 +13,8 @@ type PolicyProvider interface {
 	DecideHook(context.Context, risk.HookEvent) (risk.RiskDecision, error)
 }
 
-type PolicyConfigProvider interface {
-	ActivePolicyConfig(context.Context) (guardpolicy.Config, error)
-}
-
 type RiskPolicyProvider struct {
-	judge        judge.Judge
-	policyEngine guardpolicy.Engine
-	policyConfig PolicyConfigProvider
-}
-
-type RiskPolicyProviderOptions struct {
-	Judge                judge.Judge
-	PolicyEngine         guardpolicy.Engine
-	PolicyConfig         guardpolicy.Config
-	PolicyConfigProvider PolicyConfigProvider
-}
-
-type staticPolicyConfigProvider struct {
-	config guardpolicy.Config
-}
-
-func (p staticPolicyConfigProvider) ActivePolicyConfig(context.Context) (guardpolicy.Config, error) {
-	return p.config, nil
+	judge judge.Judge
 }
 
 func NewRiskPolicyProvider() RiskPolicyProvider {
@@ -44,21 +22,7 @@ func NewRiskPolicyProvider() RiskPolicyProvider {
 }
 
 func NewRiskPolicyProviderWithJudge(localJudge judge.Judge) RiskPolicyProvider {
-	return NewRiskPolicyProviderWithOptions(RiskPolicyProviderOptions{
-		Judge: localJudge,
-	})
-}
-
-func NewRiskPolicyProviderWithOptions(opts RiskPolicyProviderOptions) RiskPolicyProvider {
-	configProvider := opts.PolicyConfigProvider
-	if configProvider == nil {
-		configProvider = staticPolicyConfigProvider{config: opts.PolicyConfig}
-	}
-	return RiskPolicyProvider{
-		judge:        opts.Judge,
-		policyEngine: opts.PolicyEngine,
-		policyConfig: configProvider,
-	}
+	return RiskPolicyProvider{judge: localJudge}
 }
 
 func (p RiskPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
@@ -66,14 +30,12 @@ func (p RiskPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent
 		return p.asyncTelemetryDecision(event), nil
 	}
 	riskEvent := risk.NormalizeHookEvent(event)
-	policyResult := p.policyEngine.Evaluate(riskEvent, p.activePolicyConfig(ctx))
-	applyPolicyMetadata(&riskEvent, policyResult)
 	// The local chain is advisory: Cedar (the cedarPolicyProvider wrapping
-	// this chain) is the only engine that decides. Guardrail matches and
-	// judge analysis are recorded as risk signals on the decision fact; the
-	// chain's own outcome is always allow.
+	// this chain) is the only engine that decides. Judge analysis is
+	// recorded as risk signals on the decision fact; the chain's own
+	// outcome is always allow.
 	if p.judge == nil {
-		return advisoryDecision(riskEvent, policyResult), nil
+		return advisoryDecision(riskEvent), nil
 	}
 
 	result, err := p.judge.Decide(ctx, judgeInputFromRiskEvent(event, riskEvent))
@@ -96,19 +58,16 @@ func (p RiskPolicyProvider) asyncTelemetryDecision(event risk.HookEvent) risk.Ri
 	}
 }
 
-// advisoryDecision records the deterministic guardrail analysis without
-// deciding: matched rules survive as policy metadata and signals on the risk
-// event, and the chain's outcome is always allow. Cedar alone decides.
-func advisoryDecision(riskEvent risk.RiskEvent, policyResult guardpolicy.Result) risk.RiskDecision {
+// advisoryDecision records the observation without deciding: no judge is
+// wired, so there is no analysis to attach. Cedar alone decides.
+func advisoryDecision(riskEvent risk.RiskEvent) risk.RiskDecision {
 	riskEvent.Decision = risk.DecisionAllow
-	riskEvent.ReasonCode = policyResult.ReasonCode
-	riskEvent.GuardID = policyResult.RuleID
+	riskEvent.ReasonCode = risk.DecisionStageAdvisory
 	riskEvent.DecisionStage = risk.DecisionStageAdvisory
 	return risk.RiskDecision{
 		Decision:   risk.DecisionAllow,
-		Reason:     policyResult.Reason,
-		ReasonCode: policyResult.ReasonCode,
-		GuardID:    policyResult.RuleID,
+		Reason:     "observed; no local analysis wired",
+		ReasonCode: risk.DecisionStageAdvisory,
 		RiskEvent:  riskEvent,
 	}
 }
@@ -156,33 +115,6 @@ func judgeAdvisoryDecision(riskEvent risk.RiskEvent, result judge.Result) risk.R
 		GuardID:    "local_llm_judge",
 		RiskEvent:  riskEvent,
 	}
-}
-
-func (p RiskPolicyProvider) activePolicyConfig(ctx context.Context) guardpolicy.Config {
-	if p.policyConfig == nil {
-		return guardpolicy.DefaultConfig()
-	}
-	config, err := p.policyConfig.ActivePolicyConfig(ctx)
-	if err != nil {
-		return guardpolicy.DefaultConfig()
-	}
-	if err := config.Validate(); err != nil {
-		return guardpolicy.DefaultConfig()
-	}
-	return config
-}
-
-func applyPolicyMetadata(event *risk.RiskEvent, result guardpolicy.Result) {
-	event.PolicyVersion = result.PolicyVersion
-	event.PolicyHash = result.PolicyHash
-	event.PolicyProfile = string(result.Profile)
-	event.PolicyRulePack = result.RulePack
-	if !result.Matched {
-		return
-	}
-	event.PolicyRuleID = result.RuleID
-	event.PolicyRuleCategory = string(result.Category)
-	event.PolicySignals = result.MatchedSignals
 }
 
 func judgeInputFromRiskEvent(event risk.HookEvent, riskEvent risk.RiskEvent) judge.Input {
