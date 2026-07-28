@@ -93,7 +93,7 @@ kontext guard start --judge-managed
 
 Use `--judge-port` or a loopback `--judge-url` such as `http://127.0.0.1:18081` to choose a different managed `llama-server` port.
 
-The managed default is `Qwen/Qwen2.5-0.5B-Instruct-GGUF` with `qwen2.5-0.5b-instruct-q8_0.gguf`. One `llama-server` serves both local LLM signals: the JSON judge above and the risk-classifier guardrail below. Override it with either a local model path:
+The managed default is `Qwen/Qwen3-0.6B-GGUF` with `Qwen3-0.6B-Q8_0.gguf`. One `llama-server` serves both local LLM signals: the JSON judge above and the risk-classifier guardrail below. Override it with either a local model path:
 
 ```bash
 kontext guard start \
@@ -106,8 +106,8 @@ Or a specific Hugging Face GGUF:
 ```bash
 kontext guard start \
   --judge-managed \
-  --judge-hf-repo Qwen/Qwen2.5-0.5B-Instruct-GGUF \
-  --judge-hf-file qwen2.5-0.5b-instruct-q8_0.gguf
+  --judge-hf-repo Qwen/Qwen3-0.6B-GGUF \
+  --judge-hf-file Qwen3-0.6B-Q8_0.gguf
 ```
 
 Use `--judge-hf-revision` when the GGUF is on a Hugging Face branch, tag, commit, or ref other than `main`.
@@ -121,7 +121,7 @@ Evaluate a local judge against the launch fixtures:
 ```bash
 kontext guard judge eval \
   --judge-url http://127.0.0.1:8080 \
-  --judge-model Qwen/Qwen2.5-0.5B-Instruct-GGUF \
+  --judge-model Qwen/Qwen3-0.6B-GGUF \
   --fixtures internal/guard/judge/testdata/launch-v0.jsonl
 ```
 
@@ -140,7 +140,7 @@ Both models run on every command and both are logged:
 ../authz-bench/.venv/bin/python scripts/riskclassifier/export_portable.py --authz ../authz-bench
 ```
 
-2. **Guardrail LLM** — the `RISKY`/`SAFE` prompt from the serving contract, sent to the same managed `llama-server` as the judge. Enabled only when a local judge is running; otherwise records carry `llm_error` and the SVM verdict alone.
+2. **Guardrail LLM** — the `RISKY`/`SAFE` prompt from the serving contract, sent to the same managed `llama-server` as the judge, in non-thinking mode (a guard wants a fast one-word verdict, not reasoning tokens). Enabled only when a local judge is running; otherwise records carry `llm_error` and the SVM verdict alone.
 
 `normalize_command` (IP → `1.1.1.1`, URL → `example.com`, long base64 → `BASE64`) is applied before both models, identically to training. `TestNormalizeCommandGoldenParity` and `TestSVMGoldenParity` fail on any drift — never edit the normalizer without regenerating fixtures.
 
