@@ -29,7 +29,7 @@ const SchemaVersion = "decision_fact/v1"
 // FixtureDigest is the SHA-256 over the raw bytes of
 // testdata/decision-fact-v1.json. The server-side contract pins the same
 // value, so any edit fails CI on both sides until both corpora move together.
-const FixtureDigest = "ddad77b35aca0182c5f0ce439cb085636eff1e6bcf329f20cd063404ddfb1589"
+const FixtureDigest = "13eaf60d577a0cf969421c765b23aea05547c73c0573956944c604152f8c4bbb"
 
 // cacheFetchedAtLayout is the wire format for evidence.cache_fetched_at:
 // millisecond precision with an explicit UTC zone, matching the corpus bytes
@@ -380,11 +380,13 @@ func (fact DecisionFact) validateEvidenceCoherence(invalid func(string, ...any))
 
 	switch fact.AppliedMode {
 	case cedareval.RolloutModeObserve:
-		expected := cedareval.ReasonObserveNonAuthoritative
-		if fact.EvaluationState == cedareval.EvaluationStatePrincipalUnresolved {
-			expected = cedareval.ReasonPrincipalUnresolved
-		}
-		if !reasonCodePointerEquals(fact.Evidence.EffectiveReasonCode, expected) {
+		// effective_reason_code answers "why did the execution outcome
+		// hold?" — in observe mode always the authority marker, for every
+		// evaluation outcome including an unresolved principal. The cause
+		// stays recorded in evaluation_state, reason_code and
+		// evidence.evaluation_reason_code; per-cause exceptions here would
+		// diverge from the decision-mapping corpus the evaluator follows.
+		if !reasonCodePointerEquals(fact.Evidence.EffectiveReasonCode, cedareval.ReasonObserveNonAuthoritative) {
 			invalid("effective evidence must agree with the applied mode")
 		}
 	case cedareval.RolloutModeDisabled:

@@ -643,7 +643,7 @@
         "evaluator_version": null,
         "evaluation_reason_code": "principal_unresolved",
         "decision_reason_code": null,
-        "effective_reason_code": "principal_unresolved"
+        "effective_reason_code": "observe_non_authoritative"
       }
     }
   },
