@@ -346,7 +346,6 @@ func TestBuildAcceptsRealMapperOutput(t *testing.T) {
 		t.Fatalf("reason_code = %s, want principal_unresolved", fact.ReasonCode)
 	}
 }
-
 func TestBuildDoesNotAliasCallerOwnedRiskOrDiagnostics(t *testing.T) {
 	evaluator := "local"
 	score := 0.2
