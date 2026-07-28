@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -116,6 +117,19 @@ func TestValidateRejectsContractViolations(t *testing.T) {
 	cases := map[string]func(fact *ledgerfact.DecisionFact){
 		"authority marker as reason code": func(fact *ledgerfact.DecisionFact) {
 			fact.ReasonCode = cedareval.ReasonObserveNonAuthoritative
+		},
+		"unknown reason code": func(fact *ledgerfact.DecisionFact) {
+			fact.ReasonCode = "future_unrecognized_reason"
+		},
+		"non-finite risk score": func(fact *ledgerfact.DecisionFact) {
+			value := math.NaN()
+			evaluator := "test-judge"
+			fact.Risk = &ledgerfact.Risk{Status: ledgerfact.RiskStatusEvaluated, Evaluator: &evaluator, Score: &value}
+		},
+		"non-finite risk confidence": func(fact *ledgerfact.DecisionFact) {
+			value := math.Inf(1)
+			evaluator := "test-judge"
+			fact.Risk = &ledgerfact.Risk{Status: ledgerfact.RiskStatusEvaluated, Evaluator: &evaluator, Confidence: &value}
 		},
 		"cedar action without evaluation": func(fact *ledgerfact.DecisionFact) {
 			fact.EvaluationState = cedareval.EvaluationStateFailed

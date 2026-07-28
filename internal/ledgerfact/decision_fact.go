@@ -16,6 +16,7 @@ package ledgerfact
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"time"
@@ -133,6 +134,28 @@ var forbiddenReasonCodes = map[cedareval.ReasonCode]bool{
 	cedareval.ReasonRemoteDelegated:         true,
 }
 
+var validReasonCodes = map[cedareval.ReasonCode]bool{
+	cedareval.ReasonPolicyDisabled:                    true,
+	cedareval.ReasonPolicyEvaluated:                   true,
+	cedareval.ReasonDefaultDeny:                       true,
+	cedareval.ReasonExplicitForbid:                    true,
+	cedareval.ReasonPermit:                            true,
+	cedareval.ReasonAskDerived:                        true,
+	cedareval.ReasonAskUnavailable:                    true,
+	cedareval.ReasonPrincipalUnresolved:               true,
+	cedareval.ReasonRequestConversionFailed:           true,
+	cedareval.ReasonPolicyMissing:                     true,
+	cedareval.ReasonUnsupportedResponseVersion:        true,
+	cedareval.ReasonUnsupportedRequestContractVersion: true,
+	cedareval.ReasonInvalidCachedPolicy:               true,
+	cedareval.ReasonStaleCachedPolicy:                 true,
+	cedareval.ReasonEngineError:                       true,
+	cedareval.ReasonRemoteTimeout:                     true,
+	cedareval.ReasonObserveNonAuthoritative:           true,
+	cedareval.ReasonEnforcementNotReady:               true,
+	cedareval.ReasonRemoteDelegated:                   true,
+}
+
 // evaluatedOnlyReasonCodes mirror the shared contract's
 // DECISION_FACT_EVALUATED_ONLY_REASON_CODES: causes that can only arise from
 // a completed Cedar evaluation (ask_unavailable from an enforced ask
@@ -243,6 +266,9 @@ func (fact DecisionFact) validateEnums(invalid func(string, ...any)) {
 	}
 	if forbiddenReasonCodes[fact.ReasonCode] {
 		invalid("reason_code carries the outcome cause; authority is applied_mode")
+	}
+	if !validReasonCodes[fact.ReasonCode] {
+		invalid("reason_code %q is not part of the contract", fact.ReasonCode)
 	}
 	if fact.Evidence.EvaluationPrincipal != nil {
 		principal := fact.Evidence.EvaluationPrincipal
@@ -459,7 +485,7 @@ func (fact DecisionFact) validateRisk(invalid func(string, ...any)) {
 		"risk.score":      risk.Score,
 		"risk.confidence": risk.Confidence,
 	} {
-		if score != nil && (*score < 0 || *score > 1) {
+		if score != nil && (math.IsNaN(*score) || math.IsInf(*score, 0) || *score < 0 || *score > 1) {
 			invalid("%s must be within [0, 1]", name)
 		}
 	}
