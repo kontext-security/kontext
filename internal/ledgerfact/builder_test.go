@@ -3,6 +3,7 @@ package ledgerfact_test
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,8 +131,11 @@ var fixtureMappings = map[string]cedareval.DecisionMapping{
 		EvaluationState:          cedareval.EvaluationStatePrincipalUnresolved,
 		EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow,
 		EvaluationReasonCode:     cedareval.ReasonPrincipalUnresolved,
-		EffectiveReasonCode:      cedareval.ReasonPrincipalUnresolved,
-		DeterminingPolicyIDs:     []string{},
+		// The mapper marks authority, not cause, in observe mode — see the
+		// observe-preserves-authority-when-principal-unresolved mapping
+		// fixture. The cause stays in the evaluation reason above.
+		EffectiveReasonCode:  cedareval.ReasonObserveNonAuthoritative,
+		DeterminingPolicyIDs: []string{},
 	},
 }
 
@@ -296,4 +300,71 @@ func derefInt(value *int) int {
 		return 0
 	}
 	return *value
+}
+
+// TestBuildAcceptsRealMapperOutput pipes the actual decision mapper into
+// Build instead of a hand-encoded mapping. The hand-encoded table above once
+// masked a contract/mapper divergence (observe + unresolved principal built
+// a fact the validator rejected); this test makes that class of divergence
+// fail here first.
+func TestBuildAcceptsRealMapperOutput(t *testing.T) {
+	mapping, err := cedareval.MapDecision(cedareval.DecisionMappingInput{
+		RolloutMode:            cedareval.RolloutModeObserve,
+		CurrentAuthorityAction: cedareval.EffectiveExecutionActionAllow,
+		Evaluation: cedareval.EvaluationOutcome{
+			State:  cedareval.EvaluationStatePrincipalUnresolved,
+			Reason: cedareval.ReasonPrincipalUnresolved,
+		},
+	})
+	if err != nil {
+		t.Fatalf("MapDecision: %v", err)
+	}
+
+	fact, err := ledgerfact.Build(ledgerfact.BuildInput{
+		ToolCallID:      "toolu_real_mapper_observe_principal",
+		DecidedAt:       time.Date(2026, 7, 28, 12, 0, 15, 0, time.UTC),
+		ToolName:        "Bash",
+		ExecutionAction: mapping.EffectiveExecutionAction,
+		Cedar: &ledgerfact.CedarInput{
+			AppliedMode:       cedareval.RolloutModeObserve,
+			ConfiguredMode:    cedareval.RolloutModeObserve,
+			DistributionState: "principal_unavailable",
+			Mapping:           mapping,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build rejected real mapper output: %v", err)
+	}
+	if fact.Evidence.EffectiveReasonCode == nil ||
+		*fact.Evidence.EffectiveReasonCode != cedareval.ReasonObserveNonAuthoritative {
+		t.Fatalf(
+			"effective reason = %v, want observe_non_authoritative",
+			fact.Evidence.EffectiveReasonCode,
+		)
+	}
+	if fact.ReasonCode != cedareval.ReasonPrincipalUnresolved {
+		t.Fatalf("reason_code = %s, want principal_unresolved", fact.ReasonCode)
+	}
+}
+
+func TestBuildDoesNotAliasCallerOwnedRiskOrDiagnostics(t *testing.T) {
+	evaluator := "local"
+	score := 0.2
+	risk := &ledgerfact.Risk{Status: ledgerfact.RiskStatusEvaluated, Evaluator: &evaluator, Score: &score, Signals: []string{"initial"}, Categories: []string{"read"}}
+	diagnostics := []cedareval.ContextDiagnostic{{Code: "null_omitted", Path: "/input"}}
+	fact, err := ledgerfact.Build(ledgerfact.BuildInput{
+		ToolCallID: "toolu_copy", DecidedAt: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC), ToolName: "Read", ExecutionAction: cedareval.EffectiveExecutionActionAllow, Risk: risk,
+		Cedar: &ledgerfact.CedarInput{AppliedMode: cedareval.RolloutModeObserve, ConfiguredMode: cedareval.RolloutModeObserve, DistributionState: "success", PolicyHash: strings.Repeat("a", 64), DeploymentID: strings.Repeat("b", 64), ResponseVersion: 1, RequestContractVersion: 1, EvaluatorVersion: "cedar-go/test", ContextDiagnostics: diagnostics,
+			Mapping: cedareval.DecisionMapping{EvaluationState: cedareval.EvaluationStateEvaluated, EvaluationPrincipal: &cedareval.EvaluationPrincipal{EntityType: cedareval.PrincipalEntityType, EntityID: "user@example.com"}, DerivedCedarAction: cedareval.DerivedCedarActionAllow, EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow, EvaluationReasonCode: cedareval.ReasonPolicyEvaluated, DecisionReasonCode: cedareval.ReasonPermit, EffectiveReasonCode: cedareval.ReasonObserveNonAuthoritative, DeterminingPolicyIDs: []string{"permit-read"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator = "mutated"
+	score = 0.9
+	risk.Signals[0] = "mutated"
+	diagnostics[0].Code = "mutated"
+	if *fact.Risk.Evaluator != "local" || *fact.Risk.Score != 0.2 || fact.Risk.Signals[0] != "initial" || fact.Evidence.ContextDiagnostics[0].Code != "null_omitted" {
+		t.Fatalf("fact retained caller-owned data: %+v", fact)
+	}
 }

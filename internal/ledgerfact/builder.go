@@ -95,7 +95,7 @@ func Build(input BuildInput) (DecisionFact, error) {
 		ParametersHash:       nullable(input.ParametersHash),
 		ExecutionAction:      input.ExecutionAction,
 		DeterminingPolicyIDs: []string{},
-		Risk:                 input.Risk,
+		Risk:                 cloneRisk(input.Risk),
 	}
 
 	if input.Cedar == nil {
@@ -163,10 +163,7 @@ func factReasonCode(cedar CedarInput) cedareval.ReasonCode {
 }
 
 func cedarEvidence(cedar CedarInput) Evidence {
-	diagnostics := cedar.ContextDiagnostics
-	if diagnostics == nil {
-		diagnostics = []cedareval.ContextDiagnostic{}
-	}
+	diagnostics := append([]cedareval.ContextDiagnostic{}, cedar.ContextDiagnostics...)
 	evidence := Evidence{
 		ResponseVersion:        nullableInt(cedar.ResponseVersion),
 		RequestContractVersion: nullableInt(cedar.RequestContractVersion),
@@ -188,6 +185,38 @@ func cedarEvidence(cedar CedarInput) Evidence {
 		evidence.CacheFetchedAt = &fetchedAt
 	}
 	return evidence
+}
+
+func cloneRisk(risk *Risk) *Risk {
+	if risk == nil {
+		return nil
+	}
+	cloned := *risk
+	cloned.Evaluator = cloneString(risk.Evaluator)
+	cloned.Score = cloneFloat64(risk.Score)
+	cloned.Level = cloneString(risk.Level)
+	cloned.Confidence = cloneFloat64(risk.Confidence)
+	cloned.Signals = append([]string{}, risk.Signals...)
+	cloned.Categories = append([]string{}, risk.Categories...)
+	cloned.Summary = cloneString(risk.Summary)
+	cloned.FailureKind = cloneString(risk.FailureKind)
+	return &cloned
+}
+
+func cloneString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneFloat64(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func factPrincipal(principal *cedareval.EvaluationPrincipal) *Principal {
