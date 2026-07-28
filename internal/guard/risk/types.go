@@ -6,7 +6,6 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/cedareval"
 	"github.com/kontext-security/kontext-cli/internal/guard/decision"
-	"github.com/kontext-security/kontext-cli/internal/providerpolicy"
 )
 
 type HookEvent struct {
@@ -95,20 +94,16 @@ type RiskEvent struct {
 }
 
 type RiskDecision struct {
-	Decision     Decision  `json:"decision"`
-	Reason       string    `json:"reason"`
-	ReasonCode   string    `json:"reason_code"`
-	EventID      string    `json:"event_id,omitempty"`
-	RiskScore    *float64  `json:"risk_score,omitempty"`
-	Threshold    *float64  `json:"threshold,omitempty"`
-	ModelVersion string    `json:"model_version,omitempty"`
-	GuardID      string    `json:"guard_id,omitempty"`
-	RiskEvent    RiskEvent `json:"risk_event"`
-	// ProviderPolicy carries the synced-policy dry-run evaluations for this
-	// event, grouped per provider; each evaluation is recorded as a separate
-	// request.decided ledger row.
-	ProviderPolicy []ProviderPolicyEvaluations `json:"provider_policy,omitempty"`
-	Cedar          *CedarEvidence              `json:"cedar,omitempty"`
+	Decision     Decision       `json:"decision"`
+	Reason       string         `json:"reason"`
+	ReasonCode   string         `json:"reason_code"`
+	EventID      string         `json:"event_id,omitempty"`
+	RiskScore    *float64       `json:"risk_score,omitempty"`
+	Threshold    *float64       `json:"threshold,omitempty"`
+	ModelVersion string         `json:"model_version,omitempty"`
+	GuardID      string         `json:"guard_id,omitempty"`
+	RiskEvent    RiskEvent      `json:"risk_event"`
+	Cedar        *CedarEvidence `json:"cedar,omitempty"`
 }
 
 // CedarEvidence is the local evaluator's decision evidence. It is separate
@@ -130,13 +125,6 @@ type CedarEvidence struct {
 	CacheExpired           bool                          `json:"cacheExpired"`
 	CacheInvalid           bool                          `json:"cacheInvalid"`
 	EvaluatorVersion       string                        `json:"evaluatorVersion"`
-}
-
-// ProviderPolicyEvaluations groups one provider's synced-policy evaluations
-// for an event.
-type ProviderPolicyEvaluations struct {
-	Provider    string                      `json:"provider"`
-	Evaluations []providerpolicy.Evaluation `json:"evaluations"`
 }
 
 func MarshalInput(value map[string]any) string {

@@ -13,16 +13,13 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/endpointconfig"
-	"github.com/kontext-security/kontext-cli/internal/githubpolicy"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
 	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	"github.com/kontext-security/kontext-cli/internal/hubspotpolicy"
 	"github.com/kontext-security/kontext-cli/internal/installation"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
 	"github.com/kontext-security/kontext-cli/internal/managedstream"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
-	"github.com/kontext-security/kontext-cli/internal/providerpolicy"
 	"github.com/kontext-security/kontext-cli/internal/runtimehost"
 )
 
@@ -33,12 +30,10 @@ type DaemonOptions struct {
 	StreamStatePath         string
 	StreamInterval          time.Duration
 	StreamHTTPClient        *http.Client
-	GithubPolicyCachePath   string
-	HubspotPolicyCachePath  string
 	CedarPolicyCachePath    string
 	EndpointConfigCachePath string
-	// PolicyRefreshInterval and PolicyHTTPClient apply to every provider's
-	// snapshot refresh loop (test knobs; zero values use defaults).
+	// PolicyRefreshInterval and PolicyHTTPClient apply to the Cedar policy
+	// refresh loop (test knobs; zero values use defaults).
 	PolicyRefreshInterval         time.Duration
 	PolicyHTTPClient              *http.Client
 	EndpointConfigRefreshInterval time.Duration
@@ -142,8 +137,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		cedarEnforcement = server.CedarEnforcementRemote
 	}
 
-	githubCache := newProviderPolicyCache(opts.GithubPolicyCachePath, dbPath, githubpolicy.Config, opts.Diagnostic)
-	hubspotCache := newProviderPolicyCache(opts.HubspotPolicyCachePath, dbPath, hubspotpolicy.Config, opts.Diagnostic)
 	cedarCachePath := opts.CedarPolicyCachePath
 	if cedarCachePath == "" {
 		cedarCachePath = cedarpolicy.DefaultCachePathForDB(dbPath)
@@ -172,14 +165,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
-		AgentName:  managedconfig.Agent,
-		DBPath:     dbPath,
-		SocketPath: socketPath,
-		ProviderPolicies: []server.ProviderPolicyBinding{
-			server.GithubPolicyBinding(githubCache),
-			server.HubspotPolicyBinding(hubspotCache),
-		},
-		EndpointID:         installationState.InstallationID,
+		AgentName:          managedconfig.Agent,
+		DBPath:             dbPath,
+		SocketPath:         socketPath,
 		CedarPolicies:      cedarCache,
 		CedarEnforcement:   cedarEnforcement,
 		Mode:               mode,
@@ -208,8 +196,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 
 	policyCtx, stopPolicyRefresh := context.WithCancel(ctx)
 	defer stopPolicyRefresh()
-	go runProviderPolicy(policyCtx, opts, githubpolicy.Config, githubCache, installationState.InstallationID)
-	go runProviderPolicy(policyCtx, opts, hubspotpolicy.Config, hubspotCache, installationState.InstallationID)
 	cedarRefresher := cedarpolicy.Refresher{
 		Client: cedarClient,
 		Cache:  cedarCache,
@@ -390,86 +376,6 @@ func loadManagedConfig(ctx context.Context) (managedconfig.LoadedConfig, string,
 		return managedconfig.LoadedConfig{}, "", fmt.Errorf("resolve install token: %w", err)
 	}
 	return loadedConfig, installToken, nil
-}
-
-// newProviderPolicyCache builds and disk-primes one provider's snapshot
-// cache, defaulting the path next to the guard DB.
-func newProviderPolicyCache(path, dbPath string, config providerpolicy.Config, diag diagnostic.Logger) *providerpolicy.Cache {
-	if path == "" {
-		path = providerpolicy.DefaultCachePathForDB(dbPath, config)
-	}
-	cache := providerpolicy.NewCache(path, config)
-	if err := cache.LoadPersisted(); err != nil {
-		diag.Printf("%s policy cache load: %v\n", config.ProviderKey, err)
-	}
-	return cache
-}
-
-// notConfiguredBackoffTicks stretches the refresh interval while the cloud
-// answers 404 (route not deployed for this provider yet): every endpoint
-// polling every provider each minute doubles fleet-wide policy traffic per
-// added provider for orgs that never activate it. At the default 60s tick
-// this backs off to ~10 minutes; the one-time activation lag when a provider
-// route first ships is acceptable.
-const notConfiguredBackoffTicks = 10
-
-func runProviderPolicy(ctx context.Context, opts DaemonOptions, config providerpolicy.Config, cache *providerpolicy.Cache, installationID string) {
-	interval := opts.PolicyRefreshInterval
-	if interval == 0 {
-		interval = providerpolicy.IntervalFromEnv(config)
-	}
-	skipTicks := 0
-	if refreshProviderPolicy(ctx, opts, config, cache, installationID) {
-		skipTicks = notConfiguredBackoffTicks - 1
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if skipTicks > 0 {
-				skipTicks--
-				continue
-			}
-			if refreshProviderPolicy(ctx, opts, config, cache, installationID) {
-				skipTicks = notConfiguredBackoffTicks - 1
-			}
-		}
-	}
-}
-
-// refreshProviderPolicy fetches and applies one snapshot; it reports whether
-// the cloud answered not-configured (the caller backs off polling then).
-func refreshProviderPolicy(ctx context.Context, opts DaemonOptions, config providerpolicy.Config, cache *providerpolicy.Cache, installationID string) bool {
-	loadedConfig, installToken, err := loadManagedConfig(ctx)
-	if err != nil {
-		cache.MarkFetchFailed(err)
-		opts.Diagnostic.Printf("%s policy config reload: %v\n", config.ProviderKey, err)
-		return false
-	}
-	snapshot, err := providerpolicy.FetchSnapshot(ctx, opts.PolicyHTTPClient, loadedConfig.Config.CloudURL, installToken, installationID, config)
-	if errors.Is(err, providerpolicy.ErrNotConfigured) {
-		// Contract: the cloud signals "provider deactivated / no rules" with an
-		// EMPTY snapshot (epoch 0, zero rules), never a 404. A 404 therefore
-		// means the route does not exist yet (older cloud during rollout —
-		// nothing was ever cached) or a transient infra blip — in which case
-		// wiping the persisted snapshot would drop valid policy until the next
-		// successful refresh (or forever, if the daemon restarts first). Keep
-		// whatever is cached, mark it stale, and skip the per-tick alarm log.
-		cache.MarkFetchFailed(err)
-		return true
-	}
-	if err != nil {
-		cache.MarkFetchFailed(err)
-		opts.Diagnostic.Printf("%s policy refresh: %v\n", config.ProviderKey, err)
-		return false
-	}
-	if err := cache.Apply(snapshot, time.Now().UTC()); err != nil {
-		opts.Diagnostic.Printf("%s policy persist: %v\n", config.ProviderKey, err)
-	}
-	return false
 }
 
 func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string) error {
