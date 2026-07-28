@@ -11,9 +11,40 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/cedareval"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/ledgerfact"
 )
 
-func TestSaveDecisionStoresCedarEvidenceWithoutPayload(t *testing.T) {
+// enforcedDenyCedarEvidence is the evidence a deny must carry: only an
+// enforce deployment can deny execution under the decision-fact contract,
+// and an evaluated fact must carry complete provenance.
+func enforcedDenyCedarEvidence() *risk.CedarEvidence {
+	return &risk.CedarEvidence{
+		PolicyHash:             strings.Repeat("a", 64),
+		DeploymentIdentity:     strings.Repeat("b", 64),
+		AppliedRolloutMode:     cedareval.RolloutModeEnforce,
+		ConfiguredRolloutMode:  cedareval.RolloutModeEnforce,
+		DistributionState:      "success",
+		EvaluatorVersion:       "cedar-go/test",
+		ResponseVersion:        1,
+		RequestContractVersion: 1,
+		Mapping: cedareval.DecisionMapping{
+			EvaluationState: cedareval.EvaluationStateEvaluated,
+			EvaluationPrincipal: &cedareval.EvaluationPrincipal{
+				EntityType: cedareval.PrincipalEntityType,
+				EntityID:   "user@example.com",
+			},
+			CedarDecision:            cedareval.DecisionDeny,
+			DerivedCedarAction:       cedareval.DerivedCedarActionDeny,
+			EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
+			EvaluationReasonCode:     cedareval.ReasonPolicyEvaluated,
+			DecisionReasonCode:       cedareval.ReasonExplicitForbid,
+			EffectiveReasonCode:      cedareval.ReasonExplicitForbid,
+			DeterminingPolicyIDs:     []string{"policy-test"},
+		},
+	}
+}
+
+func TestSaveDecisionWritesSingleDecisionFactRow(t *testing.T) {
 	store, err := OpenStore(t.TempDir() + "/guard.db")
 	if err != nil {
 		t.Fatal(err)
@@ -25,32 +56,89 @@ func TestSaveDecisionStoresCedarEvidenceWithoutPayload(t *testing.T) {
 		Reason:     "current allow",
 		ReasonCode: "current_allow",
 		RiskEvent:  risk.RiskEvent{Decision: risk.DecisionAllow},
-		Cedar:      &risk.CedarEvidence{PolicyHash: strings.Repeat("a", 64), DeploymentIdentity: strings.Repeat("b", 64), AppliedRolloutMode: cedareval.RolloutModeObserve, EvaluatorVersion: "cedar-go/test", Mapping: cedareval.DecisionMapping{EvaluationState: cedareval.EvaluationStateEvaluated, EvaluationPrincipal: principal, CedarDecision: cedareval.DecisionAllow, DerivedCedarAction: cedareval.DerivedCedarActionAllow, EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow, EvaluationReasonCode: cedareval.ReasonPolicyEvaluated, DecisionReasonCode: cedareval.ReasonPermit, EffectiveReasonCode: cedareval.ReasonObserveNonAuthoritative, DeterminingPolicyIDs: []string{"permit-read"}}},
+		Cedar:      &risk.CedarEvidence{PolicyHash: strings.Repeat("a", 64), DeploymentIdentity: strings.Repeat("b", 64), AppliedRolloutMode: cedareval.RolloutModeObserve, DistributionState: "success", EvaluatorVersion: "cedar-go/test", ResponseVersion: 1, RequestContractVersion: 1, Mapping: cedareval.DecisionMapping{EvaluationState: cedareval.EvaluationStateEvaluated, EvaluationPrincipal: principal, CedarDecision: cedareval.DecisionAllow, DerivedCedarAction: cedareval.DerivedCedarActionAllow, EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow, EvaluationReasonCode: cedareval.ReasonPolicyEvaluated, DecisionReasonCode: cedareval.ReasonPermit, EffectiveReasonCode: cedareval.ReasonObserveNonAuthoritative, DeterminingPolicyIDs: []string{"permit-read"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var category, result, reasonCode, contextJSON string
+
+	// One tool call, one decision row: no Cedar sidecar or provider dry-run
+	// siblings exist for new writes.
+	var decidedRows int
+	if err := store.db.QueryRowContext(context.Background(), `select count(*) from authorization_actions where session_id = 's1' and canonical_event_type = 'request.decided'`).Scan(&decidedRows); err != nil {
+		t.Fatal(err)
+	}
+	if decidedRows != 1 {
+		t.Fatalf("decided rows = %d, want exactly 1", decidedRows)
+	}
+	var sidecarRows int
+	if err := store.db.QueryRowContext(context.Background(), `select count(*) from authorization_actions where provider = 'cedar' or decision_category = 'dry_run'`).Scan(&sidecarRows); err != nil {
+		t.Fatal(err)
+	}
+	if sidecarRows != 0 {
+		t.Fatalf("sidecar rows = %d, want 0", sidecarRows)
+	}
+
+	var schemaVersion, toolCallID, appliedMode, evaluationState, cedarAction, category, result, reasonCode, policyHash, policyVersion, factJSON, contextJSON string
 	var captured any
-	err = store.db.QueryRowContext(context.Background(), `select decision_category, decision_result, reason_code, context_json, tool_input_captured_json from authorization_actions where provider = 'cedar'`).Scan(&category, &result, &reasonCode, &contextJSON, &captured)
+	err = store.db.QueryRowContext(context.Background(), `
+select schema_version, tool_call_id, applied_mode, evaluation_state, cedar_action,
+  decision_category, decision_result, reason_code, policy_hash, policy_version, decision_fact_json,
+  context_json, tool_input_captured_json
+from authorization_actions where session_id = 's1' and canonical_event_type = 'request.decided'`).Scan(
+		&schemaVersion, &toolCallID, &appliedMode, &evaluationState, &cedarAction,
+		&category, &result, &reasonCode, &policyHash, &policyVersion, &factJSON, &contextJSON, &captured)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if category != "dry_run" || result != "allow" || reasonCode != string(cedareval.ReasonObserveNonAuthoritative) || captured != nil {
-		t.Fatalf("Cedar row = category %q result %q reason %q captured %#v", category, result, reasonCode, captured)
+	if schemaVersion != ledgerfact.SchemaVersion || toolCallID != "tool-1" ||
+		appliedMode != "observe" || evaluationState != "evaluated" ||
+		cedarAction != "allow" || category != "cedar_policy" || result != "allow" ||
+		reasonCode != string(cedareval.ReasonPermit) ||
+		policyHash != strings.Repeat("a", 64) || policyVersion != strings.Repeat("b", 64) ||
+		captured != nil {
+		t.Fatalf("decided row = schema %q call %q mode %q state %q cedar %q category %q result %q reason %q hash %q version %q captured %#v",
+			schemaVersion, toolCallID, appliedMode, evaluationState, cedarAction, category, result, reasonCode, policyHash, policyVersion, captured)
 	}
-	var contextEvidence map[string]any
-	if err := json.Unmarshal([]byte(contextJSON), &contextEvidence); err != nil {
+
+	// The complete fact rides the row and satisfies the shared contract.
+	var fact ledgerfact.DecisionFact
+	if err := json.Unmarshal([]byte(factJSON), &fact); err != nil {
 		t.Fatal(err)
+	}
+	if err := fact.Validate(); err != nil {
+		t.Fatalf("stored fact violates the contract: %v", err)
+	}
+	if fact.CedarAction == nil || *fact.CedarAction != cedareval.DerivedCedarActionAllow ||
+		fact.ExecutionAction != cedareval.EffectiveExecutionActionAllow {
+		t.Fatalf("stored fact actions = %#v / %q", fact.CedarAction, fact.ExecutionAction)
+	}
+
+	var contextPayload map[string]any
+	if err := json.Unmarshal([]byte(contextJSON), &contextPayload); err != nil {
+		t.Fatal(err)
+	}
+	evidence, ok := contextPayload["policy_evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("decided-row context has no policy_evidence: %s", contextJSON)
 	}
 	for field, want := range map[string]string{
 		"evaluation_reason_code": string(cedareval.ReasonPolicyEvaluated),
 		"decision_reason_code":   string(cedareval.ReasonPermit),
 		"effective_reason_code":  string(cedareval.ReasonObserveNonAuthoritative),
 	} {
-		if got := contextEvidence[field]; got != want {
+		if got := evidence[field]; got != want {
 			t.Fatalf("context evidence %s = %#v, want %q", field, got, want)
 		}
+	}
+
+	// Exactly one decision receipt anchors the fact in the chain.
+	var decisionReceipts int
+	if err := store.db.QueryRowContext(context.Background(), `select count(*) from authorization_receipts where session_id = 's1' and receipt_type = 'decision'`).Scan(&decisionReceipts); err != nil {
+		t.Fatal(err)
+	}
+	if decisionReceipts != 1 {
+		t.Fatalf("decision receipts = %d, want exactly 1", decisionReceipts)
 	}
 }
 
@@ -518,6 +606,7 @@ func TestPostToolUseDoesNotCompleteBlockedAuthorizationAction(t *testing.T) {
 		Reason:     "blocked",
 		ReasonCode: "credential_access",
 		RiskEvent:  risk.RiskEvent{Type: risk.EventCredentialAccess, CommandSummary: "cat .env"},
+		Cedar:      enforcedDenyCedarEvidence(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -637,6 +726,7 @@ func TestLedgerSigningFeatureFlagSignsReceipts(t *testing.T) {
 		Reason:     "blocked",
 		ReasonCode: "blocked",
 		RiskEvent:  risk.RiskEvent{Type: risk.EventCredentialAccess},
+		Cedar:      enforcedDenyCedarEvidence(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -762,6 +852,7 @@ func TestUnsupportedCanonicalDecisionFailsClosedInLedger(t *testing.T) {
 		Reason:     "approval required",
 		ReasonCode: "approval_required",
 		RiskEvent:  risk.RiskEvent{Type: risk.EventNormalToolCall},
+		Cedar:      enforcedDenyCedarEvidence(),
 	})
 	if err != nil {
 		t.Fatal(err)
