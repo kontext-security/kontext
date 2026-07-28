@@ -32,6 +32,7 @@ func sampleClassifierRecord() riskclassifier.Record {
 		SVM: &riskclassifier.SVMVerdict{
 			Verdict:      riskclassifier.VerdictRisky,
 			Score:        1.2345,
+			Threshold:    0.4,
 			ModelVersion: "0.1.0",
 		},
 		LLM: &riskclassifier.LLMVerdict{
@@ -69,6 +70,9 @@ func TestSaveClassifierVerdictRoundTrip(t *testing.T) {
 	}
 	if record.SVM == nil || record.SVM.Score != 1.2345 || record.SVM.Verdict != riskclassifier.VerdictRisky {
 		t.Fatalf("svm verdict mismatch: %+v", record.SVM)
+	}
+	if record.SVM.Threshold != 0.4 {
+		t.Fatalf("svm threshold = %v, want 0.4", record.SVM.Threshold)
 	}
 	if record.LLM == nil || record.LLM.Raw != "RISKY" || record.LLM.DurationMs != 180 {
 		t.Fatalf("llm verdict mismatch: %+v", record.LLM)

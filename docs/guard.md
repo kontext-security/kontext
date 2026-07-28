@@ -142,11 +142,24 @@ Both models run on every command and both are logged:
 
 2. **Guardrail LLM** — the `RISKY`/`SAFE` prompt from the serving contract, sent to the same managed `llama-server` as the judge, in non-thinking mode (a guard wants a fast one-word verdict, not reasoning tokens). Enabled only when a local judge is running; otherwise records carry `llm_error` and the SVM verdict alone.
 
-`normalize_command` (IP → `1.1.1.1`, URL → `example.com`, long base64 → `BASE64`) is applied before both models, identically to training. `TestNormalizeCommandGoldenParity` and `TestSVMGoldenParity` fail on any drift — never edit the normalizer without regenerating fixtures.
+`normalize_command` (IP → `1.1.1.1`, URL → `example.com`, long base64 → `BASE64`) is applied before both models, identically to training. Three tests fail on any drift, and none of them should be "fixed" by loosening an assertion: `TestNormalizeCommandGoldenParity` and `TestSVMGoldenParity` pin this port to the Python reference, and `TestSVMUpstreamGoldenParity` cross-checks it against authz-bench's independent Go port via that repo's shipped vectors (`testdata/upstream-golden.json`, refreshed by copying `authz-bench/serve/model/golden.json`). Two independent ports agreeing is what catches a normalizer divergence — an upstream base64 skew once passed its own parity check because its vectors did not cover the boundary.
+
+### Serving threshold
+
+The SVM verdict uses a threshold on the signed margin carried by the artifact, so retuning it is a re-export rather than a code change. The model card ships `0.0` (LinearSVC's natural boundary, explicitly "tunable"); kontext serves `0.40`, chosen by `scripts/riskclassifier/pick_threshold.py`.
+
+That script exists because the shipped model is fit on all clean labeled data, leaving no held-out split to tune on — it runs 5-fold `cross_val_predict(method="decision_function")` with the identical pipeline so every score comes from a model that did not see that command, then sweeps thresholds over those out-of-fold scores. Measured on 20,966 commands (966 risky):
+
+| threshold | precision | recall | false alarms | misses |
+|---|---|---|---|---|
+| `0.00` (model card) | 0.934 | 0.906 | 62 | 91 |
+| **`0.40` (served)** | **0.987** | **0.834** | **11** | **160** |
+
+The operating point is precision-weighted (F0.5 argmax) because in observe mode the threshold does not gate data capture — every command is logged with its raw score either way. It only decides which rows the feedback UI presents as "would block", and a noisy would-block set burns the reviewer attention the ground-truth labels depend on. Misses stay recoverable: any past command can be flagged `should_block` from history, and deterministic rules already own known-bad. Each verdict records the threshold that decided it, so stored scores make any past verdict re-derivable under a new threshold.
 
 Verdicts land in the `risk_classifier_verdicts` table, one row per decided action:
 
-- `svm_verdict` / `svm_score` / `svm_model_version`, `llm_verdict` / `llm_raw` / `llm_model`, `enforced` (always `0` in v1)
+- `svm_verdict` / `svm_score` / `svm_threshold` / `svm_model_version`, `llm_verdict` / `llm_raw` / `llm_model`, `enforced` (always `0` in v1)
 - `command_redacted` — credential-redacted, capped at 8 KB. Classification runs on the raw command in memory; only the redacted form is persisted, because this dataset is exported back to authz-bench.
 - `agent_task` — the session's latest user prompt, captured from `UserPromptSubmit`. Only the `kontext start` wrapper path registers that hook, so daemon-only `kontext guard start` sessions leave it empty.
 - `user_feedback` — `should_allow` or `should_block`, written by the dashboard. This is the ground-truth label the whole pipeline exists to collect.

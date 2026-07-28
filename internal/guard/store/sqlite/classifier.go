@@ -37,6 +37,7 @@ create table if not exists risk_classifier_verdicts (
   agent_task text,
   svm_verdict text,
   svm_score real,
+  svm_threshold real,
   svm_model_version text,
   llm_verdict text,
   llm_raw text,
@@ -68,10 +69,11 @@ func (s *Store) SaveClassifierVerdict(ctx context.Context, record riskclassifier
 	stored := ClassifierVerdictRecord{ID: "rcv_" + uuid.NewString(), Record: record}
 
 	var svmVerdict, svmModelVersion any
-	var svmScore any
+	var svmScore, svmThreshold any
 	if record.SVM != nil {
 		svmVerdict = record.SVM.Verdict
 		svmScore = record.SVM.Score
+		svmThreshold = record.SVM.Threshold
 		svmModelVersion = record.SVM.ModelVersion
 	}
 	var llmVerdict, llmRaw, llmModel, llmDurationMs any
@@ -87,14 +89,14 @@ func (s *Store) SaveClassifierVerdict(ctx context.Context, record riskclassifier
 insert into risk_classifier_verdicts(
   id, action_id, session_id, tool_use_id, agent,
   command_redacted, command_hash, command_truncated, agent_task,
-  svm_verdict, svm_score, svm_model_version,
+  svm_verdict, svm_score, svm_threshold, svm_model_version,
   llm_verdict, llm_raw, llm_model, llm_duration_ms, llm_cached, llm_error,
   enforced, user_feedback, created_at
-) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		stored.ID, record.ActionID, record.SessionID, nullIfEmpty(record.ToolUseID), nullIfEmpty(record.Agent),
 		record.Command, record.CommandHash, record.CommandTruncated, nullIfEmpty(record.AgentTask),
-		svmVerdict, svmScore, svmModelVersion,
+		svmVerdict, svmScore, svmThreshold, svmModelVersion,
 		llmVerdict, llmRaw, llmModel, llmDurationMs, llmCached, nullIfEmpty(record.LLMError),
 		record.Enforced, nullIfEmpty(record.UserFeedback), record.CreatedAt.Format(time.RFC3339Nano),
 	)
@@ -171,7 +173,7 @@ where action_id = ?
 const classifierVerdictSelect = `
 select id, action_id, session_id, coalesce(tool_use_id, ''), coalesce(agent, ''),
   command_redacted, command_hash, command_truncated, coalesce(agent_task, ''),
-  svm_verdict, svm_score, svm_model_version,
+  svm_verdict, svm_score, svm_threshold, svm_model_version,
   llm_verdict, llm_raw, llm_model, llm_duration_ms, llm_cached, coalesce(llm_error, ''),
   enforced, coalesce(user_feedback, ''), feedback_at, created_at
 from risk_classifier_verdicts
@@ -180,7 +182,7 @@ from risk_classifier_verdicts
 func scanClassifierVerdict(scanner interface{ Scan(...any) error }) (ClassifierVerdictRecord, error) {
 	var record ClassifierVerdictRecord
 	var svmVerdict, svmModelVersion sql.NullString
-	var svmScore sql.NullFloat64
+	var svmScore, svmThreshold sql.NullFloat64
 	var llmVerdict, llmRaw, llmModel sql.NullString
 	var llmDurationMs sql.NullInt64
 	var llmCached bool
@@ -189,7 +191,7 @@ func scanClassifierVerdict(scanner interface{ Scan(...any) error }) (ClassifierV
 	if err := scanner.Scan(
 		&record.ID, &record.ActionID, &record.SessionID, &record.ToolUseID, &record.Agent,
 		&record.Command, &record.CommandHash, &record.CommandTruncated, &record.AgentTask,
-		&svmVerdict, &svmScore, &svmModelVersion,
+		&svmVerdict, &svmScore, &svmThreshold, &svmModelVersion,
 		&llmVerdict, &llmRaw, &llmModel, &llmDurationMs, &llmCached, &record.LLMError,
 		&record.Enforced, &record.UserFeedback, &feedbackAt, &created,
 	); err != nil {
@@ -199,6 +201,7 @@ func scanClassifierVerdict(scanner interface{ Scan(...any) error }) (ClassifierV
 		record.SVM = &riskclassifier.SVMVerdict{
 			Verdict:      svmVerdict.String,
 			Score:        svmScore.Float64,
+			Threshold:    svmThreshold.Float64,
 			ModelVersion: svmModelVersion.String,
 		}
 	}
