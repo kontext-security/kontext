@@ -1,22 +1,6 @@
-import type { Event, PolicyProfile, RiskEvent, Session } from "./types";
+import type { Event, Session } from "./types";
 
 export const SAMPLE_SESSION_ID = "session-local-guard-preview";
-const SAMPLE_POLICY_VERSION = "guard-policy-v1";
-const SAMPLE_POLICY_PROFILE = "balanced";
-const SAMPLE_RULE_PACK = "guard-default";
-const SAMPLE_RISK_POLICY = {
-  policy_version: SAMPLE_POLICY_VERSION,
-  policy_profile: SAMPLE_POLICY_PROFILE,
-  policy_rule_pack: SAMPLE_RULE_PACK,
-} satisfies Pick<RiskEvent, "policy_version" | "policy_profile" | "policy_rule_pack">;
-
-export const SAMPLE_POLICY: PolicyProfile = {
-  profile: SAMPLE_POLICY_PROFILE,
-  recommended_profile: SAMPLE_POLICY_PROFILE,
-  version: SAMPLE_POLICY_VERSION,
-  rule_pack: SAMPLE_RULE_PACK,
-  loaded_at: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
-};
 
 export const SAMPLE_SESSIONS: Session[] = [
   {
@@ -35,9 +19,9 @@ export const SAMPLE_EVENTS: Event[] = [
     id: "evt-prod-mutation-001",
     session_id: SAMPLE_SESSION_ID,
     tool_name: "Bash",
-    decision: "deny",
-    reason_code: "production_mutation",
-    reason: "Production mutation blocked by deterministic policy.",
+    decision: "allow",
+    reason_code: "judge_deny",
+    reason: "Local judge flagged a production mutation as high risk.",
     created_at: new Date(Date.now() - 7 * 60 * 1000).toISOString(),
     risk_event: {
       type: "provider_operation",
@@ -46,21 +30,18 @@ export const SAMPLE_EVENTS: Event[] = [
       environment: "production",
       command_summary: "kubectl delete deployment checkout-api -n production",
       signals: ["production", "mutation", "persistent_resource"],
-      guard_id: "guard.production_mutation.v1",
-      decision_stage: "deterministic_deny",
-      ...SAMPLE_RISK_POLICY,
-      policy_rule_id: "guard.production_mutation.v1",
-      policy_rule_category: "production_mutation",
-      policy_signals: ["production", "mutation"],
+      decision_stage: "judge_deny",
+      judge_risk_level: "high",
+      judge_categories: ["production_mutation"],
     },
   },
   {
     id: "evt-credential-read-001",
     session_id: SAMPLE_SESSION_ID,
     tool_name: "Read",
-    decision: "deny",
-    reason_code: "credential_access_without_intent",
-    reason: "Credential access blocked by deterministic policy.",
+    decision: "allow",
+    reason_code: "judge_deny",
+    reason: "Local judge flagged credential access as high risk.",
     created_at: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
     risk_event: {
       type: "credential_access",
@@ -69,21 +50,18 @@ export const SAMPLE_EVENTS: Event[] = [
       path_class: "~/.aws/credentials",
       command_summary: "Read local AWS credentials without explicit user intent",
       signals: ["credential_path", "credential_observed"],
-      guard_id: "guard.credential_access.v1",
-      decision_stage: "deterministic_deny",
-      ...SAMPLE_RISK_POLICY,
-      policy_rule_id: "guard.credential_access.v1",
-      policy_rule_category: "credential_access",
-      policy_signals: ["credential_file_path"],
+      decision_stage: "judge_deny",
+      judge_risk_level: "high",
+      judge_categories: ["credential_access"],
     },
   },
   {
     id: "evt-admin-reindex-001",
     session_id: SAMPLE_SESSION_ID,
     tool_name: "Bash",
-    decision: "deny",
+    decision: "allow",
     reason_code: "judge_deny",
-    reason: "Local judge denied a risky staging admin mutation.",
+    reason: "Local judge flagged a risky staging admin mutation.",
     created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
     risk_event: {
       type: "normal_tool_call",
@@ -93,7 +71,6 @@ export const SAMPLE_EVENTS: Event[] = [
       command_summary: "curl -X POST $PAYMENTS_ADMIN_URL/reindex",
       signals: ["network_call", "admin_endpoint"],
       decision_stage: "judge_deny",
-      ...SAMPLE_RISK_POLICY,
       judge_duration_ms: 284,
       judge_risk_level: "high",
       judge_categories: ["admin_mutation"],
@@ -103,9 +80,9 @@ export const SAMPLE_EVENTS: Event[] = [
     id: "evt-private-key-decrypt-001",
     session_id: SAMPLE_SESSION_ID,
     tool_name: "Bash",
-    decision: "deny",
-    reason_code: "unknown_high_risk_command",
-    reason: "Unknown high-risk command blocked by deterministic policy.",
+    decision: "allow",
+    reason_code: "judge_deny",
+    reason: "Local judge flagged an unfamiliar decryption command as high risk.",
     created_at: new Date(Date.now() - 4 * 60 * 1000).toISOString(),
     risk_event: {
       type: "unknown",
@@ -114,12 +91,9 @@ export const SAMPLE_EVENTS: Event[] = [
       environment: "local",
       command_summary: "openssl rsautl -decrypt -inkey private.pem -in payload.bin",
       signals: ["unknown_high_risk", "credential_observed"],
-      guard_id: "guard.unknown_high_risk.v1",
-      decision_stage: "deterministic_deny",
-      ...SAMPLE_RISK_POLICY,
-      policy_rule_id: "guard.unknown_high_risk.v1",
-      policy_rule_category: "unknown_high_risk",
-      policy_signals: ["unknown_high_risk", "credential_observed"],
+      decision_stage: "judge_deny",
+      judge_risk_level: "high",
+      judge_categories: ["credential_access"],
     },
   },
   {
@@ -127,8 +101,8 @@ export const SAMPLE_EVENTS: Event[] = [
     session_id: SAMPLE_SESSION_ID,
     tool_name: "Read",
     decision: "allow",
-    reason_code: "workspace_read",
-    reason: "Workspace read permitted by deterministic policy.",
+    reason_code: "judge_allow",
+    reason: "Local judge assessed a workspace read as low risk.",
     created_at: new Date(Date.now() - 3.5 * 60 * 1000).toISOString(),
     risk_event: {
       type: "normal_tool_call",
@@ -137,12 +111,8 @@ export const SAMPLE_EVENTS: Event[] = [
       path_class: "workspace_file",
       command_summary: "Read README.md",
       signals: ["workspace_file", "documentation_read"],
-      guard_id: "guard.workspace_read.v1",
-      decision_stage: "deterministic_allow",
-      ...SAMPLE_RISK_POLICY,
-      policy_rule_id: "guard.workspace_read.v1",
-      policy_rule_category: "workspace_read",
-      policy_signals: ["workspace_file"],
+      decision_stage: "judge_allow",
+      judge_risk_level: "low",
     },
   },
   {
@@ -150,7 +120,7 @@ export const SAMPLE_EVENTS: Event[] = [
     session_id: SAMPLE_SESSION_ID,
     tool_name: "Bash",
     decision: "allow",
-    reason_code: "known_safe_command",
+    reason_code: "judge_allow",
     reason: "Local judge allowed a low-risk read-only command.",
     created_at: new Date(Date.now() - 3.2 * 60 * 1000).toISOString(),
     risk_event: {
@@ -161,7 +131,6 @@ export const SAMPLE_EVENTS: Event[] = [
       command_summary: "git status --short",
       signals: ["known_safe_command", "local_workspace"],
       decision_stage: "judge_allow",
-      ...SAMPLE_RISK_POLICY,
       judge_duration_ms: 142,
       judge_risk_level: "low",
     },
