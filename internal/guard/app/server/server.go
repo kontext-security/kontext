@@ -51,8 +51,6 @@ type Options struct {
 	Judge                judge.Judge
 	PolicyConfig         policy.Config
 	PolicyConfigProvider PolicyConfigProvider
-	ProviderPolicies     []ProviderPolicyBinding
-	EndpointID           string
 	CedarPolicies        cedarpolicy.SnapshotProvider
 	CedarEnforcement     CedarEnforcementSource
 	CurrentSessionID     string
@@ -100,8 +98,6 @@ func NewServerWithOptions(store *sqlite.Store, opts Options) (*Server, error) {
 	return NewServerWithPolicyConfigAndOptions(store, NewRiskPolicyProviderWithOptions(RiskPolicyProviderOptions{
 		Judge:                opts.Judge,
 		PolicyConfigProvider: configProvider,
-		ProviderPolicies:     opts.ProviderPolicies,
-		EndpointID:           opts.EndpointID,
 	}), policyStore, opts)
 }
 
