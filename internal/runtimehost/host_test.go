@@ -218,8 +218,14 @@ func TestStartWiresLocalJudgeFromEnv(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("events len = %d, want 1", len(events))
 	}
-	if events[0].Decision != risk.DecisionDeny || events[0].RiskEvent.DecisionStage != risk.DecisionStageJudgeDeny {
-		t.Fatalf("stored decision = %q stage = %q, want judge deny", events[0].Decision, events[0].RiskEvent.DecisionStage)
+	// The judge is advisory: its deny verdict survives as analysis on the
+	// risk event, never as the decision. The row's flat reason belongs to
+	// the decision fact (no Cedar deployment is wired here, so the fact is
+	// the disabled shape).
+	if events[0].Decision != risk.DecisionAllow ||
+		events[0].RiskEvent.DecisionStage != risk.DecisionStageAdvisory ||
+		events[0].RiskEvent.ReasonCode != risk.DecisionStageJudgeDeny {
+		t.Fatalf("stored decision = %q stage = %q analysis reason = %q, want advisory judge-deny analysis", events[0].Decision, events[0].RiskEvent.DecisionStage, events[0].RiskEvent.ReasonCode)
 	}
 	if events[0].RiskEvent.JudgeModel != "test-local-judge" {
 		t.Fatalf("judge model = %q, want test-local-judge", events[0].RiskEvent.JudgeModel)

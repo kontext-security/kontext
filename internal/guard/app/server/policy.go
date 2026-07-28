@@ -68,22 +68,19 @@ func (p RiskPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent
 	riskEvent := risk.NormalizeHookEvent(event)
 	policyResult := p.policyEngine.Evaluate(riskEvent, p.activePolicyConfig(ctx))
 	applyPolicyMetadata(&riskEvent, policyResult)
-	// Local layering: deterministic guardrails > probabilistic signals. The
-	// synced provider-policy layer (GitHub/HubSpot hosted rules) was removed
-	// without ever being deployed; organization policy is native Cedar,
-	// evaluated by the cedarPolicyProvider wrapping this chain.
-	if policyResult.Decision == guardpolicy.DecisionDeny {
-		return deterministicDenyDecision(riskEvent, policyResult), nil
-	}
+	// The local chain is advisory: Cedar (the cedarPolicyProvider wrapping
+	// this chain) is the only engine that decides. Guardrail matches and
+	// judge analysis are recorded as risk signals on the decision fact; the
+	// chain's own outcome is always allow.
 	if p.judge == nil {
-		return deterministicAllowDecision(riskEvent, policyResult), nil
+		return advisoryDecision(riskEvent, policyResult), nil
 	}
 
 	result, err := p.judge.Decide(ctx, judgeInputFromRiskEvent(event, riskEvent))
 	if err != nil {
 		return judgeFailOpenDecision(riskEvent, p.judge, err), nil
 	}
-	return judgeDecision(riskEvent, result), nil
+	return judgeAdvisoryDecision(riskEvent, result), nil
 }
 
 func (p RiskPolicyProvider) asyncTelemetryDecision(event risk.HookEvent) risk.RiskDecision {
@@ -99,28 +96,19 @@ func (p RiskPolicyProvider) asyncTelemetryDecision(event risk.HookEvent) risk.Ri
 	}
 }
 
-func deterministicDenyDecision(riskEvent risk.RiskEvent, policyResult guardpolicy.Result) risk.RiskDecision {
-	riskEvent.Decision = risk.DecisionDeny
-	riskEvent.ReasonCode = policyResult.ReasonCode
-	riskEvent.GuardID = policyResult.RuleID
-	riskEvent.DecisionStage = risk.DecisionStageDeterministicDeny
-	return risk.RiskDecision{
-		Decision:   risk.DecisionDeny,
-		Reason:     policyResult.Reason,
-		ReasonCode: policyResult.ReasonCode,
-		GuardID:    policyResult.RuleID,
-		RiskEvent:  riskEvent,
-	}
-}
-
-func deterministicAllowDecision(riskEvent risk.RiskEvent, policyResult guardpolicy.Result) risk.RiskDecision {
+// advisoryDecision records the deterministic guardrail analysis without
+// deciding: matched rules survive as policy metadata and signals on the risk
+// event, and the chain's outcome is always allow. Cedar alone decides.
+func advisoryDecision(riskEvent risk.RiskEvent, policyResult guardpolicy.Result) risk.RiskDecision {
 	riskEvent.Decision = risk.DecisionAllow
 	riskEvent.ReasonCode = policyResult.ReasonCode
-	riskEvent.DecisionStage = "deterministic_allow"
+	riskEvent.GuardID = policyResult.RuleID
+	riskEvent.DecisionStage = risk.DecisionStageAdvisory
 	return risk.RiskDecision{
 		Decision:   risk.DecisionAllow,
 		Reason:     policyResult.Reason,
 		ReasonCode: policyResult.ReasonCode,
+		GuardID:    policyResult.RuleID,
 		RiskEvent:  riskEvent,
 	}
 }
@@ -142,17 +130,18 @@ func judgeFailOpenDecision(riskEvent risk.RiskEvent, localJudge judge.Judge, err
 	}
 }
 
-func judgeDecision(riskEvent risk.RiskEvent, result judge.Result) risk.RiskDecision {
-	decision := risk.DecisionAllow
+// judgeAdvisoryDecision records the judge's analysis without deciding. The
+// judge's verdict survives as the reason code and risk fields on the fact's
+// advisory block; the chain's outcome is always allow.
+func judgeAdvisoryDecision(riskEvent risk.RiskEvent, result judge.Result) risk.RiskDecision {
 	reasonCode := risk.DecisionStageJudgeAllow
 	if result.Output.Decision == judge.DecisionDeny {
-		decision = risk.DecisionDeny
 		reasonCode = risk.DecisionStageJudgeDeny
 	}
 	duration := result.Metadata.DurationMs
-	riskEvent.Decision = decision
+	riskEvent.Decision = risk.DecisionAllow
 	riskEvent.ReasonCode = reasonCode
-	riskEvent.DecisionStage = reasonCode
+	riskEvent.DecisionStage = risk.DecisionStageAdvisory
 	riskEvent.GuardID = "local_llm_judge"
 	riskEvent.JudgeRuntime = result.Metadata.Runtime
 	riskEvent.JudgeModel = result.Metadata.Model
@@ -161,7 +150,7 @@ func judgeDecision(riskEvent risk.RiskEvent, result judge.Result) risk.RiskDecis
 	riskEvent.JudgeCategories = result.Output.Categories
 
 	return risk.RiskDecision{
-		Decision:   decision,
+		Decision:   risk.DecisionAllow,
 		Reason:     result.Output.Reason,
 		ReasonCode: reasonCode,
 		GuardID:    "local_llm_judge",

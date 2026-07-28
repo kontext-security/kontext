@@ -116,7 +116,7 @@ func TestEngineEvaluateProfileBehavior(t *testing.T) {
 			profile:  ProfileBalanced,
 			decision: DecisionDeny,
 			category: CategoryProductionMutation,
-			reason:   "production mutation blocked by deterministic policy",
+			reason:   "production mutation flagged by deterministic guardrails",
 		},
 		{
 			name: "production mutation denies in strict",
@@ -127,7 +127,7 @@ func TestEngineEvaluateProfileBehavior(t *testing.T) {
 			profile:  ProfileStrict,
 			decision: DecisionDeny,
 			category: CategoryProductionMutation,
-			reason:   "production mutation blocked by deterministic policy",
+			reason:   "production mutation flagged by deterministic guardrails",
 		},
 		{
 			name: "credential access without intent allows in relaxed",
@@ -146,7 +146,7 @@ func TestEngineEvaluateProfileBehavior(t *testing.T) {
 			profile:  ProfileBalanced,
 			decision: DecisionDeny,
 			category: CategoryCredentialAccess,
-			reason:   "credential access blocked by deterministic policy",
+			reason:   "credential access flagged by deterministic guardrails",
 		},
 		{
 			name: "credential access without intent denies in strict",
@@ -156,7 +156,7 @@ func TestEngineEvaluateProfileBehavior(t *testing.T) {
 			profile:  ProfileStrict,
 			decision: DecisionDeny,
 			category: CategoryCredentialAccess,
-			reason:   "credential access blocked by deterministic policy",
+			reason:   "credential access flagged by deterministic guardrails",
 		},
 		{
 			name: "unknown high-risk command allows in relaxed",

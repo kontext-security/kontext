@@ -37,7 +37,7 @@ func DefaultRulePack() RulePack {
 				ID:             "guard.production_mutation.v1",
 				Category:       CategoryProductionMutation,
 				ReasonCode:     "production_mutation",
-				Reason:         "production mutation blocked by deterministic policy",
+				Reason:         "production mutation flagged by deterministic guardrails",
 				MatchedSignals: []string{"production", "mutation"},
 				When: func(event risk.RiskEvent) bool {
 					return event.Environment == "production" &&
@@ -50,7 +50,7 @@ func DefaultRulePack() RulePack {
 				ID:             "guard.credential_access.v1",
 				Category:       CategoryCredentialAccess,
 				ReasonCode:     "credential_access_without_intent",
-				Reason:         "credential access blocked by deterministic policy",
+				Reason:         "credential access flagged by deterministic guardrails",
 				MatchedSignals: []string{"credential_path", "shell_credential_access", "credential_observed"},
 				When: func(event risk.RiskEvent) bool {
 					return event.Type == risk.EventCredentialAccess && !event.ExplicitUserIntent
