@@ -133,6 +133,21 @@ var forbiddenReasonCodes = map[cedareval.ReasonCode]bool{
 	cedareval.ReasonRemoteDelegated:         true,
 }
 
+// evaluatedOnlyReasonCodes mirror the shared contract's
+// DECISION_FACT_EVALUATED_ONLY_REASON_CODES: causes that can only arise from
+// a completed Cedar evaluation (ask_unavailable from an enforced ask
+// verdict). A fact whose evaluation never completed must not attribute its
+// outcome to any of these — without this list, the evaluation-evidence check
+// would compare the submitted reason with itself.
+var evaluatedOnlyReasonCodes = map[cedareval.ReasonCode]bool{
+	cedareval.ReasonPolicyEvaluated: true,
+	cedareval.ReasonPermit:          true,
+	cedareval.ReasonAskDerived:      true,
+	cedareval.ReasonExplicitForbid:  true,
+	cedareval.ReasonDefaultDeny:     true,
+	cedareval.ReasonAskUnavailable:  true,
+}
+
 // evaluationFailureReasonCodes mirror the shared contract's
 // POLICY_EVALUATION_FAILURE_REASON_CODES: the stable causes a failed
 // evaluation may carry.
@@ -331,6 +346,15 @@ func (fact DecisionFact) validateAuthority(invalid func(string, ...any)) {
 }
 
 func (fact DecisionFact) validateEvidenceCoherence(invalid func(string, ...any)) {
+	if fact.EvaluationState != cedareval.EvaluationStateEvaluated &&
+		evaluatedOnlyReasonCodes[fact.ReasonCode] {
+		invalid("a fact without a completed evaluation cannot cite a Cedar verdict as its cause")
+	}
+	if fact.EvaluationState == cedareval.EvaluationStatePrincipalUnresolved &&
+		fact.ReasonCode != cedareval.ReasonPrincipalUnresolved {
+		invalid("an unresolved principal is its own cause")
+	}
+
 	expectedEvaluationReason := fact.ReasonCode
 	if fact.EvaluationState == cedareval.EvaluationStateEvaluated {
 		expectedEvaluationReason = cedareval.ReasonPolicyEvaluated
@@ -466,6 +490,9 @@ func (fact DecisionFact) validateRisk(invalid func(string, ...any)) {
 			invalid("%s risk cannot carry evaluation results", risk.Status)
 		}
 		if risk.Status == RiskStatusFailed {
+			// Summary is deliberately NOT a result here: on a failed run
+			// advisoryRisk records the human-readable failure explanation in
+			// it. Scores, levels, signals and categories stay forbidden above.
 			if risk.Evaluator == nil || risk.FailureKind == nil {
 				invalid("failed risk requires evaluator and failure_kind")
 			}
