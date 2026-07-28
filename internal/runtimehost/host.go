@@ -77,6 +77,9 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
+	if mode != guardhookruntime.ModeObserve && (opts.CedarPolicies == nil || opts.CedarEnforcement == server.CedarEnforcementOff) {
+		return nil, errors.New("enforce and remote modes require a managed Cedar policy source")
+	}
 	sessionID := strings.TrimSpace(opts.SessionID)
 	if sessionID == "" {
 		sessionID = NewSessionID()

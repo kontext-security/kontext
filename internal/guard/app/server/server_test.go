@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext-cli/internal/cedareval"
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	"github.com/kontext-security/kontext-cli/internal/guard/policy"
 	"github.com/kontext-security/kontext-cli/internal/guard/policyconfig"
@@ -46,6 +47,36 @@ func newTestServerWithPolicyConfig(t *testing.T, store *sqlite.Store, policyStor
 	return server
 }
 
+// enforcedDenyEvidence returns the Cedar evidence an injected provider must
+// carry for a deny: only an enforce deployment can deny execution, so a fake
+// that denies without it would be rejected by the decision-fact contract.
+func enforcedDenyEvidence() *risk.CedarEvidence {
+	return &risk.CedarEvidence{
+		PolicyHash:             strings.Repeat("a", 64),
+		DeploymentIdentity:     strings.Repeat("b", 64),
+		AppliedRolloutMode:     cedareval.RolloutModeEnforce,
+		ConfiguredRolloutMode:  cedareval.RolloutModeEnforce,
+		DistributionState:      "success",
+		EvaluatorVersion:       "cedar-go/test",
+		ResponseVersion:        1,
+		RequestContractVersion: 1,
+		Mapping: cedareval.DecisionMapping{
+			EvaluationState: cedareval.EvaluationStateEvaluated,
+			EvaluationPrincipal: &cedareval.EvaluationPrincipal{
+				EntityType: cedareval.PrincipalEntityType,
+				EntityID:   "user@example.com",
+			},
+			CedarDecision:            cedareval.DecisionDeny,
+			DerivedCedarAction:       cedareval.DerivedCedarActionDeny,
+			EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
+			EvaluationReasonCode:     cedareval.ReasonPolicyEvaluated,
+			DecisionReasonCode:       cedareval.ReasonExplicitForbid,
+			EffectiveReasonCode:      cedareval.ReasonExplicitForbid,
+			DeterminingPolicyIDs:     []string{"policy-test"},
+		},
+	}
+}
+
 func TestStorePersistsSummaryCounts(t *testing.T) {
 	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
 	if err != nil {
@@ -67,7 +98,9 @@ func TestStorePersistsSummaryCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Actions != 3 || summary.Warnings != 0 || summary.Critical != 2 || summary.Sessions != 1 {
+	// The local chain is advisory: guardrail/judge analysis is recorded but
+	// nothing denies, so no action is critical.
+	if summary.Actions != 3 || summary.Warnings != 0 || summary.Critical != 0 || summary.Sessions != 1 {
 		t.Fatalf("summary = %+v", summary)
 	}
 }
@@ -86,6 +119,7 @@ func TestProcessHookEventUsesPolicyProvider(t *testing.T) {
 			RiskEvent: risk.RiskEvent{
 				Type: risk.EventUnknown,
 			},
+			Cedar: enforcedDenyEvidence(),
 		},
 	}
 	server := newTestServerWithPolicy(t, store, &policy)
@@ -401,6 +435,7 @@ func TestProcessHookEventPreservesRiskMetadata(t *testing.T) {
 				ModelVersion: "model-v1",
 				GuardID:      "guard-1",
 			},
+			Cedar: enforcedDenyEvidence(),
 		},
 	}
 	server := newTestServerWithPolicy(t, store, &policy)
@@ -443,6 +478,7 @@ func TestDashboardEventsHideModelMetadata(t *testing.T) {
 				JudgeModel:     "qwen3-0.6b-q4",
 				JudgeRiskLevel: "high",
 			},
+			Cedar: enforcedDenyEvidence(),
 		},
 	}
 	server := newTestServerWithPolicy(t, store, &policy)
@@ -526,7 +562,9 @@ func TestJudgePolicyDeniesFromLocalJudge(t *testing.T) {
 	if localJudge.input.ToolName != "Bash" || localJudge.input.ToolInput.Command != "python scripts/deploy.py --dry-run" {
 		t.Fatalf("judge input = %+v", localJudge.input)
 	}
-	if decision.Decision != risk.DecisionDeny || decision.ReasonCode != "judge_deny" {
+	// The judge is advisory: its deny verdict is recorded as analysis, but
+	// the chain never decides — only Cedar can block.
+	if decision.Decision != risk.DecisionAllow || decision.ReasonCode != "judge_deny" {
 		t.Fatalf("decision = %+v", decision)
 	}
 	if decision.RiskEvent.DecisionStage != risk.DecisionStageJudgeDeny || decision.RiskEvent.JudgeModel != "qwen3-0.6b-q4" || decision.RiskEvent.JudgeRiskLevel != "high" {
@@ -791,7 +829,10 @@ func TestJudgePolicyFailsOpenWhenJudgeUnavailable(t *testing.T) {
 	}
 }
 
-func TestJudgePolicyDeterministicDecisionSkipsJudge(t *testing.T) {
+// A matched guardrail no longer short-circuits anything: the chain is
+// advisory, so the judge still runs and the match survives as policy
+// metadata on an allow.
+func TestJudgePolicyGuardrailMatchIsAdvisory(t *testing.T) {
 	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
 	if err != nil {
 		t.Fatal(err)
@@ -811,10 +852,10 @@ func TestJudgePolicyDeterministicDecisionSkipsJudge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if localJudge.calls != 0 {
-		t.Fatalf("judge calls = %d, want 0", localJudge.calls)
+	if localJudge.calls != 1 {
+		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
 	}
-	if decision.Decision != risk.DecisionDeny || decision.RiskEvent.DecisionStage != risk.DecisionStageDeterministicDeny {
+	if decision.Decision != risk.DecisionAllow {
 		t.Fatalf("decision = %+v", decision)
 	}
 	if decision.RiskEvent.PolicyRuleID != "guard.destructive_persistent_resource.v1" ||
@@ -1045,7 +1086,9 @@ func TestStoreListsSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].SessionID != "s1" || sessions[0].Critical != 1 {
+	// Advisory chain: the credential-access read is recorded as risk
+	// analysis, not a deny, so nothing is critical.
+	if len(sessions) != 1 || sessions[0].SessionID != "s1" || sessions[0].Critical != 0 {
 		t.Fatalf("sessions = %+v", sessions)
 	}
 }

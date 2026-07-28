@@ -49,11 +49,8 @@ func TestInstalledHookCommandUsesCanonicalRootHookHandler(t *testing.T) {
 	if !strings.Contains(got, "hook --agent claude") {
 		t.Fatalf("hook command did not use canonical root handler: %s", got)
 	}
-	if !strings.Contains(got, `--mode "${KONTEXT_MODE:-observe}"`) {
-		t.Fatalf("hook command did not leave mode overridable through KONTEXT_MODE: %s", got)
-	}
-	if strings.Contains(got, "--mode observe") {
-		t.Fatalf("hook command hardcoded observe mode: %s", got)
+	if !strings.Contains(got, `--mode observe`) {
+		t.Fatalf("hook command did not pin local hooks to observe mode: %s", got)
 	}
 	if !strings.Contains(got, "--socket ") || !strings.Contains(got, "/tmp/kontext-custom.sock") {
 		t.Fatalf("hook command did not carry custom socket path: %s", got)
@@ -69,7 +66,7 @@ func TestIsGuardHookCommandRecognizesInstalledGuardHooks(t *testing.T) {
 		"/usr/local/bin/kontext hook --agent claude --mode observe",
 		"'/usr/local/bin/kontext' hook --agent claude --mode observe",
 		"cd '/repo' && go run ./cmd/kontext hook --agent claude --mode observe",
-		`/usr/local/bin/kontext hook --agent claude --mode "${KONTEXT_MODE:-observe}" --socket /tmp/kontext-custom.sock`,
+		`/usr/local/bin/kontext hook --agent claude --mode observe --socket /tmp/kontext-custom.sock`,
 	} {
 		if !isGuardHookCommand(command) {
 			t.Fatalf("isGuardHookCommand(%q) = false, want true", command)
@@ -94,7 +91,7 @@ func TestMergeHooksInstallsOnlyToolHooks(t *testing.T) {
 				},
 			},
 		},
-	}, `/usr/local/bin/kontext hook --agent claude --mode "${KONTEXT_MODE:-observe}" --socket /tmp/kontext.sock`)
+	}, `/usr/local/bin/kontext hook --agent claude --mode observe --socket /tmp/kontext.sock`)
 
 	if _, ok := hooks["PreToolUse"]; !ok {
 		t.Fatal("PreToolUse hook missing")
@@ -126,7 +123,7 @@ func TestMergeHooksPreservesNonGuardHookInMixedGroup(t *testing.T) {
 				},
 			},
 		},
-	}, `/usr/local/bin/kontext hook --agent claude --mode "${KONTEXT_MODE:-observe}" --socket /tmp/kontext.sock`)
+	}, `/usr/local/bin/kontext hook --agent claude --mode observe --socket /tmp/kontext.sock`)
 
 	list := hooks["PreToolUse"].([]any)
 	group := list[0].(map[string]any)
