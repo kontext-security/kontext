@@ -18,10 +18,6 @@ const (
 	VerdictRisky    = "risky"
 	VerdictNotRisky = "not_risky"
 
-	// svmThreshold is the decision boundary on the signed margin (contract
-	// default 0; tunable later, after feedback data validates it).
-	svmThreshold = 0.0
-
 	portableSchema = "kontext-svm-portable/1"
 )
 
@@ -29,10 +25,13 @@ const (
 var embeddedModel []byte
 
 // SVMVerdict is the SVM half of a classifier record: the shipped
-// char n-gram + LinearSVM model's signed margin and label.
+// char n-gram + LinearSVM model's signed margin and label. Threshold is
+// recorded alongside so the dataset stays self-describing when the serving
+// operating point is retuned — the raw score makes any verdict re-derivable.
 type SVMVerdict struct {
 	Verdict      string  `json:"verdict"`
 	Score        float64 `json:"score"`
+	Threshold    float64 `json:"threshold"`
 	ModelVersion string  `json:"model_version"`
 }
 
@@ -41,6 +40,7 @@ type SVMVerdict struct {
 // Python reference is enforced by TestSVMGoldenParity.
 type SVM struct {
 	modelVersion string
+	threshold    float64
 	ngramMin     int
 	ngramMax     int
 	intercept    float64
@@ -52,6 +52,7 @@ type SVM struct {
 type portableModel struct {
 	Schema       string    `json:"schema"`
 	ModelVersion string    `json:"model_version"`
+	Threshold    float64   `json:"threshold"`
 	NgramMin     int       `json:"ngram_min"`
 	NgramMax     int       `json:"ngram_max"`
 	Intercept    float64   `json:"intercept"`
@@ -98,12 +99,19 @@ func newSVM(gzipped []byte) (*SVM, error) {
 	if size == 0 || len(model.IDF) != size || len(model.Coef) != size {
 		return nil, fmt.Errorf("svm artifact arrays disagree: %d ngrams, %d idf, %d coef", size, len(model.IDF), len(model.Coef))
 	}
+	// The threshold is a serving decision carried by the artifact, so retuning
+	// it is a re-export rather than a code change. Guard against a nonsense
+	// value silently disabling one side of the classifier.
+	if model.Threshold < -5 || model.Threshold > 5 {
+		return nil, fmt.Errorf("svm artifact threshold %v is out of range", model.Threshold)
+	}
 	vocabulary := make(map[string]int32, size)
 	for i, ngram := range model.Ngrams {
 		vocabulary[ngram] = int32(i)
 	}
 	return &SVM{
 		modelVersion: model.ModelVersion,
+		threshold:    model.Threshold,
 		ngramMin:     model.NgramMin,
 		ngramMax:     model.NgramMax,
 		intercept:    model.Intercept,
@@ -118,20 +126,29 @@ func (s *SVM) ModelVersion() string {
 	return s.modelVersion
 }
 
+// Threshold reports the serving decision boundary from the artifact.
+func (s *SVM) Threshold() float64 {
+	return s.threshold
+}
+
 // Classify normalizes the raw command and scores it. The returned score is the
-// LinearSVC signed margin (>= 0 means risky), rounded like the reference
-// predictor's output.
+// LinearSVC signed margin, rounded like the reference predictor's output; the
+// verdict applies the artifact's serving threshold.
 func (s *SVM) Classify(command string) SVMVerdict {
 	score := s.decisionFunction(NormalizeCommand(command))
-	verdict := VerdictNotRisky
-	if score >= svmThreshold {
-		verdict = VerdictRisky
-	}
 	return SVMVerdict{
-		Verdict:      verdict,
+		Verdict:      verdictForScore(score, s.threshold),
 		Score:        math.Round(score*10000) / 10000,
+		Threshold:    s.threshold,
 		ModelVersion: s.modelVersion,
 	}
+}
+
+func verdictForScore(score, threshold float64) string {
+	if score >= threshold {
+		return VerdictRisky
+	}
+	return VerdictNotRisky
 }
 
 func (s *SVM) decisionFunction(normalized string) float64 {

@@ -33,6 +33,13 @@ FIXTURES_OUT = REPO_ROOT / "internal" / "guard" / "riskclassifier" / "testdata" 
 
 SCHEMA = "kontext-svm-portable/1"
 
+# Serving threshold on the signed margin. The model card ships 0.0 (LinearSVC's
+# natural boundary, "threshold tunable"); kontext serves a precision-weighted
+# operating point chosen from out-of-fold cross-validated scores — see
+# scripts/riskclassifier/pick_threshold.py. Re-run that script and pass the new
+# value here to change it; nothing in Go hardcodes a threshold.
+DEFAULT_THRESHOLD = 0.40
+
 
 def load_reference(authz_root: Path):
     """Import authz-bench serve/classify.py as the reference implementation."""
@@ -44,7 +51,7 @@ def load_reference(authz_root: Path):
     return module
 
 
-def export_model(pipe, card) -> dict:
+def export_model(pipe, card, threshold: float) -> dict:
     tfidf = pipe.named_steps["tfidf"]
     clf = pipe.named_steps["clf"]
 
@@ -70,6 +77,7 @@ def export_model(pipe, card) -> dict:
     return {
         "schema": SCHEMA,
         "model_version": card["version"],
+        "threshold": float(threshold),
         "ngram_min": tfidf.ngram_range[0],
         "ngram_max": tfidf.ngram_range[1],
         "intercept": float(clf.intercept_[0]),
@@ -185,12 +193,13 @@ def fixture_commands() -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--authz", type=Path, default=REPO_ROOT.parent / "authz-bench")
+    parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     args = parser.parse_args()
 
     reference = load_reference(args.authz.resolve())
     pipe, card = reference._load()
 
-    model = export_model(pipe, card)
+    model = export_model(pipe, card, args.threshold)
     MODEL_OUT.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(model, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     with gzip.GzipFile(MODEL_OUT, "wb", compresslevel=9, mtime=0) as fh:
@@ -202,6 +211,9 @@ def main() -> None:
             result = reference.classify(command)
             normalized = reference.normalize_command(command)
             score = float(pipe.decision_function([normalized])[0])  # unrounded
+            # verdict is the REFERENCE verdict at the model card's threshold 0.0,
+            # not kontext's serving threshold: these fixtures pin port fidelity,
+            # and must not move when the serving operating point is retuned.
             fh.write(json.dumps({
                 "command": command,
                 "normalized": normalized,
