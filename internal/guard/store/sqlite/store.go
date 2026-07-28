@@ -201,6 +201,13 @@ func (s *Store) migrate(ctx context.Context) error {
 	  reason_code text,
 	  reason text,
 
+	  schema_version text,
+	  tool_call_id text,
+	  applied_mode text,
+	  evaluation_state text,
+	  cedar_action text,
+	  decision_fact_json text,
+
 	  risk_level text,
 	  risk_score real,
 	  risk_threshold real,
@@ -280,6 +287,16 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if err := s.ensureColumn(ctx, "authorization_actions", "updated_at_cursor_key", "text not null default ''"); err != nil {
 		return err
+	}
+	// Decision Fact v1 mirror columns: written only on new request.decided
+	// rows; historical rows keep nulls and remain on the legacy read paths.
+	for _, column := range []string{
+		"schema_version", "tool_call_id",
+		"applied_mode", "evaluation_state", "cedar_action", "decision_fact_json",
+	} {
+		if err := s.ensureColumn(ctx, "authorization_actions", column, "text"); err != nil {
+			return err
+		}
 	}
 	if err := s.backfillAuthorizationActionCursorKeys(ctx); err != nil {
 		return err
@@ -434,6 +451,13 @@ func (s *Store) ensureAuthorizationActionsDecisionNullable(ctx context.Context) 
 	  reason_code text,
 	  reason text,
 
+	  schema_version text,
+	  tool_call_id text,
+	  applied_mode text,
+	  evaluation_state text,
+	  cedar_action text,
+	  decision_fact_json text,
+
 	  risk_level text,
 	  risk_score real,
 	  risk_threshold real,
@@ -539,6 +563,12 @@ var authorizationActionColumns = []authorizationActionColumn{
 	{name: "adapter_decision", defaultExpr: "null"},
 	{name: "reason_code", defaultExpr: "null"},
 	{name: "reason", defaultExpr: "null"},
+	{name: "schema_version", defaultExpr: "null"},
+	{name: "tool_call_id", defaultExpr: "null"},
+	{name: "applied_mode", defaultExpr: "null"},
+	{name: "evaluation_state", defaultExpr: "null"},
+	{name: "cedar_action", defaultExpr: "null"},
+	{name: "decision_fact_json", defaultExpr: "null"},
 	{name: "risk_level", defaultExpr: "null"},
 	{name: "risk_score", defaultExpr: "null"},
 	{name: "risk_threshold", defaultExpr: "null"},
@@ -771,10 +801,19 @@ on conflict(id) do update set
 		if err := s.insertAction(ctx, tx, proposedID, sessionID, event, decision, canonicalEventRequestProposed, "event", captureConfig, now); err != nil {
 			return DecisionRecord{}, err
 		}
-		if err := s.insertAction(ctx, tx, actionID, sessionID, event, decision, canonicalEventRequestDecided, "decision", captureConfig, now.Add(time.Millisecond)); err != nil {
+		// The decided row is the one decision record for this tool call: the
+		// Decision Fact overlay writes the engine of record, applied mode,
+		// Cedar verdict, provenance, and evidence onto this row. No sibling
+		// decision rows (Cedar sidecar, provider dry-run) are written.
+		decidedAt := now.Add(time.Millisecond)
+		action, err := actionValues(actionID, sessionID, event, decision, canonicalEventRequestDecided, captureConfig, decidedAt)
+		if err != nil {
 			return DecisionRecord{}, err
 		}
-		if err := s.insertCedarDecisionAction(ctx, tx, sessionID, event, decision, now.Add(2*time.Millisecond)); err != nil {
+		if err := applyDecisionFact(action, event, decision, decidedAt); err != nil {
+			return DecisionRecord{}, err
+		}
+		if err := s.insertActionRecord(ctx, tx, action, "decision", decidedAt); err != nil {
 			return DecisionRecord{}, err
 		}
 	} else {
@@ -828,6 +867,7 @@ func (s *Store) insertActionRecord(ctx context.Context, tx *sql.Tx, action map[s
 		"identity_context_json", "identity_hash", "context_json", "context_hash",
 		"policy_id", "policy_version", "policy_hash", "default_posture",
 		"decision_result", "decision_category", "adapter_decision", "reason_code", "reason",
+		"schema_version", "tool_call_id", "applied_mode", "evaluation_state", "cedar_action", "decision_fact_json",
 		"risk_level", "risk_score", "risk_threshold", "model_version", "confidence", "matched_rules_json", "risk_signals_json", "risk_event_json",
 		"modifications_json", "approval_context_json", "approval_channel", "approval_request_id", "deferral_context_json",
 		"status", "outcome", "output_summary", "output_hash", "error_redacted",
@@ -840,6 +880,7 @@ func (s *Store) insertActionRecord(ctx context.Context, tx *sql.Tx, action map[s
 		action["identity_context_json"], action["identity_hash"], action["context_json"], action["context_hash"],
 		action["policy_id"], action["policy_version"], action["policy_hash"], action["default_posture"],
 		action["decision_result"], action["decision_category"], action["adapter_decision"], action["reason_code"], action["reason"],
+		action["schema_version"], action["tool_call_id"], action["applied_mode"], action["evaluation_state"], action["cedar_action"], action["decision_fact_json"],
 		action["risk_level"], action["risk_score"], action["risk_threshold"], action["model_version"], action["confidence"], action["matched_rules_json"], action["risk_signals_json"], action["risk_event_json"],
 		action["modifications_json"], action["approval_context_json"], action["approval_channel"], action["approval_request_id"], action["deferral_context_json"],
 		action["status"], action["outcome"], action["output_summary"], action["output_hash"], action["error_redacted"],
@@ -1076,6 +1117,12 @@ func receiptInputFromAction(action map[string]any, receiptType string, now time.
 		"risk_hash":       riskHash,
 		"outcome_hash":    action["output_hash"],
 	}
+	if decisionFactJSON := stringValue(action["decision_fact_json"]); decisionFactJSON != "" {
+		// The decision fact is the authoritative decision record. Keep its
+		// complete canonical JSON inside the signed receipt payload, rather
+		// than only mirroring selected columns whose meaning may evolve.
+		actionPayload["decision_fact"] = json.RawMessage(decisionFactJSON)
+	}
 	if decisionResult != "" {
 		actionPayload["decision_result"] = decisionResult
 	}
@@ -1145,6 +1192,7 @@ func receiptActionValues(ctx context.Context, tx *sql.Tx, actionID string) (map[
 		decisionCategory, reason, riskLevel, riskSignalsJSON  string
 		policyID, policyVersion, matchedRulesJSON             string
 		outcome, outputSummary, errorRedacted                 string
+		decisionFactJSON                                      string
 		decisionResult                                        sql.NullString
 		riskScore, riskThreshold                              sql.NullFloat64
 	)
@@ -1156,7 +1204,8 @@ select id, session_id, coalesce(tool_use_id, ''), coalesce(tool_name, ''),
   coalesce(decision_category, ''), coalesce(reason, ''), coalesce(risk_level, ''),
   risk_score, risk_threshold, coalesce(risk_signals_json, '[]'),
   coalesce(policy_id, ''), coalesce(policy_version, ''), coalesce(matched_rules_json, '[]'),
-  coalesce(outcome, ''), coalesce(output_summary, ''), coalesce(error_redacted, '')
+  coalesce(outcome, ''), coalesce(output_summary, ''), coalesce(error_redacted, ''),
+  coalesce(decision_fact_json, '')
 from authorization_actions
 where id = ?
 	`, actionID).Scan(
@@ -1165,7 +1214,7 @@ where id = ?
 		&decisionResult, &reasonCode, &riskEventJSON, &outputHash,
 		&decisionCategory, &reason, &riskLevel, &riskScore, &riskThreshold,
 		&riskSignalsJSON, &policyID, &policyVersion, &matchedRulesJSON,
-		&outcome, &outputSummary, &errorRedacted,
+		&outcome, &outputSummary, &errorRedacted, &decisionFactJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -1195,6 +1244,7 @@ where id = ?
 		"outcome":            outcome,
 		"output_summary":     outputSummary,
 		"error_redacted":     errorRedacted,
+		"decision_fact_json": decisionFactJSON,
 	}, nil
 }
 
@@ -1507,6 +1557,10 @@ func copyMap(in map[string]any) map[string]any {
 	return out
 }
 
+// Summary counts each tool call once. New writes produce exactly one
+// decision row per call (the Decision Fact overlay), so no filtering is
+// needed for them; the dry_run exclusion below survives only as bounded
+// tolerance for rows written by pre-fact versions of this store.
 func (s *Store) Summary(ctx context.Context) (Summary, error) {
 	var summary Summary
 	row := s.db.QueryRowContext(ctx, `
