@@ -38,6 +38,9 @@ func TestGuardrailClassifyParsesVerdicts(t *testing.T) {
 		{"risky.", VerdictRisky},
 		{" Safe ", VerdictNotRisky},
 		{"RISKY. The command deletes data.", VerdictRisky},
+		// Qwen3 in non-thinking mode still emits an empty think pair.
+		{"<think>\n\n</think>\n\nSAFE", VerdictNotRisky},
+		{"<think></think>RISKY", VerdictRisky},
 	}
 	for _, tc := range cases {
 		server := newGuardrailServer(t, tc.reply, nil)
@@ -53,8 +56,8 @@ func TestGuardrailClassifyParsesVerdicts(t *testing.T) {
 		if verdict.Verdict != tc.verdict {
 			t.Errorf("reply %q verdict = %q, want %q", tc.reply, verdict.Verdict, tc.verdict)
 		}
-		if verdict.Raw != strings.TrimSpace(tc.reply) {
-			t.Errorf("reply %q raw = %q", tc.reply, verdict.Raw)
+		if strings.Contains(verdict.Raw, "<think>") {
+			t.Errorf("reply %q kept its think block: %q", tc.reply, verdict.Raw)
 		}
 		if verdict.Model != "qwen2.5-0.5b" {
 			t.Errorf("model = %q", verdict.Model)
@@ -84,6 +87,48 @@ func TestGuardrailClassifySendsNormalizedCommand(t *testing.T) {
 	}
 	if captured.Temperature != 0 || captured.MaxTokens != guardrailMaxTokens {
 		t.Errorf("sampling params = (%v, %d)", captured.Temperature, captured.MaxTokens)
+	}
+}
+
+func TestGuardrailSendsNoThinkForReasoningModels(t *testing.T) {
+	cases := map[string]bool{
+		"Qwen/Qwen3-0.6B-GGUF":            true,
+		"qwen3-0.6b-q8_0.gguf":            true,
+		"qwen2.5-0.5b-instruct-q8_0.gguf": false,
+	}
+	for model, wantNoThink := range cases {
+		var captured guardrailChatRequest
+		server := newGuardrailServer(t, "SAFE", &captured)
+		guardrail, err := NewGuardrail(GuardrailOptions{BaseURL: server.URL, Model: model})
+		if err != nil {
+			t.Fatalf("new guardrail %s: %v", model, err)
+		}
+		if _, err := guardrail.Classify(context.Background(), "git status"); err != nil {
+			t.Fatalf("classify %s: %v", model, err)
+		}
+		server.Close()
+		gotNoThink := strings.HasPrefix(captured.Messages[1].Content, "/no_think")
+		if gotNoThink != wantNoThink {
+			t.Errorf("model %s: /no_think prefix = %v, want %v (content %q)", model, gotNoThink, wantNoThink, captured.Messages[1].Content)
+		}
+		if !strings.HasSuffix(captured.Messages[1].Content, "git status") {
+			t.Errorf("model %s: command lost: %q", model, captured.Messages[1].Content)
+		}
+	}
+}
+
+func TestStripThinkBlocks(t *testing.T) {
+	cases := map[string]string{
+		"<think>\n\n</think>\n\nSAFE":         "\n\nSAFE",
+		"<think>reasoning</think>RISKY":       "RISKY",
+		"no think block":                      "no think block",
+		"<think>truncated mid-reasoning":      "",
+		"A<think>x</think>B<think>y</think>C": "ABC",
+	}
+	for input, want := range cases {
+		if got := stripThinkBlocks(input); got != want {
+			t.Errorf("stripThinkBlocks(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

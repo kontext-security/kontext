@@ -24,7 +24,9 @@ const (
 	// the usual offenders (long base64 payloads).
 	guardrailMaxCommandChars = 4000
 
-	guardrailMaxTokens = 8
+	// guardrailMaxTokens leaves room for a reasoning model's empty
+	// <think></think> preamble ahead of the one word we actually want.
+	guardrailMaxTokens = 24
 )
 
 //go:embed prompts/guardrail-v0.md
@@ -44,10 +46,11 @@ type LLMVerdict struct {
 // Guardrail asks a llama-server (or any OpenAI-compatible localhost endpoint)
 // for a one-word RISKY/SAFE opinion on a normalized bash command.
 type Guardrail struct {
-	endpoint   string
-	model      string
-	timeout    time.Duration
-	httpClient *http.Client
+	endpoint        string
+	model           string
+	timeout         time.Duration
+	httpClient      *http.Client
+	disableThinking bool
 }
 
 type GuardrailOptions struct {
@@ -55,6 +58,10 @@ type GuardrailOptions struct {
 	Model      string
 	Timeout    time.Duration
 	HTTPClient *http.Client
+	// DisableThinking forces non-thinking mode. Reasoning models are detected
+	// automatically; a guardrail wants a fast one-word verdict, not reasoning
+	// tokens that would blow past guardrailMaxTokens and never reach a verdict.
+	DisableThinking bool
 }
 
 func NewGuardrail(opts GuardrailOptions) (*Guardrail, error) {
@@ -82,7 +89,19 @@ func NewGuardrail(opts GuardrailOptions) (*Guardrail, error) {
 			},
 		}
 	}
-	return &Guardrail{endpoint: endpoint, model: model, timeout: timeout, httpClient: client}, nil
+	return &Guardrail{
+		endpoint:        endpoint,
+		model:           model,
+		timeout:         timeout,
+		httpClient:      client,
+		disableThinking: opts.DisableThinking || modelNeedsNoThink(model),
+	}, nil
+}
+
+// modelNeedsNoThink reports whether the model reasons by default and must be
+// told not to. Qwen3 honors the /no_think directive in the prompt.
+func modelNeedsNoThink(model string) bool {
+	return strings.Contains(strings.ToLower(model), "qwen3")
 }
 
 // Model reports the guardrail model name stamped on records.
@@ -104,11 +123,15 @@ func (g *Guardrail) Classify(ctx context.Context, command string) (LLMVerdict, e
 	defer cancel()
 
 	normalized := truncateAtRuneBoundary(NormalizeCommand(command), guardrailMaxCommandChars)
+	userContent := normalized
+	if g.disableThinking {
+		userContent = "/no_think\n\n" + normalized
+	}
 	payload, err := json.Marshal(guardrailChatRequest{
 		Model: g.model,
 		Messages: []guardrailMessage{
 			{Role: "system", Content: guardrailPrompt},
-			{Role: "user", Content: normalized},
+			{Role: "user", Content: userContent},
 		},
 		Temperature: 0,
 		MaxTokens:   guardrailMaxTokens,
@@ -134,7 +157,7 @@ func (g *Guardrail) Classify(ctx context.Context, command string) (LLMVerdict, e
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 		return LLMVerdict{}, fmt.Errorf("decode guardrail response: %w", err)
 	}
-	raw := strings.TrimSpace(decoded.firstContent())
+	raw := strings.TrimSpace(stripThinkBlocks(decoded.firstContent()))
 	verdict, err := parseGuardrailVerdict(raw)
 	if err != nil {
 		return LLMVerdict{}, err
@@ -145,6 +168,26 @@ func (g *Guardrail) Classify(ctx context.Context, command string) (LLMVerdict, e
 		Model:      g.model,
 		DurationMs: time.Since(start).Milliseconds(),
 	}, nil
+}
+
+// stripThinkBlocks removes a reasoning model's <think>…</think> preamble. Even
+// in non-thinking mode Qwen3 may emit an empty pair before the verdict, and an
+// unclosed block means the token budget ran out mid-reasoning — in that case
+// nothing usable follows, so the remainder is dropped and the caller reports an
+// unparseable verdict rather than guessing.
+func stripThinkBlocks(content string) string {
+	for {
+		start := strings.Index(content, "<think>")
+		if start < 0 {
+			return content
+		}
+		rest := content[start+len("<think>"):]
+		end := strings.Index(rest, "</think>")
+		if end < 0 {
+			return content[:start]
+		}
+		content = content[:start] + rest[end+len("</think>"):]
+	}
 }
 
 // parseGuardrailVerdict maps the model's answer onto the contract labels. The

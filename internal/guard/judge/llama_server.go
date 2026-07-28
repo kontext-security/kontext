@@ -23,11 +23,10 @@ const (
 	DefaultLlamaServerPort           = 18080
 	DefaultLlamaServerStartupTimeout = 30 * time.Second
 	// The managed sidecar serves one model for both local LLM signals: the
-	// JSON judge and the observe-mode risk-classifier guardrail. The
-	// authz-bench serving contract specifies this model for the guardrail, so
-	// it is the shared default.
-	DefaultLlamaServerHFRepo          = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
-	DefaultLlamaServerHFFile          = "qwen2.5-0.5b-instruct-q8_0.gguf"
+	// JSON judge and the observe-mode risk-classifier guardrail. This is also
+	// the model the authz-bench serving contract specifies for the guardrail.
+	DefaultLlamaServerHFRepo          = "Qwen/Qwen3-0.6B-GGUF"
+	DefaultLlamaServerHFFile          = "Qwen3-0.6B-Q8_0.gguf"
 	DefaultLlamaServerHFRevision      = "main"
 	DefaultLlamaServerDownloadTimeout = 10 * time.Minute
 )
