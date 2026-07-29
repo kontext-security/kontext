@@ -165,14 +165,6 @@ func NewServerWithPolicyConfigAndOptions(store *sqlite.Store, policy PolicyProvi
 	}
 	guardrail := newGuardrail(opts.RiskClassifier)
 	classifier := newRiskClassifierObserver(store, opts.RiskClassifier, guardrail)
-	// Sync placement replaces the JSON judge as the probabilistic layer, so the
-	// guardrail is handed to the decision path instead of the observer.
-	if opts.RiskClassifier != nil && opts.RiskClassifier.Mode == riskclassifier.ModeSync && guardrail != nil {
-		if provider, ok := policy.(RiskPolicyProvider); ok {
-			provider.guardrail = guardrail
-			policy = provider
-		}
-	}
 	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier)
 	core, err := runtimecore.New(runtime)
 	if err != nil {
@@ -211,12 +203,7 @@ func newRiskClassifierObserver(store *sqlite.Store, opts *RiskClassifierOptions,
 			return err
 		},
 	}
-	// Only async placement classifies from the observer. In sync placement the
-	// decision path already holds a verdict and hands it over, so giving the
-	// observer a guardrail too would double the inference per command.
-	if opts.Mode == riskclassifier.ModeAsync {
-		observerOpts.Guardrail = guardrail
-	}
+	observerOpts.Guardrail = guardrail
 	return riskclassifier.NewObserver(observerOpts)
 }
 

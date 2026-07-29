@@ -373,8 +373,9 @@ func TestStartDashboardUsesLoopbackEphemeralPort(t *testing.T) {
 }
 
 // TestGuardrailSupersedesJudge pins the one-LLM rule: with the risk classifier
-// enabled (the default), the JSON judge must not also run. Two local models per
-// gated call would double the latency, and the judge is the expensive one.
+// enabled (the default), the JSON judge must not also run. The classifier's LLM
+// is the only one, and because it merely annotates, no LLM sits on the decision
+// path at all — the decision stays deterministic.
 func TestGuardrailSupersedesJudge(t *testing.T) {
 	ctx := context.Background()
 	var judgeCalls int32
@@ -388,7 +389,7 @@ func TestGuardrailSupersedesJudge(t *testing.T) {
 	defer llm.Close()
 	t.Setenv("KONTEXT_JUDGE_URL", llm.URL)
 	t.Setenv("KONTEXT_JUDGE_MODEL", "test-guardrail")
-	t.Setenv("KONTEXT_RISK_CLASSIFIER_MODE", "sync")
+	t.Setenv("KONTEXT_RISK_CLASSIFIER_MODE", "on")
 
 	dbPath := filepath.Join(t.TempDir(), "guard.db")
 	host, err := Start(ctx, Options{
@@ -427,10 +428,11 @@ func TestGuardrailSupersedesJudge(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("events len = %d, want 1", len(events))
 	}
-	if stage := events[0].RiskEvent.DecisionStage; stage != "guardrail_deny" {
-		t.Fatalf("decision stage = %q, want guardrail_deny", stage)
+	// No LLM decided: the deterministic layer owns the decision.
+	if stage := events[0].RiskEvent.DecisionStage; stage != "deterministic_allow" {
+		t.Fatalf("decision stage = %q, want deterministic_allow", stage)
 	}
-	// Exactly one inference: the guardrail decided and the verdict row reused it.
+	// The one call is the classifier's annotation, not a judge consultation.
 	if got := atomic.LoadInt32(&judgeCalls); got != 1 {
 		t.Fatalf("local model called %d times, want 1", got)
 	}

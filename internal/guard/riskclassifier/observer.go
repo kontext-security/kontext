@@ -51,12 +51,6 @@ type ObserveInput struct {
 	ToolUseID string
 	Agent     string
 	Command   string
-
-	// LLM carries a verdict the decision path already obtained for this
-	// command (sync placement), so the observer records it instead of paying
-	// for a second inference. Nil means the observer classifies itself.
-	LLM      *LLMVerdict
-	LLMError string
 }
 
 // Observer scores intercepted bash commands and appends one record per command
@@ -190,26 +184,17 @@ func (o *Observer) process(input ObserveInput) {
 		Enforced:         false,
 		CreatedAt:        time.Now().UTC(),
 	}
-	o.attachLLM(input, raw, &record)
+	o.attachLLM(raw, &record)
 
 	sinkCtx, cancel := context.WithTimeout(o.baseCtx, observerSinkTimeout)
 	defer cancel()
 	_ = o.sink(sinkCtx, record)
 }
 
-// attachLLM fills the record's LLM half. A verdict handed in by the decision
-// path is used as-is; otherwise the guardrail is asked, with verbatim repeats
-// served from an LRU because agents rerun identical commands constantly.
-// Absence and failure are both recorded rather than hidden.
-func (o *Observer) attachLLM(input ObserveInput, raw string, record *Record) {
-	if input.LLM != nil {
-		record.LLM = input.LLM
-		return
-	}
-	if input.LLMError != "" {
-		record.LLMError = input.LLMError
-		return
-	}
+// attachLLM fills the record's LLM half, with verbatim repeats served from an
+// LRU because agents rerun identical commands constantly. Absence and failure
+// are both recorded rather than hidden.
+func (o *Observer) attachLLM(raw string, record *Record) {
 	if o.guardrail == nil {
 		record.LLMError = "guardrail not configured"
 		return

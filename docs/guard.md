@@ -49,7 +49,7 @@ Claude Code
   -> local SQLite
   -> local dashboard
        \
-        -> risk classifier (SVM + guardrail LLM -> verdict log)
+        -> risk annotation (SVM + guardrail LLM; recorded, never consulted)
 ```
 
 ## Risk layers
@@ -130,7 +130,9 @@ where deterministic policy is expected to deny before the judge is called.
 
 ## Risk classifier (observe mode)
 
-Guard logs a second-opinion risk verdict for every intercepted bash command, using the classifier from the sibling `authz-bench` serving contract (`authz-bench/serve/SERVING.md`). This is **observe mode only**: verdicts are recorded for feedback collection and never affect a decision. Deterministic rules stay in front and own known-bad; the classifier is a fuzzy signal for the long tail, and its job in v1 is to generate data.
+Guard attaches a **risk annotation** to every intercepted bash command, using the classifier from the sibling `authz-bench` serving contract (`authz-bench/serve/SERVING.md`).
+
+The annotation is deliberately independent of the block logic. It is computed after the decision is already made, stored alongside the action, and **nothing in Guard reads it back** — it does not participate in observe or enforce mode, and there is no configuration that lets it deny. Whether to gate tool calls on it is a separate, later decision, and keeping the two apart means that decision can be made from real data rather than guessed at now. Deterministic rules own blocking today, as they did before.
 
 The model is **char n-gram + LinearSVM** — the benchmark winner, ported natively to Go and embedded in the binary, so there is no Python and no model download at runtime. `scripts/riskclassifier/export_portable.py` flattens `authz-bench/serve/model/classifier.joblib` into `internal/guard/riskclassifier/model/svm.json.gz` and regenerates the golden fixtures that lock the port to the reference predictor. Run it after any upstream model change:
 
@@ -142,7 +144,7 @@ The model is **char n-gram + LinearSVM** — the benchmark winner, ported native
 
 The second model is the stock, public **Qwen3-0.6B** served on `llama-server` with the prompt authz-bench's sweep selected (`eval/optimize_prompt.py`, variant "V2 precision + balanced few-shot"). Nothing is fine-tuned and nothing custom ships: the GGUF is pulled from Hugging Face like any other judge model, and the prompt is exported verbatim into `internal/guard/riskclassifier/prompts/guardrail-v2.json` by `scripts/riskclassifier/export_prompt.py` — a reworded bullet is a different classifier, so it is copied mechanically rather than by hand.
 
-**This is the only LLM.** It supersedes the JSON judge: whenever the guardrail is enabled, the judge is not constructed, so a gated call runs one inference, not two.
+**This is the only LLM.** It supersedes the JSON judge: whenever the classifier is enabled, the judge is not constructed. Since the classifier only annotates, that leaves **no LLM on the decision path at all** — a gated tool call is decided by deterministic rules and waits for nothing.
 
 The two models are complementary rather than redundant, which is why both are logged:
 
@@ -151,24 +153,21 @@ The two models are complementary rather than redundant, which is why both are lo
 | SVM (threshold 0.40) | 0.987 | 0.834 | 4/16 |
 | Guardrail (Qwen3-0.6B, V2 prompt) | 0.585 | 0.967 | **16/16** |
 
-The SVM is precise but blind to `rm -rf /`, `dd if=/dev/zero of=/dev/disk0`, and `mkfs` — its benign corpus is full of routine `rm -rf`. The guardrail catches every one of those and over-flags ordinary work instead. `KONTEXT_RISK_CLASSIFIER_MODE` chooses where it runs:
+The SVM is precise but blind to `rm -rf /`, `dd if=/dev/zero of=/dev/disk0`, and `mkfs` — its benign corpus is full of routine `rm -rf`. The guardrail catches every one of those and over-flags ordinary work instead. Recording both keeps that disagreement visible, which is the useful signal.
 
-- `async` (default) — off the hook path. The verdict reaches the feedback log and cannot affect or delay a tool call.
-- `sync` — on the decision path, replacing the judge as the probabilistic layer for shell commands. Its verdict is reused by the feedback row rather than recomputed. Non-shell tool calls (paths, skills, MCP) are not sent to it, since the prompt classifies shell commands and anything else is out of distribution.
-- `off` — SVM only, no sidecar needed.
+`KONTEXT_RISK_CLASSIFIER_MODE` is `on` (default, both models) or `off` (SVM only, no sidecar needed).
 
 Measured end to end (Claude Code hook → socket → policy → SQLite) against a local Qwen3-0.6B-Q8:
 
 | configuration | mean hook latency |
 |---|---|
 | no LLM at all | 24 ms |
-| **`async`** — guardrail off-path | **28 ms** |
-| **`sync`** — guardrail decides | **66 ms** |
+| **classifier on** (what ships) | **28 ms** |
 | the JSON judge this replaces | 298 ms |
 
-The guardrail costs ~42 ms of inference (44 ms warm p50 measured directly, ~90 ms on the first call while the fixed few-shot prefix is evaluated; `llama-server` keeps that prefix in its KV cache afterwards, so a long command costs the same as a short one). Both modes are far cheaper than what shipped before, because a one-word answer generates far fewer tokens than the judge's JSON object.
+Inference is 44 ms warm p50 (~90 ms on the first call while the fixed few-shot prefix is evaluated; `llama-server` keeps that prefix cached afterwards, so a long command costs the same as a short one) — but the agent never waits for it, which is why the hook stays within 4 ms of the no-LLM floor. Removing the judge from the decision path is where the 270 ms goes.
 
-Sync is affordable, but note what it means before enabling it: precision 0.585 makes roughly two in five of its RISKY calls false alarms. In observe mode that is a noisy `would deny` in the ledger; in enforce mode it would be a false block. Deterministic rules still run in front of it either way, and it fails open on an unavailable or unparseable model.
+If the annotation is ever promoted to a gate, the number to weigh first is precision: 0.585 means roughly two in five RISKY calls are false alarms, and the measured cost of consulting it synchronously was 66 ms per gated command.
 
 `normalize_command` (IP → `1.1.1.1`, URL → `example.com`, long base64 → `BASE64`) is applied before scoring, identically to training. Three tests fail on any drift, and none of them should be "fixed" by loosening an assertion: `TestNormalizeCommandGoldenParity` and `TestSVMGoldenParity` pin this port to the Python reference, and `TestSVMUpstreamGoldenParity` cross-checks it against authz-bench's independent Go port via that repo's shipped vectors (`testdata/upstream-golden.json`, refreshed by copying `authz-bench/serve/model/golden.json`). Two independent ports agreeing is what catches a normalizer divergence — an upstream base64 skew once passed its own parity check because its vectors did not cover the boundary.
 
