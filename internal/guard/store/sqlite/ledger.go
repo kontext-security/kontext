@@ -55,6 +55,7 @@ select id, session_id, turn_id, tool_use_id, trace_id, span_id, parent_span_id,
   parameters_redacted_json, parameters_hash, identity_context_json, identity_hash,
   context_json, context_hash, policy_id, policy_version, policy_hash, default_posture,
   decision_result, decision_category, adapter_decision, reason_code, reason,
+  schema_version, tool_call_id, applied_mode, evaluation_state, cedar_action, decision_fact_json,
   risk_level, risk_score, risk_threshold, model_version, compositional_risk_score,
   confidence, alignment_score, alignment_threshold, uncertainty_score,
   matched_rules_json, risk_signals_json, risk_event_json, modifications_json,
@@ -358,6 +359,15 @@ func queryLedgerRecords(ctx context.Context, db *sql.DB, query string, args ...a
 var omitWhenEmptyLedgerColumns = map[string]bool{
 	"tool_input_captured_json":  true,
 	"tool_output_captured_json": true,
+	// Decision Fact v1 fields exist only on new request.decided rows.
+	// Omitting them when empty keeps proposed/observed/failed rows and
+	// pre-fact backlog rows byte-identical to what earlier daemons sent.
+	"schema_version":     true,
+	"tool_call_id":       true,
+	"applied_mode":       true,
+	"evaluation_state":   true,
+	"cedar_action":       true,
+	"decision_fact_json": true,
 }
 
 func normalizeLedgerValue(column string, value any) any {

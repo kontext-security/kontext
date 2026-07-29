@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kontext-security/kontext-cli/internal/ledgerfact"
 )
 
 const (
@@ -109,10 +111,13 @@ func (s ed25519ReceiptSigner) Verify(message []byte, signature, keyID string) er
 
 func (s *Store) VerifyReceipts(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, `
-select id, receipt_payload_json, previous_receipt_hash, receipt_hash,
-  coalesce(signature, ''), coalesce(signature_algorithm, ''), coalesce(key_id, '')
-from authorization_receipts
-order by rowid
+select r.id, r.receipt_payload_json, r.previous_receipt_hash, r.receipt_hash,
+	  coalesce(r.signature, ''), coalesce(r.signature_algorithm, ''), coalesce(r.key_id, ''),
+	  coalesce(a.decision_fact_json, ''), coalesce(a.schema_version, ''), coalesce(a.tool_call_id, ''),
+	  coalesce(a.applied_mode, ''), coalesce(a.evaluation_state, ''), coalesce(a.cedar_action, '')
+from authorization_receipts r
+left join authorization_actions a on a.id = r.action_id
+order by r.rowid
 	`)
 	if err != nil {
 		return err
@@ -121,9 +126,11 @@ order by rowid
 
 	previous := ""
 	for rows.Next() {
-		var id, payload, receiptHash, signature, algorithm, keyID string
+		var id, payload, receiptHash, signature, algorithm, keyID, decisionFactJSON string
+		var schemaVersion, toolCallID, appliedMode, evaluationState, cedarAction string
 		var previousHash sql.NullString
-		if err := rows.Scan(&id, &payload, &previousHash, &receiptHash, &signature, &algorithm, &keyID); err != nil {
+		if err := rows.Scan(&id, &payload, &previousHash, &receiptHash, &signature, &algorithm, &keyID,
+			&decisionFactJSON, &schemaVersion, &toolCallID, &appliedMode, &evaluationState, &cedarAction); err != nil {
 			return err
 		}
 		if got := hashString(payload); got != receiptHash {
@@ -146,9 +153,69 @@ order by rowid
 		if err := s.verifyReceiptSignature(receiptHash, signature, algorithm, keyID); err != nil {
 			return fmt.Errorf("receipt %s: %w", id, err)
 		}
+		if err := verifyReceiptDecisionFact(payload, decisionFactJSON, decisionFactMirrors{
+			SchemaVersion: schemaVersion, ToolCallID: toolCallID, AppliedMode: appliedMode,
+			EvaluationState: evaluationState, CedarAction: cedarAction,
+		}); err != nil {
+			return fmt.Errorf("receipt %s: %w", id, err)
+		}
 		previous = receiptHash
 	}
 	return rows.Err()
+}
+
+// verifyReceiptDecisionFact makes the receipt chain attest the decision fact
+// stored on its action as well as the receipt JSON itself. Legacy receipts do
+// not carry a fact and intentionally remain verifiable.
+type decisionFactMirrors struct {
+	SchemaVersion   string
+	ToolCallID      string
+	AppliedMode     string
+	EvaluationState string
+	CedarAction     string
+}
+
+func verifyReceiptDecisionFact(payload, stored string, mirrors decisionFactMirrors) error {
+	var receipt struct {
+		Action struct {
+			ID           string          `json:"id"`
+			DecisionFact json.RawMessage `json:"decision_fact"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal([]byte(payload), &receipt); err != nil {
+		return err
+	}
+	if len(receipt.Action.DecisionFact) == 0 {
+		return nil
+	}
+	if receipt.Action.ID == "" {
+		return fmt.Errorf("decision-fact receipt has no action id")
+	}
+	canonicalReceipt, err := canonicalJSON(json.RawMessage(receipt.Action.DecisionFact))
+	if err != nil {
+		return fmt.Errorf("canonicalize receipt decision fact: %w", err)
+	}
+	canonicalStored, err := canonicalJSON(json.RawMessage(stored))
+	if err != nil {
+		return fmt.Errorf("canonicalize stored decision fact: %w", err)
+	}
+	if string(canonicalReceipt) != string(canonicalStored) {
+		return fmt.Errorf("action decision fact mismatch")
+	}
+	var fact ledgerfact.DecisionFact
+	if err := json.Unmarshal(receipt.Action.DecisionFact, &fact); err != nil {
+		return fmt.Errorf("decode receipt decision fact: %w", err)
+	}
+	cedarAction := ""
+	if fact.CedarAction != nil {
+		cedarAction = string(*fact.CedarAction)
+	}
+	if mirrors.SchemaVersion != fact.SchemaVersion || mirrors.ToolCallID != fact.ToolCallID ||
+		mirrors.AppliedMode != string(fact.AppliedMode) || mirrors.EvaluationState != string(fact.EvaluationState) ||
+		mirrors.CedarAction != cedarAction {
+		return fmt.Errorf("action decision fact mirror mismatch")
+	}
+	return nil
 }
 
 func receiptPayloadPreviousHash(payload string) (string, error) {

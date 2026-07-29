@@ -157,10 +157,10 @@ process.stdin.on("end", () => {
   if (events.length !== 3 || decisions !== "allow,allow,allow") {
     throw new Error(`unexpected decisions ${decisions} in ${JSON.stringify(events)}`);
   }
-  // The chain is advisory: decisions are allow, and the guardrail analysis
-  // survives as reason codes on the recorded events.
+  // The decided row carries the Decision Fact cause: with no Cedar
+  // deployment in this environment, every call records policy_missing.
   const reasonCodes = events.map((event) => event.reason_code).sort().join(",");
-  if (reasonCodes !== "advisory,advisory,advisory") {
+  if (reasonCodes !== "policy_missing,policy_missing,policy_missing") {
     throw new Error(`unexpected reason codes ${reasonCodes}`);
   }
 });
