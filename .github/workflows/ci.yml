@@ -26,31 +26,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        with:
-          version: 10.0.0
-
-      - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: pnpm
-
       - name: Download modules
         run: go mod download
 
       - name: Verify modules
         run: go mod verify
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build Guard dashboard assets
-        run: pnpm build
-
-      - name: Check Guard dashboard assets
-        run: git diff --exit-code internal/guard/web/assets
 
       - name: Check formatting
         run: test -z "$(gofmt -l $(find cmd internal -name '*.go' -type f))"

@@ -2,7 +2,7 @@
 
 Guard is the local safety mode inside `kontext`.
 
-It lets a developer run Claude Code normally while Kontext watches tool calls locally, redacts captured data, stores events in local SQLite, and shows a local dashboard with `would allow` and `would deny` decisions.
+It lets a developer run Claude Code normally while Kontext watches tool calls locally, redacts captured data, and stores events in local SQLite with `would allow` and `would deny` decisions. Sessions are reviewed in the hosted Kontext dashboard; the daemon exposes a local JSON API only.
 
 ## User path
 
@@ -26,7 +26,7 @@ Guard mode is local-first by default:
 - no trace upload by default
 - local daemon on `127.0.0.1:4765`
 - local SQLite database
-- embedded local dashboard
+- local JSON API (`/api/...`) for status and tooling
 - observe mode by default
 
 Hosted managed mode remains separate:
@@ -47,7 +47,7 @@ Claude Code
   -> deterministic policy
   -> probabilistic risk when deterministic policy allows
   -> local SQLite
-  -> local dashboard
+  -> local daemon API
 ```
 
 ## Risk layers
@@ -130,7 +130,7 @@ Public in `kontext-cli`:
 
 - `kontext guard ...` commands
 - Claude Code local hook adapter
-- local daemon, SQLite store, dashboard
+- local daemon, SQLite store, JSON API
 - deterministic policy and local LLM judge wiring
 
 Private in Lab:

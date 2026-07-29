@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"mime"
 	"net/http"
 	"net/url"
@@ -18,14 +17,12 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/policyconfig"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	dashboardassets "github.com/kontext-security/kontext-cli/internal/guard/web/assets"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
 	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
 const (
 	DefaultAddr            = "127.0.0.1:4765"
-	devDashboardOrigin     = "http://127.0.0.1:5173"
 	jsonContentType        = "application/json"
 	unsupportedContentType = "policy profile requests require application/json"
 	untrustedProfileOrigin = "untrusted policy profile origin"
@@ -160,7 +157,7 @@ func NewServerWithPolicyConfigAndOptions(store *sqlite.Store, policy PolicyProvi
 }
 
 func (s *Server) Handler() http.Handler {
-	return withCORS(s.mux)
+	return s.mux
 }
 
 func (s *Server) RuntimeCore() *runtimecore.Core {
@@ -186,7 +183,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/sessions/", s.handleSession)
 	s.mux.HandleFunc("GET /api/policy/profile", s.handlePolicyProfile)
 	s.mux.HandleFunc("POST /api/policy/profile", s.handleActivatePolicyProfile)
-	s.mux.HandleFunc("GET /", s.handleDashboard)
 }
 
 func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
@@ -378,15 +374,6 @@ func dashboardDecisionRecords(records []sqlite.DecisionRecord) []sqlite.Decision
 	return out
 }
 
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	dist, err := fs.Sub(dashboardassets.FS, "dist")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "dashboard assets unavailable")
-		return
-	}
-	http.FileServer(http.FS(dist)).ServeHTTP(w, r)
-}
-
 func policyProfileResponse(snapshot policyconfig.Snapshot) PolicyProfileResponse {
 	return PolicyProfileResponse{
 		Profile:            snapshot.Config.Profile,
@@ -415,9 +402,6 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func trustedPolicyProfileRequest(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
-		return true
-	}
-	if origin == devDashboardOrigin {
 		return true
 	}
 	parsed, err := url.Parse(origin)
@@ -452,19 +436,6 @@ func (p policyStoreConfigProvider) ActivePolicyConfig(context.Context) (policy.C
 
 func explicitPolicyConfig(cfg policy.Config) bool {
 	return cfg.Version != "" || cfg.Profile != "" || cfg.RulePack != "" || cfg.NonBypassableRules != nil
-}
-
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:5173")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func openPolicyStoreForSQLite(store *sqlite.Store) (*policyconfig.Store, error) {

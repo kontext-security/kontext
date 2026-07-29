@@ -233,14 +233,13 @@ func TestPolicyProfilePostRejectsCrossOriginRequest(t *testing.T) {
 	}
 }
 
-func TestPolicyProfilePostAllowsTrustedDashboardOrigins(t *testing.T) {
+func TestPolicyProfilePostAllowsTrustedOrigins(t *testing.T) {
 	tests := []struct {
 		name   string
 		target string
 		origin string
 	}{
 		{name: "same origin", target: "http://127.0.0.1:4765/api/policy/profile", origin: "http://127.0.0.1:4765"},
-		{name: "vite dev", target: "http://127.0.0.1:4765/api/policy/profile", origin: devDashboardOrigin},
 	}
 
 	for _, tt := range tests {
