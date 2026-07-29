@@ -171,7 +171,8 @@ func TestObserveModeCapturesAgentTaskAndRedactsCredentials(t *testing.T) {
 	if strings.Contains(record.Command, "sk-live-abc123") {
 		t.Fatalf("credential leaked into verdict record: %q", record.Command)
 	}
-	if !strings.Contains(record.Command, "[redacted-credential]") {
+	// The shared payloadcapture ruleset marks removals with [REDACTED_SECRET].
+	if !strings.Contains(record.Command, "[REDACTED_SECRET]") {
 		t.Fatalf("command not redacted: %q", record.Command)
 	}
 	// Full-length storage: the redacted command keeps its tail rather than
