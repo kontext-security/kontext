@@ -9,6 +9,7 @@ import type {
   PolicyProfile,
   PolicyProfileID,
   RiskEvent,
+  RiskFeedback,
   SVMVerdict,
   Session,
 } from "./types";
@@ -238,6 +239,23 @@ export async function fetchVerdicts(sessionID: string): Promise<ClassifierVerdic
   if (body == null) return [];
   if (!Array.isArray(body)) throw new Error("invalid API response");
   return body.map(parseVerdict).filter((v): v is ClassifierVerdict => v !== undefined);
+}
+
+// Records the user's ground-truth label on one verdict. The daemon enforces
+// JSON content type and a trusted same-origin Origin header, which the served
+// dashboard satisfies with a plain fetch (same pattern as activatePolicy).
+export async function sendVerdictFeedback(
+  actionID: string,
+  feedback: RiskFeedback,
+): Promise<ClassifierVerdict> {
+  const response = await fetch(`${API}/api/verdicts/${encodeURIComponent(actionID)}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_feedback: feedback }),
+  }).then(ok);
+  const verdict = parseVerdict(response);
+  if (!verdict) throw new Error("invalid verdict feedback response");
+  return verdict;
 }
 
 export async function fetchPolicy(): Promise<PolicyProfile> {

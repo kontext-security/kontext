@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Shield, X } from "lucide-react";
+import { Check, ChevronDown, Shield, TriangleAlert, X } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -24,6 +24,7 @@ import type {
   Event,
   EventGroups,
   GuardMode,
+  RiskFeedback,
   Tab,
   VerdictsByAction,
 } from "./types";
@@ -42,6 +43,8 @@ export function ActionList({
   onOpen,
   onClearFilter,
   mode,
+  onFeedback,
+  feedbackPendingID,
 }: {
   tab: Tab;
   decisionGroups: EventGroups;
@@ -50,6 +53,8 @@ export function ActionList({
   onOpen: (id: string) => void;
   onClearFilter: () => void;
   mode: GuardMode;
+  onFeedback: (actionID: string, feedback: RiskFeedback) => void;
+  feedbackPendingID: string | null;
 }) {
   const visibleDecisionGroups = VISIBLE_KINDS[tab]
     .map((kind) => ({ kind, items: decisionGroups[kind] }))
@@ -105,6 +110,8 @@ export function ActionList({
                   verdict={verdicts[e.id]}
                   active={openId === e.id}
                   onClick={() => onOpen(e.id)}
+                  onFeedback={onFeedback}
+                  feedbackPending={feedbackPendingID === e.id}
                 />
               ))}
             </Group>
@@ -169,21 +176,36 @@ function Row({
   verdict,
   active,
   onClick,
+  onFeedback,
+  feedbackPending,
 }: {
   event: Event;
   verdict?: ClassifierVerdict;
   active: boolean;
   onClick: () => void;
+  onFeedback: (actionID: string, feedback: RiskFeedback) => void;
+  feedbackPending: boolean;
 }) {
   const target = summaryOf(event);
   const signal = event.risk_event?.signals?.[0]?.replace(/_/g, " ");
   const tone = decisionTone[event.decision];
   const risk = riskLevel(verdict);
   return (
-    <button
+    // A div with button semantics: the row hosts the real feedback <button>s,
+    // and interactive elements must not nest.
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       className={cn(
-        "group relative grid w-full grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-4 border-b px-10 py-3 text-left transition-colors last:border-b-0",
+        "group relative grid w-full cursor-pointer grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-4 border-b px-10 py-3 text-left transition-colors last:border-b-0",
         "hover:bg-muted/40",
         active && "bg-accent",
       )}
@@ -208,12 +230,31 @@ function Row({
           </Tooltip>
         )}
         {risk && verdict && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <RiskPill level={risk} muted={Boolean(verdict.user_feedback)} />
-            </TooltipTrigger>
-            <TooltipContent side="top">{riskBreakdown(verdict)}</TooltipContent>
-          </Tooltip>
+          <span className="group/risk flex items-center gap-1.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <RiskPill level={risk} muted={Boolean(verdict.user_feedback)} />
+              </TooltipTrigger>
+              <TooltipContent side="top">{riskBreakdown(verdict)}</TooltipContent>
+            </Tooltip>
+            {/* Space stays reserved so revealing the buttons never shifts the
+                row; below lg the reservation would starve the summary column,
+                so labelling moves to the Inspector alone. */}
+            <span className="pointer-events-none hidden items-center gap-1 opacity-0 transition-opacity lg:flex group-hover/risk:pointer-events-auto group-hover/risk:opacity-100 group-focus-within/risk:pointer-events-auto group-focus-within/risk:opacity-100">
+              <RiskFeedbackButton
+                kind="should_allow"
+                verdict={verdict}
+                disabled={feedbackPending}
+                onFeedback={onFeedback}
+              />
+              <RiskFeedbackButton
+                kind="should_block"
+                verdict={verdict}
+                disabled={feedbackPending}
+                onFeedback={onFeedback}
+              />
+            </span>
+          </span>
         )}
         <span
           className={cn(
@@ -231,6 +272,52 @@ function Row({
           )}
         />
       </span>
-    </button>
+    </div>
+  );
+}
+
+// One-click ground-truth label on the risk annotation: ✓ the flag was fine
+// (should_allow) or ⚠ Guard should have blocked this (should_block).
+// Relabeling stays possible after a click — the active label just highlights.
+function RiskFeedbackButton({
+  kind,
+  verdict,
+  disabled,
+  onFeedback,
+}: {
+  kind: RiskFeedback;
+  verdict: ClassifierVerdict;
+  disabled: boolean;
+  onFeedback: (actionID: string, feedback: RiskFeedback) => void;
+}) {
+  const selected = verdict.user_feedback === kind;
+  const allow = kind === "should_allow";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          aria-label={allow ? "Mark as fine" : "Mark as should have blocked"}
+          aria-pressed={selected}
+          onClick={(e) => {
+            e.stopPropagation();
+            onFeedback(verdict.action_id, kind);
+          }}
+          className={cn(
+            "flex h-5 w-5 items-center justify-center rounded-md border bg-background text-muted-foreground transition-colors disabled:opacity-50",
+            allow ? "hover:border-brand/40 hover:text-brand" : "hover:border-destructive/40 hover:text-destructive",
+            selected && (allow
+              ? "border-brand/40 bg-brand-light/60 text-brand"
+              : "border-destructive/40 bg-destructive/10 text-destructive"),
+          )}
+        >
+          {allow ? <Check className="h-3 w-3" /> : <TriangleAlert className="h-3 w-3" />}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {allow ? "Fine — this command was OK" : "Should’ve blocked this"}
+      </TooltipContent>
+    </Tooltip>
   );
 }

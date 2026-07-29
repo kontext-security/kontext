@@ -11,6 +11,7 @@ import {
   fetchPolicy,
   fetchSessions,
   fetchVerdicts,
+  sendVerdictFeedback,
 } from "@/dashboard/api";
 import { API, USE_SAMPLE_DATA } from "@/dashboard/config";
 import { bucket, sameSessions, verdictsByAction } from "@/dashboard/helpers";
@@ -33,6 +34,7 @@ import type {
   GuardMode,
   PolicyProfile,
   PolicyProfileID,
+  RiskFeedback,
   Session,
   Tab,
 } from "@/dashboard/types";
@@ -42,6 +44,7 @@ export default function App() {
   const [selectedSessionID, setSelectedSessionID] = useState("");
   const [events, setEvents] = useState<Event[]>([]);
   const [verdicts, setVerdicts] = useState<ClassifierVerdict[]>([]);
+  const [feedbackPendingID, setFeedbackPendingID] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("all");
   const [openId, setOpenId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -172,6 +175,30 @@ export default function App() {
       });
   }
 
+  // One label per click, one in flight at a time. The next 3s verdict poll
+  // would converge the state anyway; applying the POST response just gets the
+  // muted pill there sooner.
+  function submitFeedback(actionID: string, feedback: RiskFeedback) {
+    if (feedbackPendingID) return;
+    if (useSampleDashboard && selectedSessionID === SAMPLE_SESSION_ID) {
+      setVerdicts((prev) =>
+        prev.map((v) =>
+          v.action_id === actionID
+            ? { ...v, user_feedback: feedback, feedback_at: new Date().toISOString() }
+            : v,
+        ),
+      );
+      return;
+    }
+    setFeedbackPendingID(actionID);
+    sendVerdictFeedback(actionID, feedback)
+      .then((next) => {
+        setVerdicts((prev) => prev.map((v) => (v.action_id === next.action_id ? next : v)));
+      })
+      .catch((e: unknown) => setError(errorMessage(e)))
+      .finally(() => setFeedbackPendingID(null));
+  }
+
   function activate(id: PolicyProfileID) {
     if (id === policy?.profile || policyPending) return;
     if (useSampleDashboard && selectedSessionID === SAMPLE_SESSION_ID) {
@@ -261,6 +288,8 @@ export default function App() {
                   onOpen={setOpenId}
                   onClearFilter={() => setTab("all")}
                   mode={sessionMode}
+                  onFeedback={submitFeedback}
+                  feedbackPendingID={feedbackPendingID}
                 />
               </Block>
             </div>
@@ -272,7 +301,15 @@ export default function App() {
             side="right"
             className="w-[540px] max-w-[92vw] overflow-x-hidden p-0 sm:max-w-[540px]"
           >
-            {opened && <Inspector event={opened} mode={sessionMode} />}
+            {opened && (
+              <Inspector
+                event={opened}
+                verdict={verdictMap[opened.id]}
+                mode={sessionMode}
+                onFeedback={submitFeedback}
+                feedbackPending={feedbackPendingID === opened.id}
+              />
+            )}
           </SheetContent>
         </Sheet>
       </div>
