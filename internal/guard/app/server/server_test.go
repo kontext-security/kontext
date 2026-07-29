@@ -1,20 +1,15 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/cedareval"
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	"github.com/kontext-security/kontext-cli/internal/guard/policy"
-	"github.com/kontext-security/kontext-cli/internal/guard/policyconfig"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
@@ -34,15 +29,6 @@ func newTestServerWithPolicy(t *testing.T, store *sqlite.Store, policy PolicyPro
 	server, err := NewServerWithPolicy(store, policy)
 	if err != nil {
 		t.Fatalf("NewServerWithPolicy() error = %v", err)
-	}
-	return server
-}
-
-func newTestServerWithPolicyConfig(t *testing.T, store *sqlite.Store, policyStore *policyconfig.Store) *Server {
-	t.Helper()
-	server, err := NewServerWithPolicyConfig(store, NewRiskPolicyProvider(), policyStore)
-	if err != nil {
-		t.Fatalf("NewServerWithPolicyConfig() error = %v", err)
 	}
 	return server
 }
@@ -144,195 +130,6 @@ func TestProcessHookEventUsesPolicyProvider(t *testing.T) {
 	}
 	if summary.Actions != 1 || summary.Warnings != 0 || summary.Critical != 1 {
 		t.Fatalf("summary = %+v", summary)
-	}
-}
-
-func TestPolicyProfileGetReturnsLoadedDefault(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	policyStore, err := policyconfig.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := newTestServerWithPolicyConfig(t, store, policyStore)
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/policy/profile", nil)
-	server.Handler().ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-	var response PolicyProfileResponse
-	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
-		t.Fatal(err)
-	}
-	if response.Profile != policy.ProfileBalanced || response.RecommendedProfile != policy.ProfileBalanced {
-		t.Fatalf("response = %+v, want default balanced profile", response)
-	}
-	if response.Version != policy.DefaultPolicyVersion || response.RulePack != policy.DefaultRulePackID || response.ActivationID == "" {
-		t.Fatalf("response metadata = %+v", response)
-	}
-}
-
-func TestPolicyProfilePostActivatesProfile(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	policyStore, err := policyconfig.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := newTestServerWithPolicyConfig(t, store, policyStore)
-
-	body := bytes.NewBufferString(`{"profile":"strict"}`)
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/policy/profile", body)
-	request.Header.Set("Content-Type", "application/json")
-	server.Handler().ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-	var response PolicyProfileResponse
-	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
-		t.Fatal(err)
-	}
-	if response.Profile != policy.ProfileStrict {
-		t.Fatalf("profile = %q, want strict", response.Profile)
-	}
-	if policyStore.Current().Config.Profile != policy.ProfileStrict {
-		t.Fatalf("current profile = %q, want strict", policyStore.Current().Config.Profile)
-	}
-}
-
-func TestPolicyProfilePostRejectsInvalidProfile(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	policyStore, err := policyconfig.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := newTestServerWithPolicyConfig(t, store, policyStore)
-	initial := policyStore.Current()
-
-	body := bytes.NewBufferString(`{"profile":"paranoid"}`)
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/policy/profile", body)
-	request.Header.Set("Content-Type", "application/json")
-	server.Handler().ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
-	}
-	current := policyStore.Current()
-	if current.Config.Profile != initial.Config.Profile || current.ConfigDigest != initial.ConfigDigest {
-		t.Fatalf("current = %+v, want unchanged %+v", current, initial)
-	}
-}
-
-func TestPolicyProfilePostRejectsCrossOriginRequest(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	policyStore, err := policyconfig.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := newTestServerWithPolicyConfig(t, store, policyStore)
-	initial := policyStore.Current()
-
-	body := bytes.NewBufferString(`{"profile":"relaxed"}`)
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/policy/profile", body)
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Origin", "https://example.test")
-	server.Handler().ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
-	}
-	current := policyStore.Current()
-	if current.Config.Profile != initial.Config.Profile || current.ConfigDigest != initial.ConfigDigest {
-		t.Fatalf("current = %+v, want unchanged %+v", current, initial)
-	}
-}
-
-func TestPolicyProfilePostAllowsTrustedDashboardOrigins(t *testing.T) {
-	tests := []struct {
-		name   string
-		target string
-		origin string
-	}{
-		{name: "same origin", target: "http://127.0.0.1:4765/api/policy/profile", origin: "http://127.0.0.1:4765"},
-		{name: "vite dev", target: "http://127.0.0.1:4765/api/policy/profile", origin: devDashboardOrigin},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer store.Close()
-			policyStore, err := policyconfig.Open(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			server := newTestServerWithPolicyConfig(t, store, policyStore)
-
-			body := bytes.NewBufferString(`{"profile":"strict"}`)
-			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, tt.target, body)
-			request.Header.Set("Content-Type", "application/json")
-			request.Header.Set("Origin", tt.origin)
-			server.Handler().ServeHTTP(recorder, request)
-
-			if recorder.Code != http.StatusOK {
-				t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
-			}
-			if policyStore.Current().Config.Profile != policy.ProfileStrict {
-				t.Fatalf("current profile = %q, want strict", policyStore.Current().Config.Profile)
-			}
-		})
-	}
-}
-
-func TestPolicyProfilePostRejectsSimpleContentType(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	policyStore, err := policyconfig.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := newTestServerWithPolicyConfig(t, store, policyStore)
-	initial := policyStore.Current()
-
-	body := bytes.NewBufferString(`{"profile":"relaxed"}`)
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/policy/profile", body)
-	request.Header.Set("Content-Type", "text/plain")
-	server.Handler().ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusUnsupportedMediaType {
-		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusUnsupportedMediaType, recorder.Body.String())
-	}
-	current := policyStore.Current()
-	if current.Config.Profile != initial.Config.Profile || current.ConfigDigest != initial.ConfigDigest {
-		t.Fatalf("current = %+v, want unchanged %+v", current, initial)
 	}
 }
 
@@ -616,7 +413,7 @@ func TestJudgePolicyAllowsFromLocalJudge(t *testing.T) {
 	if decision.Decision != risk.DecisionAllow || decision.ReasonCode != risk.DecisionStageJudgeAllow {
 		t.Fatalf("decision = %+v", decision)
 	}
-	if decision.RiskEvent.DecisionStage != risk.DecisionStageJudgeAllow || decision.RiskEvent.PolicyVersion != policy.DefaultPolicyVersion {
+	if decision.RiskEvent.DecisionStage != risk.DecisionStageJudgeAllow {
 		t.Fatalf("risk event = %+v", decision.RiskEvent)
 	}
 }
@@ -825,139 +622,6 @@ func TestJudgePolicyFailsOpenWhenJudgeUnavailable(t *testing.T) {
 		t.Fatalf("decision = %+v", decision)
 	}
 	if decision.RiskEvent.JudgeFailureKind != judge.FailureTimeout || decision.RiskEvent.DecisionStage != risk.DecisionStageJudgeFailOpen {
-		t.Fatalf("risk event = %+v", decision.RiskEvent)
-	}
-}
-
-// A matched guardrail no longer short-circuits anything: the chain is
-// advisory, so the judge still runs and the match survives as policy
-// metadata on an allow.
-func TestJudgePolicyGuardrailMatchIsAdvisory(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	localJudge := &recordingJudge{}
-	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
-		SessionID:     "s1",
-		HookEventName: "PreToolUse",
-		ToolName:      "Bash",
-		ToolInput:     map[string]any{"command": "drop database"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if localJudge.calls != 1 {
-		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
-	}
-	if decision.Decision != risk.DecisionAllow {
-		t.Fatalf("decision = %+v", decision)
-	}
-	if decision.RiskEvent.PolicyRuleID != "guard.destructive_persistent_resource.v1" ||
-		decision.RiskEvent.PolicyRuleCategory != string(policy.CategoryDestructivePersistentResource) ||
-		decision.RiskEvent.PolicyVersion != policy.DefaultPolicyVersion {
-		t.Fatalf("policy metadata = %+v", decision.RiskEvent)
-	}
-}
-
-func TestJudgePolicyUsesActiveProfileForDeterministicRules(t *testing.T) {
-	dir := t.TempDir()
-	policyStore, err := policyconfig.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := policyStore.ActivateProfile(context.Background(), policy.ProfileRelaxed); err != nil {
-		t.Fatal(err)
-	}
-	store, err := sqlite.OpenStore(filepath.Join(dir, "guard.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	localJudge := &recordingJudge{
-		result: judge.Result{
-			Output: judge.Output{
-				Decision:   judge.DecisionAllow,
-				RiskLevel:  judge.RiskLevelLow,
-				Categories: []string{"explicit_profile"},
-				Reason:     "Relaxed profile allows this to reach the judge.",
-			},
-			Metadata: judge.Metadata{Runtime: "openai-compatible", Model: "qwen3-0.6b-q4"},
-		},
-	}
-	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
-		SessionID:     "s1",
-		HookEventName: "PreToolUse",
-		ToolName:      "Read",
-		ToolInput:     map[string]any{"file_path": ".env"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if localJudge.calls != 1 {
-		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
-	}
-	if localJudge.input.ToolName != "Read" || localJudge.input.ToolInput.Path != "env_file" {
-		t.Fatalf("judge input = %+v", localJudge.input)
-	}
-	if decision.Decision != risk.DecisionAllow || decision.RiskEvent.PolicyProfile != string(policy.ProfileRelaxed) {
-		t.Fatalf("decision = %+v", decision)
-	}
-}
-
-func TestJudgePolicyFallsBackWhenActivePolicyConfigInvalid(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "guard", "policy"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "guard", "policy", "active.json"), []byte(`{"version":"invalid-active-policy","profile":"custom","rulePack":"guard-default","nonBypassableRules":true}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := sqlite.OpenStore(filepath.Join(dir, "guard.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	localJudge := &recordingJudge{
-		result: judge.Result{
-			Output: judge.Output{
-				Decision:   judge.DecisionAllow,
-				RiskLevel:  judge.RiskLevelLow,
-				Categories: []string{"fallback"},
-				Reason:     "Fallback policy allowed this to reach the judge.",
-			},
-			Metadata: judge.Metadata{Runtime: "openai-compatible", Model: "qwen3-0.6b-q4"},
-		},
-	}
-	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
-		SessionID:     "s1",
-		HookEventName: "PreToolUse",
-		ToolName:      "Read",
-		ToolInput:     map[string]any{"file_path": "README.md"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if localJudge.calls != 1 {
-		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
-	}
-	if localJudge.input.ToolName != "Read" || localJudge.input.ToolInput.Path != "project_file" {
-		t.Fatalf("judge input = %+v", localJudge.input)
-	}
-	if decision.RiskEvent.PolicyVersion != policy.DefaultPolicyVersion || decision.RiskEvent.PolicyProfile != string(policy.ProfileBalanced) {
 		t.Fatalf("risk event = %+v", decision.RiskEvent)
 	}
 }

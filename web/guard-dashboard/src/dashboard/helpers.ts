@@ -7,17 +7,7 @@ import type {
   Session,
 } from "./types";
 
-const DETERMINISTIC_REASON_CODES = new Set([
-  "production_mutation",
-  "credential_access_without_intent",
-  "destructive_operation_without_intent",
-  "direct_infra_api_with_credential",
-  "unknown_high_risk_command",
-  "no_policy_rule_matched",
-]);
-
 const JUDGE_STAGES = new Set(["judge_allow", "judge_deny", "judge_fail_open"]);
-const DETERMINISTIC_STAGES = new Set(["deterministic_deny", "deterministic_allow"]);
 
 export function bucket(events: Event[]): EventBuckets {
   const groups: EventGroups = { deny: [], allow: [] };
@@ -67,14 +57,6 @@ export function prettyTool(t?: string): string {
   return humanize(t).replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function isDeterministicGuard(e: Event): boolean {
-  const stage = e.risk_event?.decision_stage;
-  return (
-    Boolean(stage && DETERMINISTIC_STAGES.has(stage)) ||
-    DETERMINISTIC_REASON_CODES.has(e.reason_code ?? "")
-  );
-}
-
 export function humanReason(e: Event): string {
   if (e.risk_event?.decision_stage === "judge_fail_open") {
     return "Local judge was unavailable, so Guard allowed by fail-open policy.";
@@ -85,21 +67,16 @@ export function humanReason(e: Event): string {
 export function technicalExplanation(e: Event): string {
   const r = e.risk_event ?? {};
   if (r.decision_stage === "judge_allow") {
-    return "Deterministic policy allowed this action, then the local judge allowed it.";
+    return "The local judge assessed this action as low risk. This is advisory analysis; Cedar is the enforcement authority.";
   }
   if (r.decision_stage === "judge_deny") {
-    return "Deterministic policy allowed this action, then the local judge denied it.";
+    return "The local judge assessed this action as high risk. This is advisory analysis; Cedar is the enforcement authority.";
   }
   if (r.decision_stage === "judge_fail_open") {
-    return `Deterministic policy allowed this action, but the local judge failed${r.judge_failure_kind ? ` with ${humanize(r.judge_failure_kind)}` : ""}.`;
-  }
-  if (isDeterministicGuard(e)) {
-    return r.policy_rule_id
-      ? `Deterministic policy matched ${r.policy_rule_id} before calling the local judge.`
-      : "Deterministic policy allowed this action.";
+    return `The local judge was unavailable${r.judge_failure_kind ? ` (${humanize(r.judge_failure_kind)})` : ""}; the action was allowed by fail-open policy.`;
   }
   if (r.type === "normal_tool_call") {
-    return "Routine coding-agent behavior. No deterministic policy rule matched.";
+    return "Routine coding-agent behavior recorded for audit.";
   }
   return `Normalized as ${r.type || "unknown"}.`;
 }
@@ -107,8 +84,7 @@ export function technicalExplanation(e: Event): string {
 export function decisionSource(e: Event): string {
   const stage = e.risk_event?.decision_stage;
   if (stage && JUDGE_STAGES.has(stage)) return "Local LLM judge";
-  if (isDeterministicGuard(e)) return "Deterministic policy";
-  return "Guard policy";
+  return "Guard runtime";
 }
 
 export function actionSummary(e: Event): string {

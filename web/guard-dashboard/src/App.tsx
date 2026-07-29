@@ -4,14 +4,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActionList } from "@/dashboard/ActionList";
-import { activatePolicy, errorMessage, fetchEvents, fetchPolicy, fetchSessions } from "@/dashboard/api";
+import { errorMessage, fetchEvents, fetchSessions } from "@/dashboard/api";
 import { API, USE_SAMPLE_DATA } from "@/dashboard/config";
 import { bucket, sameSessions } from "@/dashboard/helpers";
 import { Inspector } from "@/dashboard/Inspector";
-import { PolicyPanel } from "@/dashboard/PolicyPanel";
 import {
   SAMPLE_EVENTS,
-  SAMPLE_POLICY,
   SAMPLE_SESSION_ID,
   SAMPLE_SESSIONS,
 } from "@/dashboard/sample-data";
@@ -19,7 +17,7 @@ import { SessionHeader } from "@/dashboard/SessionHeader";
 import { Sidebar } from "@/dashboard/Sidebar";
 import { StatRow } from "@/dashboard/StatRow";
 import { Block } from "@/dashboard/shared";
-import type { Event, GuardMode, PolicyProfile, PolicyProfileID, Session, Tab } from "@/dashboard/types";
+import type { Event, GuardMode, Session, Tab } from "@/dashboard/types";
 
 export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -28,15 +26,11 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("all");
   const [openId, setOpenId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [policy, setPolicy] = useState<PolicyProfile | null>(null);
-  const [policyPending, setPolicyPending] = useState<PolicyProfileID | null>(null);
-  const [policyError, setPolicyError] = useState("");
   const selectedRef = useRef("");
   const useSampleDashboard = USE_SAMPLE_DATA && API === "";
 
   useEffect(() => {
     refresh();
-    loadPolicy();
     const t = setInterval(refresh, 3000);
     return () => clearInterval(t);
   }, []);
@@ -66,15 +60,6 @@ export default function App() {
     setError("");
   }
 
-  function applySamplePolicy(profile?: PolicyProfileID) {
-    if (!profile) {
-      setPolicy(SAMPLE_POLICY);
-      setPolicyError("");
-      return;
-    }
-    setPolicy({ ...SAMPLE_POLICY, profile, loaded_at: new Date().toISOString() });
-    setPolicyError("");
-  }
 
   function refresh() {
     if (useSampleDashboard) {
@@ -121,35 +106,7 @@ export default function App() {
       .catch((e: unknown) => setError(errorMessage(e)));
   }
 
-  function loadPolicy() {
-    if (useSampleDashboard) {
-      applySamplePolicy();
-      return;
-    }
 
-    fetchPolicy()
-      .then((p) => {
-        setPolicy(p);
-        setPolicyError("");
-      })
-      .catch((e: unknown) => {
-        setPolicyError(`Couldn't load policy profile. ${errorMessage(e)}`);
-      });
-  }
-
-  function activate(id: PolicyProfileID) {
-    if (id === policy?.profile || policyPending) return;
-    if (useSampleDashboard && selectedSessionID === SAMPLE_SESSION_ID) {
-      applySamplePolicy(id);
-      return;
-    }
-    setPolicyPending(id);
-    setPolicyError("");
-    activatePolicy(id)
-      .then(setPolicy)
-      .catch((e: unknown) => setPolicyError(`Couldn't update policy profile. ${errorMessage(e)}`))
-      .finally(() => setPolicyPending(null));
-  }
 
   const { counts, groups } = useMemo(() => bucket(events), [events]);
   const opened = useMemo(
@@ -185,14 +142,6 @@ export default function App() {
 
           <ScrollArea className="min-w-0 flex-1">
             <div className="min-w-0 px-10 pb-10 pt-8">
-              <PolicyPanel
-                profile={policy}
-                pending={policyPending}
-                error={policyError}
-                onActivate={activate}
-                onRetry={loadPolicy}
-              />
-
               <Block
                 label="Decision Summary"
                 description="What Guard decided this session."

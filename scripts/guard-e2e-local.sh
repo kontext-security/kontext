@@ -101,19 +101,19 @@ process.stdin.on("end", () => {
 assert_hook \
   "safe read" \
   "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"README.md\"}}" \
-  "no deterministic policy rule matched" \
+  "observed; no local analysis wired" \
   "would allow"
 
 assert_hook \
   "credential read" \
   "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\".env\"}}" \
-  "credential access flagged by deterministic guardrails" \
+  "observed; no local analysis wired" \
   "would allow"
 
 assert_hook \
   "provider credential" \
   "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'\"}}" \
-  "direct infrastructure API call included credential material" \
+  "observed; no local analysis wired" \
   "would allow"
 
 assert_telemetry_hook \
@@ -160,12 +160,7 @@ process.stdin.on("end", () => {
   // The chain is advisory: decisions are allow, and the guardrail analysis
   // survives as reason codes on the recorded events.
   const reasonCodes = events.map((event) => event.reason_code).sort().join(",");
-  const expectedReasonCodes = [
-    "credential_access_without_intent",
-    "direct_infra_api_with_credential",
-    "no_policy_rule_matched",
-  ].join(",");
-  if (reasonCodes !== expectedReasonCodes) {
+  if (reasonCodes !== "advisory,advisory,advisory") {
     throw new Error(`unexpected reason codes ${reasonCodes}`);
   }
 });
@@ -177,4 +172,4 @@ curl -fsS "$BASE_URL" | grep -q "<title>Kontext Guard</title>"
 go run ./cmd/kontext guard status --daemon-url "$BASE_URL" | grep -q "0 critical"
 go run ./cmd/kontext guard doctor --daemon-url "$BASE_URL" | grep -q "daemon healthy"
 
-echo "E2E passed: hook -> local runtime -> RuntimeCore -> deterministic policy -> SQLite -> dashboard API"
+echo "E2E passed: hook -> local runtime -> RuntimeCore -> advisory chain -> SQLite -> dashboard API"
