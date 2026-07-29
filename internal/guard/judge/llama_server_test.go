@@ -21,7 +21,10 @@ func TestBuildLlamaServerArgsUsesLocalModel(t *testing.T) {
 		Host:      "127.0.0.1",
 		Port:      18081,
 	})
-	want := []string{"--model", "/models/qwen.gguf", "--host", "127.0.0.1", "--port", "18081"}
+	// --ctx-size is explicit: llama-server's default allocates its full trained
+	// context per slot, which measured 5.1 GB RSS for a 0.6B model.
+	want := []string{"--model", "/models/qwen.gguf", "--host", "127.0.0.1", "--port", "18081",
+		"--ctx-size", strconv.Itoa(DefaultLlamaServerContextSize)}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
 	}

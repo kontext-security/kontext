@@ -219,3 +219,47 @@ create table risk_classifier_verdicts (
 		t.Fatalf("feedback against upgraded table: %v", err)
 	}
 }
+
+// TestMigrationListCoversEveryVerdictColumn guards the list against drift: a
+// column added to the DDL but not to classifierVerdictColumns would work on a
+// fresh database and fail only on an upgraded one, which is the case least
+// likely to be tested by hand.
+func TestMigrationListCoversEveryVerdictColumn(t *testing.T) {
+	t.Parallel()
+	store := openClassifierTestStore(t)
+	rows, err := store.db.QueryContext(context.Background(), "pragma table_info(risk_classifier_verdicts)")
+	if err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	defer rows.Close()
+	live := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		live[name] = true
+	}
+	migrated := map[string]bool{}
+	for _, column := range classifierVerdictColumns {
+		migrated[column.name] = true
+		if !live[column.name] {
+			t.Errorf("migration list has %q but the table does not", column.name)
+		}
+	}
+	// Columns present at initial creation need no migration entry; everything
+	// else does, or an upgraded database will be missing it.
+	initial := map[string]bool{
+		"id": true, "action_id": true, "session_id": true,
+		"command_redacted": true, "command_hash": true, "created_at": true,
+	}
+	for name := range live {
+		if !initial[name] && !migrated[name] {
+			t.Errorf("column %q is in the DDL but not in classifierVerdictColumns; an upgraded database will lack it", name)
+		}
+	}
+}

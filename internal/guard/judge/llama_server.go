@@ -26,6 +26,13 @@ const (
 	DefaultLlamaServerHFFile          = "Qwen3-0.6B-Q8_0.gguf"
 	DefaultLlamaServerHFRevision      = "main"
 	DefaultLlamaServerDownloadTimeout = 10 * time.Minute
+
+	// DefaultLlamaServerContextSize caps the KV cache. llama-server otherwise
+	// allocates its full trained context per slot — measured at 5.1 GB RSS for
+	// Qwen3-0.6B (4 slots x 40960 tokens) versus 1.2 GB at 4096, with identical
+	// latency. Guard's prompts are a few hundred tokens, so the large default is
+	// pure overhead on a developer machine.
+	DefaultLlamaServerContextSize = 4096
 )
 
 type LlamaServerOptions struct {
@@ -37,6 +44,7 @@ type LlamaServerOptions struct {
 	CacheDir         string
 	Host             string
 	Port             int
+	ContextSize      int
 	StartupTimeout   time.Duration
 	HTTPClient       *http.Client
 	Stdout           io.Writer
@@ -90,9 +98,10 @@ func StartLlamaServer(ctx context.Context, opts LlamaServerOptions) (*LlamaServe
 
 	childCtx, cancel := context.WithCancel(ctx)
 	args := BuildLlamaServerArgs(LlamaServerOptions{
-		ModelPath: modelPath,
-		Host:      opts.Host,
-		Port:      opts.Port,
+		ModelPath:   modelPath,
+		Host:        opts.Host,
+		Port:        opts.Port,
+		ContextSize: opts.ContextSize,
 	})
 	cmd := exec.CommandContext(childCtx, binaryPath, args...)
 	cmd.Stdout = opts.Stdout
@@ -181,6 +190,7 @@ func BuildLlamaServerArgs(opts LlamaServerOptions) []string {
 		"--model", strings.TrimSpace(opts.ModelPath),
 		"--host", opts.Host,
 		"--port", strconv.Itoa(opts.Port),
+		"--ctx-size", strconv.Itoa(opts.ContextSize),
 	}
 }
 
@@ -302,6 +312,9 @@ func normalizeLlamaServerOptions(opts LlamaServerOptions) LlamaServerOptions {
 	}
 	if opts.Port <= 0 {
 		opts.Port = DefaultLlamaServerPort
+	}
+	if opts.ContextSize <= 0 {
+		opts.ContextSize = DefaultLlamaServerContextSize
 	}
 	if strings.TrimSpace(opts.HFRevision) == "" {
 		opts.HFRevision = DefaultLlamaServerHFRevision

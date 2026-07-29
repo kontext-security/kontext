@@ -110,9 +110,9 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	return decision, nil
 }
 
-// observeCommand hands an intercepted bash command to the risk classifier.
-// Observe-mode only: the verdicts are logged against the decided action for
-// feedback collection and never revisit the decision above.
+// observeCommand hands an intercepted bash command to the risk classifier. The
+// verdict is an annotation recorded against the decided action — it is computed
+// after the decision is already made and never revisits it.
 func (r guardHookRuntime) observeCommand(event risk.HookEvent, actionID string) {
 	if r.classifier == nil || event.HookEventName != "PreToolUse" || actionID == "" {
 		return
