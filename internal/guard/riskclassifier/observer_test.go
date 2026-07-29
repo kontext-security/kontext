@@ -2,9 +2,6 @@ package riskclassifier
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -40,16 +37,15 @@ func (c *recordCollector) wait(t *testing.T, want int) []Record {
 	return nil
 }
 
-func newTestObserver(t *testing.T, guardrail *Guardrail, collector *recordCollector) *Observer {
+func newTestObserver(t *testing.T, collector *recordCollector) *Observer {
 	t.Helper()
 	svm, err := LoadSVM()
 	if err != nil {
 		t.Fatalf("load svm: %v", err)
 	}
 	observer := NewObserver(ObserverOptions{
-		SVM:       svm,
-		Guardrail: guardrail,
-		Sink:      collector.sink,
+		SVM:  svm,
+		Sink: collector.sink,
 		Redact: func(value string) string {
 			return strings.ReplaceAll(value, "hunter2", "[redacted-credential]")
 		},
@@ -61,15 +57,9 @@ func newTestObserver(t *testing.T, guardrail *Guardrail, collector *recordCollec
 	return observer
 }
 
-func TestObserverRecordsBothModels(t *testing.T) {
-	server := newGuardrailServer(t, "RISKY", nil)
-	defer server.Close()
-	guardrail, err := NewGuardrail(GuardrailOptions{BaseURL: server.URL, Model: "qwen2.5-0.5b"})
-	if err != nil {
-		t.Fatalf("new guardrail: %v", err)
-	}
+func TestObserverRecordsVerdict(t *testing.T) {
 	collector := &recordCollector{}
-	observer := newTestObserver(t, guardrail, collector)
+	observer := newTestObserver(t, collector)
 
 	observer.RecordPrompt("sess_1", "wipe the box with hunter2")
 	observer.Observe(ObserveInput{
@@ -90,14 +80,14 @@ func TestObserverRecordsBothModels(t *testing.T) {
 	if strings.Contains(record.AgentTask, "hunter2") {
 		t.Fatalf("agent task not redacted: %q", record.AgentTask)
 	}
-	if record.CommandHash == "" || len(record.CommandHash) != 64 {
+	if len(record.CommandHash) != 64 {
 		t.Fatalf("command hash = %q", record.CommandHash)
 	}
 	if record.SVM == nil || record.SVM.ModelVersion == "" {
 		t.Fatalf("svm verdict missing: %+v", record.SVM)
 	}
-	if record.LLM == nil || record.LLM.Verdict != VerdictRisky || record.LLM.Cached {
-		t.Fatalf("llm verdict wrong: %+v", record.LLM)
+	if record.SVM.Threshold == 0 {
+		t.Fatalf("svm threshold not recorded: %+v", record.SVM)
 	}
 	if record.Enforced {
 		t.Fatal("record must not be enforced")
@@ -107,75 +97,29 @@ func TestObserverRecordsBothModels(t *testing.T) {
 	}
 }
 
-func TestObserverCachesVerbatimRepeats(t *testing.T) {
-	var calls int
-	var mu sync.Mutex
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		calls++
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": "SAFE"}}},
-		})
-	}))
-	defer server.Close()
-
-	guardrail, err := NewGuardrail(GuardrailOptions{BaseURL: server.URL, Model: "qwen2.5-0.5b"})
-	if err != nil {
-		t.Fatalf("new guardrail: %v", err)
-	}
+func TestObserverIgnoresIncompleteInput(t *testing.T) {
 	collector := &recordCollector{}
-	observer := newTestObserver(t, guardrail, collector)
+	observer := newTestObserver(t, collector)
 
-	// Fill the cache with the first record before sending repeats: concurrent
-	// workers racing an identical fresh command may each miss, by design.
-	observer.Observe(ObserveInput{ActionID: "act_a", SessionID: "sess_1", Command: "git status"})
-	collector.wait(t, 1)
-	observer.Observe(ObserveInput{ActionID: "act_b", SessionID: "sess_1", Command: "git status"})
-	observer.Observe(ObserveInput{ActionID: "act_c", SessionID: "sess_1", Command: "git status"})
-	records := collector.wait(t, 3)
-
-	mu.Lock()
-	llmCalls := calls
-	mu.Unlock()
-	if llmCalls != 1 {
-		t.Fatalf("llm calls = %d, want 1 (cache misses)", llmCalls)
+	for _, input := range []ObserveInput{
+		{ActionID: "", SessionID: "sess_1", Command: "ls"},
+		{ActionID: "act_1", SessionID: "", Command: "ls"},
+		{ActionID: "act_1", SessionID: "sess_1", Command: ""},
+	} {
+		observer.Observe(input)
 	}
-	cachedCount := 0
-	for _, record := range records {
-		if record.LLM == nil {
-			t.Fatalf("llm verdict missing: %+v", record)
-		}
-		if record.LLM.Cached {
-			cachedCount++
-		}
-	}
-	if cachedCount != 2 {
-		t.Fatalf("cached records = %d, want 2", cachedCount)
-	}
-}
-
-func TestObserverRecordsGuardrailFailureAsError(t *testing.T) {
-	collector := &recordCollector{}
-	observer := newTestObserver(t, nil, collector)
-
-	observer.Observe(ObserveInput{ActionID: "act_1", SessionID: "sess_1", Command: "ls"})
-	record := collector.wait(t, 1)[0]
-	if record.LLM != nil {
-		t.Fatalf("llm should be absent: %+v", record.LLM)
-	}
-	if record.LLMError == "" {
-		t.Fatal("llm error missing")
-	}
-	if record.SVM == nil {
-		t.Fatal("svm must still run without guardrail")
+	// A well-formed record behind them proves the queue drained past the
+	// rejected ones rather than merely lagging.
+	observer.Observe(ObserveInput{ActionID: "act_ok", SessionID: "sess_1", Command: "ls"})
+	records := collector.wait(t, 1)
+	if len(records) != 1 || records[0].ActionID != "act_ok" {
+		t.Fatalf("unexpected records: %+v", records)
 	}
 }
 
 func TestObserverCloseIsSafeUnderConcurrentObserve(t *testing.T) {
 	collector := &recordCollector{}
-	observer := newTestObserver(t, nil, collector)
+	observer := newTestObserver(t, collector)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -189,5 +133,6 @@ func TestObserverCloseIsSafeUnderConcurrentObserve(t *testing.T) {
 	}
 	observer.Close()
 	wg.Wait()
+	// Observing after Close must be a no-op, not a send on a closed channel.
 	observer.Observe(ObserveInput{ActionID: "act", SessionID: "sess", Command: "ls"})
 }

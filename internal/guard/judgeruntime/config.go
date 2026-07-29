@@ -66,37 +66,19 @@ func ConfigFromEnv(dbPath string, managedDefault bool) (Config, error) {
 	}, nil
 }
 
-// Runtime is a configured local judge plus the endpoint it talks to. The
-// endpoint is reused by the observe-mode risk classifier's guardrail model, so
-// both signals share one llama-server process.
-type Runtime struct {
-	Judge   judge.Judge
-	Close   func()
-	Status  string
-	BaseURL string
-	Model   string
-}
-
 func Configure(ctx context.Context, cfg Config) (judge.Judge, func(), string, error) {
-	runtime, err := ConfigureRuntime(ctx, cfg)
-	return runtime.Judge, runtime.Close, runtime.Status, err
-}
-
-// ConfigureRuntime resolves the local judge and reports the endpoint serving
-// it. A nil Judge with a nil error means no judge was requested.
-func ConfigureRuntime(ctx context.Context, cfg Config) (Runtime, error) {
 	closeFn := func() {}
 	if cfg.Managed {
 		return configureManaged(ctx, cfg)
 	}
 	if strings.TrimSpace(cfg.URL) == "" && strings.TrimSpace(cfg.Model) == "" {
-		return Runtime{Close: closeFn}, nil
+		return nil, closeFn, "", nil
 	}
 	if strings.TrimSpace(cfg.URL) == "" || strings.TrimSpace(cfg.Model) == "" {
-		return Runtime{Close: closeFn}, fmt.Errorf("--judge-url and --judge-model must be set together")
+		return nil, closeFn, "", fmt.Errorf("--judge-url and --judge-model must be set together")
 	}
 	if err := ValidateLocalURL(cfg.URL); err != nil {
-		return Runtime{Close: closeFn}, err
+		return nil, closeFn, "", err
 	}
 	localJudge, err := judge.NewOpenAICompatibleJudge(judge.HTTPOptions{
 		BaseURL: cfg.URL,
@@ -104,18 +86,12 @@ func ConfigureRuntime(ctx context.Context, cfg Config) (Runtime, error) {
 		Timeout: cfg.Timeout,
 	})
 	if err != nil {
-		return Runtime{Close: closeFn}, err
+		return nil, closeFn, "", err
 	}
-	return Runtime{
-		Judge:   localJudge,
-		Close:   closeFn,
-		Status:  fmt.Sprintf("%s at %s", cfg.Model, cfg.URL),
-		BaseURL: cfg.URL,
-		Model:   cfg.Model,
-	}, nil
+	return localJudge, closeFn, fmt.Sprintf("%s at %s", cfg.Model, cfg.URL), nil
 }
 
-func configureManaged(ctx context.Context, cfg Config) (Runtime, error) {
+func configureManaged(ctx context.Context, cfg Config) (judge.Judge, func(), string, error) {
 	closeFn := func() {}
 	modelPath := strings.TrimSpace(cfg.ModelPath)
 	modelName := strings.TrimSpace(cfg.Model)
@@ -136,7 +112,7 @@ func configureManaged(ctx context.Context, cfg Config) (Runtime, error) {
 	}
 	host, port, baseURL, err := ManagedListenConfig(cfg.URL, cfg.Port)
 	if err != nil {
-		return Runtime{Close: closeFn}, err
+		return nil, closeFn, "", err
 	}
 	server, err := judge.StartLlamaServer(ctx, judge.LlamaServerOptions{
 		BinaryPath:       cfg.ServerBin,
@@ -157,12 +133,7 @@ func configureManaged(ctx context.Context, cfg Config) (Runtime, error) {
 			Kind:    judge.FailureUnavailable,
 			Err:     err,
 		}
-		return Runtime{
-			Judge:  unavailable,
-			Close:  closeFn,
-			Status: fmt.Sprintf("%s unavailable (%v)", modelName, err),
-			Model:  modelName,
-		}, nil
+		return unavailable, closeFn, fmt.Sprintf("%s unavailable (%v)", modelName, err), nil
 	}
 	closeFn = func() {
 		_ = server.Stop()
@@ -175,15 +146,9 @@ func configureManaged(ctx context.Context, cfg Config) (Runtime, error) {
 	})
 	if err != nil {
 		closeFn()
-		return Runtime{Close: func() {}}, err
+		return nil, func() {}, "", err
 	}
-	return Runtime{
-		Judge:   localJudge,
-		Close:   closeFn,
-		Status:  fmt.Sprintf("%s at %s (%s)", modelName, baseURL, judge.DefaultLlamaServerRuntime),
-		BaseURL: baseURL,
-		Model:   modelName,
-	}, nil
+	return localJudge, closeFn, fmt.Sprintf("%s at %s (%s)", modelName, baseURL, judge.DefaultLlamaServerRuntime), nil
 }
 
 func ManagedListenConfig(rawURL string, port int) (string, int, string, error) {

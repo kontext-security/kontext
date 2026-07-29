@@ -50,19 +50,15 @@ type Options struct {
 	CurrentSessionID string
 	Mode             string
 	// RiskClassifier enables observe-mode risk-classifier logging for
-	// intercepted bash commands. Nil disables it; the guardrail LLM inside is
-	// optional independently.
+	// intercepted bash commands. Nil disables it.
 	RiskClassifier *RiskClassifierOptions
 }
 
-// RiskClassifierOptions configure the observe-mode risk classifier. The SVM is
-// embedded and always available; the guardrail LLM reuses the local judge's
-// llama-server endpoint when one is running.
-type RiskClassifierOptions struct {
-	GuardrailBaseURL string
-	GuardrailModel   string
-	GuardrailTimeout time.Duration
-}
+// RiskClassifierOptions configure the observe-mode risk classifier. The model
+// is embedded, so enabling it needs no configuration today; the type exists so
+// callers opt in explicitly and so the contract's deferred second-opinion LLM
+// has somewhere to land.
+type RiskClassifierOptions struct{}
 
 // ClassifierFeedbackRequest is the dashboard's ground-truth label for one
 // observe-mode verdict: "should_allow" (false alarm) or "should_block" (miss).
@@ -129,21 +125,9 @@ func newRiskClassifierObserver(store *sqlite.Store, opts *RiskClassifierOptions)
 	if err != nil {
 		return nil
 	}
-	var guardrail *riskclassifier.Guardrail
-	if strings.TrimSpace(opts.GuardrailBaseURL) != "" && strings.TrimSpace(opts.GuardrailModel) != "" {
-		guardrail, err = riskclassifier.NewGuardrail(riskclassifier.GuardrailOptions{
-			BaseURL: opts.GuardrailBaseURL,
-			Model:   opts.GuardrailModel,
-			Timeout: opts.GuardrailTimeout,
-		})
-		if err != nil {
-			guardrail = nil
-		}
-	}
 	return riskclassifier.NewObserver(riskclassifier.ObserverOptions{
-		SVM:       svm,
-		Guardrail: guardrail,
-		Redact:    risk.RedactCredentials,
+		SVM:    svm,
+		Redact: risk.RedactCredentials,
 		Sink: func(ctx context.Context, record riskclassifier.Record) error {
 			_, err := store.SaveClassifierVerdict(ctx, record)
 			return err

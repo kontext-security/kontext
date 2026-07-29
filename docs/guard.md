@@ -49,7 +49,7 @@ Claude Code
   -> local SQLite
   -> local daemon API
        \
-        -> risk classifier (async, observe only: SVM + guardrail LLM -> verdict log)
+        -> risk classifier (async, observe only: SVM -> verdict log)
 ```
 
 ## Risk layers
@@ -93,7 +93,7 @@ kontext guard start --judge-managed
 
 Use `--judge-port` or a loopback `--judge-url` such as `http://127.0.0.1:18081` to choose a different managed `llama-server` port.
 
-The managed default is `Qwen/Qwen3-0.6B-GGUF` with `Qwen3-0.6B-Q8_0.gguf`. One `llama-server` serves both local LLM signals: the JSON judge above and the risk-classifier guardrail below. Override it with either a local model path:
+The managed default is `Qwen/Qwen3-0.6B-GGUF` with `Qwen3-0.6B-Q8_0.gguf`. Override it with either a local model path:
 
 ```bash
 kontext guard start \
@@ -130,19 +130,17 @@ where deterministic policy is expected to deny before the judge is called.
 
 ## Risk classifier (observe mode)
 
-Guard logs a second-opinion risk verdict for every intercepted bash command, from the two models in the sibling `authz-bench` serving contract (`authz-bench/serve/SERVING.md`). This is **observe mode only**: verdicts are recorded for feedback collection and never affect a decision. Deterministic rules stay in front and own known-bad; the classifier is a fuzzy signal for the long tail, and its job in v1 is to generate data.
+Guard logs a second-opinion risk verdict for every intercepted bash command, using the classifier from the sibling `authz-bench` serving contract (`authz-bench/serve/SERVING.md`). This is **observe mode only**: verdicts are recorded for feedback collection and never affect a decision. Deterministic rules stay in front and own known-bad; the classifier is a fuzzy signal for the long tail, and its job in v1 is to generate data.
 
-Both models run on every command and both are logged:
-
-1. **char n-gram + LinearSVM** — the benchmark winner, ported natively to Go and embedded in the binary (no Python at runtime). `scripts/riskclassifier/export_portable.py` flattens `authz-bench/serve/model/classifier.joblib` into `internal/guard/riskclassifier/model/svm.json.gz` and regenerates the golden fixtures that lock the port to the reference predictor. Run it after any upstream model change:
+The model is **char n-gram + LinearSVM** — the benchmark winner, ported natively to Go and embedded in the binary, so there is no Python and no model download at runtime. `scripts/riskclassifier/export_portable.py` flattens `authz-bench/serve/model/classifier.joblib` into `internal/guard/riskclassifier/model/svm.json.gz` and regenerates the golden fixtures that lock the port to the reference predictor. Run it after any upstream model change:
 
 ```bash
 ../authz-bench/.venv/bin/python scripts/riskclassifier/export_portable.py --authz ../authz-bench
 ```
 
-2. **Guardrail LLM** — the `RISKY`/`SAFE` prompt from the serving contract, sent to the same managed `llama-server` as the judge, in non-thinking mode (a guard wants a fast one-word verdict, not reasoning tokens). Enabled only when a local judge is running; otherwise records carry `llm_error` and the SVM verdict alone.
+The contract also describes a second opinion from a small local LLM prompted for `RISKY`/`SAFE`. That is **deferred**: the local judge already owns the LLM half of the decision path, and the guardrail model choice is still settling upstream. `RiskClassifierOptions` is where it lands when it arrives.
 
-`normalize_command` (IP → `1.1.1.1`, URL → `example.com`, long base64 → `BASE64`) is applied before both models, identically to training. Three tests fail on any drift, and none of them should be "fixed" by loosening an assertion: `TestNormalizeCommandGoldenParity` and `TestSVMGoldenParity` pin this port to the Python reference, and `TestSVMUpstreamGoldenParity` cross-checks it against authz-bench's independent Go port via that repo's shipped vectors (`testdata/upstream-golden.json`, refreshed by copying `authz-bench/serve/model/golden.json`). Two independent ports agreeing is what catches a normalizer divergence — an upstream base64 skew once passed its own parity check because its vectors did not cover the boundary.
+`normalize_command` (IP → `1.1.1.1`, URL → `example.com`, long base64 → `BASE64`) is applied before scoring, identically to training. Three tests fail on any drift, and none of them should be "fixed" by loosening an assertion: `TestNormalizeCommandGoldenParity` and `TestSVMGoldenParity` pin this port to the Python reference, and `TestSVMUpstreamGoldenParity` cross-checks it against authz-bench's independent Go port via that repo's shipped vectors (`testdata/upstream-golden.json`, refreshed by copying `authz-bench/serve/model/golden.json`). Two independent ports agreeing is what catches a normalizer divergence — an upstream base64 skew once passed its own parity check because its vectors did not cover the boundary.
 
 ### Serving threshold
 
@@ -159,7 +157,7 @@ The operating point is precision-weighted (F0.5 argmax) because in observe mode 
 
 Verdicts land in the `risk_classifier_verdicts` table, one row per decided action:
 
-- `svm_verdict` / `svm_score` / `svm_threshold` / `svm_model_version`, `llm_verdict` / `llm_raw` / `llm_model`, `enforced` (always `0` in v1)
+- `svm_verdict` / `svm_score` / `svm_threshold` / `svm_model_version`, and `enforced` (always `0` in v1)
 - `command_redacted` — credential-redacted, capped at 8 KB. Classification runs on the raw command in memory; only the redacted form is persisted, because this dataset is exported back to authz-bench.
 - `agent_task` — the session's latest user prompt, captured from `UserPromptSubmit`. Only the `kontext start` wrapper path registers that hook, so daemon-only `kontext guard start` sessions leave it empty.
 - `user_feedback` — `should_allow` or `should_block`. This is the ground-truth label the whole pipeline exists to collect.
@@ -171,7 +169,9 @@ GET  /api/sessions/{session_id}/verdicts
 POST /api/verdicts/{action_id}/feedback   {"user_feedback": "should_allow" | "should_block"}
 ```
 
-Classification is asynchronous and bounded: a small worker pool behind a 256-record queue, verbatim repeats served from an LRU so the LLM is not re-asked, and records dropped (counted, never queued indefinitely) under sustained overload. Nothing on this path can delay or change a tool call.
+Classification runs off the hook path: one worker behind a 256-record queue, draining on shutdown. Scoring itself takes microseconds — the store write is what would otherwise make a tool call wait. If the queue ever fills, the record is dropped rather than blocking; only the verdict is lost, since the tool call itself is already persisted on the decision path. Nothing here can delay or change a tool call.
+
+One verdict row per decided action, enforced by a `unique(action_id)` constraint: the feedback endpoint updates by `action_id`, so a duplicate row would let one label land on two records and corrupt the ground truth silently.
 
 ## Public/private boundary
 

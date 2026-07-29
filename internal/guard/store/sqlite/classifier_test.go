@@ -35,12 +35,6 @@ func sampleClassifierRecord() riskclassifier.Record {
 			Threshold:    0.4,
 			ModelVersion: "0.1.0",
 		},
-		LLM: &riskclassifier.LLMVerdict{
-			Verdict:    riskclassifier.VerdictRisky,
-			Raw:        "RISKY",
-			Model:      "qwen2.5-0.5b",
-			DurationMs: 180,
-		},
 	}
 }
 
@@ -74,9 +68,6 @@ func TestSaveClassifierVerdictRoundTrip(t *testing.T) {
 	if record.SVM.Threshold != 0.4 {
 		t.Fatalf("svm threshold = %v, want 0.4", record.SVM.Threshold)
 	}
-	if record.LLM == nil || record.LLM.Raw != "RISKY" || record.LLM.DurationMs != 180 {
-		t.Fatalf("llm verdict mismatch: %+v", record.LLM)
-	}
 	if record.Enforced {
 		t.Fatal("v1 records must not be enforced")
 	}
@@ -88,26 +79,25 @@ func TestSaveClassifierVerdictRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSaveClassifierVerdictAllowsMissingModels(t *testing.T) {
+func TestSaveClassifierVerdictRejectsDuplicateAction(t *testing.T) {
 	t.Parallel()
 	store := openClassifierTestStore(t)
 	ctx := context.Background()
 
-	record := sampleClassifierRecord()
-	record.LLM = nil
-	record.LLMError = "guardrail unavailable"
-	if _, err := store.SaveClassifierVerdict(ctx, record); err != nil {
+	if _, err := store.SaveClassifierVerdict(ctx, sampleClassifierRecord()); err != nil {
 		t.Fatalf("save verdict: %v", err)
+	}
+	// One verdict per decided action: a second row would let a single feedback
+	// click label two records, so the store must refuse it.
+	if _, err := store.SaveClassifierVerdict(ctx, sampleClassifierRecord()); err == nil {
+		t.Fatal("second verdict for the same action was accepted")
 	}
 	records, err := store.ClassifierVerdictsForSession(ctx, "sess_1")
 	if err != nil {
 		t.Fatalf("verdicts for session: %v", err)
 	}
-	if records[0].LLM != nil {
-		t.Fatalf("llm should be absent: %+v", records[0].LLM)
-	}
-	if records[0].LLMError != "guardrail unavailable" {
-		t.Fatalf("llm error = %q", records[0].LLMError)
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
 	}
 }
 

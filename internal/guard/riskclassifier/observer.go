@@ -1,7 +1,6 @@
 package riskclassifier
 
 import (
-	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,10 +19,9 @@ const (
 	storedTaskMaxBytes = 2048
 
 	observerQueueSize    = 256
-	observerWorkers      = 2
+	observerWorkers      = 1
 	observerSinkTimeout  = 5 * time.Second
 	observerDrainTimeout = 3 * time.Second
-	llmCacheSize         = 512
 	promptCacheSize      = 256
 )
 
@@ -35,10 +33,9 @@ type Sink func(context.Context, Record) error
 
 // ObserverOptions configure the observe-mode classifier pipeline.
 type ObserverOptions struct {
-	SVM       *SVM       // required
-	Guardrail *Guardrail // optional; records carry llm_error when absent calls fail
-	Sink      Sink       // required
-	Redact    Redactor   // required; applied to command and agent task before storage
+	SVM    *SVM     // required
+	Sink   Sink     // required
+	Redact Redactor // required; applied to command and agent task before storage
 }
 
 // ObserveInput identifies one intercepted bash command.
@@ -50,15 +47,17 @@ type ObserveInput struct {
 	Command   string
 }
 
-// Observer runs both risk models on intercepted bash commands and appends one
-// record per command to the feedback store. It is strictly observe-mode
-// plumbing: enqueueing never blocks the hook path, failures only surface in
-// the records themselves, and nothing here feeds back into decisions.
+// Observer scores intercepted bash commands and appends one record per command
+// to the feedback store. It is strictly observe-mode plumbing: enqueueing never
+// blocks the hook path, failures are swallowed rather than surfaced, and
+// nothing here feeds back into decisions.
+//
+// Work is done off the hook path because the store write — not the ~12µs
+// scoring — is what would otherwise make a tool call wait.
 type Observer struct {
-	svm       *SVM
-	guardrail *Guardrail
-	sink      Sink
-	redact    Redactor
+	svm    *SVM
+	sink   Sink
+	redact Redactor
 
 	queue   chan ObserveInput
 	baseCtx context.Context
@@ -70,10 +69,8 @@ type Observer struct {
 	// can close the channel.
 	closeMu sync.RWMutex
 	closed  atomic.Bool
-	dropped atomic.Int64
 
-	prompts  *boundedStringMap
-	llmCache *lruCache[LLMVerdict]
+	prompts *boundedStringMap
 }
 
 // NewObserver starts the worker pool. Callers own Close.
@@ -83,15 +80,13 @@ func NewObserver(opts ObserverOptions) *Observer {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	observer := &Observer{
-		svm:       opts.SVM,
-		guardrail: opts.Guardrail,
-		sink:      opts.Sink,
-		redact:    opts.Redact,
-		queue:     make(chan ObserveInput, observerQueueSize),
-		baseCtx:   ctx,
-		cancel:    cancel,
-		prompts:   newBoundedStringMap(promptCacheSize),
-		llmCache:  newLRUCache[LLMVerdict](llmCacheSize),
+		svm:     opts.SVM,
+		sink:    opts.Sink,
+		redact:  opts.Redact,
+		queue:   make(chan ObserveInput, observerQueueSize),
+		baseCtx: ctx,
+		cancel:  cancel,
+		prompts: newBoundedStringMap(promptCacheSize),
 	}
 	observer.workers.Add(observerWorkers)
 	for i := 0; i < observerWorkers; i++ {
@@ -109,9 +104,10 @@ func (o *Observer) RecordPrompt(sessionID, prompt string) {
 	o.prompts.set(sessionID, truncateAtRuneBoundary(o.redact(prompt), storedTaskMaxBytes))
 }
 
-// Observe enqueues one command for classification. It never blocks: under
-// sustained overload records are dropped and counted rather than delaying
-// tool calls.
+// Observe enqueues one command for classification. It never blocks: if the
+// queue is full the record is dropped rather than delaying a tool call. Only
+// the verdict is lost — the tool call itself is already persisted on the
+// decision path before the observer is involved.
 func (o *Observer) Observe(input ObserveInput) {
 	if o == nil || input.Command == "" || input.ActionID == "" || input.SessionID == "" {
 		return
@@ -124,24 +120,7 @@ func (o *Observer) Observe(input ObserveInput) {
 	select {
 	case o.queue <- input:
 	default:
-		o.dropped.Add(1)
 	}
-}
-
-// Dropped reports how many records were lost to queue overflow.
-func (o *Observer) Dropped() int64 {
-	if o == nil {
-		return 0
-	}
-	return o.dropped.Load()
-}
-
-// GuardrailModel reports the configured LLM, empty when the guardrail is off.
-func (o *Observer) GuardrailModel() string {
-	if o == nil {
-		return ""
-	}
-	return o.guardrail.Model()
 }
 
 // Close stops intake, waits briefly for queued work to drain, then aborts
@@ -195,34 +174,23 @@ func (o *Observer) process(input ObserveInput) {
 		Enforced:         false,
 		CreatedAt:        time.Now().UTC(),
 	}
-	o.classifyLLM(raw, &record)
 
 	sinkCtx, cancel := context.WithTimeout(o.baseCtx, observerSinkTimeout)
 	defer cancel()
 	_ = o.sink(sinkCtx, record)
 }
 
-// classifyLLM fills the record's LLM half: from the verbatim-repeat cache when
-// possible (agents rerun identical commands constantly), otherwise from the
-// guardrail. Absence or failure is data too — it lands in llm_error.
-func (o *Observer) classifyLLM(raw string, record *Record) {
-	if o.guardrail == nil {
-		record.LLMError = "guardrail not configured"
-		return
+// truncateAtRuneBoundary caps s at max bytes without splitting a UTF-8
+// sequence.
+func truncateAtRuneBoundary(s string, max int) string {
+	if len(s) <= max {
+		return s
 	}
-	cacheKey := NormalizeCommand(raw)
-	if cached, ok := o.llmCache.get(cacheKey); ok {
-		cached.Cached = true
-		record.LLM = &cached
-		return
+	cut := max
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
 	}
-	verdict, err := o.guardrail.Classify(o.baseCtx, raw)
-	if err != nil {
-		record.LLMError = err.Error()
-		return
-	}
-	record.LLM = &verdict
-	o.llmCache.set(cacheKey, verdict)
+	return s[:cut]
 }
 
 // boundedStringMap is a tiny concurrency-safe map with arbitrary eviction once
@@ -253,49 +221,4 @@ func (m *boundedStringMap) get(key string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.values[key]
-}
-
-// lruCache is a minimal LRU keyed by string.
-type lruCache[V any] struct {
-	mu      sync.Mutex
-	max     int
-	order   *list.List
-	entries map[string]*list.Element
-}
-
-type lruEntry[V any] struct {
-	key   string
-	value V
-}
-
-func newLRUCache[V any](max int) *lruCache[V] {
-	return &lruCache[V]{max: max, order: list.New(), entries: make(map[string]*list.Element, max)}
-}
-
-func (c *lruCache[V]) get(key string) (V, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	element, ok := c.entries[key]
-	if !ok {
-		var zero V
-		return zero, false
-	}
-	c.order.MoveToFront(element)
-	return element.Value.(*lruEntry[V]).value, true
-}
-
-func (c *lruCache[V]) set(key string, value V) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if element, ok := c.entries[key]; ok {
-		element.Value.(*lruEntry[V]).value = value
-		c.order.MoveToFront(element)
-		return
-	}
-	c.entries[key] = c.order.PushFront(&lruEntry[V]{key: key, value: value})
-	if c.order.Len() > c.max {
-		oldest := c.order.Back()
-		c.order.Remove(oldest)
-		delete(c.entries, oldest.Value.(*lruEntry[V]).key)
-	}
 }
