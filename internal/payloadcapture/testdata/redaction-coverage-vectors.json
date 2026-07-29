@@ -8,9 +8,24 @@
     },
     {
       "name": "bearer-header",
-      "ruleId": "bearer-basic-auth",
-      "input": "curl -H \"Authorization: Bearer tok_FAKE1234567890abcdef\" https://api.example.test",
-      "mustNotSurvive": ["tok_FAKE1234567890abcdef"]
+      "ruleId": "bearer-auth",
+      "input": "echo Bearer abc123",
+      "mustNotSurvive": ["abc123"],
+      "expected": "echo Bearer [REDACTED_SECRET]"
+    },
+    {
+      "name": "bare-basic-auth",
+      "ruleId": "basic-auth",
+      "input": "echo Basic dXNlcjpwYXNzd29yZA== done",
+      "mustNotSurvive": ["dXNlcjpwYXNzd29yZA=="],
+      "expected": "echo Basic [REDACTED_SECRET] done"
+    },
+    {
+      "name": "plain-authorization-header",
+      "ruleId": "authorization-header",
+      "input": "curl -H \"Authorization: header-secret-FAKE\" https://api.example.test",
+      "mustNotSurvive": ["header-secret-FAKE"],
+      "expected": "curl -H \"Authorization: [REDACTED_SECRET]\" https://api.example.test"
     },
     {
       "name": "github-classic-token",
@@ -72,19 +87,78 @@
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
-      "mustNotSurvive": ["verysecretFAKEvalue"]
+      "mustNotSurvive": ["verysecretFAKEvalue"],
+      "expected": "GITHUB_TOKEN=[REDACTED_SECRET] gh api /user"
+    },
+    {
+      "name": "assignment-preserves-shell-separator",
+      "ruleId": "sensitive-assignment",
+      "input": "printf ok;ACCESS_KEY=access-secret-FAKE echo next",
+      "mustNotSurvive": ["access-secret-FAKE"],
+      "expected": "printf ok;ACCESS_KEY=[REDACTED_SECRET] echo next"
+    },
+    {
+      "name": "password-alias-assignment",
+      "ruleId": "sensitive-assignment",
+      "input": "PASS=pass-secret-FAKE login",
+      "mustNotSurvive": ["pass-secret-FAKE"],
+      "expected": "PASS=[REDACTED_SECRET] login"
+    },
+    {
+      "name": "delimited-pass-segment-assignment",
+      "ruleId": "sensitive-assignment",
+      "input": "DB_PASS=db-secret-FAKE deploy",
+      "mustNotSurvive": ["db-secret-FAKE"],
+      "expected": "DB_PASS=[REDACTED_SECRET] deploy"
+    },
+    {
+      "name": "passwd-assignment",
+      "ruleId": "sensitive-assignment",
+      "input": "PASSWD=passwd-secret-FAKE su",
+      "mustNotSurvive": ["passwd-secret-FAKE"],
+      "expected": "PASSWD=[REDACTED_SECRET] su"
+    },
+    {
+      "name": "assignment-unclosed-quote",
+      "ruleId": "sensitive-assignment",
+      "input": "TOKEN=\"unterminated-secret-FAKE",
+      "mustNotSurvive": ["unterminated-secret-FAKE"],
+      "expected": "TOKEN=[REDACTED_SECRET]"
+    },
+    {
+      "name": "assignment-unclosed-quote-mid-value",
+      "ruleId": "sensitive-assignment",
+      "input": "TOKEN=a\"broken-secret-FAKE deploy",
+      "mustNotSurvive": ["broken-secret-FAKE"],
+      "expected": "TOKEN=[REDACTED_SECRET] deploy"
+    },
+    {
+      "name": "json-embedded-password",
+      "ruleId": "json-sensitive-property",
+      "input": "curl -d '{\"password\":\"json-secret-FAKE\",\"name\":\"safe\"}'",
+      "mustNotSurvive": ["json-secret-FAKE"],
+      "expected": "curl -d '{\"password\":\"[REDACTED_SECRET]\",\"name\":\"safe\"}'"
     },
     {
       "name": "cli-flag-space",
       "ruleId": "sensitive-cli-flag",
       "input": "mytool login --password hunter2FAKEsecret --verbose",
-      "mustNotSurvive": ["hunter2FAKEsecret"]
+      "mustNotSurvive": ["hunter2FAKEsecret"],
+      "expected": "mytool login --password [REDACTED_SECRET] --verbose"
+    },
+    {
+      "name": "curl-user-password",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u user:curl-secret-FAKE https://api.example.test",
+      "mustNotSurvive": ["user:curl-secret-FAKE", "curl-secret-FAKE"],
+      "expected": "curl -u [REDACTED_SECRET] https://api.example.test"
     },
     {
       "name": "query-param-code",
       "ruleId": "sensitive-query-param",
       "input": "GET /callback?code=authcodeFAKEsecret&state=xyz",
-      "mustNotSurvive": ["authcodeFAKEsecret"]
+      "mustNotSurvive": ["authcodeFAKEsecret"],
+      "expected": "GET /callback?code=[REDACTED_SECRET]&state=xyz"
     }
   ],
   "keyVectors": [
@@ -98,6 +172,8 @@
     { "name": "camel-client-secret", "key": "clientSecret", "sensitive": true },
     { "name": "dashed-api-key", "key": "x-api-key", "sensitive": true },
     { "name": "session-key", "key": "sessionKey", "sensitive": true },
+    { "name": "access-key", "key": "accessKey", "sensitive": true },
+    { "name": "password-alias", "key": "pwd", "sensitive": true },
     { "name": "author-is-not-auth", "key": "author", "sensitive": false },
     {
       "name": "tokenizer-is-not-token",

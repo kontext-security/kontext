@@ -31,7 +31,7 @@
         "api_key": "[REDACTED_SECRET]"
       },
       "redacted": true,
-      "redactorVersion": "rules/1",
+      "redactorVersion": "rules/2",
       "sourceSha256": "20405a150fcc952bd842c712cedce00008a0a2ffa1b8f97e2dd7c64582da98c3",
       "sourceByteLength": 100,
       "storedSha256": "48f9bd23d7f0664c798bf15c1019df883fc2dd82a2f67573730c86683df85b82",
@@ -49,7 +49,7 @@
       "mode": "full_truncated",
       "preview": "{\"content\":\"prefix 😀 suffix[truncated 96 bytes total]",
       "redacted": false,
-      "redactorVersion": "rules/1",
+      "redactorVersion": "rules/2",
       "sourceSha256": "37ca2d752945d115d2d07d69e4bc0a897dfe220ba90081acfa3e6764d4772cfb",
       "sourceByteLength": 96,
       "storedSha256": "38aae67c2662090f4fa46f4e108d608728dad050917c2ef4939c6a7d70a0e409",

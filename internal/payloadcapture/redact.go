@@ -19,7 +19,7 @@ func RedactJSON(value map[string]any) (map[string]any, bool) {
 func redactValue(value any) (any, bool) {
 	switch typed := value.(type) {
 	case string:
-		return redactText(typed)
+		return RedactText(typed)
 	case map[string]any:
 		changed := false
 		out := make(map[string]any, len(typed))
