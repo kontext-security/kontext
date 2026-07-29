@@ -22,7 +22,24 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/auth"
 	"github.com/kontext-security/kontext-cli/internal/credential"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 )
+
+func TestResolveLocalModeAllowsOnlyObserve(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"", "observe"} {
+		got, err := resolveLocalMode(mode)
+		if err != nil || got != guardhookruntime.ModeObserve {
+			t.Fatalf("resolveLocalMode(%q) = %q, %v; want observe, nil", mode, got, err)
+		}
+	}
+	for _, mode := range []string{"enforce", "remote"} {
+		if _, err := resolveLocalMode(mode); err == nil || !strings.Contains(err.Error(), "managed daemon") {
+			t.Fatalf("resolveLocalMode(%q) error = %v, want managed-daemon guidance", mode, err)
+		}
+	}
+}
 
 func TestFilterArgs(t *testing.T) {
 	t.Parallel()

@@ -50,6 +50,7 @@ const (
 
 const (
 	DecisionStageDeterministicDeny = "deterministic_deny"
+	DecisionStageAdvisory          = "advisory"
 	DecisionStageJudgeAllow        = "judge_allow"
 	DecisionStageJudgeDeny         = "judge_deny"
 	DecisionStageJudgeFailOpen     = "judge_fail_open"
