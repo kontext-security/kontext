@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
@@ -129,14 +128,6 @@ func LocalJudgeSummary(enabled bool, unavailable bool) string {
 		return "unavailable"
 	}
 	return "ready"
-}
-
-func (r *Renderer) DashboardReady(url string) {
-	url = strings.TrimSpace(url)
-	if url == "" {
-		return
-	}
-	r.printf("✓ Dashboard ready at %s\n", url)
 }
 
 func (r *Renderer) Mode(mode string) {

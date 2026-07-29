@@ -357,13 +357,13 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, dashboardDecisionRecords(events))
+		writeJSON(w, http.StatusOK, redactedDecisionRecords(events))
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
 }
 
-func dashboardDecisionRecords(records []sqlite.DecisionRecord) []sqlite.DecisionRecord {
+func redactedDecisionRecords(records []sqlite.DecisionRecord) []sqlite.DecisionRecord {
 	out := make([]sqlite.DecisionRecord, len(records))
 	for i, record := range records {
 		out[i] = record

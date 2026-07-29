@@ -19,7 +19,6 @@ func TestRendererNonTTYPrintsStableProgressLines(t *testing.T) {
 	renderer.HandleDownloadProgress(judge.DownloadProgress{Event: judge.DownloadProgressUpdate, CurrentBytes: 500, TotalBytes: 1000})
 	renderer.HandleDownloadProgress(judge.DownloadProgress{Event: judge.DownloadProgressDone, CurrentBytes: 1000, TotalBytes: 1000})
 	renderer.LocalJudgeReady(true, false)
-	renderer.DashboardReady("http://127.0.0.1:4765")
 
 	got := out.String()
 	if strings.Contains(got, "\r") {
@@ -31,7 +30,6 @@ func TestRendererNonTTYPrintsStableProgressLines(t *testing.T) {
 		"Downloading local judge model...",
 		"Progress: 500 B / 1.0 KB (50%)",
 		"✓ Local judge model ready",
-		"✓ Dashboard ready at http://127.0.0.1:4765",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output = %q, want %q", got, want)
