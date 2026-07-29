@@ -18,12 +18,20 @@ import (
 const (
 	envNoUpdateCheck            = "KONTEXT_NO_UPDATE_CHECK"
 	envDaemonUpdateInterval     = "KONTEXT_DAEMON_UPDATE_INTERVAL"
-	homebrewFormula             = "kontext-security/tap/kontext"
 	defaultDaemonUpdateInterval = 24 * time.Hour
 	brewListTimeout             = 15 * time.Second
 	brewUpdateTimeout           = 2 * time.Minute
 	brewUpgradeTimeout          = 5 * time.Minute
 )
+
+// homebrewFormulae maps the Cellar directory the running binary lives in to
+// the formula the updater must upgrade. Staging installs live under
+// Cellar/kontext-staging and must upgrade the staging formula — matching
+// only Cellar/kontext left staging daemons permanently ineligible.
+var homebrewFormulae = map[string]string{
+	"kontext":         "kontext-security/tap/kontext",
+	"kontext-staging": "kontext-security/tap/kontext-staging",
+}
 
 type commandRunner func(ctx context.Context, path string, args ...string) (string, error)
 
@@ -48,6 +56,7 @@ func startHomebrewUpdater(ctx context.Context, loadedConfig managedconfig.Loaded
 
 type homebrewUpdaterConfigValue struct {
 	brewPath string
+	formula  string
 	interval time.Duration
 }
 
@@ -61,17 +70,18 @@ func homebrewUpdaterConfig(ctx context.Context, loadedConfig managedconfig.Loade
 	if strings.TrimSpace(os.Getenv(envNoUpdateCheck)) != "" {
 		return homebrewUpdaterConfigValue{}, false
 	}
-	brewPath, ok := currentExecutableBrewPath()
+	brewPath, formula, ok := currentExecutableBrewPath()
 	if !ok {
-		logHomebrewUpdater(log, "daemon updater eligibility: brew not found\n")
+		logHomebrewUpdater(log, "daemon updater eligibility: not a homebrew-managed install\n")
 		return homebrewUpdaterConfigValue{}, false
 	}
-	if _, err := brewInstalledVersion(ctx, brewPath); err != nil {
+	if _, err := brewInstalledVersion(ctx, brewPath, formula); err != nil {
 		logHomebrewUpdater(log, "daemon updater eligibility: brew list failed: %v\n", err)
 		return homebrewUpdaterConfigValue{}, false
 	}
 	return homebrewUpdaterConfigValue{
 		brewPath: brewPath,
+		formula:  formula,
 		interval: daemonUpdateInterval(),
 	}, true
 }
@@ -84,13 +94,13 @@ func runHomebrewUpdater(ctx context.Context, cfg homebrewUpdaterConfigValue, log
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			changed, err := checkHomebrewUpgrade(ctx, cfg.brewPath)
+			changed, err := checkHomebrewUpgrade(ctx, cfg.brewPath, cfg.formula)
 			if err != nil {
 				logHomebrewUpdater(log, "daemon updater: %v\n", err)
 				continue
 			}
 			if changed {
-				logHomebrewUpdater(log, "daemon updater: upgraded %s; exiting for launchd restart\n", homebrewFormula)
+				logHomebrewUpdater(log, "daemon updater: upgraded %s; exiting for launchd restart\n", cfg.formula)
 				select {
 				case upgraded <- struct{}{}:
 				default:
@@ -101,26 +111,26 @@ func runHomebrewUpdater(ctx context.Context, cfg homebrewUpdaterConfigValue, log
 	}
 }
 
-func checkHomebrewUpgrade(ctx context.Context, brewPath string) (bool, error) {
-	before, err := brewInstalledVersion(ctx, brewPath)
+func checkHomebrewUpgrade(ctx context.Context, brewPath string, formula string) (bool, error) {
+	before, err := brewInstalledVersion(ctx, brewPath, formula)
 	if err != nil {
 		return false, fmt.Errorf("version before upgrade: %w", err)
 	}
 	if _, err := runBrewWithTimeout(ctx, brewUpdateTimeout, brewPath, "update-if-needed"); err != nil {
 		return false, fmt.Errorf("brew update-if-needed: %w", err)
 	}
-	if _, err := runBrewWithTimeout(ctx, brewUpgradeTimeout, brewPath, "upgrade", "--formula", "--no-ask", homebrewFormula); err != nil {
+	if _, err := runBrewWithTimeout(ctx, brewUpgradeTimeout, brewPath, "upgrade", "--formula", "--no-ask", formula); err != nil {
 		return false, fmt.Errorf("brew upgrade: %w", err)
 	}
-	after, err := brewInstalledVersion(ctx, brewPath)
+	after, err := brewInstalledVersion(ctx, brewPath, formula)
 	if err != nil {
 		return false, fmt.Errorf("version after upgrade: %w", err)
 	}
 	return after != "" && before != after, nil
 }
 
-func brewInstalledVersion(ctx context.Context, brewPath string) (string, error) {
-	output, err := runBrewWithTimeout(ctx, brewListTimeout, brewPath, "list", "--versions", homebrewFormula)
+func brewInstalledVersion(ctx context.Context, brewPath string, formula string) (string, error) {
+	output, err := runBrewWithTimeout(ctx, brewListTimeout, brewPath, "list", "--versions", formula)
 	if err != nil {
 		return "", err
 	}
@@ -141,26 +151,43 @@ func runBrewWithTimeout(parent context.Context, timeout time.Duration, brewPath 
 	return output, err
 }
 
-func currentExecutableBrewPath() (string, bool) {
+func currentExecutableBrewPath() (string, string, bool) {
 	exe, err := executablePath()
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	resolved, err := evalSymlinksPath(exe)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	for _, path := range []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"} {
 		prefix := strings.TrimSuffix(path, "/bin/brew")
-		if !strings.HasPrefix(resolved, prefix+"/Cellar/kontext/") {
+		formula, ok := homebrewFormulaForCellar(resolved, prefix)
+		if !ok {
 			continue
 		}
 		info, err := statPath(path)
 		if err == nil && !info.IsDir() {
-			return path, true
+			return path, formula, true
 		}
 	}
-	return "", false
+	return "", "", false
+}
+
+// homebrewFormulaForCellar matches the resolved executable against the
+// prefix's Cellar and returns the formula that owns that Cellar directory.
+func homebrewFormulaForCellar(resolved, prefix string) (string, bool) {
+	cellarRoot := prefix + "/Cellar/"
+	if !strings.HasPrefix(resolved, cellarRoot) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(resolved, cellarRoot)
+	cellar, _, found := strings.Cut(rest, "/")
+	if !found {
+		return "", false
+	}
+	formula, ok := homebrewFormulae[cellar]
+	return formula, ok
 }
 
 func daemonUpdateInterval() time.Duration {
