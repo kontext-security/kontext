@@ -1,8 +1,8 @@
-// Package riskclassifier scores bash commands with the two observe-mode risk
-// models from the authz-bench serving contract: the shipped char n-gram +
-// LinearSVM classifier (ported natively, embedded artifact) and a small local
-// LLM guardrail served by llama-server. Verdicts are recorded for feedback
-// collection only; nothing in this package influences hook decisions.
+// Package riskclassifier scores bash commands with the observe-mode risk model
+// from the authz-bench serving contract: the shipped char n-gram + LinearSVM
+// classifier, ported natively over an embedded artifact. Verdicts are recorded
+// for feedback collection only; nothing in this package influences hook
+// decisions.
 package riskclassifier
 
 import (
