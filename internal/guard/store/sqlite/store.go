@@ -342,6 +342,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, classifierVerdictsDDL); err != nil {
 		return err
 	}
+	if err := s.ensureClassifierVerdictColumns(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

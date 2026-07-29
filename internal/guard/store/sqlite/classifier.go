@@ -56,6 +56,41 @@ create index if not exists idx_risk_classifier_verdicts_action
 on risk_classifier_verdicts(action_id);
 `
 
+// classifierVerdictColumns is every column the current code reads and writes.
+// "create table if not exists" is a no-op on a database that already has the
+// table from an earlier build, so a column added after the table shipped would
+// be missing while inserts and selects reference it unconditionally — verdicts
+// would fail to insert and the verdict/feedback endpoints would 500. Each entry
+// is applied with ensureColumn, so add to this list whenever the table gains a
+// column.
+var classifierVerdictColumns = []struct {
+	name string
+	def  string
+}{
+	{name: "tool_use_id", def: "text"},
+	{name: "agent", def: "text"},
+	{name: "command_truncated", def: "integer not null default 0"},
+	{name: "agent_task", def: "text"},
+	{name: "svm_verdict", def: "text"},
+	{name: "svm_score", def: "real"},
+	{name: "svm_threshold", def: "real"},
+	{name: "svm_model_version", def: "text"},
+	{name: "enforced", def: "integer not null default 0"},
+	{name: "user_feedback", def: "text"},
+	{name: "feedback_at", def: "text"},
+}
+
+// ensureClassifierVerdictColumns brings an existing table up to the current
+// schema.
+func (s *Store) ensureClassifierVerdictColumns(ctx context.Context) error {
+	for _, column := range classifierVerdictColumns {
+		if err := s.ensureColumn(ctx, "risk_classifier_verdicts", column.name, column.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SaveClassifierVerdict appends one observe-mode classifier record.
 func (s *Store) SaveClassifierVerdict(ctx context.Context, record riskclassifier.Record) (ClassifierVerdictRecord, error) {
 	if record.ActionID == "" || record.SessionID == "" {

@@ -1,6 +1,7 @@
 package riskclassifier
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -153,8 +154,13 @@ func (o *Observer) work() {
 
 func (o *Observer) process(input ObserveInput) {
 	raw := input.Command
-	rawHash := sha256.Sum256([]byte(raw))
 	redacted := o.redact(raw)
+	// Hash the REDACTED command, never the raw one. The hash ships alongside the
+	// redacted text, so hashing the raw command would let a reader test
+	// candidate values offline and confirm a low-entropy or templated secret —
+	// an oracle that defeats the redaction this record promises. Verbatim
+	// repeats still collide, which is all the hash is used for.
+	redactedHash := sha256.Sum256([]byte(redacted))
 	truncated := len(redacted) > storedCommandMaxBytes
 	if truncated {
 		redacted = truncateAtRuneBoundary(redacted, storedCommandMaxBytes)
@@ -167,7 +173,7 @@ func (o *Observer) process(input ObserveInput) {
 		ToolUseID:        input.ToolUseID,
 		Agent:            input.Agent,
 		Command:          redacted,
-		CommandHash:      hex.EncodeToString(rawHash[:]),
+		CommandHash:      hex.EncodeToString(redactedHash[:]),
 		CommandTruncated: truncated,
 		AgentTask:        o.prompts.get(input.SessionID),
 		SVM:              &svmVerdict,
@@ -193,32 +199,51 @@ func truncateAtRuneBoundary(s string, max int) string {
 	return s[:cut]
 }
 
-// boundedStringMap is a tiny concurrency-safe map with arbitrary eviction once
-// full — session counts on one machine stay far below the bound in practice.
+// boundedStringMap is a small concurrency-safe string map that evicts the
+// least recently used entry once full. Recency matters: arbitrary eviction can
+// drop a still-active session's task while keeping a finished one, which
+// silently blanks agent_task on every later command from that session.
 type boundedStringMap struct {
-	mu     sync.Mutex
-	max    int
-	values map[string]string
+	mu      sync.Mutex
+	max     int
+	order   *list.List
+	entries map[string]*list.Element
+}
+
+type boundedEntry struct {
+	key   string
+	value string
 }
 
 func newBoundedStringMap(max int) *boundedStringMap {
-	return &boundedStringMap{max: max, values: make(map[string]string, max)}
+	return &boundedStringMap{max: max, order: list.New(), entries: make(map[string]*list.Element, max)}
 }
 
 func (m *boundedStringMap) set(key, value string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, exists := m.values[key]; !exists && len(m.values) >= m.max {
-		for evict := range m.values {
-			delete(m.values, evict)
-			break
-		}
+	if element, ok := m.entries[key]; ok {
+		element.Value.(*boundedEntry).value = value
+		m.order.MoveToFront(element)
+		return
 	}
-	m.values[key] = value
+	m.entries[key] = m.order.PushFront(&boundedEntry{key: key, value: value})
+	if m.order.Len() > m.max {
+		oldest := m.order.Back()
+		m.order.Remove(oldest)
+		delete(m.entries, oldest.Value.(*boundedEntry).key)
+	}
 }
 
 func (m *boundedStringMap) get(key string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.values[key]
+	element, ok := m.entries[key]
+	if !ok {
+		return ""
+	}
+	// Reading counts as use: a session actively issuing commands must not be
+	// evicted in favour of an idle one.
+	m.order.MoveToFront(element)
+	return element.Value.(*boundedEntry).value
 }
