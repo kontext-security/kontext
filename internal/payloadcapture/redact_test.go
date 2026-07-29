@@ -12,6 +12,7 @@ type coverageVectors struct {
 		RuleID         string   `json:"ruleId"`
 		Input          string   `json:"input"`
 		MustNotSurvive []string `json:"mustNotSurvive"`
+		Expected       string   `json:"expected"`
 	} `json:"valueVectors"`
 	KeyVectors []struct {
 		Name      string `json:"name"`
@@ -57,7 +58,7 @@ func TestRedactionCoverage(t *testing.T) {
 		t.Run(vector.Name, func(t *testing.T) {
 			t.Parallel()
 
-			redacted, changed := redactText(vector.Input)
+			redacted, changed := RedactText(vector.Input)
 			if !changed {
 				t.Fatalf("input was not redacted: %q", vector.Input)
 			}
@@ -68,6 +69,9 @@ func TestRedactionCoverage(t *testing.T) {
 			}
 			if !strings.Contains(redacted, RedactedPlaceholder) {
 				t.Fatalf("placeholder missing from %q", redacted)
+			}
+			if vector.Expected != "" && redacted != vector.Expected {
+				t.Fatalf("redacted = %q, want %q", redacted, vector.Expected)
 			}
 		})
 	}
@@ -83,6 +87,27 @@ func TestRedactionCoverage(t *testing.T) {
 	}
 }
 
+// TestRedactTextLeavesProseAlone pins false-positive boundaries: a short
+// word after "basic" is prose (Authorization-header context redacts Basic
+// values at any length), and pwd/pass only classify a key when they form a
+// complete _/- delimited segment of its name.
+func TestRedactTextLeavesProseAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{
+		"pip install basic package",
+		"see the basic auth docs",
+		"BYPASS=true deploy",
+		"OLDPWD=/home/user ls",
+		"COMPASS=north run",
+	} {
+		redacted, changed := RedactText(input)
+		if changed || redacted != input {
+			t.Fatalf("prose was redacted: %q -> %q", input, redacted)
+		}
+	}
+}
+
 // TestRedactionCoverageIsOrderIndependent guards the coverage invariant
 // against rule interference: an earlier rule's placeholder substitution must
 // not prevent a later rule from catching its secret, regardless of the order
@@ -95,7 +120,7 @@ func TestRedactionCoverageIsOrderIndependent(t *testing.T) {
 
 	apply := func(rules []compiledRule, input string) string {
 		for _, rule := range rules {
-			input = rule.re.ReplaceAllString(input, RedactedPlaceholder)
+			input = rule.re.ReplaceAllString(input, rule.replacement)
 		}
 		return input
 	}

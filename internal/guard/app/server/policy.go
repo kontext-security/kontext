@@ -5,100 +5,16 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/githubpolicy"
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	guardpolicy "github.com/kontext-security/kontext-cli/internal/guard/policy"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/hubspotpolicy"
-	"github.com/kontext-security/kontext-cli/internal/providerpolicy"
 )
-
-// ProviderPolicyBinding wires one provider's synced policy into the decision
-// path: a snapshot source plus a classifier turning hook events into that
-// provider's canonical policy requests (subject fields are filled in by the
-// evaluator).
-type ProviderPolicyBinding struct {
-	Provider  string
-	Snapshots providerpolicy.SnapshotProvider
-	Classify  func(event risk.HookEvent) []providerpolicy.Request
-}
-
-// GithubPolicyBinding binds the GitHub classifier to a snapshot source.
-func GithubPolicyBinding(snapshots providerpolicy.SnapshotProvider) ProviderPolicyBinding {
-	return ProviderPolicyBinding{
-		Provider:  "github",
-		Snapshots: snapshots,
-		Classify: func(event risk.HookEvent) []providerpolicy.Request {
-			actions := githubpolicy.ClassifyProviderActionsWithCWD(event.ToolName, event.ToolInput, event.CWD, func(cwd string) githubpolicy.GitContext {
-				return githubpolicy.GitContextFromCWD(cwd)
-			})
-			requests := make([]providerpolicy.Request, 0, len(actions))
-			for _, action := range actions {
-				requests = append(requests, providerpolicy.Request{
-					Action:      action.Action,
-					Resource:    action.Resource,
-					BranchOrRef: action.BranchOrRef,
-				})
-			}
-			return requests
-		},
-	}
-}
-
-// HubspotPolicyBinding binds the HubSpot classifier to a snapshot source. The
-// Cowork connector registry is resolved lazily per event from the hook cwd.
-func HubspotPolicyBinding(snapshots providerpolicy.SnapshotProvider) ProviderPolicyBinding {
-	return ProviderPolicyBinding{
-		Provider:  "hubspot",
-		Snapshots: snapshots,
-		Classify: func(event risk.HookEvent) []providerpolicy.Request {
-			actions := hubspotpolicy.ClassifyProviderActions(event.ToolName, event.ToolInput, hubspotpolicy.ConnectorResolverForCWD(event.CWD))
-			requests := make([]providerpolicy.Request, 0, len(actions))
-			for _, action := range actions {
-				requests = append(requests, providerpolicy.Request{
-					Action:   action.Action,
-					Resource: action.Resource,
-				})
-			}
-			return requests
-		},
-	}
-}
 
 type PolicyProvider interface {
 	DecideHook(context.Context, risk.HookEvent) (risk.RiskDecision, error)
 }
 
-type PolicyConfigProvider interface {
-	ActivePolicyConfig(context.Context) (guardpolicy.Config, error)
-}
-
 type RiskPolicyProvider struct {
-	judge        judge.Judge
-	policyEngine guardpolicy.Engine
-	policyConfig PolicyConfigProvider
-	// providerPolicies are the synced-policy bindings evaluated per event.
-	providerPolicies []ProviderPolicyBinding
-	// endpointID is this managed endpoint's installation ("ins_…") id, used as
-	// the endpoint-layer subject when evaluating synced provider policy.
-	endpointID string
-}
-
-type RiskPolicyProviderOptions struct {
-	Judge                judge.Judge
-	PolicyEngine         guardpolicy.Engine
-	PolicyConfig         guardpolicy.Config
-	PolicyConfigProvider PolicyConfigProvider
-	ProviderPolicies     []ProviderPolicyBinding
-	EndpointID           string
-}
-
-type staticPolicyConfigProvider struct {
-	config guardpolicy.Config
-}
-
-func (p staticPolicyConfigProvider) ActivePolicyConfig(context.Context) (guardpolicy.Config, error) {
-	return p.config, nil
+	judge judge.Judge
 }
 
 func NewRiskPolicyProvider() RiskPolicyProvider {
@@ -106,23 +22,7 @@ func NewRiskPolicyProvider() RiskPolicyProvider {
 }
 
 func NewRiskPolicyProviderWithJudge(localJudge judge.Judge) RiskPolicyProvider {
-	return NewRiskPolicyProviderWithOptions(RiskPolicyProviderOptions{
-		Judge: localJudge,
-	})
-}
-
-func NewRiskPolicyProviderWithOptions(opts RiskPolicyProviderOptions) RiskPolicyProvider {
-	configProvider := opts.PolicyConfigProvider
-	if configProvider == nil {
-		configProvider = staticPolicyConfigProvider{config: opts.PolicyConfig}
-	}
-	return RiskPolicyProvider{
-		judge:            opts.Judge,
-		policyEngine:     opts.PolicyEngine,
-		policyConfig:     configProvider,
-		providerPolicies: opts.ProviderPolicies,
-		endpointID:       opts.EndpointID,
-	}
+	return RiskPolicyProvider{judge: localJudge}
 }
 
 func (p RiskPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
@@ -130,116 +30,19 @@ func (p RiskPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent
 		return p.asyncTelemetryDecision(event), nil
 	}
 	riskEvent := risk.NormalizeHookEvent(event)
-	policyResult := p.policyEngine.Evaluate(riskEvent, p.activePolicyConfig(ctx))
-	applyPolicyMetadata(&riskEvent, policyResult)
-	// Local layering: deterministic guardrails > synced provider policy >
-	// probabilistic signals. A guardrail deny stands regardless of what the
-	// synced policy would have said; a synced policy (when enforcing)
-	// pre-empts the judge.
-	providerEvaluations, enforcing := p.evaluateProviderPolicies(event)
-	if policyResult.Decision == guardpolicy.DecisionDeny {
-		return withProviderPolicy(deterministicDenyDecision(riskEvent, policyResult), providerEvaluations), nil
-	}
-	if len(enforcing) > 0 {
-		return withProviderPolicy(providerPolicyDecision(riskEvent, enforcing), providerEvaluations), nil
-	}
+	// The local chain is advisory: Cedar (the cedarPolicyProvider wrapping
+	// this chain) is the only engine that decides. Judge analysis is
+	// recorded as risk signals on the decision fact; the chain's own
+	// outcome is always allow.
 	if p.judge == nil {
-		return withProviderPolicy(deterministicAllowDecision(riskEvent, policyResult), providerEvaluations), nil
+		return advisoryDecision(riskEvent), nil
 	}
 
 	result, err := p.judge.Decide(ctx, judgeInputFromRiskEvent(event, riskEvent))
 	if err != nil {
-		return withProviderPolicy(judgeFailOpenDecision(riskEvent, p.judge, err), providerEvaluations), nil
+		return judgeFailOpenDecision(riskEvent, p.judge, err), nil
 	}
-	return withProviderPolicy(judgeDecision(riskEvent, result), providerEvaluations), nil
-}
-
-// evaluateProviderPolicies classifies the event through every bound
-// provider's classifier and evaluates the classified actions against that
-// provider's synced snapshot. The managed endpoint's trusted identity is the
-// service account + installation — Claude hook payloads are not trusted human
-// identity — so requests carry no Kontext user/application subject and
-// user/agent-layer rules cannot match their subject (the evaluation flags
-// this via SubjectsResolved). The endpoint's own installation id IS known and
-// trusted, so it is supplied as the endpoint-layer subject; endpoint-scoped
-// rules are how device policy is enforced on this path.
-//
-// The second result is the first provider whose snapshot explicitly directs
-// enforcement AND produced evaluations for this event; empty otherwise. In
-// the observer pilot every snapshot is observe-mode, so it is always empty.
-func (p RiskPolicyProvider) evaluateProviderPolicies(event risk.HookEvent) ([]risk.ProviderPolicyEvaluations, []risk.ProviderPolicyEvaluations) {
-	var all []risk.ProviderPolicyEvaluations
-	var enforcing []risk.ProviderPolicyEvaluations
-	for _, binding := range p.providerPolicies {
-		if binding.Snapshots == nil || binding.Classify == nil {
-			continue
-		}
-		snapshot, status, ok := binding.Snapshots.CurrentSnapshot()
-		if !ok || len(snapshot.Rules) == 0 {
-			continue
-		}
-		requests := binding.Classify(event)
-		if len(requests) == 0 {
-			continue
-		}
-		evaluations := make([]providerpolicy.Evaluation, 0, len(requests))
-		for _, request := range requests {
-			request.EndpointID = p.endpointID
-			if evaluation, ok := providerpolicy.Evaluate(snapshot, status, request); ok {
-				evaluations = append(evaluations, evaluation)
-			}
-		}
-		if len(evaluations) == 0 {
-			continue
-		}
-		group := risk.ProviderPolicyEvaluations{Provider: binding.Provider, Evaluations: evaluations}
-		all = append(all, group)
-		if snapshot.Enforce() {
-			enforcing = append(enforcing, group)
-		}
-	}
-	return all, enforcing
-}
-
-func withProviderPolicy(decision risk.RiskDecision, evaluations []risk.ProviderPolicyEvaluations) risk.RiskDecision {
-	decision.ProviderPolicy = evaluations
-	return decision
-}
-
-// providerPolicyDecision is the enforce-mode path, reserved for after the
-// observer pilot: the synced policy outranks probabilistic signals, so its
-// verdict decides instead of the judge. ANY enforcing provider's denied
-// action denies the event — an event that classifies under two enforcing
-// providers must not slip through because the first one allowed it.
-func providerPolicyDecision(riskEvent risk.RiskEvent, enforcing []risk.ProviderPolicyEvaluations) risk.RiskDecision {
-	for _, provider := range enforcing {
-		for _, evaluation := range provider.Evaluations {
-			if evaluation.Result == providerpolicy.EffectDeny {
-				riskEvent.Decision = risk.DecisionDeny
-				riskEvent.ReasonCode = evaluation.ReasonCode
-				riskEvent.DecisionStage = provider.Provider + "_policy_deny"
-				return risk.RiskDecision{
-					Decision:   risk.DecisionDeny,
-					Reason:     evaluation.Reason,
-					ReasonCode: evaluation.ReasonCode,
-					GuardID:    evaluation.DecidingRuleID,
-					RiskEvent:  riskEvent,
-				}
-			}
-		}
-	}
-	first := enforcing[0]
-	allowed := first.Evaluations[0]
-	riskEvent.Decision = risk.DecisionAllow
-	riskEvent.ReasonCode = allowed.ReasonCode
-	riskEvent.DecisionStage = first.Provider + "_policy_allow"
-	return risk.RiskDecision{
-		Decision:   risk.DecisionAllow,
-		Reason:     allowed.Reason,
-		ReasonCode: allowed.ReasonCode,
-		GuardID:    allowed.DecidingRuleID,
-		RiskEvent:  riskEvent,
-	}
+	return judgeAdvisoryDecision(riskEvent, result), nil
 }
 
 func (p RiskPolicyProvider) asyncTelemetryDecision(event risk.HookEvent) risk.RiskDecision {
@@ -255,28 +58,16 @@ func (p RiskPolicyProvider) asyncTelemetryDecision(event risk.HookEvent) risk.Ri
 	}
 }
 
-func deterministicDenyDecision(riskEvent risk.RiskEvent, policyResult guardpolicy.Result) risk.RiskDecision {
-	riskEvent.Decision = risk.DecisionDeny
-	riskEvent.ReasonCode = policyResult.ReasonCode
-	riskEvent.GuardID = policyResult.RuleID
-	riskEvent.DecisionStage = risk.DecisionStageDeterministicDeny
-	return risk.RiskDecision{
-		Decision:   risk.DecisionDeny,
-		Reason:     policyResult.Reason,
-		ReasonCode: policyResult.ReasonCode,
-		GuardID:    policyResult.RuleID,
-		RiskEvent:  riskEvent,
-	}
-}
-
-func deterministicAllowDecision(riskEvent risk.RiskEvent, policyResult guardpolicy.Result) risk.RiskDecision {
+// advisoryDecision records the observation without deciding: no judge is
+// wired, so there is no analysis to attach. Cedar alone decides.
+func advisoryDecision(riskEvent risk.RiskEvent) risk.RiskDecision {
 	riskEvent.Decision = risk.DecisionAllow
-	riskEvent.ReasonCode = policyResult.ReasonCode
-	riskEvent.DecisionStage = "deterministic_allow"
+	riskEvent.ReasonCode = risk.DecisionStageAdvisory
+	riskEvent.DecisionStage = risk.DecisionStageAdvisory
 	return risk.RiskDecision{
 		Decision:   risk.DecisionAllow,
-		Reason:     policyResult.Reason,
-		ReasonCode: policyResult.ReasonCode,
+		Reason:     "observed; no local analysis wired",
+		ReasonCode: risk.DecisionStageAdvisory,
 		RiskEvent:  riskEvent,
 	}
 }
@@ -298,16 +89,19 @@ func judgeFailOpenDecision(riskEvent risk.RiskEvent, localJudge judge.Judge, err
 	}
 }
 
-func judgeDecision(riskEvent risk.RiskEvent, result judge.Result) risk.RiskDecision {
-	decision := risk.DecisionAllow
+// judgeAdvisoryDecision records the judge's analysis without deciding. The
+// judge's verdict survives as the reason code and risk fields on the fact's
+// advisory block; the chain's outcome is always allow.
+func judgeAdvisoryDecision(riskEvent risk.RiskEvent, result judge.Result) risk.RiskDecision {
 	reasonCode := risk.DecisionStageJudgeAllow
 	if result.Output.Decision == judge.DecisionDeny {
-		decision = risk.DecisionDeny
 		reasonCode = risk.DecisionStageJudgeDeny
 	}
 	duration := result.Metadata.DurationMs
-	riskEvent.Decision = decision
+	riskEvent.Decision = risk.DecisionAllow
 	riskEvent.ReasonCode = reasonCode
+	// The judge never controls execution here, but preserve its verdict as
+	// analysis so the dashboard can distinguish an advisory allow from deny.
 	riskEvent.DecisionStage = reasonCode
 	riskEvent.GuardID = "local_llm_judge"
 	riskEvent.JudgeRuntime = result.Metadata.Runtime
@@ -317,39 +111,12 @@ func judgeDecision(riskEvent risk.RiskEvent, result judge.Result) risk.RiskDecis
 	riskEvent.JudgeCategories = result.Output.Categories
 
 	return risk.RiskDecision{
-		Decision:   decision,
+		Decision:   risk.DecisionAllow,
 		Reason:     result.Output.Reason,
 		ReasonCode: reasonCode,
 		GuardID:    "local_llm_judge",
 		RiskEvent:  riskEvent,
 	}
-}
-
-func (p RiskPolicyProvider) activePolicyConfig(ctx context.Context) guardpolicy.Config {
-	if p.policyConfig == nil {
-		return guardpolicy.DefaultConfig()
-	}
-	config, err := p.policyConfig.ActivePolicyConfig(ctx)
-	if err != nil {
-		return guardpolicy.DefaultConfig()
-	}
-	if err := config.Validate(); err != nil {
-		return guardpolicy.DefaultConfig()
-	}
-	return config
-}
-
-func applyPolicyMetadata(event *risk.RiskEvent, result guardpolicy.Result) {
-	event.PolicyVersion = result.PolicyVersion
-	event.PolicyHash = result.PolicyHash
-	event.PolicyProfile = string(result.Profile)
-	event.PolicyRulePack = result.RulePack
-	if !result.Matched {
-		return
-	}
-	event.PolicyRuleID = result.RuleID
-	event.PolicyRuleCategory = string(result.Category)
-	event.PolicySignals = result.MatchedSignals
 }
 
 func judgeInputFromRiskEvent(event risk.HookEvent, riskEvent risk.RiskEvent) judge.Input {

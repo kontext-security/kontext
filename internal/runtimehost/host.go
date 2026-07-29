@@ -33,10 +33,8 @@ type Options struct {
 	JudgeConfigFromEnv    bool
 	JudgeManagedDefault   bool
 	JudgeDownloadProgress judge.DownloadProgressHandler
-	ProviderPolicies      []server.ProviderPolicyBinding
 	CedarPolicies         cedarpolicy.SnapshotProvider
 	CedarEnforcement      server.CedarEnforcementSource
-	EndpointID            string
 	Mode                  guardhookruntime.Mode
 	Diagnostic            diagnostic.Logger
 	SkipInitialSession    bool
@@ -68,6 +66,9 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	mode, err := ResolveMode(string(opts.Mode))
 	if err != nil {
 		return nil, err
+	}
+	if mode != guardhookruntime.ModeObserve && (opts.CedarPolicies == nil || opts.CedarEnforcement == server.CedarEnforcementOff) {
+		return nil, errors.New("enforce and remote modes require a managed Cedar policy source")
 	}
 	sessionID := strings.TrimSpace(opts.SessionID)
 	if sessionID == "" {
@@ -107,8 +108,6 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	}
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(dbPath, server.Options{
 		Judge:            localJudge,
-		ProviderPolicies: opts.ProviderPolicies,
-		EndpointID:       opts.EndpointID,
 		CedarPolicies:    opts.CedarPolicies,
 		CedarEnforcement: opts.CedarEnforcement,
 		CurrentSessionID: serverSessionID,

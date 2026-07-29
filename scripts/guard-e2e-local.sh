@@ -14,6 +14,7 @@ SESSION_ID="e2e-local"
 
 cleanup() {
   if [[ -n "${DAEMON_PID:-}" ]] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+    pkill -P "$DAEMON_PID" 2>/dev/null || true
     kill "$DAEMON_PID" 2>/dev/null || true
     wait "$DAEMON_PID" 2>/dev/null || true
   fi
@@ -100,20 +101,20 @@ process.stdin.on("end", () => {
 assert_hook \
   "safe read" \
   "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"README.md\"}}" \
-  "no deterministic policy rule matched" \
+  "observed; no local analysis wired" \
   "would allow"
 
 assert_hook \
   "credential read" \
   "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\".env\"}}" \
-  "credential access blocked by deterministic policy" \
-  "would deny"
+  "observed; no local analysis wired" \
+  "would allow"
 
 assert_hook \
   "provider credential" \
   "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'\"}}" \
-  "direct infrastructure API call included credential material" \
-  "would deny"
+  "observed; no local analysis wired" \
+  "would allow"
 
 assert_telemetry_hook \
   "async telemetry" \
@@ -126,7 +127,7 @@ let raw = "";
 process.stdin.on("data", (chunk) => raw += chunk);
 process.stdin.on("end", () => {
   const summary = JSON.parse(raw);
-  if (summary.critical !== 2 || summary.warnings !== 0 || summary.actions !== 4 || summary.sessions !== 1) {
+  if (summary.critical !== 0 || summary.warnings !== 0 || summary.actions !== 4 || summary.sessions !== 1) {
     throw new Error(`unexpected summary ${JSON.stringify(summary)}`);
   }
 });
@@ -141,7 +142,7 @@ let raw = "";
 process.stdin.on("data", (chunk) => raw += chunk);
 process.stdin.on("end", () => {
   const summary = JSON.parse(raw);
-  if (summary.critical !== 2 || summary.warnings !== 0 || summary.actions !== 4 || summary.sessions !== 1) {
+  if (summary.critical !== 0 || summary.warnings !== 0 || summary.actions !== 4 || summary.sessions !== 1) {
     throw new Error(`unexpected summary ${JSON.stringify(summary)}`);
   }
 });
@@ -153,13 +154,19 @@ process.stdin.on("data", (chunk) => raw += chunk);
 process.stdin.on("end", () => {
   const events = JSON.parse(raw);
   const decisions = events.map((event) => event.decision).sort().join(",");
-  if (events.length !== 3 || decisions !== "allow,deny,deny") {
+  if (events.length !== 3 || decisions !== "allow,allow,allow") {
     throw new Error(`unexpected decisions ${decisions} in ${JSON.stringify(events)}`);
+  }
+  // The decided row carries the Decision Fact cause: with no Cedar
+  // deployment in this environment, every call records policy_missing.
+  const reasonCodes = events.map((event) => event.reason_code).sort().join(",");
+  if (reasonCodes !== "policy_missing,policy_missing,policy_missing") {
+    throw new Error(`unexpected reason codes ${reasonCodes}`);
   }
 });
 '
 
-go run ./cmd/kontext guard status --daemon-url "$BASE_URL" | grep -q "2 critical"
+go run ./cmd/kontext guard status --daemon-url "$BASE_URL" | grep -q "0 critical"
 go run ./cmd/kontext guard doctor --daemon-url "$BASE_URL" | grep -q "daemon healthy"
 
-echo "E2E passed: hook -> local runtime -> RuntimeCore -> deterministic policy -> SQLite -> daemon API"
+echo "E2E passed: hook -> local runtime -> RuntimeCore -> advisory chain -> SQLite -> daemon API"

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/runtimehost"
 	"github.com/kontext-security/kontext-cli/internal/startupui"
 )
@@ -21,7 +22,7 @@ func StartLocal(ctx context.Context, opts Options) error {
 	}
 	diagnostics.Printf("agent preflight: %s -> %s\n", opts.Agent, agentPath)
 
-	mode, err := runtimehost.ResolveMode(os.Getenv("KONTEXT_MODE"))
+	mode, err := resolveLocalMode(os.Getenv("KONTEXT_MODE"))
 	if err != nil {
 		return err
 	}
@@ -68,4 +69,15 @@ func StartLocal(ctx context.Context, opts Options) error {
 	}
 
 	return launchAgentWithSettings(ctx, opts.Agent, agentPath, env, opts.Args, settingsPath)
+}
+
+func resolveLocalMode(value string) (guardhookruntime.Mode, error) {
+	mode, err := runtimehost.ResolveMode(value)
+	if err != nil {
+		return "", err
+	}
+	if mode != guardhookruntime.ModeObserve {
+		return "", fmt.Errorf("local runs support observe mode only; Cedar enforcement is provided by the managed daemon configured through kontext setup or MDM")
+	}
+	return mode, nil
 }

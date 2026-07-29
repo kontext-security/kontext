@@ -6,15 +6,11 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
-	"net/url"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	"github.com/kontext-security/kontext-cli/internal/guard/policy"
-	"github.com/kontext-security/kontext-cli/internal/guard/policyconfig"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
@@ -25,12 +21,10 @@ const (
 	DefaultAddr            = "127.0.0.1:4765"
 	jsonContentType        = "application/json"
 	unsupportedContentType = "policy profile requests require application/json"
-	untrustedProfileOrigin = "untrusted policy profile origin"
 )
 
 type Server struct {
 	store            *sqlite.Store
-	policyStore      *policyconfig.Store
 	core             *runtimecore.Core
 	mux              *http.ServeMux
 	currentSessionID string
@@ -45,32 +39,11 @@ type ProcessResponse struct {
 }
 
 type Options struct {
-	Judge                judge.Judge
-	PolicyConfig         policy.Config
-	PolicyConfigProvider PolicyConfigProvider
-	ProviderPolicies     []ProviderPolicyBinding
-	EndpointID           string
-	CedarPolicies        cedarpolicy.SnapshotProvider
-	CedarEnforcement     CedarEnforcementSource
-	CurrentSessionID     string
-	Mode                 string
-}
-
-type PolicyProfileResponse struct {
-	Profile            policy.Profile `json:"profile"`
-	RecommendedProfile policy.Profile `json:"recommended_profile"`
-	Version            string         `json:"version"`
-	RulePack           string         `json:"rule_pack"`
-	RulePackVersion    string         `json:"rule_pack_version"`
-	ConfigDigest       string         `json:"config_digest"`
-	ActivationID       string         `json:"activation_id"`
-	Source             string         `json:"source"`
-	Status             string         `json:"status"`
-	LoadedAt           time.Time      `json:"loaded_at"`
-}
-
-type ActivatePolicyProfileRequest struct {
-	Profile policy.Profile `json:"profile"`
+	Judge            judge.Judge
+	CedarPolicies    cedarpolicy.SnapshotProvider
+	CedarEnforcement CedarEnforcementSource
+	CurrentSessionID string
+	Mode             string
 }
 
 func NewServer(store *sqlite.Store) (*Server, error) {
@@ -82,56 +55,19 @@ func (s *Server) SetPayloadCaptureConfiguration(config payloadcapture.RuntimeCon
 }
 
 func NewServerWithOptions(store *sqlite.Store, opts Options) (*Server, error) {
-	policyStore, err := openPolicyStoreForSQLite(store)
-	if err != nil {
-		return nil, err
-	}
-	configProvider := opts.PolicyConfigProvider
-	if configProvider == nil {
-		if explicitPolicyConfig(opts.PolicyConfig) {
-			configProvider = staticPolicyConfigProvider{config: opts.PolicyConfig}
-		} else {
-			configProvider = policyStoreConfigProvider{store: policyStore}
-		}
-	}
-	return NewServerWithPolicyConfigAndOptions(store, NewRiskPolicyProviderWithOptions(RiskPolicyProviderOptions{
-		Judge:                opts.Judge,
-		PolicyConfigProvider: configProvider,
-		ProviderPolicies:     opts.ProviderPolicies,
-		EndpointID:           opts.EndpointID,
-	}), policyStore, opts)
+	return NewServerWithPolicyAndOptions(store, NewRiskPolicyProviderWithJudge(opts.Judge), opts)
 }
 
 // NewServerWithPolicy creates a Guard server with an injected policy provider.
 // A nil interface uses the default local risk policy; callers must not pass a
 // typed-nil provider because it still satisfies the PolicyProvider interface.
 func NewServerWithPolicy(store *sqlite.Store, policy PolicyProvider) (*Server, error) {
-	policyStore, err := openPolicyStoreForSQLite(store)
-	if err != nil {
-		return nil, err
-	}
-	return NewServerWithPolicyConfig(store, policy, policyStore)
+	return NewServerWithPolicyAndOptions(store, policy, Options{})
 }
 
-func NewServerWithPolicyConfig(store *sqlite.Store, policy PolicyProvider, policyStore *policyconfig.Store) (*Server, error) {
-	return NewServerWithPolicyConfigAndOptions(store, policy, policyStore, Options{})
-}
-
-func NewServerWithPolicyConfigAndOptions(store *sqlite.Store, policy PolicyProvider, policyStore *policyconfig.Store, opts Options) (*Server, error) {
-	if policyStore == nil {
-		var err error
-		policyStore, err = openPolicyStoreForSQLite(store)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if _, err := policyStore.Load(context.Background()); err != nil {
-		return nil, fmt.Errorf("load policy config: %w", err)
-	}
+func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, opts Options) (*Server, error) {
 	if policy == nil {
-		policy = NewRiskPolicyProviderWithOptions(RiskPolicyProviderOptions{
-			PolicyConfigProvider: policyStoreConfigProvider{store: policyStore},
-		})
+		policy = NewRiskPolicyProvider()
 	}
 	policy = newCedarPolicyProvider(policy, opts.CedarPolicies, opts.CedarEnforcement)
 	currentSessionID := strings.TrimSpace(opts.CurrentSessionID)
@@ -146,7 +82,6 @@ func NewServerWithPolicyConfigAndOptions(store *sqlite.Store, policy PolicyProvi
 	}
 	server := &Server{
 		store:            store,
-		policyStore:      policyStore,
 		core:             core,
 		mux:              http.NewServeMux(),
 		currentSessionID: currentSessionID,
@@ -181,8 +116,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/summary", s.handleSummary)
 	s.mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	s.mux.HandleFunc("GET /api/sessions/", s.handleSession)
-	s.mux.HandleFunc("GET /api/policy/profile", s.handlePolicyProfile)
-	s.mux.HandleFunc("POST /api/policy/profile", s.handleActivatePolicyProfile)
 }
 
 func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
@@ -300,38 +233,6 @@ func (s *Server) modeForSession(sessionID string) string {
 	return s.mode
 }
 
-func (s *Server) handlePolicyProfile(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, policyProfileResponse(s.policyStore.Current()))
-}
-
-func (s *Server) handleActivatePolicyProfile(w http.ResponseWriter, r *http.Request) {
-	if !trustedPolicyProfileRequest(r) {
-		writeError(w, http.StatusForbidden, untrustedProfileOrigin)
-		return
-	}
-	if !hasJSONContentType(r) {
-		writeError(w, http.StatusUnsupportedMediaType, unsupportedContentType)
-		return
-	}
-	var req ActivatePolicyProfileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid policy profile request")
-		return
-	}
-	switch req.Profile {
-	case policy.ProfileRelaxed, policy.ProfileBalanced, policy.ProfileStrict:
-	default:
-		writeError(w, http.StatusBadRequest, "unknown policy profile")
-		return
-	}
-	snapshot, err := s.policyStore.ActivateProfile(r.Context(), req.Profile)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("activate policy profile: %v", err))
-		return
-	}
-	writeJSON(w, http.StatusOK, policyProfileResponse(snapshot))
-}
-
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
@@ -374,21 +275,6 @@ func redactedDecisionRecords(records []sqlite.DecisionRecord) []sqlite.DecisionR
 	return out
 }
 
-func policyProfileResponse(snapshot policyconfig.Snapshot) PolicyProfileResponse {
-	return PolicyProfileResponse{
-		Profile:            snapshot.Config.Profile,
-		RecommendedProfile: policy.ProfileBalanced,
-		Version:            snapshot.PolicyVersion,
-		RulePack:           snapshot.RulePack,
-		RulePackVersion:    snapshot.RulePackVersion,
-		ConfigDigest:       snapshot.ConfigDigest,
-		ActivationID:       snapshot.ActivationID,
-		Source:             string(snapshot.Source),
-		Status:             string(snapshot.Status),
-		LoadedAt:           snapshot.LoadedAt,
-	}
-}
-
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -397,18 +283,6 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
-}
-
-func trustedPolicyProfileRequest(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	return parsed.Scheme == "http" && parsed.Host == r.Host
 }
 
 func hasJSONContentType(r *http.Request) bool {
@@ -421,28 +295,6 @@ func hasJSONContentType(r *http.Request) bool {
 		return false
 	}
 	return strings.EqualFold(mediaType, jsonContentType)
-}
-
-type policyStoreConfigProvider struct {
-	store *policyconfig.Store
-}
-
-func (p policyStoreConfigProvider) ActivePolicyConfig(context.Context) (policy.Config, error) {
-	if p.store == nil {
-		return policy.DefaultConfig(), nil
-	}
-	return p.store.Current().ToPolicyConfig(), nil
-}
-
-func explicitPolicyConfig(cfg policy.Config) bool {
-	return cfg.Version != "" || cfg.Profile != "" || cfg.RulePack != "" || cfg.NonBypassableRules != nil
-}
-
-func openPolicyStoreForSQLite(store *sqlite.Store) (*policyconfig.Store, error) {
-	if store == nil || store.Path() == "" {
-		return nil, fmt.Errorf("policy config requires sqlite store path")
-	}
-	return policyconfig.Open(filepath.Dir(store.Path()))
 }
 
 func OpenDefaultServer(dbPath string) (*Server, func() error, error) {

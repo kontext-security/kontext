@@ -65,7 +65,7 @@ func guardDecision(event RiskEvent) RiskDecision {
 	if event.Environment == "production" && event.OperationClass != "unknown" && event.OperationClass != "read" {
 		return RiskDecision{
 			Decision:   DecisionDeny,
-			Reason:     "production mutation blocked by deterministic policy",
+			Reason:     "production mutation flagged by deterministic guardrails",
 			ReasonCode: "production_mutation",
 			GuardID:    "guard_production_mutation",
 		}
@@ -73,7 +73,7 @@ func guardDecision(event RiskEvent) RiskDecision {
 	if event.Type == EventCredentialAccess && !event.ExplicitUserIntent {
 		return RiskDecision{
 			Decision:   DecisionDeny,
-			Reason:     "credential access blocked by deterministic policy",
+			Reason:     "credential access flagged by deterministic guardrails",
 			ReasonCode: "credential_access_without_intent",
 			GuardID:    "guard_credential_access",
 		}
@@ -81,7 +81,7 @@ func guardDecision(event RiskEvent) RiskDecision {
 	if event.Type == EventUnknown {
 		return RiskDecision{
 			Decision:   DecisionDeny,
-			Reason:     "unknown high-risk command blocked by deterministic policy",
+			Reason:     "unknown high-risk command flagged by deterministic guardrails",
 			ReasonCode: "unknown_high_risk_command",
 			GuardID:    "guard_unknown_high_risk",
 		}

@@ -358,7 +358,7 @@ func installClaudeHooks(out io.Writer, socketPath string) error {
 	}
 	fmt.Fprintf(out, "Installed Kontext Guard Claude Code hooks into %s\n", settingsPath)
 	fmt.Fprintf(out, "Hook command: %s\n", hookCommand)
-	fmt.Fprintln(out, "Default mode is observe. Set KONTEXT_MODE=enforce later to block deny decisions.")
+	fmt.Fprintln(out, "Local hooks run in observe mode. Cedar enforcement is provided by the managed daemon configured through kontext setup or MDM.")
 	return nil
 }
 
@@ -561,10 +561,10 @@ func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
 		want hook.Decision
 	}{
 		{"safe read", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Read", ToolInput: map[string]any{"file_path": "README.md"}}, hook.DecisionAllow},
-		{"env read", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Read", ToolInput: map[string]any{"file_path": ".env"}}, hook.DecisionDeny},
-		{"cat env", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "cat .env"}}, hook.DecisionDeny},
-		{"provider token", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'"}}, hook.DecisionDeny},
-		{"drop database", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "drop database"}}, hook.DecisionDeny},
+		{"env read", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Read", ToolInput: map[string]any{"file_path": ".env"}}, hook.DecisionAllow},
+		{"cat env", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "cat .env"}}, hook.DecisionAllow},
+		{"provider token", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'"}}, hook.DecisionAllow},
+		{"drop database", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "drop database"}}, hook.DecisionAllow},
 	}
 	for _, item := range cases {
 		result, err := client.Process(ctx, item.ev)
@@ -580,8 +580,11 @@ func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if summary.Actions != 5 || summary.Warnings != 0 || summary.Critical != 4 {
-		return fmt.Errorf("summary=%+v, want actions=5 critical=4 and no warnings", summary)
+	// The local chain is advisory: every decision is allow, and blocking is
+	// Cedar's alone (not exercisable here without a policy deployment). The
+	// smoke test verifies runtime plumbing and persistence, not enforcement.
+	if summary.Actions != 5 || summary.Warnings != 0 || summary.Critical != 0 {
+		return fmt.Errorf("summary=%+v, want actions=5 and no critical/warnings", summary)
 	}
 	fmt.Fprintf(out, "summary critical=%d actions=%d\n", summary.Critical, summary.Actions)
 	return nil
@@ -784,7 +787,7 @@ func installedHookCommand(socketPath string) string {
 }
 
 func installedHookInvocation(launcher, socketPath string) string {
-	return fmt.Sprintf("%s hook --agent claude --mode \"${KONTEXT_MODE:-observe}\" --socket %s", launcher, shellQuote(socketPath))
+	return fmt.Sprintf("%s hook --agent claude --mode observe --socket %s", launcher, shellQuote(socketPath))
 }
 
 func shellQuote(value string) string {
