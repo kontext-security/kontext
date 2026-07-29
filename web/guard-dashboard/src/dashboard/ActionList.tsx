@@ -7,10 +7,26 @@ import {
 } from "@/components/ui/collapsible";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { decisionLabel, decisionSource, decisionTone, prettyTool, summaryOf } from "./helpers";
-import { DecisionDot } from "./shared";
+import {
+  decisionLabel,
+  decisionSource,
+  decisionTone,
+  prettyTool,
+  riskBreakdown,
+  riskLevel,
+  summaryOf,
+} from "./helpers";
+import { DecisionDot, RiskPill } from "./shared";
 import { DECISIONS } from "./types";
-import type { Decision, Event, EventGroups, GuardMode, Tab } from "./types";
+import type {
+  ClassifierVerdict,
+  Decision,
+  Event,
+  EventGroups,
+  GuardMode,
+  Tab,
+  VerdictsByAction,
+} from "./types";
 
 const VISIBLE_KINDS = {
   all: DECISIONS,
@@ -21,6 +37,7 @@ const VISIBLE_KINDS = {
 export function ActionList({
   tab,
   decisionGroups,
+  verdicts,
   openId,
   onOpen,
   onClearFilter,
@@ -28,6 +45,7 @@ export function ActionList({
 }: {
   tab: Tab;
   decisionGroups: EventGroups;
+  verdicts: VerdictsByAction;
   openId: string | null;
   onOpen: (id: string) => void;
   onClearFilter: () => void;
@@ -81,7 +99,13 @@ export function ActionList({
               separated={index > 0}
             >
               {items.map((e) => (
-                <Row key={e.id} event={e} active={openId === e.id} onClick={() => onOpen(e.id)} />
+                <Row
+                  key={e.id}
+                  event={e}
+                  verdict={verdicts[e.id]}
+                  active={openId === e.id}
+                  onClick={() => onOpen(e.id)}
+                />
               ))}
             </Group>
           ))
@@ -142,16 +166,19 @@ function Group({
 
 function Row({
   event,
+  verdict,
   active,
   onClick,
 }: {
   event: Event;
+  verdict?: ClassifierVerdict;
   active: boolean;
   onClick: () => void;
 }) {
   const target = summaryOf(event);
   const signal = event.risk_event?.signals?.[0]?.replace(/_/g, " ");
   const tone = decisionTone[event.decision];
+  const risk = riskLevel(verdict);
   return (
     <button
       onClick={onClick}
@@ -163,7 +190,9 @@ function Row({
     >
       {active && <span className="absolute inset-y-0 left-0 w-[2px] bg-brand" />}
       <DecisionDot kind={event.decision} />
-      <span className="flex min-w-0 items-baseline gap-2.5">
+      {/* overflow-hidden: when the right cluster squeezes this column away,
+          the tool name clips instead of painting over the neighboring cells. */}
+      <span className="flex min-w-0 items-baseline gap-2.5 overflow-hidden">
         <span className="text-[12px] font-medium text-foreground">{prettyTool(event.tool_name)}</span>
         <span className="truncate font-mono text-[12px] text-muted-foreground">{target}</span>
       </span>
@@ -176,6 +205,14 @@ function Row({
               </span>
             </TooltipTrigger>
             <TooltipContent side="top">Primary signal: {signal}</TooltipContent>
+          </Tooltip>
+        )}
+        {risk && verdict && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <RiskPill level={risk} muted={Boolean(verdict.user_feedback)} />
+            </TooltipTrigger>
+            <TooltipContent side="top">{riskBreakdown(verdict)}</TooltipContent>
           </Tooltip>
         )}
         <span

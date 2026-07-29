@@ -1,6 +1,17 @@
 import { API } from "./config";
-import { isDecision, isGuardMode, isPolicyProfileID } from "./types";
-import type { Decision, Event, GuardMode, PolicyProfile, PolicyProfileID, RiskEvent, Session } from "./types";
+import { isDecision, isGuardMode, isPolicyProfileID, isRiskFeedback, isRiskVerdict } from "./types";
+import type {
+  ClassifierVerdict,
+  Decision,
+  Event,
+  GuardMode,
+  LLMVerdict,
+  PolicyProfile,
+  PolicyProfileID,
+  RiskEvent,
+  SVMVerdict,
+  Session,
+} from "./types";
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -143,6 +154,42 @@ function parseEvent(value: unknown): Event | undefined {
   };
 }
 
+function parseSVMVerdict(value: unknown): SVMVerdict | undefined {
+  if (!isObject(value) || !isRiskVerdict(value.verdict)) return undefined;
+  return {
+    verdict: value.verdict,
+    score: optionalNumber(value.score),
+    threshold: optionalNumber(value.threshold),
+    model_version: optionalString(value.model_version),
+  };
+}
+
+function parseLLMVerdict(value: unknown): LLMVerdict | undefined {
+  if (!isObject(value) || !isRiskVerdict(value.verdict)) return undefined;
+  return {
+    verdict: value.verdict,
+    raw: optionalString(value.raw),
+    model: optionalString(value.model),
+    duration_ms: optionalNumber(value.duration_ms),
+    cached: optionalBoolean(value.cached),
+  };
+}
+
+function parseVerdict(value: unknown): ClassifierVerdict | undefined {
+  if (!isObject(value) || typeof value.action_id !== "string") return undefined;
+  return {
+    action_id: value.action_id,
+    command: optionalString(value.command),
+    command_truncated: optionalBoolean(value.command_truncated),
+    svm: parseSVMVerdict(value.svm),
+    llm: parseLLMVerdict(value.llm),
+    llm_error: optionalString(value.llm_error),
+    user_feedback: isRiskFeedback(value.user_feedback) ? value.user_feedback : undefined,
+    created_at: optionalString(value.created_at),
+    feedback_at: optionalString(value.feedback_at),
+  };
+}
+
 function parsePolicyProfile(value: unknown): PolicyProfile {
   if (!isObject(value)) throw new Error("invalid policy profile response");
   const profile = policyProfileID(value.profile);
@@ -182,6 +229,15 @@ export async function fetchEvents(sessionID: string): Promise<Event[]> {
     await fetch(`${API}/api/sessions/${encodeURIComponent(sessionID)}/events`).then(ok),
     parseEvent,
   );
+}
+
+// Risk annotations are best-effort color on the decision log: one malformed
+// record drops out instead of failing the whole load like parseList would.
+export async function fetchVerdicts(sessionID: string): Promise<ClassifierVerdict[]> {
+  const body = await fetch(`${API}/api/sessions/${encodeURIComponent(sessionID)}/verdicts`).then(ok);
+  if (body == null) return [];
+  if (!Array.isArray(body)) throw new Error("invalid API response");
+  return body.map(parseVerdict).filter((v): v is ClassifierVerdict => v !== undefined);
 }
 
 export async function fetchPolicy(): Promise<PolicyProfile> {

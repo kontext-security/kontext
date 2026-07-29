@@ -21,6 +21,58 @@ export function isPolicyProfileID(value: unknown): value is PolicyProfileID {
   return typeof value === "string" && (POLICY_PROFILE_IDS as readonly string[]).includes(value);
 }
 
+export const RISK_VERDICTS = ["risky", "not_risky"] as const;
+export type RiskVerdict = (typeof RISK_VERDICTS)[number];
+
+export const RISK_FEEDBACK = ["should_allow", "should_block"] as const;
+export type RiskFeedback = (typeof RISK_FEEDBACK)[number];
+
+// Both models risky → high, exactly one → check. Ordinary commands get no
+// level at all so the risk column stays quiet.
+export type RiskLevel = "high" | "check";
+
+export function isRiskVerdict(value: unknown): value is RiskVerdict {
+  return typeof value === "string" && (RISK_VERDICTS as readonly string[]).includes(value);
+}
+
+export function isRiskFeedback(value: unknown): value is RiskFeedback {
+  return typeof value === "string" && (RISK_FEEDBACK as readonly string[]).includes(value);
+}
+
+export type SVMVerdict = {
+  verdict: RiskVerdict;
+  score?: number;
+  threshold?: number;
+  model_version?: string;
+};
+
+export type LLMVerdict = {
+  verdict: RiskVerdict;
+  raw?: string;
+  model?: string;
+  duration_ms?: number;
+  cached?: boolean;
+};
+
+// One observe-mode classifier record per intercepted bash command. This is an
+// annotation computed after the decision — it was never part of it, so the UI
+// must not present it as an action Guard took. The LLM half is absent when the
+// guardrail is off or failed; llm_error says why.
+export type ClassifierVerdict = {
+  action_id: string;
+  command?: string;
+  command_truncated?: boolean;
+  svm?: SVMVerdict;
+  llm?: LLMVerdict;
+  llm_error?: string;
+  user_feedback?: RiskFeedback;
+  created_at?: string;
+  feedback_at?: string;
+};
+
+// Keyed by action_id, which matches Event.id from the events endpoint.
+export type VerdictsByAction = Record<string, ClassifierVerdict>;
+
 export type RiskEvent = {
   type?: string;
   provider?: string;

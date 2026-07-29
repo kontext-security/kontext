@@ -1,4 +1,4 @@
-import type { Event, PolicyProfile, RiskEvent, Session } from "./types";
+import type { ClassifierVerdict, Event, PolicyProfile, RiskEvent, Session } from "./types";
 
 export const SAMPLE_SESSION_ID = "session-local-guard-preview";
 const SAMPLE_POLICY_VERSION = "guard-policy-v1";
@@ -165,5 +165,41 @@ export const SAMPLE_EVENTS: Event[] = [
       judge_duration_ms: 142,
       judge_risk_level: "low",
     },
+  },
+];
+
+const SAMPLE_GUARDRAIL_MODEL = "Qwen/Qwen3-0.6B-GGUF";
+
+// One verdict per intercepted bash command, keyed to the event ids above.
+// Covers every pill state: both models risky (high), split verdicts (check),
+// LLM unavailable (check on the SVM alone), and both quiet (no pill).
+export const SAMPLE_VERDICTS: ClassifierVerdict[] = [
+  {
+    action_id: "evt-prod-mutation-001",
+    command: "kubectl delete deployment checkout-api -n production",
+    svm: { verdict: "risky", score: 0.9114, threshold: 0.4, model_version: "svm-v1" },
+    llm: { verdict: "risky", raw: "RISKY", model: SAMPLE_GUARDRAIL_MODEL, duration_ms: 212 },
+    created_at: new Date(Date.now() - 7 * 60 * 1000).toISOString(),
+  },
+  {
+    action_id: "evt-private-key-decrypt-001",
+    command: "openssl rsautl -decrypt -inkey private.pem -in payload.bin",
+    svm: { verdict: "not_risky", score: 0.0001, threshold: 0.4, model_version: "svm-v1" },
+    llm: { verdict: "risky", raw: "RISKY", model: SAMPLE_GUARDRAIL_MODEL, duration_ms: 187 },
+    created_at: new Date(Date.now() - 4 * 60 * 1000).toISOString(),
+  },
+  {
+    action_id: "evt-admin-reindex-001",
+    command: "curl -X POST $PAYMENTS_ADMIN_URL/reindex",
+    svm: { verdict: "risky", score: 0.6231, threshold: 0.4, model_version: "svm-v1" },
+    llm_error: "guardrail request timed out",
+    created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+  },
+  {
+    action_id: "evt-bash-allow-001",
+    command: "git status --short",
+    svm: { verdict: "not_risky", score: 0.0003, threshold: 0.4, model_version: "svm-v1" },
+    llm: { verdict: "not_risky", raw: "NOT_RISKY", model: SAMPLE_GUARDRAIL_MODEL, duration_ms: 94 },
+    created_at: new Date(Date.now() - 3.2 * 60 * 1000).toISOString(),
   },
 ];

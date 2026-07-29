@@ -1,10 +1,13 @@
 import type {
+  ClassifierVerdict,
   Decision,
   Event,
   EventBuckets,
   EventGroups,
   GuardMode,
+  RiskLevel,
   Session,
+  VerdictsByAction,
 } from "./types";
 
 const DETERMINISTIC_REASON_CODES = new Set([
@@ -136,6 +139,43 @@ export function dateTime(value?: string): string {
     dateStyle: "medium",
     timeStyle: "medium",
   }).format(ts);
+}
+
+export function verdictsByAction(verdicts: ClassifierVerdict[]): VerdictsByAction {
+  const map: VerdictsByAction = {};
+  for (const verdict of verdicts) map[verdict.action_id] = verdict;
+  return map;
+}
+
+// Both models risky → high; exactly one → check (they disagree often and by
+// design — the SVM is precise but misses obvious catastrophes, the LLM catches
+// those but over-flags); neither → nothing, so the column stays quiet.
+export function riskLevel(verdict?: ClassifierVerdict): RiskLevel | undefined {
+  if (!verdict) return undefined;
+  const risky = [verdict.svm?.verdict, verdict.llm?.verdict].filter((v) => v === "risky").length;
+  if (risky === 2) return "high";
+  if (risky === 1) return "check";
+  return undefined;
+}
+
+function formatRiskScore(score?: number): string {
+  if (typeof score !== "number" || !Number.isFinite(score)) return "";
+  return Number(score.toFixed(4)).toString();
+}
+
+// Per-model breakdown for the risk tooltip, e.g. "SVM not_risky (0.0001) · LLM risky".
+export function riskBreakdown(verdict: ClassifierVerdict): string {
+  const parts: string[] = [];
+  if (verdict.svm) {
+    const score = formatRiskScore(verdict.svm.score);
+    parts.push(`SVM ${verdict.svm.verdict}${score ? ` (${score})` : ""}`);
+  }
+  if (verdict.llm) {
+    parts.push(`LLM ${verdict.llm.verdict}`);
+  } else if (verdict.llm_error) {
+    parts.push("LLM unavailable");
+  }
+  return parts.join(" · ");
 }
 
 export function decisionLabel(decision: Decision, mode: GuardMode): string {

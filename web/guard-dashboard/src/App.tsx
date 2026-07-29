@@ -4,9 +4,16 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ActionList } from "@/dashboard/ActionList";
-import { activatePolicy, errorMessage, fetchEvents, fetchPolicy, fetchSessions } from "@/dashboard/api";
+import {
+  activatePolicy,
+  errorMessage,
+  fetchEvents,
+  fetchPolicy,
+  fetchSessions,
+  fetchVerdicts,
+} from "@/dashboard/api";
 import { API, USE_SAMPLE_DATA } from "@/dashboard/config";
-import { bucket, sameSessions } from "@/dashboard/helpers";
+import { bucket, sameSessions, verdictsByAction } from "@/dashboard/helpers";
 import { Inspector } from "@/dashboard/Inspector";
 import { PolicyPanel } from "@/dashboard/PolicyPanel";
 import {
@@ -14,17 +21,27 @@ import {
   SAMPLE_POLICY,
   SAMPLE_SESSION_ID,
   SAMPLE_SESSIONS,
+  SAMPLE_VERDICTS,
 } from "@/dashboard/sample-data";
 import { SessionHeader } from "@/dashboard/SessionHeader";
 import { Sidebar } from "@/dashboard/Sidebar";
 import { StatRow } from "@/dashboard/StatRow";
 import { Block } from "@/dashboard/shared";
-import type { Event, GuardMode, PolicyProfile, PolicyProfileID, Session, Tab } from "@/dashboard/types";
+import type {
+  ClassifierVerdict,
+  Event,
+  GuardMode,
+  PolicyProfile,
+  PolicyProfileID,
+  Session,
+  Tab,
+} from "@/dashboard/types";
 
 export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionID, setSelectedSessionID] = useState("");
   const [events, setEvents] = useState<Event[]>([]);
+  const [verdicts, setVerdicts] = useState<ClassifierVerdict[]>([]);
   const [tab, setTab] = useState<Tab>("all");
   const [openId, setOpenId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -49,6 +66,7 @@ export default function App() {
   function selectSession(id: string) {
     if (selectedRef.current !== id) {
       setEvents([]);
+      setVerdicts([]);
       setOpenId(null);
     }
     selectedRef.current = id;
@@ -109,6 +127,7 @@ export default function App() {
   }
 
   function loadEvents(id: string) {
+    loadVerdicts(id);
     if (useSampleDashboard && id === SAMPLE_SESSION_ID) {
       applyEvents(SAMPLE_EVENTS);
       return;
@@ -119,6 +138,22 @@ export default function App() {
         applyEvents(next);
       })
       .catch((e: unknown) => setError(errorMessage(e)));
+  }
+
+  // Verdicts trail their events by design, and the risk column renders
+  // nothing until they land — so they load independently of events and
+  // failures stay out of the error banner instead of disturbing the log.
+  function loadVerdicts(id: string) {
+    if (useSampleDashboard && id === SAMPLE_SESSION_ID) {
+      setVerdicts(SAMPLE_VERDICTS);
+      return;
+    }
+    fetchVerdicts(id)
+      .then((next) => {
+        if (selectedRef.current !== id) return;
+        setVerdicts(next);
+      })
+      .catch(() => {});
   }
 
   function loadPolicy() {
@@ -152,6 +187,7 @@ export default function App() {
   }
 
   const { counts, groups } = useMemo(() => bucket(events), [events]);
+  const verdictMap = useMemo(() => verdictsByAction(verdicts), [verdicts]);
   const opened = useMemo(
     () => (openId ? events.find((e) => e.id === openId) ?? null : null),
     [openId, events],
@@ -220,6 +256,7 @@ export default function App() {
                 <ActionList
                   tab={tab}
                   decisionGroups={groups}
+                  verdicts={verdictMap}
                   openId={openId}
                   onOpen={setOpenId}
                   onClearFilter={() => setTab("all")}

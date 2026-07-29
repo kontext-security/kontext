@@ -1,6 +1,7 @@
+import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
 import { decisionTone } from "./helpers";
-import type { Decision } from "./types";
+import type { Decision, RiskLevel } from "./types";
 
 export function DecisionDot({ kind, className }: { kind: Decision; className?: string }) {
   const tone = decisionTone[kind];
@@ -10,6 +11,40 @@ export function DecisionDot({ kind, className }: { kind: Decision; className?: s
     />
   );
 }
+
+export const riskTone: Record<RiskLevel, { pill: string; dot: string }> = {
+  high: { pill: "border-red-200 bg-red-50 text-red-700", dot: "bg-red-500" },
+  check: { pill: "border-amber-200 bg-amber-50 text-amber-800", dot: "bg-amber-500" },
+};
+
+// The risk annotation pill. Deliberately styled apart from the decision-source
+// badge (rounded-full, tinted, sans): the annotation was computed after the
+// decision and must not read as an action Guard took. forwardRef so Radix
+// `asChild` triggers can attach to it.
+export const RiskPill = forwardRef<
+  HTMLSpanElement,
+  { level: RiskLevel; muted?: boolean; className?: string } & React.HTMLAttributes<HTMLSpanElement>
+>(function RiskPill({ level, muted = false, className, ...props }, ref) {
+  return (
+    <span
+      ref={ref}
+      {...props}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-[3px] text-[10.5px] font-medium leading-none",
+        muted ? "border-border bg-muted text-muted-foreground" : riskTone[level].pill,
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          "h-1 w-1 rounded-full",
+          muted ? "bg-muted-foreground/50" : riskTone[level].dot,
+        )}
+      />
+      {level}
+    </span>
+  );
+});
 
 export function Block({
   label,
