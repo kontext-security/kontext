@@ -15,19 +15,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
-func newGuardrailStub(t *testing.T, reply string) *httptest.Server {
-	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": reply}}},
-		})
-	}))
-	t.Cleanup(server.Close)
-	return server
-}
-
-func newClassifierServer(t *testing.T, guardrailURL string) (*Server, *sqlite.Store) {
+func newClassifierServer(t *testing.T) (*Server, *sqlite.Store) {
 	t.Helper()
 	store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
 	if err != nil {
@@ -38,11 +26,7 @@ func newClassifierServer(t *testing.T, guardrailURL string) (*Server, *sqlite.St
 	opts := Options{
 		CurrentSessionID: "sess_e2e",
 		Mode:             "observe",
-		RiskClassifier: &RiskClassifierOptions{
-			GuardrailBaseURL: guardrailURL,
-			GuardrailModel:   "qwen2.5-0.5b",
-			GuardrailTimeout: 2 * time.Second,
-		},
+		RiskClassifier:   &RiskClassifierOptions{},
 	}
 	server, err := NewServerWithOptions(store, opts)
 	if err != nil {
@@ -74,8 +58,7 @@ func waitForVerdicts(t *testing.T, store *sqlite.Store, sessionID string, want i
 // both models record a verdict against the decided action, and the hook result
 // the agent sees is untouched.
 func TestObserveModeLogsVerdictsWithoutChangingDecision(t *testing.T) {
-	guardrail := newGuardrailStub(t, "RISKY")
-	server, store := newClassifierServer(t, guardrail.URL)
+	server, store := newClassifierServer(t)
 
 	event := hook.Event{
 		SessionID: "sess_e2e",
@@ -110,8 +93,8 @@ func TestObserveModeLogsVerdictsWithoutChangingDecision(t *testing.T) {
 	if record.SVM == nil || record.SVM.ModelVersion == "" {
 		t.Fatalf("svm verdict missing: %+v", record.SVM)
 	}
-	if record.LLM == nil || record.LLM.Verdict != riskclassifier.VerdictRisky || record.LLM.Raw != "RISKY" {
-		t.Fatalf("llm verdict wrong: %+v", record.LLM)
+	if record.SVM.Threshold == 0 {
+		t.Fatalf("svm threshold not recorded: %+v", record.SVM)
 	}
 	if record.Enforced {
 		t.Fatal("v1 must never enforce")
@@ -122,8 +105,7 @@ func TestObserveModeLogsVerdictsWithoutChangingDecision(t *testing.T) {
 }
 
 func TestObserveModeSkipsNonCommandTools(t *testing.T) {
-	guardrail := newGuardrailStub(t, "SAFE")
-	server, store := newClassifierServer(t, guardrail.URL)
+	server, store := newClassifierServer(t)
 
 	for _, event := range []hook.Event{
 		{
@@ -164,8 +146,7 @@ func TestObserveModeSkipsNonCommandTools(t *testing.T) {
 }
 
 func TestObserveModeCapturesAgentTaskAndRedactsCredentials(t *testing.T) {
-	guardrail := newGuardrailStub(t, "SAFE")
-	server, store := newClassifierServer(t, guardrail.URL)
+	server, store := newClassifierServer(t)
 
 	if _, err := server.RuntimeCore().EvaluateHook(context.Background(), hook.Event{
 		SessionID: "sess_e2e",
@@ -204,8 +185,7 @@ func TestObserveModeCapturesAgentTaskAndRedactsCredentials(t *testing.T) {
 // routing the prompt into tool input: a prompt quoting a dangerous command
 // must not be denied, and its text must not reach the action record.
 func TestUserPromptSubmitStaysAllowedAndUnrecorded(t *testing.T) {
-	guardrail := newGuardrailStub(t, "SAFE")
-	server, store := newClassifierServer(t, guardrail.URL)
+	server, store := newClassifierServer(t)
 
 	result, err := server.RuntimeCore().EvaluateHook(context.Background(), hook.Event{
 		SessionID: "sess_e2e",
@@ -246,8 +226,7 @@ func TestUserPromptSubmitStaysAllowedAndUnrecorded(t *testing.T) {
 }
 
 func TestClassifierFeedbackEndpoint(t *testing.T) {
-	guardrail := newGuardrailStub(t, "RISKY")
-	server, store := newClassifierServer(t, guardrail.URL)
+	server, store := newClassifierServer(t)
 
 	result, err := server.RuntimeCore().EvaluateHook(context.Background(), hook.Event{
 		SessionID: "sess_e2e",
@@ -295,8 +274,7 @@ func TestClassifierFeedbackEndpoint(t *testing.T) {
 }
 
 func TestSessionVerdictsEndpoint(t *testing.T) {
-	guardrail := newGuardrailStub(t, "SAFE")
-	server, store := newClassifierServer(t, guardrail.URL)
+	server, store := newClassifierServer(t)
 
 	if _, err := server.RuntimeCore().EvaluateHook(context.Background(), hook.Event{
 		SessionID: "sess_e2e",

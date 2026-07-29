@@ -15,6 +15,10 @@ const (
 // credential-redacted (the dataset leaves the machine; live secrets must not),
 // and prior_commands is not duplicated per row — earlier records in the same
 // session reconstruct it at read/export time.
+//
+// v1 records the SVM only. The contract's second opinion (a small local LLM
+// prompted for RISKY/SAFE) is deferred: the model choice is still moving, and
+// the local judge already owns the LLM half of the decision path.
 type Record struct {
 	ActionID  string `json:"action_id"`
 	SessionID string `json:"session_id"`
@@ -32,9 +36,7 @@ type Record struct {
 	// when the daemon has not observed one.
 	AgentTask string `json:"agent_task,omitempty"`
 
-	SVM      *SVMVerdict `json:"svm,omitempty"`
-	LLM      *LLMVerdict `json:"llm,omitempty"`
-	LLMError string      `json:"llm_error,omitempty"`
+	SVM *SVMVerdict `json:"svm,omitempty"`
 
 	// Enforced stays false for v1: verdicts are logged, never applied.
 	Enforced bool `json:"enforced"`

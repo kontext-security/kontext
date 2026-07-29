@@ -80,6 +80,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--authz", type=Path, default=REPO_ROOT.parent / "authz-bench")
     parser.add_argument("--folds", type=int, default=5)
+    parser.add_argument("--out", type=Path, help="optional path to dump the full sweep as JSON")
     args = parser.parse_args()
 
     from sklearn.model_selection import StratifiedKFold, cross_val_predict
@@ -112,14 +113,14 @@ def main() -> None:
     print(f"best F0.5 at {best_f05['threshold']:+.2f}: precision {best_f05['precision']:.4f} recall {best_f05['recall']:.4f} "
           f"({best_f05['false_alarms']} false alarms, {best_f05['misses']} misses)")
 
-    out = REPO_ROOT / "scripts" / "riskclassifier" / "threshold_sweep.json"
-    out.write_text(json.dumps({
-        "folds": args.folds,
-        "corpus": {"total": len(commands), "risky": int(labels.sum())},
-        "recommended_threshold": best_f05["threshold"],
-        "sweep": rows,
-    }, indent=2))
-    print(f"\nwrote {out}")
+    if args.out:
+        args.out.write_text(json.dumps({
+            "folds": args.folds,
+            "corpus": {"total": len(commands), "risky": int(labels.sum())},
+            "recommended_threshold": best_f05["threshold"],
+            "sweep": rows,
+        }, indent=2))
+        print(f"\nwrote {args.out}")
 
 
 if __name__ == "__main__":

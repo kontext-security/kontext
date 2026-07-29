@@ -17,14 +17,11 @@ import (
 )
 
 const (
-	DefaultLlamaServerRuntime        = "llama-server"
-	DefaultLlamaServerBinary         = "llama-server"
-	DefaultLlamaServerHost           = "127.0.0.1"
-	DefaultLlamaServerPort           = 18080
-	DefaultLlamaServerStartupTimeout = 30 * time.Second
-	// The managed sidecar serves one model for both local LLM signals: the
-	// JSON judge and the observe-mode risk-classifier guardrail. This is also
-	// the model the authz-bench serving contract specifies for the guardrail.
+	DefaultLlamaServerRuntime         = "llama-server"
+	DefaultLlamaServerBinary          = "llama-server"
+	DefaultLlamaServerHost            = "127.0.0.1"
+	DefaultLlamaServerPort            = 18080
+	DefaultLlamaServerStartupTimeout  = 30 * time.Second
 	DefaultLlamaServerHFRepo          = "Qwen/Qwen3-0.6B-GGUF"
 	DefaultLlamaServerHFFile          = "Qwen3-0.6B-Q8_0.gguf"
 	DefaultLlamaServerHFRevision      = "main"
