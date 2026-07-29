@@ -46,6 +46,7 @@ export default function App() {
   const [verdicts, setVerdicts] = useState<ClassifierVerdict[]>([]);
   const [feedbackPendingID, setFeedbackPendingID] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("all");
+  const [riskOnly, setRiskOnly] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [policy, setPolicy] = useState<PolicyProfile | null>(null);
@@ -290,6 +291,8 @@ export default function App() {
                   mode={sessionMode}
                   onFeedback={submitFeedback}
                   feedbackPendingID={feedbackPendingID}
+                  riskOnly={riskOnly}
+                  onToggleRiskOnly={() => setRiskOnly((value) => !value)}
                 />
               </Block>
             </div>

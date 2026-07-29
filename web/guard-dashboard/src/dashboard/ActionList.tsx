@@ -45,6 +45,8 @@ export function ActionList({
   mode,
   onFeedback,
   feedbackPendingID,
+  riskOnly,
+  onToggleRiskOnly,
 }: {
   tab: Tab;
   decisionGroups: EventGroups;
@@ -55,9 +57,18 @@ export function ActionList({
   mode: GuardMode;
   onFeedback: (actionID: string, feedback: RiskFeedback) => void;
   feedbackPendingID: string | null;
+  riskOnly: boolean;
+  onToggleRiskOnly: () => void;
 }) {
+  // The risk filter narrows to annotated commands so a session's flagged
+  // commands can be labelled in one pass; it composes with the decision tabs.
   const visibleDecisionGroups = VISIBLE_KINDS[tab]
-    .map((kind) => ({ kind, items: decisionGroups[kind] }))
+    .map((kind) => ({
+      kind,
+      items: riskOnly
+        ? decisionGroups[kind].filter((e) => riskLevel(verdicts[e.id]) !== undefined)
+        : decisionGroups[kind],
+    }))
     .filter(({ items }) => items.length > 0);
   const decisionCount = DECISIONS.reduce((sum, kind) => sum + decisionGroups[kind].length, 0);
   const filterLabel = tab !== "all" ? decisionLabel(tab, mode) : null;
@@ -72,16 +83,33 @@ export function ActionList({
           </span>
         </div>
 
-        {filterLabel && (
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={onClearFilter}
-            className="inline-flex h-7 items-center gap-1.5 rounded-md border bg-background px-2.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+            onClick={onToggleRiskOnly}
+            aria-pressed={riskOnly}
+            className={cn(
+              "inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 font-mono text-[11px] transition-colors",
+              riskOnly
+                ? "border-amber-300 bg-amber-50 text-amber-800"
+                : "bg-background text-muted-foreground hover:text-foreground",
+            )}
           >
-            <span>Filtered: <span className="text-foreground">{filterLabel}</span></span>
-            <X className="h-3 w-3" />
+            risk: flagged
+            {riskOnly && <X className="h-3 w-3" />}
           </button>
-        )}
+
+          {filterLabel && (
+            <button
+              type="button"
+              onClick={onClearFilter}
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border bg-background px-2.5 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <span>Filtered: <span className="text-foreground">{filterLabel}</span></span>
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid">
@@ -91,10 +119,17 @@ export function ActionList({
             description="Pre-tool Guard decisions will appear here."
           />
         ) : visibleDecisionGroups.length === 0 ? (
-          <Empty
-            title={`No ${filterLabel?.toLowerCase() ?? "matching"} decisions.`}
-            description="Clear the filter to show all decisions."
-          />
+          riskOnly ? (
+            <Empty
+              title={`No flagged ${filterLabel ? `${filterLabel.toLowerCase()} ` : ""}commands.`}
+              description="Only commands with a risk annotation are shown. Clear the risk filter to see everything."
+            />
+          ) : (
+            <Empty
+              title={`No ${filterLabel?.toLowerCase() ?? "matching"} decisions.`}
+              description="Clear the filter to show all decisions."
+            />
+          )
         ) : (
           visibleDecisionGroups.map(({ kind, items }, index) => (
             <Group
