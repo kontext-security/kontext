@@ -191,7 +191,8 @@ func TestNormalizeRedactsCredentialValuesFromSummaries(t *testing.T) {
 		{"bearer header", `curl -H "Authorization: Bearer bearer-secret-123"`, "bearer-secret-123", `curl -H "Authorization: Bearer [REDACTED_SECRET]"`},
 		{"plain authorization header", `curl -H 'Authorization: header-secret-123' example.com`, "header-secret-123", `curl -H 'Authorization: [REDACTED_SECRET]' example.com`},
 		{"basic authorization header", `curl -H 'Authorization: Basic dXNlcjpwYXNzd29yZA==' example.com`, "dXNlcjpwYXNzd29yZA==", `curl -H 'Authorization: Basic [REDACTED_SECRET]' example.com`},
-		{"short bearer", `echo Bearer abc123`, "abc123", `echo Bearer [REDACTED_SECRET]`},
+		{"bare bearer token", `echo Bearer bearer-secret-123`, "bearer-secret-123", `echo Bearer [REDACTED_SECRET]`},
+		{"short bearer in header context", `curl -H 'Authorization: Bearer ab12' https://x.test`, "ab12", `curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://x.test`},
 		{"password assignment", `mysql --password=password-secret-123 -u root`, "password-secret-123", `mysql --password=[REDACTED_SECRET] -u root`},
 		{"pwd assignment", `PWD=pwd-secret-123 echo ok`, "pwd-secret-123", `PWD=[REDACTED_SECRET] echo ok`},
 		{"pass flag", `login --pass pass-secret-123`, "pass-secret-123", `login --pass [REDACTED_SECRET]`},
@@ -207,7 +208,10 @@ func TestNormalizeRedactsCredentialValuesFromSummaries(t *testing.T) {
 		{"json command", `curl -d '{"password":"json-secret-123"}'`, "json-secret-123", `curl -d '{"password":"[REDACTED_SECRET]"}'`},
 		{"curl user password", `curl -u user:curl-secret-123 https://x.test`, "curl-secret-123", `curl -u [REDACTED_SECRET] https://x.test`},
 		{"unclosed quote", `TOKEN="unterminated-secret`, "unterminated-secret", `TOKEN=[REDACTED_SECRET]`},
-		{"unclosed quote mid-value", `TOKEN=a"broken-secret deploy`, "broken-secret", `TOKEN=[REDACTED_SECRET] deploy`},
+		{"unclosed quote multiword", `TOKEN="alpha-secret beta gamma`, "alpha-secret", `TOKEN=[REDACTED_SECRET]`},
+		{"unclosed quote mid-value", `TOKEN=a"broken-secret deploy`, "broken-secret", `TOKEN=[REDACTED_SECRET]`},
+		{"attached curl user password", `curl -uadmin:attached-secret-123 https://x.test`, "attached-secret-123", `curl -u[REDACTED_SECRET] https://x.test`},
+		{"passwd flag", `tool --passwd passwd-secret-123 run`, "passwd-secret-123", `tool --passwd [REDACTED_SECRET] run`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

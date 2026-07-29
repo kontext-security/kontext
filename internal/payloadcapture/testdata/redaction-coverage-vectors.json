@@ -7,11 +7,11 @@
       "mustNotSurvive": ["MIIfakekeymaterialFAKE"]
     },
     {
-      "name": "bearer-header",
+      "name": "bare-bearer-token",
       "ruleId": "bearer-auth",
-      "input": "echo Bearer abc123",
-      "mustNotSurvive": ["abc123"],
-      "expected": "echo Bearer [REDACTED_SECRET]"
+      "input": "echo Bearer bearer-secret-FAKE done",
+      "mustNotSurvive": ["bearer-secret-FAKE"],
+      "expected": "echo Bearer [REDACTED_SECRET] done"
     },
     {
       "name": "bare-basic-auth",
@@ -26,6 +26,27 @@
       "input": "curl -H \"Authorization: header-secret-FAKE\" https://api.example.test",
       "mustNotSurvive": ["header-secret-FAKE"],
       "expected": "curl -H \"Authorization: [REDACTED_SECRET]\" https://api.example.test"
+    },
+    {
+      "name": "short-bearer-value-in-header-context",
+      "ruleId": "authorization-header",
+      "input": "curl -H 'Authorization: Bearer ab12' https://api.example.test",
+      "mustNotSurvive": ["ab12"],
+      "expected": "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.test"
+    },
+    {
+      "name": "header-bearer-unclosed-quote-multiword",
+      "ruleId": "authorization-header",
+      "input": "set-header Authorization: Bearer \"multi word bearer-FAKE",
+      "mustNotSurvive": ["multi word bearer-FAKE"],
+      "expected": "set-header Authorization: Bearer [REDACTED_SECRET]"
+    },
+    {
+      "name": "header-swallows-following-quoted-args",
+      "ruleId": "authorization-header",
+      "input": "curl -H \"Authorization: Bearer tok-FAKE\" -d '{\"k\":\"v\"}' https://api.example.test",
+      "mustNotSurvive": ["tok-FAKE"],
+      "expected": "curl -H \"Authorization: Bearer [REDACTED_SECRET]"
     },
     {
       "name": "github-classic-token",
@@ -129,8 +150,15 @@
       "name": "assignment-unclosed-quote-mid-value",
       "ruleId": "sensitive-assignment",
       "input": "TOKEN=a\"broken-secret-FAKE deploy",
-      "mustNotSurvive": ["broken-secret-FAKE"],
-      "expected": "TOKEN=[REDACTED_SECRET] deploy"
+      "mustNotSurvive": ["broken-secret-FAKE", "deploy"],
+      "expected": "TOKEN=[REDACTED_SECRET]"
+    },
+    {
+      "name": "assignment-unclosed-quote-multiword",
+      "ruleId": "sensitive-assignment",
+      "input": "TOKEN=\"alpha-secret-FAKE beta gamma",
+      "mustNotSurvive": ["alpha-secret-FAKE", "beta gamma"],
+      "expected": "TOKEN=[REDACTED_SECRET]"
     },
     {
       "name": "json-embedded-password",
@@ -147,10 +175,38 @@
       "expected": "mytool login --password [REDACTED_SECRET] --verbose"
     },
     {
+      "name": "cli-flag-passwd-alias",
+      "ruleId": "sensitive-cli-flag",
+      "input": "tool --passwd cli-passwd-secret-FAKE run",
+      "mustNotSurvive": ["cli-passwd-secret-FAKE"],
+      "expected": "tool --passwd [REDACTED_SECRET] run"
+    },
+    {
+      "name": "cli-flag-unclosed-quote-multiword",
+      "ruleId": "sensitive-cli-flag",
+      "input": "mytool login --password \"multi word secret-FAKE",
+      "mustNotSurvive": ["multi word secret-FAKE"],
+      "expected": "mytool login --password [REDACTED_SECRET]"
+    },
+    {
       "name": "curl-user-password",
       "ruleId": "basic-auth-userinfo",
       "input": "curl -u user:curl-secret-FAKE https://api.example.test",
       "mustNotSurvive": ["user:curl-secret-FAKE", "curl-secret-FAKE"],
+      "expected": "curl -u [REDACTED_SECRET] https://api.example.test"
+    },
+    {
+      "name": "curl-attached-user-password",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -uadmin:attached-secret-FAKE https://api.example.test",
+      "mustNotSurvive": ["admin:attached-secret-FAKE", "attached-secret-FAKE"],
+      "expected": "curl -u[REDACTED_SECRET] https://api.example.test"
+    },
+    {
+      "name": "curl-empty-username-password",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u :nouser-secret-FAKE https://api.example.test",
+      "mustNotSurvive": [":nouser-secret-FAKE", "nouser-secret-FAKE"],
       "expected": "curl -u [REDACTED_SECRET] https://api.example.test"
     },
     {
@@ -159,6 +215,13 @@
       "input": "GET /callback?code=authcodeFAKEsecret&state=xyz",
       "mustNotSurvive": ["authcodeFAKEsecret"],
       "expected": "GET /callback?code=[REDACTED_SECRET]&state=xyz"
+    },
+    {
+      "name": "query-param-passwd-alias",
+      "ruleId": "sensitive-query-param",
+      "input": "GET /login?passwd=query-passwd-secret-FAKE&next=1",
+      "mustNotSurvive": ["query-passwd-secret-FAKE"],
+      "expected": "GET /login?passwd=[REDACTED_SECRET]&next=1"
     }
   ],
   "keyVectors": [
@@ -174,6 +237,7 @@
     { "name": "session-key", "key": "sessionKey", "sensitive": true },
     { "name": "access-key", "key": "accessKey", "sensitive": true },
     { "name": "password-alias", "key": "pwd", "sensitive": true },
+    { "name": "passwd-alias", "key": "passwd", "sensitive": true },
     { "name": "author-is-not-auth", "key": "author", "sensitive": false },
     {
       "name": "tokenizer-is-not-token",
