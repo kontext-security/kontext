@@ -330,6 +330,12 @@ func TestGuardrailSupersedesJudge(t *testing.T) {
 	ctx := context.Background()
 	var judgeCalls int32
 	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The classifier probes /v1/models for readiness; that is not an
+		// inference and must not be counted.
+		if r.URL.Path == "/v1/models" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		atomic.AddInt32(&judgeCalls, 1)
 		w.Header().Set("Content-Type", "application/json")
 		// A guardrail-shaped reply; the JSON judge would reject it, so a judge

@@ -23,6 +23,15 @@ var sha256HexPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type Config struct {
 	PayloadCaptureMode payloadcapture.Mode `json:"payloadCaptureMode"`
+	// GuardrailLLMEnabled is the org's kill switch for the risk classifier's
+	// guardrail LLM. Optional, and absent means enabled — note this is the
+	// OPPOSITE default to PayloadCaptureMode, deliberately. Capture falls back
+	// to the privacy-safe "record nothing" whenever the configuration is
+	// unconfirmed; this flag exists only to turn the LLM off, so treating
+	// "unconfirmed" as off would let a transient fetch failure silently disable
+	// the classifier's second opinion with nobody noticing. Resolve it through
+	// riskclassifier.ResolveLLMEnabled rather than reading it directly.
+	GuardrailLLMEnabled *bool `json:"guardrailLlmEnabled,omitempty"`
 }
 
 func (c Config) Validate() error {

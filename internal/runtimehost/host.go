@@ -214,10 +214,17 @@ func riskClassifierOptions(judgeRuntime judgeruntime.Runtime) (*server.RiskClass
 	if err != nil {
 		return nil, err
 	}
+	gate := riskclassifier.NewLLMGate()
+	// An explicitly configured local mode is an override: a developer debugging
+	// their own machine must not be flipped by an org refresh.
+	if raw := strings.TrimSpace(os.Getenv("KONTEXT_RISK_CLASSIFIER_MODE")); raw != "" {
+		gate.PinLocal(mode.UsesLLM())
+	}
 	return &server.RiskClassifierOptions{
 		Mode:             mode,
 		GuardrailBaseURL: judgeRuntime.BaseURL,
 		GuardrailModel:   judgeRuntime.Model,
+		Gate:             gate,
 	}, nil
 }
 
@@ -247,6 +254,15 @@ func (h *Host) SetPayloadCaptureConfiguration(config payloadcapture.RuntimeConfi
 	h.server.SetPayloadCaptureConfiguration(config)
 }
 
+// SetGuardrailLLMEnabled forwards the org's guardrail-LLM kill switch to the
+// classifier. Safe on a nil host (no-op).
+func (h *Host) SetGuardrailLLMEnabled(enabled bool) {
+	if h == nil || h.server == nil {
+		return
+	}
+	h.server.SetGuardrailLLMEnabled(enabled)
+}
+
 func (h *Host) Close(ctx context.Context) error {
 	var errs []error
 	if h == nil {
@@ -263,11 +279,6 @@ func (h *Host) Close(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 		h.sessionCloseOnce = true
-	}
-	// Drain queued classifier records before the store and llama-server go
-	// away, or in-flight verdicts are lost.
-	if h.server != nil {
-		h.server.CloseRiskClassifier()
 	}
 	if h.closeStore != nil {
 		if err := h.closeStore(); err != nil {

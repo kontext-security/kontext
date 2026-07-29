@@ -33,7 +33,8 @@ type Server struct {
 	mux              *http.ServeMux
 	currentSessionID string
 	mode             string
-	classifier       *riskclassifier.Observer
+	classifier       *riskclassifier.Classifier
+	llmGate          *riskclassifier.LLMGate
 }
 
 type ProcessResponse struct {
@@ -62,6 +63,9 @@ type RiskClassifierOptions struct {
 	GuardrailBaseURL string
 	GuardrailModel   string
 	GuardrailTimeout time.Duration
+	// Gate is the runtime on/off switch for the guardrail LLM, consulted per
+	// command. Nil builds one internally.
+	Gate *riskclassifier.LLMGate
 }
 
 // ClassifierFeedbackRequest is the dashboard's ground-truth label for one
@@ -76,6 +80,24 @@ func NewServer(store *sqlite.Store) (*Server, error) {
 
 func (s *Server) SetPayloadCaptureConfiguration(config payloadcapture.RuntimeConfiguration) {
 	s.store.SetPayloadCaptureConfiguration(config)
+}
+
+// SetGuardrailLLMEnabled forwards the org's kill switch for the classifier's
+// guardrail LLM. It rides the same refresh channel as payload capture. A local
+// override, if one was configured, wins and this becomes a no-op. The embedded
+// SVM is never affected.
+func (s *Server) SetGuardrailLLMEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.llmGate.SetRemote(enabled)
+}
+
+func riskClassifierGate(opts *RiskClassifierOptions) *riskclassifier.LLMGate {
+	if opts == nil {
+		return nil
+	}
+	return opts.Gate
 }
 
 func NewServerWithOptions(store *sqlite.Store, opts Options) (*Server, error) {
@@ -99,12 +121,20 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 	if currentSessionID != "" && mode == "" {
 		mode = "observe"
 	}
-	guardrail := newGuardrail(opts.RiskClassifier)
-	classifier := newRiskClassifierObserver(store, opts.RiskClassifier, guardrail)
+	// One instance, shared: the runtime feeds it session prompts and the policy
+	// provider reads them back when annotating, so a second instance would
+	// silently lose every agent_task.
+	if opts.RiskClassifier != nil && opts.RiskClassifier.Gate == nil {
+		opts.RiskClassifier.Gate = riskclassifier.NewLLMGate()
+	}
+	classifier := newRiskClassifier(opts.RiskClassifier)
+	if provider, ok := policy.(RiskPolicyProvider); ok && provider.classifier == nil {
+		provider.classifier = classifier
+		policy = provider
+	}
 	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier)
 	core, err := runtimecore.New(runtime)
 	if err != nil {
-		classifier.Close()
 		return nil, fmt.Errorf("create runtime core: %w", err)
 	}
 	server := &Server{
@@ -114,23 +144,24 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		currentSessionID: currentSessionID,
 		mode:             mode,
 		classifier:       classifier,
+		llmGate:          riskClassifierGate(opts.RiskClassifier),
 	}
 	server.routes()
 	return server, nil
 }
 
-// newRiskClassifierObserver builds the observe-mode classifier pipeline. Every
-// failure here degrades to nil (classifier off) rather than blocking startup:
-// this path only collects feedback data and must never keep Guard from running.
-func newRiskClassifierObserver(store *sqlite.Store, opts *RiskClassifierOptions, guardrail *riskclassifier.Guardrail) *riskclassifier.Observer {
-	if opts == nil || store == nil {
+// newRiskClassifier builds the in-path classifier. Every failure degrades to
+// nil (no annotation) rather than blocking startup: this path is advisory and
+// must never keep Guard from running.
+func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
+	if opts == nil {
 		return nil
 	}
 	svm, err := riskclassifier.LoadSVM()
 	if err != nil {
 		return nil
 	}
-	observerOpts := riskclassifier.ObserverOptions{
+	return riskclassifier.NewClassifier(riskclassifier.ClassifierOptions{
 		SVM: svm,
 		// The shared ruleset directly, not risk.RedactCredentials. That wrapper
 		// adds a size guard which replaces its whole input with a placeholder —
@@ -139,14 +170,10 @@ func newRiskClassifierObserver(store *sqlite.Store, opts *RiskClassifierOptions,
 		// the same text and the same hash. Depending on staying under someone
 		// else's limit would also mean a change made for display reasons could
 		// silently break this, with no failing test in that diff.
-		Redact: redactEvidence,
-		Sink: func(ctx context.Context, record riskclassifier.Record) error {
-			_, err := store.SaveClassifierVerdict(ctx, record)
-			return err
-		},
-	}
-	observerOpts.Guardrail = guardrail
-	return riskclassifier.NewObserver(observerOpts)
+		Redact:     redactEvidence,
+		Guardrail:  newGuardrail(opts),
+		LLMEnabled: opts.Gate.Enabled,
+	})
 }
 
 // judgeForOptions drops the JSON judge whenever the guardrail LLM is enabled.
@@ -180,15 +207,6 @@ func newGuardrail(opts *RiskClassifierOptions) *riskclassifier.Guardrail {
 		return nil
 	}
 	return guardrail
-}
-
-// CloseRiskClassifier stops the observe-mode classifier, draining queued
-// records. Safe on a nil server or a disabled classifier.
-func (s *Server) CloseRiskClassifier() {
-	if s == nil {
-		return
-	}
-	s.classifier.Close()
 }
 
 func (s *Server) Handler() http.Handler {

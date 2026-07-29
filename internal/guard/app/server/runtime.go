@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/cedareval"
@@ -19,10 +18,10 @@ type guardHookRuntime struct {
 	policy           PolicyProvider
 	currentSessionID string
 	mode             string
-	classifier       *riskclassifier.Observer
+	classifier       *riskclassifier.Classifier
 }
 
-func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Observer) guardHookRuntime {
+func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier) guardHookRuntime {
 	return guardHookRuntime{
 		store:            store,
 		policy:           policy,
@@ -106,28 +105,47 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		return risk.RiskDecision{}, err
 	}
 	decision.EventID = record.ID
-	r.observeCommand(event, record.ID)
+	r.recordAnnotation(ctx, record.ID, event, decision)
 	return decision, nil
 }
 
-// observeCommand hands an intercepted bash command to the risk classifier. The
-// verdict is an annotation recorded against the decided action — it is computed
-// after the decision is already made and never revisits it.
-func (r guardHookRuntime) observeCommand(event risk.HookEvent, actionID string) {
-	if r.classifier == nil || event.HookEventName != "PreToolUse" || actionID == "" {
+// recordAnnotation persists the local verdict row. The annotation already rode
+// along with the decision into the action row (and its receipt), so this is the
+// local-only half: the redacted command, the agent task, and the feedback
+// columns the dashboard writes later.
+func (r guardHookRuntime) recordAnnotation(ctx context.Context, actionID string, event risk.HookEvent, decision risk.RiskDecision) {
+	annotation := decision.Classifier
+	if annotation == nil || annotation.SVM == nil || actionID == "" {
 		return
 	}
-	command := risk.CommandFromInput(event.ToolInput)
-	if strings.TrimSpace(command) == "" {
-		return
+	record := riskclassifier.Record{
+		ActionID:         actionID,
+		SessionID:        event.SessionID,
+		ToolUseID:        event.ToolUseID,
+		Agent:            event.Agent,
+		Command:          annotation.Command,
+		CommandHash:      annotation.CommandHash,
+		CommandTruncated: annotation.CommandTruncated,
+		AgentTask:        annotation.AgentTask,
+		LLMError:         annotation.LLMError,
+		SVM: &riskclassifier.SVMVerdict{
+			Verdict:      annotation.SVM.Verdict,
+			Score:        annotation.SVM.Score,
+			Threshold:    annotation.SVM.Threshold,
+			ModelVersion: annotation.SVM.ModelVersion,
+		},
 	}
-	r.classifier.Observe(riskclassifier.ObserveInput{
-		ActionID:  actionID,
-		SessionID: event.SessionID,
-		ToolUseID: event.ToolUseID,
-		Agent:     event.Agent,
-		Command:   command,
-	})
+	if annotation.LLM != nil {
+		record.LLM = &riskclassifier.LLMVerdict{
+			Verdict:    annotation.LLM.Verdict,
+			Model:      annotation.LLM.Model,
+			PromptID:   annotation.LLMPromptID,
+			DurationMs: annotation.LLM.DurationMs,
+			Cached:     annotation.LLM.Cached,
+		}
+	}
+	// Advisory data: a failed write must not fail the tool call.
+	_, _ = r.store.SaveClassifierVerdict(ctx, record)
 }
 
 // observePrompt keeps the session's latest user prompt so classifier records

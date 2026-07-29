@@ -167,8 +167,6 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	defer func() {
 		_ = closeStore()
 	}()
-	// Drain queued classifier records before the store closes.
-	defer localServer.CloseRiskClassifier()
 	if err := ensureGuardSocketDir(*socketPath); err != nil {
 		return err
 	}

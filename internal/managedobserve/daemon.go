@@ -15,6 +15,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/endpointconfig"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
 	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
+	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/installation"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
@@ -193,6 +194,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// at the privacy-safe default until this process receives a confirming 200
 	// or matching 304 from the independent configuration endpoint.
 	host.SetPayloadCaptureConfiguration(captureConfiguration(endpointConfigCache.Current()))
+	host.SetGuardrailLLMEnabled(guardrailLLMEnabled(endpointConfigCache.Current()))
 
 	policyCtx, stopPolicyRefresh := context.WithCancel(ctx)
 	defer stopPolicyRefresh()
@@ -224,6 +226,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Interval:       opts.EndpointConfigRefreshInterval,
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot))
+			host.SetGuardrailLLMEnabled(guardrailLLMEnabled(snapshot))
 		},
 	}
 	go endpointConfigRefresher.Run(policyCtx)
@@ -290,6 +293,17 @@ func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.Runti
 		Confirmed:      snapshot.Confirmed,
 		FallbackReason: snapshot.FallbackReason,
 	})
+}
+
+// guardrailLLMEnabled reads the org's guardrail kill switch off the same
+// endpoint configuration that carries payload capture.
+//
+// It reads Configured, not Config. Config is the effective configuration, which
+// falls back to defaults while unconfirmed — reading it would silently re-enable
+// an LLM the org had explicitly disabled, every time the daemon restarted before
+// reconfirming. A kill switch has to survive exactly that degraded state.
+func guardrailLLMEnabled(snapshot endpointconfig.Snapshot) bool {
+	return riskclassifier.ResolveLLMEnabled(snapshot.Configured.GuardrailLLMEnabled)
 }
 
 func requireManagedHooksForLegacyCowork(cfg managedconfig.Config) error {

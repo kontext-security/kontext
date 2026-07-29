@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	// DefaultGuardrailTimeout bounds one inference. Generous next to the
-	// measured warm latency so a cold first call still lands, but short enough
-	// that a stalled sidecar cannot hold a hook open.
-	DefaultGuardrailTimeout = 5 * time.Second
+	// DefaultGuardrailTimeout bounds one inference. The classifier runs in the
+	// decision path, so this is a hard budget on how long a tool call can wait:
+	// ~9x the measured warm latency (44 ms p50) to absorb a cold prefix cache,
+	// and far below any hook deadline. Slower states — a sidecar loading its
+	// model — are handled by the readiness probe rather than by waiting.
+	DefaultGuardrailTimeout = 400 * time.Millisecond
 
 	// guardrailMaxCommandChars bounds the prompt so pathological commands stay
 	// inside the model's context. Normalization already collapses the usual
@@ -107,6 +109,7 @@ func renderCommand(template, command string) string {
 // authz-bench sweep selected.
 type Guardrail struct {
 	endpoint        string
+	modelsURL       string
 	model           string
 	timeout         time.Duration
 	httpClient      *http.Client
@@ -156,8 +159,13 @@ func NewGuardrail(opts GuardrailOptions) (*Guardrail, error) {
 			},
 		}
 	}
+	modelsURL, err := guardrailModelsURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
 	return &Guardrail{
 		endpoint:        endpoint,
+		modelsURL:       modelsURL,
 		model:           model,
 		timeout:         timeout,
 		httpClient:      client,
@@ -166,6 +174,34 @@ func NewGuardrail(opts GuardrailOptions) (*Guardrail, error) {
 		template:        loaded.UserTemplate,
 		variant:         loaded.Variant,
 	}, nil
+}
+
+// readinessProbe reports whether the endpoint is serving. Used before the first
+// classify call and after the circuit breaker's cooldown.
+func (g *Guardrail) readinessProbe() func(context.Context) error {
+	if g == nil {
+		return nil
+	}
+	return httpReadinessProbe(g.httpClient, g.modelsURL)
+}
+
+// guardrailModelsURL derives the /v1/models URL from the same base as the
+// completions endpoint. llama-server serves it only once the model is loaded,
+// which is precisely the readiness signal we need.
+func guardrailModelsURL(baseURL string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "", fmt.Errorf("parse guardrail URL: %w", err)
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	path = strings.TrimSuffix(path, "/chat/completions")
+	if !strings.HasSuffix(path, "/v1") {
+		path += "/v1"
+	}
+	parsed.Path = path + "/models"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
 }
 
 // modelNeedsNoThink reports whether the model reasons by default and must be
