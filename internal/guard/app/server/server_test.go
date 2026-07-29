@@ -16,6 +16,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/policyconfig"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
 )
 
 func newTestServer(t *testing.T, store *sqlite.Store) *Server {
@@ -620,7 +621,7 @@ func TestJudgePolicyRedactsCredentialValuesFromJudgeInput(t *testing.T) {
 	if strings.Contains(got, "real-secret-123") {
 		t.Fatalf("judge input leaked credential value: %+v", localJudge.input)
 	}
-	if !strings.Contains(got, "[redacted-credential]") {
+	if !strings.Contains(got, payloadcapture.RedactedPlaceholder) {
 		t.Fatalf("judge input missing redaction marker: %+v", localJudge.input)
 	}
 }
@@ -699,6 +700,22 @@ func TestJudgeInputClassifiesCredentialPathForNonReadTools(t *testing.T) {
 				t.Fatalf("judge input leaked raw path in request: %+v", input)
 			}
 		})
+	}
+}
+
+func TestJudgeInputPreservesRedactedCommandSeparators(t *testing.T) {
+	event := risk.HookEvent{
+		ToolName:  "Bash",
+		ToolInput: map[string]any{"command": "printf ok;TOKEN=secret echo next"},
+	}
+	riskEvent := risk.NormalizeHookEvent(event)
+	input := judgeInputFromRiskEvent(event, riskEvent)
+
+	if input.ToolInput.Command != "printf ok;TOKEN=[REDACTED_SECRET] echo next" {
+		t.Fatalf("judge command = %q", input.ToolInput.Command)
+	}
+	if strings.Contains(input.ToolInput.Command, "secret") {
+		t.Fatalf("judge command leaked credential: %q", input.ToolInput.Command)
 	}
 }
 
