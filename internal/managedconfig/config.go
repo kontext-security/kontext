@@ -24,8 +24,13 @@ const (
 	Version = "managed-install-v1"
 	// Mode is the default posture; ModeEnforce turns daemon decisions into
 	// real denies at every hook edge (Claude Code and Cowork alike).
+	// ModeRemote delegates the posture to the fetched policy deployment's
+	// rollout mode: the endpoint observes until the deployment says enforce,
+	// with no local reinstall needed to flip. Observe and enforce remain
+	// static pins for deployments that must not change posture remotely.
 	Mode        = "observe"
 	ModeEnforce = "enforce"
+	ModeRemote  = "remote"
 	Agent       = "claude"
 
 	DefaultPath  = "/Library/Application Support/Kontext/managed.json"
@@ -282,8 +287,8 @@ func normalizeAndValidate(cfg Config) (Config, error) {
 	if err := validateCloudURL(cfg.CloudURL); err != nil {
 		return Config{}, err
 	}
-	if cfg.Mode != Mode && cfg.Mode != ModeEnforce {
-		return Config{}, fmt.Errorf("mode must be %q or %q", Mode, ModeEnforce)
+	if cfg.Mode != Mode && cfg.Mode != ModeEnforce && cfg.Mode != ModeRemote {
+		return Config{}, fmt.Errorf("mode must be %q, %q, or %q", Mode, ModeEnforce, ModeRemote)
 	}
 	if cfg.Agent != Agent {
 		return Config{}, fmt.Errorf("agent must be %q", Agent)
@@ -386,4 +391,75 @@ func resolveKeychainInstallToken(ctx context.Context, name string) (string, erro
 		return "", fmt.Errorf("install token keychain item %s is empty", name)
 	}
 	return token, nil
+}
+
+// RewriteMode atomically rewrites the managed config file behind loaded with
+// the given mode. Every other field's value is preserved verbatim, including
+// legacy fields the parser only tolerates — but the document is re-serialized,
+// so key order and whitespace are normalized. The write is refused when the
+// file changed since it was loaded, and the result is round-tripped through
+// Parse so a config the daemon would refuse to load is never written. The
+// whole read-verify-replace sequence runs under the config write lock, so a
+// cooperating writer (`kontext setup`) cannot slip a rewrite in between the
+// checksum verification and the final rename.
+func RewriteMode(loaded LoadedConfig, mode string) error {
+	if loaded.Path == "" {
+		return errors.New("managed config path is required")
+	}
+	return WithWriteLock(loaded.Path, func() error {
+		return rewriteModeLocked(loaded, mode)
+	})
+}
+
+func rewriteModeLocked(loaded LoadedConfig, mode string) error {
+	data, err := os.ReadFile(loaded.Path)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(data)
+	if hex.EncodeToString(digest[:]) != loaded.Checksum {
+		return errors.New("managed config changed since it was loaded")
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	encodedMode, err := json.Marshal(mode)
+	if err != nil {
+		return err
+	}
+	raw["mode"] = encodedMode
+	rewritten, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	rewritten = append(rewritten, '\n')
+	if _, err := Parse(rewritten); err != nil {
+		return fmt.Errorf("rewritten managed config is invalid: %w", err)
+	}
+
+	dir := filepath.Dir(loaded.Path)
+	temp, err := os.CreateTemp(dir, ".managed-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(rewritten); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, loaded.Path)
 }

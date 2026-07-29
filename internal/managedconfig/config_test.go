@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestLoadFileMissingReturnsErrNotManaged(t *testing.T) {
@@ -292,5 +295,129 @@ func replacementFor(field string) string {
 			"mode":      "observe",
 			"agent":     "claude",
 		}[field] + `"`
+	}
+}
+
+func TestParseModeRemote(t *testing.T) {
+	cfg, err := Parse([]byte(strings.Replace(validConfigJSON(), `"mode": "observe"`, `"mode": "remote"`, 1)))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.Mode != ModeRemote {
+		t.Fatalf("Mode = %q, want %q", cfg.Mode, ModeRemote)
+	}
+}
+
+func TestRewriteModePreservesOtherFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "managed.json")
+	original := strings.Replace(validConfigJSON(), `"cloud_url":`, `"cowork_enabled": true,
+  "cloud_url":`, 1)
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RewriteMode(loaded, ModeRemote); err != nil {
+		t.Fatalf("RewriteMode() error = %v", err)
+	}
+
+	reloaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("reload after rewrite: %v", err)
+	}
+	if reloaded.Config.Mode != ModeRemote {
+		t.Fatalf("mode = %q, want %q", reloaded.Config.Mode, ModeRemote)
+	}
+	if reloaded.Config.CloudURL != loaded.Config.CloudURL ||
+		reloaded.Config.Device.Label != loaded.Config.Device.Label ||
+		reloaded.Config.Credentials.InstallTokenRef != loaded.Config.Credentials.InstallTokenRef {
+		t.Fatalf("rewritten config = %#v, want fields preserved from %#v", reloaded.Config, loaded.Config)
+	}
+	if !reloaded.Config.LegacyCoworkEnabled {
+		t.Fatal("legacy cowork_enabled field was dropped by rewrite")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("file mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestRewriteModeRefusesConcurrentChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "managed.json")
+	if err := os.WriteFile(path, []byte(validConfigJSON()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(validConfigJSON(), "Engineering Mac", "Another Mac", 1)
+	if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RewriteMode(loaded, ModeRemote); err == nil {
+		t.Fatal("RewriteMode() rewrote a config that changed since load")
+	}
+	reloaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Config.Mode != Mode {
+		t.Fatalf("mode = %q, want untouched %q", reloaded.Config.Mode, Mode)
+	}
+}
+
+func TestRewriteModeRefusesInvalidMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "managed.json")
+	if err := os.WriteFile(path, []byte(validConfigJSON()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RewriteMode(loaded, "block"); err == nil {
+		t.Fatal("RewriteMode() accepted an invalid mode")
+	}
+}
+
+func TestWithWriteLockSerializesWriters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed.json")
+	var inCritical, maxConcurrent atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := WithWriteLock(path, func() error {
+				now := inCritical.Add(1)
+				defer inCritical.Add(-1)
+				for {
+					seen := maxConcurrent.Load()
+					if now <= seen || maxConcurrent.CompareAndSwap(seen, now) {
+						break
+					}
+				}
+				time.Sleep(5 * time.Millisecond)
+				return nil
+			})
+			if err != nil {
+				t.Errorf("WithWriteLock() error = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := maxConcurrent.Load(); got != 1 {
+		t.Fatalf("max concurrent writers = %d, want 1", got)
 	}
 }

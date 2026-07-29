@@ -39,7 +39,7 @@ func (p *countingHookPolicy) DecideHook(context.Context, risk.HookEvent) (risk.R
 func TestCedarObservePreservesCurrentAuthorityAndRecordsDecision(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("permit-read") permit(principal, action, resource == Kontext::Tool::"Read");`)
 	current := staticHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionDeny, Reason: "current deny", ReasonCode: "current_deny", RiskEvent: risk.RiskEvent{Decision: risk.DecisionDeny}}}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{FetchedAt: time.Now()}}}, false)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{FetchedAt: time.Now()}}}, CedarEnforcementOff)
 
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 	if err != nil {
@@ -62,7 +62,7 @@ func TestCedarObservePreservesCurrentAuthorityAndRecordsDecision(t *testing.T) {
 func TestCedarObserveClassifiesContextConversionFailure(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeObserve, `@id("permit") permit(principal, action, resource);`)
 	current := staticHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, false)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementOff)
 
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{"bad": make(chan struct{})}})
 	if err != nil {
@@ -79,7 +79,7 @@ func TestCedarObserveClassifiesContextConversionFailure(t *testing.T) {
 func TestCedarObserveClassifiesEngineDiagnosticsAsFailure(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeObserve, portableEngineErrorPolicy)
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, ReasonCode: "current_allow", RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, false)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementOff)
 
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": 1}})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestCedarObserveClassifiesEngineDiagnosticsAsFailure(t *testing.T) {
 
 func TestCedarObserveRecordsUnresolvedPrincipal(t *testing.T) {
 	current := staticHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: cedarpolicy.StatePrincipalUnavailable}}, false)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: cedarpolicy.StatePrincipalUnavailable}}, CedarEnforcementOff)
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestCedarObserveRecordsUnresolvedPrincipal(t *testing.T) {
 func TestCedarEnforceIsSingularAuthority(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("permit-read") permit(principal, action, resource == Kontext::Tool::"Read");`)
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionDeny, ReasonCode: "legacy_deny"}}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{FetchedAt: time.Now()}}}, true)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{FetchedAt: time.Now()}}}, CedarEnforcementStatic)
 
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 	if err != nil {
@@ -131,7 +131,7 @@ func TestCedarEnforceIsSingularAuthority(t *testing.T) {
 func TestCedarEnforceDeniesAskWithoutApprovalChannel(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("ask-write") @ask("prompt") permit(principal, action, resource == Kontext::Tool::"Write");`)
 	current := &countingHookPolicy{}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, true)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementStatic)
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Write", ToolInput: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestCedarEnforceDeniesAskWithoutApprovalChannel(t *testing.T) {
 func TestCedarEnforceFailsClosedOnEngineDiagnostics(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, portableEngineErrorPolicy)
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, true)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementStatic)
 
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": 1}})
 	if err != nil {
@@ -176,7 +176,7 @@ func TestCedarEnforceFailsClosedWithoutFallback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
-			provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: tt.snapshot}, true)
+			provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: tt.snapshot}, CedarEnforcementStatic)
 			decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 			if err != nil {
 				t.Fatal(err)
@@ -190,7 +190,7 @@ func TestCedarEnforceFailsClosedWithoutFallback(t *testing.T) {
 
 func TestCedarExplicitDisableReturnsAuthorityToCurrentEvaluator(t *testing.T) {
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, ReasonCode: "current_allow", RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: cedarpolicy.StateDisabled}}, true)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: cedarpolicy.StateDisabled}}, CedarEnforcementStatic)
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +213,7 @@ func TestCedarEnforceDoesNotFallbackOnNonRollbackResponseStates(t *testing.T) {
 			provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{
 				LastKnownGood: &deployment,
 				State:         state,
-			}}, true)
+			}}, CedarEnforcementStatic)
 			decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 			if err != nil {
 				t.Fatal(err)
@@ -239,7 +239,7 @@ func TestCedarEnforceFailsClosedWithoutLastKnownGood(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
-			provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: state}}, true)
+			provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: state}}, CedarEnforcementStatic)
 			decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 			if err != nil {
 				t.Fatal(err)
@@ -254,7 +254,7 @@ func TestCedarEnforceFailsClosedWithoutLastKnownGood(t *testing.T) {
 func TestCedarConfiguredObserveKeepsCurrentAuthority(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeObserve, `@id("forbid-all") forbid(principal, action, resource);`)
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, ReasonCode: "current_allow", RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, true)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementStatic)
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +267,7 @@ func TestCedarConfiguredObserveKeepsCurrentAuthority(t *testing.T) {
 func TestCedarNoActivePolicyIsExplicitRollback(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("permit") permit(principal, action, resource);`)
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
-	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{LastKnownGood: &deployment, State: cedarpolicy.StateNoActivePolicy}}, true)
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{LastKnownGood: &deployment, State: cedarpolicy.StateNoActivePolicy}}, CedarEnforcementStatic)
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
@@ -285,7 +285,7 @@ func TestCedarEnforceUsesAgeValidLastKnownGoodAfterRefreshFailure(t *testing.T) 
 		LastKnownGood: &deployment,
 		State:         cedarpolicy.StateSuccess,
 		Status:        cedarpolicy.CacheStatus{Stale: true},
-	}}, true)
+	}}, CedarEnforcementStatic)
 	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
@@ -304,4 +304,88 @@ func cedarTestDeployment(t *testing.T, mode cedareval.RolloutMode, policy string
 		t.Fatal(err)
 	}
 	return cedarpolicy.Deployment{ResponseVersion: 1, RequestContractVersion: 1, PolicyHash: hash, RolloutMode: mode, EvaluationPrincipal: principal, PolicyText: policy, DeploymentIdentity: identity}
+}
+
+func TestCedarRemoteFollowsEnforceRollout(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("permit-read") permit(principal, action, resource == Kontext::Tool::"Read");`)
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionDeny, ReasonCode: "legacy_deny"}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{FetchedAt: time.Now()}}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.calls != 0 {
+		t.Fatalf("previous evaluator calls = %d, want zero under remote enforce rollout", current.calls)
+	}
+	if decision.Decision != risk.DecisionAllow || decision.ReasonCode != string(cedareval.ReasonPermit) {
+		t.Fatalf("decision = %#v, want Cedar allow", decision)
+	}
+	if decision.Cedar == nil || decision.Cedar.AppliedRolloutMode != cedareval.RolloutModeEnforce {
+		t.Fatalf("Cedar evidence = %#v, want applied enforce", decision.Cedar)
+	}
+}
+
+func TestCedarRemoteStaysObserveUnderObserveRollout(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeObserve, `@id("forbid-read") forbid(principal, action, resource == Kontext::Tool::"Read");`)
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, ReasonCode: "current_allow", RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{FetchedAt: time.Now()}}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.calls != 1 || decision.Decision != risk.DecisionAllow || decision.ReasonCode != "current_allow" {
+		t.Fatalf("calls = %d decision = %#v, want preserved current authority under observe rollout", current.calls, decision)
+	}
+	if decision.Cedar == nil || decision.Cedar.AppliedRolloutMode != cedareval.RolloutModeObserve {
+		t.Fatalf("Cedar evidence = %#v, want dry-run observe", decision.Cedar)
+	}
+}
+
+func TestCedarRemoteWithoutDeploymentStaysObserve(t *testing.T) {
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: cedarpolicy.StateUnavailable}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.calls != 1 || decision.Decision != risk.DecisionAllow {
+		t.Fatalf("calls = %d decision = %#v, want fail-open observe before first deployment", current.calls, decision)
+	}
+}
+
+func TestCedarRemoteHoldsLastKnownGoodEnforce(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("permit-read") permit(principal, action, resource == Kontext::Tool::"Read");`)
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{
+		LastKnownGood: &deployment,
+		State:         cedarpolicy.StateUnavailable,
+	}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.calls != 0 || decision.Decision != risk.DecisionDeny || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
+		t.Fatalf("calls = %d decision = %#v, want fail-closed enforcement while only LKG enforce is cached", current.calls, decision)
+	}
+}
+
+func TestCedarRemoteDisabledStateRelinquishesAuthority(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("permit-read") permit(principal, action, resource == Kontext::Tool::"Read");`)
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{
+		LastKnownGood: &deployment,
+		State:         cedarpolicy.StateDisabled,
+	}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.calls != 1 || decision.Decision != risk.DecisionAllow {
+		t.Fatalf("calls = %d decision = %#v, want current authority after explicit disable", current.calls, decision)
+	}
 }

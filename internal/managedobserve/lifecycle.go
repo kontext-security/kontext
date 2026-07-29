@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/hook"
@@ -31,18 +32,28 @@ type Lifecycle struct {
 	Label      string
 	Kickstart  func(context.Context, string) error
 	Diagnostic diagnostic.Logger
-	// Mode is the managed rollout posture ("observe" or "enforce"). Empty is
-	// treated as observe. In enforce the daemon's decision is authoritative and
-	// passes through unchanged; in observe the hook can never block.
+	// Mode is the managed rollout posture ("observe", "enforce", or
+	// "remote"). Empty is treated as observe. In enforce the daemon's decision
+	// is authoritative and passes through unchanged; in observe the hook can
+	// never block. In remote the daemon's per-decision posture stamp decides:
+	// decisions the daemon marked enforce (the fetched policy deployment says
+	// enforce) pass through, everything else gets observe semantics.
 	Mode string
+	// RemoteEnforce reports whether the cached policy distribution currently
+	// claims enforcement. It is consulted only in remote mode when the daemon
+	// is unreachable, to pick between failing open (observe posture) and
+	// failing closed (enforce posture) — an unreachable daemon must not
+	// downgrade an enforcing endpoint to observe.
+	RemoteEnforce func() bool
 }
 
 func NewLifecycle() Lifecycle {
 	return Lifecycle{
-		SocketPath: DefaultSocketPath(),
-		Label:      DefaultLabel(),
-		Kickstart:  KickstartLaunchd,
-		Mode:       loadManagedMode(),
+		SocketPath:    DefaultSocketPath(),
+		Label:         DefaultLabel(),
+		Kickstart:     KickstartLaunchd,
+		Mode:          loadManagedMode(),
+		RemoteEnforce: remoteEnforceFromCache,
 	}
 }
 
@@ -55,14 +66,40 @@ func loadManagedMode() string {
 	if err != nil {
 		return managedconfig.Mode
 	}
-	if cfg.Config.Mode == managedconfig.ModeEnforce {
-		return managedconfig.ModeEnforce
+	switch cfg.Config.Mode {
+	case managedconfig.ModeEnforce, managedconfig.ModeRemote:
+		return cfg.Config.Mode
+	default:
+		return managedconfig.Mode
 	}
-	return managedconfig.Mode
+}
+
+// remoteEnforceFromCache reads the daemon's on-disk policy cache directly —
+// the daemon is unreachable when this is consulted. A missing or unreadable
+// cache reports no enforcement claim: with no trustworthy record of the
+// organization's intent, a self-serve endpoint fails open rather than
+// hard-blocking the agent.
+//
+// The cache location derives from DefaultDBPath(), the same env-overridable
+// default (KONTEXT_MANAGED_OBSERVE_DB) the daemon derives its cache path
+// from, mirroring how SocketPath resolution already keeps the two processes
+// aligned. The programmatic DaemonOptions path overrides are test seams; a
+// deployment that relocates the daemon state must export the env var to hook
+// processes too, or outage fallback will not see the enforcement claim.
+func remoteEnforceFromCache() bool {
+	cache := cedarpolicy.NewCache(cedarpolicy.DefaultCachePathForDB(DefaultDBPath()), 0)
+	if err := cache.Load(); err != nil {
+		return false
+	}
+	return cedarpolicy.DeploymentClaimsEnforce(cache.Current())
 }
 
 func (l Lifecycle) enforcing() bool {
 	return l.Mode == managedconfig.ModeEnforce
+}
+
+func (l Lifecycle) remote() bool {
+	return l.Mode == managedconfig.ModeRemote
 }
 
 func Active() bool {
@@ -131,11 +168,12 @@ func (l Lifecycle) processIfAvailable(ctx context.Context, event hook.Event, bud
 // only an explicit enforce-mode allow or deny; a stale daemon or malformed RPC
 // result is not authoritative. Non-blocking hooks are always normalized to
 // allow. In observe the hook can never block, so the decision is forced to
-// allow with a "would" note.
+// allow with a "would" note. Remote passes through only decisions the daemon
+// stamped enforce — the daemon stamps those exactly when the fetched policy
+// deployment claims enforcement — and treats everything else as observe.
 func (l Lifecycle) finalize(event hook.Event, result hook.Result) hook.Result {
 	if l.enforcing() {
-		if result.Mode != managedconfig.ModeEnforce ||
-			(result.Decision != hook.DecisionAllow && result.Decision != hook.DecisionDeny) {
+		if !guardhookruntime.AuthoritativeEnforce(result) {
 			return l.daemonUnavailable(event)
 		}
 		if !event.HookName.CanBlock() {
@@ -143,14 +181,31 @@ func (l Lifecycle) finalize(event hook.Event, result hook.Result) hook.Result {
 		}
 		return result
 	}
-	return observeResult(event, result)
+	if l.remote() {
+		return guardhookruntime.ApplyRemote(event, result)
+	}
+	return guardhookruntime.ObserveResult(event, result)
 }
 
 // daemonUnavailable is the fail path when the managed daemon cannot be reached.
 // Observe fails open (it never blocks). Enforce fails closed for blocking
 // hooks: enforcement requires an authoritative decision and an unreachable
 // daemon cannot provide one. Non-blocking lifecycle hooks remain informational.
+// Remote fails closed only while the cached policy distribution claims
+// enforcement; otherwise it fails open like observe, so a fresh self-serve
+// install without an enforcing deployment never hard-blocks the agent.
 func (l Lifecycle) daemonUnavailable(event hook.Event) hook.Result {
+	if l.remote() && l.RemoteEnforce != nil && l.RemoteEnforce() {
+		decision := hook.DecisionAllow
+		if event.HookName.CanBlock() {
+			decision = hook.DecisionDeny
+		}
+		return hook.Result{
+			Decision: decision,
+			Mode:     managedconfig.ModeEnforce,
+			Reason:   "Kontext enforce: managed policy daemon unavailable",
+		}
+	}
 	if l.enforcing() {
 		decision := hook.DecisionAllow
 		if event.HookName.CanBlock() {
@@ -162,7 +217,7 @@ func (l Lifecycle) daemonUnavailable(event hook.Event) hook.Result {
 			Reason:   "Kontext enforce: managed policy daemon unavailable",
 		}
 	}
-	return observeResult(event, hook.Result{Decision: hook.DecisionAllow, Reason: "managed observe daemon unavailable"})
+	return guardhookruntime.ObserveResult(event, hook.Result{Decision: hook.DecisionAllow, Reason: "managed observe daemon unavailable"})
 }
 
 func (l Lifecycle) probe(ctx context.Context) bool {
@@ -202,26 +257,6 @@ func (l Lifecycle) call(ctx context.Context, event hook.Event) (hook.Result, err
 		return hook.Result{}, err
 	}
 	return result, nil
-}
-
-func observeResult(event hook.Event, result hook.Result) hook.Result {
-	result.Mode = string(guardhookruntime.ModeObserve)
-	if result.Decision == "" {
-		result.Decision = hook.DecisionAllow
-	}
-	if event.HookName.CanBlock() {
-		decision := result.Decision
-		if result.Reason == "" {
-			result.Reason = "no reason provided"
-		}
-		if decision != hook.DecisionAllow {
-			result.Reason = "Kontext observe mode: would " + string(decision) + "; " + result.Reason
-		}
-		result.Decision = hook.DecisionAllow
-		return result
-	}
-	result.Decision = hook.DecisionAllow
-	return result
 }
 
 func deadlineOr(ctx context.Context, fallback time.Time) time.Time {
