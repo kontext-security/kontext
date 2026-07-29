@@ -107,6 +107,22 @@ type RiskDecision struct {
 	// event, grouped per provider; each evaluation is recorded as a separate
 	// request.decided ledger row.
 	ProviderPolicy []ProviderPolicyEvaluations `json:"provider_policy,omitempty"`
+	// Guardrail carries an LLM verdict the decision path already obtained, so
+	// the feedback record can reuse it instead of running inference twice.
+	// GuardrailErr says why it is absent. Plain data on purpose: this package
+	// sits below the classifier and must not depend on it.
+	Guardrail    *LLMVerdict `json:"guardrail,omitempty"`
+	GuardrailErr string      `json:"guardrail_error,omitempty"`
+}
+
+// LLMVerdict is a guardrail verdict in transit between the decision path and
+// the feedback log.
+type LLMVerdict struct {
+	Verdict    string `json:"verdict"`
+	Raw        string `json:"raw"`
+	Model      string `json:"model"`
+	PromptID   string `json:"prompt_id,omitempty"`
+	DurationMs int64  `json:"duration_ms"`
 }
 
 // ProviderPolicyEvaluations groups one provider's synced-policy evaluations

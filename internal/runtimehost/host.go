@@ -20,6 +20,7 @@ import (
 	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	"github.com/kontext-security/kontext-cli/internal/guard/judgeruntime"
+	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/localruntime"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
@@ -97,16 +98,27 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	closeJudge := func() {}
 	var localJudge judge.Judge
 	var judgeStatus string
+	var judgeRuntime judgeruntime.Runtime
 	if opts.JudgeConfigFromEnv {
 		judgeConfig, err := judgeruntime.ConfigFromEnv(dbPath, opts.JudgeManagedDefault)
 		if err != nil {
 			return nil, err
 		}
 		judgeConfig.DownloadProgress = opts.JudgeDownloadProgress
-		localJudge, closeJudge, judgeStatus, err = judgeruntime.Configure(ctx, judgeConfig)
+		judgeRuntime, err = judgeruntime.ConfigureRuntime(ctx, judgeConfig)
 		if err != nil {
 			return nil, err
 		}
+		localJudge = judgeRuntime.Judge
+		judgeStatus = judgeRuntime.Status
+		if judgeRuntime.Close != nil {
+			closeJudge = judgeRuntime.Close
+		}
+	}
+	classifierOpts, err := riskClassifierOptions(judgeRuntime)
+	if err != nil {
+		closeJudge()
+		return nil, err
 	}
 	serverSessionID := sessionID
 	if opts.SkipInitialSession {
@@ -118,7 +130,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		EndpointID:       opts.EndpointID,
 		CurrentSessionID: serverSessionID,
 		Mode:             string(mode),
-		RiskClassifier:   &server.RiskClassifierOptions{},
+		RiskClassifier:   classifierOpts,
 	})
 	if err != nil {
 		closeJudge()
@@ -215,6 +227,22 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	}
 
 	return host, nil
+}
+
+// riskClassifierOptions resolves the classifier's configuration. The SVM always
+// runs; KONTEXT_RISK_CLASSIFIER_MODE decides whether the guardrail LLM runs off
+// the hook path (default), on the decision path, or not at all. The LLM reuses
+// whatever local llama-server the judge configuration brought up.
+func riskClassifierOptions(judgeRuntime judgeruntime.Runtime) (*server.RiskClassifierOptions, error) {
+	mode, err := riskclassifier.ParseMode(os.Getenv("KONTEXT_RISK_CLASSIFIER_MODE"))
+	if err != nil {
+		return nil, err
+	}
+	return &server.RiskClassifierOptions{
+		Mode:             mode,
+		GuardrailBaseURL: judgeRuntime.BaseURL,
+		GuardrailModel:   judgeRuntime.Model,
+	}, nil
 }
 
 func clientResultTransform(mode guardhookruntime.Mode) func(hook.Event, hook.Result) hook.Result {

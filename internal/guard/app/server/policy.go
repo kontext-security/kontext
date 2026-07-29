@@ -9,6 +9,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	guardpolicy "github.com/kontext-security/kontext-cli/internal/guard/policy"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext-cli/internal/hubspotpolicy"
 	"github.com/kontext-security/kontext-cli/internal/providerpolicy"
 )
@@ -74,7 +75,11 @@ type PolicyConfigProvider interface {
 }
 
 type RiskPolicyProvider struct {
-	judge        judge.Judge
+	judge judge.Judge
+	// guardrail, when set, replaces the JSON judge as the probabilistic layer
+	// for shell commands (sync placement). Its verdict is carried on the
+	// decision so the feedback log does not pay for a second inference.
+	guardrail    *riskclassifier.Guardrail
 	policyEngine guardpolicy.Engine
 	policyConfig PolicyConfigProvider
 	// providerPolicies are the synced-policy bindings evaluated per event.
@@ -143,6 +148,22 @@ func (p RiskPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent
 	if len(enforcing) > 0 {
 		return withProviderPolicy(providerPolicyDecision(riskEvent, enforcing), providerEvaluations), nil
 	}
+	// The guardrail supersedes the JSON judge when configured: one local LLM,
+	// prompted for shell-command risk. It only speaks to shell commands, so
+	// path/skill/MCP calls fall through to the deterministic allow rather than
+	// being asked of a classifier trained on a different question.
+	if p.guardrail != nil {
+		command := risk.CommandFromInput(event.ToolInput)
+		if strings.TrimSpace(command) == "" {
+			return withProviderPolicy(deterministicAllowDecision(riskEvent, policyResult), providerEvaluations), nil
+		}
+		verdict, err := p.guardrail.Classify(ctx, command)
+		if err != nil {
+			decision := guardrailFailOpenDecision(riskEvent, p.guardrail, err)
+			return withProviderPolicy(decision, providerEvaluations), nil
+		}
+		return withProviderPolicy(guardrailDecision(riskEvent, verdict), providerEvaluations), nil
+	}
 	if p.judge == nil {
 		return withProviderPolicy(deterministicAllowDecision(riskEvent, policyResult), providerEvaluations), nil
 	}
@@ -152,6 +173,59 @@ func (p RiskPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent
 		return withProviderPolicy(judgeFailOpenDecision(riskEvent, p.judge, err), providerEvaluations), nil
 	}
 	return withProviderPolicy(judgeDecision(riskEvent, result), providerEvaluations), nil
+}
+
+// guardrailDecision turns a RISKY/SAFE verdict into a risk decision, carrying
+// the verdict itself so the feedback record reuses this inference.
+func guardrailDecision(riskEvent risk.RiskEvent, verdict riskclassifier.LLMVerdict) risk.RiskDecision {
+	decision := risk.DecisionAllow
+	reasonCode := "guardrail_allow"
+	reason := "local guardrail rated the command safe"
+	if verdict.Verdict == riskclassifier.VerdictRisky {
+		decision = risk.DecisionDeny
+		reasonCode = "guardrail_deny"
+		reason = "local guardrail rated the command risky"
+	}
+	duration := verdict.DurationMs
+	riskEvent.Decision = decision
+	riskEvent.ReasonCode = reasonCode
+	riskEvent.DecisionStage = reasonCode
+	riskEvent.GuardID = "local_guardrail"
+	riskEvent.JudgeRuntime = judge.DefaultLlamaServerRuntime
+	riskEvent.JudgeModel = verdict.Model
+	riskEvent.JudgeDurationMs = &duration
+	return risk.RiskDecision{
+		Decision:   decision,
+		Reason:     reason,
+		ReasonCode: reasonCode,
+		GuardID:    "local_guardrail",
+		RiskEvent:  riskEvent,
+		Guardrail: &risk.LLMVerdict{
+			Verdict:    verdict.Verdict,
+			Raw:        verdict.Raw,
+			Model:      verdict.Model,
+			PromptID:   verdict.PromptID,
+			DurationMs: verdict.DurationMs,
+		},
+	}
+}
+
+// guardrailFailOpenDecision mirrors the judge's fail-open contract: an
+// unavailable or unparseable local model allows the call and records why.
+func guardrailFailOpenDecision(riskEvent risk.RiskEvent, guardrail *riskclassifier.Guardrail, err error) risk.RiskDecision {
+	riskEvent.Decision = risk.DecisionAllow
+	riskEvent.ReasonCode = "guardrail_unavailable_allow"
+	riskEvent.DecisionStage = "guardrail_unavailable_allow"
+	riskEvent.JudgeRuntime = judge.DefaultLlamaServerRuntime
+	riskEvent.JudgeModel = guardrail.Model()
+	riskEvent.JudgeFailureKind = "unavailable"
+	return risk.RiskDecision{
+		Decision:     risk.DecisionAllow,
+		Reason:       "local guardrail unavailable; allowing by fail-open policy",
+		ReasonCode:   "guardrail_unavailable_allow",
+		RiskEvent:    riskEvent,
+		GuardrailErr: err.Error(),
+	}
 }
 
 // evaluateProviderPolicies classifies the event through every bound

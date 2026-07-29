@@ -62,11 +62,15 @@ type Options struct {
 	RiskClassifier *RiskClassifierOptions
 }
 
-// RiskClassifierOptions configure the observe-mode risk classifier. The model
-// is embedded, so enabling it needs no configuration today; the type exists so
-// callers opt in explicitly and so the contract's deferred second-opinion LLM
-// has somewhere to land.
-type RiskClassifierOptions struct{}
+// RiskClassifierOptions configure the risk classifier. The SVM is embedded and
+// always runs; the fields here govern the guardrail LLM, which needs a local
+// endpoint and whose placement relative to the hook path is a cost decision.
+type RiskClassifierOptions struct {
+	Mode             riskclassifier.Mode
+	GuardrailBaseURL string
+	GuardrailModel   string
+	GuardrailTimeout time.Duration
+}
 
 type PolicyProfileResponse struct {
 	Profile            policy.Profile `json:"profile"`
@@ -116,7 +120,7 @@ func NewServerWithOptions(store *sqlite.Store, opts Options) (*Server, error) {
 		}
 	}
 	return NewServerWithPolicyConfigAndOptions(store, NewRiskPolicyProviderWithOptions(RiskPolicyProviderOptions{
-		Judge:                opts.Judge,
+		Judge:                judgeForOptions(opts),
 		PolicyConfigProvider: configProvider,
 		ProviderPolicies:     opts.ProviderPolicies,
 		EndpointID:           opts.EndpointID,
@@ -159,7 +163,16 @@ func NewServerWithPolicyConfigAndOptions(store *sqlite.Store, policy PolicyProvi
 	if currentSessionID != "" && mode == "" {
 		mode = "observe"
 	}
-	classifier := newRiskClassifierObserver(store, opts.RiskClassifier)
+	guardrail := newGuardrail(opts.RiskClassifier)
+	classifier := newRiskClassifierObserver(store, opts.RiskClassifier, guardrail)
+	// Sync placement replaces the JSON judge as the probabilistic layer, so the
+	// guardrail is handed to the decision path instead of the observer.
+	if opts.RiskClassifier != nil && opts.RiskClassifier.Mode == riskclassifier.ModeSync && guardrail != nil {
+		if provider, ok := policy.(RiskPolicyProvider); ok {
+			provider.guardrail = guardrail
+			policy = provider
+		}
+	}
 	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier)
 	core, err := runtimecore.New(runtime)
 	if err != nil {
@@ -182,7 +195,7 @@ func NewServerWithPolicyConfigAndOptions(store *sqlite.Store, policy PolicyProvi
 // newRiskClassifierObserver builds the observe-mode classifier pipeline. Every
 // failure here degrades to nil (classifier off) rather than blocking startup:
 // this path only collects feedback data and must never keep Guard from running.
-func newRiskClassifierObserver(store *sqlite.Store, opts *RiskClassifierOptions) *riskclassifier.Observer {
+func newRiskClassifierObserver(store *sqlite.Store, opts *RiskClassifierOptions, guardrail *riskclassifier.Guardrail) *riskclassifier.Observer {
 	if opts == nil || store == nil {
 		return nil
 	}
@@ -190,14 +203,54 @@ func newRiskClassifierObserver(store *sqlite.Store, opts *RiskClassifierOptions)
 	if err != nil {
 		return nil
 	}
-	return riskclassifier.NewObserver(riskclassifier.ObserverOptions{
+	observerOpts := riskclassifier.ObserverOptions{
 		SVM:    svm,
 		Redact: risk.RedactCredentials,
 		Sink: func(ctx context.Context, record riskclassifier.Record) error {
 			_, err := store.SaveClassifierVerdict(ctx, record)
 			return err
 		},
+	}
+	// Only async placement classifies from the observer. In sync placement the
+	// decision path already holds a verdict and hands it over, so giving the
+	// observer a guardrail too would double the inference per command.
+	if opts.Mode == riskclassifier.ModeAsync {
+		observerOpts.Guardrail = guardrail
+	}
+	return riskclassifier.NewObserver(observerOpts)
+}
+
+// judgeForOptions drops the JSON judge whenever the guardrail LLM is enabled.
+// The guardrail supersedes it: one local model, one prompt. Keeping both would
+// run two inferences per gated call — and the JSON judge is the expensive one,
+// measured at ~247 ms per call against ~42 ms for the guardrail's single word.
+func judgeForOptions(opts Options) judge.Judge {
+	if opts.RiskClassifier != nil && opts.RiskClassifier.Mode.UsesLLM() && newGuardrail(opts.RiskClassifier) != nil {
+		return nil
+	}
+	return opts.Judge
+}
+
+// newGuardrail builds the guardrail client when the mode wants an LLM and an
+// endpoint is available. Every failure degrades to nil (SVM only) rather than
+// blocking startup: this path collects feedback data and must never keep Guard
+// from running.
+func newGuardrail(opts *RiskClassifierOptions) *riskclassifier.Guardrail {
+	if opts == nil || !opts.Mode.UsesLLM() {
+		return nil
+	}
+	if strings.TrimSpace(opts.GuardrailBaseURL) == "" || strings.TrimSpace(opts.GuardrailModel) == "" {
+		return nil
+	}
+	guardrail, err := riskclassifier.NewGuardrail(riskclassifier.GuardrailOptions{
+		BaseURL: opts.GuardrailBaseURL,
+		Model:   opts.GuardrailModel,
+		Timeout: opts.GuardrailTimeout,
 	})
+	if err != nil {
+		return nil
+	}
+	return guardrail
 }
 
 // CloseRiskClassifier stops the observe-mode classifier, draining queued

@@ -104,14 +104,14 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		return risk.RiskDecision{}, err
 	}
 	decision.EventID = record.ID
-	r.observeCommand(event, record.ID)
+	r.observeCommand(event, record.ID, decision)
 	return decision, nil
 }
 
 // observeCommand hands an intercepted bash command to the risk classifier.
 // Observe-mode only: the verdicts are logged against the decided action for
 // feedback collection and never revisit the decision above.
-func (r guardHookRuntime) observeCommand(event risk.HookEvent, actionID string) {
+func (r guardHookRuntime) observeCommand(event risk.HookEvent, actionID string, decision risk.RiskDecision) {
 	if r.classifier == nil || event.HookEventName != "PreToolUse" || actionID == "" {
 		return
 	}
@@ -119,13 +119,26 @@ func (r guardHookRuntime) observeCommand(event risk.HookEvent, actionID string) 
 	if strings.TrimSpace(command) == "" {
 		return
 	}
-	r.classifier.Observe(riskclassifier.ObserveInput{
+	input := riskclassifier.ObserveInput{
 		ActionID:  actionID,
 		SessionID: event.SessionID,
 		ToolUseID: event.ToolUseID,
 		Agent:     event.Agent,
 		Command:   command,
-	})
+	}
+	// Sync placement already ran the LLM for this command; hand the verdict over
+	// rather than paying for a second inference.
+	if decision.Guardrail != nil {
+		input.LLM = &riskclassifier.LLMVerdict{
+			Verdict:    decision.Guardrail.Verdict,
+			Raw:        decision.Guardrail.Raw,
+			Model:      decision.Guardrail.Model,
+			PromptID:   decision.Guardrail.PromptID,
+			DurationMs: decision.Guardrail.DurationMs,
+		}
+	}
+	input.LLMError = decision.GuardrailErr
+	r.classifier.Observe(input)
 }
 
 // observePrompt keeps the session's latest user prompt so classifier records
