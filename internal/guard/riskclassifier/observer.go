@@ -23,11 +23,16 @@ const (
 	// observerWorkers stays low on purpose: llama-server serves a small number
 	// of slots, and an async data-collection feature must not crowd out
 	// anything else sharing that sidecar.
-	observerWorkers      = 1
-	observerSinkTimeout  = 5 * time.Second
+	observerWorkers     = 1
+	observerSinkTimeout = 5 * time.Second
+	promptCacheSize     = 256
+	llmCacheSize        = 512
+)
+
+// Shutdown budgets. Variables rather than constants so shutdown ordering can be
+// tested in real time without a ten-second test.
+var (
 	observerDrainTimeout = 10 * time.Second
-	promptCacheSize      = 256
-	llmCacheSize         = 512
 )
 
 // Redactor masks credential material before text is persisted.
@@ -161,9 +166,24 @@ func (o *Observer) Close() {
 	}()
 	select {
 	case <-done:
+		// Drained cleanly; nothing is in flight.
+		return
 	case <-time.After(observerDrainTimeout):
 	}
+	// The drain budget is spent. Cancel in-flight work, then wait for the worker
+	// to actually stop — with no second deadline. A bounded wait here would put
+	// the deadline on the wrong side of the trade: expiring it means returning
+	// while a write is still executing, and the caller's next move is to close
+	// the SQLite store underneath it. Waiting cannot hang, because every sink
+	// call is already bounded by its own context: cancellation unwinds the
+	// in-flight write, and the remaining queued items short-circuit on the
+	// cancelled context rather than running.
+	//
+	// Verdicts still queued at this point are dropped. That is the intended
+	// trade — they are advisory, and shedding the LLM above keeps the drain fast
+	// enough that reaching here at all means something is badly wrong.
 	o.cancel()
+	<-done
 }
 
 func (o *Observer) work() {
@@ -222,6 +242,14 @@ func (o *Observer) process(item queuedObservation) {
 // LRU because agents rerun identical commands constantly. Absence and failure
 // are both recorded rather than hidden.
 func (o *Observer) attachLLM(raw string, record *Record) {
+	// Shutting down: the queue still has to drain, and an inference per item
+	// would blow the drain budget and lose the verdicts entirely. The SVM
+	// verdict costs microseconds and is already recorded, so shed the LLM and
+	// keep the row.
+	if o.closed.Load() {
+		record.LLMError = "skipped: shutting down"
+		return
+	}
 	if o.guardrail == nil {
 		record.LLMError = "guardrail not configured"
 		return
