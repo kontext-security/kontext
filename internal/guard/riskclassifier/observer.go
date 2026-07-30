@@ -60,7 +60,7 @@ type Observer struct {
 	sink   Sink
 	redact Redactor
 
-	queue   chan ObserveInput
+	queue   chan queuedObservation
 	baseCtx context.Context
 	cancel  context.CancelFunc
 	workers sync.WaitGroup
@@ -84,7 +84,7 @@ func NewObserver(opts ObserverOptions) *Observer {
 		svm:     opts.SVM,
 		sink:    opts.Sink,
 		redact:  opts.Redact,
-		queue:   make(chan ObserveInput, observerQueueSize),
+		queue:   make(chan queuedObservation, observerQueueSize),
 		baseCtx: ctx,
 		cancel:  cancel,
 		prompts: newBoundedStringMap(promptCacheSize),
@@ -119,9 +119,21 @@ func (o *Observer) Observe(input ObserveInput) {
 		return
 	}
 	select {
-	case o.queue <- input:
+	// Resolve the agent task HERE, not in the worker. The prompt cache holds one
+	// entry per session, so a second prompt arriving before this item is
+	// processed would otherwise attach the wrong task to this command — or an
+	// empty one, if the entry was evicted. What the queue carries is what was
+	// true when the command was intercepted.
+	case o.queue <- queuedObservation{ObserveInput: input, agentTask: o.prompts.get(input.SessionID)}:
 	default:
 	}
+}
+
+// queuedObservation is an observation plus the session context captured at
+// intake, so nothing that changes while the item waits can rewrite its history.
+type queuedObservation struct {
+	ObserveInput
+	agentTask string
 }
 
 // Close stops intake, waits briefly for queued work to drain, then aborts
@@ -147,12 +159,13 @@ func (o *Observer) Close() {
 
 func (o *Observer) work() {
 	defer o.workers.Done()
-	for input := range o.queue {
-		o.process(input)
+	for item := range o.queue {
+		o.process(item)
 	}
 }
 
-func (o *Observer) process(input ObserveInput) {
+func (o *Observer) process(item queuedObservation) {
+	input := item.ObserveInput
 	raw := input.Command
 	redacted := o.redact(raw)
 	truncated := len(redacted) > storedCommandMaxBytes
@@ -177,7 +190,7 @@ func (o *Observer) process(input ObserveInput) {
 		Command:          redacted,
 		CommandHash:      hex.EncodeToString(storedHash[:]),
 		CommandTruncated: truncated,
-		AgentTask:        o.prompts.get(input.SessionID),
+		AgentTask:        item.agentTask,
 		SVM:              &svmVerdict,
 		Enforced:         false,
 		CreatedAt:        time.Now().UTC(),

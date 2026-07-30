@@ -163,3 +163,55 @@ func TestCommandHashCoversExactlyWhatIsStored(t *testing.T) {
 		t.Error("hash covers the untruncated command, leaving an oracle over the dropped suffix")
 	}
 }
+
+// A verdict must carry the task that was active when the command was
+// intercepted. The prompt cache holds one entry per session, so resolving it in
+// the worker instead would attach whatever prompt happened to be current by the
+// time the item was processed — or nothing, if it had been evicted.
+func TestAgentTaskIsCapturedAtIntakeNotAtProcessing(t *testing.T) {
+	release := make(chan struct{})
+	collector := &recordCollector{}
+	observer := newObserverWithSink(t, func(ctx context.Context, record Record) error {
+		<-release
+		return collector.sink(ctx, record)
+	})
+
+	observer.RecordPrompt("sess_1", "first task")
+	observer.Observe(ObserveInput{ActionID: "act_1", SessionID: "sess_1", Command: "ls -la"})
+
+	// A new prompt lands while the first command is still queued, and the
+	// session's single cache entry is overwritten.
+	observer.RecordPrompt("sess_1", "second task")
+	observer.Observe(ObserveInput{ActionID: "act_2", SessionID: "sess_1", Command: "pwd"})
+	close(release)
+
+	records := collector.wait(t, 2)
+	tasks := map[string]string{}
+	for _, record := range records {
+		tasks[record.ActionID] = record.AgentTask
+	}
+	if tasks["act_1"] != "first task" {
+		t.Errorf("act_1 task = %q, want %q", tasks["act_1"], "first task")
+	}
+	if tasks["act_2"] != "second task" {
+		t.Errorf("act_2 task = %q, want %q", tasks["act_2"], "second task")
+	}
+}
+
+func newObserverWithSink(t *testing.T, sink Sink) *Observer {
+	t.Helper()
+	svm, err := LoadSVM()
+	if err != nil {
+		t.Fatalf("load svm: %v", err)
+	}
+	observer := NewObserver(ObserverOptions{
+		SVM:    svm,
+		Sink:   sink,
+		Redact: func(value string) string { return value },
+	})
+	if observer == nil {
+		t.Fatal("observer construction failed")
+	}
+	t.Cleanup(observer.Close)
+	return observer
+}
