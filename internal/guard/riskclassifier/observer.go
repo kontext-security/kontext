@@ -16,14 +16,6 @@ const (
 	// training examples, and the cap only guards against pathological inputs.
 	storedCommandMaxBytes = 8192
 
-	// redactionInputMaxBytes bounds what the redactor is handed, so redaction
-	// costs a bounded amount of work no matter how long a command is. It must
-	// stay above storedCommandMaxBytes, and that is what keeps truncation safe:
-	// a credential starting before the store cap lies wholly inside the redacted
-	// window, so the cut can only ever land inside an already-redacted
-	// placeholder, never inside a live secret.
-	redactionInputMaxBytes = 2 * storedCommandMaxBytes
-
 	// storedTaskMaxBytes caps the persisted agent task (user prompt).
 	storedTaskMaxBytes = 2048
 
@@ -175,10 +167,16 @@ func (o *Observer) work() {
 func (o *Observer) process(item queuedObservation) {
 	input := item.ObserveInput
 	raw := input.Command
-	clipped := len(raw) > redactionInputMaxBytes
-	redacted := o.redact(truncateAtRuneBoundary(raw, redactionInputMaxBytes))
-	truncated := clipped || len(redacted) > storedCommandMaxBytes
-	if len(redacted) > storedCommandMaxBytes {
+	// Redact the WHOLE command, however long, and only then truncate. Clipping
+	// first is what makes a credential splittable: the rules are structural — the
+	// JWT pattern needs all three dot-separated segments — so a token whose tail
+	// falls past the cut stops matching, and its head gets stored. There is no
+	// safe clip point either, since nothing bounds how long a credential can be.
+	// Redaction is linear in length (RE2, no backtracking), so paying it in full
+	// is cheap next to being wrong.
+	redacted := o.redact(raw)
+	truncated := len(redacted) > storedCommandMaxBytes
+	if truncated {
 		redacted = truncateAtRuneBoundary(redacted, storedCommandMaxBytes)
 	}
 	// Hash exactly what is stored — redacted AND truncated — never the raw or
