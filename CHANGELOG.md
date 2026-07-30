@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.16.0](https://github.com/kontext-security/kontext-cli/compare/v0.15.1...v0.16.0) (2026-07-29)
+
+
+### Features
+
+* add staging brew channel for testing branches against the staging backend ([#395](https://github.com/kontext-security/kontext-cli/issues/395)) ([d2400bc](https://github.com/kontext-security/kontext-cli/commit/d2400bc143e335fc854acfbabbe840a64655817b))
+* **config:** sync endpoint configuration independently ([#387](https://github.com/kontext-security/kontext-cli/issues/387)) ([69d72f5](https://github.com/kontext-security/kontext-cli/commit/69d72f5d70598d40c76a89085dc98bf6b1ac2ab7))
+* **ledger:** add Decision Fact v1 contract mirror and golden corpus ([#416](https://github.com/kontext-security/kontext-cli/issues/416)) ([9b96cb0](https://github.com/kontext-security/kontext-cli/commit/9b96cb06b1270e9f99ff6c4910346271700c4a21))
+* **ledger:** build the decision fact from evaluation outcomes ([#417](https://github.com/kontext-security/kontext-cli/issues/417)) ([7b7847b](https://github.com/kontext-security/kontext-cli/commit/7b7847bbc4a53e0fd9efeadfa71ede9d3c4c06ac))
+* **policy:** add Go Cedar decision conformance ([#383](https://github.com/kontext-security/kontext-cli/issues/383)) ([eab6639](https://github.com/kontext-security/kontext-cli/commit/eab66390bdec55e6a7c7a130307584cd09d3315f))
+* **policy:** add Go Cedar evaluator conformance ([#382](https://github.com/kontext-security/kontext-cli/issues/382)) ([3184f5d](https://github.com/kontext-security/kontext-cli/commit/3184f5dbebc5ef2b814cc4d6287268016524262a))
+* **policy:** cache native Cedar deployments ([#384](https://github.com/kontext-security/kontext-cli/issues/384)) ([e6d02c2](https://github.com/kontext-security/kontext-cli/commit/e6d02c29eb9aaa191068fc6db6ab2ffdb9714a99))
+* **policy:** gate Cedar enforcement cutover ([#386](https://github.com/kontext-security/kontext-cli/issues/386)) ([0ea3fd0](https://github.com/kontext-security/kontext-cli/commit/0ea3fd0f922f1d6e1a3a29f6fb4e3de0ec577a05))
+* **policy:** observe local Cedar decisions ([#385](https://github.com/kontext-security/kontext-cli/issues/385)) ([02d90ec](https://github.com/kontext-security/kontext-cli/commit/02d90ec7c5a2155ac94b304f6ffcfeba8035e0ae))
+* **policy:** resolve enforcement from remote rollout mode ([#412](https://github.com/kontext-security/kontext-cli/issues/412)) ([063cf95](https://github.com/kontext-security/kontext-cli/commit/063cf95eb4a0074b78b45c7fee5a8c93640d7b32))
+* **setup:** default self-serve installs to remote mode ([#413](https://github.com/kontext-security/kontext-cli/issues/413)) ([7fc4166](https://github.com/kontext-security/kontext-cli/commit/7fc4166e2051a8fc2c396d044aab5c67a961a685))
+
+
+### Bug Fixes
+
+* **guard:** keep local policy evaluation advisory ([#421](https://github.com/kontext-security/kontext-cli/issues/421)) ([a85d4b1](https://github.com/kontext-security/kontext-cli/commit/a85d4b1c0d10ad90ea6ca8e6947e4d7809459c07))
+* **guard:** redact command summaries with the shared payloadcapture ruleset ([#377](https://github.com/kontext-security/kontext-cli/issues/377)) ([bdec9e5](https://github.com/kontext-security/kontext-cli/commit/bdec9e5b267bd995e677d58b5b3df16a43454c17))
+* **ledger:** bind decision facts into signed receipts ([#418](https://github.com/kontext-security/kontext-cli/issues/418)) ([c1b3939](https://github.com/kontext-security/kontext-cli/commit/c1b39399a45261b93dfbdfdb8554733f5992d066))
+* **payloadcapture:** sync rules/2 review fixes from kontext[#655](https://github.com/kontext-security/kontext-cli/issues/655) ([#429](https://github.com/kontext-security/kontext-cli/issues/429)) ([3f80846](https://github.com/kontext-security/kontext-cli/commit/3f80846b65a8b8423ef959682f885b551bef8f1b))
+
 ## [0.15.1](https://github.com/kontext-security/kontext-cli/compare/v0.15.0...v0.15.1) (2026-07-21)
 
 
