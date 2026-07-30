@@ -1,6 +1,20 @@
 package hook
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
+
+// ErrSkipEvent reports a hook event an adapter recognizes but deliberately does
+// not translate — a lifecycle signal that carries no authorization decision and
+// must not be recorded as one.
+//
+// Adapters wrap it; hook runners test for it with errors.Is and exit
+// successfully without writing a decision. It exists because some agent
+// runtimes read a non-zero hook exit as "block the tool call", so reporting an
+// unhandled event as a decode failure would stall the agent on an event we
+// simply chose not to handle.
+var ErrSkipEvent = errors.New("hook event skipped by adapter")
 
 type HookName string
 

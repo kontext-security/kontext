@@ -1,6 +1,7 @@
 package hookruntime
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -21,6 +22,12 @@ func Run(stdin io.Reader, stdout, stderr io.Writer, codec Codec, evaluate func(h
 
 	event, err := codec.DecodeHookEvent(input)
 	if err != nil {
+		// An adapter that recognizes the event but does not translate it is not
+		// a failure: succeed without emitting a decision, so runtimes that read
+		// a non-zero exit as "block" let the tool call proceed.
+		if errors.Is(err, hook.ErrSkipEvent) {
+			return 0
+		}
 		fmt.Fprintf(stderr, "kontext: failed to decode hook input: %v\n", err)
 		return 2
 	}
