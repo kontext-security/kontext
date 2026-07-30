@@ -16,6 +16,17 @@ const (
 	// training examples, and the cap only guards against pathological inputs.
 	storedCommandMaxBytes = 8192
 
+	// redactionInputMaxBytes bounds what the redactor is handed. It must stay
+	// comfortably above storedCommandMaxBytes and below the redactor's own
+	// oversized limit, which replaces its whole input with a placeholder rather
+	// than redacting it: hand it a megabyte-long script and every such command
+	// would store that identical placeholder and hash to the same value. Being
+	// larger than the store cap is what keeps this safe — a credential starting
+	// before the cap lies wholly inside the redacted prefix, so the cut can only
+	// ever land inside an already-redacted placeholder, never inside a live
+	// secret.
+	redactionInputMaxBytes = 2 * storedCommandMaxBytes
+
 	// storedTaskMaxBytes caps the persisted agent task (user prompt).
 	storedTaskMaxBytes = 2048
 
@@ -167,9 +178,10 @@ func (o *Observer) work() {
 func (o *Observer) process(item queuedObservation) {
 	input := item.ObserveInput
 	raw := input.Command
-	redacted := o.redact(raw)
-	truncated := len(redacted) > storedCommandMaxBytes
-	if truncated {
+	clipped := len(raw) > redactionInputMaxBytes
+	redacted := o.redact(truncateAtRuneBoundary(raw, redactionInputMaxBytes))
+	truncated := clipped || len(redacted) > storedCommandMaxBytes
+	if len(redacted) > storedCommandMaxBytes {
 		redacted = truncateAtRuneBoundary(redacted, storedCommandMaxBytes)
 	}
 	// Hash exactly what is stored — redacted AND truncated — never the raw or
