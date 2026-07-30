@@ -220,7 +220,6 @@ func (s *Store) migrate(ctx context.Context) error {
 	  matched_rules_json text not null default '[]',
 	  risk_signals_json text not null default '[]',
 	  risk_event_json text not null default '{}',
-	  classifier_json text,
 
 	  modifications_json text not null default '{}',
 	  approval_context_json text not null default '{}',
@@ -294,8 +293,6 @@ func (s *Store) migrate(ctx context.Context) error {
 	for _, column := range []string{
 		"schema_version", "tool_call_id",
 		"applied_mode", "evaluation_state", "cedar_action", "decision_fact_json",
-		// The advisory risk annotation rides the same decided row.
-		"classifier_json",
 	} {
 		if err := s.ensureColumn(ctx, "authorization_actions", column, "text"); err != nil {
 			return err
@@ -479,7 +476,6 @@ func (s *Store) ensureAuthorizationActionsDecisionNullable(ctx context.Context) 
 	  matched_rules_json text not null default '[]',
 	  risk_signals_json text not null default '[]',
 	  risk_event_json text not null default '{}',
-	  classifier_json text,
 
 	  modifications_json text not null default '{}',
 	  approval_context_json text not null default '{}',
@@ -591,7 +587,6 @@ var authorizationActionColumns = []authorizationActionColumn{
 	{name: "matched_rules_json", copyExpr: "coalesce(matched_rules_json, '[]')", defaultExpr: "'[]'"},
 	{name: "risk_signals_json", copyExpr: "coalesce(risk_signals_json, '[]')", defaultExpr: "'[]'"},
 	{name: "risk_event_json", copyExpr: "coalesce(risk_event_json, '{}')", defaultExpr: "'{}'"},
-	{name: "classifier_json", defaultExpr: "null"},
 	{name: "modifications_json", copyExpr: "coalesce(modifications_json, '{}')", defaultExpr: "'{}'"},
 	{name: "approval_context_json", copyExpr: "coalesce(approval_context_json, '{}')", defaultExpr: "'{}'"},
 	{name: "approval_channel", defaultExpr: "null"},
@@ -879,7 +874,7 @@ func (s *Store) insertActionRecord(ctx context.Context, tx *sql.Tx, action map[s
 		"policy_id", "policy_version", "policy_hash", "default_posture",
 		"decision_result", "decision_category", "adapter_decision", "reason_code", "reason",
 		"schema_version", "tool_call_id", "applied_mode", "evaluation_state", "cedar_action", "decision_fact_json",
-		"risk_level", "risk_score", "risk_threshold", "model_version", "confidence", "matched_rules_json", "risk_signals_json", "risk_event_json", "classifier_json",
+		"risk_level", "risk_score", "risk_threshold", "model_version", "confidence", "matched_rules_json", "risk_signals_json", "risk_event_json",
 		"modifications_json", "approval_context_json", "approval_channel", "approval_request_id", "deferral_context_json",
 		"status", "outcome", "output_summary", "output_hash", "error_redacted",
 		"tool_input_captured_json", "tool_output_captured_json",
@@ -892,7 +887,7 @@ func (s *Store) insertActionRecord(ctx context.Context, tx *sql.Tx, action map[s
 		action["policy_id"], action["policy_version"], action["policy_hash"], action["default_posture"],
 		action["decision_result"], action["decision_category"], action["adapter_decision"], action["reason_code"], action["reason"],
 		action["schema_version"], action["tool_call_id"], action["applied_mode"], action["evaluation_state"], action["cedar_action"], action["decision_fact_json"],
-		action["risk_level"], action["risk_score"], action["risk_threshold"], action["model_version"], action["confidence"], action["matched_rules_json"], action["risk_signals_json"], action["risk_event_json"], action["classifier_json"],
+		action["risk_level"], action["risk_score"], action["risk_threshold"], action["model_version"], action["confidence"], action["matched_rules_json"], action["risk_signals_json"], action["risk_event_json"],
 		action["modifications_json"], action["approval_context_json"], action["approval_channel"], action["approval_request_id"], action["deferral_context_json"],
 		action["status"], action["outcome"], action["output_summary"], action["output_hash"], action["error_redacted"],
 		action["tool_input_captured_json"], action["tool_output_captured_json"],
@@ -1037,17 +1032,6 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 
 	updatedAt := now.Format(time.RFC3339Nano)
 
-	// The advisory risk annotation rides the decided row so it reaches the
-	// hosted ledger with the decision instead of trailing it. Absent when the
-	// classifier is off or the tool call carried no command; nil keeps the
-	// column out of the exported record entirely.
-	var classifierJSON any
-	if isDecisionEvent && decision.Classifier != nil && decision.Classifier.SVM != nil {
-		if encoded, err := json.Marshal(decision.Classifier); err == nil {
-			classifierJSON = string(encoded)
-		}
-	}
-
 	return map[string]any{
 		"id":                        actionID,
 		"session_id":                sessionID,
@@ -1084,7 +1068,6 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 		"matched_rules_json":        matchedRulesJSON,
 		"risk_signals_json":         riskSignalsJSON,
 		"risk_event_json":           riskEventJSON,
-		"classifier_json":           classifierJSON,
 		"modifications_json":        emptyObject,
 		"approval_context_json":     emptyObject,
 		"approval_channel":          "",
@@ -1145,11 +1128,6 @@ func receiptInputFromAction(action map[string]any, receiptType string, now time.
 		// complete canonical JSON inside the signed receipt payload, rather
 		// than only mirroring selected columns whose meaning may evolve.
 		actionPayload["decision_fact"] = json.RawMessage(decisionFactJSON)
-	}
-	if classifierJSON := stringValue(action["classifier_json"]); classifierJSON != "" {
-		// The advisory verdict is hashed into the same signed payload, so it is
-		// tamper-evident alongside the decision it annotates.
-		actionPayload["classifier_hash"] = hashString(classifierJSON)
 	}
 	if decisionResult != "" {
 		actionPayload["decision_result"] = decisionResult

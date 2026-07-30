@@ -267,7 +267,7 @@ Done means:
 
 ### What reaches the hosted ledger
 
-The decided action carries a `classifier` block, so verdicts arrive with the decision instead of trailing it:
+The annotation rides **inside the Decision Fact**, as a `classifier` section on the same `request.decided` fact, so verdicts arrive with the decision instead of trailing it:
 
 ```json
 "classifier": {
@@ -277,6 +277,10 @@ The decided action carries a `classifier` block, so verdicts arrive with the dec
 }
 ```
 
-Those field names are a fixed contract with hosted ingest — do not rename them. Locally the column is `classifier_json`, because the `_json` suffix is what gets it unmarshalled into a nested object rather than a string on export; it is renamed to `classifier` on the wire. A row without a verdict omits the key entirely, since consumers that predate the field reject unknown ones. The block is folded into `action_hash`, so a verdict is tamper-evident alongside the rest of the decision.
+Those field names are a fixed contract with hosted ingest — do not rename them.
+
+There is exactly one copy of the annotation on the row, and it is the one in the fact. That is deliberate: a parallel column plus a hash of it would let a reader see one verdict in the fact and a different one beside it, and the receipt already signs the complete fact, so a nested section is tamper-evident without a hash of its own. The fact's Go type carries only the contract fields, so the local-only halves of the annotation cannot reach the wire by construction rather than by remembering to strip them. A call that was not scored carries `"classifier": null`.
+
+Because the fact is a mirror of the server-side shared contract with a byte-pinned golden corpus (`FixtureDigest`, asserted on both sides), this section cannot change from one repo alone. Adding it required the matching change in the hosted mirror; the two land together or CI fails on both.
 
 The redacted command, `agent_task`, `llm_prompt_id`, `user_feedback`, and `feedback_at` stay **local only**. `cached: true` means the verdict was reused from the local LRU for a byte-identical repeat — it says nothing about the model.

@@ -58,7 +58,7 @@ select id, session_id, turn_id, tool_use_id, trace_id, span_id, parent_span_id,
   schema_version, tool_call_id, applied_mode, evaluation_state, cedar_action, decision_fact_json,
   risk_level, risk_score, risk_threshold, model_version, compositional_risk_score,
   confidence, alignment_score, alignment_threshold, uncertainty_score,
-  matched_rules_json, risk_signals_json, risk_event_json, classifier_json, modifications_json,
+  matched_rules_json, risk_signals_json, risk_event_json, modifications_json,
   approval_context_json, approval_channel, approval_request_id, approval_expires_at,
   deferral_context_json, status, outcome, output_summary, output_hash, error_redacted,
   tool_input_captured_json, tool_output_captured_json,
@@ -371,16 +371,13 @@ var omitWhenEmptyLedgerColumns = map[string]bool{
 	"evaluation_state":   true,
 	"cedar_action":       true,
 	"decision_fact_json": true,
-	"classifier_json":    true,
 }
 
-// ledgerWireColumnNames renames columns on the wire. classifier_json carries the
-// _json suffix locally so it follows the convention that gets it unmarshalled
-// into a nested object, but hosted ingest expects the key "classifier" — the
-// field names inside are a fixed contract and must not be renamed either.
-var ledgerWireColumnNames = map[string]string{
-	"classifier_json": "classifier",
-}
+// ledgerWireColumnNames renames columns on the wire when the local name follows
+// a storage convention the hosted contract does not share. Empty today: the risk
+// annotation used to live here under the name "classifier", and now rides inside
+// decision_fact_json instead, where the receipt already signs it.
+var ledgerWireColumnNames = map[string]string{}
 
 func normalizeLedgerValue(column string, value any) any {
 	if value == nil {

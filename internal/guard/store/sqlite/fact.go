@@ -31,6 +31,7 @@ func applyDecisionFact(action map[string]any, event risk.HookEvent, decision ris
 		ParametersHash:  bareHexHash(stringValue(action["parameters_hash"])),
 		ExecutionAction: executionActionFromDecision(decision.Decision),
 		Risk:            advisoryRisk(decision),
+		Classifier:      advisoryClassifier(decision),
 	}
 	if evidence := decision.Cedar; evidence != nil && cedarIsEngineOfRecord(*evidence) {
 		input.Cedar = &ledgerfact.CedarInput{
@@ -110,6 +111,40 @@ func executionActionFromDecision(decision risk.Decision) cedareval.EffectiveExec
 		return cedareval.EffectiveExecutionActionAllow
 	}
 	return cedareval.EffectiveExecutionActionDeny
+}
+
+// advisoryClassifier records the bash risk annotation on the fact. It carries
+// only the fields the shared contract defines, so the local-only halves of the
+// annotation — the redacted command, its hash, the agent task, the prompt id —
+// cannot reach the fact or the wire by construction rather than by remembering
+// to strip them. The SVM always runs, so an annotation without one is dropped
+// rather than recorded as a malformed block.
+func advisoryClassifier(decision risk.RiskDecision) *ledgerfact.Classifier {
+	annotation := decision.Classifier
+	if annotation == nil || annotation.SVM == nil {
+		return nil
+	}
+	classifier := ledgerfact.Classifier{
+		SVM: &ledgerfact.ClassifierSVM{
+			Verdict:      annotation.SVM.Verdict,
+			Score:        annotation.SVM.Score,
+			Threshold:    annotation.SVM.Threshold,
+			ModelVersion: annotation.SVM.ModelVersion,
+		},
+	}
+	if annotation.LLM != nil {
+		classifier.LLM = &ledgerfact.ClassifierLLM{
+			Verdict:    annotation.LLM.Verdict,
+			Model:      annotation.LLM.Model,
+			DurationMs: annotation.LLM.DurationMs,
+			Cached:     annotation.LLM.Cached,
+		}
+	}
+	if annotation.LLMError != "" {
+		llmError := annotation.LLMError
+		classifier.LLMError = &llmError
+	}
+	return &classifier
 }
 
 // advisoryRisk records the local LLM judge's analysis on the fact when the

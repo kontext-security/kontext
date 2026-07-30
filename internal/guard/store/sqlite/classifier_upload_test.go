@@ -10,8 +10,9 @@ import (
 )
 
 // TestExportedActionCarriesClassifierBlock pins the hosted upload contract. The
-// key must be "classifier" (not the local column name) and the field names
-// inside are fixed — hosted ingest is coded against exactly these.
+// annotation rides inside the Decision Fact, so there is one copy of it on the
+// row and the receipt already covers it. Field names inside are fixed — hosted
+// ingest is coded against exactly these.
 func TestExportedActionCarriesClassifierBlock(t *testing.T) {
 	t.Parallel()
 	store, err := OpenStore(filepath.Join(t.TempDir(), "guard.db"))
@@ -57,8 +58,8 @@ func TestExportedActionCarriesClassifierBlock(t *testing.T) {
 		}
 		// The proposed row precedes the decision, so it must not claim a verdict.
 		if action["canonical_event_type"] == "request.proposed" {
-			if _, present := action["classifier"]; present {
-				t.Error("proposed row carries a classifier block")
+			if _, present := action["decision_fact_json"]; present {
+				t.Error("proposed row carries a decision fact")
 			}
 		}
 	}
@@ -66,12 +67,20 @@ func TestExportedActionCarriesClassifierBlock(t *testing.T) {
 		t.Fatal("no decided action exported")
 	}
 
-	if _, wrongKey := decided["classifier_json"]; wrongKey {
-		t.Error("exported under the local column name; hosted ingest expects \"classifier\"")
+	// One copy, inside the fact. A parallel column would let a reader see one
+	// verdict in the fact and a different one beside it.
+	for _, parallel := range []string{"classifier", "classifier_json"} {
+		if _, present := decided[parallel]; present {
+			t.Errorf("annotation exported a second time as %q", parallel)
+		}
 	}
-	block, ok := decided["classifier"].(map[string]any)
+	fact, ok := decided["decision_fact_json"].(map[string]any)
 	if !ok {
-		t.Fatalf("classifier block missing or not an object: %T", decided["classifier"])
+		t.Fatalf("decision fact missing or not an object: %T", decided["decision_fact_json"])
+	}
+	block, ok := fact["classifier"].(map[string]any)
+	if !ok {
+		t.Fatalf("classifier block missing from the fact: %T", fact["classifier"])
 	}
 
 	// Exact field names, and nothing local leaking.
@@ -102,24 +111,52 @@ func TestExportedActionCarriesClassifierBlock(t *testing.T) {
 		t.Errorf("verdicts garbled: svm=%v llm=%v", svm["verdict"], llm["verdict"])
 	}
 
-	// The verdict must be tamper-evident: it is folded into action_hash.
+	// Tamper-evidence comes from the fact being signed whole, so the separate
+	// classifier_hash is gone rather than merely unused.
 	receipts, err := store.AuthorizationReceipts(ctx, LedgerExportOptions{})
 	if err != nil {
 		t.Fatalf("export receipts: %v", err)
 	}
-	var sawClassifierHash bool
+	var sawClassifierInFact bool
 	for _, receipt := range receipts {
 		payload, _ := json.Marshal(receipt["receipt_payload_json"])
-		if len(payload) > 0 && containsKey(payload, "classifier_hash") {
-			sawClassifierHash = true
+		if len(payload) == 0 {
+			continue
+		}
+		if containsKey(payload, "classifier_hash") {
+			t.Error("receipt still carries a separate classifier hash")
+		}
+		if classifierInSignedFact(payload) {
+			sawClassifierInFact = true
 		}
 	}
-	if !sawClassifierHash {
-		t.Error("classifier verdict is not covered by the receipt hash")
+	if !sawClassifierInFact {
+		t.Error("classifier verdict is not covered by the signed decision fact")
 	}
 	if err := store.VerifyReceipts(ctx); err != nil {
 		t.Fatalf("receipt chain broke: %v", err)
 	}
+}
+
+// classifierInSignedFact reports whether the receipt payload carries the
+// annotation at its one legitimate location: inside the signed decision fact.
+func classifierInSignedFact(payload []byte) bool {
+	var decoded struct {
+		Action struct {
+			DecisionFact struct {
+				Classifier *struct {
+					SVM *struct {
+						Verdict string `json:"verdict"`
+					} `json:"svm"`
+				} `json:"classifier"`
+			} `json:"decision_fact"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return false
+	}
+	classifier := decoded.Action.DecisionFact.Classifier
+	return classifier != nil && classifier.SVM != nil && classifier.SVM.Verdict != ""
 }
 
 // TestExportedActionOmitsAbsentClassifier: consumers that predate the field
@@ -146,11 +183,15 @@ func TestExportedActionOmitsAbsentClassifier(t *testing.T) {
 		t.Fatalf("export actions: %v", err)
 	}
 	for _, action := range actions {
-		if _, present := action["classifier"]; present {
-			t.Error("row without a verdict still mentions classifier")
+		for _, parallel := range []string{"classifier", "classifier_json"} {
+			if _, present := action[parallel]; present {
+				t.Errorf("row without a verdict still mentions %q", parallel)
+			}
 		}
-		if _, present := action["classifier_json"]; present {
-			t.Error("local column leaked into the export")
+		if fact, ok := action["decision_fact_json"].(map[string]any); ok {
+			if fact["classifier"] != nil {
+				t.Errorf("fact claims an annotation for a call that had none: %v", fact["classifier"])
+			}
 		}
 	}
 }
