@@ -16,15 +16,12 @@ const (
 	// training examples, and the cap only guards against pathological inputs.
 	storedCommandMaxBytes = 8192
 
-	// redactionInputMaxBytes bounds what the redactor is handed. It must stay
-	// comfortably above storedCommandMaxBytes and below the redactor's own
-	// oversized limit, which replaces its whole input with a placeholder rather
-	// than redacting it: hand it a megabyte-long script and every such command
-	// would store that identical placeholder and hash to the same value. Being
-	// larger than the store cap is what keeps this safe — a credential starting
-	// before the cap lies wholly inside the redacted prefix, so the cut can only
-	// ever land inside an already-redacted placeholder, never inside a live
-	// secret.
+	// redactionInputMaxBytes bounds what the redactor is handed, so redaction
+	// costs a bounded amount of work no matter how long a command is. It must
+	// stay above storedCommandMaxBytes, and that is what keeps truncation safe:
+	// a credential starting before the store cap lies wholly inside the redacted
+	// window, so the cut can only ever land inside an already-redacted
+	// placeholder, never inside a live secret.
 	redactionInputMaxBytes = 2 * storedCommandMaxBytes
 
 	// storedTaskMaxBytes caps the persisted agent task (user prompt).

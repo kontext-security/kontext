@@ -8,12 +8,13 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 )
 
-// A very long command must still store its redacted prefix. The production
-// redactor replaces its entire input with a placeholder past a size limit, so
-// handing it the whole command would make every oversized script store that same
-// placeholder and hash to the same value — useless as evidence and useless for
-// deduplication. This test uses the real redactor, not a stub, because the
-// behaviour being guarded against is the real one's.
+// A very long command must still store its redacted prefix, whatever redactor it
+// is given. This deliberately injects risk.RedactCredentials, the harshest one in
+// the tree: past a size limit it replaces its entire input with a placeholder,
+// which is right for the 240-byte display summary it exists for and ruinous here,
+// since every oversized script would store the same text and hash to the same
+// value. Production wires the shared ruleset instead, which has no such limit —
+// this proves the input cap protects the evidence field even if that changes.
 func TestOversizedCommandsStayDistinguishable(t *testing.T) {
 	var mu sync.Mutex
 	var largestInput int

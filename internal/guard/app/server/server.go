@@ -126,8 +126,15 @@ func newRiskClassifierObserver(store *sqlite.Store, opts *RiskClassifierOptions)
 		return nil
 	}
 	return riskclassifier.NewObserver(riskclassifier.ObserverOptions{
-		SVM:    svm,
-		Redact: risk.RedactCredentials,
+		SVM: svm,
+		// The shared ruleset directly, not risk.RedactCredentials. That wrapper
+		// adds a size guard which replaces its whole input with a placeholder —
+		// correct for the 240-byte display summary it was written for, ruinous
+		// for an evidence field, where it would collapse every long command to
+		// the same text and the same hash. Depending on staying under someone
+		// else's limit would also mean a change made for display reasons could
+		// silently break this, with no failing test in that diff.
+		Redact: redactEvidence,
 		Sink: func(ctx context.Context, record riskclassifier.Record) error {
 			_, err := store.SaveClassifierVerdict(ctx, record)
 			return err
@@ -430,4 +437,13 @@ func OpenDefaultServerWithOptions(dbPath string, opts Options) (*Server, func() 
 		return nil, nil, err
 	}
 	return server, store.Close, nil
+}
+
+// redactEvidence removes credentials from text that will be stored as classifier
+// evidence. It uses the shared ruleset directly rather than
+// risk.RedactCredentials, whose size guard is right for a display summary and
+// wrong here — see the comment at its call site.
+func redactEvidence(value string) string {
+	redacted, _ := payloadcapture.RedactText(value)
+	return redacted
 }
