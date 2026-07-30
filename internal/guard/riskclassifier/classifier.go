@@ -119,6 +119,13 @@ func (c *Classifier) Classify(ctx context.Context, sessionID, command string) Ve
 	if c == nil || strings.TrimSpace(command) == "" {
 		return Verdicts{}
 	}
+	// Redact the WHOLE command, however long, and only then truncate. Clipping
+	// first is what makes a credential splittable: the rules are structural — the
+	// JWT pattern needs all three dot-separated segments — so a token whose tail
+	// falls past the cut stops matching, and its head gets stored. There is no
+	// safe clip point either, since nothing bounds how long a credential can be.
+	// Redaction is linear in length (RE2, no backtracking), so paying it in full
+	// is cheap next to being wrong.
 	redacted := c.redact(command)
 	truncated := len(redacted) > storedCommandMaxBytes
 	if truncated {

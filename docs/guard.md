@@ -193,6 +193,14 @@ Measured end to end per gated bash command (hook process → socket → RuntimeC
 
 **The LLM adds p50 42 ms / p95 52 ms** per command. Even in-path this is well under half what the JSON judge cost, because a one-word answer generates far fewer tokens than a JSON object. The cost now applies to denied commands too, which previously skipped the LLM; that was measured as the row above, and it is the price of having the same evidence for every outcome.
 
+### What is deliberately lost
+
+Two cases drop verdicts on purpose, and both are worth stating plainly rather than discovering later.
+
+**A command larger than the store cap** keeps only its first 8 KiB, redacted, and `command_truncated` says so. The verdict is unaffected — the models score the whole command — and the stored hash covers exactly the retained prefix, so two scripts sharing that prefix share a hash. That is honest rather than lossy: the hash describes what the row holds.
+
+**Verdicts still queued when the daemon shuts down** are dropped once the drain budget expires. Nothing audit-relevant goes with them: the tool call and its decision are already persisted and receipted on the decision path, and the annotation is advisory training data. The alternative — writing them after cancellation — would mean either an unbounded shutdown or a second budget layered on the one that just expired, both of which add moving parts to the exact place a teardown race was fixed. Reaching this case at all means the store was already failing to keep up, which is the more useful signal.
+
 Unhappy paths cost nothing rather than the full budget:
 
 - **Sidecar down or loading** — the readiness probe fails fast and the breaker opens; six commands against a dead endpoint complete in well under a second, versus six 400 ms timeouts without it.
