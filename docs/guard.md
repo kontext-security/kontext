@@ -167,6 +167,8 @@ The SVM is precise but blind to `rm -rf /`, `dd if=/dev/zero of=/dev/disk0`, and
 
 The guardrail LLM can also be turned off **remotely**: `guardrailLlmEnabled` rides the endpoint-configuration sync, alongside `payloadCaptureMode`.
 
+> **The remote half is wired but not yet live, and it needs one coordinated server change to become live.** `ConfigIdentity` is a *shared* hash: the server sends it as the ETag and `Response.Validate` rejects any response whose identity does not match `ComputeIdentity(r.Config)`, so both sides must compute it identically. Its preimage currently covers `payloadCaptureMode` alone, which leaves no good unilateral move — leaving the preimage as-is means an org flipping only `guardrailLlmEnabled` gets an unchanged ETag, a 304, and a gate that never changes; adding the field here alone makes the CLI's recomputed hash diverge from every response the current server sends, breaking endpoint configuration outright. The fix is one change on the owning side: include `guardrailLlmEnabled` in the identity preimage, bump `ResponseVersion` and `identityDomain`, regenerate the portable golden vectors, and match here. Until then the field is inert (the server does not send it) and `KONTEXT_RISK_CLASSIFIER_MODE=off` is the working way to disable the LLM.
+
 Its handling is deliberately the **inverse** of payload capture's, and there are two failure modes to avoid at once. Capture reverts to its privacy-safe mode whenever the configuration is unconfirmed, because recording content on an unverified directive is the harmful outcome. Here:
 
 - Defaulting to off would let a transient fetch failure silently disable the classifier — a degradation nobody would notice, since the SVM keeps producing verdicts.

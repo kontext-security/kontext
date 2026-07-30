@@ -31,6 +31,16 @@ type Config struct {
 	// "unconfirmed" as off would let a transient fetch failure silently disable
 	// the classifier's second opinion with nobody noticing. Resolve it through
 	// riskclassifier.ResolveLLMEnabled rather than reading it directly.
+	//
+	// NOT YET EFFECTIVE REMOTELY: ComputeIdentity's preimage covers
+	// PayloadCaptureMode alone, and that identity is the shared ETag both sides
+	// must agree on, so flipping only this field leaves the identity unchanged
+	// and a conditional refresh reuses the cached config. Adding it to the
+	// preimage here alone would instead break Validate against every response
+	// the current server sends. Both halves have to move together, with
+	// ResponseVersion and identityDomain bumped. Inert until then, since the
+	// server does not send the field; the local override still works. See the
+	// remote kill switch section of docs/guard.md.
 	GuardrailLLMEnabled *bool `json:"guardrailLlmEnabled,omitempty"`
 }
 
