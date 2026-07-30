@@ -34,8 +34,9 @@ type Verdicts struct {
 	LLM      *LLMVerdict
 	LLMError string
 
-	// Command and CommandHash are the persisted forms — redacted and capped,
-	// with the hash taken over the raw text so verbatim repeats stay matchable.
+	// Command is the persisted form — redacted and capped — and CommandHash is
+	// the SHA-256 of exactly that text, so the hash never covers content the
+	// record omits. Verbatim repeats still collide, which is all it is used for.
 	Command          string
 	CommandHash      string
 	CommandTruncated bool
@@ -112,46 +113,39 @@ func (c *Classifier) LLMSkipped() int64 {
 	return c.llmSkipped.Load()
 }
 
-// Classify annotates one command. allowLLM is false when the decision was a
-// deny — the deterministic layer already caught it, so there is nothing an
-// advisory second opinion can add that is worth the inference.
-func (c *Classifier) Classify(ctx context.Context, sessionID, command string, allowLLM bool) Verdicts {
+// Classify annotates one command. It runs for every decision outcome; the
+// caller has already decided by the time this is called.
+func (c *Classifier) Classify(ctx context.Context, sessionID, command string) Verdicts {
 	if c == nil || strings.TrimSpace(command) == "" {
 		return Verdicts{}
 	}
 	redacted := c.redact(command)
-	// Hash the REDACTED command, never the raw one. The hash ships alongside the
-	// redacted text, so hashing the raw command would let a reader test
-	// candidate values offline and confirm a low-entropy or templated secret —
-	// an oracle that defeats the redaction this record promises. Verbatim
-	// repeats still collide, which is all the hash is used for.
-	redactedHash := sha256.Sum256([]byte(redacted))
 	truncated := len(redacted) > storedCommandMaxBytes
 	if truncated {
 		redacted = truncateAtRuneBoundary(redacted, storedCommandMaxBytes)
 	}
+	// Hash exactly what is stored — redacted AND truncated. Hashing anything
+	// wider makes the hash an oracle for the part the record drops: raw text
+	// would confirm guesses at a redacted secret, pre-truncation text guesses at
+	// the dropped suffix. Verbatim repeats still collide, which is all it does.
+	storedHash := sha256.Sum256([]byte(redacted))
 
 	svmVerdict := c.svm.Classify(command)
 	verdicts := Verdicts{
 		SVM:              &svmVerdict,
 		Command:          redacted,
-		CommandHash:      hex.EncodeToString(redactedHash[:]),
+		CommandHash:      hex.EncodeToString(storedHash[:]),
 		CommandTruncated: truncated,
 		AgentTask:        c.agentTask(sessionID),
 	}
-	c.attachLLM(ctx, command, allowLLM, &verdicts)
+	c.attachLLM(ctx, command, &verdicts)
 	return verdicts
 }
 
-func (c *Classifier) attachLLM(ctx context.Context, command string, allowLLM bool, verdicts *Verdicts) {
+func (c *Classifier) attachLLM(ctx context.Context, command string, verdicts *Verdicts) {
 	switch {
 	case c.guardrail == nil:
 		verdicts.LLMError = "guardrail not configured"
-		return
-	case !allowLLM:
-		// Deterministic policy already denied; the SVM verdict is still
-		// recorded because it costs microseconds.
-		verdicts.LLMError = "skipped: decision already denied"
 		return
 	case c.llmEnabled != nil && !c.llmEnabled():
 		c.llmSkipped.Add(1)

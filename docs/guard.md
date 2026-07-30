@@ -132,7 +132,11 @@ where deterministic policy is expected to deny before the judge is called.
 
 Guard attaches a **risk annotation** to every intercepted bash command, using the classifier from the sibling `authz-bench` serving contract (`authz-bench/serve/SERVING.md`).
 
-The annotation is computed **in the decision path** — right after the deterministic/Cedar layer, before the tool executes — so it reaches the hosted ledger attached to the decision rather than trailing it. It is nonetheless **strictly advisory**, and by construction rather than convention: `DecideHook` settles the decision in one function and then hands the finished decision to `annotate`, which may write nothing but the `Classifier` field. There is no code path from a verdict to an allow/deny outcome, and `TestAnnotationCannotChangeDecision` runs identical commands through a server with the classifier on and one with it off, requiring byte-identical decision, reason, and reason code.
+The annotation is computed **in the decision path** — after the policy layer has produced its final answer, before the tool executes — so it reaches the hosted ledger attached to the decision rather than trailing it. It is computed in exactly one place, `guardHookRuntime.annotate`, sitting between the finished decision and the write. That placement is deliberate on two counts: it is the only point that sees Cedar's actual answer, and it is the only point every path passes through, so observe, enforce, and managed runtimes all annotate rather than only the ones whose decision happens to come from the local chain.
+
+It is nonetheless **strictly advisory**, by construction rather than convention: `annotate` receives an already-settled decision and may write nothing but its `Classifier` field, so there is no code path from a verdict to an allow/deny outcome. `TestAnnotationCannotChangeDecision` runs identical commands through a server with the classifier on and one with it off and requires byte-identical decision, reason, and reason code.
+
+Both models run for **every** outcome, denies included. A deny is the case where knowing whether the models agreed with the policy is worth the most, and since the decision is already final there is nothing for the extra evidence to affect.
 
 Whether to gate on it later is a separate decision, and keeping the two apart means it can be made from real verdicts and labels instead of guessed at now. Deterministic rules own blocking today, as they did before.
 
@@ -182,15 +186,15 @@ Measured end to end per gated bash command (hook process → socket → RuntimeC
 |---|---|---|
 | no LLM at all | 21.8 ms | 23.2 ms |
 | **classifier on, warm LLM** | **64.2 ms** | **75.6 ms** |
-| classifier on, deny path (LLM skipped) | 21.7 ms | 23.7 ms |
+| classifier on, SVM only (LLM shed) | 21.7 ms | 23.7 ms |
 | the JSON judge this replaces | ~200 ms | ~247 ms |
 
-**The LLM adds p50 42 ms / p95 52 ms** to an allowed command, and nothing to a denied one. Even in-path this is well under half what the JSON judge cost, because a one-word answer generates far fewer tokens than a JSON object.
+**The LLM adds p50 42 ms / p95 52 ms** per command. Even in-path this is well under half what the JSON judge cost, because a one-word answer generates far fewer tokens than a JSON object. The cost now applies to denied commands too, which previously skipped the LLM; that was measured as the row above, and it is the price of having the same evidence for every outcome.
 
 Unhappy paths cost nothing rather than the full budget:
 
 - **Sidecar down or loading** — the readiness probe fails fast and the breaker opens; six commands against a dead endpoint complete in well under a second, versus six 400 ms timeouts without it.
-- **Denied commands** — the LLM is skipped outright; only the SVM runs, at microseconds.
+- **Remotely disabled** — the kill switch is consulted per call, so turning the LLM off costs nothing and needs no restart; the SVM keeps recording at microseconds.
 - **Verbatim repeats** — served from an LRU, no inference.
 
 If the annotation is ever promoted to a gate, the number to weigh is not latency but precision: 0.585 means roughly two in five RISKY calls are false alarms.

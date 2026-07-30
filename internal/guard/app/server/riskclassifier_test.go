@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -430,13 +432,75 @@ func TestModeOffRunsNoLLM(t *testing.T) {
 	}
 }
 
-// TestAnnotateSkipsLLMOnDenyButKeepsSVM covers the skip directly rather than
-// through the chain: the local chain is advisory now, so it never produces a
-// deny of its own for an end-to-end test to observe. The logic still matters —
-// if this chain ever denies, an advisory second opinion is not worth the
-// inference, while the SVM costs microseconds and a denied command is exactly
-// the kind of example worth scoring.
-func TestAnnotateSkipsLLMOnDenyButKeepsSVM(t *testing.T) {
+// Annotation lives in the runtime, not in the local chain, and this is why: a
+// Cedar deny under an enforce rollout is produced above that chain, so
+// annotating from inside it left exactly the decisions we most want evidence for
+// unannotated. Driving a real Cedar deny end to end proves the row is written.
+func TestCedarEnforceDenyIsStillAnnotated(t *testing.T) {
+	var calls int32
+	stub := newGuardrailStub(t, "RISKY", &calls)
+	store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce,
+		`@id("forbid-bash") forbid(principal, action, resource == Kontext::Tool::"Bash");`)
+	server, err := NewServerWithOptions(store, Options{
+		CurrentSessionID: "sess_cedar",
+		Mode:             "enforce",
+		CedarPolicies: staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{
+			Deployment:    &deployment,
+			LastKnownGood: &deployment,
+			State:         cedarpolicy.StateSuccess,
+			Status:        cedarpolicy.CacheStatus{FetchedAt: time.Now()},
+		}},
+		CedarEnforcement: CedarEnforcementStatic,
+		RiskClassifier: &RiskClassifierOptions{
+			Mode:             riskclassifier.ModeOn,
+			GuardrailBaseURL: stub.URL,
+			GuardrailModel:   "qwen3-0.6b",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	result, err := server.RuntimeCore().EvaluateHook(context.Background(), hook.Event{
+		SessionID: "sess_cedar",
+		Agent:     "claude",
+		HookName:  hook.HookPreToolUse,
+		ToolName:  "Bash",
+		ToolInput: map[string]any{"command": "rm -rf /var/data"},
+		ToolUseID: "tu_deny",
+	})
+	if err != nil {
+		t.Fatalf("evaluate hook: %v", err)
+	}
+	if result.Decision != hook.DecisionDeny {
+		t.Fatalf("decision = %q, want deny from Cedar", result.Decision)
+	}
+
+	record := verdictsFor(t, store, "sess_cedar", 1)[0]
+	if record.ActionID != result.EventID {
+		t.Fatalf("verdict action id = %q, want %q", record.ActionID, result.EventID)
+	}
+	if record.SVM == nil {
+		t.Fatalf("denied action has no svm verdict: %+v", record)
+	}
+	if record.LLM == nil {
+		t.Fatalf("denied action has no llm verdict (err %q)", record.LLMError)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("guardrail calls = %d, want 1", got)
+	}
+}
+
+// A deny gets the full annotation, both models included. Cedar stays the sole
+// authority; a deny is the case where knowing whether the models agreed with the
+// policy is worth the most, so the evidence is kept for every outcome alike.
+func TestAnnotateRunsBothModelsOnDeny(t *testing.T) {
 	var calls int32
 	stub := newGuardrailStub(t, "RISKY", &calls)
 	svm, err := riskclassifier.LoadSVM()
@@ -449,7 +513,7 @@ func TestAnnotateSkipsLLMOnDenyButKeepsSVM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new guardrail: %v", err)
 	}
-	provider := RiskPolicyProvider{
+	runtime := guardHookRuntime{
 		classifier: riskclassifier.NewClassifier(riskclassifier.ClassifierOptions{
 			SVM:       svm,
 			Redact:    risk.RedactCredentials,
@@ -464,32 +528,19 @@ func TestAnnotateSkipsLLMOnDenyButKeepsSVM(t *testing.T) {
 	}
 
 	denied := risk.RiskDecision{Decision: risk.DecisionDeny, ReasonCode: "credential_access"}
-	provider.annotate(context.Background(), event, &denied)
+	runtime.annotate(context.Background(), event, &denied)
 	if denied.Classifier == nil || denied.Classifier.SVM == nil {
 		t.Fatal("svm verdict missing on a denied decision")
 	}
-	if denied.Classifier.LLM != nil {
-		t.Errorf("llm ran on a denied decision: %+v", denied.Classifier.LLM)
+	if denied.Classifier.LLM == nil {
+		t.Fatalf("llm skipped on a denied decision (err %q)", denied.Classifier.LLMError)
 	}
-	if denied.Classifier.LLMError == "" {
-		t.Error("skip reason not recorded")
-	}
-	if got := atomic.LoadInt32(&calls); got != 0 {
-		t.Errorf("guardrail called %d times for a denied decision", got)
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("guardrail calls = %d, want 1", got)
 	}
 	// The annotation must not have touched the decision itself.
 	if denied.Decision != risk.DecisionDeny || denied.ReasonCode != "credential_access" {
 		t.Errorf("annotation altered the decision: %s/%s", denied.Decision, denied.ReasonCode)
-	}
-
-	// And an allowed decision does consult the guardrail.
-	allowed := risk.RiskDecision{Decision: risk.DecisionAllow, ReasonCode: "advisory"}
-	provider.annotate(context.Background(), event, &allowed)
-	if allowed.Classifier == nil || allowed.Classifier.LLM == nil {
-		t.Fatalf("llm missing on an allowed decision (err %q)", allowed.Classifier.LLMError)
-	}
-	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Errorf("guardrail calls = %d, want 1", got)
 	}
 }
 

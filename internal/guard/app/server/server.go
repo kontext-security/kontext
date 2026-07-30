@@ -128,10 +128,6 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		opts.RiskClassifier.Gate = riskclassifier.NewLLMGate()
 	}
 	classifier := newRiskClassifier(opts.RiskClassifier)
-	if provider, ok := policy.(RiskPolicyProvider); ok && provider.classifier == nil {
-		provider.classifier = classifier
-		policy = provider
-	}
 	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier)
 	core, err := runtimecore.New(runtime)
 	if err != nil {

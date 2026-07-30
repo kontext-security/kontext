@@ -10,8 +10,9 @@ import (
 // (~44 ms against a local Qwen3-0.6B) rather than the SVM's microseconds.
 //
 // Either way the risk verdict is an annotation on the tool call, never a
-// decision: it is computed off the hook path, recorded alongside the action, and
-// nothing in the guard consults it. Gating on it is a separate, later choice.
+// decision. It is computed in the hook path but only after the decision is
+// final, and nothing in the guard consults it. Gating on it is a separate,
+// later choice.
 type Mode string
 
 const (

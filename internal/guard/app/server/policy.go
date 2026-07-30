@@ -7,7 +7,6 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
 )
 
 type PolicyProvider interface {
@@ -15,9 +14,7 @@ type PolicyProvider interface {
 }
 
 type RiskPolicyProvider struct {
-	judge      judge.Judge
-	classifier *riskclassifier.Classifier
-	Classifier *riskclassifier.Classifier
+	judge judge.Judge
 }
 
 func NewRiskPolicyProvider() RiskPolicyProvider {
@@ -33,13 +30,11 @@ func (p RiskPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent
 		return p.asyncTelemetryDecision(event), nil
 	}
 	riskEvent := risk.NormalizeHookEvent(event)
-	// The decision is settled first, in one place, and only then annotated.
-	// Structuring it this way is what makes the classifier advisory: annotate
-	// receives a finished decision and may write nothing but its Classifier
-	// field, so no verdict can reach an allow/deny outcome.
-	decision := p.decide(ctx, event, riskEvent)
-	p.annotate(ctx, event, &decision)
-	return decision, nil
+	// Annotation deliberately does not happen here. This chain is only one input
+	// to the decision, so annotating from inside it would both miss Cedar's
+	// final answer and leave any path that does not route through this provider
+	// unannotated. The runtime annotates once, after the decision is final.
+	return p.decide(ctx, event, riskEvent), nil
 }
 
 // decide runs the local chain, which is itself advisory: Cedar (the
@@ -55,53 +50,6 @@ func (p RiskPolicyProvider) decide(ctx context.Context, event risk.HookEvent, ri
 		return judgeFailOpenDecision(riskEvent, p.judge, err)
 	}
 	return judgeAdvisoryDecision(riskEvent, result)
-}
-
-// annotate attaches the advisory risk verdict to an already-decided action. The
-// guardrail LLM is skipped when this chain itself denied, since there is nothing
-// an advisory second opinion can add that is worth the inference; the SVM still
-// runs because it costs microseconds and a denied command is exactly the kind of
-// example worth having a score for.
-//
-// Note this chain is advisory, so a Cedar deny is not visible here — the
-// guardrail will run for commands Cedar goes on to deny. That is an efficiency
-// cost only; annotating cannot affect any decision either way.
-func (p RiskPolicyProvider) annotate(ctx context.Context, event risk.HookEvent, decision *risk.RiskDecision) {
-	if p.classifier == nil {
-		return
-	}
-	command := risk.CommandFromInput(event.ToolInput)
-	if strings.TrimSpace(command) == "" {
-		return
-	}
-	allowLLM := decision.Decision != risk.DecisionDeny
-	verdicts := p.classifier.Classify(ctx, event.SessionID, command, allowLLM)
-	if verdicts.SVM == nil {
-		return
-	}
-	annotation := &risk.ClassifierAnnotation{
-		LLMError:         verdicts.LLMError,
-		Command:          verdicts.Command,
-		CommandHash:      verdicts.CommandHash,
-		CommandTruncated: verdicts.CommandTruncated,
-		AgentTask:        verdicts.AgentTask,
-		SVM: &risk.ClassifierSVM{
-			Verdict:      verdicts.SVM.Verdict,
-			Score:        verdicts.SVM.Score,
-			Threshold:    verdicts.SVM.Threshold,
-			ModelVersion: verdicts.SVM.ModelVersion,
-		},
-	}
-	if verdicts.LLM != nil {
-		annotation.LLMPromptID = verdicts.LLM.PromptID
-		annotation.LLM = &risk.ClassifierLLM{
-			Verdict:    verdicts.LLM.Verdict,
-			Model:      verdicts.LLM.Model,
-			DurationMs: verdicts.LLM.DurationMs,
-			Cached:     verdicts.LLM.Cached,
-		}
-	}
-	decision.Classifier = annotation
 }
 
 func (p RiskPolicyProvider) asyncTelemetryDecision(event risk.HookEvent) risk.RiskDecision {

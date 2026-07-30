@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/cedareval"
@@ -100,6 +101,12 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	if err != nil {
 		return risk.RiskDecision{}, err
 	}
+	// Annotate here, between the final decision and the write. Here is the only
+	// place that sees Cedar's actual answer, and the only place every path —
+	// observe, enforce, managed — passes through, so one call site covers them
+	// all. It is also what keeps the classifier advisory: the decision is
+	// already settled and annotate may write nothing but its Classifier field.
+	r.annotate(ctx, event, &decision)
 	record, err := r.store.SaveDecision(ctx, event, decision)
 	if err != nil {
 		return risk.RiskDecision{}, err
@@ -107,6 +114,47 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	decision.EventID = record.ID
 	r.recordAnnotation(ctx, record.ID, event, decision)
 	return decision, nil
+}
+
+// annotate attaches the advisory risk verdict to a settled decision. Both
+// models run for every outcome, denies included: a deny is precisely the case
+// where knowing whether the models agreed with the policy is worth the most,
+// and the annotation cannot change what has already been decided.
+func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, decision *risk.RiskDecision) {
+	if r.classifier == nil || event.HookEventName != hook.HookPreToolUse.String() {
+		return
+	}
+	command := risk.CommandFromInput(event.ToolInput)
+	if strings.TrimSpace(command) == "" {
+		return
+	}
+	verdicts := r.classifier.Classify(ctx, event.SessionID, command)
+	if verdicts.SVM == nil {
+		return
+	}
+	annotation := &risk.ClassifierAnnotation{
+		LLMError:         verdicts.LLMError,
+		Command:          verdicts.Command,
+		CommandHash:      verdicts.CommandHash,
+		CommandTruncated: verdicts.CommandTruncated,
+		AgentTask:        verdicts.AgentTask,
+		SVM: &risk.ClassifierSVM{
+			Verdict:      verdicts.SVM.Verdict,
+			Score:        verdicts.SVM.Score,
+			Threshold:    verdicts.SVM.Threshold,
+			ModelVersion: verdicts.SVM.ModelVersion,
+		},
+	}
+	if verdicts.LLM != nil {
+		annotation.LLMPromptID = verdicts.LLM.PromptID
+		annotation.LLM = &risk.ClassifierLLM{
+			Verdict:    verdicts.LLM.Verdict,
+			Model:      verdicts.LLM.Model,
+			DurationMs: verdicts.LLM.DurationMs,
+			Cached:     verdicts.LLM.Cached,
+		}
+	}
+	decision.Classifier = annotation
 }
 
 // recordAnnotation persists the local verdict row. The annotation already rode
