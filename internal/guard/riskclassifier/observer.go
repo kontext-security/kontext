@@ -155,16 +155,18 @@ func (o *Observer) work() {
 func (o *Observer) process(input ObserveInput) {
 	raw := input.Command
 	redacted := o.redact(raw)
-	// Hash the REDACTED command, never the raw one. The hash ships alongside the
-	// redacted text, so hashing the raw command would let a reader test
-	// candidate values offline and confirm a low-entropy or templated secret —
-	// an oracle that defeats the redaction this record promises. Verbatim
-	// repeats still collide, which is all the hash is used for.
-	redactedHash := sha256.Sum256([]byte(redacted))
 	truncated := len(redacted) > storedCommandMaxBytes
 	if truncated {
 		redacted = truncateAtRuneBoundary(redacted, storedCommandMaxBytes)
 	}
+	// Hash exactly what is stored — redacted AND truncated — never the raw or
+	// the pre-truncation text. Anything the hash covers but the row omits is a
+	// guessing oracle over the omitted part: hashing the raw command would let a
+	// reader confirm a low-entropy secret, and hashing the untruncated text
+	// would do the same for the dropped suffix. Hashing the stored form keeps
+	// the projection internally consistent, and verbatim repeats still collide,
+	// which is all the hash is used for.
+	storedHash := sha256.Sum256([]byte(redacted))
 
 	svmVerdict := o.svm.Classify(raw)
 	record := Record{
@@ -173,7 +175,7 @@ func (o *Observer) process(input ObserveInput) {
 		ToolUseID:        input.ToolUseID,
 		Agent:            input.Agent,
 		Command:          redacted,
-		CommandHash:      hex.EncodeToString(redactedHash[:]),
+		CommandHash:      hex.EncodeToString(storedHash[:]),
 		CommandTruncated: truncated,
 		AgentTask:        o.prompts.get(input.SessionID),
 		SVM:              &svmVerdict,

@@ -2,6 +2,8 @@ package riskclassifier
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"sync"
 	"testing"
@@ -135,4 +137,29 @@ func TestObserverCloseIsSafeUnderConcurrentObserve(t *testing.T) {
 	wg.Wait()
 	// Observing after Close must be a no-op, not a send on a closed channel.
 	observer.Observe(ObserveInput{ActionID: "act", SessionID: "sess", Command: "ls"})
+}
+
+// TestCommandHashCoversExactlyWhatIsStored: anything the hash covers but the row
+// omits is a guessing oracle over the omitted part. The hash must therefore be
+// taken over the redacted, truncated text that actually lands in the row.
+func TestCommandHashCoversExactlyWhatIsStored(t *testing.T) {
+	collector := &recordCollector{}
+	observer := newTestObserver(t, collector)
+
+	long := "echo " + strings.Repeat("x", storedCommandMaxBytes+512) + " tail-secret"
+	observer.Observe(ObserveInput{ActionID: "act_long", SessionID: "sess", Command: long})
+	record := collector.wait(t, 1)[0]
+
+	if !record.CommandTruncated {
+		t.Fatal("expected the command to be truncated")
+	}
+	want := sha256.Sum256([]byte(record.Command))
+	if record.CommandHash != hex.EncodeToString(want[:]) {
+		t.Error("hash does not cover exactly the stored command")
+	}
+	// Specifically, it must not cover the untruncated text.
+	full := sha256.Sum256([]byte(long))
+	if record.CommandHash == hex.EncodeToString(full[:]) {
+		t.Error("hash covers the untruncated command, leaving an oracle over the dropped suffix")
+	}
 }

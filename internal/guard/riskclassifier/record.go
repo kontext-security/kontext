@@ -25,9 +25,11 @@ type Record struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Agent     string `json:"agent,omitempty"`
 
-	// Command is credential-redacted and length-capped; CommandHash is the
-	// SHA-256 of the raw command so verbatim repeats stay matchable without
-	// storing the raw text.
+	// Command is credential-redacted and length-capped, and CommandHash is the
+	// SHA-256 of exactly that stored text. Hashing anything wider — the raw
+	// command, or the redacted text before truncation — would turn the hash
+	// into an oracle for testing guesses about the part the row omits. Verbatim
+	// repeats still collide, which is all the hash is used for.
 	Command          string `json:"command"`
 	CommandHash      string `json:"command_hash"`
 	CommandTruncated bool   `json:"command_truncated,omitempty"`
