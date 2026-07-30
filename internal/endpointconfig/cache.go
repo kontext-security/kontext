@@ -31,30 +31,47 @@ type Status struct {
 }
 
 type Snapshot struct {
-	Config         Config
-	Configured     Config
-	ConfigIdentity string
-	Confirmed      bool
-	FallbackReason string
-	LastKnownGood  *Response
-	Status         Status
+	Config     Config
+	Configured Config
+	// GuardrailLLMDirective is the most recent value the org ever set explicitly,
+	// which is not the same as what the current response happens to carry. A kill
+	// switch must not be undone by a response that merely says nothing about it —
+	// a rollback to a server build that omits the field, for instance — so an
+	// explicit directive is remembered until an explicit one replaces it. Nil
+	// means the org has never set it, which resolves to enabled.
+	GuardrailLLMDirective *bool
+	ConfigIdentity        string
+	Confirmed             bool
+	FallbackReason        string
+	LastKnownGood         *Response
+	Status                Status
 }
+
+// cacheFileVersion is written by this build. Version 1 files load fine and
+// simply carry no remembered directive; a version this build does not know is
+// rejected rather than guessed at.
+const cacheFileVersion = 2
 
 type cacheFile struct {
 	Version   int       `json:"version"`
 	FetchedAt string    `json:"fetchedAt"`
 	Response  *Response `json:"response"`
+	// GuardrailLLMDirective is stored beside the response rather than inside its
+	// config, because the response's identity is verified against its config on
+	// load — editing the config to carry a remembered value would invalidate it.
+	GuardrailLLMDirective *bool `json:"guardrailLlmDirective,omitempty"`
 }
 
 type Cache struct {
 	path string
 	now  func() time.Time
 
-	mu       sync.RWMutex
-	fetched  time.Time
-	active   *Response
-	lastGood *Response
-	status   Status
+	mu        sync.RWMutex
+	fetched   time.Time
+	active    *Response
+	lastGood  *Response
+	status    Status
+	directive *bool
 }
 
 func NewCache(path string) *Cache {
@@ -82,7 +99,7 @@ func (c *Cache) Load() error {
 	if err := decodeStrict(strings.NewReader(string(data)), &file); err != nil {
 		return fmt.Errorf("endpoint configuration cache: %w", err)
 	}
-	if file.Version != 1 || file.Response == nil {
+	if file.Version < 1 || file.Version > cacheFileVersion || file.Response == nil {
 		return errors.New("endpoint configuration cache: invalid cache shape")
 	}
 	if err := file.Response.Validate(); err != nil {
@@ -96,6 +113,7 @@ func (c *Cache) Load() error {
 	c.fetched = fetchedAt
 	c.active = nil
 	c.lastGood = cloneResponse(file.Response)
+	c.directive = cloneBool(file.GuardrailLLMDirective)
 	c.status = Status{FetchedAt: fetchedAt, Stale: true, LastError: "persisted configuration not yet confirmed"}
 	c.mu.Unlock()
 	return nil
@@ -107,6 +125,7 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	}
 	c.mu.RLock()
 	lastGood := cloneResponse(c.lastGood)
+	directive := cloneBool(c.directive)
 	c.mu.RUnlock()
 	var confirmed *Response
 	switch {
@@ -123,10 +142,16 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	default:
 		return errors.New("endpoint configuration cache: result has no configuration")
 	}
+	// Adopt an explicit directive; keep the remembered one when the response is
+	// silent. Silence is not a directive, so it must not clear a deliberate off.
+	if confirmed.Config.GuardrailLLMEnabled != nil {
+		directive = cloneBool(confirmed.Config.GuardrailLLMEnabled)
+	}
 	file := cacheFile{
-		Version:   1,
-		FetchedAt: fetchedAt.UTC().Format(time.RFC3339Nano),
-		Response:  cloneResponse(confirmed),
+		Version:               cacheFileVersion,
+		FetchedAt:             fetchedAt.UTC().Format(time.RFC3339Nano),
+		Response:              cloneResponse(confirmed),
+		GuardrailLLMDirective: cloneBool(directive),
 	}
 	if err := c.persist(file); err != nil {
 		return err
@@ -135,6 +160,7 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	c.fetched = fetchedAt
 	c.active = cloneResponse(confirmed)
 	c.lastGood = cloneResponse(confirmed)
+	c.directive = cloneBool(directive)
 	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt}
 	c.mu.Unlock()
 	return nil
@@ -173,6 +199,7 @@ func (c *Cache) Current() Snapshot {
 	c.mu.RLock()
 	active := cloneResponse(c.active)
 	lastGood := cloneResponse(c.lastGood)
+	directive := cloneBool(c.directive)
 	status := c.status
 	c.mu.RUnlock()
 	if active == nil {
@@ -191,22 +218,34 @@ func (c *Cache) Current() Snapshot {
 			fallbackReason = "invalid_cache"
 		}
 		return Snapshot{
-			Config:         defaultConfig,
-			Configured:     configured,
-			ConfigIdentity: identity,
-			FallbackReason: fallbackReason,
-			LastKnownGood:  lastGood,
-			Status:         status,
+			Config:                defaultConfig,
+			Configured:            configured,
+			GuardrailLLMDirective: directive,
+			ConfigIdentity:        identity,
+			FallbackReason:        fallbackReason,
+			LastKnownGood:         lastGood,
+			Status:                status,
 		}
 	}
 	return Snapshot{
-		Config:         active.Config,
-		Configured:     active.Config,
-		ConfigIdentity: active.ConfigIdentity,
-		Confirmed:      true,
-		LastKnownGood:  lastGood,
-		Status:         status,
+		Config:                active.Config,
+		Configured:            active.Config,
+		GuardrailLLMDirective: directive,
+		ConfigIdentity:        active.ConfigIdentity,
+		Confirmed:             true,
+		LastKnownGood:         lastGood,
+		Status:                status,
 	}
+}
+
+// cloneBool copies an optional directive so callers cannot mutate cache state
+// through the pointer they were handed.
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func (c *Cache) ConditionalIdentity() string {

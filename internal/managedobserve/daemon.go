@@ -298,12 +298,15 @@ func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.Runti
 // guardrailLLMEnabled reads the org's guardrail kill switch off the same
 // endpoint configuration that carries payload capture.
 //
-// It reads Configured, not Config. Config is the effective configuration, which
-// falls back to defaults while unconfirmed — reading it would silently re-enable
-// an LLM the org had explicitly disabled, every time the daemon restarted before
-// reconfirming. A kill switch has to survive exactly that degraded state.
+// It reads GuardrailLLMDirective, which is the last value the org set
+// explicitly, rather than either Config or Configured. Config is the effective
+// configuration and falls back to defaults while unconfirmed, so reading it
+// would re-enable a disabled LLM on every restart before reconfirmation.
+// Configured is closer but still only reflects the current response, so a
+// response that merely omits the field — a rollback to a build without it, say —
+// would clear a deliberate off. A kill switch has to survive both.
 func guardrailLLMEnabled(snapshot endpointconfig.Snapshot) bool {
-	return riskclassifier.ResolveLLMEnabled(snapshot.Configured.GuardrailLLMEnabled)
+	return riskclassifier.ResolveLLMEnabled(snapshot.GuardrailLLMDirective)
 }
 
 func requireManagedHooksForLegacyCowork(cfg managedconfig.Config) error {

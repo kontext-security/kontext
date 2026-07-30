@@ -45,8 +45,8 @@ func (g *LLMGate) Enabled() bool {
 	return !g.disabled.Load()
 }
 
-// ResolveLLMEnabled decides whether the guardrail may run from the org's
-// persisted directive.
+// ResolveLLMEnabled decides whether the guardrail may run from the org's last
+// explicit directive.
 //
 // Absent means enabled, which is deliberately the inverse of payload capture's
 // fallback. Capture reverts to its privacy-safe mode whenever the endpoint
@@ -57,12 +57,14 @@ func (g *LLMGate) Enabled() bool {
 //   - Defaulting to off would let a transient fetch failure silently disable the
 //     classifier, a degradation nobody would notice because the SVM keeps
 //     producing verdicts.
-//   - Ignoring a persisted off would re-enable an LLM the org explicitly
-//     disabled every time the daemon restarted before reconfirming — a kill
-//     switch that fails in exactly the degraded state it exists for.
+//   - Ignoring an explicit off would re-enable an LLM the org disabled, whether
+//     on a restart before reconfirmation or on a later response that simply omits
+//     the field — a kill switch that fails in exactly the states it exists for.
 //
-// Reading the persisted (Configured) directive satisfies both: an explicit false
-// survives restarts and unconfirmed fetches, and absence never disables.
+// The caller passes the last EXPLICIT directive, remembered across refreshes and
+// restarts, not whatever the current response happens to carry. Absence
+// therefore means "never set", not "not mentioned this time", and clearing a
+// disable takes an explicit true rather than silence.
 func ResolveLLMEnabled(directive *bool) bool {
 	if directive == nil {
 		return true

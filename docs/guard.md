@@ -174,7 +174,13 @@ Its handling is deliberately the **inverse** of payload capture's, and there are
 - Defaulting to off would let a transient fetch failure silently disable the classifier — a degradation nobody would notice, since the SVM keeps producing verdicts.
 - Ignoring a persisted off would re-enable an LLM the org explicitly disabled, every time the daemon restarted before reconfirming — a kill switch failing in exactly the degraded state it exists for.
 
-Reading the **persisted** (`Configured`) directive satisfies both: an explicit `false` survives restarts and unconfirmed fetches, and absence never disables. Resolve it through `riskclassifier.ResolveLLMEnabled` rather than reading the field directly, and note it reads `Configured`, not the effective `Config`.
+Both are satisfied by resolving the **last explicit** directive rather than whatever the current response carries. The cache remembers an explicit value across refreshes and restarts, stored beside the response rather than inside its config, since the response's identity is verified against its config on load. So:
+
+- An explicit `false` survives restarts and unconfirmed fetches.
+- A later response that simply **omits** the field does not clear it — that is the rollback case, where a server build without the field would otherwise switch a disabled guardrail back on with nobody told.
+- Absence means "never set", not "not mentioned this time". **Clearing a disable therefore takes an explicit `true`,** not silence.
+
+Resolve it through `riskclassifier.ResolveLLMEnabled(snapshot.GuardrailLLMDirective)` rather than reading `Config` or `Configured` directly.
 
 Setting `KONTEXT_RISK_CLASSIFIER_MODE` explicitly pins the local value and makes it immune to the remote directive, so a developer debugging their own machine is not flipped by a config refresh. The embedded SVM is never gated.
 
