@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"mime"
 	"net/http"
 	"strings"
@@ -14,14 +13,12 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	dashboardassets "github.com/kontext-security/kontext-cli/internal/guard/web/assets"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
 	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
 const (
 	DefaultAddr            = "127.0.0.1:4765"
-	devDashboardOrigin     = "http://127.0.0.1:5173"
 	jsonContentType        = "application/json"
 	unsupportedContentType = "policy profile requests require application/json"
 )
@@ -95,7 +92,7 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 }
 
 func (s *Server) Handler() http.Handler {
-	return withCORS(s.mux)
+	return s.mux
 }
 
 func (s *Server) RuntimeCore() *runtimecore.Core {
@@ -119,7 +116,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/summary", s.handleSummary)
 	s.mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	s.mux.HandleFunc("GET /api/sessions/", s.handleSession)
-	s.mux.HandleFunc("GET /", s.handleDashboard)
 }
 
 func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
@@ -262,13 +258,13 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, dashboardDecisionRecords(events))
+		writeJSON(w, http.StatusOK, redactedDecisionRecords(events))
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
 }
 
-func dashboardDecisionRecords(records []sqlite.DecisionRecord) []sqlite.DecisionRecord {
+func redactedDecisionRecords(records []sqlite.DecisionRecord) []sqlite.DecisionRecord {
 	out := make([]sqlite.DecisionRecord, len(records))
 	for i, record := range records {
 		out[i] = record
@@ -277,15 +273,6 @@ func dashboardDecisionRecords(records []sqlite.DecisionRecord) []sqlite.Decision
 		out[i].RiskEvent.JudgeModel = ""
 	}
 	return out
-}
-
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	dist, err := fs.Sub(dashboardassets.FS, "dist")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "dashboard assets unavailable")
-		return
-	}
-	http.FileServer(http.FS(dist)).ServeHTTP(w, r)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -308,19 +295,6 @@ func hasJSONContentType(r *http.Request) bool {
 		return false
 	}
 	return strings.EqualFold(mediaType, jsonContentType)
-}
-
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:5173")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func OpenDefaultServer(dbPath string) (*Server, func() error, error) {

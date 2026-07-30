@@ -256,7 +256,7 @@ func TestProcessHookEventPreservesRiskMetadata(t *testing.T) {
 	}
 }
 
-func TestDashboardEventsHideModelMetadata(t *testing.T) {
+func TestSessionEventsHideModelMetadata(t *testing.T) {
 	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
 	if err != nil {
 		t.Fatal(err)

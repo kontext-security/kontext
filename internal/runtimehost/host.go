@@ -6,9 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,24 +25,20 @@ import (
 )
 
 type Options struct {
-	AgentName                 string
-	SessionID                 string
-	CWD                       string
-	DBPath                    string
-	SocketPath                string
-	DashboardAddr             string
-	StartDashboard            bool
-	AllowNonLoopbackDashboard bool
-	JudgeConfigFromEnv        bool
-	JudgeManagedDefault       bool
-	JudgeDownloadProgress     judge.DownloadProgressHandler
-	CedarPolicies             cedarpolicy.SnapshotProvider
-	CedarEnforcement          server.CedarEnforcementSource
-	Mode                      guardhookruntime.Mode
-	Diagnostic                diagnostic.Logger
-	Out                       io.Writer
-	SkipInitialSession        bool
-	DisableAsyncIngest        bool
+	AgentName             string
+	SessionID             string
+	CWD                   string
+	DBPath                string
+	SocketPath            string
+	JudgeConfigFromEnv    bool
+	JudgeManagedDefault   bool
+	JudgeDownloadProgress judge.DownloadProgressHandler
+	CedarPolicies         cedarpolicy.SnapshotProvider
+	CedarEnforcement      server.CedarEnforcementSource
+	Mode                  guardhookruntime.Mode
+	Diagnostic            diagnostic.Logger
+	SkipInitialSession    bool
+	DisableAsyncIngest    bool
 }
 
 type Host struct {
@@ -53,8 +46,6 @@ type Host struct {
 	SessionDir            string
 	SocketPath            string
 	DBPath                string
-	DashboardURL          string
-	DashboardErr          error
 	LocalJudgeStatus      string
 	LocalJudgeEnabled     bool
 	LocalJudgeUnavailable bool
@@ -64,7 +55,6 @@ type Host struct {
 	closeStore       func() error
 	closeJudge       func()
 	runtimeService   *localruntime.Service
-	dashboardServer  *http.Server
 	sessionOpened    bool
 	sessionCloseOnce bool
 }
@@ -199,24 +189,6 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		host.sessionOpened = true
 	}
 
-	if opts.StartDashboard {
-		addr, err := DashboardAddr(opts.DashboardAddr, opts.AllowNonLoopbackDashboard)
-		if err != nil {
-			_ = host.Close(context.Background())
-			return nil, err
-		}
-		dashboardServer, dashboardURL, err := startDashboard(addr, localServer.Handler())
-		if err != nil {
-			host.DashboardErr = err
-			if opts.Out != nil {
-				fmt.Fprintf(opts.Out, "Local dashboard unavailable: %v\n", err)
-			}
-		} else {
-			host.dashboardServer = dashboardServer
-			host.DashboardURL = dashboardURL
-		}
-	}
-
 	return host, nil
 }
 
@@ -250,15 +222,6 @@ func (h *Host) Close(ctx context.Context) error {
 	var errs []error
 	if h == nil {
 		return nil
-	}
-	if h.dashboardServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := h.dashboardServer.Shutdown(shutdownCtx)
-		cancel()
-		if err != nil {
-			errs = append(errs, err)
-		}
-		h.dashboardServer = nil
 	}
 	if h.runtimeService != nil {
 		if err := h.runtimeService.Shutdown(ctx); err != nil {
@@ -313,38 +276,6 @@ func DefaultDBPath() string {
 	return "kontext-guard.db"
 }
 
-func DashboardAddr(value string, allowNonLoopback bool) (string, error) {
-	addr := strings.TrimSpace(value)
-	if addr == "" {
-		addr = server.DefaultAddr
-	}
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return "", fmt.Errorf("dashboard address %q must be host:port: %w", addr, err)
-	}
-	if allowNonLoopback || isLoopbackHost(host) {
-		return addr, nil
-	}
-	return "", fmt.Errorf("dashboard address %q is not loopback; use 127.0.0.1 or localhost", addr)
-}
-
-func startDashboard(addr string, handler http.Handler) (*http.Server, string, error) {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, "", fmt.Errorf("local dashboard listen on %s: %w", addr, err)
-	}
-	httpServer := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	go func() {
-		if err := httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintf(os.Stderr, "Local dashboard stopped: %v\n", err)
-		}
-	}()
-	return httpServer, "http://" + ln.Addr().String(), nil
-}
-
 func createSessionDir(sessionDir string) error {
 	if err := os.MkdirAll(filepath.Dir(sessionDir), 0o700); err != nil {
 		return fmt.Errorf("create session parent dir: %w", err)
@@ -369,14 +300,6 @@ func ensureRuntimeDataDir(path string, private bool) error {
 		return nil
 	}
 	return os.Chmod(path, 0o700)
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	return ip != nil && ip.IsLoopback()
 }
 
 func validateSessionID(sessionID string) error {

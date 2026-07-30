@@ -23,7 +23,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> starting local daemon on ${BASE_URL}"
-go run ./cmd/kontext guard start --skip-hook-install --no-open \
+go run ./cmd/kontext guard start --skip-hook-install \
   --addr "127.0.0.1:${PORT}" \
   --db "$DB_PATH" \
   --socket "$SOCKET_PATH" >"$LOG_PATH" 2>&1 &
@@ -166,10 +166,7 @@ process.stdin.on("end", () => {
 });
 '
 
-echo "==> checking served dashboard"
-curl -fsS "$BASE_URL" | grep -q "<title>Kontext Guard</title>"
-
 go run ./cmd/kontext guard status --daemon-url "$BASE_URL" | grep -q "0 critical"
 go run ./cmd/kontext guard doctor --daemon-url "$BASE_URL" | grep -q "daemon healthy"
 
-echo "E2E passed: hook -> local runtime -> RuntimeCore -> advisory chain -> SQLite -> dashboard API"
+echo "E2E passed: hook -> local runtime -> RuntimeCore -> advisory chain -> SQLite -> daemon API"

@@ -33,14 +33,11 @@ func StartLocal(ctx context.Context, opts Options) error {
 		AgentName:             opts.Agent,
 		CWD:                   cwd,
 		DBPath:                os.Getenv("KONTEXT_DB"),
-		DashboardAddr:         os.Getenv("KONTEXT_ADDR"),
-		StartDashboard:        true,
 		JudgeConfigFromEnv:    true,
 		JudgeManagedDefault:   true,
 		JudgeDownloadProgress: ui.HandleDownloadProgress,
 		Mode:                  mode,
 		Diagnostic:            diagnostics,
-		Out:                   os.Stderr,
 	})
 	if err != nil {
 		return err
@@ -64,7 +61,6 @@ func StartLocal(ctx context.Context, opts Options) error {
 	env = append(env, "KONTEXT_MODE="+string(host.Mode))
 
 	ui.LocalJudgeReady(host.LocalJudgeEnabled, host.LocalJudgeUnavailable)
-	ui.DashboardReady(host.DashboardURL)
 	ui.Mode(string(host.Mode))
 	ui.LocalSessionReady()
 	ui.Launching(opts.Agent)

@@ -4,11 +4,6 @@ version: 2
 
 project_name: kontext
 
-before:
-  hooks:
-    - pnpm install --frozen-lockfile
-    - ./scripts/build-guard-dashboard-assets.sh
-
 builds:
   - main: ./cmd/kontext
     binary: kontext

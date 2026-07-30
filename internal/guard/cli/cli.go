@@ -15,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cli/browser"
-
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
@@ -46,8 +44,6 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return nil
 	case "status":
 		return runStatus(ctx, args[1:], stdout)
-	case "dashboard":
-		return runDashboard(args[1:], stdout)
 	case "doctor":
 		return runDoctor(ctx, args[1:], stdout)
 	case "hooks":
@@ -72,8 +68,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "commands:")
 	fmt.Fprintln(out, "  start                         Run the local daemon on 127.0.0.1:4765")
 	fmt.Fprintln(out, "  stop                          Print stop instructions")
-	fmt.Fprintln(out, "  status                        Print local dashboard counters")
-	fmt.Fprintln(out, "  dashboard                     Print dashboard URL")
+	fmt.Fprintln(out, "  status                        Print local Guard counters")
 	fmt.Fprintln(out, "  doctor                        Check local daemon health")
 	fmt.Fprintln(out, "  hooks install claude-code     Install Claude Code hooks")
 	fmt.Fprintln(out, "  hooks uninstall claude-code   Remove Claude Code hooks")
@@ -103,7 +98,6 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	addr := fs.String("addr", envString("KONTEXT_ADDR", server.DefaultAddr), "listen address")
 	dbPath := fs.String("db", envString("KONTEXT_DB", defaultDBPath()), "SQLite database path")
 	skipHookInstall := fs.Bool("skip-hook-install", false, "skip Claude Code hook install")
-	noOpen := fs.Bool("no-open", false, "do not open the local dashboard")
 	socketPath := fs.String("socket", defaultGuardSocketPath(), "Unix socket path for local hook runtime")
 	judgeURL := fs.String("judge-url", envString("KONTEXT_JUDGE_URL", ""), "OpenAI-compatible local judge base URL, for example http://127.0.0.1:8080")
 	judgeModel := fs.String("judge-model", envString("KONTEXT_JUDGE_MODEL", ""), "local judge model name; with --judge-managed this may be a local GGUF path")
@@ -180,11 +174,7 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	fmt.Fprintf(out, "Kontext Guard local daemon listening on http://%s\n", *addr)
 	fmt.Fprintf(out, "Hook runtime: unix://%s\n", *socketPath)
 	fmt.Fprintln(out, "Mode: observe (Claude Code runs normally; decisions are recorded as would allow / would deny).")
-	fmt.Fprintf(out, "Dashboard: http://%s\n", *addr)
 	fmt.Fprintln(out, localJudgeStatusLine(localJudge))
-	if !*noOpen {
-		_ = browser.OpenURL("http://" + *addr)
-	}
 	return localServer.ListenAndServe(*addr)
 }
 
@@ -213,22 +203,6 @@ func runStatus(ctx context.Context, args []string, out io.Writer) error {
 	fmt.Fprintln(out, "Kontext Guard active")
 	fmt.Fprintf(out, "%d critical\n", summary.Critical)
 	fmt.Fprintf(out, "%d actions\n", summary.Actions)
-	fmt.Fprintf(out, "Dashboard: %s\n", *baseURL)
-	return nil
-}
-
-func runDashboard(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("dashboard", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	baseURL := fs.String("daemon-url", envString("KONTEXT_DAEMON_URL", defaultBaseURL), "local daemon URL")
-	noOpen := fs.Bool("no-open", false, "print URL without opening a browser")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "%s\n", *baseURL)
-	if !*noOpen {
-		_ = browser.OpenURL(*baseURL)
-	}
 	return nil
 }
 
