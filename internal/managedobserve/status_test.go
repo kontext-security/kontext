@@ -22,6 +22,33 @@ func TestDaemonStatusRoundTrip(t *testing.T) {
 	}
 }
 
+// The build stamp has to survive the file, not just the struct: doctor reads
+// these fields back from a breadcrumb another process wrote. (WriteDaemonStatus
+// reads the running binary's own stamp, and a test binary has none, so the
+// written values are exercised through JSON here rather than through a stub.)
+func TestDaemonStatusRoundTripsBuildStamp(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "guard.db")
+	const revision = "cac15fd669a7e4b0bfbdd78413d25fc0999e3a11"
+	written := `{"version":"1.2.3","revision":"` + revision + `","modified":true,"pid":1,"started_at":"2026-07-31T12:00:00Z"}`
+	if err := os.WriteFile(DaemonStatusPath(dbPath), []byte(written), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadDaemonStatus(dbPath)
+	if got == nil || got.Revision != revision || !got.Modified {
+		t.Fatalf("LoadDaemonStatus = %+v, want the revision and modified flag preserved", got)
+	}
+
+	// Absent fields must read as "no stamp recorded", which is what every daemon
+	// predating them wrote.
+	legacy := filepath.Join(t.TempDir(), "guard.db")
+	if err := os.WriteFile(DaemonStatusPath(legacy), []byte(`{"version":"1.2.3","pid":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadDaemonStatus(legacy); got == nil || got.Revision != "" || got.Modified {
+		t.Fatalf("LoadDaemonStatus legacy = %+v, want no revision and not modified", got)
+	}
+}
+
 func TestLoadDaemonStatusMissingFile(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "guard.db")
 
