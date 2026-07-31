@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "endpoint-config-identity-fixture-v2",
+  "identityDomain": "kontext:endpoint-config:v2",
+  "vectors": [
+    {
+      "name": "omitted-llm-enabled",
+      "responseVersion": 2,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "guardrailLlmEnabled": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v2\",2,\"omitted\",true]",
+      "configIdentity": "6902dc573587d15e930edb4bc144f83d8033f915b22c5ba22fd857c7791b7800"
+    },
+    {
+      "name": "summary-llm-enabled",
+      "responseVersion": 2,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "guardrailLlmEnabled": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v2\",2,\"summary\",true]",
+      "configIdentity": "33da0127809f6bbf0e318214fd86eabdd37edf9204f9aa5d0f6027f0c3463e29"
+    },
+    {
+      "name": "full-llm-enabled",
+      "responseVersion": 2,
+      "config": {
+        "payloadCaptureMode": "full",
+        "guardrailLlmEnabled": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v2\",2,\"full\",true]",
+      "configIdentity": "26ad0a05a5aca02e199388c8d116cb35083c2701d5c12d0449af674bf251834d"
+    },
+    {
+      "name": "omitted-llm-disabled",
+      "responseVersion": 2,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "guardrailLlmEnabled": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v2\",2,\"omitted\",false]",
+      "configIdentity": "6b52d89a51e46e9574f7b6a2b1f063cb2579d41cca69a06bf15bd2a0f1ad77f9"
+    },
+    {
+      "name": "summary-llm-disabled",
+      "responseVersion": 2,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "guardrailLlmEnabled": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v2\",2,\"summary\",false]",
+      "configIdentity": "f6746f32377674ce2f3ce6df6e7568cb516abe4b159a56925ee17aae7a60aa5a"
+    },
+    {
+      "name": "full-llm-disabled",
+      "responseVersion": 2,
+      "config": {
+        "payloadCaptureMode": "full",
+        "guardrailLlmEnabled": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v2\",2,\"full\",false]",
+      "configIdentity": "bc39aad61e0499d7c583fbc05e8c3fac96c3fb05b7c707948e89a819650dc327"
+    }
+  ]
+}

@@ -22,11 +22,10 @@ func guardrailResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Re
 
 func boolPtr(value bool) *bool { return &value }
 
-// A response that omits the flag must not undo a deliberate disable. This is the
-// rollback case: the org turns the guardrail off, then a server build without the
-// field answers, and resolving absence as enabled would quietly switch it back on
-// with nobody told.
-func TestOmittedDirectiveDoesNotClearAnExplicitDisable(t *testing.T) {
+// Under v2 the flag is required, so the rollback case that motivated remembering
+// it cannot even reach the cache: a response without the flag is rejected rather
+// than resolved as enabled. This is the contract-level version of that guarantee.
+func TestResponseWithoutTheFlagIsRejected(t *testing.T) {
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
 	now := time.Now().UTC()
 
@@ -34,23 +33,48 @@ func TestOmittedDirectiveDoesNotClearAnExplicitDisable(t *testing.T) {
 	if err := cache.Apply(FetchResult{Response: &disable, ETag: disable.ConfigIdentity}, now); err != nil {
 		t.Fatalf("apply disable: %v", err)
 	}
-	directive := cache.Current().GuardrailLLMDirective
-	if directive == nil || *directive {
-		t.Fatalf("explicit disable not recorded: %v", directive)
+
+	silent := Response{
+		ResponseVersion: ResponseVersion,
+		Config:          Config{PayloadCaptureMode: payloadcapture.ModeFull},
+		ConfigIdentity:  disable.ConfigIdentity,
+	}
+	if err := cache.Apply(FetchResult{Response: &silent, ETag: silent.ConfigIdentity}, now.Add(time.Minute)); err == nil {
+		t.Fatal("a response without the guardrail flag was accepted")
 	}
 
-	// A later response says nothing about the guardrail at all.
-	silent := guardrailResponse(t, payloadcapture.ModeFull, nil)
-	if err := cache.Apply(FetchResult{Response: &silent, ETag: silent.ConfigIdentity}, now.Add(time.Minute)); err != nil {
-		t.Fatalf("apply silent: %v", err)
+	// And the disable is untouched by the rejected attempt.
+	directive := cache.Current().GuardrailLLMDirective
+	if directive == nil || *directive {
+		t.Errorf("rejected response disturbed the disable: %v", directive)
+	}
+}
+
+// The remembered directive also has to survive a response-version upgrade. A
+// cache written under an older version cannot be revalidated — its identity was
+// computed over a different preimage — so it is discarded, and without the
+// remembered value a deliberate disable would be lost at exactly that moment.
+func TestRememberedDirectiveSurvivesAResponseVersionUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "endpoint-config.json")
+	stale := guardrailResponse(t, payloadcapture.ModeSummary, boolPtr(false))
+	stale.ResponseVersion = ResponseVersion - 1
+	writeCacheFileForTest(t, path, cacheFile{
+		Version:               cacheFileVersion,
+		FetchedAt:             time.Now().UTC().Format(time.RFC3339Nano),
+		Response:              &stale,
+		GuardrailLLMDirective: boolPtr(false),
+	})
+
+	cache := NewCache(path)
+	if err := cache.Load(); err != nil {
+		t.Fatalf("load across a version upgrade should not fail: %v", err)
 	}
 	snapshot := cache.Current()
 	if snapshot.GuardrailLLMDirective == nil || *snapshot.GuardrailLLMDirective {
-		t.Errorf("silence cleared the disable: %v", snapshot.GuardrailLLMDirective)
+		t.Errorf("disable lost across the upgrade: %v", snapshot.GuardrailLLMDirective)
 	}
-	// The rest of the configuration must still track the new response.
-	if snapshot.Config.PayloadCaptureMode != payloadcapture.ModeFull {
-		t.Errorf("payload capture did not follow the new response: %q", snapshot.Config.PayloadCaptureMode)
+	if snapshot.Confirmed {
+		t.Error("a discarded cache must not read as confirmed")
 	}
 }
 

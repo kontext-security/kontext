@@ -14,9 +14,12 @@ func TestResponseValidate(t *testing.T) {
 		wantErr string
 	}{
 		{name: "valid"},
-		{name: "unsupported version", mutate: func(response *Response) { response.ResponseVersion = 2 }, wantErr: "version"},
+		{name: "unsupported version", mutate: func(response *Response) { response.ResponseVersion = 1 }, wantErr: "version"},
 		{name: "unknown mode", mutate: func(response *Response) { response.Config.PayloadCaptureMode = "unknown" }, wantErr: "mode"},
 		{name: "identity mismatch", mutate: func(response *Response) { response.ConfigIdentity = strings.Repeat("f", 64) }, wantErr: "identity"},
+		// v2 always emits the guardrail flag. A response without it cannot be
+		// identity-checked, since its preimage would differ from the server's.
+		{name: "missing guardrail flag", mutate: func(response *Response) { response.Config.GuardrailLLMEnabled = nil }, wantErr: "guardrailLlmEnabled"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -37,7 +40,7 @@ func TestResponseValidate(t *testing.T) {
 
 func TestDecodeStrictRejectsUnknownAndTrailingFields(t *testing.T) {
 	response := testResponse(t, payloadcapture.ModeFull)
-	valid := `{"responseVersion":1,"config":{"payloadCaptureMode":"full"},"configIdentity":"` + response.ConfigIdentity + `"}`
+	valid := `{"responseVersion":2,"config":{"payloadCaptureMode":"full","guardrailLlmEnabled":true},"configIdentity":"` + response.ConfigIdentity + `"}`
 	for _, body := range []string{
 		strings.TrimSuffix(valid, "}") + `,"policyText":"permit();"}`,
 		valid + `{}`,
