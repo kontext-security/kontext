@@ -197,6 +197,7 @@ func cloneClassifier(classifier *Classifier) *Classifier {
 	}
 	cloned := *classifier
 	cloned.LLMError = cloneString(classifier.LLMError)
+	cloned.Command = cloneString(classifier.Command)
 	if classifier.SVM != nil {
 		svm := *classifier.SVM
 		cloned.SVM = &svm

@@ -114,17 +114,19 @@ func executionActionFromDecision(decision risk.Decision) cedareval.EffectiveExec
 }
 
 // advisoryClassifier records the bash risk annotation on the fact. It carries
-// only the fields the shared contract defines, so the local-only halves of the
-// annotation — the redacted command, its hash, the agent task, the prompt id —
-// cannot reach the fact or the wire by construction rather than by remembering
-// to strip them. The SVM always runs, so an annotation without one is dropped
-// rather than recorded as a malformed block.
+// only the fields the shared contract defines, so what stays local — the command
+// hash, the agent task, the prompt id, the feedback label — stays local by
+// construction rather than by remembering to strip it. The redacted command does
+// ship: a verdict without the text it judged cannot be analysed or corrected.
+// The SVM always runs, so an annotation without one is dropped rather than
+// recorded as a malformed block.
 func advisoryClassifier(decision risk.RiskDecision) *ledgerfact.Classifier {
 	annotation := decision.Classifier
 	if annotation == nil || annotation.SVM == nil {
 		return nil
 	}
 	classifier := ledgerfact.Classifier{
+		CommandTruncated: annotation.CommandTruncated,
 		SVM: &ledgerfact.ClassifierSVM{
 			Verdict:      annotation.SVM.Verdict,
 			Score:        annotation.SVM.Score,
@@ -143,6 +145,10 @@ func advisoryClassifier(decision risk.RiskDecision) *ledgerfact.Classifier {
 	if annotation.LLMError != "" {
 		llmError := annotation.LLMError
 		classifier.LLMError = &llmError
+	}
+	if annotation.Command != "" {
+		command := annotation.Command
+		classifier.Command = &command
 	}
 	return &classifier
 }

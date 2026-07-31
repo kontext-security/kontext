@@ -287,7 +287,9 @@ The annotation rides **inside the Decision Fact**, as a `classifier` section on 
 "classifier": {
   "svm": {"verdict": "not_risky", "score": 0.0001, "threshold": 0.4, "model_version": "0.1.0"},
   "llm": {"verdict": "risky", "model": "Qwen/Qwen3-0.6B-GGUF", "duration_ms": 44, "cached": false},
-  "llm_error": null
+  "llm_error": null,
+  "command": "npm install --save-dev typescript",
+  "command_truncated": false
 }
 ```
 

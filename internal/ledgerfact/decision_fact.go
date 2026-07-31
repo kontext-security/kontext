@@ -30,7 +30,7 @@ const SchemaVersion = "decision_fact/v1"
 // FixtureDigest is the SHA-256 over the raw bytes of
 // testdata/decision-fact-v1.json. The server-side contract pins the same
 // value, so any edit fails CI on both sides until both corpora move together.
-const FixtureDigest = "c5904f138bcf2f049ecca7623e83c857e10691762a1e7460b7af7c35136b1797"
+const FixtureDigest = "5efaeebd2519dcdbafaacbe062da1d00fe6923fb3b1bc253a1ad09a3ed8c5e08"
 
 // cacheFetchedAtLayout is the wire format for evidence.cache_fetched_at:
 // millisecond precision with an explicit UTC zone, matching the corpus bytes
@@ -73,6 +73,21 @@ type Classifier struct {
 	SVM      *ClassifierSVM `json:"svm"`
 	LLM      *ClassifierLLM `json:"llm"`
 	LLMError *string        `json:"llm_error"`
+	// Command is the credential-redacted command the verdicts describe, capped at
+	// 8 KiB. It ships because a verdict without the text it judged cannot be
+	// analysed or corrected later, and the same command already reaches the
+	// ledger as the 240-byte command_summary on every action — this is that text,
+	// longer, through the same redaction ruleset.
+	//
+	// Note it is NOT gated on payloadCaptureMode. That is a deliberate choice,
+	// not an oversight: capture governs tool payload records, and this is decision
+	// evidence that rides the fact. Anything that must never leave the machine has
+	// to be removed by the redactor, not by this field being absent.
+	Command *string `json:"command"`
+	// CommandTruncated marks Command as a prefix rather than the whole command.
+	// Without it a truncated command reads as a complete one, which would quietly
+	// corrupt any analysis that assumes it is.
+	CommandTruncated bool `json:"command_truncated"`
 }
 
 // ClassifierSVM is the embedded model's read. It always runs, so a classifier
@@ -521,6 +536,12 @@ func (fact DecisionFact) validateClassifier(invalid func(string, ...any)) {
 	}
 	if classifier.LLMError != nil && *classifier.LLMError == "" {
 		invalid("classifier.llm_error must be null or non-empty")
+	}
+	if classifier.Command != nil && *classifier.Command == "" {
+		invalid("classifier.command must be null or non-empty")
+	}
+	if classifier.Command == nil && classifier.CommandTruncated {
+		invalid("classifier.command_truncated has no meaning without a command")
 	}
 	svm := classifier.SVM
 	if svm == nil {
