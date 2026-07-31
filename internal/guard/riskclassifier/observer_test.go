@@ -24,7 +24,10 @@ func (c *recordCollector) sink(_ context.Context, record Record) error {
 
 func (c *recordCollector) wait(t *testing.T, want int) []Record {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// Generous on purpose. This bounds how long a genuine failure takes to
+	// report, not how fast a passing test runs, and the work behind these records
+	// is linear in command length under -race on a shared CI runner.
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		c.mu.Lock()
 		count := len(c.records)

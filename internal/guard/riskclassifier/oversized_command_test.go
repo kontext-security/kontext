@@ -75,10 +75,14 @@ func TestOversizedCommandsStayDistinguishable(t *testing.T) {
 	collector := &recordCollector{}
 	observer := newRedactingObserver(t, collector)
 
-	filler := strings.Repeat("echo padding; ", 12000)
+	// Just over 64 KiB: past the size at which the strict redactor gives up, which
+	// is the limit worth guarding against, and no larger. Redaction is linear in
+	// length and these run under -race in CI, so an input several times bigger
+	// buys no coverage and costs seconds.
+	filler := strings.Repeat("echo padding; ", 5000)
 	first := "echo alpha-marker; " + filler
 	second := "echo beta-marker; " + filler
-	if len(first) < 128<<10 {
+	if len(first) < 64<<10 {
 		t.Fatalf("test input too small: %d bytes", len(first))
 	}
 
