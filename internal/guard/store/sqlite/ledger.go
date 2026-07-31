@@ -348,6 +348,9 @@ func queryLedgerRecords(ctx context.Context, db *sql.DB, query string, args ...a
 			if value == nil && omitWhenEmptyLedgerColumns[column] {
 				continue
 			}
+			if wire, renamed := ledgerWireColumnNames[column]; renamed {
+				column = wire
+			}
 			record[column] = value
 		}
 		normalizeLedgerRecord(record)
@@ -369,6 +372,12 @@ var omitWhenEmptyLedgerColumns = map[string]bool{
 	"cedar_action":       true,
 	"decision_fact_json": true,
 }
+
+// ledgerWireColumnNames renames columns on the wire when the local name follows
+// a storage convention the hosted contract does not share. Empty today: the risk
+// annotation used to live here under the name "classifier", and now rides inside
+// decision_fact_json instead, where the receipt already signs it.
+var ledgerWireColumnNames = map[string]string{}
 
 func normalizeLedgerValue(column string, value any) any {
 	if value == nil {

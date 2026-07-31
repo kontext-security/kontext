@@ -30,7 +30,7 @@ const SchemaVersion = "decision_fact/v1"
 // FixtureDigest is the SHA-256 over the raw bytes of
 // testdata/decision-fact-v1.json. The server-side contract pins the same
 // value, so any edit fails CI on both sides until both corpora move together.
-const FixtureDigest = "13eaf60d577a0cf969421c765b23aea05547c73c0573956944c604152f8c4bbb"
+const FixtureDigest = "5efaeebd2519dcdbafaacbe062da1d00fe6923fb3b1bc253a1ad09a3ed8c5e08"
 
 // cacheFetchedAtLayout is the wire format for evidence.cache_fetched_at:
 // millisecond precision with an explicit UTC zone, matching the corpus bytes
@@ -58,6 +58,56 @@ type Risk struct {
 	Categories  []string   `json:"categories"`
 	Summary     *string    `json:"summary"`
 	FailureKind *string    `json:"failure_kind"`
+}
+
+// Classifier carries the advisory bash risk annotation for the same call: a
+// char-n-gram SVM embedded in the CLI, and optionally a local guardrail LLM.
+// It rides on the fact rather than in a parallel column so one decision has one
+// source of truth — the receipt signs the whole fact, so a nested annotation is
+// tamper-evident without a hash of its own.
+//
+// It is advisory in the strict sense: it is computed only after the decision is
+// final and nothing consults it. Field names are the shared ingest contract and
+// must not be renamed on either side of the mirror.
+type Classifier struct {
+	SVM      *ClassifierSVM `json:"svm"`
+	LLM      *ClassifierLLM `json:"llm"`
+	LLMError *string        `json:"llm_error"`
+	// Command is the credential-redacted command the verdicts describe, capped at
+	// 8 KiB. It ships because a verdict without the text it judged cannot be
+	// analysed or corrected later, and the same command already reaches the
+	// ledger as the 240-byte command_summary on every action — this is that text,
+	// longer, through the same redaction ruleset.
+	//
+	// Note it is NOT gated on payloadCaptureMode. That is a deliberate choice,
+	// not an oversight: capture governs tool payload records, and this is decision
+	// evidence that rides the fact. Anything that must never leave the machine has
+	// to be removed by the redactor, not by this field being absent.
+	Command *string `json:"command"`
+	// CommandTruncated marks Command as a prefix rather than the whole command.
+	// Without it a truncated command reads as a complete one, which would quietly
+	// corrupt any analysis that assumes it is.
+	CommandTruncated bool `json:"command_truncated"`
+}
+
+// ClassifierSVM is the embedded model's read. It always runs, so a classifier
+// block without it is malformed rather than merely sparse.
+type ClassifierSVM struct {
+	Verdict      string  `json:"verdict"`
+	Score        float64 `json:"score"`
+	Threshold    float64 `json:"threshold"`
+	ModelVersion string  `json:"model_version"`
+}
+
+// ClassifierLLM is the guardrail model's read, absent whenever the LLM was
+// shed — unavailable, disabled, or over budget — in which case LLMError says so.
+// Cached reports a local LRU hit for a byte-identical repeat; it says nothing
+// about the model.
+type ClassifierLLM struct {
+	Verdict    string `json:"verdict"`
+	Model      string `json:"model"`
+	DurationMs int64  `json:"duration_ms"`
+	Cached     bool   `json:"cached"`
 }
 
 // Principal is the server-resolved Cedar evaluation principal recorded as
@@ -121,6 +171,7 @@ type DecisionFact struct {
 	DeploymentID         *string              `json:"deployment_id"`
 	DeterminingPolicyIDs []string             `json:"determining_policy_ids"`
 	Risk                 *Risk                `json:"risk"`
+	Classifier           *Classifier          `json:"classifier"`
 	Evidence             Evidence             `json:"evidence"`
 }
 
@@ -198,6 +249,7 @@ func (fact DecisionFact) Validate() error {
 	fact.validateAuthority(invalid)
 	fact.validateEvidenceCoherence(invalid)
 	fact.validateRisk(invalid)
+	fact.validateClassifier(invalid)
 
 	return errors.Join(problems...)
 }
@@ -468,6 +520,58 @@ func (fact DecisionFact) validateEvidenceCoherence(invalid func(string, ...any))
 	if fact.EvaluationState == cedareval.EvaluationStatePrincipalUnresolved &&
 		fact.Evidence.EvaluationPrincipal != nil {
 		invalid("an unresolved principal cannot carry principal evidence")
+	}
+}
+
+// validateClassifier pins the annotation's shape. The SVM is embedded and
+// always runs, so its absence means the block was assembled wrong rather than
+// that a model was unavailable — the LLM is the failable half, and its absence
+// is recorded in llm_error instead. Scores are unbounded (a signed decision
+// margin, not a probability), so only finiteness is checked; JSON cannot carry
+// NaN, and a fact that cannot marshal must fail here rather than at export.
+func (fact DecisionFact) validateClassifier(invalid func(string, ...any)) {
+	classifier := fact.Classifier
+	if classifier == nil {
+		return
+	}
+	if classifier.LLMError != nil && *classifier.LLMError == "" {
+		invalid("classifier.llm_error must be null or non-empty")
+	}
+	if classifier.Command != nil && *classifier.Command == "" {
+		invalid("classifier.command must be null or non-empty")
+	}
+	if classifier.Command == nil && classifier.CommandTruncated {
+		invalid("classifier.command_truncated has no meaning without a command")
+	}
+	svm := classifier.SVM
+	if svm == nil {
+		invalid("classifier requires an svm verdict")
+	} else {
+		if svm.Verdict == "" {
+			invalid("classifier.svm.verdict must not be empty")
+		}
+		if svm.ModelVersion == "" {
+			invalid("classifier.svm.model_version must not be empty")
+		}
+		for name, value := range map[string]float64{
+			"classifier.svm.score":     svm.Score,
+			"classifier.svm.threshold": svm.Threshold,
+		} {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				invalid("%s must be finite", name)
+			}
+		}
+	}
+	if llm := classifier.LLM; llm != nil {
+		if llm.Verdict == "" {
+			invalid("classifier.llm.verdict must not be empty")
+		}
+		if llm.Model == "" {
+			invalid("classifier.llm.model must not be empty")
+		}
+		if llm.DurationMs < 0 {
+			invalid("classifier.llm.duration_ms must not be negative")
+		}
 	}
 }
 

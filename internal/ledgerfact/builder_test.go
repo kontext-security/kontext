@@ -95,6 +95,24 @@ var fixtureMappings = map[string]cedareval.DecisionMapping{
 		EffectiveReasonCode:      cedareval.ReasonObserveNonAuthoritative,
 		DeterminingPolicyIDs:     []string{"policy0"},
 	},
+	"observe-evaluated-allow-with-classifier": {
+		EvaluationState:          cedareval.EvaluationStateEvaluated,
+		DerivedCedarAction:       cedareval.DerivedCedarActionAllow,
+		EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow,
+		EvaluationReasonCode:     cedareval.ReasonPolicyEvaluated,
+		DecisionReasonCode:       cedareval.ReasonPermit,
+		EffectiveReasonCode:      cedareval.ReasonObserveNonAuthoritative,
+		DeterminingPolicyIDs:     []string{"policy0"},
+	},
+	"observe-evaluated-allow-with-classifier-llm-shed": {
+		EvaluationState:          cedareval.EvaluationStateEvaluated,
+		DerivedCedarAction:       cedareval.DerivedCedarActionAllow,
+		EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow,
+		EvaluationReasonCode:     cedareval.ReasonPolicyEvaluated,
+		DecisionReasonCode:       cedareval.ReasonPermit,
+		EffectiveReasonCode:      cedareval.ReasonObserveNonAuthoritative,
+		DeterminingPolicyIDs:     []string{"policy0"},
+	},
 	"observe-evaluated-would-deny": {
 		EvaluationState:          cedareval.EvaluationStateEvaluated,
 		DerivedCedarAction:       cedareval.DerivedCedarActionDeny,
@@ -162,6 +180,7 @@ func TestBuildReproducesGoldenCorpus(t *testing.T) {
 				ParametersHash:  deref(fact.ParametersHash),
 				ExecutionAction: fact.ExecutionAction,
 				Risk:            fact.Risk,
+				Classifier:      fact.Classifier,
 			}
 			if fact.AppliedMode == cedareval.RolloutModeDisabled {
 				input.Disabled = ledgerfact.DisabledInput{

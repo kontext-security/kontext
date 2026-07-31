@@ -67,6 +67,9 @@ type BuildInput struct {
 	Disabled DisabledInput
 	// Risk is the advisory analysis for the same call, if any ran.
 	Risk *Risk
+	// Classifier is the advisory bash risk annotation, if the command was
+	// scored. Supplied only after the decision is final.
+	Classifier *Classifier
 }
 
 // ResolveToolCallID returns the runtime-supplied tool-use id when present and
@@ -96,6 +99,7 @@ func Build(input BuildInput) (DecisionFact, error) {
 		ExecutionAction:      input.ExecutionAction,
 		DeterminingPolicyIDs: []string{},
 		Risk:                 cloneRisk(input.Risk),
+		Classifier:           cloneClassifier(input.Classifier),
 	}
 
 	if input.Cedar == nil {
@@ -185,6 +189,24 @@ func cedarEvidence(cedar CedarInput) Evidence {
 		evidence.CacheFetchedAt = &fetchedAt
 	}
 	return evidence
+}
+
+func cloneClassifier(classifier *Classifier) *Classifier {
+	if classifier == nil {
+		return nil
+	}
+	cloned := *classifier
+	cloned.LLMError = cloneString(classifier.LLMError)
+	cloned.Command = cloneString(classifier.Command)
+	if classifier.SVM != nil {
+		svm := *classifier.SVM
+		cloned.SVM = &svm
+	}
+	if classifier.LLM != nil {
+		llm := *classifier.LLM
+		cloned.LLM = &llm
+	}
+	return &cloned
 }
 
 func cloneRisk(risk *Risk) *Risk {

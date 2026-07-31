@@ -30,19 +30,26 @@ func (p RiskPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent
 		return p.asyncTelemetryDecision(event), nil
 	}
 	riskEvent := risk.NormalizeHookEvent(event)
-	// The local chain is advisory: Cedar (the cedarPolicyProvider wrapping
-	// this chain) is the only engine that decides. Judge analysis is
-	// recorded as risk signals on the decision fact; the chain's own
-	// outcome is always allow.
-	if p.judge == nil {
-		return advisoryDecision(riskEvent), nil
-	}
+	// Annotation deliberately does not happen here. This chain is only one input
+	// to the decision, so annotating from inside it would both miss Cedar's
+	// final answer and leave any path that does not route through this provider
+	// unannotated. The runtime annotates once, after the decision is final.
+	return p.decide(ctx, event, riskEvent), nil
+}
 
+// decide runs the local chain, which is itself advisory: Cedar (the
+// cedarPolicyProvider wrapping this chain) is the only engine that decides.
+// Judge analysis is recorded as risk signals on the decision fact; the chain's
+// own outcome is always allow.
+func (p RiskPolicyProvider) decide(ctx context.Context, event risk.HookEvent, riskEvent risk.RiskEvent) risk.RiskDecision {
+	if p.judge == nil {
+		return advisoryDecision(riskEvent)
+	}
 	result, err := p.judge.Decide(ctx, judgeInputFromRiskEvent(event, riskEvent))
 	if err != nil {
-		return judgeFailOpenDecision(riskEvent, p.judge, err), nil
+		return judgeFailOpenDecision(riskEvent, p.judge, err)
 	}
-	return judgeAdvisoryDecision(riskEvent, result), nil
+	return judgeAdvisoryDecision(riskEvent, result)
 }
 
 func (p RiskPolicyProvider) asyncTelemetryDecision(event risk.HookEvent) risk.RiskDecision {

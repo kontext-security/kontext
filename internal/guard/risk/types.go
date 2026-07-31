@@ -105,6 +105,10 @@ type RiskDecision struct {
 	GuardID      string         `json:"guard_id,omitempty"`
 	RiskEvent    RiskEvent      `json:"risk_event"`
 	Cedar        *CedarEvidence `json:"cedar,omitempty"`
+	// Classifier is the advisory risk annotation for this action, computed in
+	// the decision path but never consulted by it. Plain data on purpose: this
+	// package sits below the classifier and must not depend on it.
+	Classifier *ClassifierAnnotation `json:"classifier,omitempty"`
 }
 
 // CedarEvidence is the local evaluator's decision evidence. It is separate
@@ -126,6 +130,39 @@ type CedarEvidence struct {
 	CacheExpired           bool                          `json:"cacheExpired"`
 	CacheInvalid           bool                          `json:"cacheInvalid"`
 	EvaluatorVersion       string                        `json:"evaluatorVersion"`
+}
+
+// ClassifierAnnotation is one action's risk annotation. AgentTask and the
+// command fields stay local; only the verdict block is uploaded.
+type ClassifierAnnotation struct {
+	SVM      *ClassifierSVM `json:"svm,omitempty"`
+	LLM      *ClassifierLLM `json:"llm,omitempty"`
+	LLMError string         `json:"llm_error,omitempty"`
+	// LLMPromptID records which prompt variant produced the verdict. Local
+	// only: the hosted block deliberately omits it.
+	LLMPromptID      string `json:"-"`
+	Command          string `json:"-"`
+	CommandHash      string `json:"-"`
+	CommandTruncated bool   `json:"-"`
+	AgentTask        string `json:"-"`
+}
+
+// ClassifierSVM and ClassifierLLM use the field names the hosted ingest
+// expects. Renaming them breaks the upload contract.
+// ClassifierSVM and ClassifierLLM use the field names the hosted ingest
+// expects. Renaming them breaks the upload contract.
+type ClassifierSVM struct {
+	Verdict      string  `json:"verdict"`
+	Score        float64 `json:"score"`
+	Threshold    float64 `json:"threshold"`
+	ModelVersion string  `json:"model_version"`
+}
+
+type ClassifierLLM struct {
+	Verdict    string `json:"verdict"`
+	Model      string `json:"model"`
+	DurationMs int64  `json:"duration_ms"`
+	Cached     bool   `json:"cached"`
 }
 
 func MarshalInput(value map[string]any) string {
