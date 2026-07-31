@@ -103,6 +103,18 @@ func (c *Cache) Load() error {
 		return errors.New("endpoint configuration cache: invalid cache shape")
 	}
 	if err := file.Response.Validate(); err != nil {
+		// A cache written by a build that negotiated an older response version
+		// cannot be revalidated under this contract: its identity was computed
+		// over a different preimage. Discard it and start unconfirmed rather than
+		// failing startup — the next refresh repopulates it, and the remembered
+		// guardrail directive below is what actually needed to survive.
+		if file.Response.ResponseVersion != ResponseVersion {
+			c.mu.Lock()
+			c.directive = cloneBool(file.GuardrailLLMDirective)
+			c.status = Status{Stale: true, LastError: "persisted configuration predates the current response version"}
+			c.mu.Unlock()
+			return nil
+		}
 		return fmt.Errorf("endpoint configuration cache: %w", err)
 	}
 	fetchedAt, err := time.Parse(time.RFC3339Nano, file.FetchedAt)

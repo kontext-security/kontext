@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -51,7 +52,9 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, config
 		return FetchResult{}, err
 	}
 	query := endpoint.Query()
-	query.Set("response_version", "1")
+	// Ask for the version this build implements. The server serves v1 and v2 side
+	// by side, so this is what selects the shape and the identity domain.
+	query.Set("response_version", strconv.Itoa(ResponseVersion))
 	endpoint.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {

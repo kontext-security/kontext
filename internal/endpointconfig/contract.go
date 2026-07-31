@@ -14,8 +14,12 @@ import (
 )
 
 const (
-	ResponseVersion  = 1
-	identityDomain   = "kontext:endpoint-config:v1"
+	// ResponseVersion is the contract this build negotiates. The server serves v1
+	// and v2 side by side and keys the response off the requested version, so
+	// moving here changes only what this build asks for; released binaries keep
+	// getting the v1 shape and the v1 identity hashes.
+	ResponseVersion  = 2
+	identityDomain   = "kontext:endpoint-config:v2"
 	MaxResponseBytes = 64 * 1024
 )
 
@@ -32,25 +36,27 @@ type Config struct {
 	// the classifier's second opinion with nobody noticing. Resolve it through
 	// riskclassifier.ResolveLLMEnabled rather than reading it directly.
 	//
-	// NOT YET EFFECTIVE REMOTELY: ComputeIdentity's preimage covers
-	// PayloadCaptureMode alone, and that identity is the shared ETag both sides
-	// must agree on, so flipping only this field leaves the identity unchanged
-	// and a conditional refresh reuses the cached config. Adding it to the
-	// preimage here alone would instead break Validate against every response
-	// the current server sends. Both halves have to move together, with
-	// ResponseVersion and identityDomain bumped. Inert until then, since the
-	// server does not send the field; the local override still works. See the
-	// remote kill switch section of docs/guard.md.
-	GuardrailLLMEnabled *bool `json:"guardrailLlmEnabled,omitempty"`
+	// Required under v2 and part of the identity preimage, so a change to it alone
+	// produces a different ETag and is actually observed by a conditional refresh.
+	// It stays a pointer to keep "the server omitted this" distinguishable from
+	// "the server said false": the former is a contract violation Validate
+	// rejects, the latter is a directive to honour.
+	GuardrailLLMEnabled *bool `json:"guardrailLlmEnabled"`
 }
 
 func (c Config) Validate() error {
 	switch c.PayloadCaptureMode {
 	case payloadcapture.ModeOmitted, payloadcapture.ModeSummary, payloadcapture.ModeFull:
-		return nil
 	default:
 		return fmt.Errorf("endpoint configuration: unsupported payload capture mode %q", c.PayloadCaptureMode)
 	}
+	// v2 always emits the flag. Guessing a value for a missing one would put this
+	// side's identity out of step with the server's and fail every response, so
+	// reject it as the contract violation it is.
+	if c.GuardrailLLMEnabled == nil {
+		return errors.New("endpoint configuration: guardrailLlmEnabled is required")
+	}
+	return nil
 }
 
 type Response struct {
@@ -83,7 +89,16 @@ func ComputeIdentity(config Config) (string, error) {
 	if err := config.Validate(); err != nil {
 		return "", err
 	}
-	preimage, err := json.Marshal([]any{identityDomain, ResponseVersion, string(config.PayloadCaptureMode)})
+	// The preimage is a shared contract: the server hashes the same array in the
+	// same order and sends the result as the ETag, and Validate rejects any
+	// response whose identity does not match what this computes. Field order and
+	// encoding are therefore load-bearing, not stylistic.
+	preimage, err := json.Marshal([]any{
+		identityDomain,
+		ResponseVersion,
+		string(config.PayloadCaptureMode),
+		*config.GuardrailLLMEnabled,
+	})
 	if err != nil {
 		return "", fmt.Errorf("endpoint configuration: encode identity preimage: %w", err)
 	}
