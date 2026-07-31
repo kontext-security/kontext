@@ -123,6 +123,17 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		opts.Diagnostic.Printf("managed observe cleanup: %v\n", err)
 	}
 
+	// A mode this build cannot name means the install is newer than the running
+	// binary — a downgrade. The config loader already fell back to observe so
+	// the daemon still boots and still reports; this is the only place that
+	// says why, so it logs unconditionally rather than behind a diagnostic
+	// flag.
+	if unsupported := loadedConfig.Config.UnsupportedMode; unsupported != "" {
+		logAlways(opts.Diagnostic,
+			"managed config declares mode %q, which this build (%s) does not implement; running in %q — the installed binary is older than the install that wrote this config\n",
+			unsupported, binaryVersion, loadedConfig.Config.Mode)
+	}
+
 	// The deployment-level mode from managed.json drives every hook edge:
 	// observe records would-decisions, enforce returns real denies, remote
 	// defers to the fetched policy deployment's rollout mode so the posture
@@ -548,6 +559,15 @@ func cleanupInterval(idleTimeout time.Duration) time.Duration {
 // the config it loaded and retries on next start.
 func migrateSelfServeModeToRemote(loaded managedconfig.LoadedConfig, log diagnostic.Logger) managedconfig.LoadedConfig {
 	if loaded.Scope != managedconfig.ScopeUser || loaded.Config.Mode != managedconfig.Mode {
+		return loaded
+	}
+	// Observe is not always the era's default: it is also what the loader
+	// substitutes for a mode this build cannot name. Migrating that one would
+	// overwrite the operator's declared posture with this binary's guess, erase
+	// the only on-disk record that the install is newer than the binary, and
+	// silence the downgrade warning on the very next load. A downgraded endpoint
+	// is exactly the case where nothing should be rewritten.
+	if loaded.Config.UnsupportedMode != "" {
 		return loaded
 	}
 	if err := managedconfig.RewriteMode(loaded, managedconfig.ModeRemote); err != nil {
