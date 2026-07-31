@@ -165,6 +165,20 @@ The SVM is precise but blind to `rm -rf /`, `dd if=/dev/zero of=/dev/disk0`, and
 
 `KONTEXT_RISK_CLASSIFIER_MODE` is `on` (default, both models) or `off` (SVM only, no sidecar needed).
 
+Which paths run the LLM depends on whether a local model is resolved:
+
+| path | guardrail LLM |
+|---|---|
+| `kontext start` (wrapper) | yes — manages `llama-server` itself and downloads the model |
+| `kontext guard start` (local daemon) | yes, same |
+| `managed-observe` daemon | only when `KONTEXT_JUDGE_URL` + `KONTEXT_JUDGE_MODEL` point at an endpoint, or `KONTEXT_JUDGE_MANAGED=1` |
+
+The managed daemon deliberately does **not** manage a model by default: that would have every endpoint download one and run a `llama-server` child unprompted. With neither variable set it records the SVM verdict and `llm_error: "guardrail not configured"`, which is what it did before the guardrail existed.
+
+That default is worth knowing when reading collected data, because the managed daemon is the path that reaches the hosted ledger — so an endpoint without a model produces uploads whose `classifier.llm` is null.
+
+**The model name must contain `qwen3`.** That is what makes the client send `/no_think`; without it Qwen3 reasons instead of answering and returns nothing inside the token budget.
+
 The guardrail LLM can also be turned off **remotely**: `guardrailLlmEnabled` rides the endpoint-configuration sync, alongside `payloadCaptureMode`.
 
 The flag is part of the **v2** endpoint-configuration contract, and being in the identity preimage is what makes it work: the identity is the ETag, so changing only this flag produces a different one and a conditional refresh actually observes it. The CLI requests `response_version=2`; the server serves v1 and v2 side by side, so released binaries keep getting the v1 shape and the v1 identity hashes untouched.
