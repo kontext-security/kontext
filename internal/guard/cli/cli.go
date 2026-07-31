@@ -146,7 +146,8 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 		return fmt.Errorf("write startup output: %w", err)
 	}
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(*dbPath, server.Options{
-		Judge: localJudge,
+		Judge:          localJudge,
+		RiskClassifier: &server.RiskClassifierOptions{},
 	})
 	if err != nil {
 		return err
@@ -154,6 +155,8 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	defer func() {
 		_ = closeStore()
 	}()
+	// Drain queued classifier records before the store closes.
+	defer localServer.CloseRiskClassifier()
 	if err := ensureGuardSocketDir(*socketPath); err != nil {
 		return err
 	}

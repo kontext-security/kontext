@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/cedareval"
 	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/runtimecore"
@@ -17,10 +19,17 @@ type guardHookRuntime struct {
 	policy           PolicyProvider
 	currentSessionID string
 	mode             string
+	classifier       *riskclassifier.Observer
 }
 
-func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string) guardHookRuntime {
-	return guardHookRuntime{store: store, policy: policy, currentSessionID: currentSessionID, mode: mode}
+func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Observer) guardHookRuntime {
+	return guardHookRuntime{
+		store:            store,
+		policy:           policy,
+		currentSessionID: currentSessionID,
+		mode:             mode,
+		classifier:       classifier,
+	}
 }
 
 func (r guardHookRuntime) OpenSession(ctx context.Context, session runtimecore.Session) (runtimecore.Session, error) {
@@ -87,6 +96,7 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
+	r.observePrompt(event)
 	decision, err := r.policy.DecideHook(ctx, event)
 	if err != nil {
 		return risk.RiskDecision{}, err
@@ -96,7 +106,38 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		return risk.RiskDecision{}, err
 	}
 	decision.EventID = record.ID
+	r.observeCommand(event, record.ID)
 	return decision, nil
+}
+
+// observeCommand hands an intercepted bash command to the risk classifier.
+// Observe-mode only: the verdicts are logged against the decided action for
+// feedback collection and never revisit the decision above.
+func (r guardHookRuntime) observeCommand(event risk.HookEvent, actionID string) {
+	if r.classifier == nil || event.HookEventName != "PreToolUse" || actionID == "" {
+		return
+	}
+	command := risk.CommandFromInput(event.ToolInput)
+	if strings.TrimSpace(command) == "" {
+		return
+	}
+	r.classifier.Observe(riskclassifier.ObserveInput{
+		ActionID:  actionID,
+		SessionID: event.SessionID,
+		ToolUseID: event.ToolUseID,
+		Agent:     event.Agent,
+		Command:   command,
+	})
+}
+
+// observePrompt keeps the session's latest user prompt so classifier records
+// carry the agent task that motivated the command.
+func (r guardHookRuntime) observePrompt(event risk.HookEvent) {
+	if r.classifier == nil || event.HookEventName != "UserPromptSubmit" {
+		return
+	}
+	prompt, _ := event.ToolInput["prompt"].(string)
+	r.classifier.RecordPrompt(event.SessionID, prompt)
 }
 
 func riskEventFromHookEvent(event hook.Event) risk.HookEvent {

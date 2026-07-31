@@ -48,6 +48,8 @@ Claude Code
   -> probabilistic risk when deterministic policy allows
   -> local SQLite
   -> local daemon API
+       \
+        -> risk classifier (async, observe only: SVM -> verdict log)
 ```
 
 ## Risk layers
@@ -56,6 +58,8 @@ Guard uses two layers:
 
 1. Deterministic policy for obvious risk, such as credential access, direct provider API calls with credential material, production mutations, and destructive persistent-resource operations.
 2. Probabilistic risk for cases deterministic policy allows.
+
+Alongside those, the observe-mode risk classifier logs a verdict per bash command without participating in the decision. See [Risk classifier](#risk-classifier-observe-mode).
 
 ## Local authorization ledger
 
@@ -123,6 +127,51 @@ kontext guard judge eval \
 
 The eval command is for local model and prompt iteration. It skips fixtures
 where deterministic policy is expected to deny before the judge is called.
+
+## Risk classifier (observe mode)
+
+Guard logs a second-opinion risk verdict for every intercepted bash command, using the classifier from the sibling `authz-bench` serving contract (`authz-bench/serve/SERVING.md`). This is **observe mode only**: verdicts are recorded for feedback collection and never affect a decision. Deterministic rules stay in front and own known-bad; the classifier is a fuzzy signal for the long tail, and its job in v1 is to generate data.
+
+The model is **char n-gram + LinearSVM** — the benchmark winner, ported natively to Go and embedded in the binary, so there is no Python and no model download at runtime. `scripts/riskclassifier/export_portable.py` flattens `authz-bench/serve/model/classifier.joblib` into `internal/guard/riskclassifier/model/svm.json.gz` and regenerates the golden fixtures that lock the port to the reference predictor. Run it after any upstream model change:
+
+```bash
+../authz-bench/.venv/bin/python scripts/riskclassifier/export_portable.py --authz ../authz-bench
+```
+
+The contract also describes a second opinion from a small local LLM prompted for `RISKY`/`SAFE`. That is **deferred**: the local judge already owns the LLM half of the decision path, and the guardrail model choice is still settling upstream. `RiskClassifierOptions` is where it lands when it arrives.
+
+`normalize_command` (IP → `1.1.1.1`, URL → `example.com`, long base64 → `BASE64`) is applied before scoring, identically to training. Three tests fail on any drift, and none of them should be "fixed" by loosening an assertion: `TestNormalizeCommandGoldenParity` and `TestSVMGoldenParity` pin this port to the Python reference, and `TestSVMUpstreamGoldenParity` cross-checks it against authz-bench's independent Go port via that repo's shipped vectors (`testdata/upstream-golden.json`, refreshed by copying `authz-bench/serve/model/golden.json`). Two independent ports agreeing is what catches a normalizer divergence — an upstream base64 skew once passed its own parity check because its vectors did not cover the boundary.
+
+### Serving threshold
+
+The SVM verdict uses a threshold on the signed margin carried by the artifact, so retuning it is a re-export rather than a code change. The model card ships `0.0` (LinearSVC's natural boundary, explicitly "tunable"); kontext serves `0.40`, chosen by `scripts/riskclassifier/pick_threshold.py`.
+
+That script exists because the shipped model is fit on all clean labeled data, leaving no held-out split to tune on — it runs 5-fold `cross_val_predict(method="decision_function")` with the identical pipeline so every score comes from a model that did not see that command, then sweeps thresholds over those out-of-fold scores. Measured on 20,966 commands (966 risky):
+
+| threshold | precision | recall | false alarms | misses |
+|---|---|---|---|---|
+| `0.00` (model card) | 0.934 | 0.906 | 62 | 91 |
+| **`0.40` (served)** | **0.987** | **0.834** | **11** | **160** |
+
+The operating point is precision-weighted (F0.5 argmax) because in observe mode the threshold does not gate data capture — every command is logged with its raw score either way. It only decides which rows the feedback UI presents as "would block", and a noisy would-block set burns the reviewer attention the ground-truth labels depend on. Misses stay recoverable: any past command can be flagged `should_block` from history, and deterministic rules already own known-bad. Each verdict records the threshold that decided it, so stored scores make any past verdict re-derivable under a new threshold.
+
+Verdicts land in the `risk_classifier_verdicts` table, one row per decided action:
+
+- `svm_verdict` / `svm_score` / `svm_threshold` / `svm_model_version`, and `enforced` (always `0` in v1)
+- `command_redacted` — credential-redacted, capped at 8 KB. Classification runs on the raw command in memory; only the redacted form is persisted, because this dataset is exported back to authz-bench.
+- `agent_task` — the session's latest user prompt, captured from `UserPromptSubmit`. Only the `kontext start` wrapper path registers that hook, so daemon-only `kontext guard start` sessions leave it empty.
+- `user_feedback` — `should_allow` or `should_block`. This is the ground-truth label the whole pipeline exists to collect.
+
+Two loopback endpoints expose it. The embedded dashboard that used to call them is gone, so these are now for whatever labels verdicts locally — a script, a local tool, or a future command. Writes are same-origin only, so nothing reachable from a browsed page can forge training labels:
+
+```text
+GET  /api/sessions/{session_id}/verdicts
+POST /api/verdicts/{action_id}/feedback   {"user_feedback": "should_allow" | "should_block"}
+```
+
+Classification runs off the hook path: one worker behind a 256-record queue, draining on shutdown. Scoring itself takes microseconds — the store write is what would otherwise make a tool call wait. If the queue ever fills, the record is dropped rather than blocking; only the verdict is lost, since the tool call itself is already persisted on the decision path. Nothing here can delay or change a tool call.
+
+One verdict row per decided action, enforced by a `unique(action_id)` constraint: the feedback endpoint updates by `action_id`, so a duplicate row would let one label land on two records and corrupt the ground truth silently.
 
 ## Public/private boundary
 

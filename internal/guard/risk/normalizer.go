@@ -214,6 +214,13 @@ func commandFromInput(input map[string]any) string {
 	return ""
 }
 
+// CommandFromInput extracts the raw shell command from a tool input payload,
+// using the same keys the normalizer recognizes. Empty when the input carries
+// no command.
+func CommandFromInput(input map[string]any) string {
+	return commandFromInput(input)
+}
+
 func pathFromInput(input map[string]any) string {
 	for _, key := range []string{"file_path", "path", "filename"} {
 		if value, ok := input[key].(string); ok {
@@ -340,6 +347,22 @@ func summarizeCommand(value string) string {
 		}
 		return redacted[:end] + "..."
 	}
+	return redacted
+}
+
+// RedactCredentials removes secrets with the same shared ruleset
+// summarizeCommand uses, but without its display truncation. Callers that
+// persist full-length command text — the risk classifier's feedback records —
+// need the whole command intact, since long scripts are the interesting
+// training examples.
+//
+// Oversized input fails closed for the same reason summarizeCommand does:
+// truncating before redaction could split a secret match and expose its prefix.
+func RedactCredentials(value string) string {
+	if len(value) > maxSummaryRedactionInputBytes {
+		return oversizedCommandSummary
+	}
+	redacted, _ := payloadcapture.RedactText(value)
 	return redacted
 }
 

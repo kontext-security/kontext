@@ -112,6 +112,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		CedarEnforcement: opts.CedarEnforcement,
 		CurrentSessionID: serverSessionID,
 		Mode:             string(mode),
+		RiskClassifier:   &server.RiskClassifierOptions{},
 	})
 	if err != nil {
 		closeJudge()
@@ -234,6 +235,11 @@ func (h *Host) Close(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 		h.sessionCloseOnce = true
+	}
+	// Drain queued classifier records before the store and llama-server go
+	// away, or in-flight verdicts are lost.
+	if h.server != nil {
+		h.server.CloseRiskClassifier()
 	}
 	if h.closeStore != nil {
 		if err := h.closeStore(); err != nil {
