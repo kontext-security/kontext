@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -201,6 +202,104 @@ func TestAgentTaskIsCapturedAtIntakeNotAtProcessing(t *testing.T) {
 	}
 }
 
+// A worker that is mid-write when Close is called must finish unwinding before
+// Close returns: the caller's next move is to close the SQLite store, and a
+// write racing that teardown is a use-after-free on the database handle.
+func TestCloseWaitsForWorkerBeforeReturning(t *testing.T) {
+	defer swapDrainTimeout(50 * time.Millisecond)()
+
+	entered := make(chan struct{})
+	returned := make(chan struct{})
+	observer := newObserverWithSink(t, func(ctx context.Context, _ Record) error {
+		close(entered)
+		// Hold the "write" open past the drain budget, then honour cancellation
+		// the way a real SQLite call under a context does.
+		<-ctx.Done()
+		close(returned)
+		return ctx.Err()
+	})
+
+	observer.Observe(ObserveInput{ActionID: "act_1", SessionID: "sess_1", Command: "ls -la"})
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sink was never entered")
+	}
+
+	observer.Close()
+
+	select {
+	case <-returned:
+	default:
+		t.Fatal("Close returned while the sink write was still in flight")
+	}
+}
+
+// The wait after cancellation is deliberately unbounded: a deadline there would
+// mean returning mid-write, which is the exact hazard. A sink that takes longer
+// than any grace period would have must still hold Close.
+func TestCloseWaitsEvenWhenTheWriteOutlastsAnyGrace(t *testing.T) {
+	defer swapDrainTimeout(10 * time.Millisecond)()
+
+	entered := make(chan struct{})
+	var unwound atomic.Bool
+	observer := newObserverWithSink(t, func(ctx context.Context, _ Record) error {
+		close(entered)
+		<-ctx.Done()
+		// Longer than any bounded grace this code has ever used.
+		time.Sleep(3 * time.Second)
+		unwound.Store(true)
+		return ctx.Err()
+	})
+
+	observer.Observe(ObserveInput{ActionID: "act_1", SessionID: "sess_1", Command: "ls -la"})
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sink was never entered")
+	}
+
+	observer.Close()
+	if !unwound.Load() {
+		t.Fatal("Close returned before the write finished unwinding")
+	}
+}
+
+// Draining must not spend an inference per queued item: the budget is finite and
+// the SVM verdict is the part worth keeping.
+func TestShutdownShedsLLMButKeepsTheVerdict(t *testing.T) {
+	guardrail, err := NewGuardrail(GuardrailOptions{
+		BaseURL: "http://127.0.0.1:1",
+		Model:   "qwen3-0.6b",
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("guardrail: %v", err)
+	}
+
+	collector := &recordCollector{}
+	observer := newTestObserver(t, collector)
+	observer.guardrail = guardrail
+	// Stand where a worker stands after Close has flipped the flag but before
+	// the queue has drained.
+	observer.closed.Store(true)
+
+	observer.process(queuedObservation{
+		ObserveInput: ObserveInput{ActionID: "act_1", SessionID: "sess_1", Command: "rm -rf /"},
+	})
+
+	record := collector.wait(t, 1)[0]
+	if record.SVM == nil {
+		t.Fatalf("shutdown dropped the SVM verdict: %+v", record)
+	}
+	if record.LLM != nil {
+		t.Fatalf("shutdown ran an inference: %+v", record.LLM)
+	}
+	if !strings.Contains(record.LLMError, "shutting down") {
+		t.Fatalf("shutdown not recorded as the reason: %q", record.LLMError)
+	}
+}
+
 func newObserverWithSink(t *testing.T, sink Sink) *Observer {
 	t.Helper()
 	svm, err := LoadSVM()
@@ -217,4 +316,10 @@ func newObserverWithSink(t *testing.T, sink Sink) *Observer {
 	}
 	t.Cleanup(observer.Close)
 	return observer
+}
+
+func swapDrainTimeout(drain time.Duration) func() {
+	previous := observerDrainTimeout
+	observerDrainTimeout = drain
+	return func() { observerDrainTimeout = previous }
 }

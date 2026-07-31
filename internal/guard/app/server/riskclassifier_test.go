@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +16,26 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
+func newGuardrailStub(t *testing.T, reply string, calls *int32) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls != nil {
+			atomic.AddInt32(calls, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": reply}}},
+		})
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
 func newClassifierServer(t *testing.T) (*Server, *sqlite.Store) {
+	return newClassifierServerWithOptions(t, &RiskClassifierOptions{Mode: riskclassifier.ModeOff})
+}
+
+func newClassifierServerWithOptions(t *testing.T, rc *RiskClassifierOptions) (*Server, *sqlite.Store) {
 	t.Helper()
 	store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
 	if err != nil {
@@ -26,7 +46,7 @@ func newClassifierServer(t *testing.T) (*Server, *sqlite.Store) {
 	opts := Options{
 		CurrentSessionID: "sess_e2e",
 		Mode:             "observe",
-		RiskClassifier:   &RiskClassifierOptions{},
+		RiskClassifier:   rc,
 	}
 	server, err := NewServerWithOptions(store, opts)
 	if err != nil {
@@ -331,5 +351,80 @@ func TestObserverDisabledByDefault(t *testing.T) {
 	}
 	if len(records) != 0 {
 		t.Fatalf("classifier wrote records while disabled: %+v", records)
+	}
+}
+
+// TestRiskIsAnnotationNotDecision is the core contract: both models are recorded
+// against the tool call, and neither can influence the decision. The stub says
+// RISKY on a command the deterministic layer allows — the decision must stay
+// deterministic regardless.
+func TestRiskIsAnnotationNotDecision(t *testing.T) {
+	var calls int32
+	stub := newGuardrailStub(t, "RISKY", &calls)
+	server, store := newClassifierServerWithOptions(t, &RiskClassifierOptions{
+		Mode:             riskclassifier.ModeOn,
+		GuardrailBaseURL: stub.URL,
+		GuardrailModel:   "qwen3-0.6b",
+	})
+
+	result, err := server.RuntimeCore().EvaluateHook(context.Background(), hook.Event{
+		SessionID: "sess_e2e",
+		HookName:  hook.HookPreToolUse,
+		ToolName:  "Bash",
+		ToolInput: map[string]any{"command": "npm ci"},
+	})
+	if err != nil {
+		t.Fatalf("evaluate hook: %v", err)
+	}
+	// The LLM said RISKY; the decision must not reflect it in any way.
+	if result.Decision != hook.DecisionAllow {
+		t.Fatalf("risk verdict leaked into the decision: %+v", result)
+	}
+	if strings.Contains(result.ReasonCode, "guardrail") || strings.Contains(result.ReasonCode, "risk_classifier") {
+		t.Fatalf("decision reason cites the classifier: %q", result.ReasonCode)
+	}
+
+	record := waitForVerdicts(t, store, "sess_e2e", 1)[0]
+	if record.SVM == nil {
+		t.Fatal("svm verdict missing")
+	}
+	if record.LLM == nil || record.LLM.Verdict != riskclassifier.VerdictRisky {
+		t.Fatalf("llm verdict missing or wrong: %+v (err %q)", record.LLM, record.LLMError)
+	}
+	if record.LLM.PromptID == "" {
+		t.Error("llm verdict did not record which prompt produced it")
+	}
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Errorf("guardrail calls = %d, want 1", calls)
+	}
+}
+
+// TestModeOffRunsNoLLM keeps the SVM-only path honest.
+func TestModeOffRunsNoLLM(t *testing.T) {
+	var calls int32
+	stub := newGuardrailStub(t, "RISKY", &calls)
+	server, store := newClassifierServerWithOptions(t, &RiskClassifierOptions{
+		Mode:             riskclassifier.ModeOff,
+		GuardrailBaseURL: stub.URL,
+		GuardrailModel:   "qwen3-0.6b",
+	})
+
+	if _, err := server.RuntimeCore().EvaluateHook(context.Background(), hook.Event{
+		SessionID: "sess_e2e",
+		HookName:  hook.HookPreToolUse,
+		ToolName:  "Bash",
+		ToolInput: map[string]any{"command": "git status"},
+	}); err != nil {
+		t.Fatalf("evaluate hook: %v", err)
+	}
+	record := waitForVerdicts(t, store, "sess_e2e", 1)[0]
+	if record.SVM == nil {
+		t.Fatal("svm verdict missing")
+	}
+	if record.LLM != nil {
+		t.Errorf("llm ran while off: %+v", record.LLM)
+	}
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Errorf("guardrail called %d times while off", got)
 	}
 }

@@ -16,9 +16,9 @@ const (
 // and prior_commands is not duplicated per row — earlier records in the same
 // session reconstruct it at read/export time.
 //
-// v1 records the SVM only. The contract's second opinion (a small local LLM
-// prompted for RISKY/SAFE) is deferred: the model choice is still moving, and
-// the local judge already owns the LLM half of the decision path.
+// Both models from the contract are recorded: the embedded SVM and the local
+// guardrail LLM. The LLM half is absent when the guardrail is off or its call
+// failed, in which case LLMError says why — a missing verdict is data too.
 type Record struct {
 	ActionID  string `json:"action_id"`
 	SessionID string `json:"session_id"`
@@ -38,7 +38,9 @@ type Record struct {
 	// when the daemon has not observed one.
 	AgentTask string `json:"agent_task,omitempty"`
 
-	SVM *SVMVerdict `json:"svm,omitempty"`
+	SVM      *SVMVerdict `json:"svm,omitempty"`
+	LLM      *LLMVerdict `json:"llm,omitempty"`
+	LLMError string      `json:"llm_error,omitempty"`
 
 	// Enforced stays false for v1: verdicts are logged, never applied.
 	Enforced bool `json:"enforced"`

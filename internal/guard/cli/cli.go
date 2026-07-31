@@ -20,6 +20,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	"github.com/kontext-security/kontext-cli/internal/guard/judgeruntime"
+	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/localruntime"
@@ -123,7 +124,7 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 		}
 	}
 	ui := startupui.New(out)
-	localJudge, closeJudge, _, err := judgeruntime.Configure(ctx, judgeruntime.Config{
+	judgeRuntime, err := judgeruntime.ConfigureRuntime(ctx, judgeruntime.Config{
 		URL:              *judgeURL,
 		Model:            *judgeModel,
 		Timeout:          *judgeTimeout,
@@ -141,13 +142,24 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer closeJudge()
+	localJudge := judgeRuntime.Judge
+	if judgeRuntime.Close != nil {
+		defer judgeRuntime.Close()
+	}
+	classifierMode, err := riskclassifier.ParseMode(os.Getenv("KONTEXT_RISK_CLASSIFIER_MODE"))
+	if err != nil {
+		return err
+	}
 	if err := ui.Err(); err != nil {
 		return fmt.Errorf("write startup output: %w", err)
 	}
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(*dbPath, server.Options{
-		Judge:          localJudge,
-		RiskClassifier: &server.RiskClassifierOptions{},
+		Judge: localJudge,
+		RiskClassifier: &server.RiskClassifierOptions{
+			Mode:             classifierMode,
+			GuardrailBaseURL: judgeRuntime.BaseURL,
+			GuardrailModel:   judgeRuntime.Model,
+		},
 	})
 	if err != nil {
 		return err
