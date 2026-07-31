@@ -1862,3 +1862,28 @@ func assertRecordIDs(t *testing.T, records []LedgerRecord, want map[string]bool)
 		}
 	}
 }
+
+// The hosted ledger records a (provider, agent) pair per session. An unmapped
+// agent exports an empty provider, which reads downstream as "provider unknown"
+// rather than as the vendor it came from.
+func TestHostedAgentIdentityMapsKnownAgents(t *testing.T) {
+	t.Parallel()
+
+	for name, want := range map[string]struct{ provider, agent string }{
+		"claude":      {"anthropic", "claude_code"},
+		"claude-code": {"anthropic", "claude_code"},
+		"cowork":      {"anthropic", "claude_cowork"},
+		"devin":       {"cognition", "devin"},
+		"  DeVin  ":   {"cognition", "devin"},
+		"someoneelse": {"", "someoneelse"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			provider, agent := hostedAgentIdentity(name)
+			if provider != want.provider || agent != want.agent {
+				t.Fatalf("hostedAgentIdentity(%q) = (%q, %q), want (%q, %q)", name, provider, agent, want.provider, want.agent)
+			}
+		})
+	}
+}
