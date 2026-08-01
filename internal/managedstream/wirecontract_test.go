@@ -13,13 +13,10 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 )
 
-// Validates what the daemon actually uploads against the published contract in
-// docs/schema.
+// Validates what the daemon actually uploads against the published payload
+// schema in docs/schema.
 //
-// The server parses batches strictly: one field it does not recognise, or one
-// required field missing, rejects the whole batch — and that failure lands on an
-// endpoint we do not control, long after the change that caused it. This test
-// moves that failure into CI.
+// This keeps the documented CLI payload in step with the bytes posted by Flush.
 //
 // It deliberately validates the bytes captured off the wire rather than a
 // hand-built Payload. Records are assembled from database rows into
@@ -129,7 +126,7 @@ func TestPublishedSchemaRejectsUnknownField(t *testing.T) {
 	batch["unexpected_field"] = true
 
 	if err := schema.Validate(batch); err == nil {
-		t.Fatal("schema accepted an unknown field; the server would reject the batch")
+		t.Fatal("schema accepted an unknown field")
 	}
 }
 
@@ -144,8 +141,7 @@ func TestPublishedSchemaRejectsMissingRequiredField(t *testing.T) {
 }
 
 func TestPublishedSchemaPinsTheSchemaVersion(t *testing.T) {
-	// The server keys its parsing on this value, so a silent change here is a
-	// silent change of protocol.
+	// The payload schema pins the emitted record-schema label.
 	schema := loadWireSchema(t)
 	batch := capturedBatch(t)
 

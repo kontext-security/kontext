@@ -9,11 +9,6 @@
       "type": "string",
       "const": "authorization-ledger-v1"
     },
-    "organization_id": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 256
-    },
     "installation_id": {
       "type": "string",
       "pattern": "^ins_[A-Za-z0-9_-]{32}$"
@@ -36,10 +31,6 @@
           "maxLength": 512
         },
         "deployment_version": {
-          "type": "string",
-          "maxLength": 256
-        },
-        "cli_version": {
           "type": "string",
           "maxLength": 256
         },
