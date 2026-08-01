@@ -174,6 +174,19 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Mode:               mode,
 		Diagnostic:         opts.Diagnostic,
 		SkipInitialSession: true,
+		// Resolve the local model so the risk classifier's guardrail half can
+		// run here too. Without it the daemon recorded an SVM verdict and an
+		// llm_error on every command, which matters because these are the
+		// sessions that reach the hosted ledger — the LLM verdict would have
+		// been null in exactly the place the data is collected.
+		//
+		// JudgeManagedDefault stays false on purpose. Defaulting it to true
+		// would have every managed endpoint download a model and run a
+		// llama-server child unprompted; the operator opts in with
+		// KONTEXT_JUDGE_MANAGED, or points at an endpoint they already run with
+		// KONTEXT_JUDGE_URL. With neither set the runtime resolves to no judge
+		// and the daemon behaves exactly as before.
+		JudgeConfigFromEnv: true,
 		// Async ingest: non-blocking hooks (PostToolUse, session lifecycle)
 		// are acked immediately and written in the background. Synchronous
 		// writes queue on the store's single SQLite connection, and under a
