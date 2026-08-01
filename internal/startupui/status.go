@@ -96,7 +96,7 @@ func (r *Renderer) HandleDownloadProgress(event judge.DownloadProgress) {
 		}
 		if event.Err != nil {
 			r.line("✗ Failed to download local judge model")
-			r.line("  Check your connection, then run `kontext setup` again.")
+			r.line("  Check your connection, then run `kontext guard start` again.")
 		}
 	}
 }
