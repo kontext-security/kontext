@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "shadcn": {
-      "command": "sh",
-      "args": ["-c", "cd web/guard-dashboard && exec npx shadcn@latest mcp"]
-    }
-  }
-}
