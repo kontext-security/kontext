@@ -1,8 +1,11 @@
 # Kontext Guard
 
-Guard is the local safety mode inside `kontext`.
+Guard is the local safety runtime inside `kontext`. It watches tool calls locally, redacts captured data, and stores decisions in local SQLite.
 
-It lets a developer run Claude Code normally while Kontext watches tool calls locally, redacts captured data, and stores events in local SQLite with `would allow` and `would deny` decisions. Sessions are reviewed in the hosted Kontext dashboard; the daemon exposes a local JSON API only.
+There are two supported ways to use it:
+
+- `kontext guard ...` is the standalone, local-only path. It has no login, does not call the hosted Kontext API, and does not upload traces or ledger records.
+- `kontext setup` is the managed path. It configures the managed-observe daemon, which still makes decisions locally but authenticates with the installation token and streams authorization-ledger batches to the hosted Kontext backend. Those records can then be reviewed in the hosted dashboard.
 
 ## User path
 
@@ -19,15 +22,10 @@ go run ./cmd/kontext setup
 
 ## Runtime boundary
 
-Guard mode is local-first by default:
+Both paths are local-first for the decision path: the runtime, policy evaluation, risk annotation, and SQLite ledger are local. The network boundary differs:
 
-- no login
-- no hosted Kontext API
-- no trace upload by default
-- local daemon on `127.0.0.1:4765`
-- local SQLite database
-- local JSON API (`/api/...`) for status and tooling
-- observe mode by default
+- **Standalone Guard** (`kontext guard ...`): no login, hosted API, trace upload, or ledger export; its daemon and JSON API are local.
+- **Managed setup** (`kontext setup`): no user login, but the managed-observe daemon uses its install token to fetch managed configuration and export authorization-ledger batches to the hosted backend. Its hook transport is a local Unix socket, and observe mode is the default unless the managed deployment selects another posture.
 
 ## Flow
 
