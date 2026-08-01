@@ -55,32 +55,3 @@ jobs:
           go build -o ./bin/kontext ./cmd/kontext
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck -mode=binary ./bin/kontext
-
-  proto:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Install Buf
-        run: |
-          go install github.com/bufbuild/buf/cmd/buf@v1.58.0
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      - name: Install protoc plugins
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
-          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.19.1
-
-      - name: Generate protobuf code
-        run: buf generate
-
-      - name: Check generated code is up to date
-        run: git diff --exit-code gen/ || (echo "Generated code is out of date. Run 'buf generate' and commit." && exit 1)

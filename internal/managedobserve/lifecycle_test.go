@@ -19,7 +19,6 @@ import (
 )
 
 func TestLifecycleMissingSocketKickstartsAndFailsOpenObserve(t *testing.T) {
-	t.Setenv("KONTEXT_ACCESS_MODE", "enforce")
 	kickstarts := 0
 	lifecycle := Lifecycle{
 		SocketPath: filepath.Join(t.TempDir(), "missing.sock"),

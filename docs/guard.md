@@ -8,13 +8,13 @@ It lets a developer run Claude Code normally while Kontext watches tool calls lo
 
 ```bash
 brew install kontext-security/tap/kontext
-kontext start
+kontext setup
 ```
 
 Until the Guard PR is merged and released, test from source:
 
 ```bash
-go run ./cmd/kontext start
+go run ./cmd/kontext setup
 ```
 
 ## Runtime boundary
@@ -28,14 +28,6 @@ Guard mode is local-first by default:
 - local SQLite database
 - local JSON API (`/api/...`) for status and tooling
 - observe mode by default
-
-Hosted managed mode remains separate:
-
-```bash
-kontext start --managed --agent claude
-```
-
-Hosted mode owns login, provider connection, short-lived scoped credentials, hosted traces, and team governance.
 
 ## Flow
 
@@ -77,7 +69,7 @@ The SQLite store also exposes raw ledger export and verification helpers for fol
 
 ## Local judge
 
-The user-facing `kontext start` path manages a local judge by default. For daemon-only diagnostics, Guard can call a localhost OpenAI-compatible judge, such as `llama-server`, after deterministic rules allow a blocking tool call:
+The `kontext setup` daemon manages a local judge by default. Guard can call a localhost OpenAI-compatible judge, such as `llama-server`, after deterministic rules allow a blocking tool call:
 
 ```bash
 kontext guard start \
@@ -238,7 +230,6 @@ Verdicts land in the `risk_classifier_verdicts` table, one row per decided actio
 
 - `svm_verdict` / `svm_score` / `svm_threshold` / `svm_model_version`, `llm_verdict` / `llm_model` / `llm_prompt_id` / `llm_duration_ms` / `llm_cached` / `llm_error`, and `enforced` (always `0`)
 - `command_redacted` — credential-redacted, capped at 8 KB. Classification runs on the raw command in memory; only the redacted form is persisted, because this dataset is exported back to authz-bench.
-- `agent_task` — the session's latest user prompt, captured from `UserPromptSubmit`. Only the `kontext start` wrapper path registers that hook, so daemon-only `kontext guard start` sessions leave it empty.
 - `user_feedback` — `should_allow` or `should_block`. This is the ground-truth label the whole pipeline exists to collect.
 
 Two loopback endpoints expose it. The embedded dashboard that used to call them is gone, so these are now for whatever labels verdicts locally — a script, a local tool, or a future command. Writes are same-origin only, so nothing reachable from a browsed page can forge training labels:

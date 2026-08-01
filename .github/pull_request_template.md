@@ -8,7 +8,6 @@
 - [ ] `go test ./...`
 - [ ] `go test -race ./...`
 - [ ] `go vet ./...`
-- [ ] `buf generate` if protobuf or generated code changed
 
 ## Release notes
 

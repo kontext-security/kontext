@@ -3,7 +3,6 @@ package main
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/setup"
 )
 
@@ -40,7 +39,7 @@ itself stays — it is managed by Homebrew).`,
 		},
 	}
 	cmd.Flags().StringVar(&token, "token", "", "install token from the Kontext dashboard (prompted interactively when omitted)")
-	cmd.Flags().StringVar(&cloudURL, "cloud-url", backend.BaseURL(), "Kontext cloud URL")
+	cmd.Flags().StringVar(&cloudURL, "cloud-url", setup.CloudURL(), "Kontext cloud URL")
 	cmd.Flags().BoolVar(&uninstall, "uninstall", false, "remove the self-serve managed install from this Mac")
 	_ = cmd.Flags().MarkHidden("cloud-url")
 	return cmd

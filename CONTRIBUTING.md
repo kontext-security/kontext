@@ -19,12 +19,6 @@ go vet ./...
 gofmt -w ./cmd ./internal
 ```
 
-If you touch generated protobuf code, also run:
-
-```bash
-buf generate
-```
-
 ## Pull requests
 
 - Include tests for behavior changes.

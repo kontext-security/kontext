@@ -25,7 +25,6 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
 	"github.com/kontext-security/kontext-cli/internal/codexmanaged"
 	"github.com/kontext-security/kontext-cli/internal/installation"
@@ -103,6 +102,14 @@ type Options struct {
 	HTTPClient *http.Client
 }
 
+// CloudURL returns the hosted API URL for install-token setup.
+func CloudURL() string {
+	if value := strings.TrimSpace(os.Getenv("KONTEXT_API_URL")); value != "" {
+		return value
+	}
+	return DefaultCloudURL
+}
+
 type pingResponse struct {
 	OrganizationID string `json:"organization_id"`
 	// JSON null (the legacy env-fallback org) decodes to "".
@@ -142,7 +149,7 @@ func Run(ctx context.Context, opts Options) error {
 	if cloudURL == "" {
 		// Same env-aware default as the --cloud-url flag, so KONTEXT_API_URL
 		// is honored even when the flag is explicitly emptied.
-		cloudURL = backend.BaseURL()
+		cloudURL = CloudURL()
 	}
 	// Same rules the daemon's parser applies, so a bad --cloud-url fails
 	// before any state is written.
