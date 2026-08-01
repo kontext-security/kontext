@@ -67,7 +67,7 @@ The SQLite store also exposes raw ledger export and verification helpers for fol
 
 ## Local judge
 
-The `kontext setup` daemon manages a local judge by default. Guard can call a localhost OpenAI-compatible judge, such as `llama-server`, after deterministic rules allow a blocking tool call:
+The standalone `kontext guard start` daemon can use a local OpenAI-compatible judge, such as `llama-server`. The managed-observe daemon does not download or start a model by default; configure it explicitly as described in [Guardrail LLM](#guardrail-llm).
 
 ```bash
 kontext guard start \
@@ -159,7 +159,6 @@ Which paths run the LLM depends on whether a local model is resolved:
 
 | path | guardrail LLM |
 |---|---|
-| `kontext start` (wrapper) | yes — manages `llama-server` itself and downloads the model |
 | `kontext guard start` (local daemon) | yes, same |
 | `managed-observe` daemon | only when `KONTEXT_JUDGE_URL` + `KONTEXT_JUDGE_MODEL` point at an endpoint, or `KONTEXT_JUDGE_MANAGED=1` |
 
