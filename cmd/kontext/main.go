@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,11 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
-	"github.com/zalando/go-keyring"
-
 	"github.com/kontext-security/kontext-cli/internal/agent"
-	"github.com/kontext-security/kontext-cli/internal/auth"
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
@@ -24,8 +19,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/hookcmd"
 	"github.com/kontext-security/kontext-cli/internal/localruntime"
 	"github.com/kontext-security/kontext-cli/internal/managedobserve"
-	"github.com/kontext-security/kontext-cli/internal/run"
-	"github.com/kontext-security/kontext-cli/internal/update"
+	"github.com/spf13/cobra"
 
 	_ "github.com/kontext-security/kontext-cli/internal/agent/claude"
 	_ "github.com/kontext-security/kontext-cli/internal/agent/codex"
@@ -34,33 +28,30 @@ import (
 
 var version = "dev"
 
-var (
-	startLocal   = run.StartLocal
-	startManaged = run.StartManaged
-	userHomeDir  = os.UserHomeDir
-)
+var userHomeDir = os.UserHomeDir
 
 func main() {
+	root := newRootCmd()
+	if err := root.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:     "kontext",
 		Short:   "Kontext CLI — governed agent sessions",
 		Version: version,
 	}
 
-	root.AddCommand(startCmd())
 	root.AddCommand(setupCmd())
-	root.AddCommand(loginCmd())
-	root.AddCommand(logoutCmd())
 	root.AddCommand(hookCmd())
 	root.AddCommand(managedObserveDaemonCmd())
 	root.AddCommand(doctorCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(guardCmd())
-
-	if err := root.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	return root
 }
 
 func doctorCmd() *cobra.Command {
@@ -182,122 +173,6 @@ func claudeManagedSettingsValidateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&kontextBinary, "kontext-binary", claudemanaged.DefaultKontextBinary, "Kontext executable path expected in managed hooks")
 	return cmd
-}
-
-func startCmd() *cobra.Command {
-	var (
-		agentName    string
-		templateFile string
-		managed      bool
-		verbose      bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   "start [flags] [-- extra-agent-args...]",
-		Short: "Launch an agent with Kontext runtime security",
-		Long: "Launch an agent with Kontext runtime security.\n\n" +
-			"By default, this starts a local-only runtime with no hosted login. " +
-			"Use --managed when you need hosted credentials, shared traces, and team governance.",
-		Example: "  kontext start\n" +
-			"  KONTEXT_MODE=enforce kontext start\n" +
-			"  kontext start --managed",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if isInteractivePrompt() {
-				if latest := update.Available(version); latest != "" {
-					upgraded, _ := update.PromptAndUpgrade(os.Stdin, os.Stderr, version, latest)
-					if upgraded {
-						return nil
-					}
-				}
-			} else {
-				update.CheckAsync(version)
-			}
-			if !managed && cmd.Flags().Changed("env-template") {
-				return errors.New("--env-template is only used with --managed sessions")
-			}
-			ctx := context.Background()
-			opts := run.Options{
-				Agent:        agentName,
-				TemplateFile: templateFile,
-				IssuerURL:    auth.DefaultIssuerURL,
-				ClientID:     auth.DefaultClientID,
-				Verbose:      verbose,
-				Args:         args,
-			}
-			var err error
-			if managed {
-				err = startManaged(ctx, opts)
-			} else {
-				err = startLocal(ctx, opts)
-			}
-			if exitErr, ok := err.(*run.AgentExitError); ok {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", exitErr)
-				os.Exit(exitErr.ExitCode())
-			}
-			return err
-		},
-	}
-
-	cmd.Flags().StringVar(&agentName, "agent", "claude", "Agent to launch (currently: claude)")
-	cmd.Flags().StringVar(&templateFile, "env-template", ".env.kontext", "Path to env template file for --managed sessions")
-	cmd.Flags().BoolVar(&managed, "managed", false, "Launch with hosted managed credentials and shared traces")
-	cmd.Flags().BoolVar(&verbose, "verbose", false, "Show redacted diagnostic output")
-
-	return cmd
-}
-
-func loginCmd() *cobra.Command {
-	var issuerURL, clientID string
-
-	cmd := &cobra.Command{
-		Use:   "login",
-		Short: "Authenticate with Kontext via browser",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
-
-			result, err := auth.Login(ctx, issuerURL, clientID)
-			if err != nil {
-				return fmt.Errorf("login failed: %w", err)
-			}
-
-			if err := auth.SaveSession(result.Session); err != nil {
-				return fmt.Errorf("save session: %w", err)
-			}
-
-			if display := result.Session.DisplayIdentity(); display != "" {
-				fmt.Fprintf(os.Stderr, "Logged in as %s\n", display)
-			} else {
-				fmt.Fprintln(os.Stderr, "Logged in.")
-			}
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&issuerURL, "issuer-url", auth.DefaultIssuerURL, "OIDC issuer URL")
-	cmd.Flags().StringVar(&clientID, "client-id", auth.DefaultClientID, "OAuth client ID")
-
-	return cmd
-}
-
-func logoutCmd() *cobra.Command {
-	return newLogoutCmd(auth.ClearSession)
-}
-
-func newLogoutCmd(clearSession func() error) *cobra.Command {
-	return &cobra.Command{
-		Use:   "logout",
-		Short: "Log out and clear stored credentials",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := clearSession(); err != nil {
-				if errors.Is(err, keyring.ErrNotFound) {
-					return errors.New("already logged out")
-				}
-				return fmt.Errorf("logout failed: %w", err)
-			}
-			fmt.Fprintln(cmd.ErrOrStderr(), "Logged out successfully.")
-			return nil
-		},
-	}
 }
 
 func hookCmd() *cobra.Command {
@@ -557,9 +432,6 @@ func sidecarFailureResult(event hook.Event, reason, mode string) hook.Result {
 		}
 		return hook.Result{Decision: hook.DecisionDeny, Reason: reason, Mode: "enforce"}
 	}
-	if currentHostedAccessMode() == "enforce" {
-		return hook.Result{Decision: hook.DecisionDeny, Reason: reason, Mode: "enforce"}
-	}
 	return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
 }
 
@@ -570,31 +442,6 @@ func normalizedHookMode(value string) string {
 	default:
 		return ""
 	}
-}
-
-func currentHostedAccessMode() string {
-	if modePath := os.Getenv("KONTEXT_ACCESS_MODE_PATH"); modePath != "" {
-		data, err := os.ReadFile(modePath)
-		if err != nil {
-			return "enforce"
-		}
-		if mode := normalizedHostedAccessMode(string(data)); mode != "" {
-			return mode
-		}
-		return "enforce"
-	}
-	return normalizedHostedAccessMode(os.Getenv("KONTEXT_ACCESS_MODE"))
-}
-
-func normalizedHostedAccessMode(value string) string {
-	mode := strings.TrimSpace(value)
-	if mode == "disabled" || mode == "no_policy" {
-		return mode
-	}
-	if mode == "enforce" {
-		return "enforce"
-	}
-	return ""
 }
 
 // isInteractivePrompt reports whether both stdin (where the answer is read)

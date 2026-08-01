@@ -29,7 +29,7 @@ body:
     attributes:
       label: Command
       description: The exact command you ran
-      placeholder: kontext start --agent claude
+      placeholder: kontext setup
     validations:
       required: true
   - type: textarea

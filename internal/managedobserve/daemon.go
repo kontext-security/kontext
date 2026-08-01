@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -165,6 +166,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		return fmt.Errorf("configure endpoint configuration client: %w", err)
 	}
 
+	judgeConfigured, err := judgeConfigFromEnv()
+	if err != nil {
+		return err
+	}
+
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          managedconfig.Agent,
 		DBPath:             dbPath,
@@ -184,9 +190,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// would have every managed endpoint download a model and run a
 		// llama-server child unprompted; the operator opts in with
 		// KONTEXT_JUDGE_MANAGED, or points at an endpoint they already run with
-		// KONTEXT_JUDGE_URL. With neither set the runtime resolves to no judge
-		// and the daemon behaves exactly as before.
-		JudgeConfigFromEnv: true,
+		// KONTEXT_JUDGE_URL and KONTEXT_JUDGE_MODEL. An incomplete optional
+		// configuration resolves to no judge, so the daemon behaves as before.
+		JudgeConfigFromEnv: judgeConfigured,
 		// Async ingest: non-blocking hooks (PostToolUse, session lifecycle)
 		// are acked immediately and written in the background. Synchronous
 		// writes queue on the store's single SQLite connection, and under a
@@ -296,6 +302,22 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			}
 		}
 	}
+}
+
+func judgeConfigFromEnv() (bool, error) {
+	judgeURL := strings.TrimSpace(os.Getenv("KONTEXT_JUDGE_URL"))
+	judgeModel := strings.TrimSpace(os.Getenv("KONTEXT_JUDGE_MODEL"))
+	judgeManaged := strings.TrimSpace(os.Getenv("KONTEXT_JUDGE_MANAGED"))
+	if judgeManaged != "" {
+		managed, err := strconv.ParseBool(judgeManaged)
+		if err != nil {
+			return false, fmt.Errorf("KONTEXT_JUDGE_MANAGED must be a boolean: %w", err)
+		}
+		if managed {
+			return true, nil
+		}
+	}
+	return judgeURL != "" && judgeModel != "", nil
 }
 
 func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.RuntimeConfiguration {

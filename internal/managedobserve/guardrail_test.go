@@ -80,10 +80,11 @@ func TestDaemonRecordsGuardrailVerdict(t *testing.T) {
 	}
 }
 
-// With no model configured the daemon must behave exactly as before: an SVM
-// verdict, and a recorded reason for the LLM's absence rather than a failure.
-func TestDaemonWithoutModelStillRecordsSVM(t *testing.T) {
-	t.Setenv("KONTEXT_JUDGE_URL", "")
+// An incomplete optional judge configuration must not prevent the managed
+// daemon from starting. It continues to record the SVM verdict as it did
+// before judge configuration was wired into this path.
+func TestDaemonWithIncompleteJudgeConfigStillRecordsSVM(t *testing.T) {
+	t.Setenv("KONTEXT_JUDGE_URL", "http://127.0.0.1:18080")
 	t.Setenv("KONTEXT_JUDGE_MODEL", "")
 	t.Setenv("KONTEXT_RISK_CLASSIFIER_MODE", "on")
 
@@ -112,10 +113,10 @@ func TestDaemonWithoutModelStillRecordsSVM(t *testing.T) {
 		t.Fatalf("verdicts = %d, want 1", len(verdicts))
 	}
 	if verdicts[0].SVM == nil {
-		t.Fatal("svm verdict missing without a model")
+		t.Fatal("svm verdict missing with incomplete judge config")
 	}
 	if verdicts[0].LLM != nil {
-		t.Errorf("llm verdict present without a model: %+v", verdicts[0].LLM)
+		t.Errorf("llm verdict present with incomplete judge config: %+v", verdicts[0].LLM)
 	}
 	if verdicts[0].LLMError == "" {
 		t.Error("absence of the guardrail was not recorded")

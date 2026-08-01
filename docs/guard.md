@@ -1,41 +1,31 @@
 # Kontext Guard
 
-Guard is the local safety mode inside `kontext`.
+Guard is the local safety runtime inside `kontext`. It watches tool calls locally, redacts captured data, and stores decisions in local SQLite.
 
-It lets a developer run Claude Code normally while Kontext watches tool calls locally, redacts captured data, and stores events in local SQLite with `would allow` and `would deny` decisions. Sessions are reviewed in the hosted Kontext dashboard; the daemon exposes a local JSON API only.
+There are two supported ways to use it:
+
+- `kontext guard ...` is the standalone, local-only path. It has no login, does not call the hosted Kontext API, and does not upload traces or ledger records.
+- `kontext setup` is the managed path. It configures the managed-observe daemon, which still makes decisions locally but authenticates with the installation token and streams authorization-ledger batches to the hosted Kontext backend. Those records can then be reviewed in the hosted dashboard.
 
 ## User path
 
 ```bash
 brew install kontext-security/tap/kontext
-kontext start
+kontext setup
 ```
 
 Until the Guard PR is merged and released, test from source:
 
 ```bash
-go run ./cmd/kontext start
+go run ./cmd/kontext setup
 ```
 
 ## Runtime boundary
 
-Guard mode is local-first by default:
+Both paths are local-first for the decision path: the runtime, policy evaluation, risk annotation, and SQLite ledger are local. The network boundary differs:
 
-- no login
-- no hosted Kontext API
-- no trace upload by default
-- local daemon on `127.0.0.1:4765`
-- local SQLite database
-- local JSON API (`/api/...`) for status and tooling
-- observe mode by default
-
-Hosted managed mode remains separate:
-
-```bash
-kontext start --managed --agent claude
-```
-
-Hosted mode owns login, provider connection, short-lived scoped credentials, hosted traces, and team governance.
+- **Standalone Guard** (`kontext guard ...`): no login, hosted API, trace upload, or ledger export; its daemon and JSON API are local.
+- **Managed setup** (`kontext setup`): no user login, but the managed-observe daemon uses its install token to fetch managed configuration and export authorization-ledger batches to the hosted backend. Its hook transport is a local Unix socket, and observe mode is the default unless the managed deployment selects another posture.
 
 ## Flow
 
@@ -77,7 +67,7 @@ The SQLite store also exposes raw ledger export and verification helpers for fol
 
 ## Local judge
 
-The user-facing `kontext start` path manages a local judge by default. For daemon-only diagnostics, Guard can call a localhost OpenAI-compatible judge, such as `llama-server`, after deterministic rules allow a blocking tool call:
+The standalone `kontext guard start` daemon can use a local OpenAI-compatible judge, such as `llama-server`. The managed-observe daemon does not download or start a model by default; configure it explicitly as described in [Guardrail LLM](#guardrail-llm).
 
 ```bash
 kontext guard start \
@@ -169,7 +159,6 @@ Which paths run the LLM depends on whether a local model is resolved:
 
 | path | guardrail LLM |
 |---|---|
-| `kontext start` (wrapper) | yes — manages `llama-server` itself and downloads the model |
 | `kontext guard start` (local daemon) | yes, same |
 | `managed-observe` daemon | only when `KONTEXT_JUDGE_URL` + `KONTEXT_JUDGE_MODEL` point at an endpoint, or `KONTEXT_JUDGE_MANAGED=1` |
 
@@ -252,7 +241,6 @@ Verdicts land in the `risk_classifier_verdicts` table, one row per decided actio
 
 - `svm_verdict` / `svm_score` / `svm_threshold` / `svm_model_version`, `llm_verdict` / `llm_model` / `llm_prompt_id` / `llm_duration_ms` / `llm_cached` / `llm_error`, and `enforced` (always `0`)
 - `command_redacted` — credential-redacted, capped at 8 KB. Classification runs on the raw command in memory; only the redacted form is persisted, because this dataset is exported back to authz-bench.
-- `agent_task` — the session's latest user prompt, captured from `UserPromptSubmit`. Only the `kontext start` wrapper path registers that hook, so daemon-only `kontext guard start` sessions leave it empty.
 - `user_feedback` — `should_allow` or `should_block`. This is the ground-truth label the whole pipeline exists to collect.
 
 Two loopback endpoints expose it. The embedded dashboard that used to call them is gone, so these are now for whatever labels verdicts locally — a script, a local tool, or a future command. Writes are same-origin only, so nothing reachable from a browsed page can forge training labels:
