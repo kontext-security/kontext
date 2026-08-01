@@ -31,6 +31,14 @@ var version = "dev"
 var userHomeDir = os.UserHomeDir
 
 func main() {
+	root := newRootCmd()
+	if err := root.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:     "kontext",
 		Short:   "Kontext CLI — governed agent sessions",
@@ -43,11 +51,7 @@ func main() {
 	root.AddCommand(doctorCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(guardCmd())
-
-	if err := root.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	return root
 }
 
 func doctorCmd() *cobra.Command {
