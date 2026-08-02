@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -49,11 +50,11 @@ func TestPrintStatusDaemonVersionMatch(t *testing.T) {
 	env.writeDaemonStatus(t, os.Getpid(), "1.2.3")
 
 	var out bytes.Buffer
-	stale := printStatus(&out, "1.2.3", env.options())
+	status := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
-	if stale {
-		t.Fatal("staleDaemon = true, want false")
+	if !status.Healthy || status.Repairable {
+		t.Fatalf("status = %+v, want healthy and not repairable", status)
 	}
 	if !strings.Contains(output, "  daemon: running (v1.2.3, pid ") {
 		t.Fatalf("output = %q, want daemon version and pid", output)
@@ -68,11 +69,11 @@ func TestPrintStatusDaemonVersionMismatch(t *testing.T) {
 	env.writeDaemonStatus(t, os.Getpid(), "1.2.2")
 
 	var out bytes.Buffer
-	stale := printStatus(&out, "1.2.3", env.options())
+	status := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
-	if !stale {
-		t.Fatal("staleDaemon = false, want true")
+	if status.Healthy || status.Repairable != wantAutomaticDaemonRepair() {
+		t.Fatalf("status = %+v, want unhealthy and repairable=%v", status, wantAutomaticDaemonRepair())
 	}
 	if !strings.Contains(output, "WARNING: daemon is running v1.2.2 but v1.2.3 is installed") {
 		t.Fatalf("output = %q, want mismatch warning", output)
@@ -84,11 +85,11 @@ func TestPrintStatusDaemonDevVersionDoesNotWarn(t *testing.T) {
 	env.writeDaemonStatus(t, os.Getpid(), "dev")
 
 	var out bytes.Buffer
-	stale := printStatus(&out, "1.2.3", env.options())
+	status := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
-	if stale {
-		t.Fatal("staleDaemon = true, want false")
+	if !status.Healthy || status.Repairable {
+		t.Fatalf("status = %+v, want healthy and not repairable", status)
 	}
 	if strings.Contains(output, "WARNING: daemon is running") {
 		t.Fatalf("output = %q, want no dev mismatch warning", output)
@@ -100,11 +101,11 @@ func TestPrintStatusDaemonDeadPIDTreatedAsUnknownAndFixable(t *testing.T) {
 	env.writeDaemonStatus(t, deadPID(t), "1.2.2")
 
 	var out bytes.Buffer
-	stale := printStatus(&out, "1.2.3", env.options())
+	status := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
-	if !stale {
-		t.Fatal("staleDaemon = false, want true")
+	if status.Healthy || status.Repairable != wantAutomaticDaemonRepair() {
+		t.Fatalf("status = %+v, want unhealthy and repairable=%v", status, wantAutomaticDaemonRepair())
 	}
 	if !strings.Contains(output, "  daemon: running\n") {
 		t.Fatalf("output = %q, want plain running line", output)
@@ -131,14 +132,18 @@ func TestPrintStatusDaemonWithoutBreadcrumbIsFixable(t *testing.T) {
 	env := newDoctorTestEnv(t)
 
 	var out bytes.Buffer
-	stale := printStatus(&out, "1.2.3", env.options())
+	status := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
-	if !stale {
-		t.Fatal("staleDaemon = false, want true")
+	if status.Healthy || status.Repairable != wantAutomaticDaemonRepair() {
+		t.Fatalf("status = %+v, want unhealthy and repairable=%v", status, wantAutomaticDaemonRepair())
 	}
-	if !strings.Contains(output, "WARNING: daemon version is unknown — it likely predates v1.2.3") {
-		t.Fatalf("output = %q, want unknown-version warning", output)
+	wantWarning := "WARNING: daemon version is unknown — it likely predates v1.2.3"
+	if !wantAutomaticDaemonRepair() {
+		wantWarning = "WARNING: daemon version is unknown — restart it through its managing installation"
+	}
+	if !strings.Contains(output, wantWarning) {
+		t.Fatalf("output = %q, want warning %q", output, wantWarning)
 	}
 }
 
@@ -146,11 +151,11 @@ func TestPrintStatusDaemonWithoutBreadcrumbDevInstallDoesNotWarn(t *testing.T) {
 	env := newDoctorTestEnv(t)
 
 	var out bytes.Buffer
-	stale := printStatus(&out, "dev", env.options())
+	status := printStatus(&out, "dev", env.options())
 
 	output := out.String()
-	if stale {
-		t.Fatal("staleDaemon = true, want false")
+	if !status.Healthy || status.Repairable {
+		t.Fatalf("status = %+v, want healthy and not repairable", status)
 	}
 	if strings.Contains(output, "WARNING: daemon version is unknown") {
 		t.Fatalf("output = %q, want no warning for dev install", output)
@@ -170,11 +175,11 @@ func TestPrintStatusHeartbeatFreshAndExportUpToDate(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	stale := printStatus(&out, "1.2.3", env.options())
+	status := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
-	if stale {
-		t.Fatal("staleDaemon = true, want false")
+	if !status.Healthy || status.Repairable {
+		t.Fatalf("status = %+v, want healthy and not repairable", status)
 	}
 	if !strings.Contains(output, "  heartbeat: 20s ago") {
 		t.Fatalf("output = %q, want fresh heartbeat", output)
@@ -197,11 +202,11 @@ func TestPrintStatusHeartbeatOldAndExportLagging(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	stale := printStatus(&out, "1.2.3", env.options())
+	status := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
-	if stale {
-		t.Fatal("staleDaemon = true, want false")
+	if status.Healthy || status.Repairable {
+		t.Fatalf("status = %+v, want unhealthy and not repairable", status)
 	}
 	if !strings.Contains(output, "WARNING: last heartbeat was 6m0s ago") {
 		t.Fatalf("output = %q, want old heartbeat warning", output)
@@ -283,15 +288,28 @@ type doctorTestEnv struct {
 	now        time.Time
 }
 
+func wantAutomaticDaemonRepair() bool {
+	return runtime.GOOS == "darwin"
+}
+
 func newDoctorTestEnv(t *testing.T) doctorTestEnv {
 	t.Helper()
 	dir := t.TempDir()
-	configPath := filepath.Join(dir, "managed.json")
+	t.Setenv("HOME", dir)
+	configPath := filepath.Join(dir, "Library", "Application Support", "Kontext", "managed.json")
 	installationPath := filepath.Join(dir, "installation.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	writeTestManagedConfig(t, configPath)
+	t.Setenv(managedconfig.EnvPath, "")
 	writeTestInstallation(t, installationPath)
 	t.Setenv(installation.EnvPath, installationPath)
-	t.Setenv("HOME", dir)
+	if err := managedstream.SaveState(managedstream.DefaultStatePathForDB(filepath.Join(dir, "guard.db")), managedstream.State{
+		LastHeartbeatAt: time.Date(2026, 7, 9, 11, 59, 40, 0, time.UTC).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return doctorTestEnv{
 		dir:        dir,
 		dbPath:     filepath.Join(dir, "guard.db"),
@@ -309,7 +327,8 @@ func (e doctorTestEnv) options() doctorOptions {
 			_ = server.Close()
 			return client, nil
 		},
-		Now: func() time.Time { return e.now },
+		Now:                func() time.Time { return e.now },
+		LaunchAgentPresent: func() bool { return true },
 	}
 }
 

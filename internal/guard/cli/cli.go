@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
+	"github.com/kontext-security/kontext-cli/internal/codexmanaged"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
@@ -263,48 +264,141 @@ func runDoctor(ctx context.Context, args []string, out io.Writer) error {
 	return nil
 }
 
-func PrintHookStatus(out io.Writer) {
+// HookStatus is the read-only health result of installed agent integrations.
+type HookStatus struct{ Healthy bool }
+
+// PrintHookStatus reports local Guard hooks only. Hosted setup checks are
+// separate so `kontext guard doctor` stays useful on a Guard-only machine.
+func PrintHookStatus(out io.Writer) HookStatus {
+	status := HookStatus{Healthy: true}
 	settingsPath, settings, err := readClaudeSettings()
 	if err != nil {
-		fmt.Fprintf(out, "Claude Code hooks: unavailable (%v)\n", err)
-		return
-	}
-	fmt.Fprintf(out, "Claude Code settings: %s\n", settingsPath)
-	hooks, ok := settings["hooks"].(map[string]any)
-	if !ok || len(hooks) == 0 {
-		fmt.Fprintln(out, "Claude Code hooks: none installed")
-		return
-	}
-	hosted := false
-	guard := false
-	for _, raw := range hooks {
-		visitHookCommands(raw, func(command string) {
-			switch {
-			case isGuardHookCommand(command):
-				guard = true
-				fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
-			// Managed-observe hooks are quoted ('<bin>' hook '<alias>'); use the
-			// shared predicate so wrapper commands containing "kontext" are not
-			// misclassified as hosted hooks.
-			case claudemanaged.IsManagedHookCommand(command):
-				hosted = true
-				fmt.Fprintf(out, "Claude Code hosted hook: %s\n", command)
+		fmt.Fprintf(out, "Claude Code local Guard hooks: unavailable (%v)\n", err)
+	} else {
+		fmt.Fprintf(out, "Claude Code local Guard settings: %s\n", settingsPath)
+		hooks, ok := settings["hooks"].(map[string]any)
+		if !ok || len(hooks) == 0 {
+			fmt.Fprintln(out, "Claude Code local Guard hooks: none installed")
+		} else {
+			hosted, guard := false, false
+			for _, raw := range hooks {
+				visitHookCommands(raw, func(command string) {
+					switch {
+					case isGuardHookCommand(command):
+						guard = true
+						fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
+					case claudemanaged.IsManagedHookCommand(command):
+						hosted = true
+						fmt.Fprintf(out, "Claude Code hosted hook: %s\n", command)
+					}
+				})
 			}
-		})
+			switch {
+			case guard && hosted:
+				fmt.Fprintln(out, "Claude Code local Guard hook mode: conflict (hosted and Guard hooks are both installed)")
+				status.Healthy = false
+			case guard:
+				fmt.Fprintln(out, "Claude Code local Guard hook mode: local Guard")
+			case hosted:
+				fmt.Fprintln(out, "Claude Code local Guard hook mode: hosted")
+			default:
+				fmt.Fprintln(out, "Claude Code local Guard hook mode: no Kontext hook detected")
+			}
+		}
+		if disabled, _ := settings["disableAllHooks"].(bool); disabled {
+			fmt.Fprintln(out, "Claude Code local Guard hooks: disabled by disableAllHooks")
+			status.Healthy = false
+		}
 	}
-	if guard && hosted {
-		fmt.Fprintln(out, "Claude Code hook mode: conflict (hosted and Guard hooks are both installed)")
-		return
+	return status
+}
+
+// PrintManagedHookStatus verifies the integrations installed by `kontext
+// setup`: Claude Code managed settings and Codex hooks plus their feature flag.
+func PrintManagedHookStatus(out io.Writer) HookStatus {
+	claudeHealthy := printManagedClaudeHookStatus(out, claudemanaged.ManagedSettingsDropInPath)
+	codexHealthy := printCodexHookStatus(out)
+	return HookStatus{Healthy: claudeHealthy && codexHealthy}
+}
+
+// PrintOrganizationManagedHookStatus checks the policy-owned Claude settings
+// used by organization-managed installs. Codex user hooks are intentionally a
+// self-serve requirement only.
+func PrintOrganizationManagedHookStatus(out io.Writer) HookStatus {
+	return HookStatus{Healthy: printManagedClaudeHookStatus(out, claudemanaged.DefaultManagedSettingsPath())}
+}
+
+func printManagedClaudeHookStatus(out io.Writer, paths ...string) bool {
+	found, healthy := false, true
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			fmt.Fprintf(out, "Claude Code managed hooks: ERROR reading %s: %v\n", path, err)
+			return false
+		}
+		found = true
+		if binary, ok := claudemanaged.ManagedObserveHookBinary(data); ok {
+			if info, err := os.Stat(binary); err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+				fmt.Fprintf(out, "Claude Code managed hooks: configured binary is not executable (%s)\n", binary)
+				healthy = false
+				continue
+			}
+			fmt.Fprintf(out, "Claude Code managed hooks: installed (%s; binary %s)\n", path, binary)
+			continue
+		}
+		fmt.Fprintf(out, "Claude Code managed hooks: incomplete or disabled (%s)\n", path)
+		healthy = false
 	}
-	if guard {
-		fmt.Fprintln(out, "Claude Code hook mode: local Guard")
-		return
+	if !found {
+		fmt.Fprintln(out, "Claude Code managed hooks: none installed")
 	}
-	if hosted {
-		fmt.Fprintln(out, "Claude Code hook mode: hosted")
-		return
+	return found && healthy
+}
+
+func printCodexHookStatus(out io.Writer) bool {
+	hooksPath, err := codexmanaged.UserHooksPathNoCreate()
+	if err != nil {
+		fmt.Fprintf(out, "Codex hooks: unavailable (%v)\n", err)
+		return false
 	}
-	fmt.Fprintln(out, "Claude Code hook mode: no Kontext hook detected")
+	raw, err := os.ReadFile(hooksPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(out, "Codex hooks: none installed (%s)\n", hooksPath)
+		} else {
+			fmt.Fprintf(out, "Codex hooks: ERROR %v\n", err)
+		}
+		return false
+	}
+	binary, err := codexmanaged.ValidateInstalled(raw)
+	if err != nil {
+		fmt.Fprintf(out, "Codex hooks: incomplete (%v)\n", err)
+		return false
+	}
+	if info, err := os.Stat(binary); err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+		fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s)\n", binary)
+		return false
+	}
+	configPath, err := codexmanaged.UserConfigPathNoCreate()
+	if err != nil {
+		fmt.Fprintf(out, "Codex hooks feature: unavailable (%v)\n", err)
+		return false
+	}
+	enabled, err := codexmanaged.HooksEnabled(configPath)
+	if err != nil || !enabled {
+		if err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(out, "Codex hooks feature: ERROR %v\n", err)
+		} else {
+			fmt.Fprintf(out, "Codex hooks feature: disabled (set [features].hooks = true in %s)\n", configPath)
+		}
+		return false
+	}
+	fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", hooksPath, binary)
+	fmt.Fprintf(out, "Codex hooks feature: enabled (%s)\n", configPath)
+	return true
 }
 
 func visitHookCommands(raw any, visit func(string)) {
@@ -361,6 +455,9 @@ func installClaudeHooks(out io.Writer, socketPath string) error {
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		return err
+	}
 	if err := backupFile(settingsPath, "kontext-guard"); err != nil {
 		return err
 	}
@@ -413,11 +510,7 @@ func readClaudeSettings() (string, map[string]any, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	claudeDir := filepath.Join(home, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		return "", nil, err
-	}
-	settingsPath := filepath.Join(claudeDir, "settings.json")
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	settings := map[string]any{}
 	raw, err := os.ReadFile(settingsPath)
 	if err == nil {

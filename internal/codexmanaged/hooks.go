@@ -129,6 +129,56 @@ func Validate(data []byte, kontextBinary string) error {
 	return nil
 }
 
+// ValidateInstalled validates hooks without assuming the path of the running
+// binary. Setup deliberately writes a stable Homebrew symlink while the
+// process itself can run from a versioned Cellar path. It returns that shared
+// configured binary path so diagnostics can check that it still exists.
+func ValidateInstalled(data []byte) (string, error) {
+	var settings Settings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return "", fmt.Errorf("parse Codex hooks: %w", err)
+	}
+	if settings.Hooks == nil {
+		return "", errors.New("hooks missing")
+	}
+	var binary string
+	var problems []string
+	for _, event := range SupportedEvents {
+		groups := settings.Hooks[event.Name.String()]
+		found := false
+		for _, group := range groups {
+			for _, handler := range group.Hooks {
+				if !IsManagedHookCommand(handler.Command) {
+					continue
+				}
+				if handler.Type != "command" || len(handler.Args) > 0 || handler.Timeout <= 0 || (handler.Async != nil && *handler.Async) || !isAllMatcher(group.Matcher) {
+					problems = append(problems, fmt.Sprintf("%s hook is invalid", event.Name))
+					continue
+				}
+				fields, _ := agenthooks.SplitCommand(handler.Command)
+				if fields[4] != event.Alias {
+					problems = append(problems, fmt.Sprintf("%s hook uses %q, want %q", event.Name, fields[4], event.Alias))
+					continue
+				}
+				if binary == "" {
+					binary = fields[0]
+				} else if binary != fields[0] {
+					problems = append(problems, "Kontext hooks use different binary paths")
+					continue
+				}
+				found = true
+			}
+		}
+		if !found {
+			problems = append(problems, fmt.Sprintf("%s hook missing", event.Name))
+		}
+	}
+	if len(problems) > 0 {
+		return "", errors.New(strings.Join(problems, "; "))
+	}
+	return binary, nil
+}
+
 // IsManagedHookCommand reports whether a hook command is one of OUR Codex
 // self-serve hooks. Matching on the alias rather than the exact binary path
 // lets setup replace stale entries after the binary moves.
