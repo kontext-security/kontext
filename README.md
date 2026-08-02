@@ -1,4 +1,4 @@
-<img src="assets/kontext-banner-cli.svg" alt="Kontext CLI banner" width="100%" />
+<img src="assets/kontext-banner-cli.png" alt="Kontext CLI banner" width="100%" />
 
 <div align="center">
 
@@ -20,93 +20,89 @@
 
 </div>
 
-Kontext is an authorization platform for AI agents. It helps teams control what agents can access and do with scoped credentials, policy enforcement, approvals, and audit trails. Kontext can run local-first for developer agents and extend to managed or self-hosted deployments for security-sensitive environments.
+Runtime governance for AI agents, with local policy decisions, pre-action
+enforcement, and an authorization ledger.
+
+Kontext runs alongside AI agents on developer machines and in cloud
+environments. It receives tool-use events through local hooks, evaluates
+policy before consequential actions execute, and records decisions and outcomes
+in an authorization ledger. The decision path stays local; managed deployments
+can export redacted records to the Kontext dashboard.
+
+[The agent support matrix](docs/coverage.md) is authoritative for each agent and event
+surface. Blocking is off by default and available only at supported synchronous
+pre-action hooks.
 
 ## Quickstart
 
 ```bash
 brew install kontext-security/tap/kontext
-```
-
-## Connect your machine to your workspace
-
-Use self-serve setup to stream agent activity from your machine into your team's Kontext dashboard.
-
-Generate an install token on your workspace's Deployments page, then run:
-
-```bash
 kontext setup
 ```
 
-Re-run `kontext setup` to rotate the stored token. Run `kontext setup --uninstall` to remove the user-level config, hooks, LaunchAgent, and keychain token that setup installed; local logs and observe data are kept, and organization-managed hooks are left in place. Self-serve setup is currently macOS only.
+Create an install token in the Kontext dashboard when setup asks for one.
+Setup stores the token in the login keychain, installs hooks for supported
+agents, and starts a background daemon.
 
-Run `kontext doctor` to inspect the daemon version, heartbeat, and export backlog. When upgrading from a release that predates automatic stale-binary recovery, run `kontext doctor --fix` once if doctor reports an old or unknown daemon version; subsequent Homebrew upgrades restart the daemon automatically.
+```bash
+kontext doctor
+```
+
+Use `doctor` to check hook status, daemon health, and the managed export
+backlog. Re-run `kontext setup` to rotate the token. Run `kontext setup
+--uninstall` to remove the self-serve installation. Self-serve setup currently
+supports macOS.
+
+## How it works
+
+```text
+agent asks to use a tool
+        |
+        v
+Kontext receives the action through a hook
+        |
+        v
+local policy allows, denies, or records a would-decision
+        |
+        v
+the decision is written to the local authorization ledger
+```
+
+The decision path is local. A managed deployment adds configuration and record
+export; it does not require a hosted service to answer every tool call.
 
 ## Core features
 
 Kontext balances security and utility for AI agents: low-risk actions keep moving, and unsafe actions can be blocked before they execute.
 
-- **Audit trails:** Record who instructed which agent to do what, what the agent accessed, which tools it called, what policy decisions were made, and what happened next. Build a chain of custody for security review, incident investigation, and compliance evidence.
-- **Deterministic policy:** Apply `allow` and `deny` rules to agent actions at runtime, before they execute. Use hard policies for known boundaries such as destructive commands, production resources, sensitive files, data exports, and credential access.
-- **Probabilistic risk detection:** Route actions that deterministic policy allows through a local judge for an additional allow/deny decision without sending tool context to hosted services.
-
-The decision path is:
-
-```text
-Agent tool call
-  -> agent hook
-  -> daemon
-  -> action classification
-  -> deterministic policy
-  -> probabilistic risk score
-  -> allow / deny
-  -> hosted dashboard stream
-```
+- **Observe agent actions.** Record supported tool calls, policy decisions, and
+  outcomes in a local authorization ledger.
+- **Apply policy before actions run.** Use deterministic rules for boundaries
+  such as destructive commands, sensitive files, production systems, data
+  exports, and credential access.
+- **Roll out safely.** Observe mode shows what policy would deny without
+  interrupting work. Enforce mode returns a real denial for matching rules.
+- **Keep evidence.** Store redacted records locally and, for managed
+  deployments, send them to the Kontext dashboard for review.
+- **Run where the agent runs.** Use Kontext on a developer machine, in a cloud
+  sandbox, or in another managed agent environment with a supported hook.
 
 ## Managed deployments
 
 For enterprise identity, audit retention, organization controls, deployment planning, custom usage volume, and onboarding for security and platform teams, contact [michel@kontext.security](mailto:michel@kontext.security) or [book here](https://calendar.superhuman.com/book/11W5Y8b5JsB8dOzQbd/YECs9).
 
-## Security defaults
+## Agent support matrix
 
-| Default | Behavior |
-| --- | --- |
-| User-scope daemon | `kontext setup` installs a user LaunchAgent that runs `kontext managed-observe-daemon`. |
-| Observe mode | Decisions are recorded as `would allow` or `would deny` without blocking the agent. |
-| Keychain token storage | Self-serve install tokens are stored in the user's login keychain. |
-| Redacted storage | Tool events and decisions are stored locally with redaction. |
-| Managed local judge | Homebrew installs `llama-server` via `llama.cpp`; Kontext downloads and caches the default GGUF judge model when needed. |
-| No reasoning capture | Kontext captures tool events and outcomes, not LLM reasoning, token usage, or full conversation history. |
+[See the agent support matrix](docs/coverage.md) for the exact events, enforcement
+points, installation scope, and known gaps for each agent. It is the source of
+truth for what “supported” means; an integration is not treated as fully
+covered merely because Kontext can receive an event from it.
 
-## Agent support
+## Data handling
 
-| Agent | Status | Self-serve path | Support level |
-| --- | --- | --- | --- |
-| Claude Code | Active | `kontext setup` | Daemon, dashboard stream, observe by default (enforce only when managed config sets `enforce`). |
-| Claude Cowork | Active | `kontext setup` | Cowork activity appears in the dashboard after setup. |
-| Goose | Planned | Coming soon | Adapter not shipped yet. |
-| Codex | Planned | Coming soon | Adapter not shipped yet. |
-| Cursor | Planned | Coming soon | Adapter not shipped yet. |
-
-Additional agents can be added through adapters that send compatible tool events into the local runtime.
-
-## Architecture
-
-```text
-kontext setup
-  |
-  |-- User managed config: ~/Library/Application Support/Kontext/managed.json
-  |-- Agent integration: hooks or observer
-  |     |-- PreToolUse  -> kontext hook pre-tool-use
-  |     |-- PostToolUse -> kontext hook post-tool-use
-  |
-  |-- LaunchAgent: security.kontext.managed-observe
-  |-- Daemon: Unix socket service + RuntimeCore
-  |-- Deterministic policy: curated rule categories + active profile
-  |-- Probabilistic risk: local allow/deny decision after deterministic allow
-  |-- Store: local SQLite with redacted events and decision metadata
-  |-- Stream: governed activity to the hosted workspace dashboard
-```
+Kontext stores tool activity and decision evidence, not model reasoning or full
+conversation history. Sensitive values are redacted before local storage and
+managed export.
 
 ## Development
 
