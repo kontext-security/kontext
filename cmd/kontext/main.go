@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -57,17 +58,31 @@ func newRootCmd() *cobra.Command {
 func doctorCmd() *cobra.Command {
 	var fix bool
 	cmd := &cobra.Command{
-		Use:   "doctor",
-		Short: "Inspect local Kontext CLI setup",
+		Use:           "doctor",
+		Short:         "Inspect local Kontext CLI setup",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			guardcli.PrintHookStatus(cmd.OutOrStdout())
-			staleDaemon := managedobserve.PrintStatus(cmd.OutOrStdout(), version)
+			managed := managedobserve.PrintStatus(cmd.OutOrStdout(), version)
+			hooksHealthy := true
+			if managed.SelfServe {
+				hooksHealthy = guardcli.PrintManagedHookStatus(cmd.OutOrStdout()).Healthy
+			} else if managed.Configured {
+				hooksHealthy = guardcli.PrintOrganizationManagedHookStatus(cmd.OutOrStdout()).Healthy
+			}
+			localHooks := guardcli.PrintHookStatus(cmd.OutOrStdout())
+			healthy := managed.Healthy && hooksHealthy && (!managed.Configured || localHooks.Healthy)
 			if fix {
-				if !staleDaemon {
-					fmt.Fprintln(cmd.OutOrStdout(), "nothing to fix")
-					return nil
+				if !managed.Repairable {
+					if healthy {
+						fmt.Fprintln(cmd.OutOrStdout(), "nothing to fix")
+						return nil
+					}
+					fmt.Fprintln(cmd.OutOrStdout(), "no automatic fixes are available for the reported issues")
+					return errDoctorUnhealthy
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 				defer cancel()
 				if err := managedobserve.KickstartLaunchdKill(ctx, managedobserve.DefaultLabel()); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "failed to restart managed-observe daemon: %v\n", err)
@@ -77,7 +92,7 @@ func doctorCmd() *cobra.Command {
 				// daemon can exit immediately (unreadable token, codesigning
 				// kill). Only report success once the restarted daemon is
 				// serving on the installed version.
-				waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				waitCtx, waitCancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 				defer waitCancel()
 				status, err := managedobserve.WaitForDaemonRestart(
 					waitCtx,
@@ -90,6 +105,19 @@ func doctorCmd() *cobra.Command {
 					return err
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "restarted managed-observe daemon (v%s, pid %d)\n", status.Version, status.PID)
+				fmt.Fprintln(cmd.OutOrStdout(), "\nAfter repair:")
+				managed = managedobserve.PrintStatus(cmd.OutOrStdout(), version)
+				hooksHealthy = true
+				if managed.SelfServe {
+					hooksHealthy = guardcli.PrintManagedHookStatus(cmd.OutOrStdout()).Healthy
+				} else if managed.Configured {
+					hooksHealthy = guardcli.PrintOrganizationManagedHookStatus(cmd.OutOrStdout()).Healthy
+				}
+				localHooks = guardcli.PrintHookStatus(cmd.OutOrStdout())
+				healthy = managed.Healthy && hooksHealthy && (!managed.Configured || localHooks.Healthy)
+			}
+			if !healthy {
+				return errDoctorUnhealthy
 			}
 			return nil
 		},
@@ -97,6 +125,8 @@ func doctorCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&fix, "fix", false, "restart the managed-observe daemon when it is running a stale binary")
 	return cmd
 }
+
+var errDoctorUnhealthy = errors.New("local Kontext setup is unhealthy")
 
 func guardCmd() *cobra.Command {
 	return &cobra.Command{

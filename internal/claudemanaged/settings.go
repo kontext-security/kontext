@@ -194,6 +194,44 @@ func HasManagedObserveHooks(data []byte) bool {
 	return true
 }
 
+// ManagedObserveHookBinary returns the common binary path referenced by every
+// managed-observe hook. It validates the same effective hook shape as
+// HasManagedObserveHooks while preserving the path for read-only diagnostics.
+func ManagedObserveHookBinary(data []byte) (string, bool) {
+	var settings Settings
+	if err := json.Unmarshal(data, &settings); err != nil || (settings.DisableAllHooks != nil && *settings.DisableAllHooks) {
+		return "", false
+	}
+	binary := ""
+	for _, event := range SupportedEvents {
+		found := false
+		for _, group := range settings.Hooks[event.Name.String()] {
+			if !isAllMatcher(group.Matcher) {
+				continue
+			}
+			for _, handler := range group.Hooks {
+				if handler.Type != "command" || len(handler.Args) != 0 || validateAsync(event, handler.Async) != nil {
+					continue
+				}
+				fields, ok := agenthooks.SplitCommand(handler.Command)
+				if !ok || len(fields) != 3 || filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != event.Alias {
+					continue
+				}
+				if binary == "" {
+					binary = fields[0]
+				} else if binary != fields[0] {
+					return "", false
+				}
+				found = true
+			}
+		}
+		if !found {
+			return "", false
+		}
+	}
+	return binary, binary != ""
+}
+
 func DisablesAllHooks(data []byte) bool {
 	var settings Settings
 	if err := json.Unmarshal(data, &settings); err != nil {

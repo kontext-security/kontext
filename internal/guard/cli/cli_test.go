@@ -236,7 +236,7 @@ func TestPrintHookStatusReportsGuardAndHostedConflict(t *testing.T) {
 	if strings.Contains(got, "not-kontext") {
 		t.Fatalf("PrintHookStatus() = %q, want foreign hook ignored", got)
 	}
-	if !strings.Contains(got, "Claude Code hook mode: conflict (hosted and Guard hooks are both installed)") {
+	if !strings.Contains(got, "Claude Code local Guard hook mode: conflict (hosted and Guard hooks are both installed)") {
 		t.Fatalf("PrintHookStatus() = %q, want conflict mode", got)
 	}
 }

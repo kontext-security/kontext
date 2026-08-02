@@ -2,6 +2,7 @@ package codexmanaged
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,20 @@ func TestEnsureHooksEnabledCreatesMissingFile(t *testing.T) {
 	}
 	if got := readConfig(t, path); got != "[features]\nhooks = true\n" {
 		t.Fatalf("created config = %q", got)
+	}
+}
+
+func TestHooksEnabledIsReadOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if _, err := HooksEnabled(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("HooksEnabled(missing) error = %v, want not exist", err)
+	}
+	if err := os.WriteFile(path, []byte("[features]\ncodex_hooks = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := HooksEnabled(path)
+	if err != nil || !enabled {
+		t.Fatalf("HooksEnabled() = (%v, %v), want (true, nil)", enabled, err)
 	}
 }
 

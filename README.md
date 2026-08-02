@@ -48,10 +48,12 @@ agents, and starts a background daemon.
 kontext doctor
 ```
 
-Use `doctor` to check hook status, daemon health, and the managed export
-backlog. Re-run `kontext setup` to rotate the token. Run `kontext setup
---uninstall` to remove the self-serve installation. Self-serve setup currently
-supports macOS.
+Use `doctor` to check self-serve hook status, daemon health, and the managed
+export backlog. It exits non-zero when a configured installation is unhealthy.
+For a self-serve stale daemon, `kontext doctor --fix` performs the verified
+restart; other findings include their manual remediation. Re-run `kontext
+setup` to rotate the token. Run `kontext setup --uninstall` to remove the
+self-serve installation. Self-serve setup currently supports macOS.
 
 ## How it works
 

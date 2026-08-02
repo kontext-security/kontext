@@ -89,6 +89,16 @@ func EnsureHooksEnabled(path, backupLabel string) (changed bool, err error) {
 	return true, nil
 }
 
+// HooksEnabled reports whether the Codex hook engine is enabled at path. It is
+// read-only so callers such as doctor never create or rewrite config.toml.
+func HooksEnabled(path string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	return hooksFeatureEnabled(string(raw)), nil
+}
+
 // hooksFeatureEnabled reports whether config.toml already turns the Codex hook
 // engine on, via either the canonical `hooks` key or the deprecated
 // `codex_hooks` alias, in `[features]` table or top-level dotted form.

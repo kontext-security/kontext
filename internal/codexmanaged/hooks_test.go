@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 const testBinary = "/opt/homebrew/bin/kontext"
@@ -221,6 +223,50 @@ func TestIsManagedHookCommand(t *testing.T) {
 		if got := IsManagedHookCommand(tc.command); got != tc.want {
 			t.Errorf("IsManagedHookCommand(%q) = %v, want %v", tc.command, got, tc.want)
 		}
+	}
+}
+
+func TestValidateInstalledAcceptsStableBinaryAndRejectsIncompleteHooks(t *testing.T) {
+	data, err := TemplateJSON("/opt/homebrew/bin/kontext")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := ValidateInstalled(data)
+	if err != nil {
+		t.Fatalf("ValidateInstalled() error = %v", err)
+	}
+	if binary != "/opt/homebrew/bin/kontext" {
+		t.Fatalf("ValidateInstalled() binary = %q", binary)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	delete(settings["hooks"].(map[string]any), hook.HookStop.String())
+	broken, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateInstalled(broken); err == nil || !strings.Contains(err.Error(), "Stop hook missing") {
+		t.Fatalf("ValidateInstalled() error = %v, want missing Stop hook", err)
+	}
+
+	data, err = TemplateJSON("/opt/homebrew/bin/kontext")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	stop := settings["hooks"].(map[string]any)[hook.HookStop.String()].([]any)
+	stop[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"] = "'/opt/homebrew/bin/kontext' hook --agent 'codex' 'pre-tool-use'"
+	wrongAlias, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateInstalled(wrongAlias); err == nil || !strings.Contains(err.Error(), "Stop hook uses") {
+		t.Fatalf("ValidateInstalled() error = %v, want wrong alias", err)
 	}
 }
 
