@@ -22,6 +22,7 @@ const (
 	DefaultLlamaServerHost            = "127.0.0.1"
 	DefaultLlamaServerPort            = 18080
 	DefaultLlamaServerStartupTimeout  = 30 * time.Second
+	DefaultLlamaServerStopTimeout     = 3 * time.Second
 	DefaultLlamaServerHFRepo          = "Qwen/Qwen3-0.6B-GGUF"
 	DefaultLlamaServerHFFile          = "Qwen3-0.6B-Q8_0.gguf"
 	DefaultLlamaServerHFRevision      = "main"
@@ -46,6 +47,7 @@ type LlamaServerOptions struct {
 	Port             int
 	ContextSize      int
 	StartupTimeout   time.Duration
+	StopTimeout      time.Duration
 	HTTPClient       *http.Client
 	Stdout           io.Writer
 	Stderr           io.Writer
@@ -53,10 +55,11 @@ type LlamaServerOptions struct {
 }
 
 type LlamaServer struct {
-	baseURL string
-	cancel  context.CancelFunc
-	wait    chan error
-	cmd     *exec.Cmd
+	baseURL     string
+	cancel      context.CancelFunc
+	wait        chan error
+	cmd         *exec.Cmd
+	stopTimeout time.Duration
 }
 
 type DownloadProgressEvent string
@@ -118,10 +121,11 @@ func StartLlamaServer(ctx context.Context, opts LlamaServerOptions) (*LlamaServe
 	}
 
 	server := &LlamaServer{
-		baseURL: llamaServerBaseURL(opts.Host, opts.Port),
-		cancel:  cancel,
-		wait:    make(chan error, 1),
-		cmd:     cmd,
+		baseURL:     llamaServerBaseURL(opts.Host, opts.Port),
+		cancel:      cancel,
+		wait:        make(chan error, 1),
+		cmd:         cmd,
+		stopTimeout: opts.StopTimeout,
 	}
 	go func() {
 		server.wait <- cmd.Wait()
@@ -240,6 +244,10 @@ func (s *LlamaServer) Stop() error {
 	if s == nil {
 		return nil
 	}
+	stopTimeout := s.stopTimeout
+	if stopTimeout <= 0 {
+		stopTimeout = DefaultLlamaServerStopTimeout
+	}
 	s.cancel()
 	select {
 	case err := <-s.wait:
@@ -254,7 +262,7 @@ func (s *LlamaServer) Stop() error {
 			return nil
 		}
 		return err
-	case <-time.After(3 * time.Second):
+	case <-time.After(stopTimeout):
 		if s.cmd != nil && s.cmd.Process != nil {
 			_ = s.cmd.Process.Kill()
 		}
@@ -321,6 +329,9 @@ func normalizeLlamaServerOptions(opts LlamaServerOptions) LlamaServerOptions {
 	}
 	if opts.StartupTimeout <= 0 {
 		opts.StartupTimeout = DefaultLlamaServerStartupTimeout
+	}
+	if opts.StopTimeout <= 0 {
+		opts.StopTimeout = DefaultLlamaServerStopTimeout
 	}
 	return opts
 }
