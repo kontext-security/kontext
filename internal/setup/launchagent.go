@@ -41,7 +41,53 @@ func logFilePath() (string, error) {
 // throttle keeps the pipeline always-on (matching the enterprise agent)
 // without thrashing if the config is removed out from under the daemon;
 // RunAtLoad covers login, and the hook-side kickstart covers everything else.
-func renderLaunchAgentPlist(binary, logPath string) string {
+// localLLMAgentConfig is the resolved local-model opt-in. Nil means the agent
+// runs without it.
+//
+// Every field is forwarded into the agent's environment, and that is the whole
+// point: launchd does not inherit the shell, so any judge configuration an
+// operator exported when running setup is invisible to the daemon. Resolving it
+// once here and passing it through is what makes setup's pre-fetch and the
+// daemon agree on which weights, which revision and which cache — rather than
+// both reading an environment only one of them can see.
+type localLLMAgentConfig struct {
+	// ServerBinary is absolute, because launchd's minimal PATH excludes Homebrew.
+	ServerBinary string
+	HFRepo       string
+	HFFile       string
+	HFRevision   string
+	CacheDir     string
+}
+
+// agentEnvironment renders the opt-in as plist environment entries, omitting
+// anything unset so a default install stays byte-identical.
+func (c *localLLMAgentConfig) agentEnvironment() string {
+	if c == nil {
+		return ""
+	}
+	entries := []struct{ key, value string }{
+		{"KONTEXT_JUDGE_MANAGED", "1"},
+		{"KONTEXT_JUDGE_SERVER_BIN", c.ServerBinary},
+		{"KONTEXT_JUDGE_HF_REPO", c.HFRepo},
+		{"KONTEXT_JUDGE_HF_FILE", c.HFFile},
+		{"KONTEXT_JUDGE_HF_REVISION", c.HFRevision},
+		{"KONTEXT_JUDGE_CACHE_DIR", c.CacheDir},
+	}
+	var rendered strings.Builder
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.value) == "" {
+			continue
+		}
+		rendered.WriteString("\n\t\t<key>" + entry.key + "</key>\n\t\t<string>" + xmlEscape(entry.value) + "</string>")
+	}
+	return rendered.String()
+}
+
+func renderLaunchAgentPlist(binary, logPath string, llm *localLLMAgentConfig) string {
+	// The opt-in lives in the agent's environment rather than a config file:
+	// launchd already owns the daemon's env, and the daemon reads exactly these
+	// variables, so there is no second place for the two to disagree.
+	localLLM := llm.agentEnvironment()
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -56,7 +102,7 @@ func renderLaunchAgentPlist(binary, logPath string) string {
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>KONTEXT_EXPECTED_CONFIG_SCOPE</key>
-		<string>user</string>
+		<string>user</string>` + localLLM + `
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
@@ -84,7 +130,7 @@ func xmlEscape(value string) string {
 // installLaunchAgent writes the plist and (re)starts the agent in the user's
 // GUI launchd domain — no sudo anywhere. Bootout failure is expected on first
 // install; bootstrap failure usually means no GUI session (SSH).
-func installLaunchAgent(ctx context.Context, binary string) (plistPath, logPath string, err error) {
+func installLaunchAgent(ctx context.Context, binary string, llm *localLLMAgentConfig) (plistPath, logPath string, err error) {
 	plistPath, err = launchAgentPath()
 	if err != nil {
 		return "", "", err
@@ -99,7 +145,7 @@ func installLaunchAgent(ctx context.Context, binary string) (plistPath, logPath 
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(plistPath, []byte(renderLaunchAgentPlist(binary, logPath)), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(renderLaunchAgentPlist(binary, logPath, llm)), 0o644); err != nil {
 		return "", "", err
 	}
 
