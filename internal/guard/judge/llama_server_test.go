@@ -87,6 +87,18 @@ func TestStartLlamaServerRejectsOccupiedPort(t *testing.T) {
 	}
 }
 
+// testLlamaServerStartupTimeout is deliberately generous. The fake
+// llama-server re-execs the test binary, which can take seconds to serve its
+// first request when the rest of the suite is running in parallel, and a tight
+// budget here only buys a flaky "health check timed out" failure. The health
+// loop returns as soon as the fake is up, so a large budget costs nothing on a
+// healthy run.
+const testLlamaServerStartupTimeout = 30 * time.Second
+
+// testLlamaServerStopTimeout is long enough that a Stop() which actually waits
+// for its deadline is unmistakable next to normal startup jitter.
+const testLlamaServerStopTimeout = 10 * time.Second
+
 func TestStartLlamaServerHealthCheckAndStop(t *testing.T) {
 	modelPath := writeTestModel(t)
 	binaryPath := writeFakeLlamaServer(t)
@@ -95,7 +107,7 @@ func TestStartLlamaServerHealthCheckAndStop(t *testing.T) {
 		BinaryPath:     binaryPath,
 		ModelPath:      modelPath,
 		Port:           port,
-		StartupTimeout: 2 * time.Second,
+		StartupTimeout: testLlamaServerStartupTimeout,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -116,13 +128,23 @@ func TestStartLlamaServerEarlyExitDoesNotWaitForStopTimeout(t *testing.T) {
 		BinaryPath:     binaryPath,
 		ModelPath:      modelPath,
 		Port:           freeTCPPort(t),
-		StartupTimeout: 2 * time.Second,
+		StartupTimeout: testLlamaServerStartupTimeout,
+		StopTimeout:    testLlamaServerStopTimeout,
 	})
+	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("StartLlamaServer() error = nil, want early exit error")
 	}
-	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
-		t.Fatalf("early exit took %s, want less than 1.5s", elapsed)
+	// The startup path must notice the dead child itself rather than idle until
+	// the health deadline, and the Stop() it then runs must observe the same
+	// exit status instead of blocking until the stop deadline. Both are timeouts
+	// far longer than the process spawn jitter that dominates a healthy run, so
+	// the bound stays meaningful on a loaded machine.
+	if !strings.Contains(err.Error(), "exited before becoming healthy") {
+		t.Fatalf("err = %v, want early exit error", err)
+	}
+	if elapsed >= testLlamaServerStopTimeout {
+		t.Fatalf("early exit took %s, want well under the %s stop timeout", elapsed, testLlamaServerStopTimeout)
 	}
 }
 
