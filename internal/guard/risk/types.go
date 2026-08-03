@@ -140,7 +140,11 @@ type ClassifierAnnotation struct {
 	LLMError string         `json:"llm_error,omitempty"`
 	// LLMPromptID records which prompt variant produced the verdict. Local
 	// only: the hosted block deliberately omits it.
-	LLMPromptID      string `json:"-"`
+	LLMPromptID string `json:"-"`
+	// LLMRaw is what the model literally answered, also local only. The model is
+	// the weak half of this pair, so its exact words are what make an odd verdict
+	// diagnosable later; the normalized verdict alone loses that.
+	LLMRaw           string `json:"-"`
 	Command          string `json:"-"`
 	CommandHash      string `json:"-"`
 	CommandTruncated bool   `json:"-"`

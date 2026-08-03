@@ -147,6 +147,7 @@ func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, de
 	}
 	if verdicts.LLM != nil {
 		annotation.LLMPromptID = verdicts.LLM.PromptID
+		annotation.LLMRaw = verdicts.LLM.Raw
 		annotation.LLM = &risk.ClassifierLLM{
 			Verdict:    verdicts.LLM.Verdict,
 			Model:      verdicts.LLM.Model,
@@ -187,6 +188,7 @@ func (r guardHookRuntime) recordAnnotation(ctx context.Context, actionID string,
 		record.LLM = &riskclassifier.LLMVerdict{
 			Verdict:    annotation.LLM.Verdict,
 			Model:      annotation.LLM.Model,
+			Raw:        annotation.LLMRaw,
 			PromptID:   annotation.LLMPromptID,
 			DurationMs: annotation.LLM.DurationMs,
 			Cached:     annotation.LLM.Cached,

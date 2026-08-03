@@ -186,9 +186,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// sessions that reach the hosted ledger — the LLM verdict would have
 		// been null in exactly the place the data is collected.
 		//
-		// JudgeManagedDefault stays false on purpose. Defaulting it to true
-		// would have every managed endpoint download a model and run a
-		// llama-server child unprompted; the operator opts in with
+		// Managed mode is never defaulted on: that would have every managed
+		// endpoint download a model and run a llama-server child unprompted.
+		// The operator opts in with
 		// KONTEXT_JUDGE_MANAGED, or points at an endpoint they already run with
 		// KONTEXT_JUDGE_URL and KONTEXT_JUDGE_MODEL. An incomplete optional
 		// configuration resolves to no judge, so the daemon behaves as before.
