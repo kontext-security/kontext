@@ -266,13 +266,22 @@ func Run(ctx context.Context, opts Options) error {
 	// download delays nothing that protects the endpoint, and it is on disk
 	// before any daemon is told to look for it.
 	if opts.WithLocalLLM {
-		prefetchLocalModel(ctx, opts.Stdout, opts.Stderr, opts.ModelDownloadProgress)
+		agentLLM := prefetchLocalModel(ctx, llamaServerPath, opts.Stdout, opts.Stderr, opts.ModelDownloadProgress)
 		err = runWithStatus(opts.Stdout, "Enabling the local risk model", func() error {
-			_, _, err := installLaunchAgent(ctx, binary, &localLLMAgentConfig{ServerBinary: llamaServerPath})
+			_, _, err := installLaunchAgent(ctx, binary, agentLLM)
 			return err
 		})
 		if err != nil {
-			fmt.Fprintf(opts.Stderr, "warning: could not enable the local risk model (%v); the embedded model keeps scoring commands\n", err)
+			// Enabling reloads the agent: it is booted out, then bootstrapped with
+			// the new plist. A failure in the second half leaves no agent running,
+			// which is strictly worse than not having the model — so put the
+			// working configuration back rather than returning success over a
+			// stopped daemon.
+			fmt.Fprintf(opts.Stderr, "warning: could not enable the local risk model (%v); restoring the agent without it\n", err)
+			if _, _, restoreErr := installLaunchAgent(ctx, binary, nil); restoreErr != nil {
+				return fmt.Errorf("enabling the local risk model failed (%w) and the background agent could not be restored: %w", err, restoreErr)
+			}
+			fmt.Fprintln(opts.Stdout, "  ✓ Background agent restored without the local risk model")
 		} else {
 			fmt.Fprintf(opts.Stdout, "  ✓ Local risk model enabled (%s)\n", llamaServerPath)
 		}

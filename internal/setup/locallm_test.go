@@ -117,3 +117,49 @@ func prefetchCacheDirForTest(t *testing.T) string {
 	}
 	return cfg.CacheDir
 }
+
+// launchd does not inherit the shell, so any model configuration exported when
+// setup ran is invisible to the daemon. Whatever the pre-fetch resolved has to
+// travel into the agent's environment, or the daemon quietly uses defaults —
+// downloading a second copy, possibly of a different revision, into a different
+// cache than the one setup reported ready.
+func TestAgentCarriesTheResolvedModelConfiguration(t *testing.T) {
+	resolved := &localLLMAgentConfig{
+		ServerBinary: "/opt/homebrew/bin/llama-server",
+		HFRepo:       "acme/Qwen3-0.6B-GGUF",
+		HFFile:       "custom-Q8_0.gguf",
+		HFRevision:   "abc123",
+		CacheDir:     "/tmp/custom-cache",
+	}
+	plist := renderLaunchAgentPlist("/opt/homebrew/bin/kontext", "/tmp/agent.log", resolved)
+
+	for key, value := range map[string]string{
+		"KONTEXT_JUDGE_MANAGED":     "1",
+		"KONTEXT_JUDGE_SERVER_BIN":  resolved.ServerBinary,
+		"KONTEXT_JUDGE_HF_REPO":     resolved.HFRepo,
+		"KONTEXT_JUDGE_HF_FILE":     resolved.HFFile,
+		"KONTEXT_JUDGE_HF_REVISION": resolved.HFRevision,
+		"KONTEXT_JUDGE_CACHE_DIR":   resolved.CacheDir,
+	} {
+		if !strings.Contains(plist, "<key>"+key+"</key>") {
+			t.Errorf("%s missing from the agent environment", key)
+		}
+		if !strings.Contains(plist, "<string>"+value+"</string>") {
+			t.Errorf("%s value %q missing from the agent environment", key, value)
+		}
+	}
+}
+
+// Unset fields are omitted, so a default opt-in carries only what it needs.
+func TestAgentOmitsUnsetModelConfiguration(t *testing.T) {
+	plist := renderLaunchAgentPlist("/opt/homebrew/bin/kontext", "/tmp/agent.log",
+		&localLLMAgentConfig{ServerBinary: "/opt/homebrew/bin/llama-server"})
+	for _, key := range []string{"KONTEXT_JUDGE_HF_REPO", "KONTEXT_JUDGE_HF_REVISION", "KONTEXT_JUDGE_CACHE_DIR"} {
+		if strings.Contains(plist, key) {
+			t.Errorf("%s present despite being unset:\n%s", key, plist)
+		}
+	}
+	if !strings.Contains(plist, "KONTEXT_JUDGE_MANAGED") {
+		t.Error("opt-in itself went missing")
+	}
+}

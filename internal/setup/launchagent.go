@@ -43,25 +43,51 @@ func logFilePath() (string, error) {
 // RunAtLoad covers login, and the hook-side kickstart covers everything else.
 // localLLMAgentConfig is the resolved local-model opt-in. Nil means the agent
 // runs without it.
+//
+// Every field is forwarded into the agent's environment, and that is the whole
+// point: launchd does not inherit the shell, so any judge configuration an
+// operator exported when running setup is invisible to the daemon. Resolving it
+// once here and passing it through is what makes setup's pre-fetch and the
+// daemon agree on which weights, which revision and which cache — rather than
+// both reading an environment only one of them can see.
 type localLLMAgentConfig struct {
-	// ServerBinary is absolute. launchd gives the daemon a minimal PATH that
-	// excludes Homebrew, so a bare name would not resolve there even though it
-	// resolves in the shell that ran setup.
+	// ServerBinary is absolute, because launchd's minimal PATH excludes Homebrew.
 	ServerBinary string
+	HFRepo       string
+	HFFile       string
+	HFRevision   string
+	CacheDir     string
+}
+
+// agentEnvironment renders the opt-in as plist environment entries, omitting
+// anything unset so a default install stays byte-identical.
+func (c *localLLMAgentConfig) agentEnvironment() string {
+	if c == nil {
+		return ""
+	}
+	entries := []struct{ key, value string }{
+		{"KONTEXT_JUDGE_MANAGED", "1"},
+		{"KONTEXT_JUDGE_SERVER_BIN", c.ServerBinary},
+		{"KONTEXT_JUDGE_HF_REPO", c.HFRepo},
+		{"KONTEXT_JUDGE_HF_FILE", c.HFFile},
+		{"KONTEXT_JUDGE_HF_REVISION", c.HFRevision},
+		{"KONTEXT_JUDGE_CACHE_DIR", c.CacheDir},
+	}
+	var rendered strings.Builder
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.value) == "" {
+			continue
+		}
+		rendered.WriteString("\n\t\t<key>" + entry.key + "</key>\n\t\t<string>" + xmlEscape(entry.value) + "</string>")
+	}
+	return rendered.String()
 }
 
 func renderLaunchAgentPlist(binary, logPath string, llm *localLLMAgentConfig) string {
 	// The opt-in lives in the agent's environment rather than a config file:
 	// launchd already owns the daemon's env, and the daemon reads exactly these
 	// variables, so there is no second place for the two to disagree.
-	localLLM := ""
-	if llm != nil {
-		localLLM = `
-		<key>KONTEXT_JUDGE_MANAGED</key>
-		<string>1</string>
-		<key>KONTEXT_JUDGE_SERVER_BIN</key>
-		<string>` + xmlEscape(llm.ServerBinary) + `</string>`
-	}
+	localLLM := llm.agentEnvironment()
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

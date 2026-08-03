@@ -47,29 +47,39 @@ func preflightLocalLLM() (string, error) {
 	return absolute, nil
 }
 
-// prefetchLocalModel downloads the guardrail model into the judge cache so the
-// cost lands here, with a progress bar, instead of inside a developer's first
-// tool call. The download is ~680 MB and takes minutes on a cold cache; paid
-// during setup it is expected, paid during a hook it looks like a hang.
+// prefetchLocalModel downloads the guardrail model into the daemon's cache and
+// returns the configuration that was actually used, so the agent can be given
+// the same one. The cost lands here, behind a progress bar, instead of inside a
+// developer's first tool call: the download is ~680 MB and the first load takes
+// minutes, which during a hook reads as a hang.
 //
-// A failure here is reported and swallowed: the model is an optimization of
-// something that already degrades cleanly, so a flaky network must not fail an
-// otherwise complete setup. The daemon will fetch it on first use instead.
-func prefetchLocalModel(ctx context.Context, stdout, stderr io.Writer, progress judge.DownloadProgressHandler) {
+// A failure is reported and swallowed, and the returned configuration is still
+// valid: the weights are an optimization of something that already degrades
+// cleanly, so a flaky network must not fail an otherwise complete setup. The
+// daemon fetches on first use instead — into the same cache, because it is
+// handed the same configuration.
+func prefetchLocalModel(ctx context.Context, serverBinary string, stdout, stderr io.Writer, progress judge.DownloadProgressHandler) *localLLMAgentConfig {
 	// The daemon's database path, not Guard's: the model cache is derived from it,
 	// and the two defaults are different directories. Deriving it from the wrong
-	// one fills a cache nothing reads and leaves the daemon to download its own
-	// copy.
+	// one fills a cache nothing reads.
 	cfg, err := judgeruntime.ConfigFromEnv(managedobserve.DefaultDBPath())
 	if err != nil {
 		fmt.Fprintf(stderr, "warning: could not resolve the local model configuration (%v); the agent will fetch it on first use\n", err)
-		return
+		return &localLLMAgentConfig{ServerBinary: serverBinary}
 	}
 	repo, file := judge.DefaultLlamaServerHFRepo, judge.DefaultLlamaServerHFFile
 	if strings.TrimSpace(cfg.HFRepo) != "" {
 		repo = cfg.HFRepo
 		file = cfg.HFFile
 	}
+	resolved := &localLLMAgentConfig{
+		ServerBinary: serverBinary,
+		HFRepo:       repo,
+		HFFile:       file,
+		HFRevision:   cfg.HFRevision,
+		CacheDir:     cfg.CacheDir,
+	}
+
 	path, err := judge.ResolveLlamaServerModel(ctx, judge.LlamaServerOptions{
 		HFRepo:           repo,
 		HFFile:           file,
@@ -80,10 +90,11 @@ func prefetchLocalModel(ctx context.Context, stdout, stderr io.Writer, progress 
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			fmt.Fprintln(stderr, "warning: model download cancelled; the agent will fetch it on first use")
-			return
+			return resolved
 		}
 		fmt.Fprintf(stderr, "warning: could not pre-fetch the local model (%v); the agent will fetch it on first use\n", err)
-		return
+		return resolved
 	}
 	fmt.Fprintf(stdout, "  ✓ Local risk model ready (%s)\n", path)
+	return resolved
 }
