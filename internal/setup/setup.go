@@ -25,6 +25,8 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/kontext-security/kontext-cli/internal/guard/judge"
+
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
 	"github.com/kontext-security/kontext-cli/internal/codexmanaged"
 	"github.com/kontext-security/kontext-cli/internal/installation"
@@ -100,6 +102,14 @@ type Options struct {
 	// HTTPClient overrides the ping client (tests). Nil uses a 10s-timeout
 	// default.
 	HTTPClient *http.Client
+	// WithLocalLLM opts this Mac into the local risk model: setup checks the
+	// runtime is present, pre-fetches the weights, and tells the background
+	// agent to manage a llama-server. Off by default, and everything works
+	// without it — the classifier records its embedded model's verdict and notes
+	// the LLM's absence.
+	WithLocalLLM bool
+	// ModelDownloadProgress reports pre-fetch progress. Nil is silent.
+	ModelDownloadProgress judge.DownloadProgressHandler
 }
 
 // CloudURL returns the hosted API URL for install-token setup.
@@ -132,6 +142,13 @@ func Run(ctx context.Context, opts Options) error {
 
 	if err := preflightLegacyUserHooks(); err != nil {
 		return err
+	}
+	// Before any privileged write: asking for the model without the runtime
+	// installed should cost nothing to recover from.
+	if opts.WithLocalLLM {
+		if err := preflightLocalLLM(); err != nil {
+			return err
+		}
 	}
 	if err := preflightCodexUserHooks(binary); err != nil {
 		return err
@@ -230,13 +247,19 @@ func Run(ctx context.Context, opts Options) error {
 	var plistPath, logPath string
 	err = runWithStatus(opts.Stdout, "Installing background agent", func() error {
 		var err error
-		plistPath, logPath, err = installLaunchAgent(ctx, binary)
+		plistPath, logPath, err = installLaunchAgent(ctx, binary, opts.WithLocalLLM)
 		return err
 	})
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(opts.Stdout, "  ✓ Background agent installed (%s)\n", plistPath)
+
+	// After the agent exists, so a long download never delays the thing that
+	// actually protects the endpoint.
+	if opts.WithLocalLLM {
+		prefetchLocalModel(ctx, opts.Stdout, opts.Stderr, opts.ModelDownloadProgress)
+	}
 
 	if err := waitForDaemon(opts.Stdout); err != nil {
 		fmt.Fprintln(opts.Stdout, "  ! Background agent is still starting")

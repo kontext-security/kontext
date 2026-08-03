@@ -41,7 +41,16 @@ func logFilePath() (string, error) {
 // throttle keeps the pipeline always-on (matching the enterprise agent)
 // without thrashing if the config is removed out from under the daemon;
 // RunAtLoad covers login, and the hook-side kickstart covers everything else.
-func renderLaunchAgentPlist(binary, logPath string) string {
+func renderLaunchAgentPlist(binary, logPath string, withLocalLLM bool) string {
+	// The opt-in lives in the agent's environment rather than a config file:
+	// launchd already owns the daemon's env, and the daemon reads exactly this
+	// variable, so there is no second place for the two to disagree.
+	localLLM := ""
+	if withLocalLLM {
+		localLLM = `
+		<key>KONTEXT_JUDGE_MANAGED</key>
+		<string>1</string>`
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -56,7 +65,7 @@ func renderLaunchAgentPlist(binary, logPath string) string {
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>KONTEXT_EXPECTED_CONFIG_SCOPE</key>
-		<string>user</string>
+		<string>user</string>` + localLLM + `
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
@@ -84,7 +93,7 @@ func xmlEscape(value string) string {
 // installLaunchAgent writes the plist and (re)starts the agent in the user's
 // GUI launchd domain — no sudo anywhere. Bootout failure is expected on first
 // install; bootstrap failure usually means no GUI session (SSH).
-func installLaunchAgent(ctx context.Context, binary string) (plistPath, logPath string, err error) {
+func installLaunchAgent(ctx context.Context, binary string, withLocalLLM bool) (plistPath, logPath string, err error) {
 	plistPath, err = launchAgentPath()
 	if err != nil {
 		return "", "", err
@@ -99,7 +108,7 @@ func installLaunchAgent(ctx context.Context, binary string) (plistPath, logPath 
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(plistPath, []byte(renderLaunchAgentPlist(binary, logPath)), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(renderLaunchAgentPlist(binary, logPath, withLocalLLM)), 0o644); err != nil {
 		return "", "", err
 	}
 
