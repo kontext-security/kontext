@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	"github.com/kontext-security/kontext-cli/internal/guard/judgeruntime"
-	"github.com/kontext-security/kontext-cli/internal/runtimehost"
+	"github.com/kontext-security/kontext-cli/internal/managedobserve"
 )
 
 // llamaServerInstallHint is the only supported way to get the runtime today:
@@ -25,15 +26,25 @@ var errLlamaServerMissing = fmt.Errorf(
 	judge.DefaultLlamaServerBinary, llamaServerInstallHint,
 )
 
-// preflightLocalLLM fails fast when the runtime is absent. It runs before any
-// privileged write so an operator who wants the model, but has not installed
-// llama.cpp, gets told immediately rather than after their Mac is half
-// configured.
-func preflightLocalLLM() error {
-	if _, err := exec.LookPath(judge.DefaultLlamaServerBinary); err != nil {
-		return errLlamaServerMissing
+// preflightLocalLLM fails fast when the runtime is absent and returns its
+// absolute path. It runs before any privileged write so an operator who wants
+// the model, but has not installed llama.cpp, gets told immediately rather than
+// after their Mac is half configured.
+//
+// The absolute path is the point, not a convenience: this lookup happens in a
+// login shell where Homebrew is on PATH, while launchd hands the daemon a
+// minimal PATH that excludes /opt/homebrew/bin. Resolving here and passing the
+// result through means the daemon does not repeat a lookup that would fail.
+func preflightLocalLLM() (string, error) {
+	path, err := exec.LookPath(judge.DefaultLlamaServerBinary)
+	if err != nil {
+		return "", errLlamaServerMissing
 	}
-	return nil
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", judge.DefaultLlamaServerBinary, err)
+	}
+	return absolute, nil
 }
 
 // prefetchLocalModel downloads the guardrail model into the judge cache so the
@@ -45,7 +56,11 @@ func preflightLocalLLM() error {
 // something that already degrades cleanly, so a flaky network must not fail an
 // otherwise complete setup. The daemon will fetch it on first use instead.
 func prefetchLocalModel(ctx context.Context, stdout, stderr io.Writer, progress judge.DownloadProgressHandler) {
-	cfg, err := judgeruntime.ConfigFromEnv(runtimehost.DefaultDBPath(), false)
+	// The daemon's database path, not Guard's: the model cache is derived from it,
+	// and the two defaults are different directories. Deriving it from the wrong
+	// one fills a cache nothing reads and leaves the daemon to download its own
+	// copy.
+	cfg, err := judgeruntime.ConfigFromEnv(managedobserve.DefaultDBPath())
 	if err != nil {
 		fmt.Fprintf(stderr, "warning: could not resolve the local model configuration (%v); the agent will fetch it on first use\n", err)
 		return

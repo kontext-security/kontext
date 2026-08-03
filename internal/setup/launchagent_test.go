@@ -6,7 +6,7 @@ import (
 )
 
 func TestRenderLaunchAgentPlistGolden(t *testing.T) {
-	got := renderLaunchAgentPlist("/opt/homebrew/bin/kontext", "/Users/x/Library/Logs/Kontext/managed-observe.log", false)
+	got := renderLaunchAgentPlist("/opt/homebrew/bin/kontext", "/Users/x/Library/Logs/Kontext/managed-observe.log", nil)
 	want := `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -44,7 +44,7 @@ func TestRenderLaunchAgentPlistGolden(t *testing.T) {
 }
 
 func TestRenderLaunchAgentPlistEscapesXML(t *testing.T) {
-	got := renderLaunchAgentPlist(`/Users/a&b/bin/kontext <v2>`, "/tmp/log", false)
+	got := renderLaunchAgentPlist(`/Users/a&b/bin/kontext <v2>`, "/tmp/log", nil)
 	if !strings.Contains(got, "/Users/a&amp;b/bin/kontext &lt;v2&gt;") {
 		t.Fatalf("binary path not XML-escaped:\n%s", got)
 	}

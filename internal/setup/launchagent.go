@@ -41,15 +41,26 @@ func logFilePath() (string, error) {
 // throttle keeps the pipeline always-on (matching the enterprise agent)
 // without thrashing if the config is removed out from under the daemon;
 // RunAtLoad covers login, and the hook-side kickstart covers everything else.
-func renderLaunchAgentPlist(binary, logPath string, withLocalLLM bool) string {
+// localLLMAgentConfig is the resolved local-model opt-in. Nil means the agent
+// runs without it.
+type localLLMAgentConfig struct {
+	// ServerBinary is absolute. launchd gives the daemon a minimal PATH that
+	// excludes Homebrew, so a bare name would not resolve there even though it
+	// resolves in the shell that ran setup.
+	ServerBinary string
+}
+
+func renderLaunchAgentPlist(binary, logPath string, llm *localLLMAgentConfig) string {
 	// The opt-in lives in the agent's environment rather than a config file:
-	// launchd already owns the daemon's env, and the daemon reads exactly this
-	// variable, so there is no second place for the two to disagree.
+	// launchd already owns the daemon's env, and the daemon reads exactly these
+	// variables, so there is no second place for the two to disagree.
 	localLLM := ""
-	if withLocalLLM {
+	if llm != nil {
 		localLLM = `
 		<key>KONTEXT_JUDGE_MANAGED</key>
-		<string>1</string>`
+		<string>1</string>
+		<key>KONTEXT_JUDGE_SERVER_BIN</key>
+		<string>` + xmlEscape(llm.ServerBinary) + `</string>`
 	}
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -93,7 +104,7 @@ func xmlEscape(value string) string {
 // installLaunchAgent writes the plist and (re)starts the agent in the user's
 // GUI launchd domain — no sudo anywhere. Bootout failure is expected on first
 // install; bootstrap failure usually means no GUI session (SSH).
-func installLaunchAgent(ctx context.Context, binary string, withLocalLLM bool) (plistPath, logPath string, err error) {
+func installLaunchAgent(ctx context.Context, binary string, llm *localLLMAgentConfig) (plistPath, logPath string, err error) {
 	plistPath, err = launchAgentPath()
 	if err != nil {
 		return "", "", err
@@ -108,7 +119,7 @@ func installLaunchAgent(ctx context.Context, binary string, withLocalLLM bool) (
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(plistPath, []byte(renderLaunchAgentPlist(binary, logPath, withLocalLLM)), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(renderLaunchAgentPlist(binary, logPath, llm)), 0o644); err != nil {
 		return "", "", err
 	}
 

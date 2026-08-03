@@ -145,8 +145,10 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	// Before any privileged write: asking for the model without the runtime
 	// installed should cost nothing to recover from.
+	var llamaServerPath string
 	if opts.WithLocalLLM {
-		if err := preflightLocalLLM(); err != nil {
+		var err error
+		if llamaServerPath, err = preflightLocalLLM(); err != nil {
 			return err
 		}
 	}
@@ -247,7 +249,12 @@ func Run(ctx context.Context, opts Options) error {
 	var plistPath, logPath string
 	err = runWithStatus(opts.Stdout, "Installing background agent", func() error {
 		var err error
-		plistPath, logPath, err = installLaunchAgent(ctx, binary, opts.WithLocalLLM)
+		// Deliberately without the local model on this pass. Enabling it here
+		// would bootstrap a model-managing daemon that starts downloading the
+		// weights at the same moment setup does, for two ~680 MB transfers into
+		// one cache path. The agent comes up now and protects the endpoint; the
+		// model is attached below, once it is on disk.
+		plistPath, logPath, err = installLaunchAgent(ctx, binary, nil)
 		return err
 	})
 	if err != nil {
@@ -255,10 +262,20 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	fmt.Fprintf(opts.Stdout, "  ✓ Background agent installed (%s)\n", plistPath)
 
-	// After the agent exists, so a long download never delays the thing that
-	// actually protects the endpoint.
+	// The model comes last: the agent is already up and observing, so a slow
+	// download delays nothing that protects the endpoint, and it is on disk
+	// before any daemon is told to look for it.
 	if opts.WithLocalLLM {
 		prefetchLocalModel(ctx, opts.Stdout, opts.Stderr, opts.ModelDownloadProgress)
+		err = runWithStatus(opts.Stdout, "Enabling the local risk model", func() error {
+			_, _, err := installLaunchAgent(ctx, binary, &localLLMAgentConfig{ServerBinary: llamaServerPath})
+			return err
+		})
+		if err != nil {
+			fmt.Fprintf(opts.Stderr, "warning: could not enable the local risk model (%v); the embedded model keeps scoring commands\n", err)
+		} else {
+			fmt.Fprintf(opts.Stdout, "  ✓ Local risk model enabled (%s)\n", llamaServerPath)
+		}
 	}
 
 	if err := waitForDaemon(opts.Stdout); err != nil {
