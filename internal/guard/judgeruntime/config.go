@@ -30,17 +30,18 @@ type Config struct {
 	DownloadProgress judge.DownloadProgressHandler
 }
 
-func ConfigFromEnv(dbPath string, managedDefault bool) (Config, error) {
+// ConfigFromEnv resolves the local model from the environment. Managed mode is
+// opt-in only: nothing defaults it on, because the only caller that used to —
+// the retired `kontext start` wrapper — managed a llama-server child on the
+// user's behalf, and no remaining path should download a model unprompted.
+func ConfigFromEnv(dbPath string) (Config, error) {
 	timeout, err := envDuration("KONTEXT_JUDGE_TIMEOUT", judge.DefaultTimeout)
 	if err != nil {
 		return Config{}, err
 	}
-	managed, err := envBoolDefault("KONTEXT_JUDGE_MANAGED", managedDefault)
+	managed, err := envBoolDefault("KONTEXT_JUDGE_MANAGED", false)
 	if err != nil {
 		return Config{}, err
-	}
-	if os.Getenv("KONTEXT_JUDGE_MANAGED") == "" && strings.TrimSpace(os.Getenv("KONTEXT_JUDGE_URL")) != "" {
-		managed = false
 	}
 	port, err := envInt("KONTEXT_JUDGE_PORT", judge.DefaultLlamaServerPort)
 	if err != nil {

@@ -622,3 +622,41 @@ func TestUnreachableGuardrailCostsNothingAfterBreakerOpens(t *testing.T) {
 		}
 	}
 }
+
+// The model's literal answer has to reach the row. The column, the struct field
+// and the write all existed, but the hand-off from the guardrail to the record
+// dropped it, so llm_raw was empty on every row ever written — which is exactly
+// the field you reach for when a verdict looks wrong.
+func TestRawModelOutputReachesTheRow(t *testing.T) {
+	var calls int32
+	stub := newGuardrailStub(t, "  SAFE.  ", &calls)
+	server, store := newClassifierServerWithOptions(t, &RiskClassifierOptions{
+		Mode:             riskclassifier.ModeOn,
+		GuardrailBaseURL: stub.URL,
+		GuardrailModel:   "qwen3-0.6b",
+	})
+
+	if _, err := server.RuntimeCore().EvaluateHook(context.Background(), hook.Event{
+		SessionID: "sess_e2e",
+		HookName:  hook.HookPreToolUse,
+		ToolName:  "Bash",
+		ToolInput: map[string]any{"command": "ls -la"},
+	}); err != nil {
+		t.Fatalf("evaluate hook: %v", err)
+	}
+
+	record := verdictsFor(t, store, "sess_e2e", 1)[0]
+	if record.LLM == nil {
+		t.Fatalf("llm verdict missing (err %q)", record.LLMError)
+	}
+	// Trimmed of surrounding whitespace, but otherwise the model's own wording —
+	// the trailing period survives, and that is the point: "SAFE." and "safe"
+	// both normalize to not_risky, and only the raw tells them apart.
+	if record.LLM.Raw != "SAFE." {
+		t.Errorf("llm raw = %q, want the model's answer", record.LLM.Raw)
+	}
+	// The normalized verdict is still what everything else reads.
+	if record.LLM.Verdict != "not_risky" {
+		t.Errorf("llm verdict = %q, want not_risky", record.LLM.Verdict)
+	}
+}

@@ -155,16 +155,18 @@ The SVM is precise but blind to `rm -rf /`, `dd if=/dev/zero of=/dev/disk0`, and
 
 `KONTEXT_RISK_CLASSIFIER_MODE` is `on` (default, both models) or `off` (SVM only, no sidecar needed).
 
-Which paths run the LLM depends on whether a local model is resolved:
+Whether the LLM runs depends on whether a local model is resolved, and that is opt-in everywhere. Nothing downloads a model or starts a `llama-server` child unless an operator asked for it:
 
 | path | guardrail LLM |
 |---|---|
-| `kontext guard start` (local daemon) | yes, same |
-| `managed-observe` daemon | only when `KONTEXT_JUDGE_URL` + `KONTEXT_JUDGE_MODEL` point at an endpoint, or `KONTEXT_JUDGE_MANAGED=1` |
+| `managed-observe` daemon — what a plain `claude` session hits | `KONTEXT_JUDGE_URL` + `KONTEXT_JUDGE_MODEL` for an endpoint you already run, or `KONTEXT_JUDGE_MANAGED=1` to have the daemon manage one |
+| `kontext guard start` — local-only, no org | the same env, or `--judge-managed` |
 
-The managed daemon deliberately does **not** manage a model by default: that would have every endpoint download one and run a `llama-server` child unprompted. With neither variable set it records the SVM verdict and `llm_error: "guardrail not configured"`, which is what it did before the guardrail existed.
+With neither set, both paths record the SVM verdict and `llm_error: "guardrail not configured"`.
 
-That default is worth knowing when reading collected data, because the managed daemon is the path that reaches the hosted ledger — so an endpoint without a model produces uploads whose `classifier.llm` is null.
+**Today that means Homebrew installs only.** The formula depends on `llama.cpp`, so `llama-server` is on PATH after `brew install`; nothing else provisions it, and the CLI deliberately does not ship or download it — `exec.LookPath` finds it or the guardrail degrades to SVM-only. An MDM-deployed endpoint therefore collects SVM verdicts and nothing more, which is the accepted starting point rather than an oversight: enabling the LLM fleet-wide would mean shipping a signed native binary, ~1.1 GB of resident memory per endpoint, and a `llama-server` child process that endpoint security tooling has every reason to flag.
+
+Read collected data with that in mind. The managed daemon is the path that reaches the hosted ledger, so an endpoint without a model produces uploads whose `classifier.llm` is null — and the SVM is the weaker half of the pair.
 
 **The model name must contain `qwen3`.** That is what makes the client send `/no_think`; without it Qwen3 reasons instead of answering and returns nothing inside the token budget.
 

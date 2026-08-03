@@ -32,7 +32,6 @@ type Options struct {
 	DBPath                string
 	SocketPath            string
 	JudgeConfigFromEnv    bool
-	JudgeManagedDefault   bool
 	JudgeDownloadProgress judge.DownloadProgressHandler
 	CedarPolicies         cedarpolicy.SnapshotProvider
 	CedarEnforcement      server.CedarEnforcementSource
@@ -94,7 +93,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	var judgeStatus string
 	var judgeRuntime judgeruntime.Runtime
 	if opts.JudgeConfigFromEnv {
-		judgeConfig, err := judgeruntime.ConfigFromEnv(dbPath, opts.JudgeManagedDefault)
+		judgeConfig, err := judgeruntime.ConfigFromEnv(dbPath)
 		if err != nil {
 			return nil, err
 		}
