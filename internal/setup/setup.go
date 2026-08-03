@@ -25,6 +25,8 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/kontext-security/kontext-cli/internal/guard/judge"
+
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
 	"github.com/kontext-security/kontext-cli/internal/codexmanaged"
 	"github.com/kontext-security/kontext-cli/internal/installation"
@@ -100,6 +102,14 @@ type Options struct {
 	// HTTPClient overrides the ping client (tests). Nil uses a 10s-timeout
 	// default.
 	HTTPClient *http.Client
+	// WithLocalLLM opts this Mac into the local risk model: setup checks the
+	// runtime is present, pre-fetches the weights, and tells the background
+	// agent to manage a llama-server. Off by default, and everything works
+	// without it — the classifier records its embedded model's verdict and notes
+	// the LLM's absence.
+	WithLocalLLM bool
+	// ModelDownloadProgress reports pre-fetch progress. Nil is silent.
+	ModelDownloadProgress judge.DownloadProgressHandler
 }
 
 // CloudURL returns the hosted API URL for install-token setup.
@@ -132,6 +142,15 @@ func Run(ctx context.Context, opts Options) error {
 
 	if err := preflightLegacyUserHooks(); err != nil {
 		return err
+	}
+	// Before any privileged write: asking for the model without the runtime
+	// installed should cost nothing to recover from.
+	var llamaServerPath string
+	if opts.WithLocalLLM {
+		var err error
+		if llamaServerPath, err = preflightLocalLLM(); err != nil {
+			return err
+		}
 	}
 	if err := preflightCodexUserHooks(binary); err != nil {
 		return err
@@ -230,13 +249,43 @@ func Run(ctx context.Context, opts Options) error {
 	var plistPath, logPath string
 	err = runWithStatus(opts.Stdout, "Installing background agent", func() error {
 		var err error
-		plistPath, logPath, err = installLaunchAgent(ctx, binary)
+		// Deliberately without the local model on this pass. Enabling it here
+		// would bootstrap a model-managing daemon that starts downloading the
+		// weights at the same moment setup does, for two ~680 MB transfers into
+		// one cache path. The agent comes up now and protects the endpoint; the
+		// model is attached below, once it is on disk.
+		plistPath, logPath, err = installLaunchAgent(ctx, binary, nil)
 		return err
 	})
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(opts.Stdout, "  ✓ Background agent installed (%s)\n", plistPath)
+
+	// The model comes last: the agent is already up and observing, so a slow
+	// download delays nothing that protects the endpoint, and it is on disk
+	// before any daemon is told to look for it.
+	if opts.WithLocalLLM {
+		agentLLM := prefetchLocalModel(ctx, llamaServerPath, opts.Stdout, opts.Stderr, opts.ModelDownloadProgress)
+		err = runWithStatus(opts.Stdout, "Enabling the local risk model", func() error {
+			_, _, err := installLaunchAgent(ctx, binary, agentLLM)
+			return err
+		})
+		if err != nil {
+			// Enabling reloads the agent: it is booted out, then bootstrapped with
+			// the new plist. A failure in the second half leaves no agent running,
+			// which is strictly worse than not having the model — so put the
+			// working configuration back rather than returning success over a
+			// stopped daemon.
+			fmt.Fprintf(opts.Stderr, "warning: could not enable the local risk model (%v); restoring the agent without it\n", err)
+			if _, _, restoreErr := installLaunchAgent(ctx, binary, nil); restoreErr != nil {
+				return fmt.Errorf("enabling the local risk model failed (%w) and the background agent could not be restored: %w", err, restoreErr)
+			}
+			fmt.Fprintln(opts.Stdout, "  ✓ Background agent restored without the local risk model")
+		} else {
+			fmt.Fprintf(opts.Stdout, "  ✓ Local risk model enabled (%s)\n", llamaServerPath)
+		}
+	}
 
 	if err := waitForDaemon(opts.Stdout); err != nil {
 		fmt.Fprintln(opts.Stdout, "  ! Background agent is still starting")

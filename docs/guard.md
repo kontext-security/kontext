@@ -164,6 +164,14 @@ Whether the LLM runs depends on whether a local model is resolved, and that is o
 
 With neither set, both paths record the SVM verdict and `llm_error: "guardrail not configured"`.
 
+On a self-serve Mac, `kontext setup --with-local-llm` is the supported way to opt in. It runs in three steps, and the order is load-bearing:
+
+1. **Resolve `llama-server` before any privileged write.** Wanting the model without `llama.cpp` installed then costs nothing to recover from. The *absolute* path is what is kept: this lookup runs in a login shell where Homebrew is on PATH, while launchd hands the daemon a minimal PATH that excludes `/opt/homebrew/bin`, so a bare name would not resolve on the other side.
+2. **Install the agent without the model, then pre-fetch the weights.** Enabling the model first would bootstrap a model-managing daemon that starts downloading at the same moment setup does — two ~680 MB transfers into one cache path. This way the agent comes up and starts observing immediately, and the weights land while nothing is waiting on them.
+3. **Re-render the agent with `KONTEXT_JUDGE_MANAGED=1` and the resolved binary path**, which restarts it with the model attached. The opt-in lives in the agent's environment rather than a config file, because launchd already owns that environment and the daemon reads exactly those variables.
+
+The cache is derived from the **daemon's** database path, not Guard's — they are different directories, and deriving it from the wrong one fills a cache nothing reads. A failed pre-fetch warns and continues; the weights are an optimization of something that already degrades cleanly. Without the flag, the install is byte-identical to one made before the option existed.
+
 **Today that means Homebrew installs only.** The formula depends on `llama.cpp`, so `llama-server` is on PATH after `brew install`; nothing else provisions it, and the CLI deliberately does not ship or download it — `exec.LookPath` finds it or the guardrail degrades to SVM-only. An MDM-deployed endpoint therefore collects SVM verdicts and nothing more, which is the accepted starting point rather than an oversight: enabling the LLM fleet-wide would mean shipping a signed native binary, ~1.1 GB of resident memory per endpoint, and a `llama-server` child process that endpoint security tooling has every reason to flag.
 
 Read collected data with that in mind. The managed daemon is the path that reaches the hosted ledger, so an endpoint without a model produces uploads whose `classifier.llm` is null — and the SVM is the weaker half of the pair.
