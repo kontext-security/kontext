@@ -2,8 +2,11 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/kontext-security/kontext-cli/internal/profile"
 )
 
 // writeKeychainToken stores the raw token as a login-keychain generic
@@ -20,13 +23,13 @@ import (
 // go-keyring is deliberately NOT used: its darwin Set() stores
 // "go-keyring-base64:<encoded>" which the daemon's raw read would return
 // verbatim.
-func writeKeychainToken(ctx context.Context, token string) error {
-	if err := deleteKeychainTokens(ctx); err != nil {
+func writeKeychainToken(ctx context.Context, item, token string) error {
+	if err := deleteKeychainTokens(ctx, item); err != nil {
 		return err
 	}
 	command := fmt.Sprintf(
 		"add-generic-password -U -s %s -a %s -w %s\n",
-		KeychainItemName, keychainAccount, securityQuote(token),
+		item, keychainAccount, securityQuote(token),
 	)
 	if out, err := execCommand(ctx, command, "security", "-i"); err != nil {
 		return fmt.Errorf("store install token in keychain: %w (%s)", err, strings.TrimSpace(out))
@@ -38,23 +41,70 @@ func writeKeychainToken(ctx context.Context, token string) error {
 // normally ends on the first "not found" (0 or 1 items).
 const maxKeychainDeletions = 32
 
-// deleteKeychainTokens removes ALL items with our service name (delete only
-// removes one match per invocation). Only the explicit "not found" outcome
+// deleteKeychainTokens removes ALL items with the given service name (delete
+// only removes one match per invocation). Only the explicit "not found" outcome
 // ends the loop as success — a locked keychain or denied access must surface,
 // otherwise uninstall would report the token removed while it still exists
 // (and a rotation could proceed on top of a stale item).
-func deleteKeychainTokens(ctx context.Context) error {
+func deleteKeychainTokens(ctx context.Context, item string) error {
+	if item == "" {
+		return errors.New("keychain item name must not be empty")
+	}
 	for attempt := 0; attempt < maxKeychainDeletions; attempt++ {
-		out, err := execCommand(ctx, "", "security", "delete-generic-password", "-s", KeychainItemName)
+		out, err := execCommand(ctx, "", "security", "delete-generic-password", "-s", item)
 		if err == nil {
 			continue // one item deleted; loop for more
 		}
 		if isSecurityNotFound(out) {
 			return nil // no (more) matching items
 		}
-		return fmt.Errorf("delete keychain item %s: %w (%s)", KeychainItemName, err, strings.TrimSpace(out))
+		return fmt.Errorf("delete keychain item %s: %w (%s)", item, err, strings.TrimSpace(out))
 	}
-	return fmt.Errorf("more than %d keychain items named %s; clean them up in Keychain Access and retry", maxKeychainDeletions, KeychainItemName)
+	return fmt.Errorf("more than %d keychain items named %s; clean them up in Keychain Access and retry", maxKeychainDeletions, item)
+}
+
+// deleteAllInstallTokens removes the legacy item and every profile's item.
+// Uninstall must not leave a workspace token behind in the keychain just
+// because that profile was not the active one.
+// Returns the items deleted, plus the names of any profiles whose config could
+// not be read — for those, the token reference is unknown and one may survive
+// under a name nothing records any more.
+func deleteAllInstallTokens(ctx context.Context) (deleted []string, unreadable []string, err error) {
+	seen := map[string]bool{}
+	var items []string
+	add := func(item string) {
+		if item == "" || seen[item] {
+			return
+		}
+		seen[item] = true
+		items = append(items, item)
+	}
+
+	add(profile.LegacyKeychainItemName())
+	names, err := profile.List()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, name := range names {
+		// keychainItemsForProfile reads the ref each profile's config actually
+		// names, not just the name-derived convention. A renamed or migrated
+		// profile references an item whose name does not match its directory, and
+		// deriving from the name alone would leave that workspace's token in the
+		// keychain while reporting every token removed.
+		profileItems, configReadable := keychainItemsForProfile(name)
+		for _, item := range profileItems {
+			add(item)
+		}
+		if !configReadable {
+			unreadable = append(unreadable, name)
+		}
+	}
+	for _, item := range items {
+		if err := deleteKeychainTokens(ctx, item); err != nil {
+			return nil, nil, err
+		}
+	}
+	return items, unreadable, nil
 }
 
 func isSecurityNotFound(output string) bool {

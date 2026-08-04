@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/judge"
+	"github.com/kontext-security/kontext-cli/internal/profile"
 )
 
 type Config struct {
@@ -269,7 +270,15 @@ func managedBaseURL(host string, port int) string {
 
 func defaultCacheDir(dbPath string) string {
 	if dbPath != "" {
-		return filepath.Join(filepath.Dir(dbPath), "judge-models")
+		// Model weights are machine-scoped, not workspace-scoped: hundreds of
+		// megabytes, identical for every workspace. When the database sits inside
+		// a profile, the cache is hoisted to the shared root so switching or
+		// adding a profile does not trigger a re-download. Databases outside the
+		// profiles tree (`kontext guard`) keep the original layout.
+		if shared := profile.SharedDir(filepath.Dir(dbPath), profile.ModelCacheDirName); shared != "" {
+			return shared
+		}
+		return filepath.Join(filepath.Dir(dbPath), profile.ModelCacheDirName)
 	}
 	if dir, err := os.UserCacheDir(); err == nil && dir != "" {
 		return filepath.Join(dir, "kontext", "judge")

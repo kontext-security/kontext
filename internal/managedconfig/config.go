@@ -18,6 +18,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/kontext-security/kontext-cli/internal/profile"
 )
 
 const (
@@ -62,12 +64,26 @@ var systemPath = DefaultPath
 
 // UserPath is the self-serve managed config location, or "" when the home
 // directory cannot be resolved.
+//
+// With a profile active this is that profile's config; without one it is the
+// legacy unprofiled path, so an install that predates profiles resolves exactly
+// what it always did. Any profile-resolution failure — including a corrupt
+// active pointer — also falls back to the legacy path. That is safe rather than
+// merely lenient: migration MOVES the legacy config into the profile
+// directory, so post-migration the fallback names a file that does not exist,
+// Load returns ErrNotManaged, and the daemon parks instead of streaming with
+// the wrong workspace's credentials. `kontext doctor` validates the pointer
+// separately so the failure reads as "broken pointer" and not "not configured".
 func UserPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
+	if path, err := profile.ActiveManagedConfigPath(); err == nil {
+		return path
 	}
-	return filepath.Join(home, "Library", "Application Support", "Kontext", "managed.json")
+	return LegacyUserPath()
+}
+
+// LegacyUserPath is the pre-profile self-serve config location.
+func LegacyUserPath() string {
+	return profile.LegacyPath(profile.ManagedConfigFile)
 }
 
 // ResolvePath picks the managed config path for this process. Precedence is
@@ -91,12 +107,18 @@ func ResolvePath() (string, Scope) {
 }
 
 type Config struct {
-	Version     string      `json:"version"`
-	CloudURL    string      `json:"cloud_url"`
-	Mode        string      `json:"mode"`
-	Agent       string      `json:"agent"`
-	Credentials Credentials `json:"credentials"`
-	Device      Device      `json:"device,omitempty"`
+	Version  string `json:"version"`
+	CloudURL string `json:"cloud_url"`
+	Mode     string `json:"mode"`
+	Agent    string `json:"agent"`
+	// AllowHTTPLoopback permits a plaintext http cloud_url when — and only
+	// when — the host is loopback. It exists so a local-development endpoint is
+	// declared on disk rather than through an environment variable the daemon
+	// never sees. Omitted from the JSON when false so production configs are
+	// byte-identical to what they were before this field existed.
+	AllowHTTPLoopback bool        `json:"allow_http_loopback,omitempty"`
+	Credentials       Credentials `json:"credentials"`
+	Device            Device      `json:"device,omitempty"`
 	// UnsupportedMode carries the raw mode this build did not recognize, after
 	// Mode has already been rewritten to the observe fallback. Empty on every
 	// config whose mode this build understands, so callers can treat a
@@ -117,6 +139,7 @@ type configFile struct {
 	CloudURL            string          `json:"cloud_url"`
 	Mode                string          `json:"mode"`
 	Agent               string          `json:"agent"`
+	AllowHTTPLoopback   bool            `json:"allow_http_loopback,omitempty"`
 	Credentials         Credentials     `json:"credentials"`
 	Device              Device          `json:"device,omitempty"`
 }
@@ -168,6 +191,15 @@ func Load() (LoadedConfig, error) {
 		return LoadedConfig{}, err
 	}
 	loaded.Scope = scope
+	// The loopback-http opt-in is a developer convenience and has no business on
+	// an organization-managed Mac: an MDM deployment streaming governance records
+	// in plaintext to something listening on localhost is never intended, and
+	// refusing loudly beats serving it. Scope is only known here, which is why
+	// this is not in Parse — LoadFile stays the scope-agnostic primitive.
+	if scope == ScopeSystem && loaded.Config.AllowHTTPLoopback {
+		return LoadedConfig{}, fmt.Errorf(
+			"allow_http_loopback is not permitted in an organization-managed config (%s)", path)
+	}
 	return loaded, nil
 }
 
@@ -207,6 +239,7 @@ func Parse(data []byte) (Config, error) {
 		CloudURL:            file.CloudURL,
 		Mode:                file.Mode,
 		Agent:               file.Agent,
+		AllowHTTPLoopback:   file.AllowHTTPLoopback,
 		Credentials:         file.Credentials,
 		Device:              file.Device,
 		LegacyCoworkEnabled: legacyCoworkEnabled(file.LegacyCoworkEnabled),
@@ -289,7 +322,7 @@ func normalizeAndValidate(cfg Config) (Config, error) {
 	if cfg.Version != Version {
 		return Config{}, fmt.Errorf("version must be %q", Version)
 	}
-	if err := validateCloudURL(cfg.CloudURL); err != nil {
+	if err := validateCloudURL(cfg.CloudURL, cfg.AllowHTTPLoopback); err != nil {
 		return Config{}, err
 	}
 	// An unrecognized mode is the signature of a DOWNGRADE: a newer build wrote
@@ -333,15 +366,16 @@ func ValidateMode(value string) error {
 	}
 }
 
-// ValidateCloudURL enforces the managed.json cloud_url shape (https with
-// host only; loopback http behind EnvAllowHTTP). Exported so `kontext setup`
-// can fail a bad --cloud-url before any state is written, with exactly the
-// rules the daemon's parser will apply later.
-func ValidateCloudURL(value string) error {
-	return validateCloudURL(value)
+// ValidateCloudURL enforces the managed.json cloud_url shape: https with host
+// only, or loopback http when the config opts in (allowLoopback) or the
+// EnvAllowHTTP escape hatch is set. Exported so `kontext setup` can fail a bad
+// --cloud-url before any state is written, with exactly the rules the daemon's
+// parser will apply later.
+func ValidateCloudURL(value string, allowLoopback bool) error {
+	return validateCloudURL(value, allowLoopback)
 }
 
-func validateCloudURL(value string) error {
+func validateCloudURL(value string, allowLoopback bool) error {
 	if value == "" {
 		return errors.New("cloud_url is required")
 	}
@@ -350,8 +384,8 @@ func validateCloudURL(value string) error {
 		return fmt.Errorf("cloud_url is invalid: %w", err)
 	}
 	if parsed.Scheme != "https" {
-		if parsed.Scheme != "http" || !allowHTTPLoopback(parsed.Hostname()) {
-			return errors.New("cloud_url must use https unless local loopback http is explicitly enabled")
+		if parsed.Scheme != "http" || !loopbackHTTPPermitted(parsed.Hostname(), allowLoopback) {
+			return errors.New("cloud_url must use https, or point at a loopback host with allow_http_loopback set (`--allow-http-loopback`)")
 		}
 	}
 	if parsed.Host == "" || parsed.Hostname() == "" {
@@ -381,12 +415,38 @@ func validateCloudURL(value string) error {
 	return nil
 }
 
-func allowHTTPLoopback(host string) bool {
+// loopbackHTTPPermitted reports whether plaintext http is acceptable for host.
+//
+// Two things must both hold: the host is genuinely loopback, and the operator
+// has opted in. The opt-in comes either from the config itself (allowLoopback,
+// the durable form) or from EnvAllowHTTP (the original ambient form, kept
+// working so existing local-dev setups are not broken).
+//
+// The config form exists because the env form cannot be seen by the processes
+// that matter. A LaunchAgent does not inherit a shell's environment, so a
+// config the terminal accepts would be rejected by the daemon that has to serve
+// it — visibly fine, silently dead. State on disk is read identically by the
+// CLI, the daemon, and anything else.
+func loopbackHTTPPermitted(host string, allowLoopback bool) bool {
+	if !allowLoopback && !envAllowsHTTPLoopback() {
+		return false
+	}
+	return isLoopbackHost(host)
+}
+
+func envAllowsHTTPLoopback() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvAllowHTTP))) {
 	case "1", "true", "yes", "on":
+		return true
 	default:
 		return false
 	}
+}
+
+// isLoopbackHost is the hard boundary on this relaxation: the opt-in widens the
+// SCHEME only, and only for a host that cannot leave the machine. It never makes
+// plaintext acceptable to a remote endpoint.
+func isLoopbackHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true
 	}

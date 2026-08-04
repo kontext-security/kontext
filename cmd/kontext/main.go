@@ -53,6 +53,7 @@ func newRootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(setupCmd())
+	root.AddCommand(profileCmd())
 	root.AddCommand(hookCmd())
 	root.AddCommand(managedObserveDaemonCmd())
 	root.AddCommand(doctorCmd())
@@ -63,6 +64,7 @@ func newRootCmd() *cobra.Command {
 
 func doctorCmd() *cobra.Command {
 	var fix bool
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:           "doctor",
 		Short:         "Inspect local Kontext CLI setup",
@@ -70,15 +72,15 @@ func doctorCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			managed := managedobserve.PrintStatus(cmd.OutOrStdout(), version)
-			hooksHealthy := true
-			if managed.SelfServe {
-				hooksHealthy = guardcli.PrintManagedHookStatus(cmd.OutOrStdout()).Healthy
-			} else if managed.Configured {
-				hooksHealthy = guardcli.PrintOrganizationManagedHookStatus(cmd.OutOrStdout()).Healthy
+			if asJSON {
+				if fix {
+					return errors.New("--json and --fix cannot be combined; run the repair first, then re-run with --json")
+				}
+				return runDoctorJSON(cmd.OutOrStdout())
 			}
-			localHooks := guardcli.PrintHookStatus(cmd.OutOrStdout())
-			healthy := managed.Healthy && hooksHealthy && (!managed.Configured || localHooks.Healthy)
+			managed := managedobserve.PrintStatus(cmd.OutOrStdout(), version)
+			hooksHealthy, localHooksHealthy := checkHooks(cmd.OutOrStdout(), managed)
+			healthy := overallHealthy(managed, hooksHealthy, localHooksHealthy)
 			if fix {
 				if !managed.Repairable {
 					if healthy {
@@ -113,14 +115,8 @@ func doctorCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "restarted managed-observe daemon (v%s, pid %d)\n", status.Version, status.PID)
 				fmt.Fprintln(cmd.OutOrStdout(), "\nAfter repair:")
 				managed = managedobserve.PrintStatus(cmd.OutOrStdout(), version)
-				hooksHealthy = true
-				if managed.SelfServe {
-					hooksHealthy = guardcli.PrintManagedHookStatus(cmd.OutOrStdout()).Healthy
-				} else if managed.Configured {
-					hooksHealthy = guardcli.PrintOrganizationManagedHookStatus(cmd.OutOrStdout()).Healthy
-				}
-				localHooks = guardcli.PrintHookStatus(cmd.OutOrStdout())
-				healthy = managed.Healthy && hooksHealthy && (!managed.Configured || localHooks.Healthy)
+				hooksHealthy, localHooksHealthy = checkHooks(cmd.OutOrStdout(), managed)
+				healthy = overallHealthy(managed, hooksHealthy, localHooksHealthy)
 			}
 			if !healthy {
 				return errDoctorUnhealthy
@@ -129,7 +125,60 @@ func doctorCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&fix, "fix", false, "restart the managed-observe daemon when it is running a stale binary")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON instead of the human readout")
 	return cmd
+}
+
+// checkHooks reports hook health for a managed-observe status, writing its
+// readout to out. Shared by the text and JSON paths so the two can never
+// disagree about what "healthy" means.
+func checkHooks(out io.Writer, managed managedobserve.DoctorStatus) (managedHooks, localHooks bool) {
+	managedHooks = true
+	if managed.SelfServe {
+		managedHooks = guardcli.PrintManagedHookStatus(out).Healthy
+	} else if managed.Configured {
+		managedHooks = guardcli.PrintOrganizationManagedHookStatus(out).Healthy
+	}
+	localHooks = guardcli.PrintHookStatus(out).Healthy
+	return managedHooks, localHooks
+}
+
+// overallHealthy is the single definition of a healthy install. Local hook
+// health only counts once the machine is configured at all.
+func overallHealthy(managed managedobserve.DoctorStatus, managedHooks, localHooks bool) bool {
+	return managed.Healthy && managedHooks && (!managed.Configured || localHooks)
+}
+
+// doctorJSONPayload is the documented shape of `kontext doctor --json`.
+//
+// This is a CONSUMED CONTRACT, not an internal detail: external tooling decodes
+// it (see docs/json-contract.md). Its key set is pinned by a test, so adding,
+// removing, or renaming a field is a deliberate act with a failing test rather
+// than a silent break in something that is not built from this repository.
+type doctorJSONPayload struct {
+	managedobserve.Report
+	ManagedHooksHealthy bool `json:"managed_hooks_healthy"`
+	LocalHooksHealthy   bool `json:"local_hooks_healthy"`
+}
+
+// runDoctorJSON emits the report a GUI consumes. Unlike the text form it exits
+// zero even when unhealthy: the caller reads `healthy` from the payload, and a
+// non-zero exit would leave it interpreting both a status code and a document
+// that already says the same thing.
+func runDoctorJSON(out io.Writer) error {
+	managed, report := managedobserve.Diagnose(io.Discard, version)
+	managedHooks, localHooks := checkHooks(io.Discard, managed)
+	report.Healthy = overallHealthy(managed, managedHooks, localHooks)
+
+	payload := doctorJSONPayload{
+		Report:              report,
+		ManagedHooksHealthy: managedHooks,
+		LocalHooksHealthy:   localHooks,
+	}
+
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(payload)
 }
 
 var errDoctorUnhealthy = errors.New("local Kontext setup is unhealthy")

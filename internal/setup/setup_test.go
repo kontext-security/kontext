@@ -67,17 +67,21 @@ func newHarness(t *testing.T) *harness {
 		case "scutil":
 			return "Test MacBook\n", nil
 		case "security":
+			// Key the fake keychain by the service name the caller actually
+			// passed, so per-profile items are distinguishable here exactly as
+			// they are in the real keychain.
 			if len(args) > 0 && args[0] == "delete-generic-password" {
-				if _, ok := h.keychain[KeychainItemName]; ok {
-					delete(h.keychain, KeychainItemName)
+				item := serviceNameFromArgs(h.t, args)
+				if _, ok := h.keychain[item]; ok {
+					delete(h.keychain, item)
 					return "", nil
 				}
 				return "security: The specified item could not be found in the keychain.", errors.New("exit status 44")
 			}
 			// `security -i` add-generic-password via stdin.
 			if len(args) > 0 && args[0] == "-i" {
-				token := parseAddGenericPassword(h.t, stdin)
-				h.keychain[KeychainItemName] = token
+				item, token := parseAddGenericPassword(h.t, stdin)
+				h.keychain[item] = token
 				return "", nil
 			}
 			return "", nil
@@ -102,7 +106,9 @@ func overrideVar[T any](t *testing.T, target *T, value T) {
 	t.Cleanup(func() { *target = previous })
 }
 
-func parseAddGenericPassword(t *testing.T, stdin string) string {
+// parseAddGenericPassword returns the service name and token from the
+// `security -i` stdin command.
+func parseAddGenericPassword(t *testing.T, stdin string) (item, token string) {
 	t.Helper()
 	// add-generic-password -U -s <service> -a <account> -w "<token>"
 	start := strings.Index(stdin, `-w "`)
@@ -114,7 +120,20 @@ func parseAddGenericPassword(t *testing.T, stdin string) string {
 	if end < 0 {
 		t.Fatalf("unterminated token quote: %q", stdin)
 	}
-	return rest[:end]
+	return serviceNameFromArgs(t, strings.Fields(stdin)), rest[:end]
+}
+
+// serviceNameFromArgs pulls the value of the `-s` flag out of a security
+// invocation, whether it arrived as argv or as `security -i` stdin words.
+func serviceNameFromArgs(t *testing.T, args []string) string {
+	t.Helper()
+	for i, arg := range args {
+		if arg == "-s" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	t.Fatalf("no -s service name in security args: %v", args)
+	return ""
 }
 
 func (h *harness) options(token string, server *httptest.Server) Options {
@@ -1328,7 +1347,7 @@ func TestDeleteKeychainTokensAcceptsNotFoundVariants(t *testing.T) {
 			overrideVar(t, &execCommand, func(_ context.Context, stdin, name string, args ...string) (string, error) {
 				return output, errors.New("exit status 44")
 			})
-			if err := deleteKeychainTokens(context.Background()); err != nil {
+			if err := deleteKeychainTokens(context.Background(), KeychainItemName); err != nil {
 				t.Fatalf("deleteKeychainTokens() error = %v, want nil", err)
 			}
 		})

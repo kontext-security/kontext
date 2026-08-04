@@ -18,6 +18,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/installation"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
 	"github.com/kontext-security/kontext-cli/internal/managedstream"
+	"github.com/kontext-security/kontext-cli/internal/profile"
 )
 
 // PrintStatus reports the managed-observe state for `kontext doctor`:
@@ -33,7 +34,55 @@ type DoctorStatus struct {
 	Repairable bool
 }
 
+// Report is the machine-readable form of a doctor run — with `profile ls
+// --json`, one of the two surfaces a GUI is expected to build on. It carries
+// what a status indicator renders: whether things are healthy, which profile is
+// active, whether the daemon is alive, and how far behind the export is.
+//
+// Pointers distinguish "not measured" from a zero measurement: a heartbeat that
+// has never been recorded is not the same as one zero seconds old.
+type Report struct {
+	Healthy    bool `json:"healthy"`
+	Configured bool `json:"configured"`
+	SelfServe  bool `json:"self_serve"`
+	Repairable bool `json:"repairable"`
+
+	ActiveProfile string `json:"active_profile,omitempty"`
+	// LegacyInstall reports an install still resolving the pre-profile paths.
+	LegacyInstall bool   `json:"legacy_install"`
+	ConfigPath    string `json:"config_path,omitempty"`
+	ConfigScope   string `json:"config_scope,omitempty"`
+	CloudURL      string `json:"cloud_url,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+	// AllowHTTPLoopback reports that this profile accepts plaintext http to a
+	// loopback backend — a local-development posture, surfaced so it is visible
+	// rather than inferred from the URL.
+	AllowHTTPLoopback bool `json:"allow_http_loopback"`
+
+	InstallationID       string `json:"installation_id,omitempty"`
+	InstallTokenReadable bool   `json:"install_token_readable"`
+
+	DaemonRunning    bool   `json:"daemon_running"`
+	DaemonVersion    string `json:"daemon_version,omitempty"`
+	DaemonPID        int    `json:"daemon_pid,omitempty"`
+	InstalledVersion string `json:"installed_version,omitempty"`
+
+	HeartbeatAgeSeconds *float64 `json:"heartbeat_age_seconds,omitempty"`
+	ExportPending       *int     `json:"export_pending,omitempty"`
+
+	// Warnings mirrors every WARNING line in the text output, so a GUI can show
+	// the same findings without parsing prose.
+	Warnings []string `json:"warnings"`
+}
+
 func PrintStatus(out io.Writer, installedVersion string) DoctorStatus {
+	status, _ := Diagnose(out, installedVersion)
+	return status
+}
+
+// Diagnose runs the same checks as PrintStatus and additionally returns the
+// machine-readable report. Pass io.Discard as out for JSON-only callers.
+func Diagnose(out io.Writer, installedVersion string) (DoctorStatus, Report) {
 	return printStatus(out, installedVersion, doctorOptions{
 		DBPath:     DefaultDBPath(),
 		SocketPath: DefaultSocketPath(),
@@ -54,8 +103,25 @@ type doctorOptions struct {
 	LoadConfig func() (managedconfig.LoadedConfig, error)
 }
 
-func printStatus(out io.Writer, installedVersion string, opts doctorOptions) DoctorStatus {
-	status := DoctorStatus{Healthy: true}
+// The returns are NAMED so the deferred summary sync below actually reaches the
+// returned Report — with unnamed returns it would mutate a local copy that the
+// caller never sees, and every early return would report a zeroed summary.
+func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (status DoctorStatus, report Report) {
+	status = DoctorStatus{Healthy: true}
+	report = Report{InstalledVersion: installedVersion, Warnings: []string{}}
+	// warn keeps the text output and the report's Warnings in step: every
+	// WARNING a human reads is a warning a GUI can render.
+	warn := func(format string, args ...any) {
+		message := fmt.Sprintf(format, args...)
+		report.Warnings = append(report.Warnings, message)
+		fmt.Fprintf(out, "  WARNING: %s\n", message)
+	}
+	defer func() {
+		report.Healthy = status.Healthy
+		report.Configured = status.Configured
+		report.SelfServe = status.SelfServe
+		report.Repairable = status.Repairable
+	}()
 	staleDaemon := false
 	repairTargetAvailable := false
 	if opts.DBPath == "" {
@@ -79,20 +145,60 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 
 	fmt.Fprintln(out, "Managed observe:")
 
+	// Resolve the active profile FIRST. Path resolution falls back to the legacy
+	// paths when the pointer is unreadable, which fails closed but reports as
+	// "not configured" — misleading enough to be worth naming explicitly here.
+	activeProfile, profileErr := profile.ActiveName()
+	switch {
+	case profileErr == nil:
+		report.ActiveProfile = activeProfile
+		fmt.Fprintf(out, "  profile: %s\n", activeProfile)
+	case errors.Is(profileErr, profile.ErrNoActive):
+		// No pointer means either a pre-profile install or nothing installed at
+		// all. Only the former is a "legacy install"; deciding by the pointer
+		// alone would label a clean machine as one.
+		if legacy := managedconfig.LegacyUserPath(); legacy != "" {
+			if _, statErr := os.Lstat(legacy); statErr == nil {
+				report.LegacyInstall = true
+			}
+		}
+		if report.LegacyInstall {
+			fmt.Fprintln(out, "  profile: none (pre-profile install; `kontext profile migrate` moves it into \"default\")")
+		} else {
+			fmt.Fprintln(out, "  profile: none")
+		}
+	default:
+		status.Healthy = false
+		warn("the active profile pointer is unusable (%v) — config resolution has fallen back to the pre-profile paths; fix or remove %s", profileErr, profile.ActivePath())
+	}
+
+	// Through the injected loader, not managedconfig.Load directly: tests pin the
+	// scope rather than inheriting whatever this Mac has under /Library.
 	loaded, err := opts.LoadConfig()
 	if errors.Is(err, managedconfig.ErrNotManaged) {
 		fmt.Fprintln(out, "  config: not configured (run `kontext setup` to connect this Mac to a workspace)")
-		return status
+		return status, report
 	}
 	if err != nil {
 		fmt.Fprintf(out, "  config: ERROR %v\n", err)
 		status.Healthy = false
-		return status
+		return status, report
 	}
 	status.Configured = true
 	status.SelfServe = loaded.Scope == managedconfig.ScopeUser
+	report.ConfigPath = loaded.Path
+	report.ConfigScope = string(loaded.Scope)
+	report.CloudURL = loaded.Config.CloudURL
+	report.Mode = loaded.Config.Mode
+	report.AllowHTTPLoopback = loaded.Config.AllowHTTPLoopback
 
 	fmt.Fprintf(out, "  config: %s (%s)\n", loaded.Path, describeScope(loaded.Scope))
+	// Plaintext transport is a posture worth stating outright, even though it is
+	// bounded to loopback and deliberately opted into — a profile left over from
+	// a local-dev session should be obvious, not something to infer from the URL.
+	if loaded.Config.AllowHTTPLoopback {
+		fmt.Fprintf(out, "  backend: %s (plaintext http to loopback, allowed by this profile)\n", loaded.Config.CloudURL)
+	}
 	launchAgentPresent := opts.LaunchAgentPresent()
 	repairTargetAvailable = runtime.GOOS == "darwin" && loaded.Scope == managedconfig.ScopeUser && launchAgentPresent
 	if loaded.Scope == managedconfig.ScopeUser && !launchAgentPresent {
@@ -114,6 +220,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 
 	identityPath := installationPathForScope(loaded.Scope)
 	if state, err := installation.LoadFile(identityPath); err == nil {
+		report.InstallationID = state.InstallationID
 		fmt.Fprintf(out, "  installation: %s\n", state.InstallationID)
 	} else if errors.Is(err, installation.ErrNotFound) {
 		fmt.Fprintf(out, "  installation: not created yet (%s)\n", identityPath)
@@ -129,21 +236,25 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := managedconfig.ResolveInstallToken(ctx, loaded.Config.Credentials.InstallTokenRef); err == nil {
+		report.InstallTokenReadable = true
 		fmt.Fprintf(out, "  install token: readable (%s)\n", loaded.Config.Credentials.InstallTokenRef)
 	} else {
-		fmt.Fprintf(out, "  WARNING: install token is not readable (%v) — the agent cannot stream; re-run `kontext setup` or unlock your login keychain\n", err)
+		warn("install token is not readable (%v) — the agent cannot stream; re-run `kontext setup` or unlock your login keychain", err)
 		status.Healthy = false
 	}
 
 	if conn, err := opts.Dial("unix", opts.SocketPath, 500*time.Millisecond); err == nil {
 		conn.Close()
+		report.DaemonRunning = true
 		if daemonStatus := LoadDaemonStatus(opts.DBPath); daemonStatus != nil && pidAlive(daemonStatus.PID) {
+			report.DaemonVersion = daemonStatus.Version
+			report.DaemonPID = daemonStatus.PID
 			fmt.Fprintf(out, "  daemon: running (%s, pid %d)\n", describeDaemonBuild(daemonStatus), daemonStatus.PID)
 			if reason, stale := daemonSkew(daemonStatus, installedVersion, buildinfo.Revision(), buildinfo.Modified()); stale {
 				if repairTargetAvailable {
-					fmt.Fprintf(out, "  WARNING: %s — run 'kontext doctor --fix' to restart it\n", reason)
+					warn("%s — run 'kontext doctor --fix' to restart it", reason)
 				} else {
-					fmt.Fprintf(out, "  WARNING: %s — restart it through its managing installation\n", reason)
+					warn("%s — restart it through its managing installation", reason)
 				}
 				staleDaemon = true
 			}
@@ -156,9 +267,9 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 			// already-current daemon is the harmless worst case.
 			if comparableVersion(installedVersion) {
 				if repairTargetAvailable {
-					fmt.Fprintf(out, "  WARNING: daemon version is unknown — it likely predates v%s; run 'kontext doctor --fix' to restart it\n", installedVersion)
+					warn("daemon version is unknown — it likely predates v%s; run 'kontext doctor --fix' to restart it", installedVersion)
 				} else {
-					fmt.Fprintf(out, "  WARNING: daemon version is unknown — restart it through its managing installation\n")
+					warn("daemon version is unknown — restart it through its managing installation")
 				}
 				staleDaemon = true
 			}
@@ -176,10 +287,14 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 		fmt.Fprintf(out, "  export: ERROR %v\n", err)
 		status.Healthy = false
 	} else {
-		if !printHeartbeat(out, state, opts.Now()) {
+		ok, age := printHeartbeat(out, state, opts.Now(), warn)
+		report.HeartbeatAgeSeconds = age
+		if !ok {
 			status.Healthy = false
 		}
-		if !printExportLag(exportCtx, out, opts.DBPath, state) {
+		ok, pending := printExportLag(exportCtx, out, opts.DBPath, state, warn)
+		report.ExportPending = pending
+		if !ok {
 			status.Healthy = false
 		}
 	}
@@ -192,7 +307,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 		if launchAgentPresent {
 			fmt.Fprintf(out, "  launch agent: %s\n", userPlist)
 			if loaded.Scope == managedconfig.ScopeSystem {
-				fmt.Fprintln(out, "  WARNING: this Mac is organization-managed but a self-serve agent is also installed; run `kontext setup --uninstall` to remove it")
+				warn("this Mac is organization-managed but a self-serve agent is also installed; run `kontext setup --uninstall` to remove it")
 				status.Healthy = false
 			}
 		}
@@ -205,15 +320,15 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 		status.Healthy = false
 		switch authErr.Kind {
 		case "startup":
-			fmt.Fprintf(out, "  WARNING: the agent failed to start — %s (%s)\n", authErr.Message, authErr.At)
+			warn("the agent failed to start — %s (%s)", authErr.Message, authErr.At)
 		case authErrorKindCorrupt:
-			fmt.Fprintf(out, "  WARNING: auth breadcrumb is unreadable — %s\n", authErr.Message)
+			warn("auth breadcrumb is unreadable — %s", authErr.Message)
 		default:
 			detail := ""
 			if authErr.Status > 0 {
 				detail = fmt.Sprintf(" (HTTP %d, %s)", authErr.Status, authErr.At)
 			}
-			fmt.Fprintf(out, "  WARNING: hosted ingest is failing — install token rejected%s; run `kontext setup` with a new token from the dashboard\n", detail)
+			warn("hosted ingest is failing — install token rejected%s; run `kontext setup` with a new token from the dashboard", detail)
 		}
 	}
 	// Restarting a stale daemon is safe only when every other prerequisite is
@@ -222,7 +337,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 	if staleDaemon {
 		status.Healthy = false
 	}
-	return status
+	return status, report
 }
 
 func selfServeLaunchAgentPresent() bool {
@@ -358,29 +473,34 @@ func daemonSkew(status *DaemonStatus, installedVersion, installedRevision string
 	return "", false
 }
 
-func printHeartbeat(out io.Writer, state managedstream.State, now time.Time) bool {
+// printHeartbeat reports the daemon's last healthy beat, returning whether it is
+// acceptable and its age in seconds (nil when there is nothing to measure).
+func printHeartbeat(out io.Writer, state managedstream.State, now time.Time, warn func(string, ...any)) (bool, *float64) {
 	if strings.TrimSpace(state.LastHeartbeatAt) == "" {
 		fmt.Fprintln(out, "  heartbeat: none recorded yet (the daemon has not reported healthy)")
-		return false
+		return false, nil
 	}
 	last, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(state.LastHeartbeatAt))
 	if err != nil {
 		fmt.Fprintln(out, "  heartbeat: ERROR invalid timestamp")
-		return false
+		return false, nil
 	}
 	age := now.Sub(last)
 	if age < 0 {
 		age = 0
 	}
+	seconds := age.Seconds()
 	fmt.Fprintf(out, "  heartbeat: %s ago\n", doctorDuration(age))
 	if age > 5*time.Minute {
-		fmt.Fprintf(out, "  WARNING: last heartbeat was %s ago — the daemon may be stalled\n", doctorDuration(age))
-		return false
+		warn("last heartbeat was %s ago — the daemon may be stalled", doctorDuration(age))
+		return false, &seconds
 	}
-	return true
+	return true, &seconds
 }
 
-func printExportLag(ctx context.Context, out io.Writer, dbPath string, state managedstream.State) bool {
+// printExportLag reports the export backlog, returning whether it is acceptable
+// and how many events are pending (nil when the ledger could not be read).
+func printExportLag(ctx context.Context, out io.Writer, dbPath string, state managedstream.State, warn func(string, ...any)) (bool, *int) {
 	var cursor *sqlite.LedgerCursor
 	if state.UpdatedAfter != nil {
 		cursor = &sqlite.LedgerCursor{UpdatedAt: *state.UpdatedAfter, ActionID: state.ActionID}
@@ -388,15 +508,15 @@ func printExportLag(ctx context.Context, out io.Writer, dbPath string, state man
 	newest, pending, err := sqlite.LedgerLag(ctx, dbPath, cursor)
 	if err != nil {
 		fmt.Fprintf(out, "  export: ERROR %v\n", err)
-		return false
+		return false, nil
 	}
 	if newest == nil {
 		fmt.Fprintln(out, "  export: no ledger events yet")
-		return true
+		return true, &pending
 	}
 	if cursor == nil {
 		fmt.Fprintf(out, "  export: not started yet (%d pending)\n", pending)
-		return false
+		return false, &pending
 	}
 	lag := newest.Sub(cursor.UpdatedAt)
 	if lag < 0 {
@@ -405,17 +525,17 @@ func printExportLag(ctx context.Context, out io.Writer, dbPath string, state man
 	// The export cursor rides 30s behind newest by design (cursorSafetyLag),
 	// hence the 10m warning threshold.
 	if lag > 10*time.Minute && pending > 0 {
-		fmt.Fprintf(out, "  WARNING: export lagging %s (%d events pending) — the daemon may be stalled\n", doctorDuration(lag), pending)
-		return false
+		warn("export lagging %s (%d events pending) — the daemon may be stalled", doctorDuration(lag), pending)
+		return false, &pending
 	}
 	if pending == 0 {
 		fmt.Fprintln(out, "  export: up to date (0 pending)")
-		return true
+		return true, &pending
 	}
 	// Never claim "up to date" while rows are waiting — report the facts and
 	// let the operator judge.
 	fmt.Fprintf(out, "  export: %d pending (cursor %s behind newest)\n", pending, doctorDuration(lag))
-	return true
+	return true, &pending
 }
 
 func doctorDuration(d time.Duration) string {
@@ -423,4 +543,25 @@ func doctorDuration(d time.Duration) string {
 		return d.Round(time.Second).String()
 	}
 	return d.Round(time.Minute).String()
+}
+
+// DaemonLive reports whether a daemon serving THIS database is actually running.
+//
+// A reachable socket is not sufficient evidence on its own: the socket path is
+// shared across installations, so an unrelated daemon — a leftover from an
+// enterprise package, or one started by hand — binds the same path and answers.
+// The status breadcrumb is written beside the database the daemon is serving, so
+// checking it for a live pid ties the answer to the intended install rather than
+// to whoever holds the socket.
+//
+// A daemon predating the breadcrumb reads as not-live. That is the harmless
+// direction: the caller restarts an already-current daemon.
+func DaemonLive(dbPath, socketPath string) bool {
+	conn, err := net.DialTimeout("unix", socketPath, 500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	status := LoadDaemonStatus(dbPath)
+	return status != nil && pidAlive(status.PID)
 }

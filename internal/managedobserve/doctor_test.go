@@ -207,7 +207,7 @@ func TestPrintStatusDaemonVersionMatch(t *testing.T) {
 	env.writeDaemonStatus(t, os.Getpid(), "1.2.3")
 
 	var out bytes.Buffer
-	status := printStatus(&out, "1.2.3", env.options())
+	status, _ := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
 	if !status.Healthy || status.Repairable {
@@ -226,7 +226,7 @@ func TestPrintStatusDaemonVersionMismatch(t *testing.T) {
 	env.writeDaemonStatus(t, os.Getpid(), "1.2.2")
 
 	var out bytes.Buffer
-	status := printStatus(&out, "1.2.3", env.options())
+	status, _ := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
 	if status.Healthy || status.Repairable != wantAutomaticDaemonRepair() {
@@ -242,7 +242,7 @@ func TestPrintStatusDaemonDevVersionDoesNotWarn(t *testing.T) {
 	env.writeDaemonStatus(t, os.Getpid(), "dev")
 
 	var out bytes.Buffer
-	status := printStatus(&out, "1.2.3", env.options())
+	status, _ := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
 	if !status.Healthy || status.Repairable {
@@ -258,7 +258,7 @@ func TestPrintStatusDaemonDeadPIDTreatedAsUnknownAndFixable(t *testing.T) {
 	env.writeDaemonStatus(t, deadPID(t), "1.2.2")
 
 	var out bytes.Buffer
-	status := printStatus(&out, "1.2.3", env.options())
+	status, _ := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
 	if status.Healthy || status.Repairable != wantAutomaticDaemonRepair() {
@@ -289,7 +289,7 @@ func TestPrintStatusDaemonWithoutBreadcrumbIsFixable(t *testing.T) {
 	env := newDoctorTestEnv(t)
 
 	var out bytes.Buffer
-	status := printStatus(&out, "1.2.3", env.options())
+	status, _ := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
 	if status.Healthy || status.Repairable != wantAutomaticDaemonRepair() {
@@ -308,7 +308,7 @@ func TestPrintStatusDaemonWithoutBreadcrumbDevInstallDoesNotWarn(t *testing.T) {
 	env := newDoctorTestEnv(t)
 
 	var out bytes.Buffer
-	status := printStatus(&out, "dev", env.options())
+	status, _ := printStatus(&out, "dev", env.options())
 
 	output := out.String()
 	if !status.Healthy || status.Repairable {
@@ -332,7 +332,7 @@ func TestPrintStatusHeartbeatFreshAndExportUpToDate(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	status := printStatus(&out, "1.2.3", env.options())
+	status, _ := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
 	if !status.Healthy || status.Repairable {
@@ -359,7 +359,7 @@ func TestPrintStatusHeartbeatOldAndExportLagging(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	status := printStatus(&out, "1.2.3", env.options())
+	status, _ := printStatus(&out, "1.2.3", env.options())
 
 	output := out.String()
 	if status.Healthy || status.Repairable {
@@ -467,7 +467,7 @@ func TestPrintStatusOrgManagedWarningFollowsConfigScope(t *testing.T) {
 		env := newHealthyEnv(t)
 
 		var out bytes.Buffer
-		status := printStatus(&out, "1.2.3", env.options())
+		status, _ := printStatus(&out, "1.2.3", env.options())
 
 		output := out.String()
 		if !status.Healthy || !status.SelfServe {
@@ -484,7 +484,7 @@ func TestPrintStatusOrgManagedWarningFollowsConfigScope(t *testing.T) {
 		opts.LoadConfig = env.loadConfig(managedconfig.ScopeSystem)
 
 		var out bytes.Buffer
-		status := printStatus(&out, "1.2.3", opts)
+		status, _ := printStatus(&out, "1.2.3", opts)
 
 		output := out.String()
 		if status.Healthy || status.SelfServe {

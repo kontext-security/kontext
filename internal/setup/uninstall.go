@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
 	"github.com/kontext-security/kontext-cli/internal/codexmanaged"
 	"github.com/kontext-security/kontext-cli/internal/installation"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
+	"github.com/kontext-security/kontext-cli/internal/profile"
 )
 
 // Uninstall reverses Run in reverse order. Every step tolerates
@@ -107,20 +109,40 @@ func Uninstall(ctx context.Context, opts Options) error {
 		fmt.Fprintln(opts.Stdout, "  • No Codex hooks file; no hooks to remove")
 	}
 
-	if err := deleteKeychainTokens(ctx); err != nil {
+	// Every profile's token, not just the active one: leaving another
+	// workspace's credential in the keychain after an uninstall would be a
+	// quiet surprise.
+	items, unreadable, err := deleteAllInstallTokens(ctx)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(opts.Stdout, "  ✓ Install token removed from your keychain (%s)\n", KeychainItemName)
+	fmt.Fprintf(opts.Stdout, "  ✓ Install tokens removed from your keychain (%s)\n", strings.Join(items, ", "))
+	// Claiming complete cleanup while a token survives is worse than an
+	// incomplete uninstall: nothing would ever point at it again.
+	if len(unreadable) > 0 {
+		fmt.Fprintf(opts.Stderr, "warning: could not read the config for %s, so their token references are unknown.\n", strings.Join(unreadable, ", "))
+		fmt.Fprintf(opts.Stderr, "         A renamed profile keeps its token under its FORMER name — check Keychain Access for items starting %q and remove any that remain.\n", profile.LegacyKeychainItemName())
+	}
 
-	if path := managedconfig.UserPath(); path != "" {
+	configPaths, err := allManagedConfigPaths()
+	if err != nil {
+		return err
+	}
+	for _, path := range configPaths {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		fmt.Fprintf(opts.Stdout, "  ✓ Managed config removed (%s)\n", path)
 	}
 
+	// Clearing the pointer last returns path resolution to the legacy paths, so
+	// a re-run of uninstall (or a later plain `kontext setup`) is predictable.
+	if err := profile.ClearActive(); err != nil {
+		return err
+	}
+
 	fmt.Fprintln(opts.Stdout, "\nKept")
-	if identity := installation.UserPath(); identity != "" {
+	for _, identity := range allInstallationPaths() {
 		if _, err := os.Lstat(identity); err == nil {
 			fmt.Fprintf(opts.Stdout, "  • Installation identity (%s)\n", identity)
 		}
@@ -128,6 +150,49 @@ func Uninstall(ctx context.Context, opts Options) error {
 	fmt.Fprintln(opts.Stdout, "  • Local observe data and logs under ~/Library/Application Support/Kontext and ~/Library/Logs/Kontext")
 	fmt.Fprintln(opts.Stdout, "  • Homebrew-owned kontext binary (`brew uninstall kontext`)")
 	return nil
+}
+
+// allManagedConfigPaths lists every self-serve config on this Mac — the legacy
+// unprofiled one and one per profile. Uninstall removes the installation, not
+// just the profile that happened to be active.
+func allManagedConfigPaths() ([]string, error) {
+	var paths []string
+	if legacy := managedconfig.LegacyUserPath(); legacy != "" {
+		paths = append(paths, legacy)
+	}
+	names, err := profile.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		path, err := profile.ManagedConfigPath(name)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
+
+// allInstallationPaths mirrors allManagedConfigPaths for the identities that
+// uninstall deliberately keeps, so the printed "Kept" list names each one a
+// later re-setup would reuse. A profile whose name no longer validates is
+// skipped rather than reported.
+func allInstallationPaths() []string {
+	var paths []string
+	if legacy := installation.LegacyUserPath(); legacy != "" {
+		paths = append(paths, legacy)
+	}
+	names, err := profile.List()
+	if err != nil {
+		return paths
+	}
+	for _, name := range names {
+		if path, err := profile.InstallationPath(name); err == nil {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 func removeCodexUserHooks() (bool, error) {
