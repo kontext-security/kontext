@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/kontext-security/kontext-cli/internal/ledgerfact"
+	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
 )
 
 const (
@@ -191,11 +192,14 @@ func verifyReceiptDecisionFact(payload, stored string, mirrors decisionFactMirro
 	if receipt.Action.ID == "" {
 		return fmt.Errorf("decision-fact receipt has no action id")
 	}
-	canonicalReceipt, err := canonicalJSON(json.RawMessage(receipt.Action.DecisionFact))
+	// JCS on both sides: clean-form receipt payloads are stored as JCS
+	// bytes, so the embedded fact's key order/escaping differs from the
+	// stored fact column even when the values are identical.
+	canonicalReceipt, err := payloadcapture.CanonicalJSON(json.RawMessage(receipt.Action.DecisionFact))
 	if err != nil {
 		return fmt.Errorf("canonicalize receipt decision fact: %w", err)
 	}
-	canonicalStored, err := canonicalJSON(json.RawMessage(stored))
+	canonicalStored, err := payloadcapture.CanonicalJSON(json.RawMessage(stored))
 	if err != nil {
 		return fmt.Errorf("canonicalize stored decision fact: %w", err)
 	}

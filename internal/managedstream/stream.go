@@ -19,6 +19,7 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext-cli/internal/ledgeringest"
 )
 
 const (
@@ -202,13 +203,26 @@ func Flush(ctx context.Context, opts Options) error {
 			return postHeartbeatIfDue(ctx, opts, statePath, state, now)
 		}
 
-		payload := newPayload(opts, batch.Sessions, batch.Actions, batch.Receipts, batch.ReceiptChainAnchor, now)
-
-		body, err := json.Marshal(payload)
+		body, counts, err := payloadBody(opts, batch, now)
 		if err != nil {
-			return err
+			// A page that cannot be represented on its contract form is
+			// isolated like any other poison page: shrink to find it, then
+			// advance past it rather than retrying it forever.
+			reason := fmt.Sprintf("payload mapping failed: %v", err)
+			if limit == 1 {
+				return advancePastMinimumBatch(statePath, batch, state, reason, err)
+			}
+			nextLimit := reducedBatchLimit(limit)
+			opts.Diagnostic.Printf(
+				"managed stream %s; reducing batch limit from %d to %d\n",
+				reason,
+				limit,
+				nextLimit,
+			)
+			limit = nextLimit
+			continue
 		}
-		if reason := payloadLimitViolation(payload, len(body)); reason != "" {
+		if reason := payloadLimitViolation(counts, len(body)); reason != "" {
 			if limit == 1 {
 				return advancePastMinimumBatch(statePath, batch, state, reason, nil)
 			}
@@ -223,29 +237,38 @@ func Flush(ctx context.Context, opts Options) error {
 			continue
 		}
 
-		if err := post(ctx, opts, body); err != nil {
-			var hostedErr *hostedIngestError
-			if errors.As(err, &hostedErr) && shouldRetryWithSmallerBatch(hostedErr.StatusCode) {
-				if limit == 1 {
-					return err
+		// A page can map to zero wire records (local-only session lifecycle
+		// rows); its cursor still advances below, it just posts nothing.
+		if body != nil {
+			if err := post(ctx, opts, body); err != nil {
+				var hostedErr *hostedIngestError
+				if errors.As(err, &hostedErr) && shouldIsolateBatch(hostedErr.StatusCode, batch.Form) {
+					if limit == 1 {
+						if hostedErr.StatusCode == http.StatusConflict {
+							// A replay conflict never resolves by retrying the
+							// same bytes; record it and move on.
+							return advancePastMinimumBatch(statePath, batch, state, "hosted replay conflict", err)
+						}
+						return err
+					}
+					nextLimit := reducedBatchLimit(limit)
+					opts.Diagnostic.Printf(
+						"managed stream hosted ingest returned status %d; reducing batch limit from %d to %d\n",
+						hostedErr.StatusCode,
+						limit,
+						nextLimit,
+					)
+					limit = nextLimit
+					continue
 				}
-				nextLimit := reducedBatchLimit(limit)
-				opts.Diagnostic.Printf(
-					"managed stream hosted ingest returned status %d; reducing batch limit from %d to %d\n",
-					hostedErr.StatusCode,
-					limit,
-					nextLimit,
-				)
-				limit = nextLimit
-				continue
+				return err
 			}
-			return err
-		}
 
-		// The hosted ledger accepted a post with this token — proof the
-		// credential works, which is what breadcrumb-clearing needs.
-		if opts.OnFlushSuccess != nil {
-			opts.OnFlushSuccess()
+			// The hosted ledger accepted a post with this token — proof the
+			// credential works, which is what breadcrumb-clearing needs.
+			if opts.OnFlushSuccess != nil {
+				opts.OnFlushSuccess()
+			}
 		}
 
 		// Reductions are multiplicative and per-region; recovery is additive
@@ -294,8 +317,12 @@ func postHeartbeatIfDue(ctx context.Context, opts Options, statePath string, sta
 		return err
 	}
 
-	payload := newPayload(opts, nil, nil, nil, nil, now)
-	body, err := json.Marshal(payload)
+	// Heartbeats carry no records, so nothing pins them to the legacy form.
+	heartbeat, err := v1Batch(opts, sqlite.LedgerBatch{}, now)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(heartbeat)
 	if err != nil {
 		return err
 	}
@@ -308,6 +335,80 @@ func postHeartbeatIfDue(ctx context.Context, opts Options, statePath string, sta
 	}
 	state.LastHeartbeatAt = now.Format(time.RFC3339Nano)
 	return SaveState(statePath, state)
+}
+
+type payloadCounts struct {
+	sessions int
+	actions  int
+	receipts int
+}
+
+// payloadBody serializes one export page under the wire form the store
+// selected for it. A nil body with a nil error is a page whose records are
+// all local-only (nothing to post; the cursor still advances).
+func payloadBody(opts Options, batch sqlite.LedgerBatch, now time.Time) ([]byte, payloadCounts, error) {
+	if batch.Form == sqlite.LedgerFormV1 {
+		mapped, err := v1Batch(opts, batch, now)
+		if err != nil {
+			return nil, payloadCounts{}, err
+		}
+		counts := payloadCounts{
+			sessions: len(mapped.Sessions),
+			actions:  len(mapped.Actions),
+			receipts: len(mapped.Receipts),
+		}
+		if counts.sessions == 0 && counts.actions == 0 && counts.receipts == 0 {
+			return nil, counts, nil
+		}
+		body, err := json.Marshal(mapped)
+		return body, counts, err
+	}
+
+	payload := newPayload(opts, batch.Sessions, batch.Actions, batch.Receipts, batch.ReceiptChainAnchor, now)
+	counts := payloadCounts{
+		sessions: len(payload.Sessions),
+		actions:  len(payload.Actions),
+		receipts: len(payload.Receipts),
+	}
+	body, err := json.Marshal(payload)
+	return body, counts, err
+}
+
+func v1Batch(opts Options, batch sqlite.LedgerBatch, now time.Time) (ledgeringest.Batch, error) {
+	var anchor *string
+	if batch.ReceiptChainAnchor != nil {
+		anchor = &batch.ReceiptChainAnchor.PreviousReceiptHash
+	}
+	return ledgeringest.MapBatch(ledgeringest.BatchInput{
+		BatchID:                   "batch_" + uuid.NewString(),
+		InstallationID:            opts.InstallationID,
+		SentAt:                    now.Format(time.RFC3339Nano),
+		Device:                    v1Device(opts),
+		Sessions:                  recordMaps(batch.Sessions),
+		Actions:                   recordMaps(batch.Actions),
+		Receipts:                  recordMaps(batch.Receipts),
+		AnchorPreviousReceiptHash: anchor,
+	})
+}
+
+func v1Device(opts Options) *ledgeringest.Device {
+	label, deploymentVersion, userEmail := deviceValues(opts)
+	if label == "" && deploymentVersion == "" && userEmail == "" {
+		return nil
+	}
+	return &ledgeringest.Device{
+		Label:             label,
+		DeploymentVersion: deploymentVersion,
+		UserEmail:         userEmail,
+	}
+}
+
+func recordMaps(records []sqlite.LedgerRecord) []map[string]any {
+	out := make([]map[string]any, len(records))
+	for index, record := range records {
+		out[index] = record
+	}
+	return out
 }
 
 func newPayload(
@@ -328,18 +429,22 @@ func newPayload(
 		Receipts:           nonNilRecords(receipts),
 		ReceiptChainAnchor: receiptChainAnchor,
 	}
-	// Resolve the deployment version per flush so an in-place package upgrade
-	// is reflected without restarting the daemon.
-	label := strings.TrimSpace(opts.DeviceLabel)
-	userEmail := strings.TrimSpace(opts.UserEmail)
-	deploymentVersion := ""
-	if opts.DeploymentVersion != nil {
-		deploymentVersion = strings.TrimSpace(opts.DeploymentVersion())
-	}
+	label, deploymentVersion, userEmail := deviceValues(opts)
 	if label != "" || deploymentVersion != "" || userEmail != "" {
 		payload.Device = &Device{Label: label, DeploymentVersion: deploymentVersion, UserEmail: userEmail}
 	}
 	return payload
+}
+
+// deviceValues resolves the deployment version per flush so an in-place
+// package upgrade is reflected without restarting the daemon.
+func deviceValues(opts Options) (label, deploymentVersion, userEmail string) {
+	label = strings.TrimSpace(opts.DeviceLabel)
+	userEmail = strings.TrimSpace(opts.UserEmail)
+	if opts.DeploymentVersion != nil {
+		deploymentVersion = strings.TrimSpace(opts.DeploymentVersion())
+	}
+	return label, deploymentVersion, userEmail
 }
 
 func nonNilRecords(records []sqlite.LedgerRecord) []sqlite.LedgerRecord {
@@ -419,14 +524,25 @@ func shouldRetryWithSmallerBatch(statusCode int) bool {
 	return statusCode == http.StatusRequestEntityTooLarge
 }
 
-func payloadLimitViolation(payload Payload, bodyBytes int) string {
+// shouldIsolateBatch reports whether shrinking the page can isolate the
+// failing record. Oversized bodies always qualify; on the v1 contract a
+// replay conflict (409) does too — the same bytes never succeed on retry,
+// so the poison row must be found and skipped.
+func shouldIsolateBatch(statusCode int, form string) bool {
+	if shouldRetryWithSmallerBatch(statusCode) {
+		return true
+	}
+	return form == sqlite.LedgerFormV1 && statusCode == http.StatusConflict
+}
+
+func payloadLimitViolation(counts payloadCounts, bodyBytes int) string {
 	switch {
-	case len(payload.Sessions) > maxPayloadSessions:
-		return fmt.Sprintf("agent_sessions=%d exceeds max %d", len(payload.Sessions), maxPayloadSessions)
-	case len(payload.Actions) > maxPayloadActions:
-		return fmt.Sprintf("authorization_actions=%d exceeds max %d", len(payload.Actions), maxPayloadActions)
-	case len(payload.Receipts) > maxPayloadReceipts:
-		return fmt.Sprintf("authorization_receipts=%d exceeds max %d", len(payload.Receipts), maxPayloadReceipts)
+	case counts.sessions > maxPayloadSessions:
+		return fmt.Sprintf("sessions=%d exceeds max %d", counts.sessions, maxPayloadSessions)
+	case counts.actions > maxPayloadActions:
+		return fmt.Sprintf("actions=%d exceeds max %d", counts.actions, maxPayloadActions)
+	case counts.receipts > maxPayloadReceipts:
+		return fmt.Sprintf("receipts=%d exceeds max %d", counts.receipts, maxPayloadReceipts)
 	case bodyBytes > MaxPayloadBytes:
 		return fmt.Sprintf("body_bytes=%d exceeds max %d", bodyBytes, MaxPayloadBytes)
 	default:

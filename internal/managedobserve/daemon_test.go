@@ -108,7 +108,7 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 		} `json:"device,omitempty"`
 		Actions []struct {
 			SessionID string `json:"session_id"`
-		} `json:"authorization_actions"`
+		} `json:"actions"`
 	}
 
 	requests := make(chan ledgerBatchRequest, 1)

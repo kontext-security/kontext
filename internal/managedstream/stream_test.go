@@ -41,7 +41,7 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 	store, dbPath := testStore(t)
 	saveTestDecision(t, store, "session-1", "toolu_1")
 
-	var got Payload
+	var got wireBatch
 	server := capturePayloadServer(t, &got)
 	t.Cleanup(server.Close)
 
@@ -59,8 +59,8 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 		t.Fatalf("Flush() error = %v", err)
 	}
 
-	if got.SchemaVersion != SchemaVersion {
-		t.Fatalf("schema_version = %q, want %q", got.SchemaVersion, SchemaVersion)
+	if got.BatchVersion != "v1" {
+		t.Fatalf("batch_version = %q, want v1", got.BatchVersion)
 	}
 	if got.InstallationID != "ins_0123456789abcdefghijklmnopqrstuv" {
 		t.Fatalf("installation_id = %q", got.InstallationID)
@@ -74,8 +74,8 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 	if len(got.Sessions) != 1 || len(got.Actions) != 2 || len(got.Receipts) != 2 {
 		t.Fatalf("batch counts = sessions %d actions %d receipts %d", len(got.Sessions), len(got.Actions), len(got.Receipts))
 	}
-	if got.Actions[0]["canonical_event_type"] != "request.proposed" ||
-		got.Actions[1]["canonical_event_type"] != "request.decided" ||
+	if got.Actions[0]["event_type"] != "request.proposed" ||
+		got.Actions[1]["event_type"] != "request.decided" ||
 		got.Actions[1]["decision_result"] != "allow" {
 		t.Fatalf("actions = %+v, want proposed and decided ledger events", got.Actions)
 	}
@@ -96,7 +96,7 @@ func TestFlushOmitsBlankDeviceLabel(t *testing.T) {
 	store, dbPath := testStore(t)
 	saveTestDecision(t, store, "session-1", "toolu_1")
 
-	var got Payload
+	var got wireBatch
 	server := capturePayloadServer(t, &got)
 	t.Cleanup(server.Close)
 
@@ -122,7 +122,7 @@ func TestFlushEmitsDeviceForUserEmailAlone(t *testing.T) {
 	store, dbPath := testStore(t)
 	saveTestDecision(t, store, "session-1", "toolu_1")
 
-	var got Payload
+	var got wireBatch
 	server := capturePayloadServer(t, &got)
 	t.Cleanup(server.Close)
 
@@ -147,7 +147,7 @@ func TestFlushResolvesDeploymentVersionPerFlush(t *testing.T) {
 	store, dbPath := testStore(t)
 	saveTestDecision(t, store, "session-1", "toolu_1")
 
-	var got Payload
+	var got wireBatch
 	server := capturePayloadServer(t, &got)
 	t.Cleanup(server.Close)
 
@@ -214,7 +214,7 @@ func TestFlushCapsBatchLimitBeforePosting(t *testing.T) {
 		saveTestDecision(t, store, fmt.Sprintf("session-%03d", i), fmt.Sprintf("toolu_%03d", i))
 	}
 
-	var got Payload
+	var got wireBatch
 	server := capturePayloadServer(t, &got)
 	t.Cleanup(server.Close)
 
@@ -247,7 +247,7 @@ func TestFlushDrainsBacklogInOneCall(t *testing.T) {
 	var posts int
 	shipped := map[string]bool{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload Payload
+		var payload wireBatch
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Errorf("decode payload: %v", err)
 		}
@@ -294,13 +294,13 @@ func TestFlushReexportsRowsThatCommitAfterCursorAdvance(t *testing.T) {
 	var mu sync.Mutex
 	shippedToolUseIDs := map[string]bool{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload Payload
+		var payload wireBatch
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Errorf("decode payload: %v", err)
 		}
 		mu.Lock()
 		for _, action := range payload.Actions {
-			if id, ok := action["tool_use_id"].(string); ok {
+			if id, ok := action["tool_call_id"].(string); ok {
 				shippedToolUseIDs[id] = true
 			}
 		}
@@ -383,7 +383,7 @@ func TestFlushRetriesWithSmallerBatchWhenHostedBackendRejectsSize(t *testing.T) 
 
 	var actionCounts []int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var got Payload
+		var got wireBatch
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatalf("Decode() error = %v", err)
 		}
@@ -837,7 +837,7 @@ func TestFlushUsesUpdatedAfterCursor(t *testing.T) {
 func TestFlushPostsHeartbeatWhenNoActionsArePending(t *testing.T) {
 	_, dbPath := testStore(t)
 
-	var got Payload
+	var got wireBatch
 	server := capturePayloadServer(t, &got)
 	t.Cleanup(server.Close)
 
@@ -857,8 +857,8 @@ func TestFlushPostsHeartbeatWhenNoActionsArePending(t *testing.T) {
 		t.Fatalf("Flush() error = %v", err)
 	}
 
-	if got.SchemaVersion != SchemaVersion {
-		t.Fatalf("schema_version = %q, want %q", got.SchemaVersion, SchemaVersion)
+	if got.BatchVersion != "v1" {
+		t.Fatalf("batch_version = %q, want v1", got.BatchVersion)
 	}
 	if got.InstallationID != "ins_0123456789abcdefghijklmnopqrstuv" {
 		t.Fatalf("installation_id = %q", got.InstallationID)
@@ -1009,7 +1009,20 @@ func testStore(t *testing.T) (*sqlite.Store, string) {
 	return store, dbPath
 }
 
-func capturePayloadServer(t *testing.T, got *Payload) *httptest.Server {
+// wireBatch decodes the clean-v1 envelope the flush posts for pages of
+// post-cutover rows (the only kind a fresh test store produces).
+type wireBatch struct {
+	BatchVersion   string           `json:"batch_version"`
+	BatchID        string           `json:"batch_id"`
+	InstallationID string           `json:"installation_id"`
+	SentAt         string           `json:"sent_at"`
+	Device         *Device          `json:"device"`
+	Sessions       []map[string]any `json:"sessions"`
+	Actions        []map[string]any `json:"actions"`
+	Receipts       []map[string]any `json:"receipts"`
+}
+
+func capturePayloadServer(t *testing.T, got *wireBatch) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != DefaultEndpoint {
@@ -1097,7 +1110,7 @@ func TestFlushRestoresBatchLimitAfterReduction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var payload Payload
+		var payload wireBatch
 		if err := json.Unmarshal(body, &payload); err != nil {
 			t.Fatal(err)
 		}
