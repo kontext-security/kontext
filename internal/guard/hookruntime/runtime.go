@@ -2,6 +2,7 @@ package hookruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -34,6 +35,12 @@ type Processor interface {
 func Run(ctx context.Context, adapter Adapter, processor Processor, mode Mode, stdin io.Reader, stdout, stderr io.Writer) error {
 	event, err := adapter.Decode(stdin)
 	if err != nil {
+		// An event the adapter recognizes but does not translate carries no
+		// decision: emit nothing and succeed, rather than encoding a deny for
+		// what is only a lifecycle signal.
+		if errors.Is(err, hook.ErrSkipEvent) {
+			return nil
+		}
 		fmt.Fprintf(stderr, "kontext: malformed hook input: %v\n", err)
 		malformed := hook.Event{HookName: adapter.MalformedHookName()}
 		return adapter.Encode(stdout, malformed, effectiveResult(malformed, hook.Result{

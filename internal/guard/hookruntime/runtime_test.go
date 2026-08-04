@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 
@@ -181,5 +182,43 @@ func TestEffectiveResultRemoteDowngradesUnstampedToObserve(t *testing.T) {
 	}
 	if result.Reason != "Kontext observe mode: would deny; would deny" {
 		t.Fatalf("reason = %q, want observe would-note", result.Reason)
+	}
+}
+
+// An event the adapter recognizes but does not translate carries no decision.
+// It must not be encoded as a deny the way malformed input is, and it must not
+// reach the processor.
+func TestRunSkippedEventEncodesNothing(t *testing.T) {
+	t.Parallel()
+
+	adapter := &stubAdapter{
+		decodeErr: fmt.Errorf("devin: event PostCompaction: %w", hook.ErrSkipEvent),
+	}
+	stdout := &bytes.Buffer{}
+
+	err := Run(context.Background(), adapter, stubProcessor{err: errors.New("must not be called")}, ModeEnforce, bytes.NewReader(nil), stdout, io.Discard)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if adapter.result.Decision != "" {
+		t.Fatalf("encoded decision = %q, want nothing encoded", adapter.result.Decision)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+// Malformed input keeps its existing behavior: a policy-controlled result is
+// still encoded, so this must not be swept into the skip path.
+func TestRunMalformedInputStillEncodesDenyInEnforce(t *testing.T) {
+	t.Parallel()
+
+	adapter := &stubAdapter{decodeErr: errors.New("malformed")}
+	err := Run(context.Background(), adapter, stubProcessor{}, ModeEnforce, bytes.NewReader(nil), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if adapter.result.Decision != hook.DecisionDeny {
+		t.Fatalf("decision = %q, want deny", adapter.result.Decision)
 	}
 }

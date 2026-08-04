@@ -1761,12 +1761,18 @@ func scanSession(scanner interface{ Scan(...any) error }) (SessionRecord, error)
 	return record, nil
 }
 
+// hostedAgentIdentity maps a local agent name to the (provider, agent) pair the
+// hosted ledger records. An unmapped agent still exports its own name, but with
+// an empty provider, which reads downstream as "provider unknown" rather than as
+// the vendor it came from.
 func hostedAgentIdentity(agent string) (string, string) {
 	switch strings.ToLower(strings.TrimSpace(agent)) {
 	case "claude", "claude-code", "claude_code":
 		return "anthropic", "claude_code"
 	case "cowork", "claude-cowork", "claude_cowork":
 		return "anthropic", "claude_cowork"
+	case "devin":
+		return "cognition", "devin"
 	default:
 		return "", strings.TrimSpace(agent)
 	}
