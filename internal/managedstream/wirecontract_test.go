@@ -111,9 +111,10 @@ func TestUploadedBatchMatchesPublishedSchema(t *testing.T) {
 	// something to validate before trusting the result.
 	sessions, _ := batch["agent_sessions"].([]any)
 	actions, _ := batch["authorization_actions"].([]any)
-	if len(sessions) == 0 || len(actions) == 0 {
-		t.Fatalf("captured batch is empty (%d sessions, %d actions); the test would prove nothing",
-			len(sessions), len(actions))
+	receipts, _ := batch["authorization_receipts"].([]any)
+	if len(sessions) == 0 || len(actions) == 0 || len(receipts) == 0 {
+		t.Fatalf("captured batch has empty record arrays (%d sessions, %d actions, %d receipts); the test would prove nothing",
+			len(sessions), len(actions), len(receipts))
 	}
 
 	if err := schema.Validate(batch); err != nil {
