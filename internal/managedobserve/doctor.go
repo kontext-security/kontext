@@ -91,6 +91,18 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 		status.Healthy = false
 	}
 
+	// The endpoint is running, but on a posture the operator did not choose.
+	// Worth a WARNING rather than a status line: the fix is reinstalling a build
+	// that is at least as new as the config, and nothing else here hints at it.
+	// Unhealthy, and deliberately not repairable — restarting the daemon cannot
+	// teach this binary a mode it does not implement, so --fix must not claim it
+	// has a repair for this.
+	if unsupported := loaded.Config.UnsupportedMode; unsupported != "" {
+		fmt.Fprintf(out, "  WARNING: config requests mode %q, which v%s does not implement — running in %q; this binary is older than the install, reinstall to catch up\n",
+			unsupported, installedVersion, loaded.Config.Mode)
+		status.Healthy = false
+	}
+
 	identityPath := installationPathForScope(loaded.Scope)
 	if state, err := installation.LoadFile(identityPath); err == nil {
 		fmt.Fprintf(out, "  installation: %s\n", state.InstallationID)

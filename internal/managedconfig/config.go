@@ -91,13 +91,18 @@ func ResolvePath() (string, Scope) {
 }
 
 type Config struct {
-	Version             string      `json:"version"`
-	CloudURL            string      `json:"cloud_url"`
-	Mode                string      `json:"mode"`
-	Agent               string      `json:"agent"`
-	Credentials         Credentials `json:"credentials"`
-	Device              Device      `json:"device,omitempty"`
-	LegacyCoworkEnabled bool        `json:"-"`
+	Version     string      `json:"version"`
+	CloudURL    string      `json:"cloud_url"`
+	Mode        string      `json:"mode"`
+	Agent       string      `json:"agent"`
+	Credentials Credentials `json:"credentials"`
+	Device      Device      `json:"device,omitempty"`
+	// UnsupportedMode carries the raw mode this build did not recognize, after
+	// Mode has already been rewritten to the observe fallback. Empty on every
+	// config whose mode this build understands, so callers can treat a
+	// non-empty value as "the endpoint is running degraded" and say so.
+	UnsupportedMode     string `json:"-"`
+	LegacyCoworkEnabled bool   `json:"-"`
 }
 
 type configFile struct {
@@ -287,8 +292,24 @@ func normalizeAndValidate(cfg Config) (Config, error) {
 	if err := validateCloudURL(cfg.CloudURL); err != nil {
 		return Config{}, err
 	}
-	if cfg.Mode != Mode && cfg.Mode != ModeEnforce && cfg.Mode != ModeRemote {
-		return Config{}, fmt.Errorf("mode must be %q, %q, or %q", Mode, ModeEnforce, ModeRemote)
+	// An unrecognized mode is the signature of a DOWNGRADE: a newer build wrote
+	// a posture this one has no name for (as happened when `remote` was added
+	// and older binaries met it). Refusing to load is the worst available
+	// response — launchd then crash-loops the daemon, so the endpoint reports
+	// nothing at all and still enforces nothing, and no self-updater can
+	// recover a binary that will not boot. Falling back to observe is strictly
+	// better on both axes: it cannot enforce less than a process that never
+	// starts, and it keeps the telemetry that makes the skew diagnosable.
+	// Recorded rather than swallowed so startup and `kontext doctor` can say it
+	// out loud; the write path stays strict via ValidateMode.
+	// A MISSING mode is not a downgrade, it is a malformed config, and stays a
+	// hard error exactly as before.
+	if err := ValidateMode(cfg.Mode); err != nil {
+		if cfg.Mode == "" {
+			return Config{}, err
+		}
+		cfg.UnsupportedMode = cfg.Mode
+		cfg.Mode = Mode
 	}
 	if cfg.Agent != Agent {
 		return Config{}, fmt.Errorf("agent must be %q", Agent)
@@ -297,6 +318,19 @@ func normalizeAndValidate(cfg Config) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// ValidateMode reports whether value is a posture this build implements. The
+// READ path (Parse) deliberately does not fail on a bad mode — see
+// normalizeAndValidate — so this is the gate for every WRITE path instead:
+// nothing should ever persist a mode that the writer itself cannot evaluate.
+func ValidateMode(value string) error {
+	switch strings.TrimSpace(value) {
+	case Mode, ModeEnforce, ModeRemote:
+		return nil
+	default:
+		return fmt.Errorf("mode must be %q, %q, or %q", Mode, ModeEnforce, ModeRemote)
+	}
 }
 
 // ValidateCloudURL enforces the managed.json cloud_url shape (https with
@@ -412,6 +446,12 @@ func RewriteMode(loaded LoadedConfig, mode string) error {
 }
 
 func rewriteModeLocked(loaded LoadedConfig, mode string) error {
+	// Explicit, because the Parse() round-trip below no longer rejects an
+	// unknown mode — it would quietly normalize one to observe and write that
+	// through as if the caller had asked for it.
+	if err := ValidateMode(mode); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(loaded.Path)
 	if err != nil {
 		return err

@@ -45,6 +45,53 @@ func TestPrintStatusReportsInstallationLoadError(t *testing.T) {
 	}
 }
 
+// A downgraded endpoint still loads, so the only thing standing between the
+// operator and a silently wrong posture is this warning.
+func TestPrintStatusWarnsOnUnsupportedConfigMode(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "managed.json")
+	writeTestManagedConfig(t, configPath)
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	degraded := strings.Replace(string(config), `"mode": "observe"`, `"mode": "some-future-posture"`, 1)
+	if err := os.WriteFile(configPath, []byte(degraded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	status := PrintStatus(&out, "1.2.3")
+	output := out.String()
+	if !strings.Contains(output, `WARNING: config requests mode "some-future-posture"`) {
+		t.Fatalf("PrintStatus() output = %q, want unsupported mode warning", output)
+	}
+	if strings.Contains(output, "config: ERROR") {
+		t.Fatalf("PrintStatus() output = %q, an unsupported mode must not read as an unloadable config", output)
+	}
+	if status.Healthy {
+		t.Fatal("PrintStatus() reported healthy while running a posture the operator did not choose")
+	}
+	// Reinstalling is the only fix; --fix must not offer a daemon restart that
+	// cannot possibly help.
+	if status.Repairable {
+		t.Fatal("PrintStatus() reported a downgraded endpoint as repairable")
+	}
+}
+
+// The complement: a healthy install must stay quiet, or the warning is noise.
+func TestPrintStatusDoesNotWarnOnSupportedConfigMode(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "managed.json")
+	writeTestManagedConfig(t, configPath)
+
+	var out bytes.Buffer
+	PrintStatus(&out, "1.2.3")
+	if output := out.String(); strings.Contains(output, "config requests mode") {
+		t.Fatalf("PrintStatus() output = %q, want no unsupported mode warning", output)
+	}
+}
+
 func TestPrintStatusDaemonVersionMatch(t *testing.T) {
 	env := newDoctorTestEnv(t)
 	env.writeDaemonStatus(t, os.Getpid(), "1.2.3")

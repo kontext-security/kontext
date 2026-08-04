@@ -79,8 +79,76 @@ func TestParseModeObserveAndEnforce(t *testing.T) {
 	if cfg.Mode != ModeEnforce {
 		t.Fatalf("Mode = %q, want %q", cfg.Mode, ModeEnforce)
 	}
-	if _, err := Parse([]byte(strings.Replace(validConfigJSON(), `"mode": "observe"`, `"mode": "block"`, 1))); err == nil {
-		t.Fatal("Parse() accepted unknown mode")
+}
+
+// A mode this build does not implement must NOT fail the load: that is what a
+// downgrade looks like, and refusing to parse crash-loops the daemon under
+// launchd, costing all telemetry while enforcing nothing extra.
+func TestParseUnknownModeFallsBackToObserve(t *testing.T) {
+	cfg, err := Parse([]byte(strings.Replace(validConfigJSON(), `"mode": "observe"`, `"mode": "block"`, 1)))
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want unknown mode to load in observe", err)
+	}
+	if cfg.Mode != Mode {
+		t.Fatalf("Mode = %q, want %q", cfg.Mode, Mode)
+	}
+	if cfg.UnsupportedMode != "block" {
+		t.Fatalf("UnsupportedMode = %q, want %q", cfg.UnsupportedMode, "block")
+	}
+}
+
+// The regression that motivated the fallback: `remote` was added after some
+// shipped builds, so those builds met it in a config they had to keep serving.
+func TestParseFutureModeFallsBackToObserve(t *testing.T) {
+	cfg, err := Parse([]byte(strings.Replace(validConfigJSON(), `"mode": "observe"`, `"mode": "some-future-posture"`, 1)))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.Mode != Mode || cfg.UnsupportedMode != "some-future-posture" {
+		t.Fatalf("Mode = %q, UnsupportedMode = %q; want %q / %q",
+			cfg.Mode, cfg.UnsupportedMode, Mode, "some-future-posture")
+	}
+}
+
+// Every mode this build DOES implement must round-trip untouched, with no
+// degraded-mode breadcrumb — otherwise doctor cries wolf on healthy installs.
+func TestParseSupportedModesRecordNoFallback(t *testing.T) {
+	for _, mode := range []string{Mode, ModeEnforce, ModeRemote} {
+		cfg, err := Parse([]byte(strings.Replace(validConfigJSON(), `"mode": "observe"`, `"mode": "`+mode+`"`, 1)))
+		if err != nil {
+			t.Fatalf("Parse(%q) error = %v", mode, err)
+		}
+		if cfg.Mode != mode {
+			t.Fatalf("Mode = %q, want %q", cfg.Mode, mode)
+		}
+		if cfg.UnsupportedMode != "" {
+			t.Fatalf("UnsupportedMode = %q for supported mode %q, want empty", cfg.UnsupportedMode, mode)
+		}
+	}
+}
+
+// The read path is lenient; the write path must not be. Persisting a mode the
+// writer cannot evaluate would turn one downgraded boot into a permanent
+// misconfiguration.
+func TestRewriteModeRejectsUnsupportedMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "managed.json")
+	if err := os.WriteFile(path, []byte(validConfigJSON()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if err := RewriteMode(loaded, "block"); err == nil {
+		t.Fatal("RewriteMode() accepted an unsupported mode")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != validConfigJSON() {
+		t.Fatalf("config was modified by a rejected rewrite:\n%s", after)
 	}
 }
 

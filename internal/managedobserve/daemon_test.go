@@ -802,6 +802,32 @@ func TestMigrateSelfServeModeToRemote(t *testing.T) {
 		}
 	})
 
+	// The observe a downgraded build falls back to is not the era's default, and
+	// migrating it would overwrite the declared posture and destroy the evidence
+	// of the skew — leaving doctor and the startup log with nothing to report.
+	t.Run("fallback observe from an unsupported mode is untouched", func(t *testing.T) {
+		path := writeConfig(t, "some-future-posture")
+		loaded := load(t, path, managedconfig.ScopeUser)
+		if loaded.Config.UnsupportedMode != "some-future-posture" {
+			t.Fatalf("UnsupportedMode = %q, want the raw mode recorded", loaded.Config.UnsupportedMode)
+		}
+		migrated := migrateSelfServeModeToRemote(loaded, diagnostic.Logger{})
+		if migrated.Config.Mode != managedconfig.Mode {
+			t.Fatalf("returned mode = %q, want the observe fallback", migrated.Config.Mode)
+		}
+		if migrated.Config.UnsupportedMode != "some-future-posture" {
+			t.Fatalf("UnsupportedMode = %q, want it preserved so the downgrade stays reportable", migrated.Config.UnsupportedMode)
+		}
+		onDisk, err := managedconfig.LoadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if onDisk.Config.UnsupportedMode != "some-future-posture" {
+			t.Fatalf("on-disk mode was rewritten to %q, want the operator's %q left in place",
+				onDisk.Config.Mode, "some-future-posture")
+		}
+	})
+
 	t.Run("static pins and non-user scopes are untouched", func(t *testing.T) {
 		cases := []struct {
 			name  string
