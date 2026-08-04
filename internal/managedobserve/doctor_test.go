@@ -92,6 +92,116 @@ func TestPrintStatusDoesNotWarnOnSupportedConfigMode(t *testing.T) {
 	}
 }
 
+// The identity check this whole breadcrumb exists for. Table-driven because the
+// interesting behavior is entirely in which signal wins.
+func TestDaemonSkew(t *testing.T) {
+	const revisionA = "cac15fd669a7e4b0bfbdd78413d25fc0999e3a11"
+	const revisionB = "f7be605aaaa1111bbbb2222cccc3333dddd4444e"
+
+	for name, test := range map[string]struct {
+		status            DaemonStatus
+		installedVersion  string
+		installedRevision string
+		installedModified bool
+		wantStale         bool
+		wantContains      string
+	}{
+		"same revision is not skew even when versions differ": {
+			// A rebuild of one source can be labeled twice. The source is what
+			// matters, so this must stay quiet.
+			status:            DaemonStatus{Version: "0.0.0-staging.20260730.9", Revision: revisionA},
+			installedVersion:  "0.0.0-staging.20260731.15",
+			installedRevision: revisionA,
+			wantStale:         false,
+		},
+		"different revision is skew even when versions match": {
+			// The case a version comparison cannot see: two builds sharing a
+			// label. Date-stamped channels and "dev" both produce it.
+			status:            DaemonStatus{Version: "dev", Revision: revisionA},
+			installedVersion:  "dev",
+			installedRevision: revisionB,
+			wantStale:         true,
+			wantContains:      "daemon is running build vdev cac15fd6 but vdev f7be605a is installed",
+		},
+		"falls back to version when the daemon predates the revision field": {
+			status:            DaemonStatus{Version: "0.14.1"},
+			installedVersion:  "0.16.0",
+			installedRevision: revisionB,
+			wantStale:         true,
+			wantContains:      "daemon is running v0.14.1 but v0.16.0 is installed",
+		},
+		"unstamped installed binary still compares versions": {
+			status:            DaemonStatus{Version: "0.14.1", Revision: revisionA},
+			installedVersion:  "0.16.0",
+			installedRevision: "",
+			wantStale:         true,
+			wantContains:      "daemon is running v0.14.1 but v0.16.0 is installed",
+		},
+		// Warning on a missing stamp would make the check unusable for anyone
+		// building with -buildvcs=false.
+		"no revisions and equal versions is not skew": {
+			status:           DaemonStatus{Version: "0.16.0"},
+			installedVersion: "0.16.0",
+			wantStale:        false,
+		},
+		"dev builds with no stamps stay quiet": {
+			status:           DaemonStatus{Version: "dev"},
+			installedVersion: "dev",
+			wantStale:        false,
+		},
+		// A dirty tree makes equality unprovable, not false. Warning here would
+		// fire on every local build and leave `doctor --fix` unable to verify a
+		// restart, so it stays quiet and the readout marks it "+modified".
+		"same revision from modified trees is unproven, not skew": {
+			status:            DaemonStatus{Version: "dev", Revision: revisionA, Modified: true},
+			installedVersion:  "dev",
+			installedRevision: revisionA,
+			installedModified: true,
+			wantStale:         false,
+		},
+		// Different revisions are still conclusive whatever the tree state, and
+		// the message must show which side is not a clean build.
+		"different revisions from modified trees are still skew": {
+			status:            DaemonStatus{Version: "dev", Revision: revisionA, Modified: true},
+			installedVersion:  "dev",
+			installedRevision: revisionB,
+			installedModified: true,
+			wantStale:         true,
+			wantContains:      "daemon is running build vdev cac15fd6+modified but vdev f7be605a+modified is installed",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			status := test.status
+			reason, stale := daemonSkew(&status, test.installedVersion, test.installedRevision, test.installedModified)
+			if stale != test.wantStale {
+				t.Fatalf("daemonSkew() stale = %v, want %v (reason %q)", stale, test.wantStale, reason)
+			}
+			if test.wantContains != "" && !strings.Contains(reason, test.wantContains) {
+				t.Fatalf("daemonSkew() reason = %q, want it to contain %q", reason, test.wantContains)
+			}
+		})
+	}
+}
+
+func TestDescribeDaemonBuildIncludesRevisionWhenRecorded(t *testing.T) {
+	withRevision := DaemonStatus{Version: "0.14.1", Revision: "cac15fd669a7e4b0bfbdd78413d25fc0999e3a11"}
+	if got, want := describeDaemonBuild(&withRevision), "v0.14.1 cac15fd6"; got != want {
+		t.Fatalf("describeDaemonBuild() = %q, want %q", got, want)
+	}
+	// A daemon built from a dirty tree must not read as an exact build: this is
+	// the reader's only cue that comparing it to the installed binary is
+	// approximate.
+	modified := DaemonStatus{Version: "0.14.1", Revision: "cac15fd669a7e4b0bfbdd78413d25fc0999e3a11", Modified: true}
+	if got, want := describeDaemonBuild(&modified), "v0.14.1 cac15fd6+modified"; got != want {
+		t.Fatalf("describeDaemonBuild() = %q, want %q", got, want)
+	}
+	// Daemons started before the field existed must render exactly as before.
+	legacy := DaemonStatus{Version: "0.14.1"}
+	if got, want := describeDaemonBuild(&legacy), "v0.14.1"; got != want {
+		t.Fatalf("describeDaemonBuild() = %q, want %q", got, want)
+	}
+}
+
 func TestPrintStatusDaemonVersionMatch(t *testing.T) {
 	env := newDoctorTestEnv(t)
 	env.writeDaemonStatus(t, os.Getpid(), "1.2.3")

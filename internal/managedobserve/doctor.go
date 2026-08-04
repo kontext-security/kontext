@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kontext-security/kontext-cli/internal/buildinfo"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/installation"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
@@ -129,12 +130,12 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 	if conn, err := opts.Dial("unix", opts.SocketPath, 500*time.Millisecond); err == nil {
 		conn.Close()
 		if daemonStatus := LoadDaemonStatus(opts.DBPath); daemonStatus != nil && pidAlive(daemonStatus.PID) {
-			fmt.Fprintf(out, "  daemon: running (v%s, pid %d)\n", daemonStatus.Version, daemonStatus.PID)
-			if comparableVersion(daemonStatus.Version) && comparableVersion(installedVersion) && daemonStatus.Version != installedVersion {
+			fmt.Fprintf(out, "  daemon: running (%s, pid %d)\n", describeDaemonBuild(daemonStatus), daemonStatus.PID)
+			if reason, stale := daemonSkew(daemonStatus, installedVersion, buildinfo.Revision(), buildinfo.Modified()); stale {
 				if repairTargetAvailable {
-					fmt.Fprintf(out, "  WARNING: daemon is running v%s but v%s is installed — run 'kontext doctor --fix' to restart it\n", daemonStatus.Version, installedVersion)
+					fmt.Fprintf(out, "  WARNING: %s — run 'kontext doctor --fix' to restart it\n", reason)
 				} else {
-					fmt.Fprintf(out, "  WARNING: daemon is running v%s but v%s is installed — restart it through its managing installation\n", daemonStatus.Version, installedVersion)
+					fmt.Fprintf(out, "  WARNING: %s — restart it through its managing installation\n", reason)
 				}
 				staleDaemon = true
 			}
@@ -240,19 +241,29 @@ func describeScope(scope managedconfig.Scope) string {
 }
 
 // WaitForDaemonRestart polls until the socket is serving AND the status
-// breadcrumb reports a live daemon on wantVersion (any live daemon when the
-// version is not comparable, e.g. dev builds). `doctor --fix` uses it so
-// "restarted" is only printed for a verified comeback — launchd can accept a
-// kickstart and still have the new daemon exit immediately (unreadable token,
-// missing Cellar path).
+// breadcrumb reports a live daemon that is no longer skewed from this binary.
+// `doctor --fix` uses it so "restarted" is only printed for a verified comeback
+// — launchd can accept a kickstart and still have the new daemon exit
+// immediately (unreadable token, missing Cellar path).
+//
+// It reuses daemonSkew rather than comparing versions directly so that "came
+// back" means the same thing here as "up to date" does in the readout above. It
+// also narrows a hole: on builds that share a version string (notably `dev`) the
+// old version comparison accepted ANY live daemon, so a daemon that never
+// restarted was reported as restarted. Stamped builds now have to match by
+// revision. Two dirty builds of one commit remain indistinguishable, so a
+// modified local build can still satisfy this without having restarted —
+// unavoidable from the stamp alone, and never the case for a release build.
 func WaitForDaemonRestart(ctx context.Context, dbPath, socketPath, wantVersion string) (*DaemonStatus, error) {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	installedRevision := buildinfo.Revision()
+	installedModified := buildinfo.Modified()
 	for {
 		if conn, err := net.DialTimeout("unix", socketPath, 500*time.Millisecond); err == nil {
 			conn.Close()
 			if status := LoadDaemonStatus(dbPath); status != nil && pidAlive(status.PID) {
-				if !comparableVersion(wantVersion) || status.Version == wantVersion {
+				if _, stale := daemonSkew(status, wantVersion, installedRevision, installedModified); !stale {
 					return status, nil
 				}
 			}
@@ -282,6 +293,61 @@ func pidAlive(pid int) bool {
 func comparableVersion(version string) bool {
 	version = strings.TrimSpace(version)
 	return version != "" && version != "dev"
+}
+
+// describeDaemonBuild renders the running daemon's identity, including the
+// source revision when the daemon recorded one. Older daemons wrote no revision
+// and still print exactly as they used to.
+func describeDaemonBuild(status *DaemonStatus) string {
+	build := "v" + status.Version
+	if revision := buildinfo.DescribeRevision(status.Revision, status.Modified); revision != "" {
+		build += " " + revision
+	}
+	return build
+}
+
+// daemonSkew decides whether the running daemon is a different build from the
+// installed binary, preferring evidence over labels.
+//
+// REVISION FIRST, when both sides have one: it is the only field that identifies
+// a build. A version string is injected at link time, so a channel that labels
+// builds by date can hand two different sources the same version — or, for local
+// and unlabeled builds, hand every source the same "dev" — and a version
+// comparison then reports a match that is not one.
+//
+// Version is the fallback for daemons that predate the revision breadcrumb.
+// A missing revision on either side is NOT treated as a mismatch: unstamped
+// builds are legitimate, and warning on them would make the check unusable for
+// everyone who builds with -buildvcs=false.
+//
+// Equal revisions prove equal source only for CLEAN builds. With a modified tree
+// on either side the revision names the commit that build was based on, not what
+// was compiled, so equality is unproven rather than established — two different
+// dirty builds of one commit look identical here. That stays quiet on purpose:
+// nothing in the stamp can tell those apart (the toolchain records no content
+// hash), and a warning would then fire on every local build and make `doctor
+// --fix` unable to ever verify a restart. The readout marks such builds
+// "+modified" so the reader can see the match is approximate. Release builds are
+// never modified, so this costs the production path nothing.
+func daemonSkew(status *DaemonStatus, installedVersion, installedRevision string, installedModified bool) (string, bool) {
+	daemonRevision := strings.TrimSpace(status.Revision)
+	installedRevision = strings.TrimSpace(installedRevision)
+	if daemonRevision != "" && installedRevision != "" {
+		if daemonRevision == installedRevision {
+			return "", false
+		}
+		installed := "v" + installedVersion
+		if short := buildinfo.DescribeRevision(installedRevision, installedModified); short != "" {
+			installed += " " + short
+		}
+		return fmt.Sprintf("daemon is running build %s but %s is installed",
+			describeDaemonBuild(status), installed), true
+	}
+
+	if comparableVersion(status.Version) && comparableVersion(installedVersion) && status.Version != installedVersion {
+		return fmt.Sprintf("daemon is running v%s but v%s is installed", status.Version, installedVersion), true
+	}
+	return "", false
 }
 
 func printHeartbeat(out io.Writer, state managedstream.State, now time.Time) bool {

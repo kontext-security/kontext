@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/buildinfo"
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
@@ -41,9 +42,14 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:     "kontext",
-		Short:   "Kontext CLI — governed agent sessions",
-		Version: version,
+		Use:   "kontext",
+		Short: "Kontext CLI — governed agent sessions",
+		// Reported with the source revision appended, because the version
+		// string on its own cannot answer "which build is this": it is a
+		// link-time label, and release channels that name builds by date give
+		// no way to tell two sources apart. Every other use of `version` stays
+		// the bare string — only what a human reads gains the revision.
+		Version: buildinfo.Describe(version),
 	}
 
 	root.AddCommand(setupCmd())
