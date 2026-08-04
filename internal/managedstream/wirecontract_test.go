@@ -178,11 +178,12 @@ func TestHeartbeatMatchesPinnedContract(t *testing.T) {
 }
 
 // Pre-cutover rows (receipts stored before the clean-payload change, marked
-// by the payload_form column default) pin their page to the legacy form:
-// their payload bytes were hashed under the old serialization and can never
-// satisfy the clean contract. This is the deterministic drain path for the
-// backlog a daemon upgrade leaves behind.
-func TestFlushShipsPreCutoverPagesOnLegacyForm(t *testing.T) {
+// by the payload_form column default) can never satisfy the clean contract:
+// their payload bytes were hashed under the retired serialization. With the
+// legacy form gone, such pages are skipped deterministically — the rows stay
+// in the local ledger, the cursor advances, and no hybrid or legacy bytes
+// ever reach the wire.
+func TestFlushSkipsPreCutoverPages(t *testing.T) {
 	store, dbPath := testStore(t)
 	saveTestDecision(t, store, "sess-pre-cutover", "toolu_pre_cutover")
 
@@ -203,24 +204,33 @@ func TestFlushShipsPreCutoverPagesOnLegacyForm(t *testing.T) {
 	if err := Flush(context.Background(), flushOptions(dbPath, statePath, server.URL, server.Client())); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
-	if len(bodies) != 1 {
-		t.Fatalf("posted %d bodies, want one legacy batch", len(bodies))
+	for _, raw := range bodies {
+		var batch wireBatch
+		if err := json.Unmarshal(raw, &batch); err != nil {
+			t.Fatalf("decode posted body: %v", err)
+		}
+		if batch.BatchVersion != "v1" {
+			t.Fatalf("posted body is not clean v1: %s", raw)
+		}
+		if len(batch.Actions) != 0 || len(batch.Receipts) != 0 {
+			t.Fatalf("pre-cutover records reached the wire: %s", raw)
+		}
 	}
 
-	var legacy Payload
-	if err := json.Unmarshal(bodies[0], &legacy); err != nil {
-		t.Fatalf("decode legacy batch: %v", err)
+	state, err := LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState() error = %v", err)
 	}
-	if legacy.SchemaVersion != SchemaVersion {
-		t.Fatalf("schema_version = %q, want the legacy form for pre-cutover rows", legacy.SchemaVersion)
+	if state.UpdatedAfter == nil {
+		t.Fatal("cursor did not advance past the skipped pre-cutover page")
 	}
-	if bytes.Contains(bodies[0], []byte(`"batch_version"`)) {
-		t.Fatalf("legacy batch carries the v1 marker (hybrid form): %s", bodies[0])
+
+	// The rows themselves stay local: skipping is a wire decision only.
+	var receipts int
+	if err := db.QueryRow(`select count(*) from authorization_receipts`).Scan(&receipts); err != nil {
+		t.Fatal(err)
 	}
-	if bytes.Contains(bodies[0], []byte(`"payload_form"`)) {
-		t.Fatalf("local cutover column leaked onto the wire: %s", bodies[0])
-	}
-	if len(legacy.Actions) == 0 || len(legacy.Receipts) == 0 {
-		t.Fatalf("legacy batch counts = actions %d receipts %d, want the full page", len(legacy.Actions), len(legacy.Receipts))
+	if receipts == 0 {
+		t.Fatal("pre-cutover receipts were deleted; they must remain local")
 	}
 }

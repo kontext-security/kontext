@@ -23,7 +23,6 @@ import (
 )
 
 const (
-	SchemaVersion   = "authorization-ledger-v1"
 	DefaultEndpoint = "/api/v1/authorization-ledger/batches"
 
 	DefaultBatchLimit        = 100
@@ -86,24 +85,6 @@ const (
 	// the default interval.
 	authFailureRefire = 50
 )
-
-type Payload struct {
-	SchemaVersion      string                           `json:"schema_version"`
-	InstallationID     string                           `json:"installation_id"`
-	BatchID            string                           `json:"batch_id"`
-	SentAt             string                           `json:"sent_at"`
-	Device             *Device                          `json:"device,omitempty"`
-	Sessions           []sqlite.LedgerRecord            `json:"agent_sessions"`
-	Actions            []sqlite.LedgerRecord            `json:"authorization_actions"`
-	Receipts           []sqlite.LedgerRecord            `json:"authorization_receipts"`
-	ReceiptChainAnchor *sqlite.LedgerReceiptChainAnchor `json:"receipt_chain_anchor,omitempty"`
-}
-
-type Device struct {
-	Label             string `json:"label,omitempty"`
-	DeploymentVersion string `json:"deployment_version,omitempty"`
-	UserEmail         string `json:"user_email,omitempty"`
-}
 
 type State struct {
 	UpdatedAfter           *time.Time
@@ -343,34 +324,38 @@ type payloadCounts struct {
 	receipts int
 }
 
-// payloadBody serializes one export page under the wire form the store
-// selected for it. A nil body with a nil error is a page whose records are
-// all local-only (nothing to post; the cursor still advances).
+// payloadBody serializes one export page on the v1 contract. A nil body
+// with a nil error is a page with nothing to post (local-only rows, or
+// pre-cutover rows the retired legacy form used to carry); the cursor still
+// advances.
+//
+// The legacy serializer is gone: pages pinned to the legacy form by
+// pre-cutover rows are skipped with a diagnostic. Such rows exist only on a
+// device that jumped straight past the transitional release; they stay in
+// the local ledger and are simply never uploaded.
 func payloadBody(opts Options, batch sqlite.LedgerBatch, now time.Time) ([]byte, payloadCounts, error) {
-	if batch.Form == sqlite.LedgerFormV1 {
-		mapped, err := v1Batch(opts, batch, now)
-		if err != nil {
-			return nil, payloadCounts{}, err
-		}
-		counts := payloadCounts{
-			sessions: len(mapped.Sessions),
-			actions:  len(mapped.Actions),
-			receipts: len(mapped.Receipts),
-		}
-		if counts.sessions == 0 && counts.actions == 0 && counts.receipts == 0 {
-			return nil, counts, nil
-		}
-		body, err := json.Marshal(mapped)
-		return body, counts, err
+	if batch.Form == sqlite.LedgerFormLegacy {
+		opts.Diagnostic.Printf(
+			"managed stream skipped %d pre-cutover actions and %d receipts; the legacy wire form is retired and these rows remain local-only\n",
+			len(batch.Actions),
+			len(batch.Receipts),
+		)
+		return nil, payloadCounts{}, nil
 	}
 
-	payload := newPayload(opts, batch.Sessions, batch.Actions, batch.Receipts, batch.ReceiptChainAnchor, now)
-	counts := payloadCounts{
-		sessions: len(payload.Sessions),
-		actions:  len(payload.Actions),
-		receipts: len(payload.Receipts),
+	mapped, err := v1Batch(opts, batch, now)
+	if err != nil {
+		return nil, payloadCounts{}, err
 	}
-	body, err := json.Marshal(payload)
+	counts := payloadCounts{
+		sessions: len(mapped.Sessions),
+		actions:  len(mapped.Actions),
+		receipts: len(mapped.Receipts),
+	}
+	if counts.sessions == 0 && counts.actions == 0 && counts.receipts == 0 {
+		return nil, counts, nil
+	}
+	body, err := json.Marshal(mapped)
 	return body, counts, err
 }
 
@@ -411,31 +396,6 @@ func recordMaps(records []sqlite.LedgerRecord) []map[string]any {
 	return out
 }
 
-func newPayload(
-	opts Options,
-	sessions []sqlite.LedgerRecord,
-	actions []sqlite.LedgerRecord,
-	receipts []sqlite.LedgerRecord,
-	receiptChainAnchor *sqlite.LedgerReceiptChainAnchor,
-	now time.Time,
-) Payload {
-	payload := Payload{
-		SchemaVersion:      SchemaVersion,
-		InstallationID:     opts.InstallationID,
-		BatchID:            "batch_" + uuid.NewString(),
-		SentAt:             now.Format(time.RFC3339Nano),
-		Sessions:           nonNilRecords(sessions),
-		Actions:            nonNilRecords(actions),
-		Receipts:           nonNilRecords(receipts),
-		ReceiptChainAnchor: receiptChainAnchor,
-	}
-	label, deploymentVersion, userEmail := deviceValues(opts)
-	if label != "" || deploymentVersion != "" || userEmail != "" {
-		payload.Device = &Device{Label: label, DeploymentVersion: deploymentVersion, UserEmail: userEmail}
-	}
-	return payload
-}
-
 // deviceValues resolves the deployment version per flush so an in-place
 // package upgrade is reflected without restarting the daemon.
 func deviceValues(opts Options) (label, deploymentVersion, userEmail string) {
@@ -445,13 +405,6 @@ func deviceValues(opts Options) (label, deploymentVersion, userEmail string) {
 		deploymentVersion = strings.TrimSpace(opts.DeploymentVersion())
 	}
 	return label, deploymentVersion, userEmail
-}
-
-func nonNilRecords(records []sqlite.LedgerRecord) []sqlite.LedgerRecord {
-	if records != nil {
-		return records
-	}
-	return []sqlite.LedgerRecord{}
 }
 
 func post(ctx context.Context, opts Options, body []byte) error {
