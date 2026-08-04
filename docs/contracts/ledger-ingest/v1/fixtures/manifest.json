@@ -1,0 +1,506 @@
+{
+  "contract_release": "1.0.0",
+  "producer": {
+    "name": "generate-ledger-contract",
+    "version": "1.0.0",
+    "source": "packages/shared/src/ledger-ingest/v1"
+  },
+  "fixtures": [
+    {
+      "name": "valid-heartbeat-empty",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-heartbeat-empty.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "078a69d51571fed98d65030c83c6dc666c8c3ca5da196e251c1090f9dffc911e"
+    },
+    {
+      "name": "valid-heartbeat-device",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-heartbeat-device.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "75366120ba7e7d283e1ac16cc484b5b0c8bd8eb07915236389143e329f71e0b7"
+    },
+    {
+      "name": "valid-session-open-minimal",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-session-open-minimal.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "97f8ca071c61d6e0695abddf4fc1597865b2a4f336e3a38226ff59a872e711bb"
+    },
+    {
+      "name": "valid-session-closed-full",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-session-closed-full.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "93440a49aad63dd3925d7d58b6be77a5bf6d742ea492b3036532ef59c245c7c1"
+    },
+    {
+      "name": "valid-action-proposed-capture",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-action-proposed-capture.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "02348b2958ea8dce65bcbdac52ce9f6270ccdc732e1b8488402990b8448a7022"
+    },
+    {
+      "name": "valid-action-decided-fact",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-action-decided-fact.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "100ae04e899634c6c40195abb017277d8d164e0756dc1323d8949baa2d094cee"
+    },
+    {
+      "name": "valid-action-decided-observe",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-action-decided-observe.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "9b22cadaf72a358fe08d80937c25f80ae9bd31aab5dd5d5b9fb171890898407e"
+    },
+    {
+      "name": "valid-action-observed-output",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-action-observed-output.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "8fff37a54442015580c8a0beff3a8e54af0fcd85fde6826822715c96962aa282"
+    },
+    {
+      "name": "valid-action-failed",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-action-failed.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "333e7cbfb9a6edb301fa6b3caedce18175ff30cb968ca4b330beedfdb77b97ca"
+    },
+    {
+      "name": "valid-receipt-chain-genesis",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-receipt-chain-genesis.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "b17f41366aaa085e7942f821f9c9107063d55a7e58a009c9cab69808a8f988cd"
+    },
+    {
+      "name": "valid-receipt-chain-continued-signed",
+      "kind": "valid",
+      "path": "fixtures/valid/valid-receipt-chain-continued-signed.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "15be4109e85b3537bcc83fe87c4bf59140fb35d8578ed9de3e256f736baead3d"
+    },
+    {
+      "name": "invalid-unknown-batch-field",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-unknown-batch-field.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/extra_field",
+        "stage": "structural"
+      },
+      "sha256": "1b6ac6172ef2482ef3e60e735c896fcc54c4f19ded78c2c12f3986da32e84d85"
+    },
+    {
+      "name": "invalid-legacy-name-in-v1",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-legacy-name-in-v1.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/sessions/0/identity_context_json",
+        "stage": "structural"
+      },
+      "sha256": "e25b85e9628242a43793208d3f72d44cccd39cffa7d56c01265aea01d908652c"
+    },
+    {
+      "name": "invalid-missing-session-source",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-missing-session-source.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/sessions/0/source",
+        "stage": "structural"
+      },
+      "sha256": "34d9fb18e07f40da8369fcff6b38d0f6709facfa19dd37cc3f13197a14f838be"
+    },
+    {
+      "name": "invalid-null-optional-field",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-null-optional-field.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/sessions/0/cwd",
+        "stage": "structural"
+      },
+      "sha256": "5fdf64e786479951210ca0e9feb0d5c8d8de154ec6d1fb90bb515b4279894bc2"
+    },
+    {
+      "name": "invalid-timestamp-offset",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-timestamp-offset.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/sent_at",
+        "stage": "structural"
+      },
+      "sha256": "ce628e50f0c5bb33310ba000f8c9b3bd65c84447d2ac6d35533bc9311f3f6082"
+    },
+    {
+      "name": "invalid-timestamp-precision",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-timestamp-precision.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/sent_at",
+        "stage": "structural"
+      },
+      "sha256": "0a99eff62ad6baa67ccf3408b3197e826a4a9850c0715615686fd892466cd3c9"
+    },
+    {
+      "name": "invalid-batch-id-shape",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-batch-id-shape.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/batch_id",
+        "stage": "structural"
+      },
+      "sha256": "74b0e285c67793f992b2aaa8f75376e03272afb322e6fbf1215a2179a4102853"
+    },
+    {
+      "name": "invalid-session-status-vocabulary",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-session-status-vocabulary.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/sessions/0/status",
+        "stage": "structural"
+      },
+      "sha256": "f96a1dbc965a11a7347389b069b1cd7a6d8e8a51b08a8876b4a50e06132469c4"
+    },
+    {
+      "name": "invalid-open-session-with-closed-at",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-open-session-with-closed-at.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/sessions/0/closed_at",
+        "stage": "structural"
+      },
+      "sha256": "d33830456c0b9fc075da2cdea4b4e885824d43d832bdc36c73ee7afd5e567329"
+    },
+    {
+      "name": "invalid-decided-missing-fact",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-decided-missing-fact.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/actions/0/decision_fact",
+        "stage": "structural"
+      },
+      "sha256": "6a9b80ef9ee6541117730670259faf4983647af418a5002c58a4614c4913b50d"
+    },
+    {
+      "name": "invalid-proposed-wrong-status",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-proposed-wrong-status.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/actions/0/status",
+        "stage": "structural"
+      },
+      "sha256": "5b9e7067b5a66d5432c645bd0a0677ef2da7ca217db39955692d1a6366b57719"
+    },
+    {
+      "name": "invalid-session-count-limit",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-session-count-limit.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/sessions",
+        "stage": "structural"
+      },
+      "sha256": "a844e12d4d3c3458f0f6d1f03551fc3e1484bfb25dea134f3b94dbd836888dad"
+    },
+    {
+      "name": "invalid-receipts-without-anchor",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-receipts-without-anchor.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/receipt_chain_anchor",
+        "stage": "structural"
+      },
+      "sha256": "faddcf28c7cc702710e81da62a6686f1bd0ea91c82e7154362fa665a833c9def"
+    },
+    {
+      "name": "invalid-anchor-without-receipts",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-anchor-without-receipts.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/receipt_chain_anchor",
+        "stage": "structural"
+      },
+      "sha256": "8704df19bd149709412f079e611f22ccf6895a1060ef7ec76b191adeece16664"
+    },
+    {
+      "name": "invalid-signature-none-encoding",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-signature-none-encoding.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/receipts/0/proof/signature/algorithm",
+        "stage": "structural"
+      },
+      "sha256": "c770161063e69273d6e7b0981858fa46c0ffe571f4ca460a73f22abdcb3ab9d4"
+    },
+    {
+      "name": "invalid-batch-version-value",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-batch-version-value.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/batch_version",
+        "stage": "structural"
+      },
+      "sha256": "5c3f489b63865ff4cf19fbf9ced26516f272b855cecaee25ad707d4a6151e0d9"
+    },
+    {
+      "name": "invalid-session-created-after-updated",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-session-created-after-updated.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/sessions/0/created_at",
+        "stage": "semantic"
+      },
+      "sha256": "37de3417642078a4b88d4c35bb57f984837404d88ddf3532d201050a0c236892"
+    },
+    {
+      "name": "invalid-fact-mirror-mismatch",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-fact-mirror-mismatch.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/actions/0/tool_call_id",
+        "stage": "semantic"
+      },
+      "sha256": "6dc83b978e1d11befebe614522cd2ef5eef206ba71b42c353924681c5c7ce34b"
+    },
+    {
+      "name": "invalid-decision-fact-incoherent",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-decision-fact-incoherent.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SCHEMA_INVALID",
+        "pointer": "/actions/0/decision_fact/reason_code",
+        "stage": "semantic"
+      },
+      "sha256": "8bc2ad24937fa97f0ec643a750ba3ff2944ac0214ecad483e411d7ec4ab50004"
+    },
+    {
+      "name": "invalid-duplicate-action-ids",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-duplicate-action-ids.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SEMANTIC_INVALID",
+        "pointer": "/actions/1/id",
+        "stage": "semantic"
+      },
+      "sha256": "4cf322ae9ac4db09e147034bb43e486d87bca7d9eed6ee5705b292ca9345c405"
+    },
+    {
+      "name": "invalid-receipt-hash-mismatch",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-receipt-hash-mismatch.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SEMANTIC_INVALID",
+        "pointer": "/receipts/0/proof/receipt_hash",
+        "stage": "semantic"
+      },
+      "sha256": "3ffc57bd7ae84636d83e1ccfd348512a0e657fbe0f7845f893b97e51fec98091"
+    },
+    {
+      "name": "invalid-receipt-chain-anchor-mismatch",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-receipt-chain-anchor-mismatch.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SEMANTIC_INVALID",
+        "pointer": "/receipts/0/payload/previous_receipt_hash",
+        "stage": "semantic"
+      },
+      "sha256": "271a0eab6222c7d964d167e0ba947b8d200abdc95e3a859d6364e884a3125083"
+    },
+    {
+      "name": "invalid-receipt-chain-broken-link",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-receipt-chain-broken-link.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SEMANTIC_INVALID",
+        "pointer": "/receipts/1/payload/previous_receipt_hash",
+        "stage": "semantic"
+      },
+      "sha256": "7087b0e870cf337e53c325d6cebbf834811137f8c347e34d8ebaa2db7d2d8af9"
+    },
+    {
+      "name": "invalid-receipt-session-mismatch",
+      "kind": "invalid",
+      "path": "fixtures/invalid/invalid-receipt-session-mismatch.json",
+      "expected": {
+        "status": 422,
+        "code": "LEDGER_SEMANTIC_INVALID",
+        "pointer": "/receipts/0/session_id",
+        "stage": "semantic"
+      },
+      "sha256": "2241ecb01147e7644f23caaa2fde7fc8df5b0b70f1c2a4d7b10e58040061319e"
+    },
+    {
+      "name": "hybrid-v1-with-legacy-arrays",
+      "kind": "hybrid",
+      "path": "fixtures/invalid/hybrid-v1-with-legacy-arrays.json",
+      "expected": {
+        "status": 400,
+        "code": "LEDGER_HYBRID_CONTRACT_FORM",
+        "stage": "structural"
+      },
+      "sha256": "f6394bb925c7058adc393f4c58f44d6adcaa490d98ecd2719c93c91b3e218f02"
+    },
+    {
+      "name": "hybrid-legacy-with-clean-arrays",
+      "kind": "hybrid",
+      "path": "fixtures/invalid/hybrid-legacy-with-clean-arrays.json",
+      "expected": {
+        "status": 400,
+        "code": "LEDGER_HYBRID_CONTRACT_FORM",
+        "stage": "structural"
+      },
+      "sha256": "c60b60a9f2877bf691cdeef2e81beecc3435d10405e2f92313eebd7e5398f12f"
+    },
+    {
+      "name": "compat-legacy-heartbeat",
+      "kind": "compatibility",
+      "path": "fixtures/compatibility/compat-legacy-heartbeat.json",
+      "expected": {
+        "status": 201
+      },
+      "sha256": "159b941bff97f248fc41ac043579a21ef288926c90a31b92e1690393bcca4faf"
+    },
+    {
+      "name": "compat-legacy-session-action",
+      "kind": "compatibility",
+      "path": "fixtures/compatibility/compat-legacy-session-action.json",
+      "expected": {
+        "status": 201
+      },
+      "sha256": "7e5d8cb74d8b8e3a61675d60f659dfb2a241a4c9ad2b30a9935ab2bdd8372a3d"
+    },
+    {
+      "name": "compat-legacy-decided-fact",
+      "kind": "compatibility",
+      "path": "fixtures/compatibility/compat-legacy-decided-fact.json",
+      "expected": {
+        "status": 201
+      },
+      "sha256": "dfe7b042dcbfe92c3d5412b5b9b5f0e273ac3d46a3aadbaed966c334c67b22b5"
+    },
+    {
+      "name": "compat-legacy-receipts",
+      "kind": "compatibility",
+      "path": "fixtures/compatibility/compat-legacy-receipts.json",
+      "expected": {
+        "status": 201
+      },
+      "sha256": "180c24683b462e5f5b91d5cfd0c9b06ae419e2afb4550f0faf57b7023eb93697"
+    },
+    {
+      "name": "replay-exact-batch",
+      "kind": "replay",
+      "path": "fixtures/replay/replay-exact-batch.json",
+      "expected": {
+        "status": 200,
+        "disposition": "replayed"
+      },
+      "sha256": "6670cc0d549fe2c168c390345ad870e4b09f327603da84f584a64ceee0159310"
+    },
+    {
+      "name": "replay-batch-changed-content",
+      "kind": "replay",
+      "path": "fixtures/replay/replay-batch-changed-content.json",
+      "expected": {
+        "status": 409,
+        "code": "LEDGER_REPLAY_CONFLICT"
+      },
+      "sha256": "04fc1caa4e38f074f0d635879b9f9acb44cd934fe9ae88dd58de4ab16209f46d"
+    },
+    {
+      "name": "replay-action-session-conflict",
+      "kind": "replay",
+      "path": "fixtures/replay/replay-action-session-conflict.json",
+      "expected": {
+        "status": 409,
+        "code": "LEDGER_REPLAY_CONFLICT"
+      },
+      "sha256": "a586e69e863613105fc00bc3036c495e94181f1d67b14acab9526b60adf815e7"
+    },
+    {
+      "name": "replay-session-upsert-idempotent",
+      "kind": "replay",
+      "path": "fixtures/replay/replay-session-upsert-idempotent.json",
+      "expected": {
+        "status": 200,
+        "disposition": "accepted"
+      },
+      "sha256": "eebd6205dc3bda0f7db1bd8f4a9809d12afba96c81465a104a5688d6e86215b2"
+    }
+  ]
+}

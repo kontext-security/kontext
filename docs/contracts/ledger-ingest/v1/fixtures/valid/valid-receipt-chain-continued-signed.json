@@ -1,0 +1,105 @@
+{
+  "name": "valid-receipt-chain-continued-signed",
+  "description": "Continuing chain with a non-genesis anchor and a signed receipt.",
+  "kind": "valid",
+  "requests": [
+    {
+      "batch_version": "v1",
+      "batch_id": "batch_00000000-0000-4000-8000-000000000011",
+      "installation_id": "ins_0123456789abcdefABCDEF0123456789",
+      "sent_at": "2026-08-04T13:27:41.123456789Z",
+      "sessions": [
+        {
+          "id": "sess-fixture-1",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        }
+      ],
+      "actions": [
+        {
+          "id": "act_00000000-0000-4000-8000-000000000001",
+          "session_id": "sess-fixture-1",
+          "event_type": "request.proposed",
+          "status": "proposed",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z",
+          "tool_call_id": "toolu_fixture_enforce_allow",
+          "tool_name": "mcp__github__merge_pull_request",
+          "provider": "github",
+          "adapter_event_name": "PreToolUse",
+          "correlation_key": "sess-fixture-1:toolu_fixture_enforce_allow",
+          "parameters": {
+            "request_summary": "merge acme/widgets#42"
+          },
+          "parameters_hash": "sha256:abababababababababababababababababababababababababababababababab",
+          "identity": {
+            "agent": "claude_code",
+            "agent_provider": "anthropic"
+          },
+          "context": {
+            "cwd": "/Users/operator/repos/widgets",
+            "hook_event_name": "PreToolUse",
+            "payload_capture": "full",
+            "github": {
+              "branch_or_ref": "main"
+            }
+          },
+          "tool_input": {
+            "mode": "full",
+            "value": {
+              "owner": "acme",
+              "repo": "widgets",
+              "pull_number": 42
+            },
+            "redacted": false,
+            "redactorVersion": "go-redactor/3",
+            "sourceSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "sourceByteLength": 64,
+            "storedSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "storedByteLength": 64
+          },
+          "proposed_at": "2026-08-04T13:27:40.000000001Z"
+        }
+      ],
+      "receipts": [
+        {
+          "id": "rcpt_00000000-0000-4000-8000-000000000003",
+          "action_id": "act_00000000-0000-4000-8000-000000000001",
+          "session_id": "sess-fixture-1",
+          "receipt_type": "event",
+          "payload": {
+            "receipt_type": "event",
+            "previous_receipt_hash": "sha256:abababababababababababababababababababababababababababababababab",
+            "action": {
+              "id": "act_00000000-0000-4000-8000-000000000001",
+              "session_id": "sess-fixture-1",
+              "tool_call_id": "toolu_fixture_enforce_allow",
+              "parameters_hash": "sha256:abababababababababababababababababababababababababababababababab"
+            },
+            "hashes": {
+              "action_hash": "sha256:abababababababababababababababababababababababababababababababab"
+            }
+          },
+          "proof": {
+            "receipt_hash": "sha256:1689e45b17e1b2f6132d813f859dd0b693f8e15d29ca1643f67324e0abfd3b48",
+            "signature": {
+              "algorithm": "ed25519",
+              "key_id": "local-ed25519:0011223344556677",
+              "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+            }
+          },
+          "created_at": "2026-08-04T13:27:41.123456789Z"
+        }
+      ],
+      "receipt_chain_anchor": {
+        "previous_receipt_hash": "sha256:abababababababababababababababababababababababababababababababab"
+      }
+    }
+  ],
+  "expected": {
+    "status": 200,
+    "disposition": "accepted"
+  }
+}
