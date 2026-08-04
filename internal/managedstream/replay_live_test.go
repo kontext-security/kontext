@@ -30,7 +30,7 @@ func TestReplayLiveDB(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		bytesTotal += int64(len(body))
-		var p Payload
+		var p wireBatch
 		if err := json.Unmarshal(body, &p); err != nil {
 			t.Errorf("bad payload: %v", err)
 		}

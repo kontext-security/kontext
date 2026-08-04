@@ -18,6 +18,7 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext-cli/internal/ledgeringest"
 )
 
 func TestDefaultTimeoutFromEnv(t *testing.T) {
@@ -1012,14 +1013,14 @@ func testStore(t *testing.T) (*sqlite.Store, string) {
 // wireBatch decodes the clean-v1 envelope the flush posts for pages of
 // post-cutover rows (the only kind a fresh test store produces).
 type wireBatch struct {
-	BatchVersion   string           `json:"batch_version"`
-	BatchID        string           `json:"batch_id"`
-	InstallationID string           `json:"installation_id"`
-	SentAt         string           `json:"sent_at"`
-	Device         *Device          `json:"device"`
-	Sessions       []map[string]any `json:"sessions"`
-	Actions        []map[string]any `json:"actions"`
-	Receipts       []map[string]any `json:"receipts"`
+	BatchVersion   string               `json:"batch_version"`
+	BatchID        string               `json:"batch_id"`
+	InstallationID string               `json:"installation_id"`
+	SentAt         string               `json:"sent_at"`
+	Device         *ledgeringest.Device `json:"device"`
+	Sessions       []map[string]any     `json:"sessions"`
+	Actions        []map[string]any     `json:"actions"`
+	Receipts       []map[string]any     `json:"receipts"`
 }
 
 func capturePayloadServer(t *testing.T, got *wireBatch) *httptest.Server {
