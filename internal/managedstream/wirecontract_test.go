@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,8 +59,8 @@ func capturedBatch(t *testing.T) map[string]any {
 	store, dbPath := testStore(t)
 	saveTestDecision(t, store, "sess-wire-contract", "tool-use-wire-contract")
 
-	var payload Payload
-	server := capturePayloadServer(t, &payload)
+	var raw json.RawMessage
+	server := captureWirePayloadServer(t, &raw)
 	defer server.Close()
 
 	if err := Flush(context.Background(), Options{
@@ -72,15 +75,32 @@ func capturedBatch(t *testing.T) map[string]any {
 		t.Fatalf("Flush() error = %v", err)
 	}
 
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal captured payload: %v", err)
-	}
 	var decoded map[string]any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
+	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("decode captured payload: %v", err)
 	}
 	return decoded
+}
+
+func captureWirePayloadServer(t *testing.T, captured *json.RawMessage) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != DefaultEndpoint {
+			t.Fatalf("path = %q, want %q", r.URL.Path, DefaultEndpoint)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-install-token" {
+			t.Fatalf("Authorization = %q, want bearer install token", got)
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll() error = %v", err)
+		}
+		if !json.Valid(raw) {
+			t.Fatalf("uploaded body is not valid JSON: %s", raw)
+		}
+		*captured = raw
+		w.WriteHeader(http.StatusAccepted)
+	}))
 }
 
 func TestUploadedBatchMatchesPublishedSchema(t *testing.T) {

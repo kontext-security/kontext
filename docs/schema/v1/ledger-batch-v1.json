@@ -977,17 +977,6 @@
                 "type": "null"
               }
             ]
-          },
-          "classifier_json": {
-            "anyOf": [
-              {
-                "type": "object",
-                "additionalProperties": {}
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -1265,8 +1254,10 @@
     }
   },
   "required": [
+    "schema_version",
     "installation_id",
     "batch_id",
+    "sent_at",
     "agent_sessions",
     "authorization_actions",
     "authorization_receipts"

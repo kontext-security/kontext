@@ -21,11 +21,9 @@ schema and does not prove what a server accepts or rejects.
 
 ## Versioning
 
-The directory name is the payload-schema version, not a CLI release and not the
-HTTP API version. `/api/v1/` versions the API independently. This directory
-changes when the documented shape emitted by the CLI changes incompatibly — a
-removed or renamed field, a newly required field, a narrowed type, or a new
-enum value. Adding an optional field does not change it.
+The directory name identifies this payload-schema snapshot. It is not a CLI
+release and not the HTTP API version; `/api/v1/` versions the API
+independently.
 
 How the backend supports, negotiates, and retires payload versions is a server
 contract concern and is intentionally not defined here.
