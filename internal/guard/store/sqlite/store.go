@@ -17,6 +17,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/ledgeringest"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
 )
 
@@ -343,6 +344,13 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureClassifierVerdictColumns(ctx); err != nil {
+		return err
+	}
+	// Marks receipts whose stored payload is the clean-v1 wire shape (JCS
+	// bytes, published field names). Rows written by earlier builds keep the
+	// 'legacy' default, and the exporter ships any page containing one in
+	// the legacy form — the deterministic cutover for pre-upgrade backlog.
+	if err := s.ensureColumn(ctx, "authorization_receipts", "payload_form", "text not null default 'legacy'"); err != nil {
 		return err
 	}
 	return nil
@@ -900,6 +908,13 @@ func (s *Store) insertActionRecord(ctx context.Context, tx *sql.Tx, action map[s
 	); err != nil {
 		return err
 	}
+	// Session lifecycle rows are local activity records only: the wire
+	// contract carries session state via session records, receipts attest
+	// tool-call actions, and a receipt minted here would force the whole
+	// export page back onto the legacy form.
+	if eventType := stringValue(action["canonical_event_type"]); eventType == canonicalEventSessionStart || eventType == canonicalEventSessionEnd {
+		return nil
+	}
 	return s.appendReceipt(ctx, tx, receiptInputFromAction(action, receiptType, now))
 }
 
@@ -1106,23 +1121,32 @@ type receiptInput struct {
 	CreatedAt          time.Time
 }
 
+// receiptInputFromAction builds the clean-v1 receipt payload: the exact
+// object the receipt hash commits to, in the published wire shape. Every
+// member is omitted when empty (never committed as an empty string or
+// null), section values stay inside their closed vocabularies, and
+// tool_call_id is the sole tool-call correlation field.
 func receiptInputFromAction(action map[string]any, receiptType string, now time.Time) receiptInput {
 	riskEventJSON, _ := action["risk_event_json"].(string)
 	riskHash := hashString(riskEventJSON)
 	decisionResult := stringValue(action["decision_result"])
 	actionPayload := map[string]any{
-		"id":              action["id"],
-		"session_id":      action["session_id"],
-		"tool_use_id":     action["tool_use_id"],
-		"tool_name":       action["tool_name"],
-		"parameters_hash": action["parameters_hash"],
-		"context_hash":    action["context_hash"],
-		"identity_hash":   action["identity_hash"],
-		"policy_hash":     action["policy_hash"],
-		"reason_code":     action["reason_code"],
-		"risk_hash":       riskHash,
-		"outcome_hash":    action["output_hash"],
+		"id":         action["id"],
+		"session_id": action["session_id"],
 	}
+	toolCallID := stringValue(action["tool_call_id"])
+	if toolCallID == "" {
+		toolCallID = stringValue(action["tool_use_id"])
+	}
+	setNonEmpty(actionPayload, "tool_call_id", toolCallID)
+	setNonEmpty(actionPayload, "tool_name", stringValue(action["tool_name"]))
+	setHashMember(actionPayload, "parameters_hash", stringValue(action["parameters_hash"]))
+	setHashMember(actionPayload, "context_hash", stringValue(action["context_hash"]))
+	setHashMember(actionPayload, "identity_hash", stringValue(action["identity_hash"]))
+	setHashMember(actionPayload, "policy_hash", stringValue(action["policy_hash"]))
+	setNonEmpty(actionPayload, "reason_code", stringValue(action["reason_code"]))
+	setHashMember(actionPayload, "risk_hash", riskHash)
+	setHashMember(actionPayload, "outcome_hash", stringValue(action["output_hash"]))
 	if decisionFactJSON := stringValue(action["decision_fact_json"]); decisionFactJSON != "" {
 		// The decision fact is the authoritative decision record. Keep its
 		// complete canonical JSON inside the signed receipt payload, rather
@@ -1136,41 +1160,64 @@ func receiptInputFromAction(action map[string]any, receiptType string, now time.
 	payload := map[string]any{
 		"receipt_type": receiptType,
 		"action":       actionPayload,
-		"risk": map[string]any{
-			"risk_level": action["risk_level"],
-			"risk_score": action["risk_score"],
-			"threshold":  action["risk_threshold"],
-			"signals":    json.RawMessage(action["risk_signals_json"].(string)),
-		},
-		"policy": map[string]any{
-			"policy_id":      action["policy_id"],
-			"policy_version": action["policy_version"],
-			"policy_hash":    action["policy_hash"],
-			"matched_rules":  json.RawMessage(action["matched_rules_json"].(string)),
-		},
-		"hashes": map[string]any{
-			"context_hash":         action["context_hash"],
-			"identity_hash":        action["identity_hash"],
-			"risk_evaluation_hash": riskHash,
-			"action_hash":          actionHash,
-			"outcome_hash":         action["output_hash"],
-		},
 	}
-	if decisionResult != "" {
-		payload["decision"] = map[string]any{
-			"result":      decisionResult,
-			"category":    action["decision_category"],
-			"reason_code": action["reason_code"],
-			"reason":      action["reason"],
+
+	risk := map[string]any{}
+	if level := stringValue(action["risk_level"]); ledgeringest.ValidRiskLevel(level) {
+		risk["risk_level"] = level
+	}
+	setUnitInterval(risk, "risk_score", action["risk_score"])
+	setUnitInterval(risk, "threshold", action["risk_threshold"])
+	if signals := decodedStringList(action["risk_signals_json"]); len(signals) > 0 {
+		risk["signals"] = signals
+	}
+	if len(risk) > 0 {
+		payload["risk"] = risk
+	}
+
+	policy := map[string]any{}
+	setNonEmpty(policy, "policy_id", stringValue(action["policy_id"]))
+	setNonEmpty(policy, "policy_version", stringValue(action["policy_version"]))
+	setHashMember(policy, "policy_hash", stringValue(action["policy_hash"]))
+	if rules := decodedStringList(action["matched_rules_json"]); len(rules) > 0 {
+		policy["matched_rules"] = rules
+	}
+	if len(policy) > 0 {
+		payload["policy"] = policy
+	}
+
+	hashes := map[string]any{}
+	setHashMember(hashes, "context_hash", stringValue(action["context_hash"]))
+	setHashMember(hashes, "identity_hash", stringValue(action["identity_hash"]))
+	setHashMember(hashes, "risk_evaluation_hash", riskHash)
+	setHashMember(hashes, "action_hash", actionHash)
+	setHashMember(hashes, "outcome_hash", stringValue(action["output_hash"]))
+	if len(hashes) > 0 {
+		payload["hashes"] = hashes
+	}
+
+	if receiptType == "decision" {
+		decision := map[string]any{
+			"result": decisionResult,
 		}
+		if category := stringValue(action["decision_category"]); ledgeringest.ValidDecisionCategory(category) {
+			decision["category"] = category
+		}
+		setNonEmpty(decision, "reason_code", stringValue(action["reason_code"]))
+		setNonEmpty(decision, "reason", stringValue(action["reason"]))
+		payload["decision"] = decision
 	}
 	if receiptType == "outcome" {
-		payload["outcome"] = map[string]any{
-			"outcome":        action["outcome"],
-			"output_summary": action["output_summary"],
-			"output_hash":    action["output_hash"],
-			"error_redacted": action["error_redacted"],
+		outcome := map[string]any{}
+		if value := stringValue(action["outcome"]); ledgeringest.ValidActionOutcome(value) {
+			outcome["outcome"] = value
+		} else {
+			outcome["outcome"] = "not_executed"
 		}
+		setNonEmpty(outcome, "output_summary", stringValue(action["output_summary"]))
+		setHashMember(outcome, "output_hash", stringValue(action["output_hash"]))
+		setNonEmpty(outcome, "error_redacted", stringValue(action["error_redacted"]))
+		payload["outcome"] = outcome
 	}
 	return receiptInput{
 		ActionID:           action["id"].(string),
@@ -1260,11 +1307,20 @@ func (s *Store) appendReceipt(ctx context.Context, tx *sql.Tx, input receiptInpu
 		return err
 	}
 	payload := copyMap(input.Payload)
-	payload["previous_receipt_hash"] = previousHash
-	receiptPayloadJSON, err := jsonText(payload)
+	// Genesis omits the chain link entirely; the stored column keeps the
+	// empty string so local chain verification stays uniform.
+	if previousHash != "" {
+		payload["previous_receipt_hash"] = previousHash
+	}
+	// Store the RFC 8785 (JCS) bytes as the payload of record: the hash is
+	// computed over them, local verification re-hashes the stored string,
+	// and the server recomputes JCS over the parsed payload — all three see
+	// the same bytes.
+	canonicalPayload, err := payloadcapture.CanonicalJSON(payload)
 	if err != nil {
 		return err
 	}
+	receiptPayloadJSON := string(canonicalPayload)
 	receiptHash := hashString(receiptPayloadJSON)
 	signatureAlgorithm := "none"
 	signature := ""
@@ -1281,14 +1337,52 @@ insert into authorization_receipts(
   decision_result, decision_category, reason_code,
   policy_hash, context_hash, identity_hash, risk_evaluation_hash, action_hash, outcome_hash,
   receipt_payload_json, previous_receipt_hash, receipt_hash, signature, signature_algorithm, key_id,
-  created_at
-) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  payload_form, created_at
+) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, "rcpt_"+uuid.NewString(), input.ActionID, input.SessionID, input.ReceiptType,
 		input.DecisionResult, input.DecisionCategory, input.ReasonCode,
 		input.PolicyHash, input.ContextHash, input.IdentityHash, input.RiskEvaluationHash, input.ActionHash, input.OutcomeHash,
 		receiptPayloadJSON, previousHash, receiptHash, signature, signatureAlgorithm, keyID,
-		input.CreatedAt.Format(time.RFC3339Nano))
+		ledgeringest.BatchVersion, input.CreatedAt.Format(time.RFC3339Nano))
 	return err
+}
+
+func setNonEmpty(payload map[string]any, key, value string) {
+	if value != "" {
+		payload[key] = value
+	}
+}
+
+func setHashMember(payload map[string]any, key, value string) {
+	if ledgeringest.ValidHash(value) {
+		payload[key] = value
+	}
+}
+
+func setUnitInterval(payload map[string]any, key string, value any) {
+	number, ok := value.(float64)
+	if !ok || number < 0 || number > 1 {
+		return
+	}
+	payload[key] = number
+}
+
+func decodedStringList(value any) []string {
+	text, _ := value.(string)
+	if text == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(text), &values); err != nil {
+		return nil
+	}
+	out := values[:0]
+	for _, item := range values {
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func previousReceiptHash(ctx context.Context, tx *sql.Tx) (string, error) {

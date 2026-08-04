@@ -26,7 +26,17 @@ type LedgerBatch struct {
 	Receipts           []LedgerRecord            `json:"authorization_receipts"`
 	ReceiptChainAnchor *LedgerReceiptChainAnchor `json:"receipt_chain_anchor,omitempty"`
 	Cursor             *LedgerCursor             `json:"-"`
+	// Form is the wire contract this page must ship under, decided
+	// deterministically from the rows themselves: any receipt stored before
+	// the clean-payload cutover, or any decided action without its decision
+	// fact, pins the page to "legacy". Pages of post-cutover rows ship "v1".
+	Form string `json:"-"`
 }
+
+const (
+	LedgerFormLegacy = "legacy"
+	LedgerFormV1     = "v1"
+)
 
 type LedgerReceiptChainAnchor struct {
 	PreviousReceiptHash string `json:"previous_receipt_hash"`
@@ -70,8 +80,11 @@ select id, action_id, session_id, receipt_type, decision_result, decision_catego
   reason_code, approval_channel, approval_result, approver_id, approved_at,
   policy_hash, context_hash, identity_hash, risk_evaluation_hash, action_hash,
   outcome_hash, receipt_payload_json, previous_receipt_hash, receipt_hash,
-  signature, signature_algorithm, key_id, created_at
+  signature, signature_algorithm, key_id, payload_form, created_at
 from authorization_receipts`
+
+// ledgerReceiptPayloadFormColumn is local cutover state, never a wire field.
+const ledgerReceiptPayloadFormColumn = "payload_form"
 
 func (s *Store) LedgerBatch(ctx context.Context, opts LedgerExportOptions) (LedgerBatch, error) {
 	actions, cursor, err := s.authorizationActionCursorPage(ctx, opts)
@@ -98,13 +111,46 @@ func (s *Store) LedgerBatch(ctx context.Context, opts LedgerExportOptions) (Ledg
 	if err != nil {
 		return LedgerBatch{}, err
 	}
+	form := ledgerContractForm(actions, receipts)
+	stripLedgerLocalColumns(receipts)
 	return LedgerBatch{
 		Sessions:           sessions,
 		Actions:            actions,
 		Receipts:           receipts,
 		ReceiptChainAnchor: receiptChainAnchor(receipts),
 		Cursor:             cursor,
+		Form:               form,
 	}, nil
+}
+
+// ledgerContractForm picks the wire form for one export page. Deterministic
+// from the rows alone — never error-driven: a page is v1 only when every
+// receipt carries a clean-form payload and every decided action carries its
+// decision fact. Anything older pins the page to the legacy form, which is
+// how pre-upgrade backlog (including rows written during a temporary
+// downgrade) drains without a separate cutover marker.
+func ledgerContractForm(actions, receipts []LedgerRecord) string {
+	for _, receipt := range receipts {
+		if form, _ := receipt[ledgerReceiptPayloadFormColumn].(string); form != LedgerFormV1 {
+			return LedgerFormLegacy
+		}
+	}
+	for _, action := range actions {
+		eventType, _ := action["canonical_event_type"].(string)
+		if eventType != "request.decided" {
+			continue
+		}
+		if action["decision_fact_json"] == nil {
+			return LedgerFormLegacy
+		}
+	}
+	return LedgerFormV1
+}
+
+func stripLedgerLocalColumns(receipts []LedgerRecord) {
+	for _, receipt := range receipts {
+		delete(receipt, ledgerReceiptPayloadFormColumn)
+	}
 }
 
 func (s *Store) authorizationActionCursorPage(ctx context.Context, opts LedgerExportOptions) ([]LedgerRecord, *LedgerCursor, error) {
@@ -264,7 +310,12 @@ func (s *Store) AuthorizationReceipts(ctx context.Context, opts LedgerExportOpti
 		query += "\nlimit ?"
 		args = append(args, opts.Limit)
 	}
-	return queryLedgerRecords(ctx, s.db, query, args...)
+	receipts, err := queryLedgerRecords(ctx, s.db, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	stripLedgerLocalColumns(receipts)
+	return receipts, nil
 }
 
 func (s *Store) authorizationReceiptRangeForActions(ctx context.Context, actionIDs []string, limit int) ([]LedgerRecord, error) {
