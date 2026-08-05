@@ -678,7 +678,7 @@ func (s *Store) OpenSession(ctx context.Context, sessionID, agent, cwd, source, 
 
 func (s *Store) OpenSessionWithMode(ctx context.Context, sessionID, agent, cwd, source, externalID, mode string) (SessionRecord, error) {
 	now := time.Now().UTC()
-	sessionID = normalizeSessionID(sessionID)
+	sessionID = NormalizeSessionID(sessionID)
 	agentProvider, canonicalAgent := hostedAgentIdentity(agent)
 	if source == "" {
 		source = "daemon_observed"
@@ -713,7 +713,7 @@ func (s *Store) EnsureObservedSession(ctx context.Context, sessionID, agent, cwd
 
 func (s *Store) EnsureObservedSessionWithMode(ctx context.Context, sessionID, agent, cwd, mode string) (SessionRecord, error) {
 	now := time.Now().UTC()
-	sessionID = normalizeSessionID(sessionID)
+	sessionID = NormalizeSessionID(sessionID)
 	agentProvider, canonicalAgent := hostedAgentIdentity(agent)
 	_, err := s.db.ExecContext(ctx, `
 insert into agent_sessions(id, agent_provider, agent, cwd, source, status, mode, created_at, updated_at)
@@ -740,7 +740,7 @@ on conflict(id) do update set
 }
 
 func (s *Store) CloseSession(ctx context.Context, sessionID string) error {
-	sessionID = normalizeSessionID(sessionID)
+	sessionID = NormalizeSessionID(sessionID)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 update agent_sessions
@@ -781,7 +781,7 @@ func NewActionID() string {
 
 func (s *Store) SaveDecision(ctx context.Context, event risk.HookEvent, decision risk.RiskDecision) (DecisionRecord, error) {
 	now := time.Now().UTC()
-	sessionID := normalizeSessionID(event.SessionID)
+	sessionID := NormalizeSessionID(event.SessionID)
 	event.SessionID = sessionID
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1826,7 +1826,11 @@ func nullableFloat(value *float64) any {
 	return *value
 }
 
-func normalizeSessionID(sessionID string) string {
+// NormalizeSessionID maps an absent session ID to the store's catch-all
+// session. Exported so a runtime that defers the session upsert can key the
+// decision, the classifier, and the eventual rows by the same ID the store
+// would choose.
+func NormalizeSessionID(sessionID string) string {
 	if sessionID == "" {
 		return "local"
 	}

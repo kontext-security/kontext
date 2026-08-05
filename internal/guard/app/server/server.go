@@ -53,12 +53,13 @@ type Options struct {
 	// RiskClassifier enables observe-mode risk-classifier logging for
 	// intercepted bash commands. Nil disables it.
 	RiskClassifier *RiskClassifierOptions
-	// DeferRecord, when non-nil, receives the annotation + persistence work
-	// for each settled decision so the hook response does not wait on
-	// classifier inference or SQLite. The executor owns the context the job
+	// DeferRecord, when non-nil, receives every store write for each settled
+	// decision-gating hook — session upsert, annotation, decision row — so
+	// the hook response does not wait on classifier inference or SQLite.
+	// Non-blocking hooks keep synchronous writes; they are already ingested
+	// behind an immediate response. The executor owns the context the job
 	// runs under, draining before the store closes, and surfacing the job's
-	// error. Nil keeps annotation and persistence synchronous with the
-	// response, as before.
+	// error. Nil keeps every write synchronous with the response, as before.
 	DeferRecord func(job func(context.Context) error)
 }
 

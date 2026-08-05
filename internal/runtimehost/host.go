@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
@@ -41,12 +42,13 @@ type Options struct {
 	SkipInitialSession    bool
 	DisableAsyncIngest    bool
 	// AsyncDecisionRecording answers decision-gating hooks (PreToolUse) as
-	// soon as the policy verdict is settled and runs annotation + the SQLite
-	// write in the background, mirroring what AsyncIngest already does for
-	// non-blocking hooks. Without it, a cold or contended guard.db routinely
-	// outlives the hook client's budget, which reads as a dead daemon:
-	// fail-open in observe, fail-closed (every tool call denied) in enforce.
-	// Close drains pending writes before the store closes.
+	// soon as the policy verdict is settled and runs every store write —
+	// session upsert, annotation, decision row — in the background,
+	// mirroring what AsyncIngest already does for non-blocking hooks.
+	// Without it, a cold or contended guard.db routinely outlives the hook
+	// client's budget, which reads as a dead daemon: fail-open in observe,
+	// fail-closed (every tool call denied) in enforce. Close drains pending
+	// writes before the store closes.
 	AsyncDecisionRecording bool
 }
 
@@ -128,6 +130,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		serverSessionID = ""
 	}
 	var recordWG sync.WaitGroup
+	var recordFailures atomic.Int64
 	var deferRecord func(job func(context.Context) error)
 	if opts.AsyncDecisionRecording {
 		diag := opts.Diagnostic
@@ -139,7 +142,9 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 			go func() {
 				defer recordWG.Done()
 				if err := job(context.WithoutCancel(ctx)); err != nil {
-					diag.Printf("deferred decision record: %v\n", err)
+					// The hook response is long gone, so this log line and its
+					// running total are the only trace the record was lost.
+					diag.Printf("deferred decision record: %v (%d failed since start)\n", err, recordFailures.Add(1))
 				}
 			}()
 		}
