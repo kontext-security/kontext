@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/kontext-security/kontext-cli/compare/v1.0.0...v1.0.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **daemon:** answer decision hooks before annotation and persistence ([#450](https://github.com/kontext-security/kontext-cli/issues/450)) ([6ba6c39](https://github.com/kontext-security/kontext-cli/commit/6ba6c397b28d21cda84ecfd8828d3e0f5ee18621))
+
 ## [1.0.0](https://github.com/kontext-security/kontext-cli/compare/v0.16.0...v1.0.0) (2026-08-04)
 
 
