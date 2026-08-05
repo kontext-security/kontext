@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0](https://github.com/kontext-security/kontext-cli/compare/v0.16.0...v1.0.0) (2026-08-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* retire legacy managed sessions ([#440](https://github.com/kontext-security/kontext-cli/issues/440))
+
+### Features
+
+* compute the risk annotation in the decision path and upload it ([#428](https://github.com/kontext-security/kontext-cli/issues/428)) ([2eb0fc9](https://github.com/kontext-security/kontext-cli/commit/2eb0fc94a12251a9b37cf705bd0369593c7c46ad))
+* **config:** negotiate endpoint-config v2 and honour the guardrail switch ([#433](https://github.com/kontext-security/kontext-cli/issues/433)) ([d1cbf28](https://github.com/kontext-security/kontext-cli/commit/d1cbf2801160bf7a6539aa5a052a8b03dbc54623))
+* **doctor:** identify builds by source revision, not version string ([#435](https://github.com/kontext-security/kontext-cli/issues/435)) ([d106002](https://github.com/kontext-security/kontext-cli/commit/d10600212346ee76f59e3a0b3cb9a9254b874a4d))
+* **doctor:** report core setup health ([#441](https://github.com/kontext-security/kontext-cli/issues/441)) ([e4711d8](https://github.com/kontext-security/kontext-cli/commit/e4711d8f29721b8c161a1cf0dc989a8a0504ead5))
+* **guard:** run the guardrail LLM in the managed daemon too ([#436](https://github.com/kontext-security/kontext-cli/issues/436)) ([fa23eb6](https://github.com/kontext-security/kontext-cli/commit/fa23eb6c3af79a8f7b846f183e7401e59fd0102d))
+* observe-mode bash risk classifier (SVM + local guardrail LLM) ([#414](https://github.com/kontext-security/kontext-cli/issues/414)) ([f1a1904](https://github.com/kontext-security/kontext-cli/commit/f1a1904bb5c65c12351e398673126b196ca14991))
+* retire legacy managed sessions ([#440](https://github.com/kontext-security/kontext-cli/issues/440)) ([f5be064](https://github.com/kontext-security/kontext-cli/commit/f5be0642b9fdb1dc4dbf0b953b300a9b07ed6d18))
+* **setup:** make the local risk model an optional setup step ([#444](https://github.com/kontext-security/kontext-cli/issues/444)) ([938bd18](https://github.com/kontext-security/kontext-cli/commit/938bd18a5d0d6f754b9017e687817b27945b9a49))
+* single guardrail LLM (stock Qwen3-0.6B, V2 prompt) replacing the JSON judge ([#423](https://github.com/kontext-security/kontext-cli/issues/423)) ([f7be605](https://github.com/kontext-security/kontext-cli/commit/f7be605b164746b38ddc5b9d20dd44a94e9ae50b))
+
+
+### Bug Fixes
+
+* **managed:** survive a mode the running build does not implement ([#434](https://github.com/kontext-security/kontext-cli/issues/434)) ([3f4e33a](https://github.com/kontext-security/kontext-cli/commit/3f4e33a2464efe771cda34432e58fff571eff080))
+
 ## [0.16.0](https://github.com/kontext-security/kontext-cli/compare/v0.15.1...v0.16.0) (2026-07-29)
 
 
