@@ -1862,3 +1862,32 @@ func assertRecordIDs(t *testing.T, records []LedgerRecord, want map[string]bool)
 		}
 	}
 }
+
+// SaveDecision must honor a pre-set EventID: a runtime that answers the hook
+// before persisting has already handed that ID to the agent.
+func TestSaveDecisionHonorsPresetEventID(t *testing.T) {
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	preset := NewActionID()
+	event := risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PreToolUse",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "echo hi"},
+	}
+	record, err := store.SaveDecision(context.Background(), event, risk.RiskDecision{
+		Decision: risk.DecisionAllow,
+		Reason:   "test",
+		EventID:  preset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ID != preset {
+		t.Fatalf("record.ID = %q, want preset %q", record.ID, preset)
+	}
+}

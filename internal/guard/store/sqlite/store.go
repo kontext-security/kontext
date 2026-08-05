@@ -678,7 +678,7 @@ func (s *Store) OpenSession(ctx context.Context, sessionID, agent, cwd, source, 
 
 func (s *Store) OpenSessionWithMode(ctx context.Context, sessionID, agent, cwd, source, externalID, mode string) (SessionRecord, error) {
 	now := time.Now().UTC()
-	sessionID = normalizeSessionID(sessionID)
+	sessionID = NormalizeSessionID(sessionID)
 	agentProvider, canonicalAgent := hostedAgentIdentity(agent)
 	if source == "" {
 		source = "daemon_observed"
@@ -712,17 +712,29 @@ func (s *Store) EnsureObservedSession(ctx context.Context, sessionID, agent, cwd
 }
 
 func (s *Store) EnsureObservedSessionWithMode(ctx context.Context, sessionID, agent, cwd, mode string) (SessionRecord, error) {
+	return s.upsertObservedSession(ctx, sessionID, agent, cwd, mode, true)
+}
+
+// BackfillObservedSessionWithMode refreshes the session row for a record whose
+// hook was answered before anything persisted. Unlike
+// EnsureObservedSessionWithMode it never reopens a closed session: the
+// deferred write can land after a SessionEnd already closed the session, and
+// late bookkeeping must not undo a liveness fact that arrived in order.
+func (s *Store) BackfillObservedSessionWithMode(ctx context.Context, sessionID, agent, cwd, mode string) (SessionRecord, error) {
+	return s.upsertObservedSession(ctx, sessionID, agent, cwd, mode, false)
+}
+
+func (s *Store) upsertObservedSession(ctx context.Context, sessionID, agent, cwd, mode string, reopen bool) (SessionRecord, error) {
 	now := time.Now().UTC()
-	sessionID = normalizeSessionID(sessionID)
+	sessionID = NormalizeSessionID(sessionID)
 	agentProvider, canonicalAgent := hostedAgentIdentity(agent)
-	_, err := s.db.ExecContext(ctx, `
-insert into agent_sessions(id, agent_provider, agent, cwd, source, status, mode, created_at, updated_at)
-values(?, ?, ?, ?, 'daemon_observed', 'open', ?, ?, ?)
-on conflict(id) do update set
-  agent_provider = coalesce(nullif(excluded.agent_provider, ''), agent_sessions.agent_provider),
-  agent = coalesce(nullif(excluded.agent, ''), agent_sessions.agent),
-  cwd = coalesce(nullif(excluded.cwd, ''), agent_sessions.cwd),
-  mode = coalesce(nullif(excluded.mode, ''), agent_sessions.mode),
+	// A hook observed in order is proof of life and reopens anything the
+	// daemon owns; a backfilled row keeps whatever liveness it already has.
+	liveness := `
+  status = agent_sessions.status,
+  closed_at = agent_sessions.closed_at,`
+	if reopen {
+		liveness = `
   status = case
     when agent_sessions.source = 'wrapper_owned' then agent_sessions.status
     else 'open'
@@ -730,7 +742,16 @@ on conflict(id) do update set
   closed_at = case
     when agent_sessions.source = 'wrapper_owned' then agent_sessions.closed_at
     else null
-  end,
+  end,`
+	}
+	_, err := s.db.ExecContext(ctx, `
+insert into agent_sessions(id, agent_provider, agent, cwd, source, status, mode, created_at, updated_at)
+values(?, ?, ?, ?, 'daemon_observed', 'open', ?, ?, ?)
+on conflict(id) do update set
+  agent_provider = coalesce(nullif(excluded.agent_provider, ''), agent_sessions.agent_provider),
+  agent = coalesce(nullif(excluded.agent, ''), agent_sessions.agent),
+  cwd = coalesce(nullif(excluded.cwd, ''), agent_sessions.cwd),
+  mode = coalesce(nullif(excluded.mode, ''), agent_sessions.mode),`+liveness+`
   updated_at = excluded.updated_at
 	`, sessionID, agentProvider, canonicalAgent, cwd, mode, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
@@ -740,7 +761,7 @@ on conflict(id) do update set
 }
 
 func (s *Store) CloseSession(ctx context.Context, sessionID string) error {
-	sessionID = normalizeSessionID(sessionID)
+	sessionID = NormalizeSessionID(sessionID)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 update agent_sessions
@@ -772,9 +793,16 @@ where id = ?
 	return scanSession(row)
 }
 
+// NewActionID mints the identifier for one decision row. Exported so a
+// runtime that answers the hook before persisting can hand the same ID to
+// both the agent and the eventual SaveDecision call.
+func NewActionID() string {
+	return "act_" + uuid.NewString()
+}
+
 func (s *Store) SaveDecision(ctx context.Context, event risk.HookEvent, decision risk.RiskDecision) (DecisionRecord, error) {
 	now := time.Now().UTC()
-	sessionID := normalizeSessionID(event.SessionID)
+	sessionID := NormalizeSessionID(event.SessionID)
 	event.SessionID = sessionID
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -801,9 +829,15 @@ on conflict(id) do update set
 	// under the same policy, even if the mode flips concurrently.
 	captureConfig := s.payloadCaptureConfiguration()
 
-	actionID := "act_" + uuid.NewString()
+	// A caller that answered the hook before persisting has already handed
+	// the action ID to the agent; honoring it here keeps the eventual row
+	// addressable by the ID the hook response carried.
+	actionID := decision.EventID
+	if actionID == "" {
+		actionID = NewActionID()
+	}
 	if event.HookEventName == "PreToolUse" {
-		proposedID := "act_" + uuid.NewString()
+		proposedID := NewActionID()
 		if err := s.insertAction(ctx, tx, proposedID, sessionID, event, decision, canonicalEventRequestProposed, "event", captureConfig, now); err != nil {
 			return DecisionRecord{}, err
 		}
@@ -1813,7 +1847,11 @@ func nullableFloat(value *float64) any {
 	return *value
 }
 
-func normalizeSessionID(sessionID string) string {
+// NormalizeSessionID maps an absent session ID to the store's catch-all
+// session. Exported so a runtime that defers the session upsert can key the
+// decision, the classifier, and the eventual rows by the same ID the store
+// would choose.
+func NormalizeSessionID(sessionID string) string {
 	if sessionID == "" {
 		return "local"
 	}

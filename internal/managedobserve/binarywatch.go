@@ -143,9 +143,5 @@ func binaryWatchInterval() time.Duration {
 }
 
 func logAlways(log diagnostic.Logger, format string, args ...any) {
-	if log.Enabled() {
-		log.Printf(format, args...)
-		return
-	}
-	fmt.Fprint(os.Stderr, diagnostic.Redact(fmt.Sprintf(format, args...)))
+	diagnostic.LogAlways(log, format, args...)
 }

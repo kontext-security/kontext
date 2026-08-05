@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -20,15 +21,24 @@ type guardHookRuntime struct {
 	currentSessionID string
 	mode             string
 	classifier       *riskclassifier.Classifier
+	// deferRecord, when non-nil, runs every store write for decision-gating
+	// hooks — session upsert, annotation, decision row — off the hook
+	// response path. The decision itself (Cedar) is always computed before
+	// the response. Non-blocking hooks keep their synchronous writes: they
+	// are already ingested behind an immediate response. The executor owns
+	// lifetime (context, draining on shutdown) and reporting the job's
+	// error. Nil keeps the historical synchronous behavior.
+	deferRecord func(job func(context.Context) error)
 }
 
-func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier) guardHookRuntime {
+func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier, deferRecord func(job func(context.Context) error)) guardHookRuntime {
 	return guardHookRuntime{
 		store:            store,
 		policy:           policy,
 		currentSessionID: currentSessionID,
 		mode:             mode,
 		classifier:       classifier,
+		deferRecord:      deferRecord,
 	}
 }
 
@@ -55,6 +65,17 @@ func (r guardHookRuntime) CloseSession(ctx context.Context, sessionID string) er
 }
 
 func (r guardHookRuntime) EnsureSessionForEvent(ctx context.Context, event hook.Event) (hook.Event, error) {
+	// A deferred-recording runtime answers decision-gating hooks without
+	// touching the store, and the session upsert is a store write like any
+	// other: on a cold guard.db it alone can outlive the hook client's budget.
+	// The upsert rides along with the deferred decision record instead (see
+	// decideAndRecord); only the store's session-ID normalization — a pure
+	// function — happens here, so the decision, the classifier, and the
+	// eventual rows key alike.
+	if r.defersRecording(event.HookName) {
+		event.SessionID = sqlite.NormalizeSessionID(event.SessionID)
+		return event, nil
+	}
 	session, err := r.store.EnsureObservedSessionWithMode(ctx, event.SessionID, event.Agent, event.CWD, r.modeForSession(event.SessionID))
 	if err != nil {
 		return hook.Event{}, err
@@ -64,6 +85,14 @@ func (r guardHookRuntime) EnsureSessionForEvent(ctx context.Context, event hook.
 		event.Agent = session.Agent
 	}
 	return event, nil
+}
+
+// defersRecording reports whether this event's store writes run off the hook
+// response path. Only decision-gating hooks defer: non-blocking hooks are
+// already answered before ingestion (async ingest), so deferring their writes
+// would only nest one background hop inside another.
+func (r guardHookRuntime) defersRecording(hookName hook.HookName) bool {
+	return r.deferRecord != nil && hookName.CanBlock()
 }
 
 func (r guardHookRuntime) modeForSession(sessionID string) string {
@@ -106,6 +135,36 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	// observe, enforce, managed — passes through, so one call site covers them
 	// all. It is also what keeps the classifier advisory: the decision is
 	// already settled and annotate may write nothing but its Classifier field.
+	if r.defersRecording(hook.HookName(event.HookEventName)) {
+		// The decision is settled; nothing after this point may change it.
+		// Hand the agent its answer now and run annotation + persistence in
+		// the background: classifier inference and a write into a large,
+		// possibly cold guard.db both routinely outlive the hook client's
+		// budget, and a hook that times out here is treated as a dead daemon
+		// — fail-open in observe, fail-closed (every tool call denied) in
+		// enforce.
+		decision.EventID = sqlite.NewActionID()
+		deferredEvent, deferredDecision := event, decision
+		r.deferRecord(func(recordCtx context.Context) error {
+			// The session upsert EnsureSessionForEvent skipped lands first,
+			// mirroring the synchronous order: it carries the mode stamp
+			// SaveDecision's own upsert lacks. Backfill, not Ensure: this
+			// write can run after a SessionEnd that already closed the
+			// session, and it must not reopen it.
+			session, sessionErr := r.store.BackfillObservedSessionWithMode(recordCtx, deferredEvent.SessionID, deferredEvent.Agent, deferredEvent.CWD, r.modeForSession(deferredEvent.SessionID))
+			if sessionErr == nil && deferredEvent.Agent == "" {
+				deferredEvent.Agent = session.Agent
+			}
+			r.annotate(recordCtx, deferredEvent, &deferredDecision)
+			record, err := r.store.SaveDecision(recordCtx, deferredEvent, deferredDecision)
+			if err != nil {
+				return errors.Join(sessionErr, err)
+			}
+			r.recordAnnotation(recordCtx, record.ID, deferredEvent, deferredDecision)
+			return sessionErr
+		})
+		return decision, nil
+	}
 	r.annotate(ctx, event, &decision)
 	record, err := r.store.SaveDecision(ctx, event, decision)
 	if err != nil {

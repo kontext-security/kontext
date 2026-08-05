@@ -53,6 +53,14 @@ type Options struct {
 	// RiskClassifier enables observe-mode risk-classifier logging for
 	// intercepted bash commands. Nil disables it.
 	RiskClassifier *RiskClassifierOptions
+	// DeferRecord, when non-nil, receives every store write for each settled
+	// decision-gating hook — session upsert, annotation, decision row — so
+	// the hook response does not wait on classifier inference or SQLite.
+	// Non-blocking hooks keep synchronous writes; they are already ingested
+	// behind an immediate response. The executor owns the context the job
+	// runs under, draining before the store closes, and surfacing the job's
+	// error. Nil keeps every write synchronous with the response, as before.
+	DeferRecord func(job func(context.Context) error)
 }
 
 // RiskClassifierOptions configure the risk classifier. The SVM is embedded and
@@ -128,7 +136,7 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		opts.RiskClassifier.Gate = riskclassifier.NewLLMGate()
 	}
 	classifier := newRiskClassifier(opts.RiskClassifier)
-	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier)
+	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier, opts.DeferRecord)
 	core, err := runtimecore.New(runtime)
 	if err != nil {
 		return nil, fmt.Errorf("create runtime core: %w", err)

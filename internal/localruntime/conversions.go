@@ -95,6 +95,7 @@ func EvaluateResultFromResult(result hook.Result) EvaluateResult {
 		RequestID:    result.RequestID,
 		Mode:         result.Mode,
 		Epoch:        result.Epoch,
+		EventID:      result.EventID,
 		UpdatedInput: result.UpdatedInput,
 	}
 }
@@ -111,6 +112,7 @@ func ResultFromEvaluateResult(result EvaluateResult) hook.Result {
 		RequestID:    result.RequestID,
 		Mode:         result.Mode,
 		Epoch:        result.Epoch,
+		EventID:      result.EventID,
 		UpdatedInput: result.UpdatedInput,
 	}
 }
