@@ -42,6 +42,33 @@ func TestServiceEvaluatesBlockingHook(t *testing.T) {
 	}
 }
 
+// The decision ID must survive the socket protocol: a runtime that answers
+// before persisting hands the client the only handle it will ever have to the
+// eventual record.
+func TestServiceCarriesEventIDOverSocket(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{
+		evaluateResult: hook.Result{
+			Decision: hook.DecisionAllow,
+			EventID:  "act_pre-minted",
+		},
+	}
+	service := newTestService(t, runtime, false)
+	client := NewClient(service.SocketPath())
+
+	result, err := client.Process(context.Background(), hook.Event{
+		HookName: hook.HookPreToolUse,
+		ToolName: "Bash",
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.EventID != "act_pre-minted" {
+		t.Fatalf("EventID over the socket = %q, want %q", result.EventID, "act_pre-minted")
+	}
+}
+
 func TestServiceCanAckTelemetryBeforeAsyncIngest(t *testing.T) {
 	t.Parallel()
 

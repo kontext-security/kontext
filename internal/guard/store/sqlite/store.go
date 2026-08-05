@@ -712,17 +712,29 @@ func (s *Store) EnsureObservedSession(ctx context.Context, sessionID, agent, cwd
 }
 
 func (s *Store) EnsureObservedSessionWithMode(ctx context.Context, sessionID, agent, cwd, mode string) (SessionRecord, error) {
+	return s.upsertObservedSession(ctx, sessionID, agent, cwd, mode, true)
+}
+
+// BackfillObservedSessionWithMode refreshes the session row for a record whose
+// hook was answered before anything persisted. Unlike
+// EnsureObservedSessionWithMode it never reopens a closed session: the
+// deferred write can land after a SessionEnd already closed the session, and
+// late bookkeeping must not undo a liveness fact that arrived in order.
+func (s *Store) BackfillObservedSessionWithMode(ctx context.Context, sessionID, agent, cwd, mode string) (SessionRecord, error) {
+	return s.upsertObservedSession(ctx, sessionID, agent, cwd, mode, false)
+}
+
+func (s *Store) upsertObservedSession(ctx context.Context, sessionID, agent, cwd, mode string, reopen bool) (SessionRecord, error) {
 	now := time.Now().UTC()
 	sessionID = NormalizeSessionID(sessionID)
 	agentProvider, canonicalAgent := hostedAgentIdentity(agent)
-	_, err := s.db.ExecContext(ctx, `
-insert into agent_sessions(id, agent_provider, agent, cwd, source, status, mode, created_at, updated_at)
-values(?, ?, ?, ?, 'daemon_observed', 'open', ?, ?, ?)
-on conflict(id) do update set
-  agent_provider = coalesce(nullif(excluded.agent_provider, ''), agent_sessions.agent_provider),
-  agent = coalesce(nullif(excluded.agent, ''), agent_sessions.agent),
-  cwd = coalesce(nullif(excluded.cwd, ''), agent_sessions.cwd),
-  mode = coalesce(nullif(excluded.mode, ''), agent_sessions.mode),
+	// A hook observed in order is proof of life and reopens anything the
+	// daemon owns; a backfilled row keeps whatever liveness it already has.
+	liveness := `
+  status = agent_sessions.status,
+  closed_at = agent_sessions.closed_at,`
+	if reopen {
+		liveness = `
   status = case
     when agent_sessions.source = 'wrapper_owned' then agent_sessions.status
     else 'open'
@@ -730,7 +742,16 @@ on conflict(id) do update set
   closed_at = case
     when agent_sessions.source = 'wrapper_owned' then agent_sessions.closed_at
     else null
-  end,
+  end,`
+	}
+	_, err := s.db.ExecContext(ctx, `
+insert into agent_sessions(id, agent_provider, agent, cwd, source, status, mode, created_at, updated_at)
+values(?, ?, ?, ?, 'daemon_observed', 'open', ?, ?, ?)
+on conflict(id) do update set
+  agent_provider = coalesce(nullif(excluded.agent_provider, ''), agent_sessions.agent_provider),
+  agent = coalesce(nullif(excluded.agent, ''), agent_sessions.agent),
+  cwd = coalesce(nullif(excluded.cwd, ''), agent_sessions.cwd),
+  mode = coalesce(nullif(excluded.mode, ''), agent_sessions.mode),`+liveness+`
   updated_at = excluded.updated_at
 	`, sessionID, agentProvider, canonicalAgent, cwd, mode, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {

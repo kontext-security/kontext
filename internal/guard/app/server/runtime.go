@@ -147,9 +147,11 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		deferredEvent, deferredDecision := event, decision
 		r.deferRecord(func(recordCtx context.Context) error {
 			// The session upsert EnsureSessionForEvent skipped lands first,
-			// mirroring the synchronous order: it carries the mode stamp and
-			// the reopen semantics SaveDecision's own upsert lacks.
-			session, sessionErr := r.store.EnsureObservedSessionWithMode(recordCtx, deferredEvent.SessionID, deferredEvent.Agent, deferredEvent.CWD, r.modeForSession(deferredEvent.SessionID))
+			// mirroring the synchronous order: it carries the mode stamp
+			// SaveDecision's own upsert lacks. Backfill, not Ensure: this
+			// write can run after a SessionEnd that already closed the
+			// session, and it must not reopen it.
+			session, sessionErr := r.store.BackfillObservedSessionWithMode(recordCtx, deferredEvent.SessionID, deferredEvent.Agent, deferredEvent.CWD, r.modeForSession(deferredEvent.SessionID))
 			if sessionErr == nil && deferredEvent.Agent == "" {
 				deferredEvent.Agent = session.Agent
 			}

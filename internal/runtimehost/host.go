@@ -27,6 +27,13 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
+// maxConcurrentDeferredRecords caps how many deferred decision-record jobs run
+// at once. Classifier inference is the expensive stage — the store write
+// behind it is serialized by SQLite's single connection anyway — and one local
+// model serves every job, so a small bound keeps a hook burst from queueing a
+// stampede of concurrent inferences.
+const maxConcurrentDeferredRecords = 4
+
 type Options struct {
 	AgentName             string
 	SessionID             string
@@ -134,6 +141,11 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	var deferRecord func(job func(context.Context) error)
 	if opts.AsyncDecisionRecording {
 		diag := opts.Diagnostic
+		// Bounds jobs, not goroutines: a burst of hooks parks its cheap
+		// goroutines here instead of stampeding the classifier's local model
+		// with concurrent inference. Acquired inside the goroutine so the
+		// hook response path never waits for a slot.
+		slots := make(chan struct{}, maxConcurrentDeferredRecords)
 		deferRecord = func(job func(context.Context) error) {
 			recordWG.Add(1)
 			// Detached from the request context on purpose: the hook client
@@ -141,10 +153,14 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 			// finish anyway. Close bounds the drain via recordWG.
 			go func() {
 				defer recordWG.Done()
+				slots <- struct{}{}
+				defer func() { <-slots }()
 				if err := job(context.WithoutCancel(ctx)); err != nil {
-					// The hook response is long gone, so this log line and its
+					// The hook response is long gone, so this line and its
 					// running total are the only trace the record was lost.
-					diag.Printf("deferred decision record: %v (%d failed since start)\n", err, recordFailures.Add(1))
+					// Printf is debug-gated; a lost audit record must reach
+					// the daemon log unconditionally.
+					diagnostic.LogAlways(diag, "deferred decision record: %v (%d failed since start)\n", err, recordFailures.Add(1))
 				}
 			}()
 		}

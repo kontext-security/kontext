@@ -133,6 +133,79 @@ func TestDeferRecordSkipsNonBlockingHooks(t *testing.T) {
 	}
 }
 
+// A deferred record can land after a SessionEnd already closed its session:
+// the job waits on classifier inference and a possibly cold store while the
+// session winds down in order. Late bookkeeping must not undo that close.
+func TestDeferredRecordDoesNotReopenClosedSession(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	var jobs []func(context.Context) error
+	server, err := NewServerWithPolicyAndOptions(store, nil, Options{
+		DeferRecord: func(job func(context.Context) error) {
+			jobs = append(jobs, job)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event := risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PreToolUse",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "echo hi"},
+	}
+	decision, err := server.ProcessHookEvent(context.Background(), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("deferred jobs = %d, want 1", len(jobs))
+	}
+
+	// The session ends in causal order while the deferred job is still
+	// pending: SessionEnd ingests synchronously (creating the row), then the
+	// runtime closes the session, exactly as the socket service does.
+	if _, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "SessionEnd",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CloseSession(context.Background(), "s1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := jobs[0](context.Background()); err != nil {
+		t.Fatalf("deferred job error = %v", err)
+	}
+
+	session, err := store.Session(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != "closed" {
+		t.Fatalf("session status after late deferred write = %q, want closed", session.Status)
+	}
+	events, err := store.Events(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, record := range events {
+		if record.ID == decision.EventID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("late deferred job must still persist the decision %q", decision.EventID)
+	}
+}
+
 // An event with no session ID must land under the store's catch-all session
 // on the deferred path exactly as it does on the synchronous one: the
 // normalization happens before the response, the upsert after.

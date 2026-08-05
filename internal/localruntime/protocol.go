@@ -25,14 +25,18 @@ type EvaluateRequest struct {
 }
 
 type EvaluateResult struct {
-	Type         string         `json:"type"`
-	Decision     string         `json:"decision,omitempty"`
-	Allowed      bool           `json:"allowed"`
-	Reason       string         `json:"reason"`
-	ReasonCode   string         `json:"reason_code,omitempty"`
-	RequestID    string         `json:"request_id,omitempty"`
-	Mode         string         `json:"mode,omitempty"`
-	Epoch        string         `json:"epoch,omitempty"`
+	Type       string `json:"type"`
+	Decision   string `json:"decision,omitempty"`
+	Allowed    bool   `json:"allowed"`
+	Reason     string `json:"reason"`
+	ReasonCode string `json:"reason_code,omitempty"`
+	RequestID  string `json:"request_id,omitempty"`
+	Mode       string `json:"mode,omitempty"`
+	Epoch      string `json:"epoch,omitempty"`
+	// EventID is the persisted decision row's ID — pre-minted when the
+	// runtime answers before persisting — so a hook client can correlate
+	// its response with the eventual record.
+	EventID      string         `json:"event_id,omitempty"`
 	UpdatedInput map[string]any `json:"updated_input,omitempty"`
 }
 

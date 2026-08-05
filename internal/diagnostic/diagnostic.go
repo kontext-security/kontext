@@ -34,6 +34,18 @@ func (l Logger) Printf(format string, args ...any) {
 	fmt.Fprint(l.out, Redact(fmt.Sprintf(format, args...)))
 }
 
+// LogAlways writes a redacted line even when verbose output is disabled: an
+// enabled logger keeps its configured sink, a disabled one falls back to
+// stderr. For messages that must reach the process log unconditionally —
+// Printf is debug-gated and silently drops them.
+func LogAlways(log Logger, format string, args ...any) {
+	if log.Enabled() {
+		log.Printf(format, args...)
+		return
+	}
+	fmt.Fprint(os.Stderr, Redact(fmt.Sprintf(format, args...)))
+}
+
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~+/=-]+`),
 	regexp.MustCompile(`(?i)(access_token|id_token|refresh_token|authorization|cookie)=([^&\s]+)`),
