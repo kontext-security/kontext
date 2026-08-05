@@ -211,6 +211,16 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// deadline — Claude Code timed the hook out and the event was lost
 		// (ENG-474). Decision-gating hooks (PreToolUse, UserPromptSubmit)
 		// stay synchronous, and Shutdown drains pending writes.
+		//
+		// Decision recording is deferred the same way: the hook still waits
+		// for the policy verdict (Cedar is in-memory and fast), but not for
+		// classifier inference or the guard.db write. On a long-running
+		// install the first write after idle drags cold pages of a large
+		// database back from disk for seconds, which the hook client reads
+		// as a dead daemon — fail-open in observe (silent), fail-closed in
+		// enforce (every tool call denied). Close drains pending writes
+		// before the store shuts.
+		AsyncDecisionRecording: true,
 	})
 	if err != nil {
 		return err

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
@@ -39,6 +40,14 @@ type Options struct {
 	Diagnostic            diagnostic.Logger
 	SkipInitialSession    bool
 	DisableAsyncIngest    bool
+	// AsyncDecisionRecording answers decision-gating hooks (PreToolUse) as
+	// soon as the policy verdict is settled and runs annotation + the SQLite
+	// write in the background, mirroring what AsyncIngest already does for
+	// non-blocking hooks. Without it, a cold or contended guard.db routinely
+	// outlives the hook client's budget, which reads as a dead daemon:
+	// fail-open in observe, fail-closed (every tool call denied) in enforce.
+	// Close drains pending writes before the store closes.
+	AsyncDecisionRecording bool
 }
 
 type Host struct {
@@ -57,6 +66,7 @@ type Host struct {
 	runtimeService   *localruntime.Service
 	sessionOpened    bool
 	sessionCloseOnce bool
+	drainRecords     func(context.Context) error
 }
 
 func Start(ctx context.Context, opts Options) (*Host, error) {
@@ -117,6 +127,23 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	if opts.SkipInitialSession {
 		serverSessionID = ""
 	}
+	var recordWG sync.WaitGroup
+	var deferRecord func(job func(context.Context) error)
+	if opts.AsyncDecisionRecording {
+		diag := opts.Diagnostic
+		deferRecord = func(job func(context.Context) error) {
+			recordWG.Add(1)
+			// Detached from the request context on purpose: the hook client
+			// disconnects the moment it has its answer, and the write must
+			// finish anyway. Close bounds the drain via recordWG.
+			go func() {
+				defer recordWG.Done()
+				if err := job(context.WithoutCancel(ctx)); err != nil {
+					diag.Printf("deferred decision record: %v\n", err)
+				}
+			}()
+		}
+	}
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(dbPath, server.Options{
 		Judge:            localJudge,
 		CedarPolicies:    opts.CedarPolicies,
@@ -124,6 +151,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		CurrentSessionID: serverSessionID,
 		Mode:             string(mode),
 		RiskClassifier:   classifierOpts,
+		DeferRecord:      deferRecord,
 	})
 	if err != nil {
 		closeJudge()
@@ -158,6 +186,21 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		server:                localServer,
 		closeStore:            closeStore,
 		closeJudge:            closeJudge,
+	}
+	if opts.AsyncDecisionRecording {
+		host.drainRecords = func(drainCtx context.Context) error {
+			done := make(chan struct{})
+			go func() {
+				recordWG.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+				return nil
+			case <-drainCtx.Done():
+				return fmt.Errorf("drain deferred decision records: %w", drainCtx.Err())
+			}
+		}
 	}
 
 	serviceSessionID := sessionID
@@ -272,6 +315,14 @@ func (h *Host) Close(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 		h.runtimeService = nil
+	}
+	// Deferred decision writes must land before the store closes underneath
+	// them; runtimeService is already down, so no new work can arrive.
+	if h.drainRecords != nil {
+		if err := h.drainRecords(ctx); err != nil {
+			errs = append(errs, err)
+		}
+		h.drainRecords = nil
 	}
 	if h.sessionOpened && !h.sessionCloseOnce && h.server != nil {
 		if err := h.server.RuntimeCore().CloseSession(context.Background(), h.SessionID); err != nil {

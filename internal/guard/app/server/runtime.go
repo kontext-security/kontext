@@ -20,15 +20,23 @@ type guardHookRuntime struct {
 	currentSessionID string
 	mode             string
 	classifier       *riskclassifier.Classifier
+	// deferRecord, when non-nil, runs annotation + persistence off the hook
+	// response path. The decision itself (Cedar) is always computed before
+	// the response; only the advisory annotation and the SQLite write are
+	// deferred. The executor owns lifetime (context, draining on shutdown)
+	// and reporting the job's error. Nil keeps the historical synchronous
+	// behavior.
+	deferRecord func(job func(context.Context) error)
 }
 
-func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier) guardHookRuntime {
+func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier, deferRecord func(job func(context.Context) error)) guardHookRuntime {
 	return guardHookRuntime{
 		store:            store,
 		policy:           policy,
 		currentSessionID: currentSessionID,
 		mode:             mode,
 		classifier:       classifier,
+		deferRecord:      deferRecord,
 	}
 }
 
@@ -106,6 +114,27 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	// observe, enforce, managed — passes through, so one call site covers them
 	// all. It is also what keeps the classifier advisory: the decision is
 	// already settled and annotate may write nothing but its Classifier field.
+	if r.deferRecord != nil {
+		// The decision is settled; nothing after this point may change it.
+		// Hand the agent its answer now and run annotation + persistence in
+		// the background: classifier inference and a write into a large,
+		// possibly cold guard.db both routinely outlive the hook client's
+		// budget, and a hook that times out here is treated as a dead daemon
+		// — fail-open in observe, fail-closed (every tool call denied) in
+		// enforce.
+		decision.EventID = sqlite.NewActionID()
+		deferredEvent, deferredDecision := event, decision
+		r.deferRecord(func(recordCtx context.Context) error {
+			r.annotate(recordCtx, deferredEvent, &deferredDecision)
+			record, err := r.store.SaveDecision(recordCtx, deferredEvent, deferredDecision)
+			if err != nil {
+				return err
+			}
+			r.recordAnnotation(recordCtx, record.ID, deferredEvent, deferredDecision)
+			return nil
+		})
+		return decision, nil
+	}
 	r.annotate(ctx, event, &decision)
 	record, err := r.store.SaveDecision(ctx, event, decision)
 	if err != nil {

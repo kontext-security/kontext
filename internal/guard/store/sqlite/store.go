@@ -772,6 +772,13 @@ where id = ?
 	return scanSession(row)
 }
 
+// NewActionID mints the identifier for one decision row. Exported so a
+// runtime that answers the hook before persisting can hand the same ID to
+// both the agent and the eventual SaveDecision call.
+func NewActionID() string {
+	return "act_" + uuid.NewString()
+}
+
 func (s *Store) SaveDecision(ctx context.Context, event risk.HookEvent, decision risk.RiskDecision) (DecisionRecord, error) {
 	now := time.Now().UTC()
 	sessionID := normalizeSessionID(event.SessionID)
@@ -801,9 +808,15 @@ on conflict(id) do update set
 	// under the same policy, even if the mode flips concurrently.
 	captureConfig := s.payloadCaptureConfiguration()
 
-	actionID := "act_" + uuid.NewString()
+	// A caller that answered the hook before persisting has already handed
+	// the action ID to the agent; honoring it here keeps the eventual row
+	// addressable by the ID the hook response carried.
+	actionID := decision.EventID
+	if actionID == "" {
+		actionID = NewActionID()
+	}
 	if event.HookEventName == "PreToolUse" {
-		proposedID := "act_" + uuid.NewString()
+		proposedID := NewActionID()
 		if err := s.insertAction(ctx, tx, proposedID, sessionID, event, decision, canonicalEventRequestProposed, "event", captureConfig, now); err != nil {
 			return DecisionRecord{}, err
 		}
