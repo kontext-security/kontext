@@ -34,7 +34,7 @@ func TestNormalizeDecision(t *testing.T) {
 	}
 }
 
-func TestResultClaudeReason(t *testing.T) {
+func TestResultReasonOrDefault(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -59,8 +59,8 @@ func TestResultClaudeReason(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := tt.in.ClaudeReason(); got != tt.want {
-				t.Fatalf("ClaudeReason() = %q, want %q", got, tt.want)
+			if got := tt.in.ReasonOrDefault(); got != tt.want {
+				t.Fatalf("ReasonOrDefault() = %q, want %q", got, tt.want)
 			}
 		})
 	}

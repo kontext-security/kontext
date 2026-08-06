@@ -206,10 +206,10 @@ func TestEncodeAllowIncludesUpdatedInput(t *testing.T) {
 	}
 }
 
-func TestEncodeClaudeResultMapsUnsupportedDecisionToDeny(t *testing.T) {
+func TestEncodeStandardResultMapsUnsupportedDecisionToDeny(t *testing.T) {
 	t.Parallel()
 
-	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hook.Result{
+	out, err := hookruntime.EncodeStandardResult("PreToolUse", hook.Result{
 		Decision: hook.Decision("ask"),
 		Reason:   "approval required",
 	})
@@ -224,10 +224,10 @@ func TestEncodeClaudeResultMapsUnsupportedDecisionToDeny(t *testing.T) {
 	}
 }
 
-func TestEncodeClaudeResultOmitsDecisionForPostToolUse(t *testing.T) {
+func TestEncodeStandardResultOmitsDecisionForPostToolUse(t *testing.T) {
 	t.Parallel()
 
-	out, err := hookruntime.EncodeClaudeResult("PostToolUse", hook.Result{
+	out, err := hookruntime.EncodeStandardResult("PostToolUse", hook.Result{
 		Decision: hook.DecisionDeny,
 		Reason:   "telemetry only",
 	})

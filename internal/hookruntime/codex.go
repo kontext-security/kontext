@@ -90,7 +90,7 @@ func encodeCodexPreToolUseResult(hookEventName string, result hook.Result, reaso
 			HookSpecificOutput: &codexHookSpecificOutput{
 				HookEventName:            hookEventName,
 				PermissionDecision:       string(hook.DecisionDeny),
-				PermissionDecisionReason: result.ClaudeReason(),
+				PermissionDecisionReason: result.ReasonOrDefault(),
 			},
 		})
 	}
@@ -117,13 +117,13 @@ func encodeCodexNonPreToolUseResult(hookEventName string, result hook.Result, re
 		case hook.HookPostToolUse, hook.HookUserPromptSubmit:
 			return json.Marshal(codexHookOutput{
 				Decision: "block",
-				Reason:   result.ClaudeReason(),
+				Reason:   result.ReasonOrDefault(),
 			})
 		case hook.HookSessionStart:
 			cont := false
 			return json.Marshal(codexHookOutput{
 				Continue:   &cont,
-				StopReason: result.ClaudeReason(),
+				StopReason: result.ReasonOrDefault(),
 			})
 		case hook.HookStop:
 			return json.Marshal(codexHookOutput{})

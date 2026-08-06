@@ -2,7 +2,7 @@
 // owns this file and overwrites it on reinstall.
 //
 // Maps Prime Agent extension events onto the Kontext hook contract using the
-// Claude Code hook-input wire format, and enforces policy decisions at the
+// standard hook wire format, and enforces policy decisions at the
 // synchronous pre-tool-use boundary (`tool_call`). All other events are
 // recorded for the authorization ledger but never hold up the agent.
 //

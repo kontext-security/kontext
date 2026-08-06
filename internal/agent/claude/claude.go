@@ -1,3 +1,6 @@
+// Package claude registers the Claude Code agent adapter. Claude Code's
+// native hook payload is the origin of the standard hook wire format, so the
+// adapter is a thin binding of that codec to the agent name "claude".
 package claude
 
 import (
@@ -17,9 +20,9 @@ func (c *Claude) Name() string { return "claude" }
 func (c *Claude) Aliases() []string { return []string{"claude-code"} }
 
 func (c *Claude) DecodeHookInput(input []byte) (hook.Event, error) {
-	return hookruntime.DecodeClaudeEvent(input, c.Name())
+	return hookruntime.DecodeStandardEvent(input, c.Name())
 }
 
 func (c *Claude) EncodeHookResult(event hook.Event, result hook.Result) ([]byte, error) {
-	return hookruntime.EncodeClaudeResult(event.HookName.String(), result)
+	return hookruntime.EncodeStandardResult(event.HookName.String(), result)
 }
