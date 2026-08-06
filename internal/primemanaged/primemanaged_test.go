@@ -10,9 +10,7 @@ import (
 func withTempHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	original := userHomeDir
-	userHomeDir = func() (string, error) { return home, nil }
-	t.Cleanup(func() { userHomeDir = original })
+	t.Setenv("HOME", home)
 	return home
 }
 

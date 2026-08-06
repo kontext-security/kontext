@@ -836,6 +836,18 @@ func installCodexUserHooks(binary string) (string, error) {
 // the hooks we just installed actually fire — Codex gates its hook engine off
 // by default. Non-fatal in the caller: a failure here should warn, not abort a
 // setup whose durable state is already written.
+func enableCodexHooksFeature() (configPath string, enabled bool, err error) {
+	path, err := codexmanaged.UserConfigPath()
+	if err != nil {
+		return "", false, err
+	}
+	enabled, err = codexmanaged.EnsureHooksEnabled(path, settingsBackupLabel)
+	if err != nil {
+		return "", false, err
+	}
+	return path, enabled, nil
+}
+
 // installPrimeAgentExtension writes the Kontext managed extension into the
 // Prime Agent global extensions directory. It returns "" when Prime Agent is
 // not installed, so setup can report the skip without failing.
@@ -848,18 +860,6 @@ func installPrimeAgentExtension(binary string) (string, error) {
 		return "", nil
 	}
 	return primemanaged.Install(binary)
-}
-
-func enableCodexHooksFeature() (configPath string, enabled bool, err error) {
-	path, err := codexmanaged.UserConfigPath()
-	if err != nil {
-		return "", false, err
-	}
-	enabled, err = codexmanaged.EnsureHooksEnabled(path, settingsBackupLabel)
-	if err != nil {
-		return "", false, err
-	}
-	return path, enabled, nil
 }
 
 func waitForDaemon(out io.Writer) error {

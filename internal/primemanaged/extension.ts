@@ -12,7 +12,8 @@ import { execFile } from "node:child_process";
 
 const KONTEXT_BINARY = "__KONTEXT_BINARY__";
 const AGENT = "prime-agent";
-const HOOK_TIMEOUT_MS = 15_000;
+// Matches DefaultHookTimeout (20s) in claudemanaged and codexmanaged.
+const HOOK_TIMEOUT_MS = 20_000;
 
 type HookOutput = {
   hookSpecificOutput?: {
@@ -56,6 +57,9 @@ function runHook(
         }
       },
     );
+    // Fail open on stream errors too: if the child exits before reading
+    // stdin (or spawn fails), the write must not crash the host agent.
+    child.stdin?.on("error", () => {});
     child.stdin?.end(JSON.stringify(payload));
   });
 }
@@ -110,8 +114,13 @@ export default function (pi: any) {
         reason: decision.permissionDecisionReason || "Blocked by Kontext access policy.",
       };
     }
-    if (decision.updatedInput && typeof decision.updatedInput === "object") {
-      for (const key of Object.keys(event.input ?? {})) delete event.input[key];
+    if (
+      decision.updatedInput &&
+      typeof decision.updatedInput === "object" &&
+      event.input &&
+      typeof event.input === "object"
+    ) {
+      for (const key of Object.keys(event.input)) delete event.input[key];
       Object.assign(event.input, decision.updatedInput);
     }
   });

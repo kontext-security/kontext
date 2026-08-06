@@ -28,12 +28,10 @@ const binaryPlaceholder = "__KONTEXT_BINARY__"
 // extensions directory.
 const ExtensionFileName = "kontext.ts"
 
-var userHomeDir = os.UserHomeDir
-
 // AgentConfigDir returns the Prime Agent user config directory. Its presence
 // is how setup detects a Prime Agent installation.
 func AgentConfigDir() (string, error) {
-	home, err := userHomeDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
