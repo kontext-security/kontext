@@ -44,14 +44,14 @@ type codexHookSpecificOutput struct {
 func DecodeCodexEvent(input []byte, agentName string) (hook.Event, error) {
 	var h codexHookInput
 	if err := json.Unmarshal(input, &h); err != nil {
-		return hook.Event{}, fmt.Errorf("codex: decode hook input: %w", err)
+		return hook.Event{}, fmt.Errorf("%s: decode hook input: %w", agentName, err)
 	}
 	if h.HookEventName == "" {
-		return hook.Event{}, fmt.Errorf("codex: hook event name missing")
+		return hook.Event{}, fmt.Errorf("%s: hook event name missing", agentName)
 	}
 	hookName := hook.HookName(h.HookEventName)
 	if !codexSupportedHook(hookName) {
-		return hook.Event{}, fmt.Errorf("codex: unsupported hook event %q", h.HookEventName)
+		return hook.Event{}, fmt.Errorf("%s: unsupported hook event %q", agentName, h.HookEventName)
 	}
 
 	toolInput, err := normalizeCodexToolInput(h)
@@ -90,7 +90,7 @@ func encodeCodexPreToolUseResult(hookEventName string, result hook.Result, reaso
 			HookSpecificOutput: &codexHookSpecificOutput{
 				HookEventName:            hookEventName,
 				PermissionDecision:       string(hook.DecisionDeny),
-				PermissionDecisionReason: result.ClaudeReason(),
+				PermissionDecisionReason: result.ReasonOrDefault(),
 			},
 		})
 	}
@@ -117,13 +117,13 @@ func encodeCodexNonPreToolUseResult(hookEventName string, result hook.Result, re
 		case hook.HookPostToolUse, hook.HookUserPromptSubmit:
 			return json.Marshal(codexHookOutput{
 				Decision: "block",
-				Reason:   result.ClaudeReason(),
+				Reason:   result.ReasonOrDefault(),
 			})
 		case hook.HookSessionStart:
 			cont := false
 			return json.Marshal(codexHookOutput{
 				Continue:   &cont,
-				StopReason: result.ClaudeReason(),
+				StopReason: result.ReasonOrDefault(),
 			})
 		case hook.HookStop:
 			return json.Marshal(codexHookOutput{})

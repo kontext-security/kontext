@@ -16,7 +16,7 @@ func TestRegistryResolvesPrimeAgentAndAlias(t *testing.T) {
 	}
 }
 
-func TestDecodeHookInputUsesClaudeFormatWithPrimeAgentName(t *testing.T) {
+func TestDecodeHookInputUsesStandardFormatWithPrimeAgentName(t *testing.T) {
 	input := []byte(`{
 		"session_id": "prime-session-1",
 		"hook_event_name": "PreToolUse",
@@ -50,7 +50,7 @@ func TestDecodeHookInputUsesClaudeFormatWithPrimeAgentName(t *testing.T) {
 	}
 }
 
-func TestEncodeHookResultEmitsClaudePermissionDecision(t *testing.T) {
+func TestEncodeHookResultEmitsStandardPermissionDecision(t *testing.T) {
 	event := hook.Event{HookName: hook.HookPreToolUse}
 	result := hook.Result{Decision: hook.DecisionDeny, Reason: "blocked by policy"}
 

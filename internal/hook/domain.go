@@ -127,7 +127,10 @@ func (r Result) Blocking() bool {
 	return r.Decision == DecisionDeny
 }
 
-func (r Result) ClaudeReason() string {
+// ReasonOrDefault returns the decision reason, substituting a generic
+// user-facing message for denials that carry none. Hook encoders use it so an
+// agent never shows an empty block reason.
+func (r Result) ReasonOrDefault() string {
 	reason := r.Reason
 	if reason == "" && r.Decision == DecisionDeny {
 		return "Blocked by Kontext access policy."

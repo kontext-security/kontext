@@ -1,11 +1,11 @@
 // Package primeagent registers the Prime Agent adapter. Prime Agent
 // (github.com/PrimeIntellect-ai/prime-agent) exposes a first-class extension
 // system with synchronous pre-tool-use callbacks; the Kontext managed
-// extension maps those extension events onto the Claude Code hook-input
-// format before invoking `kontext hook --agent prime-agent`. The adapter
-// therefore reuses the Claude decoder/encoder and only differs in its name,
-// which is recorded as the session's agent ("prime-agent") to distinguish
-// Prime Agent activity in the ledger and dashboard.
+// extension emits the standard hook wire format when invoking
+// `kontext hook --agent prime-agent`, so the adapter reuses the standard
+// codec and only differs in its name, which is recorded as the session's
+// agent ("prime-agent") to distinguish Prime Agent activity in the ledger
+// and dashboard.
 package primeagent
 
 import (
@@ -25,9 +25,9 @@ func (p *PrimeAgent) Name() string { return "prime-agent" }
 func (p *PrimeAgent) Aliases() []string { return []string{"primeagent"} }
 
 func (p *PrimeAgent) DecodeHookInput(input []byte) (hook.Event, error) {
-	return hookruntime.DecodeClaudeEvent(input, p.Name())
+	return hookruntime.DecodeStandardEvent(input, p.Name())
 }
 
 func (p *PrimeAgent) EncodeHookResult(event hook.Event, result hook.Result) ([]byte, error) {
-	return hookruntime.EncodeClaudeResult(event.HookName.String(), result)
+	return hookruntime.EncodeStandardResult(event.HookName.String(), result)
 }

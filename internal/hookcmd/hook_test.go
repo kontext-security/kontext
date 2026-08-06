@@ -38,7 +38,7 @@ func (s *stubAgent) EncodeHookResult(event hook.Event, result hook.Result) ([]by
 	}
 	if result.Blocking() {
 		s.blockingDecision = result.Decision
-		s.blockingReason = result.ClaudeReason()
+		s.blockingReason = result.ReasonOrDefault()
 		return []byte(strings.ToUpper(string(result.Decision))), nil
 	}
 	s.allowUpdatedInput = result.UpdatedInput
