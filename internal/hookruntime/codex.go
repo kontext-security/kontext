@@ -44,14 +44,14 @@ type codexHookSpecificOutput struct {
 func DecodeCodexEvent(input []byte, agentName string) (hook.Event, error) {
 	var h codexHookInput
 	if err := json.Unmarshal(input, &h); err != nil {
-		return hook.Event{}, fmt.Errorf("codex: decode hook input: %w", err)
+		return hook.Event{}, fmt.Errorf("%s: decode hook input: %w", agentName, err)
 	}
 	if h.HookEventName == "" {
-		return hook.Event{}, fmt.Errorf("codex: hook event name missing")
+		return hook.Event{}, fmt.Errorf("%s: hook event name missing", agentName)
 	}
 	hookName := hook.HookName(h.HookEventName)
 	if !codexSupportedHook(hookName) {
-		return hook.Event{}, fmt.Errorf("codex: unsupported hook event %q", h.HookEventName)
+		return hook.Event{}, fmt.Errorf("%s: unsupported hook event %q", agentName, h.HookEventName)
 	}
 
 	toolInput, err := normalizeCodexToolInput(h)

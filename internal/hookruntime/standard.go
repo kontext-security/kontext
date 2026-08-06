@@ -1,10 +1,3 @@
-// The standard hook wire format is Kontext's interchange format for agents
-// that do not define a native hook payload. It originated as the Claude Code
-// hook-input schema (hook_event_name, tool_input, permissionDecision, ...) and
-// is spoken verbatim by Claude Code; Cowork and the Prime Agent managed
-// extension emit the same format, so their adapters reuse this codec and
-// differ only in the agent name they record. Codex has its own native format
-// (see codex.go).
 package hookruntime
 
 import (
@@ -54,6 +47,15 @@ type standardHookSpecificOutput struct {
 	UpdatedInput             map[string]any `json:"updatedInput,omitempty"`
 }
 
+// DecodeStandardEvent decodes the standard hook wire format: Kontext's
+// interchange format for agents that do not define a native hook payload. The
+// schema originated as the Claude Code hook-input format (hook_event_name,
+// tool_input, permissionDecision, ...) and is spoken verbatim by Claude Code;
+// Cowork and the Prime Agent managed extension emit the same format, so their
+// adapters reuse this codec and differ only in agentName, which is recorded
+// as the session's agent and prefixes decode errors. Aliased fields resolve
+// snake_case first, then camelCase, then legacy names. Codex has its own
+// native format (see codex.go).
 func DecodeStandardEvent(input []byte, agentName string) (hook.Event, error) {
 	var h standardHookInput
 	if err := decodeUseNumber(input, &h); err != nil {
@@ -153,6 +155,10 @@ func decodeUseNumber(data []byte, dst any) error {
 	return nil
 }
 
+// EncodeStandardResult encodes a policy result in the standard hook wire
+// format. Only PreToolUse responses carry a permission decision (plus any
+// updated tool input); every other event acknowledges with suppressed output,
+// so enforcement is limited to the pre-tool-use boundary by construction.
 func EncodeStandardResult(hookEventName string, result hook.Result) ([]byte, error) {
 	if hook.HookName(hookEventName) != hook.HookPreToolUse {
 		return json.Marshal(standardHookOutput{SuppressOutput: true})

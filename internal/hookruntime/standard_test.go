@@ -2,7 +2,10 @@ package hookruntime
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 func TestDecodeStandardEventToolResponseObject(t *testing.T) {
@@ -97,5 +100,41 @@ func TestDecodeStandardEventToolResponseAbsent(t *testing.T) {
 	}
 	if ev.ToolResponse != nil {
 		t.Fatalf("ToolResponse = %v, want nil", ev.ToolResponse)
+	}
+}
+
+func TestEncodeStandardResultMapsUnsupportedDecisionToDeny(t *testing.T) {
+	t.Parallel()
+
+	out, err := EncodeStandardResult("PreToolUse", hook.Result{
+		Decision: hook.Decision("ask"),
+		Reason:   "approval required",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"permissionDecision":"deny"`) {
+		t.Fatalf("output = %s", string(out))
+	}
+	if !strings.Contains(string(out), `"permissionDecisionReason":"approval required"`) {
+		t.Fatalf("output = %s", string(out))
+	}
+}
+
+func TestEncodeStandardResultOmitsDecisionForPostToolUse(t *testing.T) {
+	t.Parallel()
+
+	out, err := EncodeStandardResult("PostToolUse", hook.Result{
+		Decision: hook.DecisionDeny,
+		Reason:   "telemetry only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "permissionDecision") {
+		t.Fatalf("output = %s, want no PreToolUse permission decision", string(out))
+	}
+	if !strings.Contains(string(out), `"suppressOutput":true`) {
+		t.Fatalf("output = %s, want suppressed output", string(out))
 	}
 }
