@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kontext-security/kontext-cli/internal/agenthooks"
 )
 
 //go:embed extension.ts
@@ -111,7 +113,9 @@ func Install(kontextBinary string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", fmt.Errorf("create extensions directory: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	// Atomic replacement (temp file + rename): an interrupted reinstall must
+	// never leave a truncated extension behind for Prime Agent to load.
+	if err := agenthooks.WriteRawFile(path, data); err != nil {
 		return "", fmt.Errorf("write extension: %w", err)
 	}
 	return path, nil

@@ -24,6 +24,8 @@ type HookOutput = {
   };
 };
 
+// Reset on session_start so each session gets its own unavailability warning
+// even when one Prime Agent process hosts several sessions (reload/resume).
 let warnedUnavailable = false;
 
 function runHook(
@@ -80,6 +82,7 @@ function basePayload(hookEventName: string, ctx: any): Record<string, unknown> {
 
 export default function (pi: any) {
   pi.on("session_start", async (_event: any, ctx: any) => {
+    warnedUnavailable = false;
     await runHook("session-start", basePayload("SessionStart", ctx), ctx);
   });
 
