@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 )
 
 const (
@@ -331,6 +333,13 @@ type Refresher struct {
 	Interval       time.Duration
 	MaxBackoff     time.Duration
 	Now            func() time.Time
+	// Diagnostic surfaces refresh state transitions in the daemon log. A
+	// refresh loop that fails silently leaves enforcement running on a stale
+	// policy with no operator-visible signal, so failures must not be
+	// log-invisible.
+	Diagnostic diagnostic.Logger
+
+	lastFailure string
 }
 
 func (r *Refresher) Refresh(ctx context.Context) error {
@@ -360,6 +369,7 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 		r.recordFailure(err)
 		return err
 	}
+	r.recovered()
 	return nil
 }
 
@@ -399,6 +409,20 @@ func (r *Refresher) Run(ctx context.Context) {
 
 func (r *Refresher) recordFailure(err error) {
 	r.Cache.MarkFailed(err, r.now())
+	// Log once per distinct error, not once per attempt: the loop retries
+	// every minute and a repeated line per retry would drown the daemon log.
+	if message := err.Error(); message != r.lastFailure {
+		r.lastFailure = message
+		diagnostic.LogAlways(r.Diagnostic, "cedar policy refresh failed (running on the last cached policy until it recovers): %v\n", err)
+	}
+}
+
+func (r *Refresher) recovered() {
+	if r.lastFailure == "" {
+		return
+	}
+	r.lastFailure = ""
+	diagnostic.LogAlways(r.Diagnostic, "cedar policy refresh recovered\n")
 }
 
 func (r *Refresher) now() time.Time {

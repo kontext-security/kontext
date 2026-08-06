@@ -97,8 +97,14 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, config
 	return FetchResult{Response: &decoded, ETag: etag}, nil
 }
 
+// parseETag extracts the config identity from a strong or weak ETag. Weak
+// ETags are accepted because an intermediary that transforms the response
+// representation (compression, say) may legally weaken the validator
+// (RFC 9110 section 8.8.1); the identity inside is still the value the origin
+// computed. The Cedar policy client applies the same tolerance.
 func parseETag(value string) string {
 	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "W/")
 	if len(value) != 66 || value[0] != '"' || value[len(value)-1] != '"' {
 		return ""
 	}

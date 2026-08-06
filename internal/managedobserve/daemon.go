@@ -239,8 +239,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	policyCtx, stopPolicyRefresh := context.WithCancel(ctx)
 	defer stopPolicyRefresh()
 	cedarRefresher := cedarpolicy.Refresher{
-		Client: cedarClient,
-		Cache:  cedarCache,
+		Client:     cedarClient,
+		Cache:      cedarCache,
+		Diagnostic: opts.Diagnostic,
 		TokenSource: func(refreshCtx context.Context) (string, error) {
 			loaded, err := managedconfig.Load()
 			if err != nil {
@@ -253,8 +254,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	go cedarRefresher.Run(policyCtx)
 	endpointConfigRefresher := endpointconfig.Refresher{
-		Client: endpointConfigClient,
-		Cache:  endpointConfigCache,
+		Client:     endpointConfigClient,
+		Cache:      endpointConfigCache,
+		Diagnostic: opts.Diagnostic,
 		TokenSource: func(refreshCtx context.Context) (string, error) {
 			loaded, err := managedconfig.Load()
 			if err != nil {
