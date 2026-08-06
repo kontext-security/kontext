@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
 )
 
@@ -346,6 +347,12 @@ type Refresher struct {
 	Now            func() time.Time
 	Jitter         func(time.Duration) time.Duration
 	OnChanged      func(Snapshot)
+	// Diagnostic surfaces refresh state transitions in the daemon log. A
+	// refresh loop that fails silently leaves payload capture degraded with
+	// no operator-visible signal, so failures must not be log-invisible.
+	Diagnostic diagnostic.Logger
+
+	lastFailure string
 }
 
 func (r *Refresher) Refresh(ctx context.Context) error {
@@ -363,6 +370,7 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	if err := r.Cache.Apply(result, r.now()); err != nil {
 		return r.fail(err)
 	}
+	r.recovered()
 	r.notify()
 	return nil
 }
@@ -409,7 +417,21 @@ func (r *Refresher) fail(err error) error {
 		r.Cache.MarkFailed(err, r.now())
 		r.notify()
 	}
+	// Log once per distinct error, not once per attempt: the loop retries
+	// every minute and a repeated line per retry would drown the daemon log.
+	if message := err.Error(); message != r.lastFailure {
+		r.lastFailure = message
+		diagnostic.LogAlways(r.Diagnostic, "endpoint config refresh failed (capture degrades to summary until it recovers): %v\n", err)
+	}
 	return err
+}
+
+func (r *Refresher) recovered() {
+	if r.lastFailure == "" {
+		return
+	}
+	r.lastFailure = ""
+	diagnostic.LogAlways(r.Diagnostic, "endpoint config refresh recovered\n")
 }
 
 func (r *Refresher) notify() {
