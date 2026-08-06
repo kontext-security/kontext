@@ -32,6 +32,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/installation"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
 	"github.com/kontext-security/kontext-cli/internal/managedobserve"
+	"github.com/kontext-security/kontext-cli/internal/primemanaged"
 )
 
 const (
@@ -245,6 +246,15 @@ func Run(ctx context.Context, opts Options) error {
 		fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks feature enabled ([features].hooks in %s)\n", configPath)
 	}
 	fmt.Fprintln(opts.Stderr, "note: Codex hooks require review before they run; open `/hooks` in Codex to trust the Kontext hooks.")
+
+	primeExtensionPath, err := installPrimeAgentExtension(binary)
+	if err != nil {
+		fmt.Fprintf(opts.Stderr, "note: could not install the Prime Agent extension (%v); fix or move ~/.prime/agent/extensions/%s, then rerun setup.\n", err, primemanaged.ExtensionFileName)
+	} else if primeExtensionPath != "" {
+		fmt.Fprintf(opts.Stdout, "  ✓ Prime Agent extension installed (%s)\n", primeExtensionPath)
+	} else {
+		fmt.Fprintln(opts.Stdout, "  • Prime Agent not detected; skipping extension install")
+	}
 
 	var plistPath, logPath string
 	err = runWithStatus(opts.Stdout, "Installing background agent", func() error {
@@ -826,6 +836,20 @@ func installCodexUserHooks(binary string) (string, error) {
 // the hooks we just installed actually fire — Codex gates its hook engine off
 // by default. Non-fatal in the caller: a failure here should warn, not abort a
 // setup whose durable state is already written.
+// installPrimeAgentExtension writes the Kontext managed extension into the
+// Prime Agent global extensions directory. It returns "" when Prime Agent is
+// not installed, so setup can report the skip without failing.
+func installPrimeAgentExtension(binary string) (string, error) {
+	installed, err := primemanaged.AgentInstalled()
+	if err != nil {
+		return "", err
+	}
+	if !installed {
+		return "", nil
+	}
+	return primemanaged.Install(binary)
+}
+
 func enableCodexHooksFeature() (configPath string, enabled bool, err error) {
 	path, err := codexmanaged.UserConfigPath()
 	if err != nil {
