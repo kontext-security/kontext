@@ -119,6 +119,7 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 	oldHome := userHomeDir
 	userHomeDir = func() (string, error) { return "/Users/michel", nil }
 	t.Cleanup(func() { userHomeDir = oldHome })
+	stubEnv(t, nil)
 	a, ok := agent.Get("claude")
 	if !ok {
 		t.Fatal("claude agent not registered")
@@ -132,6 +133,53 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			event, err := (managedHookAgent{Agent: a}).DecodeHookInput([]byte(tt.input))
+			if err != nil {
+				t.Fatalf("DecodeHookInput() error = %v", err)
+			}
+			if event.Agent != tt.want {
+				t.Fatalf("Agent = %q, want %q", event.Agent, tt.want)
+			}
+		})
+	}
+}
+
+// stubEnv replaces the process environment lookup for the duration of a test.
+func stubEnv(t *testing.T, env map[string]string) {
+	t.Helper()
+	old := lookupEnv
+	lookupEnv = func(key string) string { return env[key] }
+	t.Cleanup(func() { lookupEnv = old })
+}
+
+// Cowork opened on a folder or repository runs on the host with the working
+// directory set to the user's own checkout and a transcript under ~/.claude, so
+// no path in the hook payload identifies it. Before the host-session check these
+// sessions were recorded as plain Claude Code and never appeared under Cowork.
+func TestManagedHookAgentIdentifiesCoworkRunningOnHost(t *testing.T) {
+	oldHome := userHomeDir
+	userHomeDir = func() (string, error) { return "/Users/michel", nil }
+	t.Cleanup(func() { userHomeDir = oldHome })
+	a, ok := agent.Get("claude")
+	if !ok {
+		t.Fatal("claude agent not registered")
+	}
+	const hostSession = `{"session_id":"s1","hook_event_name":"PreToolUse",` +
+		`"cwd":"/Users/michel/projects/app/.claude/worktrees/feature-abc123",` +
+		`"transcript_path":"/Users/michel/.claude/projects/-Users-michel-projects-app/s1.jsonl"}`
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"cowork host session", map[string]string{"CLAUDE_CODE_HOST_SESSION_ID": "local_9826bfca-2687"}, "cowork"},
+		{"no host session id", nil, "claude"},
+		{"empty host session id", map[string]string{"CLAUDE_CODE_HOST_SESSION_ID": ""}, "claude"},
+		{"non-cowork host session id", map[string]string{"CLAUDE_CODE_HOST_SESSION_ID": "remote_9826bfca"}, "claude"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubEnv(t, tt.env)
+			event, err := (managedHookAgent{Agent: a}).DecodeHookInput([]byte(hostSession))
 			if err != nil {
 				t.Fatalf("DecodeHookInput() error = %v", err)
 			}

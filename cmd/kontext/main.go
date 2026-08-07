@@ -32,6 +32,8 @@ var version = "dev"
 
 var userHomeDir = os.UserHomeDir
 
+var lookupEnv = os.Getenv
+
 func main() {
 	root := newRootCmd()
 	if err := root.Execute(); err != nil {
@@ -291,6 +293,9 @@ func (a managedHookAgent) DecodeHookInput(input []byte) (hook.Event, error) {
 }
 
 func isCoworkHookContext(input []byte, event hook.Event) bool {
+	if isCoworkHostSession() {
+		return true
+	}
 	if isCoworkPath(event.CWD) {
 		return true
 	}
@@ -309,6 +314,17 @@ func isCoworkHookContext(input []byte, event hook.Event) bool {
 		}
 	}
 	return false
+}
+
+// isCoworkHostSession reports whether the hook was spawned by a Cowork session
+// running on the host. Cowork opened on a folder or repository runs the bundled
+// CLI directly on the host with the working directory set to the user's own
+// checkout, so the session-path heuristic below never matches it. The desktop
+// app does mark those processes: it sets CLAUDE_CODE_HOST_SESSION_ID to the
+// Cowork session id, which carries a "local_" prefix, and hooks inherit it as
+// child processes. Plain Claude Code leaves the variable unset.
+func isCoworkHostSession() bool {
+	return strings.HasPrefix(lookupEnv("CLAUDE_CODE_HOST_SESSION_ID"), "local_")
 }
 
 func isCoworkPath(value string) bool {
