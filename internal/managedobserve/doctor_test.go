@@ -438,10 +438,69 @@ func TestWaitForDaemonRestartTimesOutWithoutDaemon(t *testing.T) {
 	}
 }
 
+// Config scope decides the org-managed callout, and it must come from the
+// injected loader — not from whatever managed.json this Mac happens to have
+// under /Library. Before doctorOptions.LoadConfig existed, a developer with the
+// customer .pkg installed silently ran every doctor test at system scope and
+// saw this warning flip them all red.
+func TestPrintStatusOrgManagedWarningFollowsConfigScope(t *testing.T) {
+	const orgManagedWarning = "WARNING: this Mac is organization-managed but a self-serve agent is also installed"
+
+	// Everything except scope is healthy, so scope is the only thing that can
+	// move Healthy.
+	newHealthyEnv := func(t *testing.T) doctorTestEnv {
+		t.Helper()
+		env := newDoctorTestEnv(t)
+		env.writeDaemonStatus(t, os.Getpid(), "1.2.3")
+		cursor := env.seedLedger(t)
+		if err := managedstream.SaveState(managedstream.DefaultStatePathForDB(env.dbPath), managedstream.State{
+			UpdatedAfter:    &cursor.UpdatedAt,
+			ActionID:        cursor.ActionID,
+			LastHeartbeatAt: env.now.Add(-20 * time.Second).Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return env
+	}
+
+	t.Run("user scope is a plain self-serve install", func(t *testing.T) {
+		env := newHealthyEnv(t)
+
+		var out bytes.Buffer
+		status := printStatus(&out, "1.2.3", env.options())
+
+		output := out.String()
+		if !status.Healthy || !status.SelfServe {
+			t.Fatalf("status = %+v, want healthy and self-serve; output = %q", status, output)
+		}
+		if strings.Contains(output, orgManagedWarning) {
+			t.Fatalf("output = %q, want no org-managed warning at user scope", output)
+		}
+	})
+
+	t.Run("system scope plus a user agent is a conflict", func(t *testing.T) {
+		env := newHealthyEnv(t)
+		opts := env.options()
+		opts.LoadConfig = env.loadConfig(managedconfig.ScopeSystem)
+
+		var out bytes.Buffer
+		status := printStatus(&out, "1.2.3", opts)
+
+		output := out.String()
+		if status.Healthy || status.SelfServe {
+			t.Fatalf("status = %+v, want unhealthy and not self-serve; output = %q", status, output)
+		}
+		if !strings.Contains(output, orgManagedWarning) {
+			t.Fatalf("output = %q, want warning %q", output, orgManagedWarning)
+		}
+	})
+}
+
 type doctorTestEnv struct {
 	dir        string
 	dbPath     string
 	socketPath string
+	configPath string
 	now        time.Time
 }
 
@@ -471,7 +530,23 @@ func newDoctorTestEnv(t *testing.T) doctorTestEnv {
 		dir:        dir,
 		dbPath:     filepath.Join(dir, "guard.db"),
 		socketPath: filepath.Join(dir, "kontext.sock"),
+		configPath: configPath,
 		now:        time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+// loadConfig reads this env's fixture at a caller-chosen scope. Tests must not
+// go through managedconfig.ResolvePath: it prefers an existing system config,
+// so on any Mac with a real pkg install the fixture would lose to
+// /Library/Application Support/Kontext/managed.json.
+func (e doctorTestEnv) loadConfig(scope managedconfig.Scope) func() (managedconfig.LoadedConfig, error) {
+	return func() (managedconfig.LoadedConfig, error) {
+		loaded, err := managedconfig.LoadFile(e.configPath)
+		if err != nil {
+			return managedconfig.LoadedConfig{}, err
+		}
+		loaded.Scope = scope
+		return loaded, nil
 	}
 }
 
@@ -486,6 +561,7 @@ func (e doctorTestEnv) options() doctorOptions {
 		},
 		Now:                func() time.Time { return e.now },
 		LaunchAgentPresent: func() bool { return true },
+		LoadConfig:         e.loadConfig(managedconfig.ScopeUser),
 	}
 }
 

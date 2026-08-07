@@ -47,6 +47,11 @@ type doctorOptions struct {
 	Dial               func(network, address string, timeout time.Duration) (net.Conn, error)
 	Now                func() time.Time
 	LaunchAgentPresent func() bool
+	// LoadConfig resolves the managed config whose scope drives most of this
+	// readout. Defaults to managedconfig.Load; injectable so callers can pin a
+	// scope instead of inheriting whatever this machine happens to have under
+	// /Library — a real MDM install would otherwise decide the answer.
+	LoadConfig func() (managedconfig.LoadedConfig, error)
 }
 
 func printStatus(out io.Writer, installedVersion string, opts doctorOptions) DoctorStatus {
@@ -68,10 +73,13 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) Doc
 	if opts.LaunchAgentPresent == nil {
 		opts.LaunchAgentPresent = selfServeLaunchAgentPresent
 	}
+	if opts.LoadConfig == nil {
+		opts.LoadConfig = managedconfig.Load
+	}
 
 	fmt.Fprintln(out, "Managed observe:")
 
-	loaded, err := managedconfig.Load()
+	loaded, err := opts.LoadConfig()
 	if errors.Is(err, managedconfig.ErrNotManaged) {
 		fmt.Fprintln(out, "  config: not configured (run `kontext setup` to connect this Mac to a workspace)")
 		return status
