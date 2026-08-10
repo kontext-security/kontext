@@ -11,6 +11,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/codexmanaged"
 	"github.com/kontext-security/kontext-cli/internal/installation"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
+	"github.com/kontext-security/kontext-cli/internal/primemanaged"
 )
 
 // Uninstall reverses Run in reverse order. Every step tolerates
@@ -105,6 +106,15 @@ func Uninstall(ctx context.Context, opts Options) error {
 		fmt.Fprintln(opts.Stdout, "✓ Codex hooks removed from ~/.codex/hooks.json")
 	} else {
 		fmt.Fprintln(opts.Stdout, "  • No Codex hooks file; no hooks to remove")
+	}
+
+	removedPrimeExtension, err := primemanaged.Remove()
+	if err != nil {
+		fmt.Fprintf(opts.Stderr, "warning: Prime Agent extension could not be removed (%v)\n", err)
+	} else if removedPrimeExtension {
+		fmt.Fprintln(opts.Stdout, "✓ Prime Agent extension removed from ~/.prime/agent/extensions")
+	} else {
+		fmt.Fprintln(opts.Stdout, "  • No Prime Agent extension; nothing to remove")
 	}
 
 	if err := deleteKeychainTokens(ctx); err != nil {
