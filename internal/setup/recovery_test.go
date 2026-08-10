@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -478,11 +479,100 @@ func TestSetupWritesToTheProfileItCleared(t *testing.T) {
 	rerun := h.options("kt_same", server)
 	var wrote string
 	rerun.OnProfileResolved = func(name string) { wrote = name }
-	if err := Run(context.Background(), rerun); err != nil {
-		t.Fatalf("Run() error = %v", err)
+	err := Run(context.Background(), rerun)
+
+	// The invariant is that the write never lands on a profile the guard did not
+	// clear. Refusing satisfies it more strongly than writing to "work" would,
+	// and refusing is what the target snapshot now does — but "other" must never
+	// be the target either way.
+	if wrote == "other" {
+		t.Errorf("setup targeted %q, which the guard never cleared", wrote)
 	}
-	if wrote != "work" {
-		t.Errorf("setup wrote to profile %q, but cleared %q past the guard", wrote, "work")
+	if err == nil {
+		t.Fatal("Run() = nil, want a refusal after the active pointer moved")
+	}
+	if !strings.Contains(err.Error(), "while setup was running") {
+		t.Fatalf("error = %v, want it to name the concurrent change", err)
+	}
+}
+
+// Resolving the target once is not enough on its own: `profile rename` moves
+// the directory the resolved paths name, so writing afterwards would recreate a
+// profile under the name the user just renamed away. Refuse instead.
+func TestSetupRefusesWhenTheTargetIsRenamedMidRun(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rename the target the moment the guard runs — after resolution, before the
+	// first write.
+	overrideVar(t, &boundProfileLookup, func(orgID, cloudURL, exclude string) (string, error) {
+		// Renaming AFTER the real lookup, so the guard sees the world as it was
+		// and the run proceeds to the write it must now refuse.
+		duplicate, err := profileBoundToWorkspace(orgID, cloudURL, exclude)
+		if err != nil {
+			return "", err
+		}
+		if renameErr := RenameProfile(context.Background(), "work", "renamed", io.Discard); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+		return duplicate, nil
+	})
+
+	err := Run(context.Background(), h.options("kt_same", server))
+	if err == nil {
+		t.Fatal("Run() = nil, want a refusal after the target moved")
+	}
+	if !strings.Contains(err.Error(), "while setup was running") {
+		t.Fatalf("error = %v, want it to name the concurrent change", err)
+	}
+	// The refusal must be clean: no profile resurrected under the old name.
+	if exists, _ := profile.Exists("work"); exists {
+		t.Error("a refused setup recreated the renamed-away profile")
+	}
+}
+
+// `profile rm` refuses the ACTIVE profile, but an explicitly named target need
+// not be active — so removal mid-run is reachable there.
+func TestSetupRefusesWhenTheTargetIsRemovedMidRun(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	other := h.options("kt_other", multiWorkspacePingServer(t, map[string]string{"kt_other": "org_other"}))
+	other.Profile = "other"
+	if err := Run(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("other"); err != nil {
+		t.Fatal(err)
+	}
+
+	overrideVar(t, &boundProfileLookup, func(orgID, cloudURL, exclude string) (string, error) {
+		if err := profile.Remove("work"); err != nil {
+			t.Fatal(err)
+		}
+		return profileBoundToWorkspace(orgID, cloudURL, exclude)
+	})
+
+	rerun := h.options("kt_same", server)
+	rerun.Profile = "work"
+	err := Run(context.Background(), rerun)
+	if err == nil {
+		t.Fatal("Run() = nil, want a refusal after the target was removed")
+	}
+	if !strings.Contains(err.Error(), "while setup was running") {
+		t.Fatalf("error = %v, want it to name the concurrent change", err)
 	}
 }
 

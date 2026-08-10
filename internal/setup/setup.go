@@ -246,9 +246,14 @@ func Run(ctx context.Context, opts Options) error {
 	// It also needs no exclusion — that run creates a NEW profile, so every
 	// existing one is a real candidate duplicate.
 	var slot target
+	var snapshot targetSnapshot
 	deriving := opts.DeriveProfileName && opts.Profile == ""
 	if !deriving {
 		slot, err = resolveTarget(opts.Profile)
+		if err != nil {
+			return err
+		}
+		snapshot, err = snapshotTarget(slot.Profile, opts.Profile == "")
 		if err != nil {
 			return err
 		}
@@ -272,9 +277,19 @@ func Run(ctx context.Context, opts Options) error {
 		if err != nil {
 			return err
 		}
+		snapshot, err = snapshotTarget(slot.Profile, false)
+		if err != nil {
+			return err
+		}
 	}
 	if opts.OnProfileResolved != nil {
 		opts.OnProfileResolved(slot.Profile)
+	}
+
+	// Last point at which nothing has been written. Past here the target's
+	// meaning is assumed, so a concurrent rename or removal must be caught now.
+	if err := snapshot.confirm(); err != nil {
+		return err
 	}
 
 	if err := writeKeychainToken(ctx, slot.KeychainItem, token); err != nil {
