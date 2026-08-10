@@ -411,6 +411,64 @@ func TestSetupRerunForTheSameProfileIsNotADuplicate(t *testing.T) {
 	}
 }
 
+// Plain `kontext setup` — no profile name — rewrites the ACTIVE profile, which
+// is how a token is rotated on a machine that already has profiles. So the
+// duplicate check has to exclude the active profile, not only an explicitly
+// named one: excluding just opts.Profile made the re-run find the very profile
+// it was about to write and refuse itself, breaking the documented promise that
+// re-running setup is safe.
+func TestSetupRerunWithoutAProfileNameRotatesTheActiveProfile(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Profile deliberately unset: resolveTarget falls back to the active one.
+	rerun := h.options("kt_same", server)
+	if err := Run(context.Background(), rerun); err != nil {
+		t.Fatalf("plain `kontext setup` against the active profile was refused: %v", err)
+	}
+	names, err := profile.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "work" {
+		t.Errorf("profiles = %v, want the re-run to rewrite \"work\" rather than add another", names)
+	}
+}
+
+// The fix must not blunt the guard: a run that DERIVES its name is creating a
+// new profile, so every existing profile stays a candidate duplicate — even
+// though this run has an active profile that a plain setup would have excluded.
+func TestSetupStillRefusesADuplicateWhenTheNameIsDerived(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	added := h.options("kt_same", server)
+	added.DeriveProfileName = true
+	err := Run(context.Background(), added)
+	if err == nil {
+		t.Fatal("Run() = nil, want a duplicate-workspace refusal")
+	}
+	if !strings.Contains(err.Error(), "already set up as profile \"work\"") {
+		t.Fatalf("error = %v, want it to name the existing profile", err)
+	}
+}
+
 // Several workspaces on ONE backend is exactly what workspaces are for — the
 // rule is per workspace, not per environment.
 func TestSetupAllowsASecondWorkspaceOnTheSameBackend(t *testing.T) {

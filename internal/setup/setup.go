@@ -227,7 +227,11 @@ func Run(ctx context.Context, opts Options) error {
 	// the hosted API answers, so nothing earlier can tell two tokens apart. It is
 	// deliberately NOT "one profile per environment" — several workspaces on one
 	// backend is exactly what workspaces are for.
-	if duplicate, err := profileBoundToWorkspace(ping.OrganizationID, cloudURL, opts.Profile); err != nil {
+	rewriting, err := rewriteTarget(opts)
+	if err != nil {
+		return err
+	}
+	if duplicate, err := profileBoundToWorkspace(ping.OrganizationID, cloudURL, rewriting); err != nil {
 		return err
 	} else if duplicate != "" {
 		return fmt.Errorf(
