@@ -238,36 +238,10 @@ func orDash(value string) string {
 //
 // `exclude` is the profile being written, so re-running setup for an existing
 // profile — rotating its token — is never mistaken for a duplicate of itself.
-// rewriteTarget names the profile this run will write to, when that is knowable
-// before the workspace is. It is what the duplicate check must EXCLUDE:
-// rewriting a profile in place is the documented way to rotate its token, and
-// counting the profile you are about to write as a duplicate of itself refuses
-// the re-run that `kontext setup` promises is safe.
-//
-// Empty means "exclude nothing", which is correct in the two cases it returns
-// it for: a derived name (`profile add` with no name) creates a NEW profile, so
-// every existing one is a real candidate; and a legacy install with no active
-// profile is not a profile, so nothing can collide with it.
-func rewriteTarget(opts Options) (string, error) {
-	if opts.Profile != "" {
-		return opts.Profile, nil
-	}
-	if opts.DeriveProfileName {
-		return "", nil
-	}
-	// Plain `kontext setup`: resolveTarget falls back to the active profile, so
-	// that is the profile being rewritten.
-	active, err := profile.ActiveName()
-	switch {
-	case err == nil:
-		return active, nil
-	case errors.Is(err, profile.ErrNoActive):
-		return "", nil
-	default:
-		return "", err
-	}
-}
-
+// profileBoundToWorkspace names an existing profile already bound to this
+// workspace on this backend, or "" if none is. exclude is the profile the
+// caller is about to write to — rewriting a profile in place is how a token is
+// rotated, so it must never count as a duplicate of itself.
 func profileBoundToWorkspace(organizationID, cloudURL, exclude string) (string, error) {
 	if strings.TrimSpace(organizationID) == "" {
 		// Nothing to compare. The legacy env-fallback org reports an empty id, and

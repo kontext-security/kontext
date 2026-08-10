@@ -87,6 +87,9 @@ var (
 		}
 		return conn.Close()
 	}
+	// Seam so a test can move the active profile at the one instant that used to
+	// matter: between the duplicate check and the write.
+	boundProfileLookup  = profileBoundToWorkspace
 	systemConfigPath    = managedconfig.DefaultPath
 	orgInstallTokenPath = "/Library/Application Support/Kontext/install-token"
 	managedSettingsPath = claudemanaged.ManagedSettingsDropInPath
@@ -227,11 +230,31 @@ func Run(ctx context.Context, opts Options) error {
 	// the hosted API answers, so nothing earlier can tell two tokens apart. It is
 	// deliberately NOT "one profile per environment" — several workspaces on one
 	// backend is exactly what workspaces are for.
-	rewriting, err := rewriteTarget(opts)
-	if err != nil {
-		return err
+	// The target is resolved BEFORE the guard, and exactly once: the profile
+	// excluded from duplicate detection and the profile written to must be the
+	// same one. Resolving the active pointer twice — once to exclude, once to
+	// write — leaves a window in which a concurrent `kontext profile use` moves
+	// it in between, so the guard clears profile A while the write lands on B.
+	// The menu bar app switches profiles on a single click, which makes that
+	// window reachable rather than theoretical.
+	//
+	// Resolving early writes nothing: a target is path arithmetic, and every
+	// failure below still leaves the profile untouched.
+	//
+	// The derived case is the exception, and cannot be resolved yet: its name
+	// comes from the workspace, which nothing knows until the hosted API answers.
+	// It also needs no exclusion — that run creates a NEW profile, so every
+	// existing one is a real candidate duplicate.
+	var slot target
+	deriving := opts.DeriveProfileName && opts.Profile == ""
+	if !deriving {
+		slot, err = resolveTarget(opts.Profile)
+		if err != nil {
+			return err
+		}
 	}
-	if duplicate, err := profileBoundToWorkspace(ping.OrganizationID, cloudURL, rewriting); err != nil {
+
+	if duplicate, err := boundProfileLookup(ping.OrganizationID, cloudURL, slot.Profile); err != nil {
 		return err
 	} else if duplicate != "" {
 		return fmt.Errorf(
@@ -239,21 +262,16 @@ func Run(ctx context.Context, opts Options) error {
 			orgLabel, duplicate, cloudURL, duplicate)
 	}
 
-	// The target is resolved HERE, not before the token: with DeriveProfileName
-	// the name comes from the workspace, which nothing knows until the hosted API
-	// answers. Nothing above this point writes anything, so the ordering costs
-	// nothing and removes the need to invent a name up front.
-	profileName := opts.Profile
-	if opts.DeriveProfileName && profileName == "" {
-		profileName, err = DeriveProfileName(cloudURL, ping.OrganizationName, ping.OrganizationID)
+	if deriving {
+		profileName, err := DeriveProfileName(cloudURL, ping.OrganizationName, ping.OrganizationID)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(opts.Stdout, "  ✓ Profile name: %s\n", profileName)
-	}
-	slot, err := resolveTarget(profileName)
-	if err != nil {
-		return err
+		slot, err = resolveTarget(profileName)
+		if err != nil {
+			return err
+		}
 	}
 	if opts.OnProfileResolved != nil {
 		opts.OnProfileResolved(slot.Profile)

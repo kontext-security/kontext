@@ -443,6 +443,49 @@ func TestSetupRerunWithoutAProfileNameRotatesTheActiveProfile(t *testing.T) {
 	}
 }
 
+// The profile excluded from duplicate detection and the profile written to must
+// be the SAME one. When the active pointer was read twice — once to exclude,
+// once to write — a `kontext profile use` landing between the two reads sent
+// the write to a profile the guard had never cleared. The menu bar app switches
+// profiles on one click, so the window is reachable.
+//
+// The seam fires at exactly that instant.
+func TestSetupWritesToTheProfileItCleared(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	other := h.options("kt_other", multiWorkspacePingServer(t, map[string]string{"kt_other": "org_other"}))
+	other.Profile = "other"
+	if err := Run(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Switch the active profile the moment the guard runs.
+	overrideVar(t, &boundProfileLookup, func(orgID, cloudURL, exclude string) (string, error) {
+		if err := profile.SetActive("other"); err != nil {
+			t.Fatal(err)
+		}
+		return profileBoundToWorkspace(orgID, cloudURL, exclude)
+	})
+
+	rerun := h.options("kt_same", server)
+	var wrote string
+	rerun.OnProfileResolved = func(name string) { wrote = name }
+	if err := Run(context.Background(), rerun); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if wrote != "work" {
+		t.Errorf("setup wrote to profile %q, but cleared %q past the guard", wrote, "work")
+	}
+}
+
 // The fix must not blunt the guard: a run that DERIVES its name is creating a
 // new profile, so every existing profile stays a candidate duplicate — even
 // though this run has an active profile that a plain setup would have excluded.
