@@ -8,6 +8,7 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/guard/judgeruntime"
 	"github.com/kontext-security/kontext-cli/internal/managedobserve"
+	"github.com/kontext-security/kontext-cli/internal/profile"
 	"github.com/kontext-security/kontext-cli/internal/runtimehost"
 )
 
@@ -96,7 +97,18 @@ func TestPrefetchTargetsTheDaemonModelCache(t *testing.T) {
 	if daemonCfg.CacheDir == guardCfg.CacheDir {
 		t.Fatal("cache dirs coincide; this test can no longer tell the two apart")
 	}
-	if want := filepath.Join(filepath.Dir(daemonDB), "judge-models"); daemonCfg.CacheDir != want {
+	// The cache used to sit beside the daemon's database unconditionally. With a
+	// profile active it is hoisted to the shared root instead, because the weights
+	// are machine-scoped and per-profile copies would re-download ~680 MB each
+	// time a profile is added. Assert the rule rather than one of its two shapes.
+	if shared := profile.SharedDir(filepath.Dir(daemonDB), profile.ModelCacheDirName); shared != "" {
+		if daemonCfg.CacheDir != shared {
+			t.Fatalf("daemon cache dir = %q, want the shared root %q", daemonCfg.CacheDir, shared)
+		}
+		if strings.Contains(daemonCfg.CacheDir, filepath.Join("profiles", "")) {
+			t.Errorf("daemon cache dir %q is inside a profile; the weights must be shared", daemonCfg.CacheDir)
+		}
+	} else if want := filepath.Join(filepath.Dir(daemonDB), profile.ModelCacheDirName); daemonCfg.CacheDir != want {
 		t.Fatalf("daemon cache dir = %q, want %q", daemonCfg.CacheDir, want)
 	}
 	// What prefetchLocalModel resolves must be the daemon's, which is the whole

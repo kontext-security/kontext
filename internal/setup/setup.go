@@ -32,6 +32,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/installation"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
 	"github.com/kontext-security/kontext-cli/internal/managedobserve"
+	"github.com/kontext-security/kontext-cli/internal/profile"
 )
 
 const (
@@ -99,6 +100,31 @@ type Options struct {
 	Version  string
 	Stdout   io.Writer
 	Stderr   io.Writer
+	// Profile names the installation slot to write. Empty follows the active
+	// profile pointer, falling back to the legacy unprofiled paths on a machine
+	// that has never used profiles — so a plain `kontext setup` keeps behaving
+	// exactly as it did before profiles existed.
+	Profile string
+	// DeriveProfileName lets setup name the profile itself, from the environment
+	// and the workspace the token resolves to. Only meaningful with an empty
+	// Profile, and only for `profile add` — a plain `kontext setup` still targets
+	// the active profile or the legacy paths.
+	DeriveProfileName bool
+	// OnProfileResolved reports the profile setup actually wrote. With
+	// DeriveProfileName the caller cannot know the name in advance, and guessing
+	// it afterwards from the profile list would be a race and a lie.
+	OnProfileResolved func(name string)
+	// TokenFromStdin reads the install token from standard input instead of
+	// --token. A command-line argument is visible in `ps` to every process on the
+	// machine for the duration of the call, so any caller that is not a human at a
+	// terminal — a script, or a GUI shelling out — needs a way to pass a
+	// credential that does not appear there.
+	TokenFromStdin bool
+	// AllowHTTPLoopback records, in the written config, that a plaintext http
+	// cloud_url is intended — only ever honored for a loopback host. It is
+	// persisted rather than taken from the environment because the background
+	// agent does not inherit one.
+	AllowHTTPLoopback bool
 	// HTTPClient overrides the ping client (tests). Nil uses a 10s-timeout
 	// default.
 	HTTPClient *http.Client
@@ -172,7 +198,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	// Same rules the daemon's parser applies, so a bad --cloud-url fails
 	// before any state is written.
-	if err := managedconfig.ValidateCloudURL(cloudURL); err != nil {
+	if err := managedconfig.ValidateCloudURL(cloudURL, opts.AllowHTTPLoopback); err != nil {
 		return err
 	}
 
@@ -192,29 +218,79 @@ func Run(ctx context.Context, opts Options) error {
 	fmt.Fprintln(opts.Stdout, "\nWorkspace")
 	fmt.Fprintf(opts.Stdout, "  ✓ %s\n", orgLabel)
 
-	if err := writeKeychainToken(ctx, token); err != nil {
+	// Refuse a SECOND profile for a workspace already bound on this backend. Two
+	// profiles differing only by name would hold the same workspace's records in
+	// two ledgers and present it two device identities — no purpose, and a
+	// confusing thing to inherit.
+	//
+	// The check has to be here, not in a caller: the workspace is only known once
+	// the hosted API answers, so nothing earlier can tell two tokens apart. It is
+	// deliberately NOT "one profile per environment" — several workspaces on one
+	// backend is exactly what workspaces are for.
+	if duplicate, err := profileBoundToWorkspace(ping.OrganizationID, cloudURL, opts.Profile); err != nil {
+		return err
+	} else if duplicate != "" {
+		return fmt.Errorf(
+			"workspace %s is already set up as profile %q on %s\n\nSwitch to it with `kontext profile use %s`, or remove it first to re-create it.",
+			orgLabel, duplicate, cloudURL, duplicate)
+	}
+
+	// The target is resolved HERE, not before the token: with DeriveProfileName
+	// the name comes from the workspace, which nothing knows until the hosted API
+	// answers. Nothing above this point writes anything, so the ordering costs
+	// nothing and removes the need to invent a name up front.
+	profileName := opts.Profile
+	if opts.DeriveProfileName && profileName == "" {
+		profileName, err = DeriveProfileName(cloudURL, ping.OrganizationName, ping.OrganizationID)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(opts.Stdout, "  ✓ Profile name: %s\n", profileName)
+	}
+	slot, err := resolveTarget(profileName)
+	if err != nil {
+		return err
+	}
+	if opts.OnProfileResolved != nil {
+		opts.OnProfileResolved(slot.Profile)
+	}
+
+	if err := writeKeychainToken(ctx, slot.KeychainItem, token); err != nil {
 		return err
 	}
 	// Read back through the daemon's actual code path so a write/read
 	// asymmetry fails HERE, not silently at the first flush under launchd.
-	stored, err := resolveToken(ctx, managedconfig.TokenRef{Source: "keychain", Name: KeychainItemName})
+	stored, err := resolveToken(ctx, managedconfig.TokenRef{Source: "keychain", Name: slot.KeychainItem})
 	if err != nil {
 		return fmt.Errorf("keychain read-back failed: %w", err)
 	}
 	if stored != token {
-		return errors.New("keychain read-back returned a different token; remove stale 'kontext-install-token' keychain items and retry")
+		return fmt.Errorf("keychain read-back returned a different token; remove stale %q keychain items and retry", slot.KeychainItem)
 	}
-	fmt.Fprintf(opts.Stdout, "  ✓ Token saved to Keychain (%s)\n", KeychainItemName)
+	fmt.Fprintf(opts.Stdout, "  ✓ Token saved to Keychain (%s)\n", slot.KeychainItem)
 
 	fmt.Fprintln(opts.Stdout, "\nMac")
 
-	configPath, err := writeUserManagedConfig(cloudURL, deviceLabel(ctx))
+	// A named profile needs its directory before anything is written into it.
+	// Create is idempotent here by construction: re-running setup for an
+	// existing profile rotates its token rather than failing.
+	if slot.Profile != "" {
+		if exists, err := profile.Exists(slot.Profile); err != nil {
+			return err
+		} else if !exists {
+			if _, err := profile.Create(slot.Profile); err != nil {
+				return err
+			}
+		}
+	}
+
+	configPath, err := writeUserManagedConfig(slot, cloudURL, deviceLabel(ctx), opts.AllowHTTPLoopback)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(opts.Stdout, "  ✓ Config written (%s)\n", configPath)
 
-	identityPath := installation.UserPath()
+	identityPath := slot.IdentityPath
 	if identityPath == "" {
 		return errors.New("cannot resolve your home directory")
 	}
@@ -223,6 +299,16 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("ensure installation identity: %w", err)
 	}
 	fmt.Fprintf(opts.Stdout, "  ✓ Installation identity ready (%s)\n", identity.InstallationID)
+
+	// Cache the workspace label so listings can name the workspace instead of a
+	// backend hostname. Failing here must not fail the setup — it is a display
+	// convenience, and everything that governs behavior is already written.
+	if slot.Profile != "" {
+		workspace := Workspace{OrganizationID: ping.OrganizationID, OrganizationName: ping.OrganizationName}
+		if err := writeWorkspace(slot.Profile, workspace); err != nil {
+			fmt.Fprintf(opts.Stderr, "note: could not cache the workspace label for profile %q (%v); `kontext profile ls` will show the backend URL instead\n", slot.Profile, err)
+		}
+	}
 
 	if binaryNote != "" {
 		fmt.Fprintln(opts.Stderr, binaryNote)
@@ -462,6 +548,19 @@ func acquireToken(opts Options) (string, error) {
 	if opts.Token != "" {
 		return opts.Token, validateTokenShape(opts.Token)
 	}
+	if opts.TokenFromStdin {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", fmt.Errorf("read token from stdin: %w", err)
+		}
+		// Trim only the surrounding whitespace a pipe or heredoc adds; anything
+		// inside is the caller's problem and validateTokenShape reports it.
+		token := strings.TrimSpace(string(raw))
+		if token == "" {
+			return "", errors.New("no install token on stdin")
+		}
+		return token, validateTokenShape(token)
+	}
 	fd := int(os.Stdin.Fd())
 	if !isTerminal(fd) {
 		return "", errors.New("no install token: pass --token in non-interactive environments")
@@ -538,22 +637,26 @@ func deviceLabel(ctx context.Context) string {
 	return host
 }
 
-func writeUserManagedConfig(cloudURL, label string) (string, error) {
-	path := managedconfig.UserPath()
+func writeUserManagedConfig(slot target, cloudURL, label string, allowHTTPLoopback bool) (string, error) {
+	path := slot.ConfigPath
 	if path == "" {
 		return "", errors.New("cannot resolve your home directory")
 	}
 
 	cfg := managedconfig.Config{
-		Version:  managedconfig.Version,
-		CloudURL: cloudURL,
+		Version:           managedconfig.Version,
+		CloudURL:          cloudURL,
+		AllowHTTPLoopback: allowHTTPLoopback,
 		// Self-serve installs follow the policy deployment's rollout mode, so
 		// the posture is controlled from the dashboard. Static observe/enforce
 		// pins remain an MDM (system-scope) concern.
 		Mode:  managedconfig.ModeRemote,
 		Agent: managedconfig.Agent,
 		Credentials: managedconfig.Credentials{
-			InstallTokenRef: managedconfig.TokenRef{Source: "keychain", Name: KeychainItemName},
+			// The token ref is the profile's own keychain item, so the daemon
+			// resolves whatever the ACTIVE config names and a switch needs no
+			// keychain work at all.
+			InstallTokenRef: managedconfig.TokenRef{Source: "keychain", Name: slot.KeychainItem},
 		},
 		Device: managedconfig.Device{Label: label},
 	}
@@ -642,7 +745,22 @@ func managedSettingsData(binary string) ([]byte, error) {
 	return data, nil
 }
 
+// installManagedSettings writes the Claude drop-in, skipping the write entirely
+// when the file on disk already has exactly this content.
+//
+// The write needs root, so it costs an administrator password. Re-running setup
+// or adding a second profile does not change these settings — they name the
+// binary and the hook events, neither of which varies per profile — so asking
+// for a password to rewrite identical bytes is pure friction. It also trains
+// people to type a password at a prompt that did not need one.
 func installManagedSettings(ctx context.Context, data []byte) (string, error) {
+	if current, err := os.ReadFile(managedSettingsPath); err == nil && bytes.Equal(current, data) {
+		return managedSettingsPath, nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		// An unreadable existing file must not be silently overwritten: the
+		// privileged write would mask whatever the real problem is.
+		return "", fmt.Errorf("cannot read existing Claude managed settings: %w", err)
+	}
 	if err := writePrivilegedFile(ctx, managedSettingsPath, data); err != nil {
 		return "", err
 	}

@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kontext-security/kontext-cli/internal/profile"
 )
 
 const (
@@ -35,12 +37,21 @@ func PathFromEnv() string {
 // user-scope managed config), or "" when the home directory cannot be
 // resolved. The system DefaultPath stays the default so enterprise daemons
 // keep creating identity under /Library exactly as before.
+//
+// Identity is per-profile: the same Mac enrolled in two workspaces must not
+// present one shared installation id to both. Resolution mirrors
+// managedconfig.UserPath — active profile when there is one, legacy path
+// otherwise.
 func UserPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
+	if path, err := profile.ActiveInstallationPath(); err == nil {
+		return path
 	}
-	return filepath.Join(home, "Library", "Application Support", "Kontext", "installation.json")
+	return LegacyUserPath()
+}
+
+// LegacyUserPath is the pre-profile self-serve identity location.
+func LegacyUserPath() string {
+	return profile.LegacyPath(profile.InstallationFile)
 }
 
 func LoadFile(path string) (State, error) {

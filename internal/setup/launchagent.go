@@ -176,6 +176,60 @@ func installLaunchAgent(ctx context.Context, binary string, llm *localLLMAgentCo
 	return plistPath, logPath, nil
 }
 
+// StopLaunchAgent unloads the self-serve agent but LEAVES the plist in place,
+// so a later BootstrapLaunchAgent brings it back. Profile switching and
+// migration need this pause: the daemon holds the ledger database open, and
+// moving or re-pointing that database under a live writer is what a switch
+// must never do. Already-unloaded and never-installed are both success.
+func StopLaunchAgent(ctx context.Context) error {
+	plistPath, err := launchAgentPath()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(plistPath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	domainTarget := "gui/" + strconv.Itoa(os.Getuid())
+	serviceTarget := domainTarget + "/" + LaunchAgentLabel
+	if out, err := runLaunchctl(ctx, "bootout", domainTarget, plistPath); err != nil {
+		// Distinguish "was not loaded" (fine) from "refused to unload" (fatal):
+		// continuing past a live daemon would move its database out from under it.
+		loaded, printErr := launchAgentLoaded(ctx, serviceTarget, true)
+		if printErr != nil {
+			return fmt.Errorf("launchctl bootout failed and service state is unknown: %w (%s)", err, strings.TrimSpace(out))
+		}
+		if loaded {
+			return fmt.Errorf("launchctl bootout failed and the background agent is still loaded: %w (%s)", err, strings.TrimSpace(out))
+		}
+	}
+	return nil
+}
+
+// BootstrapLaunchAgent reloads the already-written plist. A missing plist is
+// not an error: a machine mid-setup simply has no agent to start yet.
+func BootstrapLaunchAgent(ctx context.Context) error {
+	plistPath, err := launchAgentPath()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(plistPath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	domainTarget := "gui/" + strconv.Itoa(os.Getuid())
+	if out, err := runLaunchctl(ctx, "bootstrap", domainTarget, plistPath); err != nil {
+		detail := strings.TrimSpace(out)
+		if strings.Contains(detail, "Input/output error") {
+			return fmt.Errorf("launchctl bootstrap failed (%s) — this usually means no GUI login session; run this from a logged-in desktop session, not SSH", detail)
+		}
+		return fmt.Errorf("launchctl bootstrap failed: %w (%s)", err, detail)
+	}
+	return nil
+}
+
 func runLaunchctl(ctx context.Context, args ...string) (string, error) {
 	launchCtx, cancel := context.WithTimeout(ctx, launchctlCommandTimeout)
 	defer cancel()

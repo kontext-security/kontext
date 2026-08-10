@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/kontext-security/kontext-cli/internal/profile"
 )
 
 const (
@@ -33,17 +35,29 @@ func DefaultSocketPath() string {
 	return filepath.Join("/tmp", fmt.Sprintf("kontext-managed-observe-%d", os.Getuid()), "kontext.sock")
 }
 
+// DefaultDBPath is the ledger cache location. With a profile active it is that
+// profile's database, which is what fences the export backlog: the stream
+// cursor and the policy cache both derive from the database's directory, so
+// events captured for one workspace can never be flushed to another. Without a
+// profile it is the legacy unprofiled path.
 func DefaultDBPath() string {
 	if path := strings.TrimSpace(os.Getenv(envDBPath)); path != "" {
 		return path
 	}
-	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "Kontext", "managed-observe", "guard.db")
+	if path, err := profile.ActiveDBPath(); err == nil {
+		return path
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, "Library", "Application Support", "Kontext", "managed-observe", "guard.db")
+	return LegacyDBPath()
+}
+
+// LegacyDBPath is the pre-profile ledger cache location.
+func LegacyDBPath() string {
+	if path := profile.LegacyPath(filepath.Join(profile.ManagedObserveDir, profile.ManagedObserveDB)); path != "" {
+		return path
 	}
-	return filepath.Join("managed-observe", "guard.db")
+	// No resolvable home: keep the pre-profile relative fallback rather than
+	// returning an empty path a caller would open as "".
+	return filepath.Join(profile.ManagedObserveDir, profile.ManagedObserveDB)
 }
 
 func DefaultIdleTimeout() time.Duration {

@@ -27,3 +27,6 @@ $CODEX_HOME/
 engineering-*.png
 engineering-snapshot.md
 linear-*.png
+
+# Local hook debug log, written wherever an agent's cwd happens to be
+srt-kontext-hook.log
