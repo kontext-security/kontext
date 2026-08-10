@@ -238,6 +238,10 @@ func orDash(value string) string {
 //
 // `exclude` is the profile being written, so re-running setup for an existing
 // profile — rotating its token — is never mistaken for a duplicate of itself.
+// profileBoundToWorkspace names an existing profile already bound to this
+// workspace on this backend, or "" if none is. exclude is the profile the
+// caller is about to write to — rewriting a profile in place is how a token is
+// rotated, so it must never count as a duplicate of itself.
 func profileBoundToWorkspace(organizationID, cloudURL, exclude string) (string, error) {
 	if strings.TrimSpace(organizationID) == "" {
 		// Nothing to compare. The legacy env-fallback org reports an empty id, and

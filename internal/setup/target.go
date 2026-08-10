@@ -59,6 +59,82 @@ func resolveTarget(name string) (target, error) {
 	}
 }
 
+// targetSnapshot records what was true about the write target when it was
+// resolved, so that a concurrent `kontext profile` command moving that state is
+// caught BEFORE this run writes through it.
+//
+// Resolving the target once removes the divergence between the duplicate guard
+// and the write, but a target is only a set of paths: `profile rename` can move
+// the directory those paths name, and `profile rm` can delete it. Writing
+// afterwards would recreate a profile under a name the user had just renamed
+// away, and rotate a token into a keychain item nothing points at.
+//
+// There is no lock between kontext invocations — an interactive setup holds the
+// terminal across a token prompt and a sudo prompt, so holding one would block
+// the menu bar app's `profile use` for as long as someone leaves the prompt
+// sitting there. This is optimistic instead: it does not prevent the
+// interleaving, it refuses to write through it. A refusal that says what
+// happened and can be retried beats a stray profile nobody notices.
+type targetSnapshot struct {
+	profile    string
+	fromActive bool
+	active     string
+	existed    bool
+}
+
+func snapshotTarget(profileName string, fromActive bool) (targetSnapshot, error) {
+	snapshot := targetSnapshot{profile: profileName, fromActive: fromActive}
+	if profileName == "" {
+		// The legacy unprofiled slot: no profile state exists to be moved.
+		return snapshot, nil
+	}
+	exists, err := profile.Exists(profileName)
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.existed = exists
+	if fromActive {
+		active, err := profile.ActiveName()
+		if err != nil && !errors.Is(err, profile.ErrNoActive) {
+			return snapshot, err
+		}
+		snapshot.active = active
+	}
+	return snapshot, nil
+}
+
+// confirm reports whether the target still means what it did when resolved.
+func (s targetSnapshot) confirm() error {
+	if s.profile == "" {
+		return nil
+	}
+	if s.fromActive {
+		active, err := profile.ActiveName()
+		if err != nil && !errors.Is(err, profile.ErrNoActive) {
+			return err
+		}
+		if active != s.active {
+			return fmt.Errorf(
+				"the active profile changed from %q to %q while setup was running, so nothing was written; re-run the command",
+				s.active, active)
+		}
+	}
+	// Only meaningful when it existed at resolution: a run that is CREATING a
+	// profile legitimately finds nothing here.
+	if s.existed {
+		exists, err := profile.Exists(s.profile)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf(
+				"profile %q was renamed or removed while setup was running, so nothing was written; re-run the command",
+				s.profile)
+		}
+	}
+	return nil
+}
+
 func profileTarget(name string) (target, error) {
 	if _, err := profile.Dir(name); err != nil {
 		return target{}, err

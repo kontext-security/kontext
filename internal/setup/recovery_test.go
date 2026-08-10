@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -408,6 +409,196 @@ func TestSetupRerunForTheSameProfileIsNotADuplicate(t *testing.T) {
 	}
 	if err := Run(context.Background(), opts); err != nil {
 		t.Fatalf("re-running setup for the same profile was refused: %v", err)
+	}
+}
+
+// Plain `kontext setup` — no profile name — rewrites the ACTIVE profile, which
+// is how a token is rotated on a machine that already has profiles. So the
+// duplicate check has to exclude the active profile, not only an explicitly
+// named one: excluding just opts.Profile made the re-run find the very profile
+// it was about to write and refuse itself, breaking the documented promise that
+// re-running setup is safe.
+func TestSetupRerunWithoutAProfileNameRotatesTheActiveProfile(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Profile deliberately unset: resolveTarget falls back to the active one.
+	rerun := h.options("kt_same", server)
+	if err := Run(context.Background(), rerun); err != nil {
+		t.Fatalf("plain `kontext setup` against the active profile was refused: %v", err)
+	}
+	names, err := profile.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "work" {
+		t.Errorf("profiles = %v, want the re-run to rewrite \"work\" rather than add another", names)
+	}
+}
+
+// The profile excluded from duplicate detection and the profile written to must
+// be the SAME one. When the active pointer was read twice — once to exclude,
+// once to write — a `kontext profile use` landing between the two reads sent
+// the write to a profile the guard had never cleared. The menu bar app switches
+// profiles on one click, so the window is reachable.
+//
+// The seam fires at exactly that instant.
+func TestSetupWritesToTheProfileItCleared(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	other := h.options("kt_other", multiWorkspacePingServer(t, map[string]string{"kt_other": "org_other"}))
+	other.Profile = "other"
+	if err := Run(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Switch the active profile the moment the guard runs.
+	overrideVar(t, &boundProfileLookup, func(orgID, cloudURL, exclude string) (string, error) {
+		if err := profile.SetActive("other"); err != nil {
+			t.Fatal(err)
+		}
+		return profileBoundToWorkspace(orgID, cloudURL, exclude)
+	})
+
+	rerun := h.options("kt_same", server)
+	var wrote string
+	rerun.OnProfileResolved = func(name string) { wrote = name }
+	err := Run(context.Background(), rerun)
+
+	// The invariant is that the write never lands on a profile the guard did not
+	// clear. Refusing satisfies it more strongly than writing to "work" would,
+	// and refusing is what the target snapshot now does — but "other" must never
+	// be the target either way.
+	if wrote == "other" {
+		t.Errorf("setup targeted %q, which the guard never cleared", wrote)
+	}
+	if err == nil {
+		t.Fatal("Run() = nil, want a refusal after the active pointer moved")
+	}
+	if !strings.Contains(err.Error(), "while setup was running") {
+		t.Fatalf("error = %v, want it to name the concurrent change", err)
+	}
+}
+
+// Resolving the target once is not enough on its own: `profile rename` moves
+// the directory the resolved paths name, so writing afterwards would recreate a
+// profile under the name the user just renamed away. Refuse instead.
+func TestSetupRefusesWhenTheTargetIsRenamedMidRun(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rename the target the moment the guard runs — after resolution, before the
+	// first write.
+	overrideVar(t, &boundProfileLookup, func(orgID, cloudURL, exclude string) (string, error) {
+		// Renaming AFTER the real lookup, so the guard sees the world as it was
+		// and the run proceeds to the write it must now refuse.
+		duplicate, err := profileBoundToWorkspace(orgID, cloudURL, exclude)
+		if err != nil {
+			return "", err
+		}
+		if renameErr := RenameProfile(context.Background(), "work", "renamed", io.Discard); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+		return duplicate, nil
+	})
+
+	err := Run(context.Background(), h.options("kt_same", server))
+	if err == nil {
+		t.Fatal("Run() = nil, want a refusal after the target moved")
+	}
+	if !strings.Contains(err.Error(), "while setup was running") {
+		t.Fatalf("error = %v, want it to name the concurrent change", err)
+	}
+	// The refusal must be clean: no profile resurrected under the old name.
+	if exists, _ := profile.Exists("work"); exists {
+		t.Error("a refused setup recreated the renamed-away profile")
+	}
+}
+
+// `profile rm` refuses the ACTIVE profile, but an explicitly named target need
+// not be active — so removal mid-run is reachable there.
+func TestSetupRefusesWhenTheTargetIsRemovedMidRun(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	other := h.options("kt_other", multiWorkspacePingServer(t, map[string]string{"kt_other": "org_other"}))
+	other.Profile = "other"
+	if err := Run(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("other"); err != nil {
+		t.Fatal(err)
+	}
+
+	overrideVar(t, &boundProfileLookup, func(orgID, cloudURL, exclude string) (string, error) {
+		if err := profile.Remove("work"); err != nil {
+			t.Fatal(err)
+		}
+		return profileBoundToWorkspace(orgID, cloudURL, exclude)
+	})
+
+	rerun := h.options("kt_same", server)
+	rerun.Profile = "work"
+	err := Run(context.Background(), rerun)
+	if err == nil {
+		t.Fatal("Run() = nil, want a refusal after the target was removed")
+	}
+	if !strings.Contains(err.Error(), "while setup was running") {
+		t.Fatalf("error = %v, want it to name the concurrent change", err)
+	}
+}
+
+// The fix must not blunt the guard: a run that DERIVES its name is creating a
+// new profile, so every existing profile stays a candidate duplicate — even
+// though this run has an active profile that a plain setup would have excluded.
+func TestSetupStillRefusesADuplicateWhenTheNameIsDerived(t *testing.T) {
+	h := profileHarness(t)
+	server := pingServer(t, "kt_same")
+	first := h.options("kt_same", server)
+	first.Profile = "work"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	added := h.options("kt_same", server)
+	added.DeriveProfileName = true
+	err := Run(context.Background(), added)
+	if err == nil {
+		t.Fatal("Run() = nil, want a duplicate-workspace refusal")
+	}
+	if !strings.Contains(err.Error(), "already set up as profile \"work\"") {
+		t.Fatalf("error = %v, want it to name the existing profile", err)
 	}
 }
 
