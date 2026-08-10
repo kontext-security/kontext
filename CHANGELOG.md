@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/kontext-security/kontext-cli/compare/v1.1.0...v1.1.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **setup:** let `kontext setup` re-run against the active profile ([#458](https://github.com/kontext-security/kontext-cli/issues/458)) ([9608939](https://github.com/kontext-security/kontext-cli/commit/96089399f4654770963866f2475e2613b1842972))
+
 ## [1.1.0](https://github.com/kontext-security/kontext-cli/compare/v1.0.1...v1.1.0) (2026-08-10)
 
 
