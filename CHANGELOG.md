@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/kontext-security/kontext-cli/compare/v1.1.1...v1.2.0) (2026-08-11)
+
+
+### Features
+
+* **managed-observe:** report Claude Code hook health with every heartbeat ([#460](https://github.com/kontext-security/kontext-cli/issues/460)) ([eba60aa](https://github.com/kontext-security/kontext-cli/commit/eba60aaa8e772310e5f5dd4a398f6f741ebf8229))
+
 ## [1.1.1](https://github.com/kontext-security/kontext-cli/compare/v1.1.0...v1.1.1) (2026-08-10)
 
 
