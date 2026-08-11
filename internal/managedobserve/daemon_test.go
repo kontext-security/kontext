@@ -535,6 +535,84 @@ func TestLegacyCoworkRejectsDisabledManagedSettingsSource(t *testing.T) {
 	}
 }
 
+func TestManagedObserveHooksFact(t *testing.T) {
+	template, err := claudemanaged.TemplateJSON("/opt/homebrew/bin/kontext")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("drop-in installed", func(t *testing.T) {
+		dir := t.TempDir()
+		dropIn := filepath.Join(dir, "20-kontext.json")
+		if err := os.WriteFile(dropIn, template, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		swapManagedSettingsPaths(t, dropIn, filepath.Join(dir, "missing", "managed-settings.json"))
+
+		fact, ok := managedObserveHooksFact()
+		if !ok || !fact.Present || fact.DisabledAllHooks {
+			t.Fatalf("managedObserveHooksFact() = %+v, %v; want present", fact, ok)
+		}
+	})
+
+	t.Run("hooks deleted", func(t *testing.T) {
+		dir := t.TempDir()
+		swapManagedSettingsPaths(t,
+			filepath.Join(dir, "missing", "20-kontext.json"),
+			filepath.Join(dir, "missing", "managed-settings.json"))
+
+		fact, ok := managedObserveHooksFact()
+		if !ok || fact.Present || fact.DisabledAllHooks {
+			t.Fatalf("managedObserveHooksFact() = %+v, %v; want known-missing", fact, ok)
+		}
+	})
+
+	t.Run("disableAllHooks overrides drop-in", func(t *testing.T) {
+		dir := t.TempDir()
+		dropIn := filepath.Join(dir, "20-kontext.json")
+		if err := os.WriteFile(dropIn, template, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		root := filepath.Join(dir, "managed-settings.json")
+		if err := os.WriteFile(root, []byte(`{"disableAllHooks":true}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		swapManagedSettingsPaths(t, dropIn, root)
+
+		fact, ok := managedObserveHooksFact()
+		if !ok || fact.Present || !fact.DisabledAllHooks {
+			t.Fatalf("managedObserveHooksFact() = %+v, %v; want disabled", fact, ok)
+		}
+	})
+
+	t.Run("unreadable settings report unknown", func(t *testing.T) {
+		dir := t.TempDir()
+		// A directory where the drop-in file should be makes ReadFile fail
+		// without depending on permission semantics (root ignores 0o000).
+		dropIn := filepath.Join(dir, "20-kontext.json")
+		if err := os.Mkdir(dropIn, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		swapManagedSettingsPaths(t, dropIn, filepath.Join(dir, "missing", "managed-settings.json"))
+
+		if _, ok := managedObserveHooksFact(); ok {
+			t.Fatal("managedObserveHooksFact() ok = true, want unknown on read error")
+		}
+	})
+}
+
+func swapManagedSettingsPaths(t *testing.T, dropIn, root string) {
+	t.Helper()
+	previousDropIn := managedSettingsDropInPath
+	previousRoot := managedSettingsFilePath
+	managedSettingsDropInPath = dropIn
+	managedSettingsFilePath = root
+	t.Cleanup(func() {
+		managedSettingsDropInPath = previousDropIn
+		managedSettingsFilePath = previousRoot
+	})
+}
+
 func TestCleanupIntervalNeverReturnsZero(t *testing.T) {
 	if got := cleanupInterval(time.Nanosecond); got != time.Nanosecond {
 		t.Fatalf("cleanupInterval(1ns) = %s, want 1ns", got)

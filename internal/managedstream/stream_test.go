@@ -182,6 +182,61 @@ func TestFlushResolvesDeploymentVersionPerFlush(t *testing.T) {
 	}
 }
 
+func TestFlushReportsHooksFactPerFlush(t *testing.T) {
+	store, dbPath := testStore(t)
+	saveTestDecision(t, store, "session-1", "toolu_1")
+
+	var got Payload
+	server := capturePayloadServer(t, &got)
+	t.Cleanup(server.Close)
+
+	fact := HooksFact{Present: true}
+	known := true
+	flushOpts := func() Options {
+		return Options{
+			DBPath:         dbPath,
+			StatePath:      filepath.Join(t.TempDir(), "stream-state.json"),
+			CloudURL:       server.URL,
+			InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+			InstallToken:   "test-install-token",
+			HooksFact:      func() (HooksFact, bool) { return fact, known },
+			HTTPClient:     server.Client(),
+		}
+	}
+
+	if err := Flush(context.Background(), flushOpts()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got.Device == nil || got.Device.HooksPresent == nil || !*got.Device.HooksPresent {
+		t.Fatalf("device = %+v, want hooks_present true", got.Device)
+	}
+	if got.Device.DisabledAllHooks == nil || *got.Device.DisabledAllHooks {
+		t.Fatalf("device = %+v, want disabled_all_hooks false", got.Device)
+	}
+
+	// A drop-in deleted under the running daemon flips the fact on the next
+	// flush, without rebuilding the daemon's options.
+	fact = HooksFact{Present: false}
+	if err := Flush(context.Background(), flushOpts()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got.Device == nil || got.Device.HooksPresent == nil || *got.Device.HooksPresent {
+		t.Fatalf("device = %+v, want hooks_present false", got.Device)
+	}
+
+	// An undetermined state omits the fields entirely: the hosted side must
+	// read "unknown", never "missing". Reset the capture first — decoding a
+	// payload without a device key would otherwise keep the previous one.
+	known = false
+	got = Payload{}
+	if err := Flush(context.Background(), flushOpts()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got.Device != nil {
+		t.Fatalf("device = %+v, want omitted when hooks state is unknown", got.Device)
+	}
+}
+
 func TestFlushDoesNotAdvanceCursorWhenHostedBackendFails(t *testing.T) {
 	store, dbPath := testStore(t)
 	saveTestDecision(t, store, "session-1", "toolu_1")
