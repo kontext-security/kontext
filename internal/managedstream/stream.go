@@ -62,6 +62,12 @@ type Options struct {
 	DeviceLabel       string
 	UserEmail         string
 	DeploymentVersion func() string
+	// HooksFact resolves the endpoint's Claude Code hook health per flush, so a
+	// drop-in deleted under a running daemon is reported on the next batch. A
+	// false second return means the state could not be determined (e.g. the
+	// settings file is unreadable) — the fact is then omitted entirely, which
+	// the hosted side reads as "unknown", never as "missing".
+	HooksFact         func() (HooksFact, bool)
 	Interval          time.Duration
 	HeartbeatInterval time.Duration
 	BatchLimit        int
@@ -102,6 +108,23 @@ type Device struct {
 	Label             string `json:"label,omitempty"`
 	DeploymentVersion string `json:"deployment_version,omitempty"`
 	UserEmail         string `json:"user_email,omitempty"`
+	// Hook health, pointers so an endpoint that cannot determine the state
+	// omits the fields instead of asserting false. Without this fact a device
+	// whose managed hooks were deleted is indistinguishable server-side from
+	// one where the agent simply isn't used: heartbeats keep flowing and the
+	// ledger stays empty either way.
+	HooksPresent     *bool `json:"hooks_present,omitempty"`
+	DisabledAllHooks *bool `json:"disabled_all_hooks,omitempty"`
+}
+
+// HooksFact is the per-flush answer to "are the Claude Code managed hooks for
+// Kontext actually in effect on this device". Present means the managed
+// settings (drop-in or file) carry the full Kontext hook set AND no settings
+// file disables all hooks; DisabledAllHooks distinguishes "hooks removed" from
+// "hooks present but switched off via disableAllHooks".
+type HooksFact struct {
+	Present          bool
+	DisabledAllHooks bool
 }
 
 type State struct {
@@ -336,8 +359,23 @@ func newPayload(
 	if opts.DeploymentVersion != nil {
 		deploymentVersion = strings.TrimSpace(opts.DeploymentVersion())
 	}
-	if label != "" || deploymentVersion != "" || userEmail != "" {
-		payload.Device = &Device{Label: label, DeploymentVersion: deploymentVersion, UserEmail: userEmail}
+	// Hook health resolves per flush too: it is exactly the fact that must not
+	// go stale when someone deletes the drop-in under a running daemon.
+	var hooksPresent, disabledAllHooks *bool
+	if opts.HooksFact != nil {
+		if fact, ok := opts.HooksFact(); ok {
+			hooksPresent = &fact.Present
+			disabledAllHooks = &fact.DisabledAllHooks
+		}
+	}
+	if label != "" || deploymentVersion != "" || userEmail != "" || hooksPresent != nil {
+		payload.Device = &Device{
+			Label:             label,
+			DeploymentVersion: deploymentVersion,
+			UserEmail:         userEmail,
+			HooksPresent:      hooksPresent,
+			DisabledAllHooks:  disabledAllHooks,
+		}
 	}
 	return payload
 }

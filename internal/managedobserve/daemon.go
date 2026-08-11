@@ -390,6 +390,34 @@ func requireManagedHooksForLegacyCowork(cfg managedconfig.Config) error {
 	return fmt.Errorf("cowork_enabled is set but Claude Code managed hooks are missing at %s or %s; run `kontext setup` or install the managed-settings drop-in before starting managed observe", managedSettingsDropInPath, managedSettingsFilePath)
 }
 
+// managedObserveHooksFact reduces the two managed-settings locations to the
+// device fact reported with every heartbeat batch. Present requires the full
+// Kontext hook set in at least one location and no disableAllHooks anywhere:
+// Claude Code merges drop-ins into the managed settings, so a disable in
+// either file switches off hooks the other file declares. A read error yields
+// ok=false — the fact is omitted from the batch rather than reported as
+// missing, so a daemon that cannot read /Library (sandboxing, permissions)
+// never files a false "hooks deleted" alarm.
+func managedObserveHooksFact() (managedstream.HooksFact, bool) {
+	var hasHooks, disabled bool
+	for _, path := range []string{managedSettingsDropInPath, managedSettingsFilePath} {
+		state, err := managedObserveHooksState(path)
+		if err != nil {
+			return managedstream.HooksFact{}, false
+		}
+		if state.disabled {
+			disabled = true
+		}
+		if state.hasHooks {
+			hasHooks = true
+		}
+	}
+	return managedstream.HooksFact{
+		Present:          hasHooks && !disabled,
+		DisabledAllHooks: disabled,
+	}, true
+}
+
 type managedObserveHooksStatus struct {
 	disabled bool
 	hasHooks bool
@@ -509,6 +537,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		DeviceLabel:       loadedConfig.Config.Device.Label,
 		UserEmail:         loadedConfig.Config.Device.UserEmail,
 		DeploymentVersion: deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
+		HooksFact:         managedObserveHooksFact,
 		HTTPClient:        opts.StreamHTTPClient,
 		Diagnostic:        opts.Diagnostic,
 		OnFlushSuccess: func() {
