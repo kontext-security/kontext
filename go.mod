@@ -1,6 +1,6 @@
 module github.com/kontext-security/kontext-cli
 
-go 1.25.12
+go 1.22
 
 require (
 	github.com/cedar-policy/cedar-go v1.8.0
