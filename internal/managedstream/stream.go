@@ -67,7 +67,12 @@ type Options struct {
 	// false second return means the state could not be determined (e.g. the
 	// settings file is unreadable) — the fact is then omitted entirely, which
 	// the hosted side reads as "unknown", never as "missing".
-	HooksFact         func() (HooksFact, bool)
+	HooksFact func() (HooksFact, bool)
+	// DeviceKey resolves the endpoint's stable reconciliation key per flush.
+	// Empty means unknown — the field is omitted, and the hosted side must
+	// read absence as "no key reported", never as "a different device":
+	// every CLI that predates the field omits it forever.
+	DeviceKey         func() string
 	Interval          time.Duration
 	HeartbeatInterval time.Duration
 	BatchLimit        int
@@ -115,6 +120,13 @@ type Device struct {
 	// ledger stays empty either way.
 	HooksPresent     *bool `json:"hooks_present,omitempty"`
 	DisabledAllHooks *bool `json:"disabled_all_hooks,omitempty"`
+	// DeviceKey is HMAC-SHA256 over the Mac's IOPlatformUUID, keyed with the
+	// organization id (internal/deviceid) — stable when the same Mac
+	// re-enrolls in the same workspace, unlinkable across workspaces, never
+	// the raw hardware identifier. The hosted side uses it to reconcile a
+	// fresh installation_id with the stale instance it replaces. It is
+	// self-reported: a reconciliation hint, never an authentication input.
+	DeviceKey string `json:"device_key,omitempty"`
 }
 
 // HooksFact is the per-flush answer to "are the Claude Code managed hooks for
@@ -368,13 +380,21 @@ func newPayload(
 			disabledAllHooks = &fact.DisabledAllHooks
 		}
 	}
-	if label != "" || deploymentVersion != "" || userEmail != "" || hooksPresent != nil {
+	// The device key resolves per flush as well, because its ingredients
+	// arrive late: the first flushes after login can race networking, and the
+	// resolver reports empty until the workspace answers.
+	deviceKey := ""
+	if opts.DeviceKey != nil {
+		deviceKey = strings.TrimSpace(opts.DeviceKey())
+	}
+	if label != "" || deploymentVersion != "" || userEmail != "" || hooksPresent != nil || deviceKey != "" {
 		payload.Device = &Device{
 			Label:             label,
 			DeploymentVersion: deploymentVersion,
 			UserEmail:         userEmail,
 			HooksPresent:      hooksPresent,
 			DisabledAllHooks:  disabledAllHooks,
+			DeviceKey:         deviceKey,
 		}
 	}
 	return payload

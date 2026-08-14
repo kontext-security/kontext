@@ -237,6 +237,48 @@ func TestFlushReportsHooksFactPerFlush(t *testing.T) {
 	}
 }
 
+func TestFlushReportsDeviceKeyPerFlush(t *testing.T) {
+	_, dbPath := testStore(t)
+
+	var got Payload
+	server := capturePayloadServer(t, &got)
+	t.Cleanup(server.Close)
+
+	// Starts unresolved, as it does on a real boot when the workspace ping
+	// races login-time networking; a later flush picks the key up without
+	// rebuilding the daemon's options.
+	deviceKey := ""
+	flushOpts := func() Options {
+		return Options{
+			DBPath:         dbPath,
+			StatePath:      filepath.Join(t.TempDir(), "stream-state.json"),
+			CloudURL:       server.URL,
+			InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+			InstallToken:   "test-install-token",
+			DeviceKey:      func() string { return deviceKey },
+			HTTPClient:     server.Client(),
+		}
+	}
+
+	// Empty ledger: this flush is a heartbeat, which must omit the whole
+	// device envelope while the key is still unknown and nothing else is set.
+	if err := Flush(context.Background(), flushOpts()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got.Device != nil {
+		t.Fatalf("device = %+v, want omitted while the key is unresolved", got.Device)
+	}
+
+	deviceKey = " dk_r9NpM1vh94fxqPIcsnx6DalBNVfubPTNYHUBLGUoUcc "
+	got = Payload{}
+	if err := Flush(context.Background(), flushOpts()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got.Device == nil || got.Device.DeviceKey != "dk_r9NpM1vh94fxqPIcsnx6DalBNVfubPTNYHUBLGUoUcc" {
+		t.Fatalf("device = %+v, want trimmed device_key on the heartbeat", got.Device)
+	}
+}
+
 func TestFlushDoesNotAdvanceCursorWhenHostedBackendFails(t *testing.T) {
 	store, dbPath := testStore(t)
 	saveTestDecision(t, store, "session-1", "toolu_1")

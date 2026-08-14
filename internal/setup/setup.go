@@ -30,6 +30,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
 	"github.com/kontext-security/kontext-cli/internal/codexmanaged"
 	"github.com/kontext-security/kontext-cli/internal/installation"
+	"github.com/kontext-security/kontext-cli/internal/ledgerping"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
 	"github.com/kontext-security/kontext-cli/internal/managedobserve"
 	"github.com/kontext-security/kontext-cli/internal/profile"
@@ -43,8 +44,6 @@ const (
 	// token with `security find-generic-password -s <name> -w`.
 	KeychainItemName = "kontext-install-token"
 	keychainAccount  = "kontext"
-
-	pingPath = "/api/v1/authorization-ledger/ping"
 
 	settingsBackupLabel = "kontext-setup"
 )
@@ -628,37 +627,23 @@ func validateTokenShape(token string) error {
 	return nil
 }
 
+// validateToken delegates the wire work to ledgerping — the daemon resolves
+// tokens through the same call, so the two cannot drift — and keeps only the
+// setup-specific copy: this is the one caller with a human at a terminal who
+// can go mint a fresh token.
 func validateToken(ctx context.Context, client *http.Client, cloudURL, token string) (pingResponse, error) {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cloudURL, "/")+pingPath, nil)
+	ping, err := ledgerping.Ping(ctx, client, cloudURL, token)
 	if err != nil {
+		if errors.Is(err, ledgerping.ErrUnauthorized) {
+			return pingResponse{}, errors.New("install token was rejected — it may be revoked or mistyped; create a new one in the dashboard (Deployments page)")
+		}
+		var status *ledgerping.StatusError
+		if errors.As(err, &status) {
+			return pingResponse{}, fmt.Errorf("token validation failed: %s returned HTTP %d", cloudURL, status.StatusCode)
+		}
 		return pingResponse{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return pingResponse{}, fmt.Errorf("cannot reach %s: %w", cloudURL, err)
-	}
-	defer resp.Body.Close()
-
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return pingResponse{}, errors.New("install token was rejected — it may be revoked or mistyped; create a new one in the dashboard (Deployments page)")
-	case resp.StatusCode < 200 || resp.StatusCode >= 300:
-		return pingResponse{}, fmt.Errorf("token validation failed: %s returned HTTP %d", cloudURL, resp.StatusCode)
-	}
-
-	var ping pingResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ping); err != nil {
-		return pingResponse{}, fmt.Errorf("parse token validation response: %w", err)
-	}
-	if strings.TrimSpace(ping.OrganizationID) == "" {
-		return pingResponse{}, errors.New("server did not return an organization id for this token")
-	}
-	return ping, nil
+	return pingResponse{OrganizationID: ping.OrganizationID, OrganizationName: ping.OrganizationName}, nil
 }
 
 func deviceLabel(ctx context.Context) string {

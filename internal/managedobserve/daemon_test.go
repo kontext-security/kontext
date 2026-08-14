@@ -3,6 +3,7 @@ package managedobserve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/ledgerping"
 	"github.com/kontext-security/kontext-cli/internal/localruntime"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
 )
@@ -113,6 +115,12 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 
 	requests := make(chan ledgerBatchRequest, 1)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == ledgerping.Path {
+			// The daemon resolves its device key against the same backend;
+			// answer so the flush keeps exercising the full path.
+			w.Write([]byte(`{"organization_id":"org_test"}`))
+			return
+		}
 		if r.URL.Path != "/api/v1/authorization-ledger/batches" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
@@ -208,7 +216,20 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 	}
 }
 
+// disableDeviceKeyResolution keeps a daemon test's strict fake backend from
+// seeing workspace pings it never expected: without a platform UUID the
+// resolver gives up before its first ping.
+func disableDeviceKeyResolution(t *testing.T) {
+	t.Helper()
+	stubDeviceKeyResolution(t,
+		func(context.Context) (string, error) { return "", errors.New("device key disabled in this test") },
+		func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+			return ledgerping.Response{}, errors.New("device key disabled in this test")
+		})
+}
+
 func TestDaemonRefreshesStreamInstallToken(t *testing.T) {
+	disableDeviceKeyResolution(t)
 	streamTokens := make(chan string, 8)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/authorization-ledger/batches" {
@@ -295,6 +316,7 @@ func TestDaemonRefreshesStreamInstallToken(t *testing.T) {
 }
 
 func TestDaemonWritesAuthErrorAfterConsecutiveStreamAuthFailures(t *testing.T) {
+	disableDeviceKeyResolution(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/authorization-ledger/batches" {
 			t.Fatalf("path = %q", r.URL.Path)
@@ -933,6 +955,142 @@ func TestMigrateSelfServeModeToRemote(t *testing.T) {
 					t.Fatalf("on-disk mode = %q, want untouched %q", onDisk.Config.Mode, tc.mode)
 				}
 			})
+		}
+	})
+}
+
+func stubDeviceKeyResolution(
+	t *testing.T,
+	uuidFn func(context.Context) (string, error),
+	pingFn func(context.Context, *http.Client, string, string) (ledgerping.Response, error),
+) {
+	t.Helper()
+	previousUUID, previousPing := platformUUIDFn, workspacePingFn
+	platformUUIDFn = uuidFn
+	workspacePingFn = pingFn
+	t.Cleanup(func() {
+		platformUUIDFn = previousUUID
+		workspacePingFn = previousPing
+	})
+}
+
+func TestDeviceKeySource(t *testing.T) {
+	const testUUID = "0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B"
+	quiet := diagnostic.Logger{}
+
+	t.Run("resolves once per config identity and caches", func(t *testing.T) {
+		pings := 0
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) { return testUUID, nil },
+			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+				pings++
+				return ledgerping.Response{OrganizationID: "org_katana"}, nil
+			})
+
+		source := &deviceKeySource{}
+		key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet)
+		if key != "dk_r9NpM1vh94fxqPIcsnx6DalBNVfubPTNYHUBLGUoUcc" {
+			t.Fatalf("resolve() = %q, want the pinned deviceid vector", key)
+		}
+		if again := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); again != key {
+			t.Fatalf("second resolve() = %q, want cached %q", again, key)
+		}
+		if pings != 1 {
+			t.Fatalf("workspace pings = %d, want the resolution cached after one", pings)
+		}
+	})
+
+	t.Run("re-derives when the config identity changes", func(t *testing.T) {
+		// A system-scope config rewritten in place to another workspace does
+		// NOT restart the daemon. Serving the old cached key there would hand
+		// the new workspace the previous workspace's stable pseudonym, so an
+		// identity change must invalidate the cache and derive fresh.
+		org := "org_katana"
+		pings := 0
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) { return testUUID, nil },
+			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+				pings++
+				return ledgerping.Response{OrganizationID: org}, nil
+			})
+
+		source := &deviceKeySource{}
+		first := source.resolve(context.Background(), "https://api.test", "token-a", nil, quiet)
+		org = "org_other"
+		second := source.resolve(context.Background(), "https://api.test", "token-b", nil, quiet)
+		if pings != 2 {
+			t.Fatalf("workspace pings = %d, want a fresh derivation after the token changed", pings)
+		}
+		if first == second || second != "dk_wOHaCumCEoXxMGJTl7KiZ-AranWDM3LpSgC8zass4UQ" {
+			t.Fatalf("resolve() after workspace change = %q, want the other workspace's pinned vector (first was %q)", second, first)
+		}
+		// A rotation back within one workspace re-pings but derives the same key.
+		org = "org_katana"
+		if rotated := source.resolve(context.Background(), "https://api.test", "token-c", nil, quiet); rotated != first {
+			t.Fatalf("resolve() after rotation = %q, want %q re-derived", rotated, first)
+		}
+	})
+
+	t.Run("retries after a failed workspace ping", func(t *testing.T) {
+		pingErr := errors.New("cannot reach backend")
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) { return testUUID, nil },
+			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+				err := pingErr
+				return ledgerping.Response{OrganizationID: "org_katana"}, err
+			})
+
+		source := &deviceKeySource{}
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
+			t.Fatalf("resolve() = %q, want empty while the workspace is unreachable", key)
+		}
+		pingErr = nil
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key == "" {
+			t.Fatal("resolve() after the network came up = empty, want the key resolved on retry")
+		}
+	})
+
+	t.Run("retries after a failed platform UUID read", func(t *testing.T) {
+		// Even the local ioreg exec can fail transiently (resource pressure);
+		// caching that failure would silently disable the key until an
+		// unrelated daemon restart.
+		uuidErr := errors.New("fork: resource temporarily unavailable")
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) {
+				if uuidErr != nil {
+					return "", uuidErr
+				}
+				return testUUID, nil
+			},
+			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+				return ledgerping.Response{OrganizationID: "org_katana"}, nil
+			})
+
+		source := &deviceKeySource{}
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
+			t.Fatalf("resolve() = %q, want empty while the UUID is unreadable", key)
+		}
+		uuidErr = nil
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key == "" {
+			t.Fatal("resolve() after ioreg recovered = empty, want the key resolved on retry")
+		}
+	})
+
+	t.Run("kill switch reports nothing", func(t *testing.T) {
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) {
+				t.Fatal("platform UUID read despite kill switch")
+				return "", nil
+			},
+			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+				t.Fatal("workspace pinged despite kill switch")
+				return ledgerping.Response{}, nil
+			})
+		t.Setenv(envNoDeviceKey, "1")
+
+		source := &deviceKeySource{}
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
+			t.Fatalf("resolve() = %q, want empty under %s", key, envNoDeviceKey)
 		}
 	})
 }
