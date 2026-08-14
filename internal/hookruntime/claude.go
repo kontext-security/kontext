@@ -37,6 +37,8 @@ type claudeHookInput struct {
 type claudeHookOutput struct {
 	HookSpecificOutput *claudeHookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 	SuppressOutput     bool                      `json:"suppressOutput,omitempty"`
+	Decision           string                    `json:"decision,omitempty"`
+	Reason             string                    `json:"reason,omitempty"`
 }
 
 type claudeHookSpecificOutput struct {
@@ -60,6 +62,7 @@ func DecodeClaudeEvent(input []byte, agentName string) (hook.Event, error) {
 		SessionID:      firstString(h.SessionID, h.SessionIDAlt),
 		Agent:          agentName,
 		HookName:       hook.HookName(hookName),
+		Prompt:         stringPtrValue(h.Prompt),
 		ToolName:       firstString(h.ToolName, h.ToolNameAlt),
 		ToolInput:      normalizeClaudeToolInput(hookName, h),
 		ToolResponse:   normalizeToolResponse(h.ToolResponse, h.ToolResponseAlt),
@@ -147,7 +150,26 @@ func decodeUseNumber(data []byte, dst any) error {
 }
 
 func EncodeClaudeResult(hookEventName string, result hook.Result) ([]byte, error) {
-	if hook.HookName(hookEventName) != hook.HookPreToolUse {
+	hookName := hook.HookName(hookEventName)
+	if hookName == hook.HookUserPromptSubmit {
+		if result.Decision == hook.DecisionDeny {
+			return json.Marshal(claudeHookOutput{
+				Decision: "block",
+				Reason:   result.ClaudeReason(),
+			})
+		}
+		reason := strings.TrimSpace(result.Reason)
+		if reason == "" || strings.EqualFold(reason, "allowed") {
+			return json.Marshal(claudeHookOutput{})
+		}
+		return json.Marshal(claudeHookOutput{
+			HookSpecificOutput: &claudeHookSpecificOutput{
+				HookEventName:     hookEventName,
+				AdditionalContext: reason,
+			},
+		})
+	}
+	if hookName != hook.HookPreToolUse {
 		return json.Marshal(claudeHookOutput{SuppressOutput: true})
 	}
 

@@ -9,30 +9,33 @@ import (
 )
 
 type EvaluateRequest struct {
-	Type           string          `json:"type"`
-	SessionID      string          `json:"session_id,omitempty"`
-	Agent          string          `json:"agent"`
-	HookEvent      string          `json:"hook_event"`
-	ToolName       string          `json:"tool_name"`
-	ToolInput      json.RawMessage `json:"tool_input,omitempty"`
-	ToolResponse   json.RawMessage `json:"tool_response,omitempty"`
-	ToolUseID      string          `json:"tool_use_id"`
-	CWD            string          `json:"cwd"`
-	PermissionMode string          `json:"permission_mode,omitempty"`
-	DurationMs     *int64          `json:"duration_ms,omitempty"`
-	Error          string          `json:"error,omitempty"`
-	IsInterrupt    *bool           `json:"is_interrupt,omitempty"`
+	ProtocolVersion int             `json:"protocol_version,omitempty"`
+	Type            string          `json:"type"`
+	SessionID       string          `json:"session_id,omitempty"`
+	Agent           string          `json:"agent"`
+	HookEvent       string          `json:"hook_event"`
+	Prompt          string          `json:"prompt,omitempty"`
+	ToolName        string          `json:"tool_name"`
+	ToolInput       json.RawMessage `json:"tool_input,omitempty"`
+	ToolResponse    json.RawMessage `json:"tool_response,omitempty"`
+	ToolUseID       string          `json:"tool_use_id"`
+	CWD             string          `json:"cwd"`
+	PermissionMode  string          `json:"permission_mode,omitempty"`
+	DurationMs      *int64          `json:"duration_ms,omitempty"`
+	Error           string          `json:"error,omitempty"`
+	IsInterrupt     *bool           `json:"is_interrupt,omitempty"`
 }
 
 type EvaluateResult struct {
-	Type       string `json:"type"`
-	Decision   string `json:"decision,omitempty"`
-	Allowed    bool   `json:"allowed"`
-	Reason     string `json:"reason"`
-	ReasonCode string `json:"reason_code,omitempty"`
-	RequestID  string `json:"request_id,omitempty"`
-	Mode       string `json:"mode,omitempty"`
-	Epoch      string `json:"epoch,omitempty"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	Type            string `json:"type"`
+	Decision        string `json:"decision,omitempty"`
+	Allowed         bool   `json:"allowed"`
+	Reason          string `json:"reason"`
+	ReasonCode      string `json:"reason_code,omitempty"`
+	RequestID       string `json:"request_id,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	Epoch           string `json:"epoch,omitempty"`
 	// EventID is the persisted decision row's ID — pre-minted when the
 	// runtime answers before persisting — so a hook client can correlate
 	// its response with the eventual record.

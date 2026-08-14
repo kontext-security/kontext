@@ -2,8 +2,33 @@ package hookruntime
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
+
+func TestDecodeClaudeEventUserPromptSubmitPreservesPrompt(t *testing.T) {
+	t.Parallel()
+	event, err := DecodeClaudeEvent([]byte(`{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"ship it"}`), "claude")
+	if err != nil {
+		t.Fatalf("DecodeClaudeEvent() error = %v", err)
+	}
+	if event.Prompt != "ship it" || event.ToolInput["prompt"] != "ship it" {
+		t.Fatalf("event = %+v, want first-class prompt and compatibility mirror", event)
+	}
+}
+
+func TestEncodeClaudeUserPromptSubmitDenyBlocks(t *testing.T) {
+	t.Parallel()
+	out, err := EncodeClaudeResult("UserPromptSubmit", hook.Result{Decision: hook.DecisionDeny, Reason: "policy unavailable"})
+	if err != nil {
+		t.Fatalf("EncodeClaudeResult() error = %v", err)
+	}
+	if text := string(out); !strings.Contains(text, `"decision":"block"`) || !strings.Contains(text, "policy unavailable") {
+		t.Fatalf("EncodeClaudeResult() = %s, want top-level block", text)
+	}
+}
 
 func TestDecodeClaudeEventToolResponseObject(t *testing.T) {
 	t.Parallel()

@@ -15,6 +15,7 @@ import (
 const (
 	DefaultKontextBinary = "/usr/local/bin/kontext"
 	DefaultHookTimeout   = 20
+	PromptHookTimeout    = 65
 )
 
 var SupportedEvents = []hook.EventAlias{
@@ -88,11 +89,18 @@ func Template(kontextBinary string) Settings {
 			Hooks: []Handler{{
 				Type:    "command",
 				Command: hookCommand(kontextBinary, event.Alias),
-				Timeout: DefaultHookTimeout,
+				Timeout: hookTimeout(event.Name),
 			}},
 		}}
 	}
 	return settings
+}
+
+func hookTimeout(name hook.HookName) int {
+	if name == hook.HookUserPromptSubmit {
+		return PromptHookTimeout
+	}
+	return DefaultHookTimeout
 }
 
 func TemplateJSON(kontextBinary string) ([]byte, error) {
@@ -219,7 +227,7 @@ func managedHookPlan(kontextBinary string) agenthooks.Plan {
 			},
 			Command: agenthooks.CommandHook{
 				Command: hookCommand(kontextBinary, event.Alias),
-				Timeout: DefaultHookTimeout,
+				Timeout: hookTimeout(event.Name),
 			},
 			Placement: agenthooks.PlacementAppend,
 		}
