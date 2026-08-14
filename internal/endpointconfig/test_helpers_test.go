@@ -8,10 +8,10 @@ import (
 
 func testResponse(t *testing.T, mode payloadcapture.Mode) Response {
 	t.Helper()
-	// The server always emits the guardrail flag under v2 and defaults it to
-	// enabled, so that is what a representative response looks like.
+	// The server always emits both runtime directives under v3.
 	enabled := true
-	config := Config{PayloadCaptureMode: mode, GuardrailLLMEnabled: &enabled}
+	disabled := false
+	config := Config{PayloadCaptureMode: mode, GuardrailLLMEnabled: &enabled, PromptPolicyEnabled: &disabled}
 	identity, err := ComputeIdentity(config)
 	if err != nil {
 		t.Fatal(err)

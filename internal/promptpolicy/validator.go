@@ -11,6 +11,7 @@ type ExpectedAudience struct {
 	AuthorizationSessionID   string
 	PromptSequence           uint64
 	ParentDeploymentIdentity string
+	RolloutMode              string
 }
 
 // ActivationValidator checks that a decoded bundle is the exact, current
@@ -31,7 +32,8 @@ func (v *ActivationValidator) Validate(bundle Bundle, expected ExpectedAudience)
 		bundle.Audience.InstallationID != expected.InstallationID ||
 		bundle.Audience.AuthorizationSessionID != expected.AuthorizationSessionID ||
 		bundle.Audience.PromptSequence != expected.PromptSequence ||
-		bundle.Parent.DeploymentIdentity != expected.ParentDeploymentIdentity {
+		bundle.Parent.DeploymentIdentity != expected.ParentDeploymentIdentity ||
+		(expected.RolloutMode != "" && bundle.RolloutMode != expected.RolloutMode) {
 		return errors.New("prompt-policy audience or parent mismatch")
 	}
 	validFrom, _ := time.Parse(time.RFC3339Nano, bundle.ValidFrom)

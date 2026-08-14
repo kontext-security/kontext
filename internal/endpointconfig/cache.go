@@ -41,6 +41,9 @@ type Snapshot struct {
 	// explicit directive is remembered until an explicit one replaces it. Nil
 	// means the org has never set it, which resolves to enabled.
 	GuardrailLLMDirective *bool
+	// PromptPolicyDirective is remembered across transient refresh failures so
+	// an enabled authorization barrier cannot silently fail open.
+	PromptPolicyDirective *bool
 	ConfigIdentity        string
 	Confirmed             bool
 	FallbackReason        string
@@ -51,7 +54,7 @@ type Snapshot struct {
 // cacheFileVersion is written by this build. Version 1 files load fine and
 // simply carry no remembered directive; a version this build does not know is
 // rejected rather than guessed at.
-const cacheFileVersion = 2
+const cacheFileVersion = 3
 
 type cacheFile struct {
 	Version   int       `json:"version"`
@@ -61,18 +64,20 @@ type cacheFile struct {
 	// config, because the response's identity is verified against its config on
 	// load — editing the config to carry a remembered value would invalidate it.
 	GuardrailLLMDirective *bool `json:"guardrailLlmDirective,omitempty"`
+	PromptPolicyDirective *bool `json:"promptPolicyDirective,omitempty"`
 }
 
 type Cache struct {
 	path string
 	now  func() time.Time
 
-	mu        sync.RWMutex
-	fetched   time.Time
-	active    *Response
-	lastGood  *Response
-	status    Status
-	directive *bool
+	mu                    sync.RWMutex
+	fetched               time.Time
+	active                *Response
+	lastGood              *Response
+	status                Status
+	directive             *bool
+	promptPolicyDirective *bool
 }
 
 func NewCache(path string) *Cache {
@@ -112,6 +117,7 @@ func (c *Cache) Load() error {
 		if file.Response.ResponseVersion != ResponseVersion {
 			c.mu.Lock()
 			c.directive = cloneBool(file.GuardrailLLMDirective)
+			c.promptPolicyDirective = cloneBool(file.PromptPolicyDirective)
 			c.status = Status{Stale: true, LastError: "persisted configuration predates the current response version"}
 			c.mu.Unlock()
 			return nil
@@ -127,6 +133,7 @@ func (c *Cache) Load() error {
 	c.active = nil
 	c.lastGood = cloneResponse(file.Response)
 	c.directive = cloneBool(file.GuardrailLLMDirective)
+	c.promptPolicyDirective = cloneBool(file.PromptPolicyDirective)
 	c.status = Status{FetchedAt: fetchedAt, Stale: true, LastError: "persisted configuration not yet confirmed"}
 	c.mu.Unlock()
 	return nil
@@ -139,6 +146,7 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	c.mu.RLock()
 	lastGood := cloneResponse(c.lastGood)
 	directive := cloneBool(c.directive)
+	promptPolicyDirective := cloneBool(c.promptPolicyDirective)
 	c.mu.RUnlock()
 	var confirmed *Response
 	switch {
@@ -160,11 +168,15 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	if confirmed.Config.GuardrailLLMEnabled != nil {
 		directive = cloneBool(confirmed.Config.GuardrailLLMEnabled)
 	}
+	if confirmed.Config.PromptPolicyEnabled != nil {
+		promptPolicyDirective = cloneBool(confirmed.Config.PromptPolicyEnabled)
+	}
 	file := cacheFile{
 		Version:               cacheFileVersion,
 		FetchedAt:             fetchedAt.UTC().Format(time.RFC3339Nano),
 		Response:              cloneResponse(confirmed),
 		GuardrailLLMDirective: cloneBool(directive),
+		PromptPolicyDirective: cloneBool(promptPolicyDirective),
 	}
 	if err := c.persist(file); err != nil {
 		return err
@@ -174,6 +186,7 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	c.active = cloneResponse(confirmed)
 	c.lastGood = cloneResponse(confirmed)
 	c.directive = cloneBool(directive)
+	c.promptPolicyDirective = cloneBool(promptPolicyDirective)
 	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt}
 	c.mu.Unlock()
 	return nil
@@ -213,6 +226,7 @@ func (c *Cache) Current() Snapshot {
 	active := cloneResponse(c.active)
 	lastGood := cloneResponse(c.lastGood)
 	directive := cloneBool(c.directive)
+	promptPolicyDirective := cloneBool(c.promptPolicyDirective)
 	status := c.status
 	c.mu.RUnlock()
 	if active == nil {
@@ -234,6 +248,7 @@ func (c *Cache) Current() Snapshot {
 			Config:                defaultConfig,
 			Configured:            configured,
 			GuardrailLLMDirective: directive,
+			PromptPolicyDirective: promptPolicyDirective,
 			ConfigIdentity:        identity,
 			FallbackReason:        fallbackReason,
 			LastKnownGood:         lastGood,
@@ -244,6 +259,7 @@ func (c *Cache) Current() Snapshot {
 		Config:                active.Config,
 		Configured:            active.Config,
 		GuardrailLLMDirective: directive,
+		PromptPolicyDirective: promptPolicyDirective,
 		ConfigIdentity:        active.ConfigIdentity,
 		Confirmed:             true,
 		LastKnownGood:         lastGood,

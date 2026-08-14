@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kontext-security/kontext-cli/internal/cedareval"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 )
 
@@ -32,8 +33,55 @@ type CacheStatus struct {
 type Snapshot struct {
 	Deployment    *Deployment
 	LastKnownGood *Deployment
-	State         State
-	Status        CacheStatus
+	// PolicySet is the runtime authorization shape for non-v1 sources such as
+	// session-derived bundles. Wire DTOs are converted at the boundary.
+	PolicySet *PolicySetSnapshot
+	State     State
+	Status    CacheStatus
+}
+
+type PolicySetSnapshot struct {
+	ResponseVersion        int
+	RequestContractVersion int
+	SourceHash             string
+	RolloutMode            string
+	EvaluationPrincipal    cedareval.EvaluationPrincipal
+	Source                 string
+	DeploymentIdentity     string
+	Evaluator              *cedareval.Evaluator
+}
+
+func (s Snapshot) ActivePolicySet() *PolicySetSnapshot {
+	if s.PolicySet != nil {
+		copy := *s.PolicySet
+		return &copy
+	}
+	if s.Deployment == nil {
+		return nil
+	}
+	return policySetFromDeployment(s.Deployment)
+}
+
+func (s Snapshot) BestKnownPolicySet() *PolicySetSnapshot {
+	if active := s.ActivePolicySet(); active != nil {
+		return active
+	}
+	if s.LastKnownGood == nil {
+		return nil
+	}
+	return policySetFromDeployment(s.LastKnownGood)
+}
+
+func policySetFromDeployment(deployment *Deployment) *PolicySetSnapshot {
+	return &PolicySetSnapshot{
+		ResponseVersion:        deployment.ResponseVersion,
+		RequestContractVersion: deployment.RequestContractVersion,
+		SourceHash:             deployment.PolicyHash,
+		RolloutMode:            string(deployment.RolloutMode),
+		EvaluationPrincipal:    deployment.EvaluationPrincipal,
+		Source:                 deployment.PolicyText,
+		DeploymentIdentity:     deployment.DeploymentIdentity,
+	}
 }
 
 // SnapshotProvider exposes validated in-memory policy state to the hook path.

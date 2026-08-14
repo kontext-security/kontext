@@ -28,22 +28,22 @@ var (
 )
 
 type PutRequest struct {
-	RequestContractVersion           int    `json:"requestContractVersion"`
+	PromptPolicyContractVersion      int    `json:"promptPolicyContractVersion"`
 	Prompt                           string `json:"prompt"`
 	ExpectedParentDeploymentIdentity string `json:"expectedParentDeploymentIdentity"`
 }
 
 type Bundle struct {
-	ResponseVersion        int                 `json:"responseVersion"`
-	RequestContractVersion int                 `json:"requestContractVersion"`
-	DeploymentIdentity     string              `json:"deploymentIdentity"`
-	RolloutMode            string              `json:"rolloutMode"`
-	Audience               Audience            `json:"audience"`
-	Parent                 ParentPolicySet     `json:"parent"`
-	PolicySet              EffectivePolicySet  `json:"policySet"`
-	EvaluationPrincipal    EvaluationPrincipal `json:"evaluationPrincipal"`
-	ValidFrom              string              `json:"validFrom"`
-	ExpiresAt              string              `json:"expiresAt"`
+	ResponseVersion             int                 `json:"responseVersion"`
+	CedarRequestContractVersion int                 `json:"cedarRequestContractVersion"`
+	DeploymentIdentity          string              `json:"deploymentIdentity"`
+	RolloutMode                 string              `json:"rolloutMode"`
+	Audience                    Audience            `json:"audience"`
+	Parent                      ParentPolicySet     `json:"parent"`
+	PolicySet                   EffectivePolicySet  `json:"policySet"`
+	EvaluationPrincipal         EvaluationPrincipal `json:"evaluationPrincipal"`
+	ValidFrom                   string              `json:"validFrom"`
+	ExpiresAt                   string              `json:"expiresAt"`
 }
 
 type Audience struct {
@@ -89,7 +89,7 @@ func DecodeBundle(data []byte) (Bundle, error) {
 }
 
 func (b Bundle) Validate() error {
-	if b.ResponseVersion != ResponseVersion || b.RequestContractVersion != CedarRequestVersion {
+	if b.ResponseVersion != ResponseVersion || b.CedarRequestContractVersion != CedarRequestVersion {
 		return errors.New("unsupported prompt-policy bundle version")
 	}
 	if b.RolloutMode != "observe" && b.RolloutMode != "enforce" {
@@ -131,7 +131,7 @@ func (b Bundle) ComputeDeploymentIdentity() (string, error) {
 	preimage, err := json.Marshal([]any{
 		bundleIdentityDomain,
 		b.ResponseVersion,
-		b.RequestContractVersion,
+		b.CedarRequestContractVersion,
 		b.RolloutMode,
 		b.Audience.OrganizationID,
 		b.Audience.InstallationID,
