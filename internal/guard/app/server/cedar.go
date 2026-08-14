@@ -55,6 +55,9 @@ func (p *cedarPolicyProvider) DecideHook(ctx context.Context, event risk.HookEve
 	}
 
 	snapshot := p.snapshots.Current()
+	if sessions, ok := p.snapshots.(cedarpolicy.SessionSnapshotProvider); ok {
+		snapshot = sessions.CurrentFor(event.SessionID, event.Agent)
+	}
 	claimsAuthority := p.claimsAuthority(snapshot)
 	decision := risk.RiskDecision{}
 	currentAction := cedareval.EffectiveExecutionActionAllow

@@ -25,6 +25,7 @@ import (
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 	"github.com/kontext-security/kontext/internal/runtimecore"
+	"github.com/kontext-security/kontext/internal/sessionpolicy"
 )
 
 // maxConcurrentDeferredRecords caps how many deferred decision-record jobs run
@@ -57,6 +58,7 @@ type Options struct {
 	// fail-closed (every tool call denied) in enforce. Close drains pending
 	// writes before the store closes.
 	AsyncDecisionRecording bool
+	PromptPolicies         *sessionpolicy.Manager
 }
 
 type Host struct {
@@ -173,6 +175,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		Mode:             string(mode),
 		RiskClassifier:   classifierOpts,
 		DeferRecord:      deferRecord,
+		PromptPolicies:   opts.PromptPolicies,
 	})
 	if err != nil {
 		closeJudge()

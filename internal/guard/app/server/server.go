@@ -18,6 +18,7 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 	"github.com/kontext-security/kontext/internal/runtimecore"
+	"github.com/kontext-security/kontext/internal/sessionpolicy"
 )
 
 const (
@@ -60,7 +61,8 @@ type Options struct {
 	// behind an immediate response. The executor owns the context the job
 	// runs under, draining before the store closes, and surfacing the job's
 	// error. Nil keeps every write synchronous with the response, as before.
-	DeferRecord func(job func(context.Context) error)
+	DeferRecord    func(job func(context.Context) error)
+	PromptPolicies *sessionpolicy.Manager
 }
 
 // RiskClassifierOptions configure the risk classifier. The binary SVM is
@@ -126,6 +128,7 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		policy = NewRiskPolicyProvider()
 	}
 	policy = newCedarPolicyProvider(policy, opts.CedarPolicies, opts.CedarEnforcement)
+	policy = newPromptPolicyProvider(policy, opts.PromptPolicies)
 	currentSessionID := strings.TrimSpace(opts.CurrentSessionID)
 	mode := strings.TrimSpace(opts.Mode)
 	if currentSessionID != "" && mode == "" {
