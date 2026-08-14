@@ -18,8 +18,8 @@ const (
 	// and v2 side by side and keys the response off the requested version, so
 	// moving here changes only what this build asks for; released binaries keep
 	// getting the v1 shape and the v1 identity hashes.
-	ResponseVersion  = 2
-	identityDomain   = "kontext:endpoint-config:v2"
+	ResponseVersion  = 3
+	identityDomain   = "kontext:endpoint-config:v3"
 	MaxResponseBytes = 64 * 1024
 )
 
@@ -42,6 +42,8 @@ type Config struct {
 	// "the server said false": the former is a contract violation Validate
 	// rejects, the latter is a directive to honour.
 	GuardrailLLMEnabled *bool `json:"guardrailLlmEnabled"`
+	// PromptPolicyEnabled is the single remotely managed runtime switch.
+	PromptPolicyEnabled *bool `json:"promptPolicyEnabled"`
 }
 
 func (c Config) Validate() error {
@@ -55,6 +57,9 @@ func (c Config) Validate() error {
 	// reject it as the contract violation it is.
 	if c.GuardrailLLMEnabled == nil {
 		return errors.New("endpoint configuration: guardrailLlmEnabled is required")
+	}
+	if c.PromptPolicyEnabled == nil {
+		return errors.New("endpoint configuration: promptPolicyEnabled is required")
 	}
 	return nil
 }
@@ -98,6 +103,7 @@ func ComputeIdentity(config Config) (string, error) {
 		ResponseVersion,
 		string(config.PayloadCaptureMode),
 		*config.GuardrailLLMEnabled,
+		*config.PromptPolicyEnabled,
 	})
 	if err != nil {
 		return "", fmt.Errorf("endpoint configuration: encode identity preimage: %w", err)

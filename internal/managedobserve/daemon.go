@@ -29,8 +29,6 @@ import (
 	"github.com/kontext-security/kontext/internal/sessionpolicy"
 )
 
-const promptPolicyEnabledEnv = "KONTEXT_PROMPT_POLICY_ENABLED"
-
 type DaemonOptions struct {
 	SocketPath              string
 	DBPath                  string
@@ -170,28 +168,25 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		return fmt.Errorf("configure cedar policy client: %w", err)
 	}
 	cedarSnapshots := cedarpolicy.SnapshotProvider(cedarCache)
-	var promptPolicies *sessionpolicy.Manager
-	if strings.EqualFold(strings.TrimSpace(os.Getenv(promptPolicyEnabledEnv)), "true") {
-		promptClient, clientErr := promptpolicy.NewClient(loadedConfig.Config.CloudURL, opts.PolicyHTTPClient)
-		if clientErr != nil {
-			return fmt.Errorf("configure prompt-policy client: %w", clientErr)
-		}
-		promptPolicies, clientErr = sessionpolicy.NewManager(
-			promptClient, promptpolicy.NewActivationValidator(), cedarCache,
-			func(tokenCtx context.Context) (string, error) {
-				loaded, loadErr := managedconfig.Load()
-				if loadErr != nil {
-					return "", loadErr
-				}
-				return managedconfig.ResolveInstallToken(tokenCtx, loaded.Config.Credentials.InstallTokenRef)
-			},
-			installationState.InstallationID, 60*time.Second,
-		)
-		if clientErr != nil {
-			return fmt.Errorf("configure prompt-policy manager: %w", clientErr)
-		}
-		cedarSnapshots = promptPolicies
+	promptClient, err := promptpolicy.NewClient(loadedConfig.Config.CloudURL, opts.PolicyHTTPClient)
+	if err != nil {
+		return fmt.Errorf("configure prompt-policy client: %w", err)
 	}
+	promptPolicies, err := sessionpolicy.NewManager(
+		promptClient, promptpolicy.NewActivationValidator(), cedarCache,
+		func(tokenCtx context.Context) (string, error) {
+			loaded, loadErr := managedconfig.Load()
+			if loadErr != nil {
+				return "", loadErr
+			}
+			return managedconfig.ResolveInstallToken(tokenCtx, loaded.Config.Credentials.InstallTokenRef)
+		},
+		installationState.InstallationID, 0,
+	)
+	if err != nil {
+		return fmt.Errorf("configure prompt-policy manager: %w", err)
+	}
+	cedarSnapshots = promptPolicies
 	endpointConfigCachePath := opts.EndpointConfigCachePath
 	if endpointConfigCachePath == "" {
 		endpointConfigCachePath = endpointconfig.DefaultCachePathForDB(dbPath)
@@ -201,6 +196,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		endpointConfigCache.MarkInvalid(err)
 		opts.Diagnostic.Printf("endpoint configuration cache load: %v\n", err)
 	}
+	promptPolicies.SetEnabled(promptPolicyEnabled(endpointConfigCache.Current()))
 	endpointConfigClient, err := endpointconfig.NewClient(loadedConfig.Config.CloudURL, opts.EndpointConfigHTTPClient)
 	if err != nil {
 		return fmt.Errorf("configure endpoint configuration client: %w", err)
@@ -299,6 +295,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot))
 			host.SetGuardrailLLMEnabled(guardrailLLMEnabled(snapshot))
+			promptPolicies.SetEnabled(promptPolicyEnabled(snapshot))
 		},
 	}
 	go endpointConfigRefresher.Run(policyCtx)
@@ -395,6 +392,10 @@ func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.Runti
 // would clear a deliberate off. A kill switch has to survive both.
 func guardrailLLMEnabled(snapshot endpointconfig.Snapshot) bool {
 	return riskclassifier.ResolveLLMEnabled(snapshot.GuardrailLLMDirective)
+}
+
+func promptPolicyEnabled(snapshot endpointconfig.Snapshot) bool {
+	return snapshot.PromptPolicyDirective != nil && *snapshot.PromptPolicyDirective
 }
 
 func requireManagedHooksForLegacyCowork(cfg managedconfig.Config) error {
