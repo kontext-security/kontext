@@ -47,6 +47,7 @@ type Snapshot struct {
 	PromptSequence uint64
 	Deployment     *cedarpolicy.Deployment
 	Failure        error
+	ExpiresAt      time.Time
 }
 
 type Manager struct {
@@ -129,8 +130,34 @@ func (m *Manager) BeginPrompt(ctx context.Context, key SessionKey, prompt string
 		return state.snapshot, state.snapshot.Failure
 	}
 	deployment := deploymentFromBundle(bundle)
-	state.snapshot = Snapshot{Required: true, Ready: true, PromptSequence: sequence, Deployment: &deployment}
+	expiresAt, _ := time.Parse(time.RFC3339Nano, bundle.ExpiresAt)
+	state.snapshot = Snapshot{Required: true, Ready: true, PromptSequence: sequence, Deployment: &deployment, ExpiresAt: expiresAt}
 	return cloneSnapshot(state.snapshot), nil
+}
+
+// Current preserves the existing organization policy API.
+func (m *Manager) Current() cedarpolicy.Snapshot { return m.parents.Current() }
+
+// CurrentFor returns exactly one selected complete policy set. Once a prompt
+// requires a derived set, absence/failure never falls back to the broader
+// parent in enforce mode.
+func (m *Manager) CurrentFor(sessionID, agent string) cedarpolicy.Snapshot {
+	base := m.parents.Current()
+	selected := m.SnapshotFor(SessionKey{Provider: agent, NativeSessionID: sessionID})
+	if !selected.Required {
+		return base
+	}
+	if selected.Ready && selected.Deployment != nil && time.Now().Before(selected.ExpiresAt) {
+		return cedarpolicy.Snapshot{
+			Deployment: selected.Deployment, LastKnownGood: selected.Deployment,
+			State:  cedarpolicy.StateSuccess,
+			Status: cedarpolicy.CacheStatus{State: cedarpolicy.StateSuccess, FetchedAt: time.Now()},
+		}
+	}
+	return cedarpolicy.Snapshot{
+		LastKnownGood: base.Deployment, State: cedarpolicy.StateUnavailable,
+		Status: cedarpolicy.CacheStatus{State: cedarpolicy.StateUnavailable, Invalid: true, LastError: "required prompt policy is not ready"},
+	}
 }
 
 func (m *Manager) SnapshotFor(key SessionKey) Snapshot {
