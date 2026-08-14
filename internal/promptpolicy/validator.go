@@ -27,7 +27,7 @@ func (v *ActivationValidator) Validate(bundle Bundle, expected ExpectedAudience)
 	if err := bundle.Validate(); err != nil {
 		return err
 	}
-	if bundle.Audience.OrganizationID != expected.OrganizationID ||
+	if (expected.OrganizationID != "" && bundle.Audience.OrganizationID != expected.OrganizationID) ||
 		bundle.Audience.InstallationID != expected.InstallationID ||
 		bundle.Audience.AuthorizationSessionID != expected.AuthorizationSessionID ||
 		bundle.Audience.PromptSequence != expected.PromptSequence ||
