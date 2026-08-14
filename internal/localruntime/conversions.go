@@ -12,17 +12,19 @@ import (
 
 func EvaluateRequestFromEvent(event hook.Event) (EvaluateRequest, error) {
 	req := EvaluateRequest{
-		Type:           "evaluate",
-		SessionID:      event.SessionID,
-		Agent:          event.Agent,
-		HookEvent:      event.HookName.String(),
-		ToolName:       event.ToolName,
-		ToolUseID:      event.ToolUseID,
-		CWD:            event.CWD,
-		PermissionMode: event.PermissionMode,
-		DurationMs:     event.DurationMs,
-		Error:          event.Error,
-		IsInterrupt:    event.IsInterrupt,
+		ProtocolVersion: 2,
+		Type:            "evaluate",
+		SessionID:       event.SessionID,
+		Agent:           event.Agent,
+		HookEvent:       event.HookName.String(),
+		Prompt:          event.Prompt,
+		ToolName:        event.ToolName,
+		ToolUseID:       event.ToolUseID,
+		CWD:             event.CWD,
+		PermissionMode:  event.PermissionMode,
+		DurationMs:      event.DurationMs,
+		Error:           event.Error,
+		IsInterrupt:     event.IsInterrupt,
 	}
 
 	if event.ToolInput != nil {
@@ -64,6 +66,7 @@ func EventFromEvaluateRequest(sessionID, fallbackAgent string, req *EvaluateRequ
 		SessionID:      sessionID,
 		Agent:          agent,
 		HookName:       hookName,
+		Prompt:         req.Prompt,
 		ToolName:       req.ToolName,
 		ToolUseID:      req.ToolUseID,
 		CWD:            req.CWD,
@@ -87,16 +90,17 @@ func EventFromEvaluateRequest(sessionID, fallbackAgent string, req *EvaluateRequ
 
 func EvaluateResultFromResult(result hook.Result) EvaluateResult {
 	return EvaluateResult{
-		Type:         "result",
-		Decision:     string(result.Decision),
-		Allowed:      result.Allowed(),
-		Reason:       result.Reason,
-		ReasonCode:   result.ReasonCode,
-		RequestID:    result.RequestID,
-		Mode:         result.Mode,
-		Epoch:        result.Epoch,
-		EventID:      result.EventID,
-		UpdatedInput: result.UpdatedInput,
+		ProtocolVersion: 2,
+		Type:            "result",
+		Decision:        string(result.Decision),
+		Allowed:         result.Allowed(),
+		Reason:          result.Reason,
+		ReasonCode:      result.ReasonCode,
+		RequestID:       result.RequestID,
+		Mode:            result.Mode,
+		Epoch:           result.Epoch,
+		EventID:         result.EventID,
+		UpdatedInput:    result.UpdatedInput,
 	}
 }
 

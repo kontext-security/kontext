@@ -92,6 +92,9 @@ func TestDecodeCodexEventUserPromptSubmitPreservesPrompt(t *testing.T) {
 	if event.HookName != hook.HookUserPromptSubmit {
 		t.Fatalf("HookName = %q, want UserPromptSubmit", event.HookName)
 	}
+	if event.Prompt != "ship it" {
+		t.Fatalf("Prompt = %q, want ship it", event.Prompt)
+	}
 	if event.ToolInput["prompt"] != "ship it" {
 		t.Fatalf("ToolInput[prompt] = %v, want prompt", event.ToolInput["prompt"])
 	}

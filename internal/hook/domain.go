@@ -84,9 +84,12 @@ func NormalizeDecision(value string) (Decision, bool) {
 }
 
 type Event struct {
-	SessionID      string
-	Agent          string
-	HookName       HookName
+	SessionID string
+	Agent     string
+	HookName  HookName
+	// Prompt is first-class task input. ToolInput temporarily retains a mirror
+	// for older classifier consumers; new prompt-policy code uses this field.
+	Prompt         string
 	ToolName       string
 	ToolInput      map[string]any
 	ToolResponse   map[string]any

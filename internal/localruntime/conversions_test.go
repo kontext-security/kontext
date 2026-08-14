@@ -15,6 +15,7 @@ func TestEvaluateRequestFromEventPreservesHookFields(t *testing.T) {
 	req, err := EvaluateRequestFromEvent(hook.Event{
 		Agent:          "claude",
 		HookName:       hook.HookPostToolUseFailed,
+		Prompt:         "ship it",
 		ToolName:       "Bash",
 		ToolInput:      map[string]any{"command": "npm test"},
 		ToolResponse:   map[string]any{"stderr": "failed"},
@@ -30,8 +31,10 @@ func TestEvaluateRequestFromEventPreservesHookFields(t *testing.T) {
 	}
 
 	if req.Type != "evaluate" ||
+		req.ProtocolVersion != 2 ||
 		req.Agent != "claude" ||
 		req.HookEvent != "PostToolUseFailure" ||
+		req.Prompt != "ship it" ||
 		req.ToolName != "Bash" ||
 		req.ToolUseID != "toolu_123" ||
 		req.CWD != "/tmp/project" ||
@@ -56,6 +59,7 @@ func TestEventFromEvaluateRequestPreservesHookFields(t *testing.T) {
 	event, err := EventFromEvaluateRequest("session-123", "fallback-agent", &EvaluateRequest{
 		Agent:          "claude",
 		HookEvent:      "PostToolUseFailure",
+		Prompt:         "ship it",
 		ToolName:       "Bash",
 		ToolInput:      json.RawMessage(`{"command":"npm test"}`),
 		ToolResponse:   json.RawMessage(`{"stderr":"failed"}`),
@@ -73,6 +77,7 @@ func TestEventFromEvaluateRequestPreservesHookFields(t *testing.T) {
 	if event.SessionID != "session-123" ||
 		event.Agent != "claude" ||
 		event.HookName != hook.HookPostToolUseFailed ||
+		event.Prompt != "ship it" ||
 		event.ToolName != "Bash" ||
 		event.ToolInput["command"] != "npm test" ||
 		event.ToolResponse["stderr"] != "failed" ||

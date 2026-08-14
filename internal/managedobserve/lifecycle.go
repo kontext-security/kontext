@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	sessionStartWait = 400 * time.Millisecond
-	preToolUseWait   = 250 * time.Millisecond
-	asyncHookWait    = 120 * time.Millisecond
-	probeTimeout     = 60 * time.Millisecond
+	sessionStartWait     = 400 * time.Millisecond
+	preToolUseWait       = 250 * time.Millisecond
+	userPromptSubmitWait = 60 * time.Second
+	asyncHookWait        = 120 * time.Millisecond
+	probeTimeout         = 60 * time.Millisecond
 )
 
 var launchdMu sync.Mutex
@@ -123,6 +124,8 @@ func (l Lifecycle) Process(ctx context.Context, event hook.Event) hook.Result {
 		return l.processWithKickstart(ctx, event, sessionStartWait)
 	case hook.HookPreToolUse:
 		return l.processWithKickstart(ctx, event, preToolUseWait)
+	case hook.HookUserPromptSubmit:
+		return l.processWithKickstart(ctx, event, userPromptSubmitWait)
 	default:
 		return l.processIfAvailable(ctx, event, asyncHookWait)
 	}

@@ -62,6 +62,7 @@ func DecodeCodexEvent(input []byte, agentName string) (hook.Event, error) {
 		SessionID:      codexSessionID(h.SessionID),
 		Agent:          agentName,
 		HookName:       hookName,
+		Prompt:         stringPtrValue(h.Prompt),
 		ToolName:       h.ToolName,
 		ToolInput:      toolInput,
 		ToolResponse:   normalizeToolResponse(h.ToolResponse),
