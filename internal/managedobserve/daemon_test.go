@@ -978,7 +978,7 @@ func TestDeviceKeySource(t *testing.T) {
 	const testUUID = "0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B"
 	quiet := diagnostic.Logger{}
 
-	t.Run("resolves once and caches", func(t *testing.T) {
+	t.Run("resolves once per config identity and caches", func(t *testing.T) {
 		pings := 0
 		stubDeviceKeyResolution(t,
 			func(context.Context) (string, error) { return testUUID, nil },
@@ -988,15 +988,46 @@ func TestDeviceKeySource(t *testing.T) {
 			})
 
 		source := &deviceKeySource{}
-		key := source.get(context.Background(), "https://api.test", "token", nil, quiet)
+		key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet)
 		if key != "dk_r9NpM1vh94fxqPIcsnx6DalBNVfubPTNYHUBLGUoUcc" {
-			t.Fatalf("get() = %q, want the pinned deviceid vector", key)
+			t.Fatalf("resolve() = %q, want the pinned deviceid vector", key)
 		}
-		if again := source.get(context.Background(), "https://api.test", "token", nil, quiet); again != key {
-			t.Fatalf("second get() = %q, want cached %q", again, key)
+		if again := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); again != key {
+			t.Fatalf("second resolve() = %q, want cached %q", again, key)
 		}
 		if pings != 1 {
 			t.Fatalf("workspace pings = %d, want the resolution cached after one", pings)
+		}
+	})
+
+	t.Run("re-derives when the config identity changes", func(t *testing.T) {
+		// A system-scope config rewritten in place to another workspace does
+		// NOT restart the daemon. Serving the old cached key there would hand
+		// the new workspace the previous workspace's stable pseudonym, so an
+		// identity change must invalidate the cache and derive fresh.
+		org := "org_katana"
+		pings := 0
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) { return testUUID, nil },
+			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+				pings++
+				return ledgerping.Response{OrganizationID: org}, nil
+			})
+
+		source := &deviceKeySource{}
+		first := source.resolve(context.Background(), "https://api.test", "token-a", nil, quiet)
+		org = "org_other"
+		second := source.resolve(context.Background(), "https://api.test", "token-b", nil, quiet)
+		if pings != 2 {
+			t.Fatalf("workspace pings = %d, want a fresh derivation after the token changed", pings)
+		}
+		if first == second || second != "dk_wOHaCumCEoXxMGJTl7KiZ-AranWDM3LpSgC8zass4UQ" {
+			t.Fatalf("resolve() after workspace change = %q, want the other workspace's pinned vector (first was %q)", second, first)
+		}
+		// A rotation back within one workspace re-pings but derives the same key.
+		org = "org_katana"
+		if rotated := source.resolve(context.Background(), "https://api.test", "token-c", nil, quiet); rotated != first {
+			t.Fatalf("resolve() after rotation = %q, want %q re-derived", rotated, first)
 		}
 	})
 
@@ -1010,38 +1041,38 @@ func TestDeviceKeySource(t *testing.T) {
 			})
 
 		source := &deviceKeySource{}
-		if key := source.get(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
-			t.Fatalf("get() = %q, want empty while the workspace is unreachable", key)
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
+			t.Fatalf("resolve() = %q, want empty while the workspace is unreachable", key)
 		}
 		pingErr = nil
-		if key := source.get(context.Background(), "https://api.test", "token", nil, quiet); key == "" {
-			t.Fatal("get() after the network came up = empty, want the key resolved on retry")
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key == "" {
+			t.Fatal("resolve() after the network came up = empty, want the key resolved on retry")
 		}
 	})
 
-	t.Run("gives up for good without a platform UUID", func(t *testing.T) {
-		uuidReads, pings := 0, 0
+	t.Run("retries after a failed platform UUID read", func(t *testing.T) {
+		// Even the local ioreg exec can fail transiently (resource pressure);
+		// caching that failure would silently disable the key until an
+		// unrelated daemon restart.
+		uuidErr := errors.New("fork: resource temporarily unavailable")
 		stubDeviceKeyResolution(t,
 			func(context.Context) (string, error) {
-				uuidReads++
-				return "", errors.New("ioreg unavailable")
+				if uuidErr != nil {
+					return "", uuidErr
+				}
+				return testUUID, nil
 			},
 			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
-				pings++
 				return ledgerping.Response{OrganizationID: "org_katana"}, nil
 			})
 
 		source := &deviceKeySource{}
-		for range 2 {
-			if key := source.get(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
-				t.Fatalf("get() = %q, want empty when the UUID is unreadable", key)
-			}
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
+			t.Fatalf("resolve() = %q, want empty while the UUID is unreadable", key)
 		}
-		if uuidReads != 1 {
-			t.Fatalf("uuid reads = %d, want the local deterministic failure cached", uuidReads)
-		}
-		if pings != 0 {
-			t.Fatal("workspace was pinged despite having no UUID to derive from")
+		uuidErr = nil
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key == "" {
+			t.Fatal("resolve() after ioreg recovered = empty, want the key resolved on retry")
 		}
 	})
 
@@ -1058,8 +1089,8 @@ func TestDeviceKeySource(t *testing.T) {
 		t.Setenv(envNoDeviceKey, "1")
 
 		source := &deviceKeySource{}
-		if key := source.get(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
-			t.Fatalf("get() = %q, want empty under %s", key, envNoDeviceKey)
+		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
+			t.Fatalf("resolve() = %q, want empty under %s", key, envNoDeviceKey)
 		}
 	})
 }

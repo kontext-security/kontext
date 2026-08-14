@@ -498,34 +498,41 @@ var (
 	workspacePingFn = ledgerping.Ping
 )
 
-// deviceKeySource resolves the device reconciliation key once and caches it
-// for the daemon's lifetime. Confined to the managed-stream goroutine, so no
-// locking. Both ingredients are stable while the daemon runs: the hardware
-// UUID by definition, and the organization id because a re-enrollment
-// rewrites the config and restarts the agent.
+// deviceKeySource resolves the device reconciliation key and caches it per
+// config identity. Confined to the managed-stream goroutine, so no locking.
+//
+// The cache is keyed by (cloudURL, token), not held for the daemon's
+// lifetime: a system-scope config can be rewritten in place to a DIFFERENT
+// workspace under a running daemon (MDM re-enrollment does not restart this
+// agent), and serving that workspace the key derived for the previous one
+// would hand it the previous workspace's stable pseudonym — precisely the
+// cross-workspace linkability the per-organization HMAC exists to prevent.
+// A token rotation within one workspace also invalidates and merely costs
+// one extra ping; the re-derived key is identical.
 type deviceKeySource struct {
 	key      string
+	cloudURL string
+	token    string
 	resolved bool
 }
 
-// get returns the cached key, resolving it on first use. Empty means "no key
-// this flush" and the batch's device envelope simply omits the field. The
-// failure modes deliberately differ: a machine that cannot answer ioreg now
-// will not answer it in ten seconds either, so that failure is cached; an
-// unreachable workspace is retried on the next flush, because the first
-// flushes after login race the network coming up.
-func (s *deviceKeySource) get(ctx context.Context, cloudURL, token string, client *http.Client, diag diagnostic.Logger) string {
-	if s.resolved {
-		return s.key
-	}
+// resolve returns the key for this flush's config identity, deriving it on
+// first use or whenever the identity changed. Empty means "no key this
+// flush" and the batch's device envelope simply omits the field. Every
+// failure is retried on a later flush — the first flushes after login race
+// the network coming up, and even the local ioreg read can fail transiently
+// under resource pressure — so nothing short of the kill switch disables
+// reporting for the daemon's lifetime.
+func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token string, client *http.Client, diag diagnostic.Logger) string {
 	if strings.TrimSpace(os.Getenv(envNoDeviceKey)) != "" {
-		s.resolved = true
 		return ""
+	}
+	if s.resolved && s.cloudURL == cloudURL && s.token == token {
+		return s.key
 	}
 	uuid, err := platformUUIDFn(ctx)
 	if err != nil {
 		diag.Printf("device key: %v\n", err)
-		s.resolved = true
 		return ""
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, deviceKeyPingTimeout)
@@ -538,10 +545,11 @@ func (s *deviceKeySource) get(ctx context.Context, cloudURL, token string, clien
 	key, err := deviceid.Key(uuid, ping.OrganizationID)
 	if err != nil {
 		diag.Printf("device key: %v\n", err)
-		s.resolved = true
 		return ""
 	}
 	s.key = key
+	s.cloudURL = cloudURL
+	s.token = token
 	s.resolved = true
 	return s.key
 }
@@ -594,6 +602,10 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 	if err != nil {
 		return fmt.Errorf("managed stream config reload: %w", err)
 	}
+	// Resolved once per flush, not per payload: a Flush drains the backlog in
+	// pages and builds a payload for each, and a hung ping retried per page
+	// would stack its timeout onto every page of the drain.
+	deviceKey := deviceKeys.resolve(ctx, loadedConfig.Config.CloudURL, installToken, opts.StreamHTTPClient, opts.Diagnostic)
 	if err := managedstream.Flush(ctx, managedstream.Options{
 		DBPath:            dbPath,
 		StatePath:         opts.StreamStatePath,
@@ -604,11 +616,9 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		UserEmail:         loadedConfig.Config.Device.UserEmail,
 		DeploymentVersion: deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
 		HooksFact:         managedObserveHooksFact,
-		DeviceKey: func() string {
-			return deviceKeys.get(ctx, loadedConfig.Config.CloudURL, installToken, opts.StreamHTTPClient, opts.Diagnostic)
-		},
-		HTTPClient: opts.StreamHTTPClient,
-		Diagnostic: opts.Diagnostic,
+		DeviceKey:         func() string { return deviceKey },
+		HTTPClient:        opts.StreamHTTPClient,
+		Diagnostic:        opts.Diagnostic,
 		OnFlushSuccess: func() {
 			if err := ClearAuthError(dbPath); err != nil {
 				opts.Diagnostic.Printf("clear auth-error breadcrumb: %v\n", err)
