@@ -194,7 +194,7 @@ func managedHookPlan(kontextBinary string) agenthooks.Plan {
 	for _, event := range SupportedEvents {
 		handler := agenthooks.CommandHook{
 			Command: hookCommand(kontextBinary, event.Alias),
-			Timeout: DefaultHookTimeout,
+			Timeout: eventTimeout(event),
 		}
 		if event.Async {
 			value := true
