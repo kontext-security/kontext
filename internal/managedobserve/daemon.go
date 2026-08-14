@@ -12,6 +12,7 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
+	"github.com/kontext-security/kontext-cli/internal/deviceid"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/endpointconfig"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
@@ -19,6 +20,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/installation"
+	"github.com/kontext-security/kontext-cli/internal/ledgerping"
 	"github.com/kontext-security/kontext-cli/internal/managedconfig"
 	"github.com/kontext-security/kontext-cli/internal/managedstream"
 	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
@@ -481,14 +483,78 @@ func loadManagedConfig(ctx context.Context) (managedconfig.LoadedConfig, string,
 	return loadedConfig, installToken, nil
 }
 
+// envNoDeviceKey switches off device-key reporting entirely — the escape
+// hatch for a backend that rejects the field before its ingest side deploys.
+const envNoDeviceKey = "KONTEXT_NO_DEVICE_KEY"
+
+// deviceKeyPingTimeout bounds the workspace ping inside a flush. The flush
+// interval is ~10s; a hung ping must not eat the whole cycle.
+const deviceKeyPingTimeout = 10 * time.Second
+
+// Test seams (repo convention, cf. updater.go's runCommand) so device-key
+// resolution never touches this machine's ioreg or a hosted backend.
+var (
+	platformUUIDFn  = deviceid.PlatformUUID
+	workspacePingFn = ledgerping.Ping
+)
+
+// deviceKeySource resolves the device reconciliation key once and caches it
+// for the daemon's lifetime. Confined to the managed-stream goroutine, so no
+// locking. Both ingredients are stable while the daemon runs: the hardware
+// UUID by definition, and the organization id because a re-enrollment
+// rewrites the config and restarts the agent.
+type deviceKeySource struct {
+	key      string
+	resolved bool
+}
+
+// get returns the cached key, resolving it on first use. Empty means "no key
+// this flush" and the batch's device envelope simply omits the field. The
+// failure modes deliberately differ: a machine that cannot answer ioreg now
+// will not answer it in ten seconds either, so that failure is cached; an
+// unreachable workspace is retried on the next flush, because the first
+// flushes after login race the network coming up.
+func (s *deviceKeySource) get(ctx context.Context, cloudURL, token string, client *http.Client, diag diagnostic.Logger) string {
+	if s.resolved {
+		return s.key
+	}
+	if strings.TrimSpace(os.Getenv(envNoDeviceKey)) != "" {
+		s.resolved = true
+		return ""
+	}
+	uuid, err := platformUUIDFn(ctx)
+	if err != nil {
+		diag.Printf("device key: %v\n", err)
+		s.resolved = true
+		return ""
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, deviceKeyPingTimeout)
+	defer cancel()
+	ping, err := workspacePingFn(pingCtx, client, cloudURL, token)
+	if err != nil {
+		diag.Printf("device key: workspace ping: %v\n", err)
+		return ""
+	}
+	key, err := deviceid.Key(uuid, ping.OrganizationID)
+	if err != nil {
+		diag.Printf("device key: %v\n", err)
+		s.resolved = true
+		return ""
+	}
+	s.key = key
+	s.resolved = true
+	return s.key
+}
+
 func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string) error {
 	interval := opts.StreamInterval
 	if interval == 0 {
 		interval = managedstream.DefaultIntervalFromEnv()
 	}
+	deviceKeys := &deviceKeySource{}
 	var consecutiveAuthFailures, consecutiveFlushFailures int
 	flush := func() {
-		err := flushManagedStream(ctx, opts, dbPath, installationID)
+		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys)
 		if err == nil {
 			consecutiveAuthFailures = 0
 			consecutiveFlushFailures = 0
@@ -523,7 +589,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	}
 }
 
-func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string) error {
+func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource) error {
 	loadedConfig, installToken, err := loadManagedConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("managed stream config reload: %w", err)
@@ -538,8 +604,11 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		UserEmail:         loadedConfig.Config.Device.UserEmail,
 		DeploymentVersion: deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
 		HooksFact:         managedObserveHooksFact,
-		HTTPClient:        opts.StreamHTTPClient,
-		Diagnostic:        opts.Diagnostic,
+		DeviceKey: func() string {
+			return deviceKeys.get(ctx, loadedConfig.Config.CloudURL, installToken, opts.StreamHTTPClient, opts.Diagnostic)
+		},
+		HTTPClient: opts.StreamHTTPClient,
+		Diagnostic: opts.Diagnostic,
 		OnFlushSuccess: func() {
 			if err := ClearAuthError(dbPath); err != nil {
 				opts.Diagnostic.Printf("clear auth-error breadcrumb: %v\n", err)
