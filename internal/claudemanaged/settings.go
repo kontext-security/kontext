@@ -19,12 +19,14 @@ const (
 	WindowsManagedSettingsPath = `C:\Program Files\ClaudeCode\managed-settings.json`
 	DefaultKontextBinary       = "/usr/local/bin/kontext"
 	DefaultHookTimeout         = 20
+	PromptHookTimeout          = 65
 )
 
 type Event struct {
-	Name  hook.HookName
-	Alias string
-	Async bool
+	Name    hook.HookName
+	Alias   string
+	Async   bool
+	Timeout int
 }
 
 var SupportedEvents = []Event{
@@ -33,6 +35,7 @@ var SupportedEvents = []Event{
 	{Name: hook.HookPostToolUse, Alias: "post-tool-use"},
 	{Name: hook.HookPostToolUseFailed, Alias: "post-tool-use-failure"},
 	{Name: hook.HookSessionEnd, Alias: "session-end", Async: true},
+	{Name: hook.HookUserPromptSubmit, Alias: "user-prompt-submit", Timeout: PromptHookTimeout},
 }
 
 func DefaultManagedSettingsPath() string {
@@ -79,7 +82,7 @@ func Template(kontextBinary string) Settings {
 		handler := Handler{
 			Type:    "command",
 			Command: hookCommand(kontextBinary, event.Alias),
-			Timeout: DefaultHookTimeout,
+			Timeout: eventTimeout(event),
 		}
 		if event.Async {
 			value := true
@@ -262,7 +265,7 @@ func hasManagedObserveHook(groups []MatcherGroup, event Event) bool {
 }
 
 func isCanonicalManagedDropInHandler(handler Handler, event Event) bool {
-	if handler.Type != "command" || len(handler.Args) != 0 || handler.Timeout != DefaultHookTimeout {
+	if handler.Type != "command" || len(handler.Args) != 0 || handler.Timeout != eventTimeout(event) {
 		return false
 	}
 	if event.Async {
@@ -277,6 +280,13 @@ func isCanonicalManagedDropInHandler(handler Handler, event Event) bool {
 		filepath.Base(fields[0]) == "kontext" &&
 		fields[1] == "hook" &&
 		fields[2] == event.Alias
+}
+
+func eventTimeout(event Event) int {
+	if event.Timeout > 0 {
+		return event.Timeout
+	}
+	return DefaultHookTimeout
 }
 
 func ParseEventAlias(value string) (hook.HookName, bool) {

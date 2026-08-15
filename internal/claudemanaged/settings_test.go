@@ -42,8 +42,8 @@ func TestTemplateIncludesManagedKontextHooks(t *testing.T) {
 		if len(handler.Args) != 0 {
 			t.Fatalf("%s args = %q, want omitted", event.Name, handler.Args)
 		}
-		if handler.Timeout != DefaultHookTimeout {
-			t.Fatalf("%s timeout = %d, want %d", event.Name, handler.Timeout, DefaultHookTimeout)
+		if handler.Timeout != eventTimeout(event) {
+			t.Fatalf("%s timeout = %d, want %d", event.Name, handler.Timeout, eventTimeout(event))
 		}
 		if event.Async {
 			if handler.Async == nil || !*handler.Async {
