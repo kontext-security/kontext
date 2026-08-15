@@ -24,12 +24,23 @@ func (p *promptPolicyProvider) DecideHook(ctx context.Context, event risk.HookEv
 	key := sessionpolicy.SessionKey{Provider: event.Agent, NativeSessionID: event.SessionID}
 	switch hook.HookName(event.HookEventName) {
 	case hook.HookUserPromptSubmit:
-		if _, err := p.policies.BeginPrompt(ctx, key, event.Prompt); err != nil {
-			return risk.RiskDecision{
-				Decision: risk.DecisionDeny, Reason: "The prompt policy could not be activated: " + err.Error(),
-				ReasonCode: "prompt_policy_activation_failed",
-			}, nil
+		snapshot, activationErr := p.policies.BeginPrompt(ctx, key, event.Prompt)
+		decision, err := p.current.DecideHook(ctx, event)
+		if err != nil {
+			decision = risk.RiskDecision{
+				Reason:     "Prompt accepted; downstream prompt evaluation was unavailable.",
+				ReasonCode: "prompt_evaluation_unavailable",
+			}
 		}
+		decision.Decision = risk.DecisionAllow
+		if activationErr != nil {
+			decision.Reason = "Prompt accepted; policy was not generated."
+			decision.ReasonCode = "prompt_policy_generation_failed"
+		} else if snapshot.State == sessionpolicy.SessionStateActive {
+			decision.Reason = "Prompt accepted; policy generated."
+			decision.ReasonCode = "prompt_policy_generated"
+		}
+		return decision, nil
 	case hook.HookSessionEnd:
 		p.policies.EndSession(key)
 	}

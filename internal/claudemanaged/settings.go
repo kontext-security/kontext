@@ -166,11 +166,17 @@ func IsManagedSettingsDropIn(data []byte) bool {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return false
 	}
-	if len(settings.Hooks) != len(SupportedEvents) {
+	// Upgrade compatibility: the previous Kontext-owned drop-in had the same
+	// exact shape minus UserPromptSubmit. Recognize it as ours so setup can
+	// replace it and uninstall can remove it safely.
+	if len(settings.Hooks) != len(SupportedEvents) && len(settings.Hooks) != len(SupportedEvents)-1 {
 		return false
 	}
 	for _, event := range SupportedEvents {
 		groups := settings.Hooks[event.Name.String()]
+		if event.Name == hook.HookUserPromptSubmit && len(groups) == 0 && len(settings.Hooks) == len(SupportedEvents)-1 {
+			continue
+		}
 		if len(groups) != 1 || groups[0].Matcher != "" || len(groups[0].Hooks) != 1 {
 			return false
 		}

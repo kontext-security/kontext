@@ -36,17 +36,23 @@ type cedarPolicyProvider struct {
 	snapshots   cedarpolicy.SnapshotProvider
 	enforcement CedarEnforcementSource
 
-	mu        sync.Mutex
-	identity  string
-	evaluator *cedareval.Evaluator
-	parseErr  error
+	mu             sync.Mutex
+	evaluators     map[string]cachedEvaluator
+	evaluatorOrder []string
 }
+
+type cachedEvaluator struct {
+	evaluator *cedareval.Evaluator
+	err       error
+}
+
+const maxCachedEvaluators = 32
 
 func newCedarPolicyProvider(current PolicyProvider, snapshots cedarpolicy.SnapshotProvider, enforcement CedarEnforcementSource) PolicyProvider {
 	if snapshots == nil {
 		return current
 	}
-	return &cedarPolicyProvider{current: current, snapshots: snapshots, enforcement: enforcement}
+	return &cedarPolicyProvider{current: current, snapshots: snapshots, enforcement: enforcement, evaluators: make(map[string]cachedEvaluator)}
 }
 
 func (p *cedarPolicyProvider) DecideHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
@@ -90,18 +96,15 @@ func (p *cedarPolicyProvider) claimsAuthority(snapshot cedarpolicy.Snapshot) boo
 		if snapshot.Status.Invalid {
 			return true
 		}
-		deployment := snapshot.Deployment
-		if deployment == nil {
-			deployment = snapshot.LastKnownGood
-		}
-		if deployment == nil {
+		policySet := snapshot.BestKnownPolicySet()
+		if policySet == nil {
 			// Once the local cutover gate is enabled, absence and untrusted
 			// response states cannot silently restore the previous evaluator.
 			// Only explicit disabled/no-active-policy states relinquish Cedar
 			// authority.
 			return true
 		}
-		return deployment.RolloutMode == cedareval.RolloutModeEnforce
+		return policySet.RolloutMode == string(cedareval.RolloutModeEnforce)
 	case CedarEnforcementRemote:
 		return cedarpolicy.DeploymentClaimsEnforce(snapshot)
 	default:
@@ -123,23 +126,20 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	outcome := cedareval.EvaluationOutcome{State: cedareval.EvaluationStateFailed, Reason: cedareval.ReasonPolicyMissing}
 	var principal *cedareval.EvaluationPrincipal
 
-	metadata := snapshot.Deployment
-	if metadata == nil {
-		metadata = snapshot.LastKnownGood
-	}
+	metadata := snapshot.BestKnownPolicySet()
 	if metadata != nil {
-		deployment := metadata
-		evidence.ResponseVersion = deployment.ResponseVersion
-		evidence.RequestContractVersion = deployment.RequestContractVersion
-		evidence.PolicyHash = deployment.PolicyHash
-		evidence.DeploymentIdentity = deployment.DeploymentIdentity
-		evidence.ConfiguredRolloutMode = deployment.RolloutMode
-		principalValue := deployment.EvaluationPrincipal
+		policySet := metadata
+		evidence.ResponseVersion = policySet.ResponseVersion
+		evidence.RequestContractVersion = policySet.RequestContractVersion
+		evidence.PolicyHash = policySet.SourceHash
+		evidence.DeploymentIdentity = policySet.DeploymentIdentity
+		evidence.ConfiguredRolloutMode = cedareval.RolloutMode(policySet.RolloutMode)
+		principalValue := policySet.EvaluationPrincipal
 		principal = &principalValue
 
-		if snapshot.Deployment == nil {
+		if snapshot.ActivePolicySet() == nil {
 			outcome.Reason = cedareval.ReasonStaleCachedPolicy
-		} else if evaluator, parseErr := p.evaluatorFor(deployment); parseErr != nil {
+		} else if evaluator, parseErr := p.evaluatorFor(policySet); parseErr != nil {
 			outcome.Reason = cedareval.ReasonInvalidCachedPolicy
 			evidence.EngineErrorCount = 1
 		} else {
@@ -187,7 +187,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	currentAuthority := current
 	if claimsAuthority {
 		appliedMode = cedareval.RolloutModeEnforce
-		enforcementReady = snapshot.Deployment != nil && !snapshot.Status.Expired && !snapshot.Status.Invalid
+		enforcementReady = snapshot.ActivePolicySet() != nil && !snapshot.Status.Expired && !snapshot.Status.Invalid
 		currentAuthority = ""
 		if !enforcementReady {
 			outcome = cedareval.EvaluationOutcome{State: cedareval.EvaluationStateNotEvaluated, Reason: cedareval.ReasonEnforcementNotReady}
@@ -243,14 +243,32 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	return evidence
 }
 
-func (p *cedarPolicyProvider) evaluatorFor(deployment *cedarpolicy.Deployment) (*cedareval.Evaluator, error) {
+func (p *cedarPolicyProvider) evaluatorFor(policySet *cedarpolicy.PolicySetSnapshot) (*cedareval.Evaluator, error) {
+	if policySet.Evaluator != nil {
+		return policySet.Evaluator, nil
+	}
+	p.mu.Lock()
+	if cached, ok := p.evaluators[policySet.DeploymentIdentity]; ok {
+		p.mu.Unlock()
+		return cached.evaluator, cached.err
+	}
+	p.mu.Unlock()
+
+	evaluator, err := cedareval.New(policySet.Source)
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.identity != deployment.DeploymentIdentity {
-		p.identity = deployment.DeploymentIdentity
-		p.evaluator, p.parseErr = cedareval.New(deployment.PolicyText)
+	if cached, ok := p.evaluators[policySet.DeploymentIdentity]; ok {
+		return cached.evaluator, cached.err
 	}
-	return p.evaluator, p.parseErr
+	p.evaluators[policySet.DeploymentIdentity] = cachedEvaluator{evaluator: evaluator, err: err}
+	p.evaluatorOrder = append(p.evaluatorOrder, policySet.DeploymentIdentity)
+	if len(p.evaluatorOrder) > maxCachedEvaluators {
+		oldest := p.evaluatorOrder[0]
+		p.evaluatorOrder = p.evaluatorOrder[1:]
+		delete(p.evaluators, oldest)
+	}
+	return evaluator, err
 }
 
 func executionAction(decision risk.Decision) cedareval.EffectiveExecutionAction {

@@ -14,6 +14,7 @@ func TestActivationValidatorAcceptsExactBundleAndRejectsTampering(t *testing.T) 
 		OrganizationID: "org-1", InstallationID: "ins_12345678901234567890123456789012",
 		AuthorizationSessionID: "codex-session-1", PromptSequence: 3,
 		ParentDeploymentIdentity: bundle.Parent.DeploymentIdentity,
+		RolloutMode:              bundle.RolloutMode,
 	}
 	if err := validator.Validate(bundle, expected); err != nil {
 		t.Fatalf("validate bundle: %v", err)
@@ -29,6 +30,11 @@ func TestActivationValidatorAcceptsExactBundleAndRejectsTampering(t *testing.T) 
 	if err := validator.Validate(bundle, wrongSession); err == nil {
 		t.Fatal("expected audience mismatch to be rejected")
 	}
+	wrongRollout := expected
+	wrongRollout.RolloutMode = "observe"
+	if err := validator.Validate(bundle, wrongRollout); err == nil {
+		t.Fatal("expected rollout mismatch to be rejected")
+	}
 }
 
 func TestDecodeBundleRejectsUnknownAndTrailingJSON(t *testing.T) {
@@ -42,11 +48,33 @@ func TestDecodeBundleRejectsUnknownAndTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestDeploymentIdentityMatchesTypeScriptFixture(t *testing.T) {
+	source := `@id("kontext.generated.fixture") forbid(principal, action, resource);`
+	digest := sourceHash(source)
+	bundle := Bundle{
+		ResponseVersion: ResponseVersion, CedarRequestContractVersion: CedarRequestVersion,
+		RolloutMode:         "enforce",
+		Audience:            Audience{OrganizationID: "org_fixture", InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", AuthorizationSessionID: "codex:session:epoch", PromptSequence: 1},
+		Parent:              ParentPolicySet{PolicySetVersionID: "11111111-1111-4111-8111-111111111111", PolicySetSourceHash: digest, DeploymentIdentity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		PolicySet:           EffectivePolicySet{PolicySetVersionID: "22222222-2222-4222-8222-222222222222", Source: source, SourceHash: digest, StaticPolicyCount: 1},
+		EvaluationPrincipal: EvaluationPrincipal{EntityType: "Kontext::User", EntityID: "user-fixture"},
+		ValidFrom:           "2026-08-15T10:00:00.000Z", ExpiresAt: "2026-08-15T11:00:00.000Z",
+	}
+	identity, err := bundle.ComputeDeploymentIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expected = "817e35fb0e6018c6bf9e50e143be55df2ae23e1a07a5786e9aa2b1bc3e353e31"
+	if identity != expected {
+		t.Fatalf("identity = %s, want %s", identity, expected)
+	}
+}
+
 func testBundle(t *testing.T, now time.Time) Bundle {
 	t.Helper()
 	source := `permit(principal, action, resource);`
 	bundle := Bundle{
-		ResponseVersion: ResponseVersion, RequestContractVersion: CedarRequestVersion,
+		ResponseVersion: ResponseVersion, CedarRequestContractVersion: CedarRequestVersion,
 		RolloutMode:         "enforce",
 		Audience:            Audience{OrganizationID: "org-1", InstallationID: "ins_12345678901234567890123456789012", AuthorizationSessionID: "codex-session-1", PromptSequence: 3},
 		Parent:              ParentPolicySet{PolicySetVersionID: "11111111-1111-4111-8111-111111111111", PolicySetSourceHash: sourceHash(source), DeploymentIdentity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},

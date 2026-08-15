@@ -175,6 +175,17 @@ func (l Lifecycle) processIfAvailable(ctx context.Context, event hook.Event, bud
 // stamped enforce — the daemon stamps those exactly when the fetched policy
 // deployment claims enforcement — and treats everything else as observe.
 func (l Lifecycle) finalize(event hook.Event, result hook.Result) hook.Result {
+	// Prompt submission is the policy boundary, never an authorization target.
+	// Generation may fail, but rejecting the user's prompt would prevent the
+	// agent from explaining or recovering. PreToolUse remains the fail-closed
+	// edge when no policy was activated.
+	if event.HookName == hook.HookUserPromptSubmit {
+		result.Decision = hook.DecisionAllow
+		if l.enforcing() {
+			result.Mode = managedconfig.ModeEnforce
+		}
+		return result
+	}
 	if l.enforcing() {
 		if !guardhookruntime.AuthoritativeEnforce(result) {
 			return l.daemonUnavailable(event)
@@ -198,6 +209,17 @@ func (l Lifecycle) finalize(event hook.Event, result hook.Result) hook.Result {
 // enforcement; otherwise it fails open like observe, so a fresh self-serve
 // install without an enforcing deployment never hard-blocks the agent.
 func (l Lifecycle) daemonUnavailable(event hook.Event) hook.Result {
+	if event.HookName == hook.HookUserPromptSubmit {
+		mode := managedconfig.Mode
+		if l.enforcing() || (l.remote() && l.RemoteEnforce != nil && l.RemoteEnforce()) {
+			mode = managedconfig.ModeEnforce
+		}
+		return hook.Result{
+			Decision: hook.DecisionAllow,
+			Mode:     mode,
+			Reason:   "Prompt accepted; tool use waits for authorization policy activation",
+		}
+	}
 	if l.remote() && l.RemoteEnforce != nil && l.RemoteEnforce() {
 		decision := hook.DecisionAllow
 		if event.HookName.CanBlock() {
