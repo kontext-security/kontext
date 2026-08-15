@@ -42,6 +42,14 @@ type SnapshotProvider interface {
 	Current() Snapshot
 }
 
+// SessionSnapshotProvider selects one complete policy set for an agent
+// session. Providers that do not implement it retain organization-only v1
+// behavior.
+type SessionSnapshotProvider interface {
+	SnapshotProvider
+	CurrentFor(sessionID, agent string) Snapshot
+}
+
 type cacheFile struct {
 	Version    int         `json:"version"`
 	State      State       `json:"state"`
