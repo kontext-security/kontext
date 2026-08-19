@@ -170,6 +170,53 @@ func TestObserveModeSkipsNonCommandTools(t *testing.T) {
 	}
 }
 
+func TestRiskTypesRunOnlyForBinaryRiskyShellCommands(t *testing.T) {
+	server, store := newClassifierServer(t)
+
+	for _, event := range []hook.Event{
+		{
+			SessionID: "sess_types",
+			HookName:  hook.HookPreToolUse,
+			ToolName:  "Bash",
+			ToolInput: map[string]any{"command": "launchctl kickstart -k gui/501/security.kontext.managed-observe"},
+			ToolUseID: "tool_risky_shell",
+		},
+		{
+			SessionID: "sess_types",
+			HookName:  hook.HookPreToolUse,
+			ToolName:  "apply_patch",
+			ToolInput: map[string]any{"command": "launchctl kickstart -k gui/501/security.kontext.managed-observe"},
+			ToolUseID: "tool_patch",
+		},
+		{
+			SessionID: "sess_types",
+			HookName:  hook.HookPreToolUse,
+			ToolName:  "Bash",
+			ToolInput: map[string]any{"command": "git status"},
+			ToolUseID: "tool_safe_shell",
+		},
+	} {
+		result, err := server.RuntimeCore().EvaluateHook(context.Background(), event)
+		if err != nil {
+			t.Fatalf("evaluate %s: %v", event.ToolUseID, err)
+		}
+		if result.Decision != hook.DecisionAllow {
+			t.Fatalf("risk types changed %s decision to %s", event.ToolUseID, result.Decision)
+		}
+	}
+
+	annotations, _, err := store.RiskTypeAnnotations(context.Background(), sqlite.RiskTypeAnnotationExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(annotations) != 1 || annotations[0].ToolUseID != "tool_risky_shell" {
+		t.Fatalf("risk-type annotations = %+v, want only risky shell", annotations)
+	}
+	if annotations[0].InputKind != riskclassifier.RiskTypeInputRawCommand {
+		t.Fatalf("live input kind = %q", annotations[0].InputKind)
+	}
+}
+
 func TestObserveModeCapturesAgentTaskAndRedactsCredentials(t *testing.T) {
 	server, store := newClassifierServer(t)
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,9 +31,11 @@ type Redactor func(string) string
 // decision path but never consulted there: the caller finalizes its decision
 // first and only then attaches this.
 type Verdicts struct {
-	SVM      *SVMVerdict
-	LLM      *LLMVerdict
-	LLMError string
+	SVM           *SVMVerdict
+	LLM           *LLMVerdict
+	LLMError      string
+	RiskTypes     *RiskTypeVerdict
+	RiskTypeError string
 
 	// Command is the persisted form — redacted and capped — and CommandHash is
 	// the SHA-256 of exactly that text, so the hash never covers content the
@@ -47,9 +50,11 @@ type Verdicts struct {
 
 // ClassifierOptions configure the in-path classifier.
 type ClassifierOptions struct {
-	SVM       *SVM       // required
-	Redact    Redactor   // required
-	Guardrail *Guardrail // optional; nil records the SVM alone
+	SVM           *SVM         // required
+	RiskTypes     *RiskTypeSVM // optional; nil leaves the second stage absent
+	RiskTypeError string       // optional load failure retained for eligible rows
+	Redact        Redactor     // required
+	Guardrail     *Guardrail   // optional; nil records the SVM alone
 	// LLMEnabled reports whether the guardrail may run. Consulted per call so
 	// a remote kill switch takes effect without a restart. Nil means enabled.
 	LLMEnabled func() bool
@@ -60,13 +65,16 @@ type ClassifierOptions struct {
 // breaker, and a readiness probe — an unhealthy or still-loading sidecar must
 // cost a tool call nothing.
 //
-// The SVM is embedded and effectively free (~12µs), so it always runs. The
-// guardrail is the expensive, failable half and is the only part gated.
+// The binary SVM is embedded and effectively free (~12µs), so it always runs.
+// The native risk-type SVM is gated to its eligible subset. The guardrail is
+// the expensive, failable half and has its own configuration/readiness gates.
 type Classifier struct {
-	svm        *SVM
-	redact     Redactor
-	guardrail  *Guardrail
-	llmEnabled func() bool
+	svm           *SVM
+	riskTypes     *RiskTypeSVM
+	riskTypeError string
+	redact        Redactor
+	guardrail     *Guardrail
+	llmEnabled    func() bool
 
 	breaker  *breaker
 	prompts  *lruCache[string]
@@ -82,12 +90,14 @@ func NewClassifier(opts ClassifierOptions) *Classifier {
 		return nil
 	}
 	classifier := &Classifier{
-		svm:        opts.SVM,
-		redact:     opts.Redact,
-		guardrail:  opts.Guardrail,
-		llmEnabled: opts.LLMEnabled,
-		prompts:    newLRUCache[string](promptCacheSize),
-		llmCache:   newLRUCache[LLMVerdict](llmCacheSize),
+		svm:           opts.SVM,
+		riskTypes:     opts.RiskTypes,
+		riskTypeError: opts.RiskTypeError,
+		redact:        opts.Redact,
+		guardrail:     opts.Guardrail,
+		llmEnabled:    opts.LLMEnabled,
+		prompts:       newLRUCache[string](promptCacheSize),
+		llmCache:      newLRUCache[LLMVerdict](llmCacheSize),
 	}
 	if opts.Guardrail != nil {
 		classifier.breaker = newBreaker(opts.Guardrail.readinessProbe())
@@ -114,8 +124,10 @@ func (c *Classifier) LLMSkipped() int64 {
 }
 
 // Classify annotates one command. It runs for every decision outcome; the
-// caller has already decided by the time this is called.
-func (c *Classifier) Classify(ctx context.Context, sessionID, command string) Verdicts {
+// caller has already decided by the time this is called. toolName is kept at
+// this boundary so the risk-type stage can require an explicit shell tool — a
+// command-shaped field on apply_patch is not shell execution.
+func (c *Classifier) Classify(ctx context.Context, sessionID, toolName, command string) Verdicts {
 	if c == nil || strings.TrimSpace(command) == "" {
 		return Verdicts{}
 	}
@@ -145,8 +157,30 @@ func (c *Classifier) Classify(ctx context.Context, sessionID, command string) Ve
 		CommandTruncated: truncated,
 		AgentTask:        c.agentTask(sessionID),
 	}
+	c.attachRiskTypes(toolName, command, svmVerdict, &verdicts)
 	c.attachLLM(ctx, command, &verdicts)
 	return verdicts
+}
+
+func (c *Classifier) attachRiskTypes(toolName, command string, svmVerdict SVMVerdict, verdicts *Verdicts) {
+	if svmVerdict.Verdict != VerdictRisky || !IsShellCommandTool(toolName) {
+		return
+	}
+	if c.riskTypes == nil {
+		verdicts.RiskTypeError = c.riskTypeError
+		return
+	}
+	// A corrupt in-memory model or scorer bug is advisory degradation. Recover
+	// here so this second stage can never crash the daemon after authorization
+	// has already settled the tool call.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			verdicts.RiskTypes = nil
+			verdicts.RiskTypeError = fmt.Sprintf("risk-type classifier panic: %v", recovered)
+		}
+	}()
+	verdict := c.riskTypes.Classify(command)
+	verdicts.RiskTypes = &verdict
 }
 
 func (c *Classifier) attachLLM(ctx context.Context, command string, verdicts *Verdicts) {
