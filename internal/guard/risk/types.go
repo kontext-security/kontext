@@ -135,9 +135,11 @@ type CedarEvidence struct {
 // ClassifierAnnotation is one action's risk annotation. AgentTask and the
 // command fields stay local; only the verdict block is uploaded.
 type ClassifierAnnotation struct {
-	SVM      *ClassifierSVM `json:"svm,omitempty"`
-	LLM      *ClassifierLLM `json:"llm,omitempty"`
-	LLMError string         `json:"llm_error,omitempty"`
+	SVM           *ClassifierSVM       `json:"svm,omitempty"`
+	LLM           *ClassifierLLM       `json:"llm,omitempty"`
+	LLMError      string               `json:"llm_error,omitempty"`
+	RiskTypes     *ClassifierRiskTypes `json:"-"`
+	RiskTypeError string               `json:"-"`
 	// LLMPromptID records which prompt variant produced the verdict. Local
 	// only: the hosted block deliberately omits it.
 	LLMPromptID string `json:"-"`
@@ -153,8 +155,6 @@ type ClassifierAnnotation struct {
 
 // ClassifierSVM and ClassifierLLM use the field names the hosted ingest
 // expects. Renaming them breaks the upload contract.
-// ClassifierSVM and ClassifierLLM use the field names the hosted ingest
-// expects. Renaming them breaks the upload contract.
 type ClassifierSVM struct {
 	Verdict      string  `json:"verdict"`
 	Score        float64 `json:"score"`
@@ -167,6 +167,35 @@ type ClassifierLLM struct {
 	Model      string `json:"model"`
 	DurationMs int64  `json:"duration_ms"`
 	Cached     bool   `json:"cached"`
+}
+
+// ClassifierRiskTypes is local derived data, deliberately excluded from the
+// signed DecisionFact. It is appended after the fact is written so historical
+// facts can be enriched by the same model without rewriting signed evidence.
+type ClassifierRiskTypes struct {
+	SchemaVersion   string
+	Status          string
+	RiskTypes       []string
+	PrimaryRiskType string
+	Scores          []ClassifierRiskTypeScore
+	Threshold       float64
+	Abstained       bool
+	Provenance      ClassifierRiskTypeProvenance
+}
+
+type ClassifierRiskTypeScore struct {
+	RiskType string
+	Score    float64
+}
+
+type ClassifierRiskTypeProvenance struct {
+	ModelVersion            string
+	SourceArtifactSHA256    string
+	SourceRevision          string
+	SourcePR                string
+	AnnotationSHA256        string
+	AnnotationSchemaVersion string
+	AnnotationPromptVersion string
 }
 
 func MarshalInput(value map[string]any) string {

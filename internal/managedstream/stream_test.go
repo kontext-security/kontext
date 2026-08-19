@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
 
@@ -89,6 +90,67 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 	}
 	if state.LastHeartbeatAttemptAt == "" || state.LastHeartbeatAt == "" {
 		t.Fatalf("heartbeat state = %+v, want ledger success to count as heartbeat", state)
+	}
+}
+
+func TestFlushUploadsAppendOnlyRiskTypeAnnotations(t *testing.T) {
+	store, dbPath := testStore(t)
+	saveTestDecision(t, store, "session-1", "toolu_types")
+	var actionID string
+	actions, err := store.AuthorizationActions(context.Background(), sqlite.LedgerExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range actions {
+		if action["tool_use_id"] == "toolu_types" && action["canonical_event_type"] == "request.decided" {
+			actionID, _ = action["id"].(string)
+		}
+	}
+	if actionID == "" {
+		t.Fatal("decided action not found")
+	}
+	model, err := riskclassifier.LoadRiskTypeSVM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, inserted, err := store.SaveRiskTypeAnnotation(context.Background(), riskclassifier.RiskTypeRecord{
+		ActionID:    actionID,
+		SessionID:   "session-1",
+		ToolUseID:   "toolu_types",
+		CommandHash: "redacted-command-hash",
+		InputKind:   riskclassifier.RiskTypeInputStoredRedactedCommand,
+		Verdict:     model.Classify("launchctl load ~/Library/LaunchAgents/example.plist"),
+	}); err != nil || !inserted {
+		t.Fatalf("save risk type = inserted %v, err %v", inserted, err)
+	}
+
+	var got Payload
+	server := capturePayloadServer(t, &got)
+	t.Cleanup(server.Close)
+	statePath := filepath.Join(t.TempDir(), "stream-state.json")
+	if err := Flush(context.Background(), Options{
+		DBPath:         dbPath,
+		StatePath:      statePath,
+		CloudURL:       server.URL,
+		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		InstallToken:   "test-install-token",
+		HTTPClient:     server.Client(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.RiskTypeAnnotations) != 1 {
+		t.Fatalf("uploaded risk-type annotations = %d", len(got.RiskTypeAnnotations))
+	}
+	annotation := got.RiskTypeAnnotations[0]
+	if annotation.ActionID != actionID || annotation.Verdict.SchemaVersion != riskclassifier.RiskTypeAnnotationSchema {
+		t.Fatalf("uploaded annotation = %+v", annotation)
+	}
+	state, err := LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RiskTypeCreatedAfter == nil {
+		t.Fatal("risk-type upload cursor was not persisted")
 	}
 }
 

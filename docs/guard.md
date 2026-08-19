@@ -136,6 +136,13 @@ The model is **char n-gram + LinearSVM** — the benchmark winner, ported native
 ../authz-bench/.venv/bin/python scripts/riskclassifier/export_portable.py --authz ../authz-bench
 ```
 
+Binary-risky shell commands also receive a native, multi-label char-SVM
+risk-type annotation. It is separate append-only derived data rather than part
+of the signed decision fact, so historical calls can be enriched without
+rewriting evidence. See [Observe-only risk-type classification](risk-type-classifier.md)
+for the exact model contract, retrospective command, transfer caveat, and the
+required companion hosted-schema deployment.
+
 ### Guardrail LLM
 
 The second model is the stock, public **Qwen3-0.6B** served on `llama-server` with the prompt authz-bench's sweep selected (`eval/optimize_prompt.py`, variant "V2 precision + balanced few-shot"). Nothing is fine-tuned and nothing custom ships: the GGUF is pulled from Hugging Face like any other judge model, and the prompt is exported verbatim into `internal/guard/riskclassifier/prompts/guardrail-v2.json` by `scripts/riskclassifier/export_prompt.py` — a reworded bullet is a different classifier, so it is copied mechanically rather than by hand.

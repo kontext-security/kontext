@@ -51,7 +51,7 @@ type Options struct {
 	CurrentSessionID string
 	Mode             string
 	// RiskClassifier enables observe-mode risk-classifier logging for
-	// intercepted bash commands. Nil disables it.
+	// intercepted commands. Nil disables it.
 	RiskClassifier *RiskClassifierOptions
 	// DeferRecord, when non-nil, receives every store write for each settled
 	// decision-gating hook — session upsert, annotation, decision row — so
@@ -63,9 +63,11 @@ type Options struct {
 	DeferRecord func(job func(context.Context) error)
 }
 
-// RiskClassifierOptions configure the risk classifier. The SVM is embedded and
-// always runs; the fields here govern the guardrail LLM, which needs a local
-// endpoint and whose placement relative to the hook path is a cost decision.
+// RiskClassifierOptions configure the risk classifier. The binary SVM is
+// embedded and always runs; the risk-type SVM is embedded and gated to risky
+// shell commands. The fields here govern the guardrail LLM, which needs a
+// local endpoint and whose placement relative to the hook path is a cost
+// decision.
 type RiskClassifierOptions struct {
 	Mode             riskclassifier.Mode
 	GuardrailBaseURL string
@@ -154,9 +156,9 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 	return server, nil
 }
 
-// newRiskClassifier builds the in-path classifier. Every failure degrades to
-// nil (no annotation) rather than blocking startup: this path is advisory and
-// must never keep Guard from running.
+// newRiskClassifier builds the in-path classifier. A binary-model failure
+// degrades to nil; a risk-type failure keeps the binary model and is recorded
+// on eligible rows. Neither failure blocks Guard startup.
 func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 	if opts == nil {
 		return nil
@@ -165,8 +167,17 @@ func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 	if err != nil {
 		return nil
 	}
+	riskTypes, riskTypeErr := riskclassifier.LoadRiskTypeSVM()
+	riskTypeError := ""
+	if riskTypeErr != nil {
+		// The binary SVM remains useful and continues running. Retain the error
+		// so an eligible risky shell row explains why its second stage is absent.
+		riskTypeError = riskTypeErr.Error()
+	}
 	return riskclassifier.NewClassifier(riskclassifier.ClassifierOptions{
-		SVM: svm,
+		SVM:           svm,
+		RiskTypes:     riskTypes,
+		RiskTypeError: riskTypeError,
 		// The shared ruleset directly, not risk.RedactCredentials. That wrapper
 		// adds a size guard which replaces its whole input with a placeholder —
 		// correct for the 240-byte display summary it was written for, ruinous
