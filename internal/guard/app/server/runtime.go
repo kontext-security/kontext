@@ -175,10 +175,12 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	return decision, nil
 }
 
-// annotate attaches the advisory risk verdict to a settled decision. Both
-// models run for every outcome, denies included: a deny is precisely the case
-// where knowing whether the models agreed with the policy is worth the most,
-// and the annotation cannot change what has already been decided.
+// annotate attaches the advisory risk verdict to a settled decision. The
+// binary and optional LLM models run for every outcome, denies included: a
+// deny is precisely the case where knowing whether the models agreed with the
+// policy is worth the most,
+// and the annotation cannot change what has already been decided. Risk types
+// are further gated to binary-risky shell commands inside Classifier.Classify.
 func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, decision *risk.RiskDecision) {
 	if r.classifier == nil || event.HookEventName != hook.HookPreToolUse.String() {
 		return
@@ -187,12 +189,13 @@ func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, de
 	if strings.TrimSpace(command) == "" {
 		return
 	}
-	verdicts := r.classifier.Classify(ctx, event.SessionID, command)
+	verdicts := r.classifier.Classify(ctx, event.SessionID, event.ToolName, command)
 	if verdicts.SVM == nil {
 		return
 	}
 	annotation := &risk.ClassifierAnnotation{
 		LLMError:         verdicts.LLMError,
+		RiskTypeError:    verdicts.RiskTypeError,
 		Command:          verdicts.Command,
 		CommandHash:      verdicts.CommandHash,
 		CommandTruncated: verdicts.CommandTruncated,
@@ -203,6 +206,9 @@ func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, de
 			Threshold:    verdicts.SVM.Threshold,
 			ModelVersion: verdicts.SVM.ModelVersion,
 		},
+	}
+	if verdicts.RiskTypes != nil {
+		annotation.RiskTypes = classifierRiskTypes(verdicts.RiskTypes)
 	}
 	if verdicts.LLM != nil {
 		annotation.LLMPromptID = verdicts.LLM.PromptID
@@ -236,6 +242,7 @@ func (r guardHookRuntime) recordAnnotation(ctx context.Context, actionID string,
 		CommandTruncated: annotation.CommandTruncated,
 		AgentTask:        annotation.AgentTask,
 		LLMError:         annotation.LLMError,
+		RiskTypeError:    annotation.RiskTypeError,
 		SVM: &riskclassifier.SVMVerdict{
 			Verdict:      annotation.SVM.Verdict,
 			Score:        annotation.SVM.Score,
@@ -255,6 +262,66 @@ func (r guardHookRuntime) recordAnnotation(ctx context.Context, actionID string,
 	}
 	// Advisory data: a failed write must not fail the tool call.
 	_, _ = r.store.SaveClassifierVerdict(ctx, record)
+	if annotation.RiskTypes != nil {
+		_, _, _ = r.store.SaveRiskTypeAnnotation(ctx, riskclassifier.RiskTypeRecord{
+			ActionID:    actionID,
+			SessionID:   event.SessionID,
+			ToolUseID:   event.ToolUseID,
+			CommandHash: annotation.CommandHash,
+			InputKind:   riskclassifier.RiskTypeInputRawCommand,
+			Verdict:     riskTypeVerdict(annotation.RiskTypes),
+		})
+	}
+}
+
+func classifierRiskTypes(verdict *riskclassifier.RiskTypeVerdict) *risk.ClassifierRiskTypes {
+	scores := make([]risk.ClassifierRiskTypeScore, len(verdict.Scores))
+	for index, score := range verdict.Scores {
+		scores[index] = risk.ClassifierRiskTypeScore{RiskType: score.RiskType, Score: score.Score}
+	}
+	return &risk.ClassifierRiskTypes{
+		SchemaVersion:   verdict.SchemaVersion,
+		Status:          verdict.Status,
+		RiskTypes:       append([]string{}, verdict.RiskTypes...),
+		PrimaryRiskType: verdict.PrimaryRiskType,
+		Scores:          scores,
+		Threshold:       verdict.Threshold,
+		Abstained:       verdict.Abstained,
+		Provenance: risk.ClassifierRiskTypeProvenance{
+			ModelVersion:            verdict.Provenance.ModelVersion,
+			SourceArtifactSHA256:    verdict.Provenance.SourceArtifactSHA256,
+			SourceRevision:          verdict.Provenance.SourceRevision,
+			SourcePR:                verdict.Provenance.SourcePR,
+			AnnotationSHA256:        verdict.Provenance.AnnotationSHA256,
+			AnnotationSchemaVersion: verdict.Provenance.AnnotationSchemaVersion,
+			AnnotationPromptVersion: verdict.Provenance.AnnotationPromptVersion,
+		},
+	}
+}
+
+func riskTypeVerdict(annotation *risk.ClassifierRiskTypes) riskclassifier.RiskTypeVerdict {
+	scores := make([]riskclassifier.RiskTypeScore, len(annotation.Scores))
+	for index, score := range annotation.Scores {
+		scores[index] = riskclassifier.RiskTypeScore{RiskType: score.RiskType, Score: score.Score}
+	}
+	return riskclassifier.RiskTypeVerdict{
+		SchemaVersion:   annotation.SchemaVersion,
+		Status:          annotation.Status,
+		RiskTypes:       append([]string{}, annotation.RiskTypes...),
+		PrimaryRiskType: annotation.PrimaryRiskType,
+		Scores:          scores,
+		Threshold:       annotation.Threshold,
+		Abstained:       annotation.Abstained,
+		Provenance: riskclassifier.RiskTypeProvenance{
+			ModelVersion:            annotation.Provenance.ModelVersion,
+			SourceArtifactSHA256:    annotation.Provenance.SourceArtifactSHA256,
+			SourceRevision:          annotation.Provenance.SourceRevision,
+			SourcePR:                annotation.Provenance.SourcePR,
+			AnnotationSHA256:        annotation.Provenance.AnnotationSHA256,
+			AnnotationSchemaVersion: annotation.Provenance.AnnotationSchemaVersion,
+			AnnotationPromptVersion: annotation.Provenance.AnnotationPromptVersion,
+		},
+	}
 }
 
 // observePrompt keeps the session's latest user prompt so classifier records

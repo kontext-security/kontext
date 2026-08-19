@@ -17,7 +17,7 @@ import (
 
 func TestRootCmdExposesSupportedCommandsOnly(t *testing.T) {
 	root := newRootCmd()
-	for _, name := range []string{"setup", "hook", "managed-observe-daemon", "doctor", "claude", "guard"} {
+	for _, name := range []string{"setup", "hook", "managed-observe-daemon", "doctor", "risk-types", "claude", "guard"} {
 		if _, _, err := root.Find([]string{name}); err != nil {
 			t.Fatalf("root command missing %q: %v", name, err)
 		}

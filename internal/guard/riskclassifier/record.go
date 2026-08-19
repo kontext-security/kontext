@@ -7,6 +7,9 @@ import "time"
 const (
 	FeedbackShouldAllow = "should_allow"
 	FeedbackShouldBlock = "should_block"
+
+	RiskTypeInputRawCommand            = "raw_command"
+	RiskTypeInputStoredRedactedCommand = "stored_redacted_command"
 )
 
 // Record is one observe-mode classifier record per intercepted bash command —
@@ -16,9 +19,11 @@ const (
 // and prior_commands is not duplicated per row — earlier records in the same
 // session reconstruct it at read/export time.
 //
-// Both models from the contract are recorded: the embedded SVM and the local
-// guardrail LLM. The LLM half is absent when the guardrail is off or its call
-// failed, in which case LLMError says why — a missing verdict is data too.
+// The original verdict blocks are recorded here: the embedded binary SVM and
+// the local guardrail LLM. Successful risk types use their separate derived
+// table; RiskTypeError retains a missing second-stage result. The LLM half is
+// absent when the guardrail is off or its call failed, in which case LLMError
+// says why — a missing verdict is data too.
 type Record struct {
 	ActionID  string `json:"action_id"`
 	SessionID string `json:"session_id"`
@@ -41,10 +46,28 @@ type Record struct {
 	SVM      *SVMVerdict `json:"svm,omitempty"`
 	LLM      *LLMVerdict `json:"llm,omitempty"`
 	LLMError string      `json:"llm_error,omitempty"`
+	// RiskTypeError records advisory model load/inference degradation for an
+	// eligible binary-risky shell call. A successful derived annotation lives
+	// in the separate append-only risk_type_annotations table.
+	RiskTypeError string `json:"risk_type_error,omitempty"`
 
 	// Enforced stays false for v1: verdicts are logged, never applied.
 	Enforced bool `json:"enforced"`
 
 	UserFeedback string    `json:"user_feedback,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// RiskTypeRecord is an append-only derived annotation for one existing
+// classifier action. It is intentionally not part of DecisionFactV1: the fact
+// and its receipt stay byte-for-byte immutable while a historical action can
+// gain a model-versioned annotation later.
+type RiskTypeRecord struct {
+	ActionID    string          `json:"action_id"`
+	SessionID   string          `json:"session_id"`
+	ToolUseID   string          `json:"tool_use_id,omitempty"`
+	CommandHash string          `json:"command_hash"`
+	InputKind   string          `json:"input_kind"`
+	Verdict     RiskTypeVerdict `json:"annotation"`
+	CreatedAt   time.Time       `json:"created_at"`
 }

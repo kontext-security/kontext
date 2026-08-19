@@ -46,6 +46,7 @@ create table if not exists risk_classifier_verdicts (
   llm_duration_ms integer,
   llm_cached integer not null default 0,
   llm_error text,
+  risk_type_error text,
   enforced integer not null default 0,
   user_feedback text,
   feedback_at text,
@@ -89,6 +90,7 @@ var classifierVerdictColumns = []struct {
 	{name: "llm_duration_ms", def: "integer"},
 	{name: "llm_cached", def: "integer not null default 0"},
 	{name: "llm_error", def: "text"},
+	{name: "risk_type_error", def: "text"},
 	{name: "enforced", def: "integer not null default 0"},
 	{name: "user_feedback", def: "text"},
 	{name: "feedback_at", def: "text"},
@@ -138,14 +140,14 @@ insert into risk_classifier_verdicts(
   id, action_id, session_id, tool_use_id, agent,
   command_redacted, command_hash, command_truncated, agent_task,
   svm_verdict, svm_score, svm_threshold, svm_model_version,
-  llm_verdict, llm_raw, llm_model, llm_prompt_id, llm_duration_ms, llm_cached, llm_error,
+  llm_verdict, llm_raw, llm_model, llm_prompt_id, llm_duration_ms, llm_cached, llm_error, risk_type_error,
   enforced, user_feedback, created_at
-) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		stored.ID, record.ActionID, record.SessionID, nullIfEmpty(record.ToolUseID), nullIfEmpty(record.Agent),
 		record.Command, record.CommandHash, record.CommandTruncated, nullIfEmpty(record.AgentTask),
 		svmVerdict, svmScore, svmThreshold, svmModelVersion,
-		llmVerdict, llmRaw, llmModel, llmPromptID, llmDurationMs, llmCached, nullIfEmpty(record.LLMError),
+		llmVerdict, llmRaw, llmModel, llmPromptID, llmDurationMs, llmCached, nullIfEmpty(record.LLMError), nullIfEmpty(record.RiskTypeError),
 		record.Enforced, nullIfEmpty(record.UserFeedback), record.CreatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -222,7 +224,7 @@ const classifierVerdictSelect = `
 select id, action_id, session_id, coalesce(tool_use_id, ''), coalesce(agent, ''),
   command_redacted, command_hash, command_truncated, coalesce(agent_task, ''),
   svm_verdict, svm_score, svm_threshold, svm_model_version,
-  llm_verdict, llm_raw, llm_model, coalesce(llm_prompt_id, ''), llm_duration_ms, llm_cached, coalesce(llm_error, ''),
+  llm_verdict, llm_raw, llm_model, coalesce(llm_prompt_id, ''), llm_duration_ms, llm_cached, coalesce(llm_error, ''), coalesce(risk_type_error, ''),
   enforced, coalesce(user_feedback, ''), feedback_at, created_at
 from risk_classifier_verdicts
 `
@@ -241,7 +243,7 @@ func scanClassifierVerdict(scanner interface{ Scan(...any) error }) (ClassifierV
 		&record.ID, &record.ActionID, &record.SessionID, &record.ToolUseID, &record.Agent,
 		&record.Command, &record.CommandHash, &record.CommandTruncated, &record.AgentTask,
 		&svmVerdict, &svmScore, &svmThreshold, &svmModelVersion,
-		&llmVerdict, &llmRaw, &llmModel, &llmPromptID, &llmDurationMs, &llmCached, &record.LLMError,
+		&llmVerdict, &llmRaw, &llmModel, &llmPromptID, &llmDurationMs, &llmCached, &record.LLMError, &record.RiskTypeError,
 		&record.Enforced, &record.UserFeedback, &feedbackAt, &created,
 	); err != nil {
 		return ClassifierVerdictRecord{}, err
