@@ -119,18 +119,25 @@ func (s targetSnapshot) confirm() error {
 				s.active, active)
 		}
 	}
-	// Only meaningful when it existed at resolution: a run that is CREATING a
-	// profile legitimately finds nothing here.
-	if s.existed {
-		exists, err := profile.Exists(s.profile)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			return fmt.Errorf(
-				"profile %q was renamed or removed while setup was running, so nothing was written; re-run the command",
-				s.profile)
-		}
+	// Existence must still mean what it meant at resolution — in BOTH
+	// directions. A profile that existed and is now gone was renamed or removed
+	// mid-run; writing would resurrect it under the old name. A profile that
+	// did NOT exist and now does was created concurrently by another setup or
+	// `profile add`; writing would silently adopt that run's directory and
+	// rotate a token it just stored.
+	exists, err := profile.Exists(s.profile)
+	if err != nil {
+		return err
+	}
+	if s.existed && !exists {
+		return fmt.Errorf(
+			"profile %q was renamed or removed while setup was running, so nothing was written; re-run the command",
+			s.profile)
+	}
+	if !s.existed && exists {
+		return fmt.Errorf(
+			"profile %q was created by another process while setup was running, so nothing was written; re-run the command",
+			s.profile)
 	}
 	return nil
 }

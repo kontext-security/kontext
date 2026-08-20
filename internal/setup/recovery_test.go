@@ -800,6 +800,100 @@ func TestPlainSetupRestoresTheActivePointerWhenTheAgentInstallFails(t *testing.T
 	}
 }
 
+// A profile snapshotted as ABSENT must still be absent at the write. Another
+// setup or `profile add` creating the same name mid-run would otherwise have
+// its directory silently adopted — and the token it just stored rotated away.
+func TestSetupRefusesWhenTheDerivedProfileIsCreatedMidRun(t *testing.T) {
+	h := profileHarness(t)
+	backend := multiWorkspacePingServer(t, map[string]string{
+		"kt_work": "org_work",
+		"kt_new":  "org_new",
+	})
+	work := h.options("kt_work", backend)
+	work.Profile = "work"
+	if err := Run(context.Background(), work); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	rerun := h.options("kt_new", backend)
+	// Fires after the derived target is resolved and snapshotted, before the
+	// snapshot is confirmed — exactly where a concurrent creation lands.
+	var derived string
+	rerun.OnProfileResolved = func(name string) {
+		derived = name
+		if _, err := profile.Create(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := Run(context.Background(), rerun)
+	if err == nil {
+		t.Fatal("Run() = nil, want a refusal after the target appeared mid-run")
+	}
+	if !strings.Contains(err.Error(), "created by another process") {
+		t.Fatalf("error = %v, want it to name the concurrent creation", err)
+	}
+	// Refused before anything was written: the other run's token slot is intact.
+	if _, ok := h.keychain["kontext-install-token."+derived]; ok {
+		t.Errorf("a refused setup wrote a token into %q", derived)
+	}
+}
+
+// Activation is a convenience, not a right. A `profile use` landing while
+// setup runs — the menu bar app switches on one click — is a choice someone
+// just made, and the completed run must not overwrite it: the profile is
+// still written, the switch is skipped, and the note says how to catch up.
+func TestPlainSetupLeavesAConcurrentlyMovedPointerAlone(t *testing.T) {
+	h := profileHarness(t)
+	backend := multiWorkspacePingServer(t, map[string]string{
+		"kt_work":   "org_work",
+		"kt_work_2": "org_work", // a fresh token for work's workspace
+		"kt_other":  "org_other",
+		"kt_third":  "org_third",
+	})
+	for name, token := range map[string]string{"work": "kt_work", "other": "kt_other", "third": "kt_third"} {
+		opts := h.options(token, backend)
+		opts.Profile = name
+		if err := Run(context.Background(), opts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := profile.SetActive("other"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Move the pointer at the token write — after the retarget decision and
+	// its snapshot, before the run reaches activation.
+	original := execCommand
+	moved := false
+	overrideVar(t, &execCommand, func(ctx context.Context, stdin, name string, args ...string) (string, error) {
+		if name == "security" && len(args) > 0 && args[0] == "-i" && !moved {
+			moved = true
+			if err := profile.SetActive("third"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return original(ctx, stdin, name, args...)
+	})
+
+	if err := Run(context.Background(), h.options("kt_work_2", backend)); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if active, _ := profile.ActiveName(); active != "third" {
+		t.Errorf("active profile = %q, want the concurrent switch to \"third\" respected", active)
+	}
+	if !strings.Contains(h.errOut.String(), "left alone") {
+		t.Errorf("stderr did not explain the skipped activation:\n%s", h.errOut.String())
+	}
+	// The rotation itself still happened.
+	if got := h.keychain["kontext-install-token.work"]; got != "kt_work_2" {
+		t.Errorf("work's stored token = %q, want the fresh token", got)
+	}
+}
+
 // A machine that has never used profiles keeps its pre-profile behavior
 // exactly: the legacy slot has no recorded binding to compare, so a plain
 // re-run rewrites it in place — even for a different workspace — and no

@@ -256,7 +256,9 @@ func Run(ctx context.Context, opts Options) error {
 	// The profile to make active before the agent restarts. Set only when a
 	// plain setup retargeted: whoever pasted this token wants THIS Mac reporting
 	// to that token's workspace, and the daemon reads the active config.
-	var activate string
+	// activationBase records what was active when that decision was made, so a
+	// `profile use` landing mid-run is detected rather than overwritten.
+	var activate, activationBase string
 	if !deriving {
 		slot, err = resolveTarget(opts.Profile)
 		if err != nil {
@@ -318,6 +320,12 @@ func Run(ctx context.Context, opts Options) error {
 				return err
 			}
 			activate = profileName
+		}
+	}
+	if activate != "" {
+		activationBase, err = profile.ActiveName()
+		if err != nil && !errors.Is(err, profile.ErrNoActive) {
+			return err
 		}
 	}
 
@@ -428,23 +436,34 @@ func Run(ctx context.Context, opts Options) error {
 	// below bring it up already serving the retargeted profile — one restart,
 	// not a restart onto the old profile followed by a switch.
 	//
-	// The previous pointer is captured first: a run that FAILS below must not
-	// leave the Mac silently switched as a side effect.
+	// Activation is conditional on the pointer still being where it was when
+	// retargeting was decided. A `kontext profile use` landing mid-run — the
+	// menu bar app switches on one click — is a choice someone just made, and
+	// setup must not overwrite it. The retargeted profile is fully written
+	// either way; the note says how to switch to it.
 	var restoreActive func() error
 	if activate != "" {
-		previous, err := profile.ActiveName()
+		current, err := profile.ActiveName()
 		if err != nil && !errors.Is(err, profile.ErrNoActive) {
 			return err
 		}
+		if current != activationBase {
+			fmt.Fprintf(opts.Stderr, "note: the active profile changed to %q while setup was running, so it was left alone; switch with `kontext profile use %s`.\n", current, activate)
+			activate = ""
+		}
+	}
+	if activate != "" {
 		if err := profile.SetActive(activate); err != nil {
 			return fmt.Errorf("switch the active profile to %q: %w", activate, err)
 		}
 		fmt.Fprintf(opts.Stdout, "  ✓ Active profile: %s\n", activate)
+		// A run that FAILS below must not leave the Mac silently switched as a
+		// side effect.
 		restoreActive = func() error {
-			if previous == "" {
+			if activationBase == "" {
 				return profile.ClearActive()
 			}
-			return profile.SetActive(previous)
+			return profile.SetActive(activationBase)
 		}
 	}
 
