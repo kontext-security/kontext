@@ -427,11 +427,25 @@ func Run(ctx context.Context, opts Options) error {
 	// the active profile's config at startup, so this ordering makes the restart
 	// below bring it up already serving the retargeted profile — one restart,
 	// not a restart onto the old profile followed by a switch.
+	//
+	// The previous pointer is captured first: a run that FAILS below must not
+	// leave the Mac silently switched as a side effect.
+	var restoreActive func() error
 	if activate != "" {
+		previous, err := profile.ActiveName()
+		if err != nil && !errors.Is(err, profile.ErrNoActive) {
+			return err
+		}
 		if err := profile.SetActive(activate); err != nil {
 			return fmt.Errorf("switch the active profile to %q: %w", activate, err)
 		}
 		fmt.Fprintf(opts.Stdout, "  ✓ Active profile: %s\n", activate)
+		restoreActive = func() error {
+			if previous == "" {
+				return profile.ClearActive()
+			}
+			return profile.SetActive(previous)
+		}
 	}
 
 	var plistPath, logPath string
@@ -446,6 +460,20 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	})
 	if err != nil {
+		if restoreActive != nil {
+			// The run failed after moving the pointer. Put it back and try to
+			// bring the agent up for the profile that was serving before —
+			// the same "never leave the Mac switched or unobserved by a failed
+			// run" contract a failed `profile use` keeps. Best-effort: the
+			// error names whatever could not be undone.
+			if restoreErr := restoreActive(); restoreErr != nil {
+				return fmt.Errorf("%w\n\nThe active profile could not be restored afterwards (%v); run `kontext profile use` to pick one.", err, restoreErr)
+			}
+			if _, _, restartErr := installLaunchAgent(ctx, binary, nil); restartErr != nil {
+				return fmt.Errorf("%w\n\nThe active profile was restored, but the background agent did not restart (%v); run `kontext profile use` to repair it.", err, restartErr)
+			}
+			return fmt.Errorf("%w\n\nThe active profile was restored and the background agent is running on it; nothing switched.", err)
+		}
 		return err
 	}
 	fmt.Fprintf(opts.Stdout, "  ✓ Background agent installed (%s)\n", plistPath)

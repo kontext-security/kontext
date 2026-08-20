@@ -757,6 +757,49 @@ func TestPlainSetupLeavesTheActiveProfileWhenTheBackendDiffers(t *testing.T) {
 	}
 }
 
+// A plain setup that retargets moves the active pointer before the agent is
+// reinstalled. If that install then fails, the run has FAILED — it must not
+// leave the Mac silently switched as a side effect, so the pointer goes back
+// and the agent is brought up for the profile that was serving before.
+func TestPlainSetupRestoresTheActivePointerWhenTheAgentInstallFails(t *testing.T) {
+	h := profileHarness(t)
+	backend := multiWorkspacePingServer(t, map[string]string{
+		"kt_work": "org_work",
+		"kt_new":  "org_new",
+	})
+	work := h.options("kt_work", backend)
+	work.Profile = "work"
+	if err := Run(context.Background(), work); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fail the FIRST bootstrap from here on — the one right after the pointer
+	// moved — and let the recovery's bootstrap succeed.
+	original := execCommand
+	failed := false
+	overrideVar(t, &execCommand, func(ctx context.Context, stdin, name string, args ...string) (string, error) {
+		if name == "launchctl" && len(args) > 0 && args[0] == "bootstrap" && !failed {
+			failed = true
+			return "", errors.New("simulated bootstrap failure")
+		}
+		return original(ctx, stdin, name, args...)
+	})
+
+	err := Run(context.Background(), h.options("kt_new", backend))
+	if err == nil {
+		t.Fatal("Run() = nil, want the agent install failure surfaced")
+	}
+	if !strings.Contains(err.Error(), "restored") {
+		t.Errorf("error = %v, want it to say the active profile was restored", err)
+	}
+	if active, _ := profile.ActiveName(); active != "work" {
+		t.Errorf("active profile = %q, want the pointer restored to \"work\"", active)
+	}
+}
+
 // A machine that has never used profiles keeps its pre-profile behavior
 // exactly: the legacy slot has no recorded binding to compare, so a plain
 // re-run rewrites it in place — even for a different workspace — and no
