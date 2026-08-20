@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 type registryTestAgent struct{}

@@ -1,7 +1,7 @@
 package hookruntime
 
 import (
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 // AuthoritativeEnforce reports whether a result carries the enforce stamp

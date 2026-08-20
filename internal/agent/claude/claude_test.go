@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/hookruntime"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/hookruntime"
 )
 
 func TestDecodeHookInputPreservesOptionalMetadata(t *testing.T) {

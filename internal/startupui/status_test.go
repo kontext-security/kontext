@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/guard/judge"
 )
 
 func TestRendererNonTTYPrintsStableProgressLines(t *testing.T) {

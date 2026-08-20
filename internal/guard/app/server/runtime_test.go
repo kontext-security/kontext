@@ -3,9 +3,9 @@ package server
 import (
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func TestHookResultStampsEnforceForAuthoritativeCedarDecision(t *testing.T) {

@@ -2,7 +2,7 @@
 
 ## Our standard
 
-We want Kontext CLI to be a respectful, low-ego project. Be direct, kind, and professional. Harassment, discrimination, intimidation, or personal attacks are not acceptable.
+We want Kontext to be a respectful, low-ego project. Be direct, kind, and professional. Harassment, discrimination, intimidation, or personal attacks are not acceptable.
 
 ## Expected behavior
 

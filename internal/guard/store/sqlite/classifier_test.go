@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 )
 
 func openClassifierTestStore(t *testing.T) *Store {

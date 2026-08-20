@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/diagnostic"
 )
 
 func TestReplayLiveDB(t *testing.T) {

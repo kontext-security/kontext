@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 const testInstallationID = "ins_0123456789abcdefghijklmnopqrstuv"

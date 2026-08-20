@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	sqlitestore "github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	"github.com/kontext-security/kontext-cli/internal/installation"
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
-	"github.com/kontext-security/kontext-cli/internal/managedstream"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	sqlitestore "github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/installation"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/managedstream"
 )
 
 func TestPrintStatusReportsInstallationLoadError(t *testing.T) {

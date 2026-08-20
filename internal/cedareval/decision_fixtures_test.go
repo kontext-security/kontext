@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 type decisionContractFixture struct {

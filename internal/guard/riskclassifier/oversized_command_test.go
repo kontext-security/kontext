@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 // newRedactingClassifier mirrors production wiring: the shared ruleset applied to

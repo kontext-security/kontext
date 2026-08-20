@@ -21,7 +21,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 // SchemaVersion identifies Decision Fact v1 on the wire.

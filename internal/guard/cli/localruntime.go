@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/kontext-security/kontext-cli/internal/localruntime"
+	"github.com/kontext-security/kontext/internal/localruntime"
 )
 
 func defaultGuardSocketPath() string {

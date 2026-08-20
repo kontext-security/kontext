@@ -14,11 +14,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/agent"
-	"github.com/kontext-security/kontext-cli/internal/agent/claude"
-	"github.com/kontext-security/kontext-cli/internal/agent/codex"
-	"github.com/kontext-security/kontext-cli/internal/agent/cowork"
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/agent"
+	"github.com/kontext-security/kontext/internal/agent/claude"
+	"github.com/kontext-security/kontext/internal/agent/codex"
+	"github.com/kontext-security/kontext/internal/agent/cowork"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 const portableFixtureContractVersion = 1

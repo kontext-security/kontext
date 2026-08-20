@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	"github.com/kontext-security/kontext-cli/internal/guard/judgeruntime"
+	"github.com/kontext-security/kontext/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/guard/judgeruntime"
 )
 
 func TestGuardHookCompatibilityCommandIsRetired(t *testing.T) {

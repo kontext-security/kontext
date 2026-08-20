@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	"github.com/kontext-security/kontext-cli/internal/guard/judgeruntime"
-	"github.com/kontext-security/kontext-cli/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/guard/judgeruntime"
+	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
 // llamaServerInstallHint is the only supported way to get the runtime today:

@@ -6,9 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
-	"github.com/kontext-security/kontext-cli/internal/profile"
-	"github.com/kontext-security/kontext-cli/internal/setup"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/profile"
+	"github.com/kontext-security/kontext/internal/setup"
 )
 
 func profileCmd() *cobra.Command {

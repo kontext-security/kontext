@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/buildinfo"
-	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	"github.com/kontext-security/kontext-cli/internal/installation"
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
-	"github.com/kontext-security/kontext-cli/internal/managedstream"
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/buildinfo"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/installation"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/managedstream"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 // PrintStatus reports the managed-observe state for `kontext doctor`:

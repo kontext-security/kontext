@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 const testInstallationID = "ins_0123456789abcdefghijklmnopqrstuv"

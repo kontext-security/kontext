@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 type Codec interface {

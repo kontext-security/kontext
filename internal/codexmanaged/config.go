@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/agenthooks"
+	"github.com/kontext-security/kontext/internal/agenthooks"
 )
 
 // Codex gates its hook engine behind a feature flag that is off by default:

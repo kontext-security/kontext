@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
 // LaunchAgentLabel matches the enterprise LaunchAgent so the hook-side

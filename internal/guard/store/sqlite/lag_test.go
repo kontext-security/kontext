@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/risk"
 )
 
 func TestLedgerLag(t *testing.T) {
