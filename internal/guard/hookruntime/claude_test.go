@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/agent/claude"
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/agent/claude"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func TestAgentAdapterDecodePreservesHookEvent(t *testing.T) {

@@ -3,8 +3,8 @@ package main
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/kontext-security/kontext-cli/internal/setup"
-	"github.com/kontext-security/kontext-cli/internal/startupui"
+	"github.com/kontext-security/kontext/internal/setup"
+	"github.com/kontext-security/kontext/internal/startupui"
 )
 
 func setupCmd() *cobra.Command {

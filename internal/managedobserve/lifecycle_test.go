@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
-	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/localruntime"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/localruntime"
 )
 
 func TestLifecycleMissingSocketKickstartsAndFailsOpenObserve(t *testing.T) {

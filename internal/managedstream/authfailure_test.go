@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/diagnostic"
 )
 
 // A store with one decision so every Flush actually posts — an empty store

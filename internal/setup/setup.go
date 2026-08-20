@@ -25,15 +25,15 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/guard/judge"
 
-	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
-	"github.com/kontext-security/kontext-cli/internal/codexmanaged"
-	"github.com/kontext-security/kontext-cli/internal/installation"
-	"github.com/kontext-security/kontext-cli/internal/ledgerping"
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
-	"github.com/kontext-security/kontext-cli/internal/managedobserve"
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/installation"
+	"github.com/kontext-security/kontext/internal/ledgerping"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 const (

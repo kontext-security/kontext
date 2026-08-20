@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Kontext CLI.
+Thanks for helping improve Kontext.
 
 ## Ground rules
 

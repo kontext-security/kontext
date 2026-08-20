@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
 
 // A deferred-recording server must settle the hook response without touching

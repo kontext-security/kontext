@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/ledgerfact"
+	"github.com/kontext-security/kontext/internal/ledgerfact"
 )
 
 const (

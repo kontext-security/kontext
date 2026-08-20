@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 
 	cedar "github.com/cedar-policy/cedar-go"
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 const (

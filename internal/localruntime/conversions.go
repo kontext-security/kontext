@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func EvaluateRequestFromEvent(event hook.Event) (EvaluateRequest, error) {

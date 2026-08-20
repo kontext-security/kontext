@@ -1,4 +1,4 @@
-# Staging CLI builds
+# Staging Kontext builds
 
 A staging channel for testing a CLI branch against the **staging backend**
 before the branch lands on `main` and becomes a prod release.
@@ -14,7 +14,7 @@ before the branch lands on `main` and becomes a prod release.
   by release-please, public assets on this repo's releases.
 - **Staging:** `brew install kontext-security/tap/kontext-staging` — built
   on demand from any branch by the `Staging Release` workflow in the
-  **private** `kontext-security/kontext-cli-staging-releases` repo (org
+  **private** `kontext-security/kontext-staging-releases` repo (org
   members only). Staging tags are valid SemVer prereleases such as
   `v0.0.0-staging.20260721.4`. They are published only to the separate
   staging-releases repo, so release-please in the source repo never sees them.
@@ -36,11 +36,11 @@ Then, from any branch:
 
 ```bash
 gh workflow run staging-release.yml \
-  -R kontext-security/kontext-cli-staging-releases \
+  -R kontext-security/kontext-staging-releases \
   -f ref=my-feature-branch
 ```
 
-(or open `kontext-cli-staging-releases` → Actions → Staging Release → Run
+(or open `kontext-staging-releases` → Actions → Staging Release → Run
 workflow). A credential-free job builds the selected CLI ref. A fresh runner
 then publishes its four archives as a private prerelease and updates
 `Formula/kontext-staging.rb` in `kontext-security/homebrew-tap`. Re-run it to

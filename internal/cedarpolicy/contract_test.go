@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 func TestDeploymentValidate(t *testing.T) {

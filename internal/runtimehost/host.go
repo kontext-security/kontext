@@ -14,17 +14,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
-	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	"github.com/kontext-security/kontext-cli/internal/guard/judgeruntime"
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
-	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/localruntime"
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
-	"github.com/kontext-security/kontext-cli/internal/runtimecore"
+	"github.com/kontext-security/kontext/internal/cedarpolicy"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/guard/app/server"
+	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
+	"github.com/kontext-security/kontext/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/guard/judgeruntime"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/localruntime"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/runtimecore"
 )
 
 // maxConcurrentDeferredRecords caps how many deferred decision-record jobs run

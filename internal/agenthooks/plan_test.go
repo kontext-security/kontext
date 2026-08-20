@@ -3,7 +3,7 @@ package agenthooks
 import (
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func TestPlanValidation(t *testing.T) {

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"io"
 
-	"github.com/kontext-security/kontext-cli/internal/agent"
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/agent"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 type AgentAdapter struct {

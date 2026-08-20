@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/managedobserve"
-	"github.com/kontext-security/kontext-cli/internal/setup"
+	"github.com/kontext-security/kontext/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/setup"
 )
 
 // The `--json` outputs are consumed by tooling built OUTSIDE this repository, so

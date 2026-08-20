@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 const (

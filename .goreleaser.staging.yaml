@@ -25,7 +25,7 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-# The private kontext-cli-staging-releases workflow runs this configuration
+# The private kontext-staging-releases workflow runs this configuration
 # with --skip=publish, transfers only the archives to a fresh runner, and
 # publishes them with that repository's own short-lived GITHUB_TOKEN.
 

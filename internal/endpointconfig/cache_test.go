@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 func TestCacheRestartRequiresServerConfirmation(t *testing.T) {

@@ -1,4 +1,4 @@
-<img src="assets/kontext-banner-cli.png" alt="Kontext CLI banner" width="100%" />
+<img src="assets/kontext-banner-cli.png" alt="Kontext banner" width="100%" />
 
 <div align="center">
 
@@ -14,7 +14,7 @@
 
 <p>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-152822?labelColor=0d1714"></a>
-  <a href="https://github.com/kontext-security/kontext-cli/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/kontext-security/kontext-cli?color=152822&labelColor=0d1714"></a>
+  <a href="https://github.com/kontext-security/kontext/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/kontext-security/kontext?color=152822&labelColor=0d1714"></a>
   <img alt="Built with Go" src="https://img.shields.io/badge/Go-1.25-152822?labelColor=0d1714">
 </p>
 
@@ -119,4 +119,4 @@ go vet ./...
 
 - Read [SUPPORT.md](SUPPORT.md) for support channels.
 - Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a contribution.
-- Kontext CLI is released under the [MIT License](LICENSE).
+- Kontext is released under the [MIT License](LICENSE).

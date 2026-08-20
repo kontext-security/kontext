@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 )
 
 // ErrClassifierVerdictNotFound reports feedback aimed at an action that has no

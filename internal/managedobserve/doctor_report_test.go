@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 // The report's summary flags are filled in by a deferred assignment. With

@@ -4,8 +4,8 @@ set -euo pipefail
 usage() {
   echo "usage: $0 <version> <checksums-file> [--staging]" >&2
   echo "" >&2
-  echo "  default     renders the prod Formula/kontext.rb (public kontext-cli releases)" >&2
-  echo "  --staging   renders Formula/kontext-staging.rb (private kontext-cli-staging-releases" >&2
+  echo "  default     renders the prod Formula/kontext.rb (public kontext releases)" >&2
+  echo "  --staging   renders Formula/kontext-staging.rb (private kontext-staging-releases" >&2
   echo "              repo, token-gated download strategy, conflicts_with prod formula)" >&2
   exit 1
 }
@@ -56,12 +56,12 @@ linux_arm64_sha="$(sha_for "$linux_arm64_archive")"
 if [[ "$staging" == true ]]; then
   formula_class="KontextStaging"
   strategy_class="KontextStagingGitHubPrivateRepositoryReleaseDownloadStrategy"
-  release_repo="kontext-security/kontext-cli-staging-releases"
+  release_repo="kontext-security/kontext-staging-releases"
   tag="v${version}"
   conflicts_line=$'  conflicts_with "kontext"\n'
 else
   formula_class="Kontext"
-  release_repo="kontext-security/kontext-cli"
+  release_repo="kontext-security/kontext"
   tag="v${version}"
   conflicts_line=$'  conflicts_with "kontext-staging"\n'
 fi

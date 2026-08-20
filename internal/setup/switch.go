@@ -8,9 +8,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
-	"github.com/kontext-security/kontext-cli/internal/managedobserve"
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 // SwitchTimeout bounds the wait for the restarted daemon to come back.

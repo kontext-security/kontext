@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/kontext-security/kontext-cli/internal/hook"
+import "github.com/kontext-security/kontext/internal/hook"
 
 type Agent interface {
 	Name() string

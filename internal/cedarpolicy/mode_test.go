@@ -3,7 +3,7 @@ package cedarpolicy
 import (
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 func TestDeploymentClaimsEnforce(t *testing.T) {

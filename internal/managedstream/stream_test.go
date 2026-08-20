@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
 
 func TestDefaultTimeoutFromEnv(t *testing.T) {

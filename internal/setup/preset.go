@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 // StagingCloudURL is the staging backend. It is not a secret — it appears in

@@ -11,21 +11,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/agent"
-	"github.com/kontext-security/kontext-cli/internal/buildinfo"
-	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
-	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
-	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/hookcmd"
-	"github.com/kontext-security/kontext-cli/internal/localruntime"
-	"github.com/kontext-security/kontext-cli/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/agent"
+	"github.com/kontext-security/kontext/internal/buildinfo"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	guardcli "github.com/kontext-security/kontext/internal/guard/cli"
+	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/hookcmd"
+	"github.com/kontext-security/kontext/internal/localruntime"
+	"github.com/kontext-security/kontext/internal/managedobserve"
 	"github.com/spf13/cobra"
 
-	_ "github.com/kontext-security/kontext-cli/internal/agent/claude"
-	_ "github.com/kontext-security/kontext-cli/internal/agent/codex"
-	_ "github.com/kontext-security/kontext-cli/internal/agent/cowork"
+	_ "github.com/kontext-security/kontext/internal/agent/claude"
+	_ "github.com/kontext-security/kontext/internal/agent/codex"
+	_ "github.com/kontext-security/kontext/internal/agent/cowork"
 )
 
 var version = "dev"
@@ -43,7 +43,7 @@ func main() {
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "kontext",
-		Short: "Kontext CLI — governed agent sessions",
+		Short: "Kontext — governed agent sessions",
 		// Reported with the source revision appended, because the version
 		// string on its own cannot answer "which build is this": it is a
 		// link-time label, and release channels that name builds by date give
@@ -67,7 +67,7 @@ func doctorCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:           "doctor",
-		Short:         "Inspect local Kontext CLI setup",
+		Short:         "Inspect local Kontext setup",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,

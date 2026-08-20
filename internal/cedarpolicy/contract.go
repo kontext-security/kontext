@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"unicode/utf16"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 const (

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/buildinfo"
+	"github.com/kontext-security/kontext/internal/buildinfo"
 )
 
 // DaemonStatus is the on-disk breadcrumb a daemon leaves after its socket is

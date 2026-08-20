@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
-	"github.com/kontext-security/kontext-cli/internal/ledgerfact"
+	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/ledgerfact"
 )
 
 type decisionFactFixture struct {

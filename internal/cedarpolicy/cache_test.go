@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 func TestCachePersistsDeploymentAndRestoresStale(t *testing.T) {

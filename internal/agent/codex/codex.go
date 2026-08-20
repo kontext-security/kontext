@@ -2,9 +2,9 @@
 package codex
 
 import (
-	"github.com/kontext-security/kontext-cli/internal/agent"
-	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/hookruntime"
+	"github.com/kontext-security/kontext/internal/agent"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/hookruntime"
 )
 
 func init() {

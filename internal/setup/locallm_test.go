@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/judgeruntime"
-	"github.com/kontext-security/kontext-cli/internal/managedobserve"
-	"github.com/kontext-security/kontext-cli/internal/profile"
-	"github.com/kontext-security/kontext-cli/internal/runtimehost"
+	"github.com/kontext-security/kontext/internal/guard/judgeruntime"
+	"github.com/kontext-security/kontext/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/profile"
+	"github.com/kontext-security/kontext/internal/runtimehost"
 )
 
 // Opting in has to reach the daemon, and the only channel is the agent's

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/risk"
 )
 
 // A database written by an earlier build of this branch still has the retired
