@@ -11,8 +11,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 )
+
+// withAgentLifecycleLock serializes the stop→mutate→bootstrap sequences that
+// (re)start the shared launch agent, anchored on the plist path with the same
+// advisory flock the managed-config writers use. Without it, two kontext
+// processes — a setup rollback and a `profile use`, say — can interleave
+// their bootout and bootstrap calls and leave the loser's daemon stopped.
+// Never nest it: the serialized sequences call StopLaunchAgent and
+// BootstrapLaunchAgent directly, which deliberately do not take the lock
+// themselves.
+func withAgentLifecycleLock(fn func() error) error {
+	plistPath, err := launchAgentPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		return err
+	}
+	return managedconfig.WithWriteLock(plistPath, fn)
+}
 
 // LaunchAgentLabel matches the enterprise LaunchAgent so the hook-side
 // kickstart (managedobserve.Lifecycle) works identically for both install
@@ -145,33 +165,42 @@ func installLaunchAgent(ctx context.Context, binary string, llm *localLLMAgentCo
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(plistPath, []byte(renderLaunchAgentPlist(binary, logPath, llm)), 0o644); err != nil {
+	// The write and the restart are one serialized unit: another process's
+	// stop→bootstrap sequence can neither interleave with this bootout and
+	// bootstrap nor observe the new plist half-installed.
+	err = withAgentLifecycleLock(func() error {
+		if err := os.WriteFile(plistPath, []byte(renderLaunchAgentPlist(binary, logPath, llm)), 0o644); err != nil {
+			return err
+		}
+
+		domainTarget := "gui/" + strconv.Itoa(os.Getuid())
+		serviceTarget := domainTarget + "/" + LaunchAgentLabel
+
+		// Not loaded on first install is fine. For re-runs, unload the exact
+		// self-serve plist setup owns before bootstrapping the replacement. This
+		// keeps a machine linked to an older workspace from keeping the old job
+		// loaded while setup writes the new config.
+		if out, err := runLaunchctl(ctx, "bootout", domainTarget, plistPath); err != nil {
+			loaded, printErr := launchAgentLoaded(ctx, serviceTarget, true)
+			if printErr != nil {
+				return fmt.Errorf("launchctl bootout failed before reload and service state is unknown: %w (%s)", err, strings.TrimSpace(out))
+			}
+			if loaded {
+				return fmt.Errorf("launchctl bootout failed before reload: %w (%s)", err, strings.TrimSpace(out))
+			}
+		}
+
+		if out, err := runLaunchctl(ctx, "bootstrap", domainTarget, plistPath); err != nil {
+			detail := strings.TrimSpace(out)
+			if strings.Contains(detail, "Input/output error") {
+				return fmt.Errorf("launchctl bootstrap failed (%s) — this usually means no GUI login session; run `kontext setup` from a logged-in desktop session, not SSH", detail)
+			}
+			return fmt.Errorf("launchctl bootstrap failed: %w (%s)", err, detail)
+		}
+		return nil
+	})
+	if err != nil {
 		return "", "", err
-	}
-
-	domainTarget := "gui/" + strconv.Itoa(os.Getuid())
-	serviceTarget := domainTarget + "/" + LaunchAgentLabel
-
-	// Not loaded on first install is fine. For re-runs, unload the exact
-	// self-serve plist setup owns before bootstrapping the replacement. This
-	// keeps a machine linked to an older workspace from keeping the old job
-	// loaded while setup writes the new config.
-	if out, err := runLaunchctl(ctx, "bootout", domainTarget, plistPath); err != nil {
-		loaded, printErr := launchAgentLoaded(ctx, serviceTarget, true)
-		if printErr != nil {
-			return "", "", fmt.Errorf("launchctl bootout failed before reload and service state is unknown: %w (%s)", err, strings.TrimSpace(out))
-		}
-		if loaded {
-			return "", "", fmt.Errorf("launchctl bootout failed before reload: %w (%s)", err, strings.TrimSpace(out))
-		}
-	}
-
-	if out, err := runLaunchctl(ctx, "bootstrap", domainTarget, plistPath); err != nil {
-		detail := strings.TrimSpace(out)
-		if strings.Contains(detail, "Input/output error") {
-			return "", "", fmt.Errorf("launchctl bootstrap failed (%s) — this usually means no GUI login session; run `kontext setup` from a logged-in desktop session, not SSH", detail)
-		}
-		return "", "", fmt.Errorf("launchctl bootstrap failed: %w (%s)", err, detail)
 	}
 	return plistPath, logPath, nil
 }

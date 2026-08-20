@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/kontext-security/kontext/internal/profile"
 )
@@ -34,6 +33,9 @@ func RenameProfile(ctx context.Context, oldName, newName string, out io.Writer) 
 		return nil
 	}
 
+	// Cheap pre-checks, so a doomed rename does not stop a healthy daemon. The
+	// authoritative checks re-run atomically inside profile.Rename, under the
+	// pointer lock.
 	exists, err := profile.Exists(oldName)
 	if err != nil {
 		return err
@@ -55,15 +57,6 @@ func RenameProfile(ctx context.Context, oldName, newName string, out io.Writer) 
 	}
 	renamingActive := active == oldName
 
-	from, err := profile.Dir(oldName)
-	if err != nil {
-		return err
-	}
-	to, err := profile.Dir(newName)
-	if err != nil {
-		return err
-	}
-
 	// Only the active profile's rename involves the daemon: its resolved config
 	// and database paths are about to change underneath it. Renaming an inactive
 	// profile touches nothing the daemon is reading, so it stays untouched — no
@@ -82,17 +75,15 @@ func RenameProfile(ctx context.Context, oldName, newName string, out io.Writer) 
 		}()
 	}
 
-	if err := os.Rename(from, to); err != nil {
-		return fmt.Errorf("move profile %q to %q: %w", oldName, newName, err)
+	// Move and re-point in one locked step: the pointer can never name a
+	// directory that no longer exists, and a profile a concurrent setup is
+	// mid-creating is refused rather than renamed away from under it.
+	repointed, err := profile.Rename(oldName, newName)
+	if err != nil {
+		return err
 	}
 	fmt.Fprintf(out, "  ✓ Renamed %q to %q\n", oldName, newName)
-
-	// Re-point AFTER the move: a pointer naming a directory that does not exist
-	// yet is a window in which nothing resolves.
-	if renamingActive {
-		if err := profile.SetActive(newName); err != nil {
-			return fmt.Errorf("profile moved to %q but the active pointer still names %q: %w", newName, oldName, err)
-		}
+	if repointed {
 		fmt.Fprintf(out, "  ✓ Active profile is now %q\n", newName)
 	}
 	return nil

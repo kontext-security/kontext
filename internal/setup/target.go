@@ -3,8 +3,6 @@ package setup
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
@@ -145,56 +143,24 @@ func (s targetSnapshot) confirm() error {
 }
 
 // claimTarget atomically reserves a profile directory that was absent when it
-// was snapshotted. The bare Mkdir either creates the directory or fails
-// because another process just did — closing the window that an
+// was snapshotted — profile.Claim's mkdir either reserves the name or fails
+// because another process just did, closing the window that an
 // exists-then-write check can only narrow. Called BEFORE the keychain write,
-// so a lost race refuses with nothing to undo.
-//
-// The claim is stamped with a uniquely named marker file, and the returned
-// release acts only while that marker still exists. A directory that was
-// removed and re-created by another process carries no marker of this run's —
-// so a replacement claim at the same pathname is never touched, by cleanup or
-// anything else. release(failed=true) discards a still-empty claim;
-// release(false) keeps the directory and drops only the marker.
+// so a lost race refuses with nothing to undo. The claim's pid-stamped marker
+// also pins the directory against `profile rm` and `profile rename` for as
+// long as this run lives, and scopes the returned release to what this run
+// actually owns.
 func claimTarget(name string) (release func(failed bool), err error) {
-	dir, err := profile.Dir(name)
+	release, err = profile.Claim(name)
 	if err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
-		return nil, err
-	}
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		if errors.Is(err, os.ErrExist) {
+		if errors.Is(err, profile.ErrExists) {
 			return nil, fmt.Errorf(
 				"profile %q was created by another process while setup was running, so nothing was written; re-run the command",
 				name)
 		}
 		return nil, err
 	}
-	marker, err := os.CreateTemp(dir, ".claim-*")
-	if err != nil {
-		_ = os.Remove(dir)
-		return nil, err
-	}
-	markerPath := marker.Name()
-	if err := marker.Close(); err != nil {
-		_ = os.Remove(markerPath)
-		_ = os.Remove(dir)
-		return nil, err
-	}
-	return func(failed bool) {
-		if _, err := os.Lstat(markerPath); err != nil {
-			// Not this run's directory any more; leave it exactly as found.
-			return
-		}
-		_ = os.Remove(markerPath)
-		if failed {
-			// Remove refuses a non-empty directory, so a run that got as far
-			// as real content keeps it for inspection.
-			_ = os.Remove(dir)
-		}
-	}, nil
+	return release, nil
 }
 
 // rebindReason says why writing this backend and workspace into the slot would

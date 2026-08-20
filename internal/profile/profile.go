@@ -341,29 +341,112 @@ func CompareAndSetActive(expected, name string) (bool, error) {
 // Remove deletes name's directory and everything under it. It refuses to
 // remove the active profile: callers must switch away first, so a machine is
 // never left with a pointer aimed at nothing.
+//
+// It runs under the pointer lock, so a removal cannot interleave with a
+// pointer write — SetActive's existence check can never pass for a directory
+// this delete is about to take away. A directory carrying a live claim (a
+// setup mid-creating it) is refused rather than pulled out from under that
+// run.
 func Remove(name string) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
-	exists, err := Exists(name)
+	path, err := pointerPath()
 	if err != nil {
 		return err
 	}
-	if !exists {
-		return fmt.Errorf("%w: %s", ErrNotFound, name)
+	return withPointerLock(path, func() error {
+		exists, err := Exists(name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("%w: %s", ErrNotFound, name)
+		}
+		live, err := HasLiveClaim(name)
+		if err != nil {
+			return err
+		}
+		if live {
+			return errStillBeingCreated(name)
+		}
+		active, err := ActiveName()
+		if err != nil && !errors.Is(err, ErrNoActive) {
+			return err
+		}
+		if active == name {
+			return fmt.Errorf("profile %q is active; switch to another profile before removing it", name)
+		}
+		dir, err := Dir(name)
+		if err != nil {
+			return err
+		}
+		return os.RemoveAll(dir)
+	})
+}
+
+// Rename moves name's directory and, when it was the active profile,
+// re-points the pointer in the SAME locked step — so no pointer write can
+// interleave with the move, and a directory a setup run is mid-creating (a
+// live claim) is never renamed away from under it. It reports whether the
+// pointer moved with the directory.
+func Rename(oldName, newName string) (repointed bool, err error) {
+	if err := ValidateName(oldName); err != nil {
+		return false, err
 	}
-	active, err := ActiveName()
-	if err != nil && !errors.Is(err, ErrNoActive) {
-		return err
+	if err := ValidateName(newName); err != nil {
+		return false, err
 	}
-	if active == name {
-		return fmt.Errorf("profile %q is active; switch to another profile before removing it", name)
-	}
-	dir, err := Dir(name)
+	path, err := pointerPath()
 	if err != nil {
-		return err
+		return false, err
 	}
-	return os.RemoveAll(dir)
+	err = withPointerLock(path, func() error {
+		exists, err := Exists(oldName)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("%w: %s", ErrNotFound, oldName)
+		}
+		taken, err := Exists(newName)
+		if err != nil {
+			return err
+		}
+		if taken {
+			return fmt.Errorf("%w: %s", ErrExists, newName)
+		}
+		live, err := HasLiveClaim(oldName)
+		if err != nil {
+			return err
+		}
+		if live {
+			return errStillBeingCreated(oldName)
+		}
+		from, err := Dir(oldName)
+		if err != nil {
+			return err
+		}
+		to, err := Dir(newName)
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(from, to); err != nil {
+			return fmt.Errorf("move profile %q to %q: %w", oldName, newName, err)
+		}
+		current, err := ActiveName()
+		if err != nil && !errors.Is(err, ErrNoActive) {
+			return err
+		}
+		if current == oldName {
+			if err := setActiveLocked(path, newName); err != nil {
+				return fmt.Errorf("profile moved to %q but the active pointer still names %q: %w", newName, oldName, err)
+			}
+			repointed = true
+		}
+		return nil
+	})
+	return repointed, err
 }
 
 func syncDir(dir string) error {

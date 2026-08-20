@@ -69,18 +69,25 @@ func Activate(ctx context.Context, name string, out, errOut io.Writer) error {
 		return err
 	}
 
-	if err := StopLaunchAgent(ctx); err != nil {
-		return fmt.Errorf("stop the background agent: %w", err)
-	}
-	if err := profile.SetActive(name); err != nil {
-		// Bring the old daemon back rather than leaving the Mac unobserved.
-		if restartErr := BootstrapLaunchAgent(ctx); restartErr != nil {
-			return fmt.Errorf("%w (and the background agent did not restart: %v)", err, restartErr)
+	// One serialized stop→re-point→start: another process's restart sequence
+	// cannot interleave with this one and leave the loser's daemon stopped.
+	if err := withAgentLifecycleLock(func() error {
+		if err := StopLaunchAgent(ctx); err != nil {
+			return fmt.Errorf("stop the background agent: %w", err)
 		}
+		if err := profile.SetActive(name); err != nil {
+			// Bring the old daemon back rather than leaving the Mac unobserved.
+			if restartErr := BootstrapLaunchAgent(ctx); restartErr != nil {
+				return fmt.Errorf("%w (and the background agent did not restart: %v)", err, restartErr)
+			}
+			return err
+		}
+		if err := BootstrapLaunchAgent(ctx); err != nil {
+			return fmt.Errorf("switched to %q, but the background agent did not restart: %w", name, err)
+		}
+		return nil
+	}); err != nil {
 		return err
-	}
-	if err := BootstrapLaunchAgent(ctx); err != nil {
-		return fmt.Errorf("switched to %q, but the background agent did not restart: %w", name, err)
 	}
 
 	fmt.Fprintf(out, "Active profile: %s\n", name)
@@ -135,12 +142,18 @@ func ensureAgentRunning(ctx context.Context, name string, out, errOut io.Writer)
 
 	fmt.Fprintf(out, "Profile %q is already active, but the background agent is not running. Starting it.\n", name)
 	// Bootstrap alone fails when launchd still has the job loaded but the process
-	// is dead, so take the same stop-then-start path a switch does.
-	if err := StopLaunchAgent(ctx); err != nil {
-		return fmt.Errorf("stop the background agent before restarting it: %w", err)
-	}
-	if err := BootstrapLaunchAgent(ctx); err != nil {
-		return fmt.Errorf("the background agent did not start: %w", err)
+	// is dead, so take the same stop-then-start path a switch does — serialized
+	// like one, too.
+	if err := withAgentLifecycleLock(func() error {
+		if err := StopLaunchAgent(ctx); err != nil {
+			return fmt.Errorf("stop the background agent before restarting it: %w", err)
+		}
+		if err := BootstrapLaunchAgent(ctx); err != nil {
+			return fmt.Errorf("the background agent did not start: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	return waitForSwitchedDaemon(ctx, name, out, errOut)
 }

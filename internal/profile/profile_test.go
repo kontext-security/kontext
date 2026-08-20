@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -349,5 +350,75 @@ func TestCompareAndSetActive(t *testing.T) {
 	}
 	if _, err := ActiveName(); !errors.Is(err, ErrNoActive) {
 		t.Fatalf("ActiveName() error = %v, want ErrNoActive after the clear", err)
+	}
+}
+
+// A live claim pins the directory: rm and rename refuse while the claiming
+// process runs, and stop refusing the moment its claim is released.
+func TestRemoveAndRenameRefuseALiveClaim(t *testing.T) {
+	withRoot(t)
+	release, err := Claim("mid-setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove("mid-setup"); err == nil || !strings.Contains(err.Error(), "still being created") {
+		t.Fatalf("Remove() = %v, want a live-claim refusal", err)
+	}
+	if _, err := Rename("mid-setup", "elsewhere"); err == nil || !strings.Contains(err.Error(), "still being created") {
+		t.Fatalf("Rename() = %v, want a live-claim refusal", err)
+	}
+	release(false)
+	if err := Remove("mid-setup"); err != nil {
+		t.Fatalf("Remove() after release = %v", err)
+	}
+}
+
+// A crashed run's claim must not pin its directory forever: a marker whose
+// pid is dead stops counting immediately — no grace period, no manual repair.
+func TestStaleClaimDoesNotBlockRemoval(t *testing.T) {
+	withRoot(t)
+	if _, err := Create("crashed"); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := Dir("crashed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Far above any real pid_max, so it can never name a running process.
+	if err := os.WriteFile(filepath.Join(dir, ".claim-99999999-x"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove("crashed"); err != nil {
+		t.Fatalf("Remove() with a dead process's claim = %v, want success", err)
+	}
+}
+
+// Renaming the active profile moves the pointer in the same locked step, and
+// an inactive profile's rename leaves the pointer alone.
+func TestRenameRepointsTheActivePointerAtomically(t *testing.T) {
+	withRoot(t)
+	for _, name := range []string{"a", "c"} {
+		if _, err := Create(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SetActive("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	repointed, err := Rename("a", "b")
+	if err != nil || !repointed {
+		t.Fatalf("Rename(a, b) = %v, %v; want the active rename to repoint", repointed, err)
+	}
+	if name, err := ActiveName(); err != nil || name != "b" {
+		t.Fatalf("ActiveName() = %q, %v; want the pointer moved to \"b\"", name, err)
+	}
+
+	repointed, err = Rename("c", "d")
+	if err != nil || repointed {
+		t.Fatalf("Rename(c, d) = %v, %v; want an inactive rename to leave the pointer", repointed, err)
+	}
+	if name, _ := ActiveName(); name != "b" {
+		t.Fatalf("ActiveName() = %q, want it untouched by an inactive rename", name)
 	}
 }
