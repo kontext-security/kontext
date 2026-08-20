@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
+	"github.com/kontext-security/kontext-cli/internal/managedconfig"
 	"github.com/kontext-security/kontext-cli/internal/profile"
 )
 
@@ -625,6 +626,158 @@ func TestSetupAllowsASecondWorkspaceOnTheSameBackend(t *testing.T) {
 		if exists, _ := profile.Exists(name); !exists {
 			t.Errorf("profile %q was not created", name)
 		}
+	}
+}
+
+// A plain setup holding a token for a workspace that already has a profile
+// switches to that profile — rotating its token on the way — rather than
+// refusing. The refusal only made sense for a NAMED run, where the name given
+// and the profile found disagree; here the token names the intent completely.
+func TestPlainSetupSwitchesToTheProfileBoundToTheTokensWorkspace(t *testing.T) {
+	h := profileHarness(t)
+	backend := multiWorkspacePingServer(t, map[string]string{
+		"kt_work":   "org_work",
+		"kt_work_2": "org_work", // a fresh token for the same workspace
+		"kt_other":  "org_other",
+	})
+	work := h.options("kt_work", backend)
+	work.Profile = "work"
+	if err := Run(context.Background(), work); err != nil {
+		t.Fatal(err)
+	}
+	other := h.options("kt_other", backend)
+	other.Profile = "other"
+	if err := Run(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("other"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Run(context.Background(), h.options("kt_work_2", backend)); err != nil {
+		t.Fatalf("plain setup with an already-bound workspace's token was refused: %v", err)
+	}
+	if got := h.keychain["kontext-install-token.work"]; got != "kt_work_2" {
+		t.Errorf("work's stored token = %q, want the fresh token", got)
+	}
+	if active, err := profile.ActiveName(); err != nil || active != "work" {
+		t.Errorf("active profile = %q (err %v), want the switch to \"work\"", active, err)
+	}
+	// The profile that WAS active kept its own binding and token.
+	if got := h.keychain["kontext-install-token.other"]; got != "kt_other" {
+		t.Errorf("other's stored token = %q, want it untouched", got)
+	}
+	if names, _ := profile.List(); len(names) != 2 {
+		t.Errorf("profiles = %v, want no third profile", names)
+	}
+}
+
+// A plain setup holding a token for a workspace nothing is bound to must not
+// write it over the active profile — that would silently destroy a working
+// workspace's binding and its keychain token. It becomes an addition instead,
+// exactly as if `kontext profile add` had been typed, and switches to it.
+func TestPlainSetupAddsAProfileForANewWorkspace(t *testing.T) {
+	h := profileHarness(t)
+	backend := multiWorkspacePingServer(t, map[string]string{
+		"kt_work": "org_work",
+		"kt_new":  "org_new",
+	})
+	work := h.options("kt_work", backend)
+	work.Profile = "work"
+	if err := Run(context.Background(), work); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Run(context.Background(), h.options("kt_new", backend)); err != nil {
+		t.Fatalf("plain setup with a new workspace's token failed: %v", err)
+	}
+	// The previously active profile kept its token and its binding.
+	if got := h.keychain["kontext-install-token.work"]; got != "kt_work" {
+		t.Errorf("work's stored token = %q, want it untouched", got)
+	}
+	workspace, err := readWorkspace("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspace.OrganizationID != "org_work" {
+		t.Errorf("work's workspace = %q, want its binding untouched", workspace.OrganizationID)
+	}
+	// The new workspace landed in a new profile, now active.
+	active, err := profile.ActiveName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active == "work" {
+		t.Fatal("active profile is still \"work\"; want a switch to the added profile")
+	}
+	added, err := readWorkspace(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added.OrganizationID != "org_new" {
+		t.Errorf("added profile's workspace = %q, want org_new", added.OrganizationID)
+	}
+}
+
+// The same protection across backends: an active local-dev profile must
+// survive a plain setup run with a production token, rather than being
+// rewritten to point at production under its local name.
+func TestPlainSetupLeavesTheActiveProfileWhenTheBackendDiffers(t *testing.T) {
+	h := profileHarness(t)
+	localBackend := pingServer(t, "kt_local")
+	local := h.options("kt_local", localBackend)
+	local.Profile = "localdev"
+	if err := Run(context.Background(), local); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("localdev"); err != nil {
+		t.Fatal(err)
+	}
+
+	otherBackend := multiWorkspacePingServer(t, map[string]string{"kt_prod": "org_prod"})
+	if err := Run(context.Background(), h.options("kt_prod", otherBackend)); err != nil {
+		t.Fatalf("plain setup against a different backend failed: %v", err)
+	}
+	configPath, err := profile.ManagedConfigPath("localdev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := managedconfig.LoadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Config.CloudURL != localBackend.URL {
+		t.Errorf("localdev's backend = %q, want it still pointing at %q", loaded.Config.CloudURL, localBackend.URL)
+	}
+	if active, _ := profile.ActiveName(); active == "localdev" {
+		t.Error("active profile is still \"localdev\"; want a switch to the added profile")
+	}
+}
+
+// A machine that has never used profiles keeps its pre-profile behavior
+// exactly: the legacy slot has no recorded binding to compare, so a plain
+// re-run rewrites it in place — even for a different workspace — and no
+// profile machinery appears.
+func TestPlainSetupOnALegacyMachineStillRewritesInPlace(t *testing.T) {
+	h := profileHarness(t)
+	backend := multiWorkspacePingServer(t, map[string]string{
+		"kt_a": "org_a",
+		"kt_b": "org_b",
+	})
+	if err := Run(context.Background(), h.options("kt_a", backend)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(context.Background(), h.options("kt_b", backend)); err != nil {
+		t.Fatalf("legacy re-run with a different workspace's token was refused: %v", err)
+	}
+	if got := h.keychain[KeychainItemName]; got != "kt_b" {
+		t.Errorf("legacy stored token = %q, want the in-place rewrite", got)
+	}
+	if names, _ := profile.List(); len(names) != 0 {
+		t.Errorf("profiles = %v, want none on a legacy machine", names)
 	}
 }
 

@@ -28,7 +28,13 @@ the second opinion is absent. Pass --with-local-llm to opt in — setup then
 checks llama-server is installed, downloads the weights (~680 MB) while you
 watch, and tells the background agent to run it.
 
-Re-running setup is safe: it rotates the stored token and restarts the agent.
+Re-running setup is safe, and never overwrites an existing workspace. A token
+for the workspace this Mac is already connected to rotates the stored token
+and restarts the agent. A token for a workspace that already has another
+profile rotates that profile's token and switches to it. A token for a new
+workspace adds a profile for it (like ` + "`kontext profile add`" + `) and switches to
+it, leaving the current profile untouched.
+
 Use --uninstall to remove everything setup installed (the kontext binary
 itself stays — it is managed by Homebrew).`,
 		Args: cobra.NoArgs,

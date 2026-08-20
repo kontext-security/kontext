@@ -135,6 +135,28 @@ func (s targetSnapshot) confirm() error {
 	return nil
 }
 
+// rebindReason says why writing this backend and workspace into the slot would
+// rebind it away from a working workspace — or "" when the write is safe: the
+// same backend and workspace (a token rotation), or a binding too broken or
+// incomplete to judge. Unreadable state deliberately reads as "safe":
+// re-running setup has always been the repair path for a profile whose config
+// or workspace cache is damaged, and refusing to write into one would take
+// that away.
+func rebindReason(slot target, cloudURL, organizationID string) string {
+	loaded, err := managedconfig.LoadFile(slot.ConfigPath)
+	if err != nil {
+		return ""
+	}
+	if loaded.Config.CloudURL != cloudURL {
+		return loaded.Config.CloudURL
+	}
+	workspace, err := readWorkspace(slot.Profile)
+	if err != nil || workspace.OrganizationID == "" || workspace.OrganizationID == organizationID {
+		return ""
+	}
+	return "workspace " + workspace.Label()
+}
+
 func profileTarget(name string) (target, error) {
 	if _, err := profile.Dir(name); err != nil {
 		return target{}, err
