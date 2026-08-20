@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security issue
-    url: https://github.com/kontext-security/kontext-cli/security/advisories/new
+    url: https://github.com/kontext-security/kontext/security/advisories/new
     about: Report security vulnerabilities privately
   - name: Documentation
     url: https://docs.kontext.security/getting-started/welcome

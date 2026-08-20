@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/setup"
+	"github.com/kontext-security/kontext/internal/setup"
 )
 
 func TestSetupCmdFlags(t *testing.T) {

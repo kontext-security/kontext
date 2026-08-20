@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 const testBinary = "/opt/homebrew/bin/kontext"

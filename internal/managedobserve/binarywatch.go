@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/diagnostic"
 )
 
 const (

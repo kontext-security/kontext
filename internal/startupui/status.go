@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/guard/judge"
 	"github.com/mattn/go-isatty"
 )
 

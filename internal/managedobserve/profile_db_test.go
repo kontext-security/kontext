@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/managedstream"
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/managedstream"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 func fakeProfileHome(t *testing.T) string {

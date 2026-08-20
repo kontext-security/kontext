@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/runtimecore"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/runtimecore"
 )
 
 const hookConnDeadline = 10 * time.Second

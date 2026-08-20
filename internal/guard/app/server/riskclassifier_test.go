@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
-	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
+	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
-	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func newGuardrailStub(t *testing.T, reply string, calls *int32) *httptest.Server {

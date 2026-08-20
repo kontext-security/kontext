@@ -15,17 +15,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
-	"github.com/kontext-security/kontext-cli/internal/codexmanaged"
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	"github.com/kontext-security/kontext-cli/internal/guard/judgeruntime"
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
-	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/localruntime"
-	"github.com/kontext-security/kontext-cli/internal/startupui"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/guard/app/server"
+	"github.com/kontext-security/kontext/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/guard/judgeruntime"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/localruntime"
+	"github.com/kontext-security/kontext/internal/startupui"
 )
 
 const (

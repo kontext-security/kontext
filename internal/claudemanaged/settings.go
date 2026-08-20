@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/agenthooks"
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/agenthooks"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 const (

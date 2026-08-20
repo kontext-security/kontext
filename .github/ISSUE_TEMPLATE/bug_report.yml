@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible bug in Kontext CLI
+description: Report a reproducible bug in Kontext
 title: "bug: "
 labels:
   - bug
@@ -11,7 +11,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: CLI version
+      label: Kontext version
       description: Output of `kontext --version`
       placeholder: v0.1.1
     validations:

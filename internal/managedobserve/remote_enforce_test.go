@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
-	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
+	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedarpolicy"
 )
 
 const remoteEnforceTestPolicy = `@id("permit-read")

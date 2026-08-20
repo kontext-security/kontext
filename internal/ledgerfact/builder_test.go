@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
-	"github.com/kontext-security/kontext-cli/internal/ledgerfact"
+	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/ledgerfact"
 )
 
 // fixtureMappings hand-encodes the evaluator output that produces each golden

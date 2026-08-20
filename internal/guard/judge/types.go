@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/decision"
+	"github.com/kontext-security/kontext/internal/guard/decision"
 )
 
 const (

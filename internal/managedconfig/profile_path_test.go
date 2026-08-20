@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 // fakeHome points both the legacy path and the profile root at a temp home, as

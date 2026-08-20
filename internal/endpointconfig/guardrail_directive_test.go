@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 func guardrailResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Response {

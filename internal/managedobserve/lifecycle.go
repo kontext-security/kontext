@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
-	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/localruntime"
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/cedarpolicy"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/localruntime"
+	"github.com/kontext-security/kontext/internal/managedconfig"
 )
 
 const (

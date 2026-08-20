@@ -3,7 +3,7 @@ package cedareval_test
 import (
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 // The validation-diagnostics corpus pins the portable policy dialect: entries

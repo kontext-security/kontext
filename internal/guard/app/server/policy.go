@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/guard/risk"
 )
 
 type PolicyProvider interface {

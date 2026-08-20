@@ -10,7 +10,7 @@ import (
 	"io"
 	"regexp"
 
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 const (

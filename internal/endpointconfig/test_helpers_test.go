@@ -3,7 +3,7 @@ package endpointconfig
 import (
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 func testResponse(t *testing.T, mode payloadcapture.Mode) Response {

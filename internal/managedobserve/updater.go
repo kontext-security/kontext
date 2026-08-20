@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/managedconfig"
 )
 
 const (

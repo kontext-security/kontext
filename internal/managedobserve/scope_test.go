@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/installation"
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/installation"
+	"github.com/kontext-security/kontext/internal/managedconfig"
 )
 
 func TestInstallationPathForScope(t *testing.T) {

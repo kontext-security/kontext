@@ -5,10 +5,10 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
-	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedarpolicy"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 const cedarEvaluatorVersion = "cedar-go/v1.8.0"

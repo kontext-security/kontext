@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
-	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
-	"github.com/kontext-security/kontext-cli/internal/runtimecore"
+	"github.com/kontext-security/kontext/internal/cedarpolicy"
+	"github.com/kontext-security/kontext/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/runtimecore"
 )
 
 const (

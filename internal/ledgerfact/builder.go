@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 // CedarInput carries the evaluation outcome and cache/provenance detail the

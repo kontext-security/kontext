@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func TestEvaluateHookRejectsTelemetryHooks(t *testing.T) {

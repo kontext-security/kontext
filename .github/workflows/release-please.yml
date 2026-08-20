@@ -28,7 +28,7 @@ jobs:
         with:
           client-id: ${{ vars.KONTEXT_RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.KONTEXT_RELEASE_APP_PRIVATE_KEY }}
-          repositories: kontext-cli
+          repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
           permission-issues: write

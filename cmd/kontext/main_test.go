@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/agent"
-	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/agent"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func TestRootCmdExposesSupportedCommandsOnly(t *testing.T) {

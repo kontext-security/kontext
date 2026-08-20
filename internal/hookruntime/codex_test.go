@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func TestDecodeCodexEventPreToolUse(t *testing.T) {

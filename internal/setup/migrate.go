@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 // Test seam (repo convention, cf. execCommand and dialSocket). Migration's

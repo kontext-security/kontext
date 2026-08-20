@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/ledgerfact"
+	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/ledgerfact"
 )
 
 // enforcedDenyCedarEvidence is the evidence a deny must carry: only an
@@ -402,7 +402,7 @@ func TestSaveDecisionEnrichesGitHubRepoResource(t *testing.T) {
 		HookEventName: "PreToolUse",
 		ToolName:      "Bash",
 		ToolUseID:     "tool-1",
-		ToolInput:     map[string]any{"command": "gh repo view kontext-security/kontext-cli"},
+		ToolInput:     map[string]any{"command": "gh repo view kontext-security/kontext"},
 	}
 	decision, err := risk.DecideRisk(event)
 	if err != nil {
@@ -422,7 +422,7 @@ where id = ?
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider != "github" || operation != "gh repo view" || operationClass != "read" || resourceClass != "repo" || resourceID != "kontext-security/kontext-cli" {
+	if provider != "github" || operation != "gh repo view" || operationClass != "read" || resourceClass != "repo" || resourceID != "kontext-security/kontext" {
 		t.Fatalf("github action = provider %q operation %q/%q resource %q/%q", provider, operation, operationClass, resourceClass, resourceID)
 	}
 	var riskEvent risk.RiskEvent
@@ -435,14 +435,14 @@ where id = ?
 }
 
 func TestGitHubRepoFromCommandPrefersGitHubURLRepository(t *testing.T) {
-	got := githubRepoFromCommand("git clone https://github.com/kontext-security/kontext-cli.git")
-	if got != "kontext-security/kontext-cli" {
-		t.Fatalf("repo = %q, want kontext-security/kontext-cli", got)
+	got := githubRepoFromCommand("git clone https://github.com/kontext-security/kontext.git")
+	if got != "kontext-security/kontext" {
+		t.Fatalf("repo = %q, want kontext-security/kontext", got)
 	}
 
-	got = githubRepoFromCommand("gh pr view https://github.com/kontext-security/kontext-cli/pull/223")
-	if got != "kontext-security/kontext-cli" {
-		t.Fatalf("pull URL repo = %q, want kontext-security/kontext-cli", got)
+	got = githubRepoFromCommand("gh pr view https://github.com/kontext-security/kontext/pull/223")
+	if got != "kontext-security/kontext" {
+		t.Fatalf("pull URL repo = %q, want kontext-security/kontext", got)
 	}
 }
 

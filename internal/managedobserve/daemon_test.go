@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/claudemanaged"
-	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/ledgerping"
-	"github.com/kontext-security/kontext-cli/internal/localruntime"
-	"github.com/kontext-security/kontext-cli/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/ledgerping"
+	"github.com/kontext-security/kontext/internal/localruntime"
+	"github.com/kontext-security/kontext/internal/managedconfig"
 )
 
 const testRuntimeTimeout = 5 * time.Second

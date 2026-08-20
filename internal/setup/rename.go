@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 // RenameProfile moves a profile's state to a new name, keeping it active if it

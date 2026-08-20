@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 func TestNormalizeCredentialFileRead(t *testing.T) {
@@ -102,7 +102,7 @@ func TestNormalizeSourceControlReadDefaultsRepoAndLocalEnvironment(t *testing.T)
 }
 
 func TestNormalizeGitHubRepoViewIsReadOnly(t *testing.T) {
-	event := NormalizeHookEvent(HookEvent{ToolName: "Bash", ToolInput: map[string]any{"command": "gh repo view kontext-security/kontext-cli"}})
+	event := NormalizeHookEvent(HookEvent{ToolName: "Bash", ToolInput: map[string]any{"command": "gh repo view kontext-security/kontext"}})
 	if event.Provider != "github" {
 		t.Fatalf("provider = %s, want github", event.Provider)
 	}

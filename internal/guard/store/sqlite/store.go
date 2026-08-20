@@ -16,8 +16,8 @@ import (
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 type Store struct {

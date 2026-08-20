@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 func fakeHome(t *testing.T) string {

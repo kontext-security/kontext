@@ -1,4 +1,4 @@
-module github.com/kontext-security/kontext-cli
+module github.com/kontext-security/kontext
 
 go 1.25.13
 

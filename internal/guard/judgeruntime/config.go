@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/judge"
-	"github.com/kontext-security/kontext-cli/internal/profile"
+	"github.com/kontext-security/kontext/internal/guard/judge"
+	"github.com/kontext-security/kontext/internal/profile"
 )
 
 type Config struct {

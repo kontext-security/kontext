@@ -1,6 +1,6 @@
 package cedarpolicy
 
-import "github.com/kontext-security/kontext-cli/internal/cedareval"
+import "github.com/kontext-security/kontext/internal/cedareval"
 
 // DeploymentClaimsEnforce reports whether the cached policy distribution asks
 // this endpoint to enforce: an active (or last-known-good) deployment exists
