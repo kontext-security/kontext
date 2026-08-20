@@ -357,20 +357,15 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	// An absent target is CLAIMED now, atomically, before the first write: the
 	// mkdir either reserves the name or reports the concurrent creation that
 	// confirm — a check, not a reservation — could still miss. A claim the run
-	// then fails out of is removed again while still empty, so a refused setup
-	// leaves no hollow profile behind.
+	// then fails out of is removed again while still empty and still ours, so
+	// a refused setup leaves no hollow profile behind and a replacement claim
+	// by another process is never touched.
 	if slot.Profile != "" && !snapshot.existed {
-		dir, err := claimTarget(slot.Profile)
+		release, err := claimTarget(slot.Profile)
 		if err != nil {
 			return err
 		}
-		defer func() {
-			if retErr != nil {
-				// Remove refuses a non-empty directory, so a run that got as
-				// far as real content keeps it for inspection.
-				_ = os.Remove(dir)
-			}
-		}()
+		defer func() { release(retErr != nil) }()
 	}
 
 	if err := writeKeychainToken(ctx, slot.KeychainItem, token); err != nil {
@@ -455,44 +450,32 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	// below bring it up already serving the retargeted profile — one restart,
 	// not a restart onto the old profile followed by a switch.
 	//
-	// Activation is conditional on the pointer still being where it was when
-	// retargeting was decided. A `kontext profile use` landing mid-run — the
-	// menu bar app switches on one click — is a choice someone just made, and
-	// setup must not overwrite it. The retargeted profile is fully written
-	// either way; the note says how to switch to it.
+	// Activation is one atomic compare-and-set: the pointer moves only if it
+	// still reads what it read when retargeting was decided. A `kontext
+	// profile use` landing anywhere in between — the menu bar app switches on
+	// one click — is a choice someone just made, and it wins; the retargeted
+	// profile is fully written either way, and the note says how to catch up.
 	var restoreActive func() (bool, error)
 	if activate != "" {
-		current, err := profile.ActiveName()
-		if err != nil && !errors.Is(err, profile.ErrNoActive) {
-			return err
-		}
-		if current != activationBase {
-			fmt.Fprintf(opts.Stderr, "note: the active profile changed to %q while setup was running, so it was left alone; switch with `kontext profile use %s`.\n", current, activate)
-			activate = ""
-		}
-	}
-	if activate != "" {
-		if err := profile.SetActive(activate); err != nil {
+		switched, err := profile.CompareAndSetActive(activationBase, activate)
+		if err != nil {
 			return fmt.Errorf("switch the active profile to %q: %w", activate, err)
 		}
-		fmt.Fprintf(opts.Stdout, "  ✓ Active profile: %s\n", activate)
-		// A run that FAILS below must not leave the Mac silently switched as a
-		// side effect. The restore reports whether it acted: a pointer that no
-		// longer names OUR profile was moved by another process after the
-		// switch above, and putting the base back would overwrite that choice
-		// with a staler one — so it is left exactly where they put it.
-		restoreActive = func() (bool, error) {
+		if !switched {
 			current, err := profile.ActiveName()
 			if err != nil && !errors.Is(err, profile.ErrNoActive) {
-				return false, err
+				return err
 			}
-			if current != activate {
-				return false, nil
+			fmt.Fprintf(opts.Stderr, "note: the active profile changed to %q while setup was running, so it was left alone; switch with `kontext profile use %s`.\n", current, activate)
+		} else {
+			fmt.Fprintf(opts.Stdout, "  ✓ Active profile: %s\n", activate)
+			// A run that FAILS below must not leave the Mac silently switched
+			// as a side effect. The undo is the same compare-and-set in the
+			// other direction: it puts the base back only while the pointer
+			// still names OUR profile, never over a concurrent choice.
+			restoreActive = func() (bool, error) {
+				return profile.CompareAndSetActive(activate, activationBase)
 			}
-			if activationBase == "" {
-				return true, profile.ClearActive()
-			}
-			return true, profile.SetActive(activationBase)
 		}
 	}
 

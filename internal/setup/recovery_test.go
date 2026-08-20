@@ -999,6 +999,56 @@ func TestFailedRunRemovesAnEmptyClaimedProfile(t *testing.T) {
 	}
 }
 
+// Claim cleanup is ownership-checked, not pathname-checked: a claim that was
+// removed and re-created by another process while this run was failing
+// carries no marker of this run's, and must survive this run's cleanup.
+func TestFailedRunLeavesAReplacementClaimAlone(t *testing.T) {
+	h := profileHarness(t)
+	backend := multiWorkspacePingServer(t, map[string]string{
+		"kt_work": "org_work",
+		"kt_new":  "org_new",
+	})
+	work := h.options("kt_work", backend)
+	work.Profile = "work"
+	if err := Run(context.Background(), work); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	rerun := h.options("kt_new", backend)
+	var derived string
+	rerun.OnProfileResolved = func(name string) { derived = name }
+
+	// At the keychain write — after the claim — replace the claim as another
+	// process would, then fail the run so its cleanup fires.
+	original := execCommand
+	overrideVar(t, &execCommand, func(ctx context.Context, stdin, name string, args ...string) (string, error) {
+		if name == "security" && len(args) > 0 && args[0] == "-i" {
+			dir, err := profile.Dir(derived)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			return "", errors.New("simulated keychain failure")
+		}
+		return original(ctx, stdin, name, args...)
+	})
+
+	if err := Run(context.Background(), rerun); err == nil {
+		t.Fatal("Run() = nil, want the keychain failure surfaced")
+	}
+	if exists, _ := profile.Exists(derived); !exists {
+		t.Error("the replacement claim was removed by a run that no longer owned the pathname")
+	}
+}
+
 // A machine that has never used profiles keeps its pre-profile behavior
 // exactly: the legacy slot has no recorded binding to compare, so a plain
 // re-run rewrites it in place — even for a different workspace — and no

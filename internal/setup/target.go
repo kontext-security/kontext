@@ -149,23 +149,52 @@ func (s targetSnapshot) confirm() error {
 // because another process just did — closing the window that an
 // exists-then-write check can only narrow. Called BEFORE the keychain write,
 // so a lost race refuses with nothing to undo.
-func claimTarget(name string) (string, error) {
+//
+// The claim is stamped with a uniquely named marker file, and the returned
+// release acts only while that marker still exists. A directory that was
+// removed and re-created by another process carries no marker of this run's —
+// so a replacement claim at the same pathname is never touched, by cleanup or
+// anything else. release(failed=true) discards a still-empty claim;
+// release(false) keeps the directory and drops only the marker.
+func claimTarget(name string) (release func(failed bool), err error) {
 	dir, err := profile.Dir(name)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return "", fmt.Errorf(
+			return nil, fmt.Errorf(
 				"profile %q was created by another process while setup was running, so nothing was written; re-run the command",
 				name)
 		}
-		return "", err
+		return nil, err
 	}
-	return dir, nil
+	marker, err := os.CreateTemp(dir, ".claim-*")
+	if err != nil {
+		_ = os.Remove(dir)
+		return nil, err
+	}
+	markerPath := marker.Name()
+	if err := marker.Close(); err != nil {
+		_ = os.Remove(markerPath)
+		_ = os.Remove(dir)
+		return nil, err
+	}
+	return func(failed bool) {
+		if _, err := os.Lstat(markerPath); err != nil {
+			// Not this run's directory any more; leave it exactly as found.
+			return
+		}
+		_ = os.Remove(markerPath)
+		if failed {
+			// Remove refuses a non-empty directory, so a run that got as far
+			// as real content keeps it for inspection.
+			_ = os.Remove(dir)
+		}
+	}, nil
 }
 
 // rebindReason says why writing this backend and workspace into the slot would

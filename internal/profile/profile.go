@@ -214,24 +214,30 @@ func Create(name string) (string, error) {
 
 // SetActive points the active pointer at name, which must already exist. The
 // write is a temp-file rename so a concurrent reader sees either the old name
-// or the new one, never a truncated file.
+// or the new one, never a truncated file — and it runs under the pointer
+// lock, so writers serialize instead of interleaving their check-then-write
+// sequences.
 func SetActive(name string) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
+	path, err := pointerPath()
+	if err != nil {
+		return err
+	}
+	return withPointerLock(path, func() error {
+		return setActiveLocked(path, name)
+	})
+}
+
+// setActiveLocked writes the pointer. Callers hold the pointer lock.
+func setActiveLocked(path, name string) error {
 	exists, err := Exists(name)
 	if err != nil {
 		return err
 	}
 	if !exists {
 		return fmt.Errorf("%w: %s", ErrNotFound, name)
-	}
-	path := ActivePath()
-	if path == "" {
-		return errors.New("cannot resolve your home directory")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
 	}
 
 	temp, err := os.CreateTemp(filepath.Dir(path), ".active-*.tmp")
@@ -262,17 +268,74 @@ func SetActive(name string) error {
 	return syncDir(filepath.Dir(path))
 }
 
+// pointerPath resolves the active pointer's path with its directory in place —
+// the sidecar lock file needs somewhere to live even before a pointer exists.
+func pointerPath() (string, error) {
+	path := ActivePath()
+	if path == "" {
+		return "", errors.New("cannot resolve your home directory")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 // ClearActive removes the pointer, returning the install to legacy-path
 // resolution. Uninstall uses it; switching never does.
 func ClearActive() error {
-	path := ActivePath()
-	if path == "" {
-		return errors.New("cannot resolve your home directory")
+	path, err := pointerPath()
+	if err != nil {
+		return err
 	}
+	return withPointerLock(path, func() error {
+		return clearActiveLocked(path)
+	})
+}
+
+func clearActiveLocked(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
+}
+
+// CompareAndSetActive moves the pointer from expected to name as one atomic
+// step — a compare-and-set under the pointer lock, not a check followed by a
+// write, so two processes can never interleave their reads and both conclude
+// they own the transition. expected "" means "no pointer"; name "" clears it.
+// It reports false, and writes nothing, when the pointer no longer reads
+// expected — the caller lost the race and someone else's choice stands.
+func CompareAndSetActive(expected, name string) (bool, error) {
+	if name != "" {
+		if err := ValidateName(name); err != nil {
+			return false, err
+		}
+	}
+	path, err := pointerPath()
+	if err != nil {
+		return false, err
+	}
+	swapped := false
+	err = withPointerLock(path, func() error {
+		current, err := ActiveName()
+		if err != nil && !errors.Is(err, ErrNoActive) {
+			return err
+		}
+		if current != expected {
+			return nil
+		}
+		if name == "" {
+			if err := clearActiveLocked(path); err != nil {
+				return err
+			}
+		} else if err := setActiveLocked(path, name); err != nil {
+			return err
+		}
+		swapped = true
+		return nil
+	})
+	return swapped, err
 }
 
 // Remove deletes name's directory and everything under it. It refuses to

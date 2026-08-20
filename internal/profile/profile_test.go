@@ -316,3 +316,38 @@ func TestSetActiveReplacesPointerAtomically(t *testing.T) {
 		}
 	}
 }
+
+// The pointer transition is a compare-and-set, not a check followed by a
+// write: a stale expectation writes nothing, so two processes can never both
+// conclude they own the same transition.
+func TestCompareAndSetActive(t *testing.T) {
+	withRoot(t)
+	for _, name := range []string{"a", "b"} {
+		if _, err := Create(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// From no pointer.
+	if ok, err := CompareAndSetActive("", "a"); err != nil || !ok {
+		t.Fatalf(`CompareAndSetActive("", "a") = %v, %v; want a swap`, ok, err)
+	}
+	// A stale expectation loses, and writes nothing.
+	if ok, err := CompareAndSetActive("", "b"); err != nil || ok {
+		t.Fatalf(`CompareAndSetActive("", "b") = %v, %v; want no swap`, ok, err)
+	}
+	if name, err := ActiveName(); err != nil || name != "a" {
+		t.Fatalf("ActiveName() = %q, %v; want the losing swap to have written nothing", name, err)
+	}
+	// A matching expectation moves it.
+	if ok, err := CompareAndSetActive("a", "b"); err != nil || !ok {
+		t.Fatalf(`CompareAndSetActive("a", "b") = %v, %v; want a swap`, ok, err)
+	}
+	// And clears it.
+	if ok, err := CompareAndSetActive("b", ""); err != nil || !ok {
+		t.Fatalf(`CompareAndSetActive("b", "") = %v, %v; want a clear`, ok, err)
+	}
+	if _, err := ActiveName(); !errors.Is(err, ErrNoActive) {
+		t.Fatalf("ActiveName() error = %v, want ErrNoActive after the clear", err)
+	}
+}
