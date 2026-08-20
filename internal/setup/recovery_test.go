@@ -894,6 +894,111 @@ func TestPlainSetupLeavesAConcurrentlyMovedPointerAlone(t *testing.T) {
 	}
 }
 
+// The rollback after a failed agent install must not overwrite a selection
+// made while the install was running: restoring the base would replace the
+// choice someone just made with a staler one.
+func TestFailedInstallRollbackLeavesAConcurrentSelectionAlone(t *testing.T) {
+	h := profileHarness(t)
+	backend := multiWorkspacePingServer(t, map[string]string{
+		"kt_work":   "org_work",
+		"kt_work_2": "org_work", // a fresh token for work's workspace
+		"kt_other":  "org_other",
+		"kt_third":  "org_third",
+	})
+	for name, token := range map[string]string{"work": "kt_work", "other": "kt_other", "third": "kt_third"} {
+		opts := h.options(token, backend)
+		opts.Profile = name
+		if err := Run(context.Background(), opts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := profile.SetActive("other"); err != nil {
+		t.Fatal(err)
+	}
+
+	// At the retargeted run's bootstrap — after setup switched to "work" —
+	// move the pointer to "third" AND fail the install, so the rollback runs
+	// against a pointer that is no longer setup's own.
+	original := execCommand
+	fired := false
+	overrideVar(t, &execCommand, func(ctx context.Context, stdin, name string, args ...string) (string, error) {
+		if name == "launchctl" && len(args) > 0 && args[0] == "bootstrap" && !fired {
+			fired = true
+			if err := profile.SetActive("third"); err != nil {
+				t.Fatal(err)
+			}
+			return "", errors.New("simulated bootstrap failure")
+		}
+		return original(ctx, stdin, name, args...)
+	})
+
+	err := Run(context.Background(), h.options("kt_work_2", backend))
+	if err == nil {
+		t.Fatal("Run() = nil, want the agent install failure surfaced")
+	}
+	if !strings.Contains(err.Error(), "changed by another process") {
+		t.Fatalf("error = %v, want it to say the pointer was left alone", err)
+	}
+	if active, _ := profile.ActiveName(); active != "third" {
+		t.Errorf("active profile = %q, want the concurrent switch to \"third\" respected", active)
+	}
+}
+
+// The claim is the reservation: the bare mkdir either creates the directory
+// or reports that another process just did, with no window between check and
+// write for a concurrent creation to slip through.
+func TestClaimTargetRefusesAnExistingDirectory(t *testing.T) {
+	profileHarness(t)
+	if _, err := claimTarget("fresh"); err != nil {
+		t.Fatalf("first claim error = %v", err)
+	}
+	_, err := claimTarget("fresh")
+	if err == nil || !strings.Contains(err.Error(), "created by another process") {
+		t.Fatalf("second claim = %v, want the concurrent-creation refusal", err)
+	}
+}
+
+// A claim the run then fails out of is removed again, so a refused setup does
+// not leave a hollow profile for `profile ls` to report as broken.
+func TestFailedRunRemovesAnEmptyClaimedProfile(t *testing.T) {
+	h := profileHarness(t)
+	backend := multiWorkspacePingServer(t, map[string]string{
+		"kt_work": "org_work",
+		"kt_new":  "org_new",
+	})
+	work := h.options("kt_work", backend)
+	work.Profile = "work"
+	if err := Run(context.Background(), work); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.SetActive("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fail the keychain write — the first write after the claim.
+	original := execCommand
+	overrideVar(t, &execCommand, func(ctx context.Context, stdin, name string, args ...string) (string, error) {
+		if name == "security" && len(args) > 0 && args[0] == "-i" {
+			return "", errors.New("simulated keychain failure")
+		}
+		return original(ctx, stdin, name, args...)
+	})
+
+	rerun := h.options("kt_new", backend)
+	var derived string
+	rerun.OnProfileResolved = func(name string) { derived = name }
+
+	if err := Run(context.Background(), rerun); err == nil {
+		t.Fatal("Run() = nil, want the keychain failure surfaced")
+	}
+	if derived == "" {
+		t.Fatal("OnProfileResolved never reported the derived profile")
+	}
+	if exists, _ := profile.Exists(derived); exists {
+		t.Errorf("profile %q survived a failed run as an empty claim", derived)
+	}
+}
+
 // A machine that has never used profiles keeps its pre-profile behavior
 // exactly: the legacy slot has no recorded binding to compare, so a plain
 // re-run rewrites it in place — even for a different workspace — and no

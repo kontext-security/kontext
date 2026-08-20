@@ -3,6 +3,8 @@ package setup
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
@@ -140,6 +142,30 @@ func (s targetSnapshot) confirm() error {
 			s.profile)
 	}
 	return nil
+}
+
+// claimTarget atomically reserves a profile directory that was absent when it
+// was snapshotted. The bare Mkdir either creates the directory or fails
+// because another process just did — closing the window that an
+// exists-then-write check can only narrow. Called BEFORE the keychain write,
+// so a lost race refuses with nothing to undo.
+func claimTarget(name string) (string, error) {
+	dir, err := profile.Dir(name)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf(
+				"profile %q was created by another process while setup was running, so nothing was written; re-run the command",
+				name)
+		}
+		return "", err
+	}
+	return dir, nil
 }
 
 // rebindReason says why writing this backend and workspace into the slot would

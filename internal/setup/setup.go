@@ -157,7 +157,7 @@ type pingResponse struct {
 // Run connects this Mac to the org owning the install token. Steps are
 // ordered so every irreversible action happens after the token is proven
 // valid, and re-running is always safe (token rotation restarts the agent).
-func Run(ctx context.Context, opts Options) error {
+func Run(ctx context.Context, opts Options) (retErr error) {
 	if goos != "darwin" {
 		return errors.New("kontext setup is currently macOS-only")
 	}
@@ -354,6 +354,25 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
+	// An absent target is CLAIMED now, atomically, before the first write: the
+	// mkdir either reserves the name or reports the concurrent creation that
+	// confirm — a check, not a reservation — could still miss. A claim the run
+	// then fails out of is removed again while still empty, so a refused setup
+	// leaves no hollow profile behind.
+	if slot.Profile != "" && !snapshot.existed {
+		dir, err := claimTarget(slot.Profile)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if retErr != nil {
+				// Remove refuses a non-empty directory, so a run that got as
+				// far as real content keeps it for inspection.
+				_ = os.Remove(dir)
+			}
+		}()
+	}
+
 	if err := writeKeychainToken(ctx, slot.KeychainItem, token); err != nil {
 		return err
 	}
@@ -441,7 +460,7 @@ func Run(ctx context.Context, opts Options) error {
 	// menu bar app switches on one click — is a choice someone just made, and
 	// setup must not overwrite it. The retargeted profile is fully written
 	// either way; the note says how to switch to it.
-	var restoreActive func() error
+	var restoreActive func() (bool, error)
 	if activate != "" {
 		current, err := profile.ActiveName()
 		if err != nil && !errors.Is(err, profile.ErrNoActive) {
@@ -458,12 +477,22 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		fmt.Fprintf(opts.Stdout, "  ✓ Active profile: %s\n", activate)
 		// A run that FAILS below must not leave the Mac silently switched as a
-		// side effect.
-		restoreActive = func() error {
-			if activationBase == "" {
-				return profile.ClearActive()
+		// side effect. The restore reports whether it acted: a pointer that no
+		// longer names OUR profile was moved by another process after the
+		// switch above, and putting the base back would overwrite that choice
+		// with a staler one — so it is left exactly where they put it.
+		restoreActive = func() (bool, error) {
+			current, err := profile.ActiveName()
+			if err != nil && !errors.Is(err, profile.ErrNoActive) {
+				return false, err
 			}
-			return profile.SetActive(activationBase)
+			if current != activate {
+				return false, nil
+			}
+			if activationBase == "" {
+				return true, profile.ClearActive()
+			}
+			return true, profile.SetActive(activationBase)
 		}
 	}
 
@@ -485,8 +514,15 @@ func Run(ctx context.Context, opts Options) error {
 			// the same "never leave the Mac switched or unobserved by a failed
 			// run" contract a failed `profile use` keeps. Best-effort: the
 			// error names whatever could not be undone.
-			if restoreErr := restoreActive(); restoreErr != nil {
+			restored, restoreErr := restoreActive()
+			if restoreErr != nil {
 				return fmt.Errorf("%w\n\nThe active profile could not be restored afterwards (%v); run `kontext profile use` to pick one.", err, restoreErr)
+			}
+			if !restored {
+				// Another process moved the pointer after our switch. Its
+				// `profile use` also owns the agent's state now — restarting
+				// here would race whatever it is doing.
+				return fmt.Errorf("%w\n\nThe active profile was changed by another process while setup was running, so it was left alone.", err)
 			}
 			if _, _, restartErr := installLaunchAgent(ctx, binary, nil); restartErr != nil {
 				return fmt.Errorf("%w\n\nThe active profile was restored, but the background agent did not restart (%v); run `kontext profile use` to repair it.", err, restartErr)
