@@ -1,0 +1,23 @@
+{
+  "name": "invalid-unknown-batch-field",
+  "description": "Unknown top-level property.",
+  "kind": "invalid",
+  "requests": [
+    {
+      "batch_version": "v1",
+      "batch_id": "batch_00000000-0000-4000-8000-000000000020",
+      "installation_id": "ins_0123456789abcdefABCDEF0123456789",
+      "sent_at": "2026-08-04T13:27:41.123456789Z",
+      "sessions": [],
+      "actions": [],
+      "receipts": [],
+      "extra_field": true
+    }
+  ],
+  "expected": {
+    "status": 422,
+    "code": "LEDGER_SCHEMA_INVALID",
+    "pointer": "/extra_field",
+    "stage": "structural"
+  }
+}

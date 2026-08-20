@@ -1,0 +1,730 @@
+{
+  "name": "invalid-session-count-limit",
+  "description": "More than 100 session records.",
+  "kind": "invalid",
+  "requests": [
+    {
+      "batch_version": "v1",
+      "batch_id": "batch_00000000-0000-4000-8000-000000000031",
+      "installation_id": "ins_0123456789abcdefABCDEF0123456789",
+      "sent_at": "2026-08-04T13:27:41.123456789Z",
+      "sessions": [
+        {
+          "id": "sess-limit-0",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-1",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-2",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-3",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-4",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-5",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-6",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-7",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-8",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-9",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-10",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-11",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-12",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-13",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-14",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-15",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-16",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-17",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-18",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-19",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-20",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-21",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-22",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-23",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-24",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-25",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-26",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-27",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-28",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-29",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-30",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-31",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-32",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-33",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-34",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-35",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-36",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-37",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-38",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-39",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-40",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-41",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-42",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-43",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-44",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-45",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-46",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-47",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-48",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-49",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-50",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-51",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-52",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-53",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-54",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-55",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-56",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-57",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-58",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-59",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-60",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-61",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-62",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-63",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-64",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-65",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-66",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-67",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-68",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-69",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-70",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-71",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-72",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-73",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-74",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-75",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-76",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-77",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-78",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-79",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-80",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-81",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-82",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-83",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-84",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-85",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-86",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-87",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-88",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-89",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-90",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-91",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-92",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-93",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-94",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-95",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-96",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-97",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-98",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-99",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "sess-limit-100",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        }
+      ],
+      "actions": [],
+      "receipts": []
+    }
+  ],
+  "expected": {
+    "status": 422,
+    "code": "LEDGER_SCHEMA_INVALID",
+    "pointer": "/sessions",
+    "stage": "structural"
+  }
+}

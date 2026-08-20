@@ -1,0 +1,129 @@
+{
+  "name": "compat-legacy-session-action",
+  "description": "Legacy session + proposed action with *_json fields.",
+  "kind": "compatibility",
+  "requests": [
+    {
+      "schema_version": "authorization-ledger-v1",
+      "installation_id": "ins_0123456789abcdefABCDEF0123456789",
+      "batch_id": "batch_00000000-0000-4000-8000-000000000092",
+      "sent_at": "2026-08-04T13:27:41.123456789Z",
+      "device": {
+        "label": "build-runner-3",
+        "deployment_version": "0.3.0",
+        "cli_version": "0.15.1",
+        "user_email": "operator@example.com"
+      },
+      "agent_sessions": [
+        {
+          "id": "sess-legacy-1",
+          "runtime_kind": null,
+          "runtime_instance_id": null,
+          "adapter_kind": null,
+          "adapter_version": null,
+          "agent_provider": "anthropic",
+          "agent": "claude_code",
+          "conversation_id": null,
+          "trace_id": null,
+          "principal_id": null,
+          "identity_context_json": {
+            "agent": "claude_code",
+            "agent_provider": "anthropic"
+          },
+          "identity_hash": "sha256:abababababababababababababababababababababababababababababababab",
+          "policy_version": "guard-launch-v0",
+          "policy_hash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "cwd": "/Users/operator/repos/widgets",
+          "source": "daemon_observed",
+          "mode": "observe",
+          "status": "open",
+          "external_id": null,
+          "closed_at": null,
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        }
+      ],
+      "authorization_actions": [
+        {
+          "id": "act_00000000-0000-4000-8000-000000000091",
+          "session_id": "sess-legacy-1",
+          "turn_id": null,
+          "tool_use_id": "toolu_legacy_1",
+          "trace_id": null,
+          "span_id": null,
+          "parent_span_id": null,
+          "runtime_kind": null,
+          "runtime_instance_id": null,
+          "adapter_kind": null,
+          "adapter_version": null,
+          "canonical_event_type": "request.proposed",
+          "adapter_event_name": "PreToolUse",
+          "correlation_key": "sess-legacy-1:toolu_legacy_1",
+          "correlation_confidence": null,
+          "tool_name": "Bash",
+          "provider": null,
+          "operation": "git_push",
+          "operation_class": "execute",
+          "resource_class": "repo",
+          "resource_id": "acme/widgets",
+          "parameters_redacted_json": {
+            "command_summary": "git push origin main"
+          },
+          "parameters_hash": "sha256:abababababababababababababababababababababababababababababababab",
+          "identity_context_json": {
+            "agent": "claude_code",
+            "agent_provider": "anthropic"
+          },
+          "identity_hash": "sha256:abababababababababababababababababababababababababababababababab",
+          "context_json": {
+            "cwd": "/Users/operator/repos/widgets",
+            "hook_event_name": "PreToolUse",
+            "payload_capture": "full"
+          },
+          "context_hash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "policy_id": null,
+          "policy_version": "guard-launch-v0",
+          "policy_hash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "default_posture": "",
+          "decision_result": null,
+          "decision_category": null,
+          "adapter_decision": null,
+          "reason_code": null,
+          "reason": null,
+          "risk_level": null,
+          "risk_score": null,
+          "risk_threshold": null,
+          "model_version": null,
+          "compositional_risk_score": null,
+          "confidence": null,
+          "alignment_score": null,
+          "alignment_threshold": null,
+          "uncertainty_score": null,
+          "matched_rules_json": [],
+          "risk_signals_json": [],
+          "risk_event_json": {},
+          "modifications_json": {},
+          "approval_context_json": {},
+          "approval_channel": "",
+          "approval_request_id": "",
+          "approval_expires_at": null,
+          "deferral_context_json": {},
+          "status": "proposed",
+          "outcome": null,
+          "output_summary": null,
+          "output_hash": null,
+          "error_redacted": null,
+          "proposed_at": "2026-08-04T13:27:40.000000001Z",
+          "decision_at": null,
+          "completed_at": null,
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        }
+      ],
+      "authorization_receipts": []
+    }
+  ],
+  "expected": {
+    "status": 201
+  }
+}

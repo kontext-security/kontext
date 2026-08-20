@@ -1,0 +1,26 @@
+{
+  "name": "valid-heartbeat-device",
+  "description": "Heartbeat carrying the full device metadata object.",
+  "kind": "valid",
+  "requests": [
+    {
+      "batch_version": "v1",
+      "batch_id": "batch_00000000-0000-4000-8000-000000000002",
+      "installation_id": "ins_0123456789abcdefABCDEF0123456789",
+      "sent_at": "2026-08-04T13:27:41.123456789Z",
+      "sessions": [],
+      "actions": [],
+      "receipts": [],
+      "device": {
+        "label": "build-runner-3",
+        "deployment_version": "0.3.0",
+        "cli_version": "0.15.1",
+        "user_email": "operator@example.com"
+      }
+    }
+  ],
+  "expected": {
+    "status": 200,
+    "disposition": "accepted"
+  }
+}

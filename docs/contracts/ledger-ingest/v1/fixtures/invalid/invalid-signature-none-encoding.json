@@ -1,0 +1,277 @@
+{
+  "name": "invalid-signature-none-encoding",
+  "description": "Unsigned receipts omit signature; algorithm \"none\" is a legacy form.",
+  "kind": "invalid",
+  "requests": [
+    {
+      "batch_version": "v1",
+      "batch_id": "batch_00000000-0000-4000-8000-000000000034",
+      "installation_id": "ins_0123456789abcdefABCDEF0123456789",
+      "sent_at": "2026-08-04T13:27:41.123456789Z",
+      "sessions": [
+        {
+          "id": "sess-fixture-1",
+          "source": "daemon_observed",
+          "status": "open",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z"
+        }
+      ],
+      "actions": [
+        {
+          "id": "act_00000000-0000-4000-8000-000000000001",
+          "session_id": "sess-fixture-1",
+          "event_type": "request.proposed",
+          "status": "proposed",
+          "created_at": "2026-08-04T13:27:40.000000001Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z",
+          "tool_call_id": "toolu_fixture_enforce_allow",
+          "tool_name": "mcp__github__merge_pull_request",
+          "provider": "github",
+          "adapter_event_name": "PreToolUse",
+          "correlation_key": "sess-fixture-1:toolu_fixture_enforce_allow",
+          "parameters": {
+            "request_summary": "merge acme/widgets#42"
+          },
+          "parameters_hash": "sha256:abababababababababababababababababababababababababababababababab",
+          "identity": {
+            "agent": "claude_code",
+            "agent_provider": "anthropic"
+          },
+          "context": {
+            "cwd": "/Users/operator/repos/widgets",
+            "hook_event_name": "PreToolUse",
+            "payload_capture": "full",
+            "github": {
+              "branch_or_ref": "main"
+            }
+          },
+          "tool_input": {
+            "mode": "full",
+            "value": {
+              "owner": "acme",
+              "repo": "widgets",
+              "pull_number": 42
+            },
+            "redacted": false,
+            "redactorVersion": "go-redactor/3",
+            "sourceSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "sourceByteLength": 64,
+            "storedSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "storedByteLength": 64
+          },
+          "proposed_at": "2026-08-04T13:27:40.000000001Z"
+        },
+        {
+          "id": "act_00000000-0000-4000-8000-000000000002",
+          "session_id": "sess-fixture-1",
+          "event_type": "request.decided",
+          "status": "authorized",
+          "created_at": "2026-08-04T13:27:41.123456789Z",
+          "updated_at": "2026-08-04T13:27:41.123456789Z",
+          "tool_call_id": "toolu_fixture_enforce_allow",
+          "tool_name": "mcp__github__merge_pull_request",
+          "provider": "github",
+          "operation": "pulls.merge",
+          "resource_id": "acme/widgets#42",
+          "decision_result": "allow",
+          "decision_category": "cedar_policy",
+          "reason_code": "permit",
+          "decision_fact": {
+            "schema_version": "decision_fact/v1",
+            "tool_call_id": "toolu_fixture_enforce_allow",
+            "decided_at": "2026-08-04T13:27:41.123456789Z",
+            "target_provider": "github",
+            "tool_name": "mcp__github__merge_pull_request",
+            "operation": "pulls.merge",
+            "resource_id": "acme/widgets#42",
+            "parameters_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "applied_mode": "enforce",
+            "evaluation_state": "evaluated",
+            "cedar_action": "allow",
+            "execution_action": "allow",
+            "reason_code": "permit",
+            "policy_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "deployment_id": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "determining_policy_ids": [
+              "policy0"
+            ],
+            "risk": null,
+            "classifier": null,
+            "evidence": {
+              "response_version": 1,
+              "request_contract_version": 1,
+              "evaluation_principal": {
+                "entity_type": "Kontext::User",
+                "entity_id": "operator@example.com"
+              },
+              "configured_mode": "enforce",
+              "distribution_state": "active",
+              "context_diagnostics": [],
+              "engine_error_count": 0,
+              "cache_fetched_at": "2026-08-04T13:27:40.000000001Z",
+              "cache_stale": false,
+              "cache_expired": false,
+              "cache_invalid": false,
+              "evaluator_version": "1.0.0",
+              "evaluation_reason_code": "policy_evaluated",
+              "decision_reason_code": "permit",
+              "effective_reason_code": "permit"
+            }
+          },
+          "decided_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "act_00000000-0000-4000-8000-000000000003",
+          "session_id": "sess-fixture-1",
+          "event_type": "request.observed",
+          "status": "completed",
+          "outcome": "success",
+          "created_at": "2026-08-04T13:27:42.5Z",
+          "updated_at": "2026-08-04T13:27:42.5Z",
+          "tool_call_id": "toolu_fixture_enforce_allow",
+          "tool_name": "mcp__github__merge_pull_request",
+          "output_summary": "merged acme/widgets#42",
+          "output_hash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "tool_output": {
+            "mode": "full_truncated",
+            "preview": "{\"merged\":true,\"sha\":\"…[truncated 96 bytes total]",
+            "redacted": true,
+            "redactorVersion": "go-redactor/3",
+            "sourceSha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "sourceByteLength": 4096,
+            "storedSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "storedByteLength": 96
+          },
+          "completed_at": "2026-08-04T13:27:42.5Z"
+        }
+      ],
+      "receipts": [
+        {
+          "id": "rcpt_00000000-0000-4000-8000-000000000001",
+          "action_id": "act_00000000-0000-4000-8000-000000000002",
+          "session_id": "sess-fixture-1",
+          "receipt_type": "decision",
+          "payload": {
+            "receipt_type": "decision",
+            "action": {
+              "id": "act_00000000-0000-4000-8000-000000000002",
+              "session_id": "sess-fixture-1",
+              "tool_call_id": "toolu_fixture_enforce_allow",
+              "tool_name": "mcp__github__merge_pull_request",
+              "parameters_hash": "sha256:abababababababababababababababababababababababababababababababab",
+              "policy_hash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "reason_code": "permit",
+              "decision_result": "allow",
+              "decision_fact": {
+                "schema_version": "decision_fact/v1",
+                "tool_call_id": "toolu_fixture_enforce_allow",
+                "decided_at": "2026-08-04T13:27:41.123456789Z",
+                "target_provider": "github",
+                "tool_name": "mcp__github__merge_pull_request",
+                "operation": "pulls.merge",
+                "resource_id": "acme/widgets#42",
+                "parameters_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "applied_mode": "enforce",
+                "evaluation_state": "evaluated",
+                "cedar_action": "allow",
+                "execution_action": "allow",
+                "reason_code": "permit",
+                "policy_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "deployment_id": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+                "determining_policy_ids": [
+                  "policy0"
+                ],
+                "risk": null,
+                "classifier": null,
+                "evidence": {
+                  "response_version": 1,
+                  "request_contract_version": 1,
+                  "evaluation_principal": {
+                    "entity_type": "Kontext::User",
+                    "entity_id": "operator@example.com"
+                  },
+                  "configured_mode": "enforce",
+                  "distribution_state": "active",
+                  "context_diagnostics": [],
+                  "engine_error_count": 0,
+                  "cache_fetched_at": "2026-08-04T13:27:40.000000001Z",
+                  "cache_stale": false,
+                  "cache_expired": false,
+                  "cache_invalid": false,
+                  "evaluator_version": "1.0.0",
+                  "evaluation_reason_code": "policy_evaluated",
+                  "decision_reason_code": "permit",
+                  "effective_reason_code": "permit"
+                }
+              }
+            },
+            "policy": {
+              "policy_version": "guard-launch-v0",
+              "policy_hash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "matched_rules": [
+                "policy0"
+              ]
+            },
+            "hashes": {
+              "action_hash": "sha256:abababababababababababababababababababababababababababababababab"
+            },
+            "decision": {
+              "result": "allow",
+              "category": "cedar_policy",
+              "reason_code": "permit",
+              "reason": "Cedar permitted the call"
+            }
+          },
+          "proof": {
+            "receipt_hash": "sha256:24677d45db0ddaa37a8ab905c04bbdac29367fa172c26efa8cf993442cdeeb77",
+            "signature": {
+              "algorithm": "none",
+              "key_id": "",
+              "value": ""
+            }
+          },
+          "created_at": "2026-08-04T13:27:41.123456789Z"
+        },
+        {
+          "id": "rcpt_00000000-0000-4000-8000-000000000002",
+          "action_id": "act_00000000-0000-4000-8000-000000000003",
+          "session_id": "sess-fixture-1",
+          "receipt_type": "outcome",
+          "payload": {
+            "receipt_type": "outcome",
+            "previous_receipt_hash": "sha256:24677d45db0ddaa37a8ab905c04bbdac29367fa172c26efa8cf993442cdeeb77",
+            "action": {
+              "id": "act_00000000-0000-4000-8000-000000000003",
+              "session_id": "sess-fixture-1",
+              "tool_call_id": "toolu_fixture_enforce_allow",
+              "tool_name": "mcp__github__merge_pull_request",
+              "outcome_hash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+            },
+            "hashes": {
+              "outcome_hash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+            },
+            "outcome": {
+              "outcome": "success",
+              "output_summary": "merged acme/widgets#42",
+              "output_hash": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+            }
+          },
+          "proof": {
+            "receipt_hash": "sha256:b5bc156bbb4e65570a0ef4cfc93fa373e48d0b099630d0af4a1c6713b3ef174e"
+          },
+          "created_at": "2026-08-04T13:27:42.5Z"
+        }
+      ],
+      "receipt_chain_anchor": {
+        "previous_receipt_hash": ""
+      }
+    }
+  ],
+  "expected": {
+    "status": 422,
+    "code": "LEDGER_SCHEMA_INVALID",
+    "pointer": "/receipts/0/proof/signature/algorithm",
+    "stage": "structural"
+  }
+}
