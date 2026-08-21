@@ -1,4 +1,4 @@
-<img src="assets/kontext-banner-cli.png" alt="Kontext banner" width="100%" />
+<img src="assets/kontext-computer-wordmark.gif" alt="Kontext animated wordmark" width="100%" />
 
 <div align="center">
 
