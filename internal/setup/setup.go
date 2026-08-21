@@ -157,7 +157,7 @@ type pingResponse struct {
 // Run connects this Mac to the org owning the install token. Steps are
 // ordered so every irreversible action happens after the token is proven
 // valid, and re-running is always safe (token rotation restarts the agent).
-func Run(ctx context.Context, opts Options) error {
+func Run(ctx context.Context, opts Options) (retErr error) {
 	if goos != "darwin" {
 		return errors.New("kontext setup is currently macOS-only")
 	}
@@ -220,10 +220,11 @@ func Run(ctx context.Context, opts Options) error {
 	fmt.Fprintln(opts.Stdout, "\nWorkspace")
 	fmt.Fprintf(opts.Stdout, "  ✓ %s\n", orgLabel)
 
-	// Refuse a SECOND profile for a workspace already bound on this backend. Two
+	// Never a SECOND profile for a workspace already bound on this backend. Two
 	// profiles differing only by name would hold the same workspace's records in
 	// two ledgers and present it two device identities — no purpose, and a
-	// confusing thing to inherit.
+	// confusing thing to inherit. A named or deriving run refuses; a plain run
+	// rotates the bound profile's token and switches to it instead.
 	//
 	// The check has to be here, not in a caller: the workspace is only known once
 	// the hosted API answers, so nothing earlier can tell two tokens apart. It is
@@ -247,6 +248,17 @@ func Run(ctx context.Context, opts Options) error {
 	var slot target
 	var snapshot targetSnapshot
 	deriving := opts.DeriveProfileName && opts.Profile == ""
+	// plain is a bare `kontext setup`: no profile named, no derivation asked
+	// for. It writes the active profile — the one target the caller did not
+	// choose — so it is also the only mode allowed to RETARGET below instead of
+	// writing a different workspace over whatever happens to be active.
+	plain := opts.Profile == "" && !opts.DeriveProfileName
+	// The profile to make active before the agent restarts. Set only when a
+	// plain setup retargeted: whoever pasted this token wants THIS Mac reporting
+	// to that token's workspace, and the daemon reads the active config.
+	// activationBase records what was active when that decision was made, so a
+	// `profile use` landing mid-run is detected rather than overwritten.
+	var activate, activationBase string
 	if !deriving {
 		slot, err = resolveTarget(opts.Profile)
 		if err != nil {
@@ -258,12 +270,63 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 
-	if duplicate, err := boundProfileLookup(ping.OrganizationID, cloudURL, slot.Profile); err != nil {
+	duplicate, err := boundProfileLookup(ping.OrganizationID, cloudURL, slot.Profile)
+	if err != nil {
 		return err
-	} else if duplicate != "" {
+	}
+	switch {
+	case duplicate != "" && !plain:
 		return fmt.Errorf(
 			"workspace %s is already set up as profile %q on %s\n\nSwitch to it with `kontext profile use %s`, or remove it first to re-create it.",
 			orgLabel, duplicate, cloudURL, duplicate)
+	case duplicate != "":
+		// A plain setup with a token for a workspace that already has a profile.
+		// The token names the intent unambiguously — "connect this Mac to that
+		// workspace" — so rotate THAT profile's token and switch to it. Erroring
+		// here (as the named modes still do, where the mismatch between the name
+		// given and the profile found needs a human) would only send the user off
+		// to run the exact commands this run can perform.
+		fmt.Fprintf(opts.Stdout, "  ✓ Already set up as profile %q — rotating its token and switching to it\n", duplicate)
+		slot, err = resolveTarget(duplicate)
+		if err != nil {
+			return err
+		}
+		snapshot, err = snapshotTarget(duplicate, false)
+		if err != nil {
+			return err
+		}
+		activate = duplicate
+	case plain && slot.Profile != "":
+		// Writing the active profile is only right while the token belongs to the
+		// workspace it is already bound to (a rotation). A token for anything
+		// else must not overwrite that binding — that is a working workspace
+		// silently destroyed, its token gone from the keychain — so the run
+		// becomes an addition instead, as if `kontext profile add` had been
+		// typed. The legacy unprofiled slot is exempt: it has no recorded
+		// binding to compare, and pre-profile machines keep their old behavior.
+		if reason := rebindReason(slot, cloudURL, ping.OrganizationID); reason != "" {
+			fmt.Fprintf(opts.Stdout, "  • Active profile %q is bound to %s — leaving it untouched\n", slot.Profile, reason)
+			profileName, err := DeriveProfileName(cloudURL, ping.OrganizationName, ping.OrganizationID)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(opts.Stdout, "  ✓ Profile name: %s\n", profileName)
+			slot, err = resolveTarget(profileName)
+			if err != nil {
+				return err
+			}
+			snapshot, err = snapshotTarget(profileName, false)
+			if err != nil {
+				return err
+			}
+			activate = profileName
+		}
+	}
+	if activate != "" {
+		activationBase, err = profile.ActiveName()
+		if err != nil && !errors.Is(err, profile.ErrNoActive) {
+			return err
+		}
 	}
 
 	if deriving {
@@ -289,6 +352,20 @@ func Run(ctx context.Context, opts Options) error {
 	// meaning is assumed, so a concurrent rename or removal must be caught now.
 	if err := snapshot.confirm(); err != nil {
 		return err
+	}
+
+	// An absent target is CLAIMED now, atomically, before the first write: the
+	// mkdir either reserves the name or reports the concurrent creation that
+	// confirm — a check, not a reservation — could still miss. A claim the run
+	// then fails out of is removed again while still empty and still ours, so
+	// a refused setup leaves no hollow profile behind and a replacement claim
+	// by another process is never touched.
+	if slot.Profile != "" && !snapshot.existed {
+		release, err := claimTarget(slot.Profile)
+		if err != nil {
+			return err
+		}
+		defer func() { release(retErr != nil) }()
 	}
 
 	if err := writeKeychainToken(ctx, slot.KeychainItem, token); err != nil {
@@ -368,6 +445,40 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	fmt.Fprintln(opts.Stderr, "note: Codex hooks require review before they run; open `/hooks` in Codex to trust the Kontext hooks.")
 
+	// The pointer moves BEFORE the agent is (re)installed: the daemon resolves
+	// the active profile's config at startup, so this ordering makes the restart
+	// below bring it up already serving the retargeted profile — one restart,
+	// not a restart onto the old profile followed by a switch.
+	//
+	// Activation is one atomic compare-and-set: the pointer moves only if it
+	// still reads what it read when retargeting was decided. A `kontext
+	// profile use` landing anywhere in between — the menu bar app switches on
+	// one click — is a choice someone just made, and it wins; the retargeted
+	// profile is fully written either way, and the note says how to catch up.
+	var restoreActive func() (bool, error)
+	if activate != "" {
+		switched, err := profile.CompareAndSetActive(activationBase, activate)
+		if err != nil {
+			return fmt.Errorf("switch the active profile to %q: %w", activate, err)
+		}
+		if !switched {
+			current, err := profile.ActiveName()
+			if err != nil && !errors.Is(err, profile.ErrNoActive) {
+				return err
+			}
+			fmt.Fprintf(opts.Stderr, "note: the active profile changed to %q while setup was running, so it was left alone; switch with `kontext profile use %s`.\n", current, activate)
+		} else {
+			fmt.Fprintf(opts.Stdout, "  ✓ Active profile: %s\n", activate)
+			// A run that FAILS below must not leave the Mac silently switched
+			// as a side effect. The undo is the same compare-and-set in the
+			// other direction: it puts the base back only while the pointer
+			// still names OUR profile, never over a concurrent choice.
+			restoreActive = func() (bool, error) {
+				return profile.CompareAndSetActive(activate, activationBase)
+			}
+		}
+	}
+
 	var plistPath, logPath string
 	err = runWithStatus(opts.Stdout, "Installing background agent", func() error {
 		var err error
@@ -380,6 +491,27 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	})
 	if err != nil {
+		if restoreActive != nil {
+			// The run failed after moving the pointer. Put it back and try to
+			// bring the agent up for the profile that was serving before —
+			// the same "never leave the Mac switched or unobserved by a failed
+			// run" contract a failed `profile use` keeps. Best-effort: the
+			// error names whatever could not be undone.
+			restored, restoreErr := restoreActive()
+			if restoreErr != nil {
+				return fmt.Errorf("%w\n\nThe active profile could not be restored afterwards (%v); run `kontext profile use` to pick one.", err, restoreErr)
+			}
+			if !restored {
+				// Another process moved the pointer after our switch. Its
+				// `profile use` also owns the agent's state now — restarting
+				// here would race whatever it is doing.
+				return fmt.Errorf("%w\n\nThe active profile was changed by another process while setup was running, so it was left alone.", err)
+			}
+			if _, _, restartErr := installLaunchAgent(ctx, binary, nil); restartErr != nil {
+				return fmt.Errorf("%w\n\nThe active profile was restored, but the background agent did not restart (%v); run `kontext profile use` to repair it.", err, restartErr)
+			}
+			return fmt.Errorf("%w\n\nThe active profile was restored and the background agent is running on it; nothing switched.", err)
+		}
 		return err
 	}
 	fmt.Fprintf(opts.Stdout, "  ✓ Background agent installed (%s)\n", plistPath)

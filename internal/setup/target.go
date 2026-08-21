@@ -119,20 +119,70 @@ func (s targetSnapshot) confirm() error {
 				s.active, active)
 		}
 	}
-	// Only meaningful when it existed at resolution: a run that is CREATING a
-	// profile legitimately finds nothing here.
-	if s.existed {
-		exists, err := profile.Exists(s.profile)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			return fmt.Errorf(
-				"profile %q was renamed or removed while setup was running, so nothing was written; re-run the command",
-				s.profile)
-		}
+	// Existence must still mean what it meant at resolution — in BOTH
+	// directions. A profile that existed and is now gone was renamed or removed
+	// mid-run; writing would resurrect it under the old name. A profile that
+	// did NOT exist and now does was created concurrently by another setup or
+	// `profile add`; writing would silently adopt that run's directory and
+	// rotate a token it just stored.
+	exists, err := profile.Exists(s.profile)
+	if err != nil {
+		return err
+	}
+	if s.existed && !exists {
+		return fmt.Errorf(
+			"profile %q was renamed or removed while setup was running, so nothing was written; re-run the command",
+			s.profile)
+	}
+	if !s.existed && exists {
+		return fmt.Errorf(
+			"profile %q was created by another process while setup was running, so nothing was written; re-run the command",
+			s.profile)
 	}
 	return nil
+}
+
+// claimTarget atomically reserves a profile directory that was absent when it
+// was snapshotted — profile.Claim's mkdir either reserves the name or fails
+// because another process just did, closing the window that an
+// exists-then-write check can only narrow. Called BEFORE the keychain write,
+// so a lost race refuses with nothing to undo. The claim's pid-stamped marker
+// also pins the directory against `profile rm` and `profile rename` for as
+// long as this run lives, and scopes the returned release to what this run
+// actually owns.
+func claimTarget(name string) (release func(failed bool), err error) {
+	release, err = profile.Claim(name)
+	if err != nil {
+		if errors.Is(err, profile.ErrExists) {
+			return nil, fmt.Errorf(
+				"profile %q was created by another process while setup was running, so nothing was written; re-run the command",
+				name)
+		}
+		return nil, err
+	}
+	return release, nil
+}
+
+// rebindReason says why writing this backend and workspace into the slot would
+// rebind it away from a working workspace — or "" when the write is safe: the
+// same backend and workspace (a token rotation), or a binding too broken or
+// incomplete to judge. Unreadable state deliberately reads as "safe":
+// re-running setup has always been the repair path for a profile whose config
+// or workspace cache is damaged, and refusing to write into one would take
+// that away.
+func rebindReason(slot target, cloudURL, organizationID string) string {
+	loaded, err := managedconfig.LoadFile(slot.ConfigPath)
+	if err != nil {
+		return ""
+	}
+	if loaded.Config.CloudURL != cloudURL {
+		return loaded.Config.CloudURL
+	}
+	workspace, err := readWorkspace(slot.Profile)
+	if err != nil || workspace.OrganizationID == "" || workspace.OrganizationID == organizationID {
+		return ""
+	}
+	return "workspace " + workspace.Label()
 }
 
 func profileTarget(name string) (target, error) {
