@@ -345,6 +345,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureClassifierVerdictColumns(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureRiskTypeAnnotations(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

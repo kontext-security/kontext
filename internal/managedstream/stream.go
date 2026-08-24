@@ -40,9 +40,10 @@ const (
 	// hosted upsert is idempotent per action id, so duplicates are harmless.
 	cursorSafetyLag = 30 * time.Second
 
-	maxPayloadSessions = 100
-	maxPayloadActions  = 1000
-	maxPayloadReceipts = 2000
+	maxPayloadSessions            = 100
+	maxPayloadActions             = 1000
+	maxPayloadReceipts            = 2000
+	maxPayloadRiskTypeAnnotations = 1000
 
 	maxErrorBodyBytes = 4096
 
@@ -98,15 +99,16 @@ const (
 )
 
 type Payload struct {
-	SchemaVersion      string                           `json:"schema_version"`
-	InstallationID     string                           `json:"installation_id"`
-	BatchID            string                           `json:"batch_id"`
-	SentAt             string                           `json:"sent_at"`
-	Device             *Device                          `json:"device,omitempty"`
-	Sessions           []sqlite.LedgerRecord            `json:"agent_sessions"`
-	Actions            []sqlite.LedgerRecord            `json:"authorization_actions"`
-	Receipts           []sqlite.LedgerRecord            `json:"authorization_receipts"`
-	ReceiptChainAnchor *sqlite.LedgerReceiptChainAnchor `json:"receipt_chain_anchor,omitempty"`
+	SchemaVersion       string                            `json:"schema_version"`
+	InstallationID      string                            `json:"installation_id"`
+	BatchID             string                            `json:"batch_id"`
+	SentAt              string                            `json:"sent_at"`
+	Device              *Device                           `json:"device,omitempty"`
+	Sessions            []sqlite.LedgerRecord             `json:"agent_sessions"`
+	Actions             []sqlite.LedgerRecord             `json:"authorization_actions"`
+	Receipts            []sqlite.LedgerRecord             `json:"authorization_receipts"`
+	RiskTypeAnnotations []sqlite.RiskTypeAnnotationRecord `json:"risk_type_annotations,omitempty"`
+	ReceiptChainAnchor  *sqlite.LedgerReceiptChainAnchor  `json:"receipt_chain_anchor,omitempty"`
 }
 
 type Device struct {
@@ -142,6 +144,8 @@ type HooksFact struct {
 type State struct {
 	UpdatedAfter           *time.Time
 	ActionID               string
+	RiskTypeCreatedAfter   *time.Time
+	RiskTypeAnnotationID   string
 	LastHeartbeatAttemptAt string
 	LastHeartbeatAt        string
 }
@@ -149,6 +153,8 @@ type State struct {
 type persistedState struct {
 	UpdatedAfter           string `json:"updated_after,omitempty"`
 	ActionID               string `json:"action_id,omitempty"`
+	RiskTypeCreatedAfter   string `json:"risk_type_created_after,omitempty"`
+	RiskTypeAnnotationID   string `json:"risk_type_annotation_id,omitempty"`
 	LastHeartbeatAttemptAt string `json:"last_heartbeat_attempt_at,omitempty"`
 	LastHeartbeatAt        string `json:"last_heartbeat_at,omitempty"`
 }
@@ -207,6 +213,8 @@ func Flush(ctx context.Context, opts Options) error {
 	// cursorSafetyLag (see clampCursor).
 	pageUpdatedAfter := state.UpdatedAfter
 	pageActionID := state.ActionID
+	pageRiskTypeCreatedAfter := state.RiskTypeCreatedAfter
+	pageRiskTypeAnnotationID := state.RiskTypeAnnotationID
 	for {
 		// Stamped per page: a full drain can run for minutes, and sent_at /
 		// heartbeat marks should reflect when each batch actually shipped.
@@ -233,11 +241,31 @@ func Flush(ctx context.Context, opts Options) error {
 			}
 			return err
 		}
-		if len(batch.Actions) == 0 {
+		// Drain actions before derived annotations. The hosted ingest accepts an
+		// annotation only after its referenced action is present either in the
+		// same batch or in an earlier accepted batch. Independent cursors can put
+		// a recent annotation beside an unrelated old action during backlog
+		// recovery, so co-paging the two streams can permanently stall on an
+		// unknown-action rejection.
+		var riskTypeAnnotations []sqlite.RiskTypeAnnotationRecord
+		var riskTypeCursor *sqlite.RiskTypeAnnotationCursor
+		if len(batch.Actions) == 0 && state.UpdatedAfter != nil {
+			riskTypeAnnotations, riskTypeCursor, err = store.RiskTypeAnnotations(ctx, sqlite.RiskTypeAnnotationExportOptions{
+				CreatedAfter:           pageRiskTypeCreatedAfter,
+				CreatedAfterID:         pageRiskTypeAnnotationID,
+				ActionUpdatedThrough:   state.UpdatedAfter,
+				ActionUpdatedThroughID: state.ActionID,
+				Limit:                  limit,
+			})
+			if err != nil {
+				return err
+			}
+		}
+		if len(batch.Actions) == 0 && len(riskTypeAnnotations) == 0 {
 			return postHeartbeatIfDue(ctx, opts, statePath, state, now)
 		}
 
-		payload := newPayload(opts, batch.Sessions, batch.Actions, batch.Receipts, batch.ReceiptChainAnchor, now)
+		payload := newPayload(opts, batch.Sessions, batch.Actions, batch.Receipts, riskTypeAnnotations, batch.ReceiptChainAnchor, now)
 
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -290,26 +318,35 @@ func Flush(ctx context.Context, opts Options) error {
 			limit++
 		}
 
-		if batch.Cursor == nil {
-			return nil
-		}
 		state.LastHeartbeatAttemptAt = now.Format(time.RFC3339Nano)
 		state.LastHeartbeatAt = now.Format(time.RFC3339Nano)
-		cursorAt := batch.Cursor.UpdatedAt.UTC()
-		safeAt, safeID := clampCursor(cursorAt, batch.Cursor.ActionID, now)
-		// Never regress the persisted cursor: advancePastMinimumBatch may have
-		// deliberately advanced it past a poison row, and clamping back behind
-		// that row would re-fetch it (and re-fail) until it ages out of the
-		// lag window.
-		if cursorAdvances(state, safeAt, safeID) {
-			state.UpdatedAfter = &safeAt
-			state.ActionID = safeID
+		if batch.Cursor != nil {
+			cursorAt := batch.Cursor.UpdatedAt.UTC()
+			safeAt, safeID := clampCursor(cursorAt, batch.Cursor.ActionID, now)
+			// Never regress the persisted cursor: advancePastMinimumBatch may have
+			// deliberately advanced it past a poison row, and clamping back behind
+			// that row would re-fetch it (and re-fail) until it ages out of the
+			// lag window.
+			if cursorAdvances(state, safeAt, safeID) {
+				state.UpdatedAfter = &safeAt
+				state.ActionID = safeID
+			}
+			pageUpdatedAfter = &cursorAt
+			pageActionID = batch.Cursor.ActionID
+		}
+		if riskTypeCursor != nil {
+			cursorAt := riskTypeCursor.CreatedAt.UTC()
+			safeAt, safeID := clampCursor(cursorAt, riskTypeCursor.AnnotationID, now)
+			if riskTypeCursorAdvances(state, safeAt, safeID) {
+				state.RiskTypeCreatedAfter = &safeAt
+				state.RiskTypeAnnotationID = safeID
+			}
+			pageRiskTypeCreatedAfter = &cursorAt
+			pageRiskTypeAnnotationID = riskTypeCursor.AnnotationID
 		}
 		if err := SaveState(statePath, state); err != nil {
 			return err
 		}
-		pageUpdatedAfter = &cursorAt
-		pageActionID = batch.Cursor.ActionID
 		// Keep draining: one call empties the queue instead of shipping a
 		// single batch per tick. A 40-subagent burst generates events ~20x
 		// faster than one capped batch per 10s interval can ship them, which
@@ -329,7 +366,7 @@ func postHeartbeatIfDue(ctx context.Context, opts Options, statePath string, sta
 		return err
 	}
 
-	payload := newPayload(opts, nil, nil, nil, nil, now)
+	payload := newPayload(opts, nil, nil, nil, nil, nil, now)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -350,18 +387,20 @@ func newPayload(
 	sessions []sqlite.LedgerRecord,
 	actions []sqlite.LedgerRecord,
 	receipts []sqlite.LedgerRecord,
+	riskTypeAnnotations []sqlite.RiskTypeAnnotationRecord,
 	receiptChainAnchor *sqlite.LedgerReceiptChainAnchor,
 	now time.Time,
 ) Payload {
 	payload := Payload{
-		SchemaVersion:      SchemaVersion,
-		InstallationID:     opts.InstallationID,
-		BatchID:            "batch_" + uuid.NewString(),
-		SentAt:             now.Format(time.RFC3339Nano),
-		Sessions:           nonNilRecords(sessions),
-		Actions:            nonNilRecords(actions),
-		Receipts:           nonNilRecords(receipts),
-		ReceiptChainAnchor: receiptChainAnchor,
+		SchemaVersion:       SchemaVersion,
+		InstallationID:      opts.InstallationID,
+		BatchID:             "batch_" + uuid.NewString(),
+		SentAt:              now.Format(time.RFC3339Nano),
+		Sessions:            nonNilRecords(sessions),
+		Actions:             nonNilRecords(actions),
+		Receipts:            nonNilRecords(receipts),
+		RiskTypeAnnotations: riskTypeAnnotations,
+		ReceiptChainAnchor:  receiptChainAnchor,
 	}
 	// Resolve the deployment version per flush so an in-place package upgrade
 	// is reflected without restarting the daemon.
@@ -485,6 +524,8 @@ func payloadLimitViolation(payload Payload, bodyBytes int) string {
 		return fmt.Sprintf("authorization_actions=%d exceeds max %d", len(payload.Actions), maxPayloadActions)
 	case len(payload.Receipts) > maxPayloadReceipts:
 		return fmt.Sprintf("authorization_receipts=%d exceeds max %d", len(payload.Receipts), maxPayloadReceipts)
+	case len(payload.RiskTypeAnnotations) > maxPayloadRiskTypeAnnotations:
+		return fmt.Sprintf("risk_type_annotations=%d exceeds max %d", len(payload.RiskTypeAnnotations), maxPayloadRiskTypeAnnotations)
 	case bodyBytes > MaxPayloadBytes:
 		return fmt.Sprintf("body_bytes=%d exceeds max %d", bodyBytes, MaxPayloadBytes)
 	default:
@@ -542,6 +583,16 @@ func cursorAdvances(state State, at time.Time, id string) bool {
 		return true
 	}
 	return at.Equal(*state.UpdatedAfter) && id > state.ActionID
+}
+
+func riskTypeCursorAdvances(state State, at time.Time, id string) bool {
+	if state.RiskTypeCreatedAfter == nil {
+		return true
+	}
+	if at.After(*state.RiskTypeCreatedAfter) {
+		return true
+	}
+	return at.Equal(*state.RiskTypeCreatedAfter) && id > state.RiskTypeAnnotationID
 }
 
 func parseStateUpdatedAfter(value string) (time.Time, error) {
@@ -665,6 +716,14 @@ func LoadState(path string) (State, error) {
 		state.UpdatedAfter = &parsed
 	}
 	state.ActionID = strings.TrimSpace(persisted.ActionID)
+	if createdAfter := strings.TrimSpace(persisted.RiskTypeCreatedAfter); createdAfter != "" {
+		parsed, err := parseStateUpdatedAfter(createdAfter)
+		if err != nil {
+			return State{}, fmt.Errorf("parse managed stream risk-type state: %w", err)
+		}
+		state.RiskTypeCreatedAfter = &parsed
+	}
+	state.RiskTypeAnnotationID = strings.TrimSpace(persisted.RiskTypeAnnotationID)
 	state.LastHeartbeatAttemptAt = strings.TrimSpace(persisted.LastHeartbeatAttemptAt)
 	state.LastHeartbeatAt = strings.TrimSpace(persisted.LastHeartbeatAt)
 	return state, nil
@@ -676,11 +735,15 @@ func SaveState(path string, state State) error {
 	}
 	persisted := persistedState{
 		ActionID:               strings.TrimSpace(state.ActionID),
+		RiskTypeAnnotationID:   strings.TrimSpace(state.RiskTypeAnnotationID),
 		LastHeartbeatAttemptAt: strings.TrimSpace(state.LastHeartbeatAttemptAt),
 		LastHeartbeatAt:        strings.TrimSpace(state.LastHeartbeatAt),
 	}
 	if state.UpdatedAfter != nil {
 		persisted.UpdatedAfter = state.UpdatedAfter.UTC().Format(time.RFC3339Nano)
+	}
+	if state.RiskTypeCreatedAfter != nil {
+		persisted.RiskTypeCreatedAfter = state.RiskTypeCreatedAfter.UTC().Format(time.RFC3339Nano)
 	}
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {

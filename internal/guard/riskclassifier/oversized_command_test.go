@@ -52,7 +52,7 @@ func TestCredentialStraddlingTheStoreCapIsStillRedacted(t *testing.T) {
 		t.Fatalf("token ends at %d, must extend past any plausible clip point", tokenStart+len(token))
 	}
 
-	verdicts := classifier.Classify(context.Background(), "sess_1", command)
+	verdicts := classifier.Classify(context.Background(), "sess_1", "Bash", command)
 	tail := verdicts.Command[max(0, len(verdicts.Command)-90):]
 	if strings.Contains(verdicts.Command, "eyJ") {
 		t.Errorf("stored evidence carries a JWT fragment; tail: %q", tail)
@@ -79,8 +79,8 @@ func TestOversizedCommandsStayDistinguishable(t *testing.T) {
 		t.Fatalf("test input too small: %d bytes", len(first))
 	}
 
-	one := classifier.Classify(context.Background(), "sess_1", first)
-	two := classifier.Classify(context.Background(), "sess_1", second)
+	one := classifier.Classify(context.Background(), "sess_1", "Bash", first)
+	two := classifier.Classify(context.Background(), "sess_1", "Bash", second)
 
 	for label, verdicts := range map[string]Verdicts{"first": one, "second": two} {
 		if !verdicts.CommandTruncated {
