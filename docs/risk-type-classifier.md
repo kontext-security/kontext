@@ -1,8 +1,11 @@
 # Observe-only risk-type classification
 
-The risk-type classifier is a second advisory stage after the existing binary
-bash-risk SVM. It explains a binary `risky` result with zero or more canonical
-effects; it never participates in authorization.
+The risk-type classifier is a shadow advisory stage after the existing binary
+bash-risk SVM. It annotates a binary `risky` result with zero or more canonical
+effects; it never participates in authorization. The hosted Risk page does not
+present it as a visible second-stage classifier: the current product category,
+severity, and explanation come from the hosted automatic LLM assessment, while
+this native result remains model-versioned shadow data.
 
 ## Runtime boundary
 
@@ -65,8 +68,9 @@ Each result carries `authz-bench-risk-types-char-svm/1`, the joblib hash, source
 revision and PR, annotation-corpus hash, annotation schema `1.0`, and prompt
 version `1.1`.
 
-No XGBoost, CodeBERT, or online Sol call is deployed. Sol generated the offline
-training annotations only.
+No XGBoost, CodeBERT, or online Sol call runs in the CLI. Sol generated the
+offline training annotations only. The hosted product's separate automatic LLM
+assessment is outside this local model contract.
 
 ## Persistence and retrospective enrichment
 
@@ -94,40 +98,40 @@ Re-running the command returns the existing byte-equivalent row. It neither
 updates the authorization action nor rewrites `decision_fact_json` or receipt
 payloads. A different model version appends a new row.
 
-## Companion server/shared-schema change (deploy server first)
+## Hosted schema compatibility
 
 The CLI extends `authorization-ledger-v1` batches with an optional top-level
-`risk_type_annotations` array. It is omitted when empty. The current hosted
-batch Zod schema is strict, so the server change must be deployed before a CLI
-that can emit non-empty annotations.
+`risk_type_annotations` array. It is omitted when empty. Hosted support landed
+in [kontext-cloud #884](https://github.com/kontext-security/kontext-cloud/pull/884)
+and must remain deployed before a CLI that can emit non-empty annotations.
 
-The companion change must:
+The hosted contract:
 
-1. Add a strict shared `RiskTypeAnnotationV1` schema matching
+1. Defines a strict shared `RiskTypeAnnotationV1` schema matching
    `sqlite.RiskTypeAnnotationRecord`: deterministic `id`, `action_id`,
    `session_id`, optional `tool_use_id`, `command_hash`, `input_kind`, the
    complete nested `annotation`, and RFC3339 `created_at`.
-2. Validate the 15 canonical labels and their order in `scores`; require finite
-   signed margins; derive the returned labels by applying the recorded
-   threshold; require primary to be the first highest positive margin; and
-   require `none` plus `abstained=true` for empty results. Validate all
-   provenance fields as non-empty and treat the scores as margins, never
+2. Validates the 15 canonical labels and their order in `scores`; requires finite
+   signed margins; derives the returned labels by applying the recorded
+   threshold; requires primary to be the first highest positive margin; and
+   requires `none` plus `abstained=true` for empty results. It validates all
+   provenance fields as non-empty and treats the scores as margins, never
    probabilities.
-3. Add `risk_type_annotations` as an optional/default-empty array on
-   `hostedLedgerBatchSchema` with a maximum of 1,000 records. Include it in the
-   existing payload byte limit.
-4. Persist annotations in a separate table keyed by organization,
+3. Adds `risk_type_annotations` as an optional/default-empty array on
+   `hostedLedgerBatchSchema` with a maximum of 1,000 records. The field counts
+   toward the existing payload byte limit.
+4. Persists annotations in a separate table keyed by organization,
    installation, annotation ID, and action/model uniqueness. Insert/upsert must
    be idempotent for an identical deterministic ID and reject different content
    for the same `(action, model_version)` key. It must not update the stored
    decision fact or signed receipt.
-5. Permit an annotation to reference an action ingested by an earlier batch,
+5. Permits an annotation to reference an action ingested by an earlier batch,
    while verifying that the action belongs to the same installation and
    organization. The CLI has an independent at-least-once annotation cursor,
    so duplicates are expected.
-6. Expose the derived annotation separately in shared dashboard/API types. UI
-   copy must call it advisory model output, not the reason an action was allowed
-   or denied.
+6. Exposes the derived annotation separately in shared API types. The current
+   Risk UI intentionally uses the automatic LLM assessment for its visible
+   classification and retains this result as shadow evidence.
 
 No `DecisionFactV1` schema change is required or desired.
 

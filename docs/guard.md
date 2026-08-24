@@ -126,7 +126,7 @@ The annotation is computed **in the decision path** — after the policy layer h
 
 It is nonetheless **strictly advisory**, by construction rather than convention: `annotate` receives an already-settled decision and may write nothing but its `Classifier` field, so there is no code path from a verdict to an allow/deny outcome. `TestAnnotationCannotChangeDecision` runs identical commands through a server with the classifier on and one with it off and requires byte-identical decision, reason, and reason code.
 
-Both models run for **every** outcome, denies included. A deny is the case where knowing whether the models agreed with the policy is worth the most, and since the decision is already final there is nothing for the extra evidence to affect.
+The binary SVM and optional guardrail LLM run for **every** outcome, denies included. A deny is the case where knowing whether the models agreed with the policy is worth the most, and since the decision is already final there is nothing for the extra evidence to affect. The shadow risk-type SVM runs only for binary-risky shell calls.
 
 Whether to gate on it later is a separate decision, and keeping the two apart means it can be made from real verdicts and labels instead of guessed at now. Deterministic rules own blocking today, as they did before.
 
@@ -139,15 +139,16 @@ The model is **char n-gram + LinearSVM** — the benchmark winner, ported native
 Binary-risky shell commands also receive a native, multi-label char-SVM
 risk-type annotation. It is separate append-only derived data rather than part
 of the signed decision fact, so historical calls can be enriched without
-rewriting evidence. See [Observe-only risk-type classification](risk-type-classifier.md)
-for the exact model contract, retrospective command, transfer caveat, and the
-required companion hosted-schema deployment.
+rewriting evidence. The hosted Risk page keeps this as shadow data and uses its
+automatic LLM assessment for the visible category and explanation. See
+[Observe-only risk-type classification](risk-type-classifier.md) for the exact
+model contract, retrospective command, transfer caveat, and hosted schema.
 
 ### Guardrail LLM
 
-The second model is the stock, public **Qwen3-0.6B** served on `llama-server` with the prompt authz-bench's sweep selected (`eval/optimize_prompt.py`, variant "V2 precision + balanced few-shot"). Nothing is fine-tuned and nothing custom ships: the GGUF is pulled from Hugging Face like any other judge model, and the prompt is exported verbatim into `internal/guard/riskclassifier/prompts/guardrail-v2.json` by `scripts/riskclassifier/export_prompt.py` — a reworded bullet is a different classifier, so it is copied mechanically rather than by hand.
+The optional guardrail model is the stock, public **Qwen3-0.6B** served on `llama-server` with the prompt authz-bench's sweep selected (`eval/optimize_prompt.py`, variant "V2 precision + balanced few-shot"). Nothing is fine-tuned and nothing custom ships: the GGUF is pulled from Hugging Face like any other judge model, and the prompt is exported verbatim into `internal/guard/riskclassifier/prompts/guardrail-v2.json` by `scripts/riskclassifier/export_prompt.py` — a reworded bullet is a different classifier, so it is copied mechanically rather than by hand.
 
-**This is the only LLM.** It supersedes the JSON judge: whenever the classifier is enabled, the judge is not constructed. Since the classifier only annotates, that leaves **no LLM on the decision path at all** — a gated tool call is decided by deterministic rules and Cedar, and waits for nothing.
+**This is the only LLM in the endpoint runtime.** It supersedes the JSON judge: whenever the classifier is enabled, the judge is not constructed. Since the classifier only annotates, that leaves **no LLM on the decision path at all** — a gated tool call is decided by deterministic rules and Cedar, and waits for nothing. The hosted Risk page's automatic assessment is a separate, asynchronous server-side workflow.
 
 That is a deliberate, accepted trade-off rather than an oversight, and it narrows enforce-mode coverage: a command that deterministic and provider policy allow, which the old JSON judge would have denied, now runs. It was accepted because the judge cost ~200 ms on every gated call against ~22 ms without it, and because promoting the classifier to a gate is not viable at its measured 0.585 precision — two in five of its RISKY calls are false alarms, so blocking on it would cause more harm than the gap it closes. Revisit when a model with enforce-grade precision exists; the verdicts and `user_feedback` being collected now are what will show whether it does.
 

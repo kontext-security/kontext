@@ -2,10 +2,12 @@ package sqlite
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 )
 
 func TestRiskTypeEnrichmentIsAppendOnlyIdempotentAndShellOnly(t *testing.T) {
@@ -66,6 +68,83 @@ func TestRiskTypeEnrichmentIsAppendOnlyIdempotentAndShellOnly(t *testing.T) {
 	}
 	if factAfter != factBefore || receiptAfter != receiptBefore {
 		t.Fatal("retrospective enrichment rewrote signed historical evidence")
+	}
+}
+
+func TestRiskTypeAnnotationRequiresMatchingActionIdentity(t *testing.T) {
+	store := openClassifierTestStore(t)
+	model, err := riskclassifier.LoadRiskTypeSVM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verdict := model.Classify("launchctl load ~/Library/LaunchAgents/com.example.agent.plist")
+	record := riskclassifier.RiskTypeRecord{
+		ActionID:    "act_00000000-0000-0000-0000-000000000000",
+		SessionID:   "session",
+		ToolUseID:   "tool",
+		CommandHash: "hash",
+		InputKind:   riskclassifier.RiskTypeInputRawCommand,
+		Verdict:     verdict,
+	}
+	if _, _, err := store.SaveRiskTypeAnnotation(context.Background(), record); err == nil || !strings.Contains(err.Error(), "unknown action") {
+		t.Fatalf("unknown-action error = %v", err)
+	}
+
+	action := saveRiskyClassifierCall(t, store, "session", "tool", "Bash", "launchctl load ~/Library/LaunchAgents/com.example.agent.plist")
+	record.ActionID = action.ID
+	record.SessionID = "wrong-session"
+	if _, _, err := store.SaveRiskTypeAnnotation(context.Background(), record); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("session-mismatch error = %v", err)
+	}
+	record.SessionID = "session"
+	record.ToolUseID = "wrong-tool"
+	if _, _, err := store.SaveRiskTypeAnnotation(context.Background(), record); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("tool-mismatch error = %v", err)
+	}
+}
+
+func TestRiskTypeAnnotationExportWaitsForActionCursor(t *testing.T) {
+	store := openClassifierTestStore(t)
+	action := saveRiskyClassifierCall(t, store, "session", "tool", "Bash", "launchctl load ~/Library/LaunchAgents/com.example.agent.plist")
+	model, err := riskclassifier.LoadRiskTypeSVM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.SaveRiskTypeAnnotation(context.Background(), riskclassifier.RiskTypeRecord{
+		ActionID:    action.ID,
+		SessionID:   "session",
+		ToolUseID:   "tool",
+		CommandHash: "hash-tool",
+		InputKind:   riskclassifier.RiskTypeInputRawCommand,
+		Verdict:     model.Classify("launchctl load ~/Library/LaunchAgents/com.example.agent.plist"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	before := time.Unix(0, 0).UTC()
+	annotations, _, err := store.RiskTypeAnnotations(context.Background(), RiskTypeAnnotationExportOptions{ActionUpdatedThrough: &before})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(annotations) != 0 {
+		t.Fatalf("annotations before action cursor = %d, want 0", len(annotations))
+	}
+	batch, err := store.LedgerBatch(context.Background(), LedgerExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Cursor == nil {
+		t.Fatal("action cursor is nil")
+	}
+	annotations, _, err = store.RiskTypeAnnotations(context.Background(), RiskTypeAnnotationExportOptions{
+		ActionUpdatedThrough:   &batch.Cursor.UpdatedAt,
+		ActionUpdatedThroughID: batch.Cursor.ActionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(annotations) != 1 || annotations[0].ActionID != action.ID {
+		t.Fatalf("annotations through action cursor = %+v", annotations)
 	}
 }
 

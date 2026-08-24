@@ -7,9 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
-	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
-	"github.com/kontext-security/kontext-cli/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
 func riskTypesCmd() *cobra.Command {

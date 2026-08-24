@@ -109,6 +109,7 @@ func TestFlushUploadsAppendOnlyRiskTypeAnnotations(t *testing.T) {
 	if actionID == "" {
 		t.Fatal("decided action not found")
 	}
+	ageTestActionCursor(t, dbPath, actionID)
 	model, err := riskclassifier.LoadRiskTypeSVM()
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +124,7 @@ func TestFlushUploadsAppendOnlyRiskTypeAnnotations(t *testing.T) {
 	}); err != nil || !inserted {
 		t.Fatalf("save risk type = inserted %v, err %v", inserted, err)
 	}
+	assertRiskTypeEligibleBeforeFlush(t, store, actionID)
 
 	var got Payload
 	server := capturePayloadServer(t, &got)
@@ -138,19 +140,127 @@ func TestFlushUploadsAppendOnlyRiskTypeAnnotations(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	state, err := LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got.RiskTypeAnnotations) != 1 {
-		t.Fatalf("uploaded risk-type annotations = %d", len(got.RiskTypeAnnotations))
+		t.Fatalf("uploaded risk-type annotations = %d; state = %+v", len(got.RiskTypeAnnotations), state)
 	}
 	annotation := got.RiskTypeAnnotations[0]
 	if annotation.ActionID != actionID || annotation.Verdict.SchemaVersion != riskclassifier.RiskTypeAnnotationSchema {
 		t.Fatalf("uploaded annotation = %+v", annotation)
 	}
-	state, err := LoadState(statePath)
+	if state.RiskTypeCreatedAfter == nil {
+		t.Fatal("risk-type upload cursor was not persisted")
+	}
+}
+
+func TestFlushUploadsRiskTypeAnnotationAfterReferencedAction(t *testing.T) {
+	store, dbPath := testStore(t)
+	saveTestDecision(t, store, "session-1", "toolu_ordered_types")
+	actions, err := store.AuthorizationActions(context.Background(), sqlite.LedgerExportOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.RiskTypeCreatedAfter == nil {
-		t.Fatal("risk-type upload cursor was not persisted")
+	var actionID string
+	for _, action := range actions {
+		if action["tool_use_id"] == "toolu_ordered_types" && action["canonical_event_type"] == "request.decided" {
+			actionID, _ = action["id"].(string)
+		}
+	}
+	if actionID == "" {
+		t.Fatal("decided action not found")
+	}
+	ageTestActionCursor(t, dbPath, actionID)
+	model, err := riskclassifier.LoadRiskTypeSVM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, inserted, err := store.SaveRiskTypeAnnotation(context.Background(), riskclassifier.RiskTypeRecord{
+		ActionID:    actionID,
+		SessionID:   "session-1",
+		ToolUseID:   "toolu_ordered_types",
+		CommandHash: "redacted-command-hash",
+		InputKind:   riskclassifier.RiskTypeInputStoredRedactedCommand,
+		Verdict:     model.Classify("launchctl load ~/Library/LaunchAgents/example.plist"),
+	}); err != nil || !inserted {
+		t.Fatalf("save risk type = inserted %v, err %v", inserted, err)
+	}
+	assertRiskTypeEligibleBeforeFlush(t, store, actionID)
+
+	knownActions := map[string]bool{}
+	var actionPost, annotationPost int
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		posts++
+		var payload Payload
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, action := range payload.Actions {
+			id, _ := action["id"].(string)
+			knownActions[id] = true
+			if id == actionID {
+				actionPost = posts
+			}
+		}
+		for _, annotation := range payload.RiskTypeAnnotations {
+			if !knownActions[annotation.ActionID] {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if annotation.ActionID == actionID {
+				annotationPost = posts
+			}
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(server.Close)
+
+	if err := Flush(context.Background(), Options{
+		DBPath:         dbPath,
+		StatePath:      filepath.Join(t.TempDir(), "stream-state.json"),
+		CloudURL:       server.URL,
+		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		InstallToken:   "test-install-token",
+		BatchLimit:     1,
+		HTTPClient:     server.Client(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if actionPost == 0 || annotationPost <= actionPost {
+		t.Fatalf("action/annotation posts = %d/%d, want annotation after its accepted action", actionPost, annotationPost)
+	}
+}
+
+func ageTestActionCursor(t *testing.T, dbPath, actionID string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	old := time.Now().Add(-time.Minute).UTC()
+	oldCursor := old.Format("2006-01-02T15:04:05.000000000Z07:00")
+	if _, err := db.Exec(`update authorization_actions set updated_at = ?, updated_at_cursor_key = ? where id = ?`, old.Format(time.RFC3339Nano), oldCursor, actionID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertRiskTypeEligibleBeforeFlush(t *testing.T, store *sqlite.Store, actionID string) {
+	t.Helper()
+	through := time.Now().Add(-cursorSafetyLag)
+	annotations, _, err := store.RiskTypeAnnotations(context.Background(), sqlite.RiskTypeAnnotationExportOptions{
+		ActionUpdatedThrough: &through,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(annotations) != 1 || annotations[0].ActionID != actionID {
+		t.Fatalf("eligible pre-flush annotations = %+v", annotations)
 	}
 }
 

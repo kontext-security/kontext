@@ -8,9 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 )
 
 // RiskTypeAnnotationRecord is the append-only local and wire record. The ID is
@@ -22,9 +23,11 @@ type RiskTypeAnnotationRecord struct {
 }
 
 type RiskTypeAnnotationExportOptions struct {
-	CreatedAfter   *time.Time
-	CreatedAfterID string
-	Limit          int
+	CreatedAfter           *time.Time
+	CreatedAfterID         string
+	ActionUpdatedThrough   *time.Time
+	ActionUpdatedThroughID string
+	Limit                  int
 }
 
 type RiskTypeAnnotationCursor struct {
@@ -90,6 +93,9 @@ func (s *Store) SaveRiskTypeAnnotation(ctx context.Context, record riskclassifie
 	if err := record.Verdict.Validate(); err != nil {
 		return RiskTypeAnnotationRecord{}, false, err
 	}
+	if err := s.validateRiskTypeAnnotationAction(ctx, record); err != nil {
+		return RiskTypeAnnotationRecord{}, false, err
+	}
 	if record.CreatedAt.IsZero() {
 		record.CreatedAt = time.Now().UTC()
 	} else {
@@ -125,6 +131,29 @@ on conflict(action_id, model_version) do nothing
 	return stored, affected == 1, nil
 }
 
+func (s *Store) validateRiskTypeAnnotationAction(ctx context.Context, record riskclassifier.RiskTypeRecord) error {
+	var sessionID string
+	var toolUseID sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+select session_id, tool_use_id
+from authorization_actions
+where id = ?
+	`, record.ActionID).Scan(&sessionID, &toolUseID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("risk-type annotation references unknown action %s", record.ActionID)
+	}
+	if err != nil {
+		return err
+	}
+	if sessionID != record.SessionID {
+		return fmt.Errorf("risk-type annotation session %s does not match action %s", record.SessionID, record.ActionID)
+	}
+	if storedToolUseID := toolUseID.String; record.ToolUseID != "" && storedToolUseID != record.ToolUseID {
+		return fmt.Errorf("risk-type annotation tool use %q does not match action %s", record.ToolUseID, record.ActionID)
+	}
+	return nil
+}
+
 func riskTypeAnnotationID(actionID, modelVersion string) string {
 	digest := sha256.Sum256([]byte(actionID + "\x00" + modelVersion))
 	return "rta_" + hex.EncodeToString(digest[:])
@@ -142,7 +171,7 @@ func equivalentRiskTypeRecord(stored, incoming riskclassifier.RiskTypeRecord) bo
 
 func (s *Store) RiskTypeAnnotationForActionModel(ctx context.Context, actionID, modelVersion string) (RiskTypeAnnotationRecord, error) {
 	row := s.db.QueryRowContext(ctx, riskTypeAnnotationSelect+`
-where action_id = ? and model_version = ?
+where annotation.action_id = ? and annotation.model_version = ?
 limit 1
 	`, actionID, modelVersion)
 	return scanRiskTypeAnnotation(row)
@@ -152,17 +181,39 @@ limit 1
 func (s *Store) RiskTypeAnnotations(ctx context.Context, opts RiskTypeAnnotationExportOptions) ([]RiskTypeAnnotationRecord, *RiskTypeAnnotationCursor, error) {
 	query := riskTypeAnnotationSelect
 	args := []any{}
+	conditions := []string{}
 	if opts.CreatedAfter != nil {
 		created := opts.CreatedAfter.UTC().Format(time.RFC3339Nano)
 		if opts.CreatedAfterID != "" {
-			query += "\nwhere created_at > ? or (created_at = ? and id > ?)"
+			conditions = append(conditions, "(annotation.created_at > ? or (annotation.created_at = ? and annotation.id > ?))")
 			args = append(args, created, created, opts.CreatedAfterID)
 		} else {
-			query += "\nwhere created_at > ?"
+			conditions = append(conditions, "annotation.created_at > ?")
 			args = append(args, created)
 		}
 	}
-	query += "\norder by created_at, id"
+	if opts.ActionUpdatedThrough != nil {
+		updated := ledgerTimestampCursorKeyFromTime(*opts.ActionUpdatedThrough)
+		if opts.ActionUpdatedThroughID != "" {
+			conditions = append(conditions, `exists (
+  select 1 from authorization_actions action
+  where action.id = annotation.action_id
+    and (action.updated_at_cursor_key < ? or (action.updated_at_cursor_key = ? and action.id <= ?))
+)`)
+			args = append(args, updated, updated, opts.ActionUpdatedThroughID)
+		} else {
+			conditions = append(conditions, `exists (
+  select 1 from authorization_actions action
+  where action.id = annotation.action_id
+    and action.updated_at_cursor_key < ?
+)`)
+			args = append(args, updated)
+		}
+	}
+	if len(conditions) > 0 {
+		query += "\nwhere " + strings.Join(conditions, "\nand ")
+	}
+	query += "\norder by annotation.created_at, annotation.id"
 	if opts.Limit > 0 {
 		query += "\nlimit ?"
 		args = append(args, opts.Limit)
@@ -191,9 +242,11 @@ func (s *Store) RiskTypeAnnotations(ctx context.Context, opts RiskTypeAnnotation
 }
 
 const riskTypeAnnotationSelect = `
-select id, action_id, session_id, coalesce(tool_use_id, ''), command_hash,
-  input_kind, schema_version, model_version, annotation_json, created_at
-from risk_type_annotations`
+select annotation.id, annotation.action_id, annotation.session_id,
+  coalesce(annotation.tool_use_id, ''), annotation.command_hash,
+  annotation.input_kind, annotation.schema_version, annotation.model_version,
+  annotation.annotation_json, annotation.created_at
+from risk_type_annotations annotation`
 
 func scanRiskTypeAnnotation(scanner interface{ Scan(...any) error }) (RiskTypeAnnotationRecord, error) {
 	var record RiskTypeAnnotationRecord

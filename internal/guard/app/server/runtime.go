@@ -178,8 +178,8 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 // annotate attaches the advisory risk verdict to a settled decision. The
 // binary and optional LLM models run for every outcome, denies included: a
 // deny is precisely the case where knowing whether the models agreed with the
-// policy is worth the most,
-// and the annotation cannot change what has already been decided. Risk types
+// policy is worth the most, and the annotation cannot change what has already
+// been decided. Risk types
 // are further gated to binary-risky shell commands inside Classifier.Classify.
 func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, decision *risk.RiskDecision) {
 	if r.classifier == nil || event.HookEventName != hook.HookPreToolUse.String() {

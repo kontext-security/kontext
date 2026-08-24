@@ -241,13 +241,25 @@ func Flush(ctx context.Context, opts Options) error {
 			}
 			return err
 		}
-		riskTypeAnnotations, riskTypeCursor, err := store.RiskTypeAnnotations(ctx, sqlite.RiskTypeAnnotationExportOptions{
-			CreatedAfter:   pageRiskTypeCreatedAfter,
-			CreatedAfterID: pageRiskTypeAnnotationID,
-			Limit:          limit,
-		})
-		if err != nil {
-			return err
+		// Drain actions before derived annotations. The hosted ingest accepts an
+		// annotation only after its referenced action is present either in the
+		// same batch or in an earlier accepted batch. Independent cursors can put
+		// a recent annotation beside an unrelated old action during backlog
+		// recovery, so co-paging the two streams can permanently stall on an
+		// unknown-action rejection.
+		var riskTypeAnnotations []sqlite.RiskTypeAnnotationRecord
+		var riskTypeCursor *sqlite.RiskTypeAnnotationCursor
+		if len(batch.Actions) == 0 && state.UpdatedAfter != nil {
+			riskTypeAnnotations, riskTypeCursor, err = store.RiskTypeAnnotations(ctx, sqlite.RiskTypeAnnotationExportOptions{
+				CreatedAfter:           pageRiskTypeCreatedAfter,
+				CreatedAfterID:         pageRiskTypeAnnotationID,
+				ActionUpdatedThrough:   state.UpdatedAfter,
+				ActionUpdatedThroughID: state.ActionID,
+				Limit:                  limit,
+			})
+			if err != nil {
+				return err
+			}
 		}
 		if len(batch.Actions) == 0 && len(riskTypeAnnotations) == 0 {
 			return postHeartbeatIfDue(ctx, opts, statePath, state, now)
