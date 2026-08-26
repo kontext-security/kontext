@@ -31,11 +31,17 @@ type Request struct {
 type HTTPError struct {
 	StatusCode int
 	Response   ErrorResponse
+	RetryAfter time.Duration
 }
 
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("prompt-policy request failed: HTTP %d (%s)", e.StatusCode, e.Response.Code)
 }
+
+type TransportError struct{ Err error }
+
+func (e *TransportError) Error() string { return e.Err.Error() }
+func (e *TransportError) Unwrap() error { return e.Err }
 
 func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
@@ -53,7 +59,7 @@ func (c *Client) Put(ctx context.Context, input Request) (Bundle, error) {
 		return Bundle{}, errors.New("invalid prompt-policy request")
 	}
 	body, err := json.Marshal(PutRequest{
-		RequestContractVersion:           RequestContractVersion,
+		PromptPolicyContractVersion:      RequestContractVersion,
 		Prompt:                           input.Prompt,
 		ExpectedParentDeploymentIdentity: input.ParentDeploymentIdentity,
 	})
@@ -72,12 +78,16 @@ func (c *Client) Put(ctx context.Context, input Request) (Bundle, error) {
 	req.Header.Set("Content-Type", "application/json")
 	response, err := c.http.Do(req)
 	if err != nil {
-		return Bundle{}, fmt.Errorf("send prompt-policy request: %w", err)
+		return Bundle{}, &TransportError{Err: fmt.Errorf("send prompt-policy request: %w", err)}
 	}
 	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxPolicySetBytes+64*1024))
+	const maxResponseBytes = 6*maxPolicySetBytes + 64*1024
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
-		return Bundle{}, fmt.Errorf("read prompt-policy response: %w", err)
+		return Bundle{}, &TransportError{Err: fmt.Errorf("read prompt-policy response: %w", err)}
+	}
+	if len(data) > maxResponseBytes {
+		return Bundle{}, errors.New("prompt-policy response exceeds size limit")
 	}
 	if response.StatusCode != http.StatusOK {
 		var apiError ErrorResponse
@@ -87,7 +97,15 @@ func (c *Client) Put(ctx context.Context, input Request) (Bundle, error) {
 		if apiError.ResponseVersion != ResponseVersion || apiError.Code == "" {
 			return Bundle{}, errors.New("invalid prompt-policy error response")
 		}
-		return Bundle{}, &HTTPError{StatusCode: response.StatusCode, Response: apiError}
+		return Bundle{}, &HTTPError{StatusCode: response.StatusCode, Response: apiError, RetryAfter: retryAfter(response.Header.Get("Retry-After"))}
 	}
 	return DecodeBundle(data)
+}
+
+func retryAfter(value string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds <= 0 || seconds > 5 {
+		return 500 * time.Millisecond
+	}
+	return time.Duration(seconds) * time.Second
 }

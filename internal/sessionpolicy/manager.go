@@ -2,21 +2,20 @@ package sessionpolicy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/cedareval"
-	"github.com/kontext-security/kontext-cli/internal/cedarpolicy"
-	"github.com/kontext-security/kontext-cli/internal/promptpolicy"
+	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cedarpolicy"
+	"github.com/kontext-security/kontext/internal/promptpolicy"
 )
 
-const defaultDerivationTimeout = 60 * time.Second
+const defaultDerivationTimeout = 58 * time.Second
 
-// SessionKey is the authority-bearing identity of one agent session. The
-// installation is configured on Manager; Provider prevents native session IDs
-// from different adapters sharing an authorization boundary.
 type SessionKey struct {
 	Provider        string
 	NativeSessionID string
@@ -39,15 +38,22 @@ type ParentSource interface {
 	Current() cedarpolicy.Snapshot
 }
 
-// Snapshot is the single effective PolicySet selected for a session. Required
-// with Ready=false is an explicit fail-closed barrier, not a fallback request.
+type SessionState string
+
+const (
+	SessionStateIdle    SessionState = ""
+	SessionStatePending SessionState = "pending"
+	SessionStateActive  SessionState = "active"
+	SessionStateFailed  SessionState = "failed"
+)
+
 type Snapshot struct {
-	Required       bool
-	Ready          bool
-	PromptSequence uint64
-	Deployment     *cedarpolicy.Deployment
-	Failure        error
-	ExpiresAt      time.Time
+	State                    SessionState
+	PromptSequence           uint64
+	PolicySet                *cedarpolicy.PolicySetSnapshot
+	ParentDeploymentIdentity string
+	Failure                  error
+	ExpiresAt                time.Time
 }
 
 type Manager struct {
@@ -57,15 +63,19 @@ type Manager struct {
 	tokenSource    TokenSource
 	installationID string
 	timeout        time.Duration
+	daemonEpoch    string
+	configMu       sync.RWMutex
+	enabled        bool
 
 	mu       sync.Mutex
 	sessions map[SessionKey]*session
 }
 
 type session struct {
-	mu       sync.Mutex
-	sequence uint64
-	snapshot Snapshot
+	operationMu sync.Mutex
+	mu          sync.RWMutex
+	sequence    uint64
+	snapshot    Snapshot
 }
 
 func NewManager(deriver Deriver, validator *promptpolicy.ActivationValidator, parents ParentSource, tokenSource TokenSource, installationID string, timeout time.Duration) (*Manager, error) {
@@ -75,88 +85,149 @@ func NewManager(deriver Deriver, validator *promptpolicy.ActivationValidator, pa
 	if timeout <= 0 {
 		timeout = defaultDerivationTimeout
 	}
-	return &Manager{deriver: deriver, validator: validator, parents: parents, tokenSource: tokenSource, installationID: installationID, timeout: timeout, sessions: make(map[SessionKey]*session)}, nil
+	epoch, err := newDaemonEpoch()
+	if err != nil {
+		return nil, fmt.Errorf("create prompt-policy daemon epoch: %w", err)
+	}
+	return &Manager{deriver: deriver, validator: validator, parents: parents, tokenSource: tokenSource, installationID: installationID, timeout: timeout, daemonEpoch: epoch, sessions: make(map[SessionKey]*session)}, nil
 }
 
-// BeginPrompt is the synchronous policy barrier. It returns only after a new
-// complete PolicySet has been verified, parsed, and atomically selected.
+// BeginPrompt synchronously establishes the policy barrier. Snapshot readers
+// never wait on its network work: they immediately see required/not-ready.
 func (m *Manager) BeginPrompt(ctx context.Context, key SessionKey, prompt string) (Snapshot, error) {
-	authorizationSessionID, err := key.AuthorizationSessionID()
+	baseSessionID, err := key.AuthorizationSessionID()
 	if err != nil {
 		return Snapshot{}, err
 	}
 	if prompt == "" {
 		return Snapshot{}, errors.New("prompt policy requires a prompt")
 	}
+	m.configMu.RLock()
+	if !m.enabled {
+		m.configMu.RUnlock()
+		return Snapshot{}, nil
+	}
 	state := m.sessionFor(key)
 	state.mu.Lock()
-	defer state.mu.Unlock()
-
 	state.sequence++
 	sequence := state.sequence
-	state.snapshot = Snapshot{Required: true, PromptSequence: sequence}
+	state.snapshot = Snapshot{State: SessionStatePending, PromptSequence: sequence}
+	state.mu.Unlock()
+	m.configMu.RUnlock()
 
-	parent := m.parents.Current().Deployment
-	if parent == nil {
-		err := errors.New("prompt policy parent is not ready")
-		state.snapshot.Failure = err
-		return state.snapshot, err
+	state.operationMu.Lock()
+	defer state.operationMu.Unlock()
+	state.mu.RLock()
+	if state.sequence != sequence {
+		snapshot := cloneSnapshot(state.snapshot)
+		state.mu.RUnlock()
+		return snapshot, nil
+	}
+	state.mu.RUnlock()
+
+	parentSnapshot := m.parents.Current()
+	parent := parentSnapshot.ActivePolicySet()
+	if parentSnapshot.State != cedarpolicy.StateSuccess || parent == nil {
+		failure := errors.New("prompt policy parent is not ready")
+		return m.failIfCurrent(state, sequence, failure), failure
 	}
 	token, err := m.tokenSource(ctx)
 	if err != nil {
-		state.snapshot.Failure = fmt.Errorf("resolve prompt-policy token: %w", err)
-		return state.snapshot, state.snapshot.Failure
+		failure := fmt.Errorf("resolve prompt-policy token: %w", err)
+		return m.failIfCurrent(state, sequence, failure), failure
 	}
+	authorizationSessionID := baseSessionID + ":" + m.daemonEpoch
 	requestCtx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
-	bundle, err := m.deriver.Put(requestCtx, promptpolicy.Request{
+	request := promptpolicy.Request{
 		Token: token, InstallationID: m.installationID,
 		AuthorizationSessionID: authorizationSessionID, PromptSequence: sequence,
 		Prompt: prompt, ParentDeploymentIdentity: parent.DeploymentIdentity,
-	})
+	}
+	bundle, err := m.deriveWithRetry(requestCtx, request)
 	if err != nil {
-		state.snapshot.Failure = err
-		return state.snapshot, err
+		return m.failIfCurrent(state, sequence, err), err
 	}
 	if err := m.validator.Validate(bundle, promptpolicy.ExpectedAudience{
 		InstallationID: m.installationID, AuthorizationSessionID: authorizationSessionID,
 		PromptSequence: sequence, ParentDeploymentIdentity: parent.DeploymentIdentity,
+		RolloutMode: parent.RolloutMode,
 	}); err != nil {
-		state.snapshot.Failure = err
-		return state.snapshot, err
+		return m.failIfCurrent(state, sequence, err), err
 	}
-	if _, err := cedareval.New(bundle.PolicySet.Source); err != nil {
-		state.snapshot.Failure = fmt.Errorf("parse effective prompt policy set: %w", err)
-		return state.snapshot, state.snapshot.Failure
+	evaluator, err := cedareval.New(bundle.PolicySet.Source)
+	if err != nil {
+		failure := fmt.Errorf("parse effective prompt policy set: %w", err)
+		return m.failIfCurrent(state, sequence, failure), failure
 	}
-	deployment := deploymentFromBundle(bundle)
+	policySet := policySetFromBundle(bundle, evaluator)
 	expiresAt, _ := time.Parse(time.RFC3339Nano, bundle.ExpiresAt)
-	state.snapshot = Snapshot{Required: true, Ready: true, PromptSequence: sequence, Deployment: &deployment, ExpiresAt: expiresAt}
-	return cloneSnapshot(state.snapshot), nil
+	state.mu.Lock()
+	if state.sequence == sequence {
+		state.snapshot = Snapshot{State: SessionStateActive, PromptSequence: sequence, PolicySet: &policySet, ParentDeploymentIdentity: bundle.Parent.DeploymentIdentity, ExpiresAt: expiresAt}
+	}
+	snapshot := cloneSnapshot(state.snapshot)
+	state.mu.Unlock()
+	return snapshot, nil
 }
 
-// Current preserves the existing organization policy API.
-func (m *Manager) Current() cedarpolicy.Snapshot { return m.parents.Current() }
-
-// CurrentFor returns exactly one selected complete policy set. Once a prompt
-// requires a derived set, absence/failure never falls back to the broader
-// parent in enforce mode.
-func (m *Manager) CurrentFor(sessionID, agent string) cedarpolicy.Snapshot {
-	base := m.parents.Current()
-	selected := m.SnapshotFor(SessionKey{Provider: agent, NativeSessionID: sessionID})
-	if !selected.Required {
-		return base
-	}
-	if selected.Ready && selected.Deployment != nil && time.Now().Before(selected.ExpiresAt) {
-		return cedarpolicy.Snapshot{
-			Deployment: selected.Deployment, LastKnownGood: selected.Deployment,
-			State:  cedarpolicy.StateSuccess,
-			Status: cedarpolicy.CacheStatus{State: cedarpolicy.StateSuccess, FetchedAt: time.Now()},
+func (m *Manager) deriveWithRetry(ctx context.Context, request promptpolicy.Request) (promptpolicy.Bundle, error) {
+	for attempt := 0; ; attempt++ {
+		bundle, err := m.deriver.Put(ctx, request)
+		if err == nil || attempt >= 2 {
+			return bundle, err
+		}
+		var httpError *promptpolicy.HTTPError
+		var transportError *promptpolicy.TransportError
+		retryDelay := 100 * time.Millisecond
+		if errors.As(err, &httpError) {
+			if !httpError.Response.Retryable {
+				return promptpolicy.Bundle{}, err
+			}
+			retryDelay = httpError.RetryAfter
+		} else if !errors.As(err, &transportError) {
+			return promptpolicy.Bundle{}, err
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return promptpolicy.Bundle{}, ctx.Err()
+		case <-timer.C:
 		}
 	}
-	return cedarpolicy.Snapshot{
-		LastKnownGood: base.Deployment, State: cedarpolicy.StateUnavailable,
-		Status: cedarpolicy.CacheStatus{State: cedarpolicy.StateUnavailable, Invalid: true, LastError: "required prompt policy is not ready"},
+}
+
+func (m *Manager) Current() cedarpolicy.Snapshot { return m.parents.Current() }
+
+func (m *Manager) CurrentFor(sessionID, agent string) cedarpolicy.Snapshot {
+	base := m.parents.Current()
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+	if !m.enabled {
+		return base
+	}
+	selected := m.SnapshotFor(SessionKey{Provider: agent, NativeSessionID: sessionID})
+	if selected.State == SessionStateIdle {
+		return unavailableSnapshot(base, "no prompt policy is active for this session")
+	}
+	parent := base.ActivePolicySet()
+	parentMatches := parent != nil && parent.DeploymentIdentity == selected.ParentDeploymentIdentity
+	parentEligible := base.State == cedarpolicy.StateSuccess && !base.Status.Invalid && !base.Status.Expired
+	if selected.State == SessionStateActive && selected.PolicySet != nil && parentMatches && parentEligible && time.Now().Before(selected.ExpiresAt) {
+		return cedarpolicy.Snapshot{PolicySet: selected.PolicySet, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{State: cedarpolicy.StateSuccess, FetchedAt: time.Now()}}
+	}
+	return unavailableSnapshot(base, "required prompt policy is not ready or its parent changed")
+}
+
+func (m *Manager) SetEnabled(enabled bool) {
+	m.configMu.Lock()
+	defer m.configMu.Unlock()
+	m.enabled = enabled
+	if !enabled {
+		m.mu.Lock()
+		m.sessions = make(map[SessionKey]*session)
+		m.mu.Unlock()
 	}
 }
 
@@ -167,8 +238,8 @@ func (m *Manager) SnapshotFor(key SessionKey) Snapshot {
 	if state == nil {
 		return Snapshot{}
 	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
 	return cloneSnapshot(state.snapshot)
 }
 
@@ -189,19 +260,39 @@ func (m *Manager) sessionFor(key SessionKey) *session {
 	return created
 }
 
-func deploymentFromBundle(bundle promptpolicy.Bundle) cedarpolicy.Deployment {
-	return cedarpolicy.Deployment{
-		ResponseVersion: bundle.ResponseVersion, RequestContractVersion: bundle.RequestContractVersion,
-		PolicyHash: bundle.PolicySet.SourceHash, RolloutMode: cedareval.RolloutMode(bundle.RolloutMode),
-		EvaluationPrincipal: cedareval.EvaluationPrincipal{EntityType: bundle.EvaluationPrincipal.EntityType, EntityID: bundle.EvaluationPrincipal.EntityID},
-		PolicyText:          bundle.PolicySet.Source, DeploymentIdentity: bundle.DeploymentIdentity,
+func (m *Manager) failIfCurrent(state *session, sequence uint64, failure error) Snapshot {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.sequence == sequence {
+		state.snapshot = Snapshot{State: SessionStateFailed, PromptSequence: sequence, Failure: failure}
 	}
+	return cloneSnapshot(state.snapshot)
+}
+
+func policySetFromBundle(bundle promptpolicy.Bundle, evaluator *cedareval.Evaluator) cedarpolicy.PolicySetSnapshot {
+	return cedarpolicy.PolicySetSnapshot{ResponseVersion: bundle.ResponseVersion, RequestContractVersion: bundle.CedarRequestContractVersion, SourceHash: bundle.PolicySet.SourceHash, RolloutMode: bundle.RolloutMode, EvaluationPrincipal: cedareval.EvaluationPrincipal{EntityType: bundle.EvaluationPrincipal.EntityType, EntityID: bundle.EvaluationPrincipal.EntityID}, Source: bundle.PolicySet.Source, DeploymentIdentity: bundle.DeploymentIdentity, Evaluator: evaluator}
+}
+
+func unavailableSnapshot(base cedarpolicy.Snapshot, reason string) cedarpolicy.Snapshot {
+	lastKnownParent := base.Deployment
+	if lastKnownParent == nil {
+		lastKnownParent = base.LastKnownGood
+	}
+	return cedarpolicy.Snapshot{LastKnownGood: lastKnownParent, State: cedarpolicy.StateUnavailable, Status: cedarpolicy.CacheStatus{State: cedarpolicy.StateUnavailable, Invalid: true, LastError: reason}}
 }
 
 func cloneSnapshot(snapshot Snapshot) Snapshot {
-	if snapshot.Deployment != nil {
-		deployment := *snapshot.Deployment
-		snapshot.Deployment = &deployment
+	if snapshot.PolicySet != nil {
+		policySet := *snapshot.PolicySet
+		snapshot.PolicySet = &policySet
 	}
 	return snapshot
+}
+
+func newDaemonEpoch() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value[:]), nil
 }

@@ -334,6 +334,23 @@ func TestLifecycleEnforceUnavailableNonBlockingHookDoesNotDeny(t *testing.T) {
 	}
 }
 
+func TestLifecycleNeverRejectsPromptSubmit(t *testing.T) {
+	lifecycle := Lifecycle{Mode: "enforce"}
+	event := hook.Event{HookName: hook.HookUserPromptSubmit}
+	for name, result := range map[string]hook.Result{
+		"unstamped daemon allow": {Decision: hook.DecisionAllow},
+		"daemon deny":            {Decision: hook.DecisionDeny},
+		"daemon unavailable":     lifecycle.daemonUnavailable(event),
+	} {
+		t.Run(name, func(t *testing.T) {
+			final := lifecycle.finalize(event, result)
+			if final.Decision != hook.DecisionAllow || final.Mode != "enforce" {
+				t.Fatalf("prompt result = %+v, want enforce-stamped allow", final)
+			}
+		})
+	}
+}
+
 func TestObserveResultFormatsBlockingPromptSubmit(t *testing.T) {
 	result := guardhookruntime.ObserveResult(hook.Event{HookName: hook.HookUserPromptSubmit}, hook.Result{
 		Decision: hook.DecisionDeny,

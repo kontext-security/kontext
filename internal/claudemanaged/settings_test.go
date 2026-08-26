@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func TestTemplateIncludesManagedKontextHooks(t *testing.T) {
@@ -113,6 +115,18 @@ func TestTemplateJSONOnlyMarksLifecycleHooksAsync(t *testing.T) {
 		} else if hasAsync {
 			t.Fatalf("%s async emitted, want omitted", event.Name)
 		}
+	}
+}
+
+func TestLegacyFiveHookDropInRemainsKontextOwned(t *testing.T) {
+	settings := Template("/usr/local/bin/kontext")
+	delete(settings.Hooks, hook.HookUserPromptSubmit.String())
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsManagedSettingsDropIn(data) {
+		t.Fatal("legacy Kontext drop-in was not recognized for upgrade")
 	}
 }
 

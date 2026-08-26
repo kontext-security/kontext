@@ -2,6 +2,7 @@ package endpointconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +13,8 @@ import (
 
 func guardrailResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Response {
 	t.Helper()
-	config := Config{PayloadCaptureMode: mode, GuardrailLLMEnabled: enabled}
+	promptPolicyEnabled := false
+	config := Config{PayloadCaptureMode: mode, GuardrailLLMEnabled: enabled, PromptPolicyEnabled: &promptPolicyEnabled}
 	identity, err := ComputeIdentity(config)
 	if err != nil {
 		t.Fatal(err)
@@ -21,6 +23,26 @@ func guardrailResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Re
 }
 
 func boolPtr(value bool) *bool { return &value }
+
+func TestPromptPolicyDirectiveSurvivesRefreshFailure(t *testing.T) {
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	now := time.Now().UTC()
+	response := guardrailResponse(t, payloadcapture.ModeSummary, boolPtr(true))
+	response.Config.PromptPolicyEnabled = boolPtr(true)
+	identity, err := ComputeIdentity(response.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.ConfigIdentity = identity
+	if err := cache.Apply(FetchResult{Response: &response, ETag: identity}, now); err != nil {
+		t.Fatal(err)
+	}
+	cache.MarkFailed(errors.New("offline"), now.Add(time.Minute))
+	directive := cache.Current().PromptPolicyDirective
+	if directive == nil || !*directive {
+		t.Fatalf("prompt-policy barrier failed open after refresh failure: %v", directive)
+	}
+}
 
 // Under v2 the flag is required, so the rollback case that motivated remembering
 // it cannot even reach the cache: a response without the flag is rejected rather

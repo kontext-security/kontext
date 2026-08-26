@@ -111,6 +111,41 @@ func TestCedarObserveRecordsUnresolvedPrincipal(t *testing.T) {
 	}
 }
 
+func TestSessionPolicyRemainsAdvisoryInObserveMode(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeObserve, `@id("permit-read") permit(principal, action, resource == Kontext::Tool::"Read");`)
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{
+		Deployment: &deployment,
+		State:      cedarpolicy.StateSuccess,
+	}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Write", ToolInput: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.calls != 1 || decision.Decision != risk.DecisionAllow || decision.Cedar.AppliedRolloutMode != cedareval.RolloutModeObserve || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateEvaluated {
+		t.Fatalf("calls = %d decision = %#v, want prompt policy to remain advisory", current.calls, decision)
+	}
+}
+
+func TestMissingSessionPolicyContinuesInObserveMode(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeObserve, `@id("permit-read") permit(principal, action, resource == Kontext::Tool::"Read");`)
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{
+		LastKnownGood: &deployment,
+		State:         cedarpolicy.StateUnavailable,
+		Status:        cedarpolicy.CacheStatus{Invalid: true},
+	}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), risk.HookEvent{HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.calls != 1 || decision.Decision != risk.DecisionAllow || decision.Cedar.AppliedRolloutMode != cedareval.RolloutModeObserve || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateFailed {
+		t.Fatalf("calls = %d decision = %#v, want missing prompt policy to continue with failure evidence", current.calls, decision)
+	}
+}
+
 func TestCedarEnforceIsSingularAuthority(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("permit-read") permit(principal, action, resource == Kontext::Tool::"Read");`)
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionDeny, ReasonCode: "legacy_deny"}}

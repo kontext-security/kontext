@@ -15,9 +15,6 @@ func DeploymentClaimsEnforce(snapshot Snapshot) bool {
 	if snapshot.State == StateDisabled || snapshot.State == StateNoActivePolicy {
 		return false
 	}
-	deployment := snapshot.Deployment
-	if deployment == nil {
-		deployment = snapshot.LastKnownGood
-	}
-	return deployment != nil && deployment.RolloutMode == cedareval.RolloutModeEnforce
+	policySet := snapshot.BestKnownPolicySet()
+	return policySet != nil && policySet.RolloutMode == string(cedareval.RolloutModeEnforce)
 }
