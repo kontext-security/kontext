@@ -12,6 +12,7 @@ type HookEvent struct {
 	SessionID     string         `json:"session_id"`
 	Agent         string         `json:"agent,omitempty"`
 	HookEventName string         `json:"hook_event_name"`
+	Prompt        string         `json:"prompt,omitempty"`
 	ToolName      string         `json:"tool_name,omitempty"`
 	ToolInput     map[string]any `json:"tool_input,omitempty"`
 	ToolResponse  map[string]any `json:"tool_response,omitempty"`
