@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "model_version": "toolsafe-deberta-v3-xsmall-no-thought-v1",
+  "source_project": "kontext-security/toolsafe-lab",
+  "source_revision": "05c07583850c6ee037b826276d7aa87eb620fa80",
+  "source_artifact_path": "artifacts/models/standalone_encoders/deberta_v3_xsmall",
+  "base_model": "microsoft/deberta-v3-xsmall",
+  "base_model_revision": "4b419818330868dff6a60ad3e6b1c730f8b8c0c6",
+  "base_model_license": "MIT",
+  "input_mode": "execution_context",
+  "thought_included": false,
+  "max_length": 512,
+  "field_markers": {
+    "request": "[USER_REQUEST]",
+    "history": "[INTERACTION_HISTORY]",
+    "action": "[CURRENT_ACTION]",
+    "schema": "[TOOL_DESCRIPTIONS]"
+  },
+  "field_budgets": {
+    "request": 96,
+    "history": 144,
+    "action": 128,
+    "schema": 128
+  },
+  "calibration_kind": "sigmoid",
+  "calibration_scale": 1.157280529495871,
+  "calibration_bias": 1.1360845295110542,
+  "initial_threshold": 0.5,
+  "artifacts": [
+    {
+      "name": "config.json",
+      "size_bytes": 924,
+      "sha256": "41f89ae28c4f0549b92537d0ef5918ef9e1af25e9898af6456e3551bf0a93852"
+    },
+    {
+      "name": "model.safetensors",
+      "size_bytes": 283201512,
+      "sha256": "726ee0bafbe17688e47bc52f20176e98898b061aa026c93fbbeacadcb0fd8bd7"
+    },
+    {
+      "name": "tokenizer.json",
+      "size_bytes": 8340654,
+      "sha256": "d6c20af053b5d86d986a9f70898c1fceccb9d93e7ce6f63dabc899a12a53b031"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "size_bytes": 601,
+      "sha256": "141468772d3b095cc30275fd9c05dff92a78619c341487da9f5549a3564ea6cb"
+    }
+  ],
+  "excluded_training_artifact": {
+    "name": "training_checkpoint.pt",
+    "reason": "optimizer/RNG training-resume state is not required for inference"
+  }
+}

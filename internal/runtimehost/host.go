@@ -21,6 +21,7 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/judge"
 	"github.com/kontext-security/kontext/internal/guard/judgeruntime"
 	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
@@ -72,6 +73,7 @@ type Host struct {
 	server           *server.Server
 	closeStore       func() error
 	closeJudge       func()
+	closeStepSafety  func() error
 	runtimeService   *localruntime.Service
 	sessionOpened    bool
 	sessionCloseOnce bool
@@ -132,6 +134,21 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		closeJudge()
 		return nil, err
 	}
+	stepSafetyConfig, err := stepsafety.ConfigFromEnv(dbPath)
+	if err != nil {
+		closeJudge()
+		return nil, err
+	}
+	stepSafety := stepsafety.New(ctx, stepSafetyConfig)
+	closeStepSafety := func() error { return stepSafety.Close() }
+	if stepSafety != nil {
+		healthCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		health := stepSafety.Health(healthCtx)
+		cancel()
+		if health.Status != "ready" {
+			diagnostic.LogAlways(opts.Diagnostic, "step-safety shadow unavailable (%s); calls will fail open\n", health.ErrorCode)
+		}
+	}
 	serverSessionID := sessionID
 	if opts.SkipInitialSession {
 		serverSessionID = ""
@@ -172,14 +189,17 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		CurrentSessionID: serverSessionID,
 		Mode:             string(mode),
 		RiskClassifier:   classifierOpts,
+		StepSafety:       stepSafety,
 		DeferRecord:      deferRecord,
 	})
 	if err != nil {
+		_ = closeStepSafety()
 		closeJudge()
 		return nil, err
 	}
 	if err := os.Chmod(dbPath, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
 		_ = closeStore()
+		_ = closeStepSafety()
 		closeJudge()
 		return nil, fmt.Errorf("secure runtime database: %w", err)
 	}
@@ -187,6 +207,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	sessionDir := filepath.Join("/tmp", "kontext", sessionID)
 	if err := createSessionDir(sessionDir); err != nil {
 		_ = closeStore()
+		_ = closeStepSafety()
 		closeJudge()
 		return nil, err
 	}
@@ -207,6 +228,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		server:                localServer,
 		closeStore:            closeStore,
 		closeJudge:            closeJudge,
+		closeStepSafety:       closeStepSafety,
 	}
 	if opts.AsyncDecisionRecording {
 		host.drainRecords = func(drainCtx context.Context) error {
@@ -356,6 +378,12 @@ func (h *Host) Close(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 		h.closeStore = nil
+	}
+	if h.closeStepSafety != nil {
+		if err := h.closeStepSafety(); err != nil {
+			errs = append(errs, err)
+		}
+		h.closeStepSafety = nil
 	}
 	if h.closeJudge != nil {
 		h.closeJudge()

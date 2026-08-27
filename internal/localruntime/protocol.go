@@ -22,6 +22,8 @@ type EvaluateRequest struct {
 	DurationMs     *int64          `json:"duration_ms,omitempty"`
 	Error          string          `json:"error,omitempty"`
 	IsInterrupt    *bool           `json:"is_interrupt,omitempty"`
+	UserRequest    string          `json:"user_request,omitempty"`
+	ToolSchemas    json.RawMessage `json:"available_tool_schemas,omitempty"`
 }
 
 type EvaluateResult struct {
