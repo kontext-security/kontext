@@ -80,6 +80,18 @@ class PackingTests(unittest.TestCase):
                 max_length=4,
             )
 
+    def test_oversized_field_is_rejected_before_tokenization(self):
+        with self.assertRaises(worker.InputTooLargeError):
+            worker.inference_fields(
+                {
+                    "user_request": "x"
+                    * (worker.MAX_PRETOKENIZED_FIELD_BYTES + 1),
+                    "tool_name": "Read",
+                    "tool_arguments": {},
+                    "available_tool_schemas": [],
+                }
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

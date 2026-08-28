@@ -20,9 +20,15 @@ import (
 
 const (
 	sessionStartWait = 400 * time.Millisecond
-	preToolUseWait   = 250 * time.Millisecond
-	asyncHookWait    = 120 * time.Millisecond
-	probeTimeout     = 60 * time.Millisecond
+	// The original 250 ms window remains reserved for the authoritative
+	// policy path. The local shadow model has a separately bounded allowance
+	// (250 ms by default, 500 ms maximum) plus IPC scheduling headroom. Agent
+	// hook configurations allow 20 seconds, so this prevents a shadow timeout
+	// from being misclassified as an unavailable enforcing daemon and denying
+	// an otherwise authorized call.
+	preToolUseWait = time.Second
+	asyncHookWait  = 120 * time.Millisecond
+	probeTimeout   = 60 * time.Millisecond
 )
 
 var launchdMu sync.Mutex

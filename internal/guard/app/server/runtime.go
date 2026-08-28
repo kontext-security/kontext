@@ -117,6 +117,7 @@ func (r guardHookRuntime) modeForSession(sessionID string) string {
 }
 
 func (r guardHookRuntime) EvaluateHook(ctx context.Context, event hook.Event) (hook.Result, error) {
+	r.observeStepContext(riskEventFromHookEvent(event))
 	decision, err := r.decideAndRecord(ctx, riskEventFromHookEvent(event))
 	if err != nil {
 		return hook.Result{}, err
@@ -132,12 +133,20 @@ func (r guardHookRuntime) IngestEvent(ctx context.Context, event hook.Event) (ho
 	return hookResultFromRiskDecision(decision), nil
 }
 
+// ObserveAsyncEvent is deliberately memory-only. localruntime calls it before
+// acknowledging PostToolUse so the next PreToolUse cannot race ahead of the
+// preceding interaction while SQLite ingestion continues in the background.
+func (r guardHookRuntime) ObserveAsyncEvent(event hook.Event) {
+	riskEvent := riskEventFromHookEvent(event)
+	riskEvent.SessionID = sqlite.NormalizeSessionID(riskEvent.SessionID)
+	r.observeStepContext(riskEvent)
+}
+
 func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
 	r.observePrompt(event)
-	r.observeStepContext(event)
 	decision, err := r.policy.DecideHook(ctx, event)
 	if err != nil {
 		return risk.RiskDecision{}, err

@@ -12,22 +12,34 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 //go:embed worker.py
 var pythonWorker string
 
+type workerProcess struct {
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	stdout   *bufio.Reader
+	wait     chan error
+	killOnce sync.Once
+	stopOnce sync.Once
+	stopErr  error
+}
+
 type pythonBackend struct {
-	mu           sync.Mutex
-	closeOnce    sync.Once
-	cmd          *exec.Cmd
-	stdin        io.WriteCloser
-	stdout       *bufio.Reader
-	wait         chan error
-	modelVersion string
-	device       string
-	closed       bool
-	nextID       uint64
+	mu            sync.Mutex
+	operation     chan struct{}
+	cfg           Config
+	pythonPath    string
+	workerSource  string
+	worker        *workerProcess
+	restarting    bool
+	restartCancel context.CancelFunc
+	closed        bool
+	nextID        uint64
+	device        string
 }
 
 type workerRequest struct {
@@ -58,8 +70,30 @@ func newPythonBackend(ctx context.Context, cfg Config) (*pythonBackend, error) {
 	if err != nil {
 		return nil, backendError(ErrorUnavailable, errors.New("step-safety Python runtime is unavailable"))
 	}
+	backend := &pythonBackend{
+		operation:    make(chan struct{}, 1),
+		cfg:          cfg,
+		pythonPath:   pythonPath,
+		workerSource: pythonWorker,
+	}
+	startupCtx, cancel := context.WithTimeout(ctx, cfg.StartupTimeout)
+	defer cancel()
+	process, ready, err := launchPythonWorker(startupCtx, cfg, pythonPath, pythonWorker)
+	if err != nil {
+		return nil, backendError(ErrorUnavailable, err)
+	}
+	if err := validateReadyResponse(ready, cfg.ModelVersion); err != nil {
+		_ = process.stop()
+		return nil, err
+	}
+	backend.worker = process
+	backend.device = ready.Device
+	return backend, nil
+}
+
+func launchPythonWorker(ctx context.Context, cfg Config, pythonPath, source string) (*workerProcess, workerResponse, error) {
 	cmd := exec.Command(pythonPath,
-		"-u", "-c", pythonWorker,
+		"-u", "-c", source,
 		"--model-dir", cfg.ModelDir,
 		"--model-version", cfg.ModelVersion,
 		"--device", cfg.Device,
@@ -71,40 +105,75 @@ func newPythonBackend(ctx context.Context, cfg Config) (*pythonBackend, error) {
 	)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, backendError(ErrorUnavailable, err)
+		return nil, workerResponse{}, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, backendError(ErrorUnavailable, err)
+		return nil, workerResponse{}, err
 	}
 	// Worker stderr may contain dependency diagnostics, but it must never be
 	// allowed to mingle with hook contents or persisted telemetry.
 	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
-		return nil, backendError(ErrorUnavailable, err)
+		return nil, workerResponse{}, err
 	}
-	backend := &pythonBackend{
-		cmd:          cmd,
-		stdin:        stdin,
-		stdout:       bufio.NewReaderSize(stdout, 64*1024),
-		wait:         make(chan error, 1),
-		modelVersion: cfg.ModelVersion,
+	process := &workerProcess{
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: bufio.NewReaderSize(stdout, 64*1024),
+		wait:   make(chan error, 1),
 	}
-	go func() { backend.wait <- cmd.Wait() }()
-
-	startupCtx, cancel := context.WithTimeout(ctx, cfg.StartupTimeout)
-	defer cancel()
-	ready, err := backend.readResponse(startupCtx)
+	go func() { process.wait <- cmd.Wait() }()
+	ready, err := readWorkerResponse(ctx, process.stdout)
 	if err != nil {
-		_ = backend.Close()
-		return nil, backendError(ErrorUnavailable, err)
+		_ = process.stop()
+		return nil, workerResponse{}, err
 	}
-	if ready.Type != "ready" || ready.Status != "ready" || ready.ModelVersion != cfg.ModelVersion {
-		_ = backend.Close()
-		return nil, backendError(ErrorProtocol, errors.New("step-safety worker returned an invalid ready response"))
+	return process, ready, nil
+}
+
+func validateReadyResponse(ready workerResponse, modelVersion string) error {
+	if ready.Type != "ready" || ready.Status != "ready" || ready.ModelVersion != modelVersion {
+		return backendError(ErrorProtocol, errors.New("step-safety worker returned an invalid ready response"))
 	}
-	backend.device = ready.Device
-	return backend, nil
+	return nil
+}
+
+func (p *workerProcess) stop() error {
+	if p == nil {
+		return nil
+	}
+	p.kill()
+	p.stopOnce.Do(func() {
+		if p.wait != nil {
+			select {
+			case err := <-p.wait:
+				if err != nil {
+					var exitErr *exec.ExitError
+					if !errors.As(err, &exitErr) {
+						p.stopErr = err
+					}
+				}
+			case <-time.After(2 * time.Second):
+				p.stopErr = errors.New("step-safety worker did not exit")
+			}
+		}
+	})
+	return p.stopErr
+}
+
+func (p *workerProcess) kill() {
+	if p == nil {
+		return
+	}
+	p.killOnce.Do(func() {
+		if p.stdin != nil {
+			_ = p.stdin.Close()
+		}
+		if p.cmd != nil && p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+		}
+	})
 }
 
 func (b *pythonBackend) Infer(ctx context.Context, input Input) ([2]float64, error) {
@@ -145,45 +214,62 @@ func (b *pythonBackend) Health(ctx context.Context) (Health, error) {
 }
 
 func (b *pythonBackend) roundTrip(ctx context.Context, request workerRequest) (workerResponse, error) {
+	select {
+	case b.operation <- struct{}{}:
+		defer func() { <-b.operation }()
+	case <-ctx.Done():
+		return workerResponse{}, backendError(ErrorTimeout, ctx.Err())
+	}
+
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.closed {
+		b.mu.Unlock()
 		return workerResponse{}, backendError(ErrorUnavailable, errors.New("step-safety worker is closed"))
+	}
+	process := b.worker
+	if process == nil {
+		b.mu.Unlock()
+		b.scheduleRestart()
+		return workerResponse{}, backendError(ErrorUnavailable, errors.New("step-safety worker is restarting"))
 	}
 	b.nextID++
 	request.ID = b.nextID
+	b.mu.Unlock()
+
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return workerResponse{}, backendError(ErrorProtocol, err)
 	}
-	if _, err := b.stdin.Write(append(encoded, '\n')); err != nil {
+	if _, err := process.stdin.Write(append(encoded, '\n')); err != nil {
+		b.invalidate(process)
 		return workerResponse{}, backendError(ErrorUnavailable, err)
 	}
-	response, err := b.readResponse(ctx)
+	response, err := readWorkerResponse(ctx, process.stdout)
 	if err != nil {
 		// Once a response deadline is missed the stream boundary is unknowable.
-		// Kill the singleton and make all later calls fail open immediately.
-		_ = b.closeLocked()
+		// Retire that process, but keep the singleton backend alive: one
+		// detached, bounded restart reloads the local model for later calls.
+		b.invalidate(process)
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return workerResponse{}, backendError(ErrorTimeout, err)
 		}
 		return workerResponse{}, backendError(ErrorUnavailable, err)
 	}
 	if response.ID != request.ID {
-		_ = b.closeLocked()
+		b.invalidate(process)
 		return workerResponse{}, backendError(ErrorProtocol, fmt.Errorf("step-safety response id mismatch"))
 	}
 	return response, nil
 }
 
-func (b *pythonBackend) readResponse(ctx context.Context) (workerResponse, error) {
+func readWorkerResponse(ctx context.Context, reader *bufio.Reader) (workerResponse, error) {
 	type readResult struct {
 		line []byte
 		err  error
 	}
 	done := make(chan readResult, 1)
 	go func() {
-		line, err := b.stdout.ReadBytes('\n')
+		line, err := reader.ReadBytes('\n')
 		done <- readResult{line: line, err: err}
 	}()
 	select {
@@ -201,35 +287,75 @@ func (b *pythonBackend) readResponse(ctx context.Context) (workerResponse, error
 	}
 }
 
+func (b *pythonBackend) invalidate(process *workerProcess) {
+	b.mu.Lock()
+	if b.worker != process {
+		b.mu.Unlock()
+		return
+	}
+	b.worker = nil
+	b.device = ""
+	b.mu.Unlock()
+	// Process.Kill is immediate; reap outside the hook response path so the
+	// worker's OS shutdown can never consume the shadow fail-open budget.
+	process.kill()
+	go func() { _ = process.stop() }()
+	b.scheduleRestart()
+}
+
+func (b *pythonBackend) scheduleRestart() {
+	b.mu.Lock()
+	if b.closed || b.restarting || b.worker != nil {
+		b.mu.Unlock()
+		return
+	}
+	restartCtx, cancel := context.WithTimeout(context.Background(), b.cfg.StartupTimeout)
+	b.restarting = true
+	b.restartCancel = cancel
+	b.mu.Unlock()
+
+	go func() {
+		defer cancel()
+		process, ready, err := launchPythonWorker(restartCtx, b.cfg, b.pythonPath, b.workerSource)
+		if err == nil {
+			err = validateReadyResponse(ready, b.cfg.ModelVersion)
+		}
+		b.mu.Lock()
+		b.restarting = false
+		b.restartCancel = nil
+		closed := b.closed
+		if err == nil && !closed && b.worker == nil {
+			b.worker = process
+			b.device = ready.Device
+			process = nil
+		}
+		b.mu.Unlock()
+		if process != nil {
+			_ = process.stop()
+		}
+	}()
+}
+
 func (b *pythonBackend) Close() error {
 	if b == nil {
 		return nil
 	}
+	b.operation <- struct{}{}
+	defer func() { <-b.operation }()
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.closeLocked()
-}
-
-func (b *pythonBackend) closeLocked() error {
-	var closeErr error
-	b.closeOnce.Do(func() {
-		b.closed = true
-		if b.stdin != nil {
-			_ = b.stdin.Close()
-		}
-		if b.cmd != nil && b.cmd.Process != nil {
-			_ = b.cmd.Process.Kill()
-		}
-		if b.wait != nil {
-			if err := <-b.wait; err != nil {
-				var exitErr *exec.ExitError
-				if !errors.As(err, &exitErr) {
-					closeErr = err
-				}
-			}
-		}
-	})
-	return closeErr
+	if b.closed {
+		b.mu.Unlock()
+		return nil
+	}
+	b.closed = true
+	process := b.worker
+	b.worker = nil
+	cancel := b.restartCancel
+	b.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return process.stop()
 }
 
 func normalizeWorkerError(code string) string {
@@ -238,6 +364,8 @@ func normalizeWorkerError(code string) string {
 		return ErrorInference
 	case ErrorInvalidOutput:
 		return ErrorInvalidOutput
+	case ErrorInputTooLarge:
+		return ErrorInputTooLarge
 	default:
 		return ErrorProtocol
 	}

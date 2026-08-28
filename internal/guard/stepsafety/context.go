@@ -8,8 +8,8 @@ import (
 const (
 	maxContextSessions  = 256
 	maxHistoryEntries   = 24
-	maxHistoryBytes     = 256 * 1024
-	maxUserRequestBytes = 256 * 1024
+	maxHistoryBytes     = maxPretokenizedFieldBytes
+	maxUserRequestBytes = maxPretokenizedFieldBytes
 )
 
 type HistoryEntry struct {

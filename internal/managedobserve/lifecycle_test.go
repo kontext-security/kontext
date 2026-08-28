@@ -244,6 +244,65 @@ func TestLifecycleEnforcePassesDaemonDenyThroughToAgent(t *testing.T) {
 	}
 }
 
+func TestLifecycleReservesShadowBudgetAfterAuthoritativePolicy(t *testing.T) {
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-shadow-budget-%d.sock", time.Now().UnixNano()))
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 2 {
+			connection, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = connection.Close()
+		}
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer connection.Close()
+		var request localruntime.EvaluateRequest
+		if localruntime.ReadMessage(connection, &request) != nil {
+			return
+		}
+		// Longer than the former complete 250 ms PreToolUse budget, but still
+		// within the independently reserved shadow-inference window.
+		time.Sleep(600 * time.Millisecond)
+		_ = localruntime.WriteMessage(connection, localruntime.EvaluateResult{
+			Decision: "allow",
+			Allowed:  true,
+			Reason:   "policy allowed; shadow timed out open",
+			Mode:     "enforce",
+		})
+	}()
+
+	lifecycle := Lifecycle{
+		SocketPath: socketPath,
+		Label:      DefaultLaunchdLabel,
+		Mode:       "enforce",
+		Kickstart: func(context.Context, string) error {
+			t.Fatal("kickstart should not be called")
+			return nil
+		},
+	}
+	result := lifecycle.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse})
+	if result.Decision != hook.DecisionAllow || result.Mode != "enforce" {
+		t.Fatalf("result = %+v, want authoritative allow after shadow budget", result)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("server did not complete delayed shadow response")
+	}
+}
+
 func TestLifecycleEnforceFailsClosedWhenDaemonUnavailable(t *testing.T) {
 	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-enforce-down-%d.sock", time.Now().UnixNano()))
 	lifecycle := Lifecycle{

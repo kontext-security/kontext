@@ -8,6 +8,8 @@ from typing import Any, Sequence
 
 
 MAX_LENGTH = 512
+MAX_PRETOKENIZED_FIELD_BYTES = 64 * 1024
+MAX_PRETOKENIZED_TOTAL_BYTES = 128 * 1024
 FIELD_BUDGETS = {
     "request": 96,
     "history": 144,
@@ -20,6 +22,10 @@ FIELD_MARKERS = {
     "action": "[CURRENT_ACTION]",
     "schema": "[TOOL_DESCRIPTIONS]",
 }
+
+
+class InputTooLargeError(ValueError):
+    pass
 
 
 def _head_tail(values: Sequence[int], budget: int) -> list[int]:
@@ -64,6 +70,23 @@ def execution_only_text(tool_name: object, arguments: object) -> str:
     return "\n".join(
         ("[TOOL_NAME]", _string(tool_name), "[ARGUMENTS]", normalized_arguments)
     ).strip()
+
+
+def inference_fields(request: dict[str, object]) -> dict[str, str]:
+    fields = {
+        "request": _string(request.get("user_request")),
+        "history": _string(request.get("interaction_history")),
+        "action": execution_only_text(
+            request.get("tool_name"), request.get("tool_arguments")
+        ),
+        "schema": _string(request.get("available_tool_schemas")),
+    }
+    sizes = [len(value.encode("utf-8")) for value in fields.values()]
+    if any(size > MAX_PRETOKENIZED_FIELD_BYTES for size in sizes):
+        raise InputTooLargeError("Input field exceeds preprocessing bound")
+    if sum(sizes) > MAX_PRETOKENIZED_TOTAL_BYTES:
+        raise InputTooLargeError("Input exceeds preprocessing bound")
+    return fields
 
 
 def pack_fields(
@@ -147,14 +170,9 @@ class ModelRuntime:
         self.model.eval()
 
     def infer(self, request: dict[str, object]) -> list[float]:
-        fields = {
-            "request": _string(request.get("user_request")),
-            "history": _string(request.get("interaction_history")),
-            "action": execution_only_text(
-                request.get("tool_name"), request.get("tool_arguments")
-            ),
-            "schema": _string(request.get("available_tool_schemas")),
-        }
+        # Admission is checked before tokenizer.encode. Go applies the same
+        # bounds before IPC; this duplicate guard protects direct worker use.
+        fields = inference_fields(request)
         packed = pack_fields(self.tokenizer, fields)
         inputs = {
             name: self.torch.tensor([values], dtype=self.torch.long, device=self.device)
@@ -208,6 +226,14 @@ def serve(model_dir: str, model_version: str, device: str) -> int:
                     "id": request_id,
                     "type": "result",
                     "logits": runtime.infer(request),
+                }
+            )
+        except InputTooLargeError:
+            _write(
+                {
+                    "id": request.get("id", 0) if isinstance(request, dict) else 0,
+                    "type": "result",
+                    "error_code": "input_too_large",
                 }
             )
         except Exception:

@@ -56,12 +56,18 @@ LaunchAgent/daemon configuration and restart the daemon. Optional controls are:
 - `KONTEXT_STEP_SAFETY_MODEL_DIR`: override the model-cache path.
 - `KONTEXT_STEP_SAFETY_DEVICE`: `auto` (default), `cpu`, `mps`, or `cuda`.
 - `KONTEXT_STEP_SAFETY_TIMEOUT`: complete admission plus inference budget;
-  default `250ms`.
+  default `250ms`, maximum `500ms`.
 - `KONTEXT_STEP_SAFETY_STARTUP_TIMEOUT`: singleton load budget; default `30s`.
 - `KONTEXT_STEP_SAFETY_MAX_CONCURRENCY`: fixed at `1` for this singleton pilot.
 
 There is deliberately no enforcement flag. Promoting this signal requires a
 separate reviewed code change.
+
+Managed `PreToolUse` reserves the existing 250 ms policy window and a separate
+bounded shadow-inference allowance (one second total at the hook edge). Thus a model
+timeout returns an unavailable shadow result before tool execution without
+turning an already-settled enforcing policy allow into a daemon-unavailable
+deny. Installed Claude and Codex hooks retain their 20 second outer timeout.
 
 ## Exact input contract
 
@@ -95,6 +101,14 @@ Packing is copied from `standalone_encoder.py`: markers are
 budgets are 96/144/128/128. Request keeps its head. History, action, and schemas
 keep equal head/tail slices.
 
+Packing remains exact for admitted inputs. Before tokenization, Kontext caps
+each rendered field at 64 KiB and all four fields together at 128 KiB. An
+oversized call records `input_too_large` and fails open instead of asking the
+tokenizer to process an unbounded hook-controlled string. Structured
+`PostToolUse` context is captured in memory before its asynchronous durable
+ingestion is acknowledged, so the next action deterministically sees the
+preceding interaction.
+
 For logits `[safe_logit, unsafe_logit]`, Kontext computes:
 
 ```text
@@ -109,6 +123,9 @@ The initial unsafe threshold is `0.5`.
 `GET /healthz` includes `step_safety` with `disabled`, `ready`, or `unavailable`,
 the model version, local device, and a redacted error code. An unavailable model
 does not make the main daemon unhealthy because this pilot must fail open.
+If a worker response times out or loses protocol synchronization, Kontext
+retires that process and performs one bounded background reload; calls fail
+open while the singleton is restarting.
 
 For each enabled `PreToolUse`, the local `step_safety_verdicts` table stores only:
 

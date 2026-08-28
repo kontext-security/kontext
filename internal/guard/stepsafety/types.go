@@ -7,6 +7,7 @@ package stepsafety
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -24,8 +25,15 @@ const (
 	calibrationBias  = 1.1360845295110542
 
 	defaultTimeout        = 250 * time.Millisecond
+	maxConfiguredTimeout  = 500 * time.Millisecond
 	defaultStartupTimeout = 30 * time.Second
 	defaultConcurrency    = 1
+
+	// Packing remains token-exact for admitted inputs, but hook-controlled
+	// strings must be bounded before the tokenizer sees them. Each limit is
+	// still orders of magnitude above its final token budget.
+	maxPretokenizedFieldBytes = 64 * 1024
+	maxPretokenizedTotalBytes = 128 * 1024
 )
 
 const (
@@ -41,6 +49,7 @@ const (
 	ErrorInference     = "inference_error"
 	ErrorConcurrency   = "concurrency_timeout"
 	ErrorInvalidOutput = "invalid_output"
+	ErrorInputTooLarge = "input_too_large"
 )
 
 // Input is the complete production-available no-Thought representation. The
@@ -130,6 +139,9 @@ func ConfigFromEnv(dbPath string) (Config, error) {
 	timeout, err := envDuration("KONTEXT_STEP_SAFETY_TIMEOUT", defaultTimeout)
 	if err != nil {
 		return Config{}, err
+	}
+	if timeout > maxConfiguredTimeout {
+		return Config{}, fmt.Errorf("KONTEXT_STEP_SAFETY_TIMEOUT must not exceed %s", maxConfiguredTimeout)
 	}
 	startupTimeout, err := envDuration("KONTEXT_STEP_SAFETY_STARTUP_TIMEOUT", defaultStartupTimeout)
 	if err != nil {
@@ -231,6 +243,11 @@ func (e *Evaluator) Evaluate(ctx context.Context, input Input) Evaluation {
 		return result
 	}
 	result.ModelVersion = e.modelVersion
+	if err := validateInputBounds(input); err != nil {
+		result.ErrorCode = errorCode(err)
+		result.LatencyMS = elapsedMilliseconds(started)
+		return result
+	}
 	if e.unavailable != "" || e.backend == nil {
 		result.ErrorCode = firstNonEmpty(e.unavailable, ErrorUnavailable)
 		result.LatencyMS = elapsedMilliseconds(started)
@@ -265,6 +282,37 @@ func (e *Evaluator) Evaluate(ctx context.Context, input Input) Evaluation {
 		result.ShadowDecision = DecisionUnsafe
 	}
 	return result
+}
+
+func validateInputBounds(input Input) error {
+	arguments, err := json.Marshal(input.ToolArguments)
+	if err != nil {
+		return backendError(ErrorInference, errors.New("step-safety arguments are not JSON encodable"))
+	}
+	schemas := []byte(nil)
+	if input.AvailableToolSchemas != nil {
+		schemas, err = json.Marshal(input.AvailableToolSchemas)
+		if err != nil {
+			return backendError(ErrorInference, errors.New("step-safety schemas are not JSON encodable"))
+		}
+	}
+	fields := []int{
+		len(input.UserRequest),
+		len(input.InteractionHistory),
+		len(input.ToolName) + len(arguments) + len("[TOOL_NAME]\n\n[ARGUMENTS]\n"),
+		len(schemas),
+	}
+	total := 0
+	for _, size := range fields {
+		if size > maxPretokenizedFieldBytes {
+			return backendError(ErrorInputTooLarge, errors.New("step-safety input field exceeds preprocessing bound"))
+		}
+		total += size
+	}
+	if total > maxPretokenizedTotalBytes {
+		return backendError(ErrorInputTooLarge, errors.New("step-safety input exceeds preprocessing bound"))
+	}
+	return nil
 }
 
 func CalibratedProbability(margin float64) float64 {

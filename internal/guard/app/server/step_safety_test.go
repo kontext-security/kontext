@@ -3,23 +3,86 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/localruntime"
 )
 
 type capturingStepSafetyBackend struct {
 	mu     sync.Mutex
 	inputs []stepsafety.Input
+}
+
+func TestStepSafetyAsyncHistoryIsObservedOnceBeforeNextSocketHook(t *testing.T) {
+	store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &capturingStepSafetyBackend{}
+	evaluator := stepsafety.NewWithBackend(backend, time.Second, 1, stepsafety.ModelVersion)
+	server, err := NewServerWithOptions(store, Options{StepSafety: evaluator})
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketDir, err := os.MkdirTemp("/tmp", "kontext-step-safety-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := localruntime.NewService(localruntime.Options{
+		SocketPath:  filepath.Join(socketDir, "kontext.sock"),
+		Core:        server.RuntimeCore(),
+		AgentName:   "claude",
+		AsyncIngest: true,
+		Diagnostic:  diagnostic.New(io.Discard, false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		service.Stop()
+		_ = store.Close()
+		_ = os.RemoveAll(socketDir)
+	})
+	client := localruntime.NewClient(service.SocketPath())
+
+	if _, err := client.Process(context.Background(), hook.Event{
+		SessionID: "ordered-step-session",
+		HookName:  hook.HookPostToolUse,
+		ToolName:  "Read",
+		ToolInput: map[string]any{"file_path": "config.json"},
+	}); err != nil {
+		t.Fatalf("PostToolUse: %v", err)
+	}
+	if _, err := client.Process(context.Background(), hook.Event{
+		SessionID: "ordered-step-session",
+		HookName:  hook.HookPreToolUse,
+		ToolName:  "Write",
+		ToolInput: map[string]any{"file_path": "config.json"},
+	}); err != nil {
+		t.Fatalf("PreToolUse: %v", err)
+	}
+
+	history := backend.lastInput().InteractionHistory
+	if strings.Count(history, `"tool_name":"Read"`) != 1 {
+		t.Fatalf("history = %s, want immediately preceding interaction exactly once", history)
+	}
 }
 
 func (b *capturingStepSafetyBackend) Infer(_ context.Context, input stepsafety.Input) ([2]float64, error) {

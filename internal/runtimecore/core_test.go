@@ -33,6 +33,30 @@ func TestIngestEventRejectsBlockingHooks(t *testing.T) {
 	}
 }
 
+func TestIngestObservedEventDoesNotApplyOrderedObservationTwice(t *testing.T) {
+	runtime := &recordingRuntime{}
+	core, err := New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := hook.Event{HookName: hook.HookPostToolUse, ToolName: "Read"}
+	if err := core.ObserveAsyncEvent(event); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.IngestObservedEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.observeCalls != 1 || runtime.ingestCalls != 1 {
+		t.Fatalf("calls observe=%d ingest=%d, want 1/1", runtime.observeCalls, runtime.ingestCalls)
+	}
+	if _, err := core.IngestEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.observeCalls != 2 || runtime.ingestCalls != 2 {
+		t.Fatalf("direct calls observe=%d ingest=%d, want 2/2", runtime.observeCalls, runtime.ingestCalls)
+	}
+}
+
 func TestProcessHookRoutesByBlockingCapability(t *testing.T) {
 	runtime := &recordingRuntime{
 		evaluateResult: hook.Result{Decision: hook.DecisionDeny, Reason: "review"},
@@ -139,10 +163,15 @@ func TestNewRejectsMissingRuntime(t *testing.T) {
 type recordingRuntime struct {
 	evaluateCalls     int
 	ingestCalls       int
+	observeCalls      int
 	evaluateResult    hook.Result
 	ingestResult      hook.Result
 	err               error
 	lastEvaluateEvent hook.Event
+}
+
+func (r *recordingRuntime) ObserveAsyncEvent(hook.Event) {
+	r.observeCalls++
 }
 
 func (r *recordingRuntime) EvaluateHook(_ context.Context, event hook.Event) (hook.Result, error) {

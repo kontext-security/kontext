@@ -74,6 +74,21 @@ func TestEvaluatorRedactsBackendErrors(t *testing.T) {
 	}
 }
 
+func TestEvaluatorRejectsOversizedInputBeforeBackend(t *testing.T) {
+	backend := &fakeBackend{logits: [2]float64{0, 1}}
+	evaluator := NewWithBackend(backend, time.Second, 1, ModelVersion)
+	result := evaluator.Evaluate(context.Background(), Input{
+		UserRequest: string(make([]byte, maxPretokenizedFieldBytes+1)),
+		ToolName:    "Write",
+	})
+	if result.ErrorCode != ErrorInputTooLarge || result.UnsafeProbability != nil {
+		t.Fatalf("result = %+v, want bounded fail-open result", result)
+	}
+	if calls := backend.calls.Load(); calls != 0 {
+		t.Fatalf("backend calls = %d, want preprocessing rejection before inference", calls)
+	}
+}
+
 func TestEvaluatorBoundsConcurrency(t *testing.T) {
 	release := make(chan struct{})
 	backend := &fakeBackend{block: release}
@@ -100,5 +115,13 @@ func TestConfigDisabledByDefault(t *testing.T) {
 	}
 	if cfg.Enabled {
 		t.Fatal("step safety enabled without feature flag")
+	}
+}
+
+func TestConfigRejectsTimeoutBeyondManagedHookReservation(t *testing.T) {
+	t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "true")
+	t.Setenv("KONTEXT_STEP_SAFETY_TIMEOUT", "501ms")
+	if _, err := ConfigFromEnv("/tmp/guard.db"); err == nil {
+		t.Fatal("ConfigFromEnv() error = nil, want timeout bound")
 	}
 }
