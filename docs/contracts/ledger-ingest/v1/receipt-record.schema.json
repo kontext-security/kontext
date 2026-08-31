@@ -1,0 +1,1967 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.kontext.dev/ledger-ingest/v1/receipt-record.schema.json",
+  "title": "Ledger ingest v1 receipt record",
+  "description": "One entry of the batch receipts array. proof.receipt_hash is sha256 over the RFC 8785 (JCS) bytes of payload.",
+  "$ref": "#/$defs/ReceiptRecord",
+  "$defs": {
+    "SafeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,255}$"
+    },
+    "ActionId": {
+      "type": "string",
+      "pattern": "^act_[0-9a-f-]{36}$"
+    },
+    "ReceiptId": {
+      "type": "string",
+      "pattern": "^rcpt_[0-9a-f-]{36}$"
+    },
+    "BatchId": {
+      "type": "string",
+      "pattern": "^batch_[0-9a-f-]{36}$"
+    },
+    "InstallationId": {
+      "type": "string",
+      "pattern": "^ins_[A-Za-z0-9_-]{32}$"
+    },
+    "Hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "Timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$",
+      "format": "date-time"
+    },
+    "BoundedName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "SummaryText": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "PathText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "OtelTraceId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "not": {
+        "const": "00000000000000000000000000000000"
+      }
+    },
+    "OtelSpanId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$",
+      "not": {
+        "const": "0000000000000000"
+      }
+    },
+    "SessionIdentity": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "agent_provider": {
+          "$ref": "#/$defs/BoundedName"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "SessionRecord": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "source": {
+          "enum": [
+            "wrapper_owned",
+            "daemon_observed"
+          ]
+        },
+        "status": {
+          "enum": [
+            "open",
+            "closed"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "runtime_kind": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "runtime_instance_id": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "adapter_kind": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "adapter_version": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "agent_provider": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "agent": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "trace_id": {
+          "$ref": "#/$defs/OtelTraceId"
+        },
+        "principal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 320
+        },
+        "identity": {
+          "$ref": "#/$defs/SessionIdentity"
+        },
+        "identity_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "policy_version": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "policy_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "cwd": {
+          "$ref": "#/$defs/PathText"
+        },
+        "mode": {
+          "enum": [
+            "disabled",
+            "observe",
+            "enforce"
+          ]
+        },
+        "external_id": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "closed_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "closed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "closed_at"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "closed_at"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ByteLength": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "CapturedToolPayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "omitted"
+            },
+            "sourceByteLength": {
+              "$ref": "#/$defs/ByteLength"
+            }
+          },
+          "required": [
+            "mode",
+            "sourceByteLength"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "full"
+            },
+            "value": {
+              "type": "object"
+            },
+            "redacted": {
+              "type": "boolean"
+            },
+            "redactorVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "sourceSha256": {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            "sourceByteLength": {
+              "$ref": "#/$defs/ByteLength"
+            },
+            "storedSha256": {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            "storedByteLength": {
+              "$ref": "#/$defs/ByteLength"
+            }
+          },
+          "required": [
+            "mode",
+            "value",
+            "redacted",
+            "redactorVersion",
+            "sourceSha256",
+            "sourceByteLength",
+            "storedSha256",
+            "storedByteLength"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "full_truncated"
+            },
+            "preview": {
+              "type": "string"
+            },
+            "redacted": {
+              "type": "boolean"
+            },
+            "redactorVersion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "sourceSha256": {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            "sourceByteLength": {
+              "$ref": "#/$defs/ByteLength"
+            },
+            "storedSha256": {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            "storedByteLength": {
+              "$ref": "#/$defs/ByteLength"
+            }
+          },
+          "required": [
+            "mode",
+            "preview",
+            "redacted",
+            "redactorVersion",
+            "sourceSha256",
+            "sourceByteLength",
+            "storedSha256",
+            "storedByteLength"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "capture_failed"
+            },
+            "reason": {
+              "enum": [
+                "serialization_error",
+                "redaction_error",
+                "size_precheck_exceeded",
+                "invalid_payload"
+              ]
+            },
+            "sourceSha256": {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            "sourceByteLength": {
+              "$ref": "#/$defs/ByteLength"
+            }
+          },
+          "required": [
+            "mode",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PolicyReasonCode": {
+      "enum": [
+        "policy_disabled",
+        "policy_evaluated",
+        "default_deny",
+        "explicit_forbid",
+        "permit",
+        "ask_derived",
+        "ask_unavailable",
+        "principal_unresolved",
+        "request_conversion_failed",
+        "policy_missing",
+        "unsupported_response_version",
+        "unsupported_request_contract_version",
+        "invalid_cached_policy",
+        "stale_cached_policy",
+        "engine_error",
+        "remote_timeout",
+        "enforcement_not_ready"
+      ]
+    },
+    "DecisionFactRisk": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "evaluated",
+            "failed",
+            "skipped"
+          ]
+        },
+        "evaluator": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "level": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 256
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 256
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failure_kind": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "evaluator",
+        "score",
+        "level",
+        "confidence",
+        "signals",
+        "categories",
+        "summary",
+        "failure_kind"
+      ],
+      "additionalProperties": false
+    },
+    "DecisionFactClassifier": {
+      "type": "object",
+      "properties": {
+        "svm": {
+          "type": "object",
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "score": {
+              "type": "number"
+            },
+            "threshold": {
+              "type": "number"
+            },
+            "model_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "verdict",
+            "score",
+            "threshold",
+            "model_version"
+          ],
+          "additionalProperties": false
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "verdict": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cached": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "verdict",
+                "model",
+                "duration_ms",
+                "cached"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "llm_error": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "command": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "command_truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "svm",
+        "llm",
+        "llm_error"
+      ],
+      "additionalProperties": false
+    },
+    "DecisionFactEvidence": {
+      "type": "object",
+      "properties": {
+        "response_version": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_contract_version": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evaluation_principal": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "entity_type": {
+                  "const": "Kontext::User"
+                },
+                "entity_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              },
+              "required": [
+                "entity_type",
+                "entity_id"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configured_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "disabled",
+                "observe",
+                "enforce"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "distribution_state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context_diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              }
+            },
+            "required": [
+              "code",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 256
+        },
+        "engine_error_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_fetched_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_stale": {
+          "type": "boolean"
+        },
+        "cache_expired": {
+          "type": "boolean"
+        },
+        "cache_invalid": {
+          "type": "boolean"
+        },
+        "evaluator_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evaluation_reason_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolicyReasonCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decision_reason_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolicyReasonCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effective_reason_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolicyReasonCode"
+            },
+            {
+              "const": "observe_non_authoritative"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "response_version",
+        "request_contract_version",
+        "evaluation_principal",
+        "configured_mode",
+        "distribution_state",
+        "context_diagnostics",
+        "engine_error_count",
+        "cache_fetched_at",
+        "cache_stale",
+        "cache_expired",
+        "cache_invalid",
+        "evaluator_version",
+        "evaluation_reason_code",
+        "decision_reason_code",
+        "effective_reason_code"
+      ],
+      "additionalProperties": false
+    },
+    "DecisionFactV1": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": "decision_fact/v1"
+        },
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "target_provider": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parameters_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applied_mode": {
+          "enum": [
+            "disabled",
+            "observe",
+            "enforce"
+          ]
+        },
+        "evaluation_state": {
+          "enum": [
+            "not_evaluated",
+            "evaluated",
+            "failed",
+            "principal_unresolved"
+          ]
+        },
+        "cedar_action": {
+          "anyOf": [
+            {
+              "enum": [
+                "allow",
+                "deny",
+                "ask"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_action": {
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
+        "reason_code": {
+          "$ref": "#/$defs/PolicyReasonCode"
+        },
+        "policy_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deployment_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "determining_policy_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 256
+        },
+        "risk": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionFactRisk"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "classifier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionFactClassifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/DecisionFactEvidence"
+        }
+      },
+      "required": [
+        "schema_version",
+        "tool_call_id",
+        "decided_at",
+        "target_provider",
+        "tool_name",
+        "operation",
+        "resource_id",
+        "parameters_hash",
+        "applied_mode",
+        "evaluation_state",
+        "cedar_action",
+        "execution_action",
+        "reason_code",
+        "policy_hash",
+        "deployment_id",
+        "determining_policy_ids",
+        "risk",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
+    "ActionIdentity": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "agent_provider": {
+          "$ref": "#/$defs/BoundedName"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ActionContext": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "$ref": "#/$defs/PathText"
+        },
+        "hook_event_name": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "payload_capture": {
+          "enum": [
+            "omitted",
+            "summary",
+            "full"
+          ]
+        },
+        "github": {
+          "type": "object",
+          "properties": {
+            "branch_or_ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ActionRecord": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "event_type": {
+          "enum": [
+            "request.proposed",
+            "request.decided",
+            "request.observed",
+            "request.failed"
+          ]
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "authorized",
+            "blocked",
+            "completed",
+            "failed"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "turn_id": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "tool_call_id": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "trace_id": {
+          "$ref": "#/$defs/OtelTraceId"
+        },
+        "span_id": {
+          "$ref": "#/$defs/OtelSpanId"
+        },
+        "parent_span_id": {
+          "$ref": "#/$defs/OtelSpanId"
+        },
+        "runtime_kind": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "runtime_instance_id": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "adapter_kind": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "adapter_version": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "adapter_event_name": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "correlation_key": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "tool_name": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "provider": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "operation": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "operation_class": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "resource_class": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "parameters": {
+          "type": "object"
+        },
+        "parameters_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "identity": {
+          "$ref": "#/$defs/ActionIdentity"
+        },
+        "identity_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "context": {
+          "$ref": "#/$defs/ActionContext"
+        },
+        "context_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "policy_id": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "policy_version": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "policy_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "decision_result": {
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
+        "decision_category": {
+          "enum": [
+            "cedar_policy",
+            "deterministic_deny",
+            "advisory",
+            "judge_allow",
+            "judge_deny",
+            "judge_fail_open",
+            "default"
+          ]
+        },
+        "adapter_decision": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "reason_code": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "reason": {
+          "$ref": "#/$defs/SummaryText"
+        },
+        "decision_fact": {
+          "$ref": "#/$defs/DecisionFactV1"
+        },
+        "risk_level": {
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL"
+          ]
+        },
+        "risk_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "risk_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "model_version": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "matched_rules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 256
+        },
+        "risk_signals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 256
+        },
+        "outcome": {
+          "enum": [
+            "success",
+            "error",
+            "not_executed"
+          ]
+        },
+        "output_summary": {
+          "$ref": "#/$defs/SummaryText"
+        },
+        "output_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "error_redacted": {
+          "$ref": "#/$defs/SummaryText"
+        },
+        "tool_input": {
+          "$ref": "#/$defs/CapturedToolPayload"
+        },
+        "tool_output": {
+          "$ref": "#/$defs/CapturedToolPayload"
+        },
+        "proposed_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "decided_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "completed_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "event_type",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "request.proposed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "proposed"
+              }
+            },
+            "required": [
+              "proposed_at"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "request.decided"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "authorized",
+                  "blocked"
+                ]
+              }
+            },
+            "required": [
+              "decision_result",
+              "decision_fact",
+              "decided_at"
+            ]
+          },
+          "else": {
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "decision_result"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "decision_fact"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "request.observed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              },
+              "outcome": {
+                "const": "success"
+              }
+            },
+            "required": [
+              "outcome",
+              "completed_at"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "request.failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              },
+              "outcome": {
+                "const": "error"
+              }
+            },
+            "required": [
+              "outcome",
+              "error_redacted",
+              "completed_at"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "span_id"
+            ]
+          },
+          "then": {
+            "required": [
+              "trace_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "parent_span_id"
+            ]
+          },
+          "then": {
+            "required": [
+              "span_id"
+            ]
+          }
+        }
+      ]
+    },
+    "ReceiptActionCommitment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "tool_call_id": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "tool_name": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "parameters_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "context_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "identity_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "policy_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "reason_code": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "risk_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "outcome_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "decision_result": {
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
+        "decision_fact": {
+          "$ref": "#/$defs/DecisionFactV1"
+        }
+      },
+      "required": [
+        "id",
+        "session_id"
+      ],
+      "additionalProperties": false
+    },
+    "ReceiptRiskSection": {
+      "type": "object",
+      "properties": {
+        "risk_level": {
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL"
+          ]
+        },
+        "risk_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ReceiptPolicySection": {
+      "type": "object",
+      "properties": {
+        "policy_id": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "policy_version": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "policy_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "matched_rules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ReceiptHashesSection": {
+      "type": "object",
+      "properties": {
+        "context_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "identity_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "risk_evaluation_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "action_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "outcome_hash": {
+          "$ref": "#/$defs/Hash"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ReceiptDecisionSection": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
+        "category": {
+          "enum": [
+            "cedar_policy",
+            "deterministic_deny",
+            "advisory",
+            "judge_allow",
+            "judge_deny",
+            "judge_fail_open",
+            "default"
+          ]
+        },
+        "reason_code": {
+          "$ref": "#/$defs/BoundedName"
+        },
+        "reason": {
+          "$ref": "#/$defs/SummaryText"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "ReceiptOutcomeSection": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "enum": [
+            "success",
+            "error",
+            "not_executed"
+          ]
+        },
+        "output_summary": {
+          "$ref": "#/$defs/SummaryText"
+        },
+        "output_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "error_redacted": {
+          "$ref": "#/$defs/SummaryText"
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "additionalProperties": false
+    },
+    "ReceiptPayload": {
+      "type": "object",
+      "properties": {
+        "receipt_type": {
+          "enum": [
+            "event",
+            "decision",
+            "outcome"
+          ]
+        },
+        "previous_receipt_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "action": {
+          "$ref": "#/$defs/ReceiptActionCommitment"
+        },
+        "risk": {
+          "$ref": "#/$defs/ReceiptRiskSection"
+        },
+        "policy": {
+          "$ref": "#/$defs/ReceiptPolicySection"
+        },
+        "hashes": {
+          "$ref": "#/$defs/ReceiptHashesSection"
+        },
+        "decision": {
+          "$ref": "#/$defs/ReceiptDecisionSection"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ReceiptOutcomeSection"
+        }
+      },
+      "required": [
+        "receipt_type",
+        "action"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "receipt_type": {
+                "const": "decision"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "decision"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "decision"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "receipt_type": {
+                "const": "outcome"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "outcome"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "outcome"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ReceiptSignature": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "const": "ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        }
+      },
+      "required": [
+        "algorithm",
+        "key_id",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "ReceiptProof": {
+      "type": "object",
+      "properties": {
+        "receipt_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "signature": {
+          "$ref": "#/$defs/ReceiptSignature"
+        }
+      },
+      "required": [
+        "receipt_hash"
+      ],
+      "additionalProperties": false
+    },
+    "ReceiptRecord": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ReceiptId"
+        },
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SafeId"
+        },
+        "receipt_type": {
+          "enum": [
+            "event",
+            "decision",
+            "outcome"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/ReceiptPayload"
+        },
+        "proof": {
+          "$ref": "#/$defs/ReceiptProof"
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "id",
+        "action_id",
+        "session_id",
+        "receipt_type",
+        "payload",
+        "proof",
+        "created_at"
+      ],
+      "additionalProperties": false
+    },
+    "BatchDevice": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "deployment_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "cli_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "user_email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 320
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ReceiptChainAnchor": {
+      "type": "object",
+      "properties": {
+        "previous_receipt_hash": {
+          "anyOf": [
+            {
+              "const": ""
+            },
+            {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          ]
+        }
+      },
+      "required": [
+        "previous_receipt_hash"
+      ],
+      "additionalProperties": false
+    },
+    "LedgerIngestBatch": {
+      "type": "object",
+      "properties": {
+        "batch_version": {
+          "const": "v1"
+        },
+        "batch_id": {
+          "$ref": "#/$defs/BatchId"
+        },
+        "installation_id": {
+          "$ref": "#/$defs/InstallationId"
+        },
+        "sent_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "device": {
+          "$ref": "#/$defs/BatchDevice"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionRecord"
+          },
+          "maxItems": 100
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionRecord"
+          },
+          "maxItems": 1000
+        },
+        "receipts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptRecord"
+          },
+          "maxItems": 2000
+        },
+        "receipt_chain_anchor": {
+          "$ref": "#/$defs/ReceiptChainAnchor"
+        }
+      },
+      "required": [
+        "batch_version",
+        "batch_id",
+        "installation_id",
+        "sent_at",
+        "sessions",
+        "actions",
+        "receipts"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "receipts": {
+                "minItems": 1
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "receipt_chain_anchor"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "receipt_chain_anchor"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "LedgerIngestSuccess": {
+      "type": "object",
+      "properties": {
+        "batch_version": {
+          "const": "v1"
+        },
+        "batch_id": {
+          "$ref": "#/$defs/BatchId"
+        },
+        "disposition": {
+          "enum": [
+            "accepted",
+            "replayed"
+          ]
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "received": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "inserted": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "updated": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unchanged": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "received",
+            "inserted",
+            "updated",
+            "unchanged"
+          ],
+          "additionalProperties": false
+        },
+        "accepted_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^req_[0-9a-f-]{36}$"
+        }
+      },
+      "required": [
+        "batch_version",
+        "batch_id",
+        "disposition",
+        "counts",
+        "accepted_at",
+        "request_id"
+      ],
+      "additionalProperties": false
+    },
+    "LedgerIngestProblem": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 256
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 400,
+          "maximum": 599
+        },
+        "code": {
+          "enum": [
+            "LEDGER_MALFORMED_BODY",
+            "LEDGER_UNAUTHENTICATED",
+            "LEDGER_INSTALLATION_MISMATCH",
+            "LEDGER_REPLAY_CONFLICT",
+            "LEDGER_BODY_TOO_LARGE",
+            "LEDGER_UNSUPPORTED_MEDIA_TYPE",
+            "LEDGER_SCHEMA_INVALID",
+            "LEDGER_SEMANTIC_INVALID",
+            "LEDGER_HYBRID_CONTRACT_FORM",
+            "LEDGER_RATE_LIMITED",
+            "LEDGER_INTERNAL_ERROR"
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "instance": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^req_[0-9a-f-]{36}$"
+        },
+        "batch_id": {
+          "$ref": "#/$defs/BatchId"
+        },
+        "errors": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 1024
+              }
+            },
+            "required": [
+              "code",
+              "path",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "retry_after_seconds": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "status",
+        "code",
+        "detail"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

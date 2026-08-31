@@ -1,0 +1,22 @@
+{
+  "name": "invalid-timestamp-precision",
+  "description": "sent_at with more than 9 fractional digits.",
+  "kind": "invalid",
+  "requests": [
+    {
+      "batch_version": "v1",
+      "batch_id": "batch_00000000-0000-4000-8000-000000000025",
+      "installation_id": "ins_0123456789abcdefABCDEF0123456789",
+      "sent_at": "2026-08-04T13:27:41.1234567891Z",
+      "sessions": [],
+      "actions": [],
+      "receipts": []
+    }
+  ],
+  "expected": {
+    "status": 422,
+    "code": "LEDGER_SCHEMA_INVALID",
+    "pointer": "/sent_at",
+    "stage": "structural"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "hybrid-legacy-with-clean-arrays",
+  "description": "schema_version plus clean record array names.",
+  "kind": "hybrid",
+  "requests": [
+    {
+      "schema_version": "authorization-ledger-v1",
+      "installation_id": "ins_0123456789abcdefABCDEF0123456789",
+      "batch_id": "batch_00000000-0000-4000-8000-000000000061",
+      "sessions": [],
+      "actions": [],
+      "receipts": [],
+      "agent_sessions": [],
+      "authorization_actions": [],
+      "authorization_receipts": []
+    }
+  ],
+  "expected": {
+    "status": 400,
+    "code": "LEDGER_HYBRID_CONTRACT_FORM",
+    "stage": "structural"
+  }
+}

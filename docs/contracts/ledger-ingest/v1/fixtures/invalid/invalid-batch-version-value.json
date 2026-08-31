@@ -1,0 +1,22 @@
+{
+  "name": "invalid-batch-version-value",
+  "description": "batch_version other than the const v1.",
+  "kind": "invalid",
+  "requests": [
+    {
+      "batch_version": "v2",
+      "batch_id": "batch_00000000-0000-4000-8000-000000000035",
+      "installation_id": "ins_0123456789abcdefABCDEF0123456789",
+      "sent_at": "2026-08-04T13:27:41.123456789Z",
+      "sessions": [],
+      "actions": [],
+      "receipts": []
+    }
+  ],
+  "expected": {
+    "status": 422,
+    "code": "LEDGER_SCHEMA_INVALID",
+    "pointer": "/batch_version",
+    "stage": "structural"
+  }
+}
