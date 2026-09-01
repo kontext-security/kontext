@@ -80,7 +80,7 @@ func TestStepSafetyAsyncHistoryIsObservedOnceBeforeNextSocketHook(t *testing.T) 
 	}
 
 	history := backend.lastInput().InteractionHistory
-	if strings.Count(history, `"tool_name":"Read"`) != 1 {
+	if strings.Count(history, `"tool":"Read"`) != 1 {
 		t.Fatalf("history = %s, want immediately preceding interaction exactly once", history)
 	}
 }
@@ -175,7 +175,8 @@ func TestStepSafetyRunsAtPreExecutionHook(t *testing.T) {
 	if input.UserRequest != "Update the application configuration." || input.ToolName != "Write" {
 		t.Fatalf("model input = %+v", input)
 	}
-	if !strings.Contains(input.InteractionHistory, `"tool_name":"Read"`) {
+	if !strings.Contains(input.InteractionHistory, `"tool":"Read"`) ||
+		!strings.Contains(input.InteractionHistory, `"observation":"{\"content\":\"{}\"}"`) {
 		t.Fatalf("structured history missing prior tool: %s", input.InteractionHistory)
 	}
 	if len(input.AvailableToolSchemas.([]any)) != 1 {

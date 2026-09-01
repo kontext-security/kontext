@@ -7,10 +7,12 @@ and timeouts, overload, worker failures, missing dependencies, and malformed
 outputs all fail open. Existing deterministic and Cedar policy decisions remain
 the only authorization decisions.
 
-This is intentionally a pilot, not an enforcement recommendation. ToolSafe-Lab's
-frozen evaluation found 90.24% pooled accuracy and 83.62% pooled recall at the
-0.5 threshold, but only 14.77% recall on the worst evaluation source. That
-source shift is enough to rule out enforcement without new deployment evidence.
+This is intentionally a pilot, not an enforcement recommendation. The
+structured-history DeBERTa checkpoint found 91.19% pooled accuracy, 92.66%
+precision, 88.45% recall, 90.51% F1, and 0.824 MCC at the 0.5 threshold. Its
+worst-source recall improved from the raw-history model's 14.77% to 50.85%, but
+that remains far below released TS-Guard's 89.49%. The source shift is still
+large enough to rule out enforcement without new deployment evidence.
 
 ## Model storage and local runtime
 
@@ -20,7 +22,7 @@ into Kontext's existing database-adjacent model cache:
 
 ```sh
 kontext step-safety install \
-  --source /path/to/deberta_v3_xsmall
+  --source /path/to/history_serialization/deberta_v3_xsmall
 ```
 
 Only `config.json`, `model.safetensors`, `tokenizer.json`, and
@@ -30,7 +32,7 @@ exact sizes and SHA-256 digests, writes `PROVENANCE.json` and the upstream MIT
 license, and atomically publishes the model at:
 
 ```text
-<ledger directory>/judge-models/toolsafe/toolsafe-deberta-v3-xsmall-no-thought-v1
+<ledger directory>/judge-models/toolsafe/toolsafe-deberta-v3-xsmall-structured-history-v2
 ```
 
 Inference uses one long-lived, local Python worker embedded in the Kontext
@@ -76,7 +78,7 @@ The worker receives four fields available at the pre-execution boundary:
 1. latest user request observed through `UserPromptSubmit` (or the typed hook
    field when supplied);
 2. memory-only interaction history built exclusively from structured prior
-   tool inputs/results;
+   tool inputs/results and serialized in the model's training representation;
 3. current tool name and arguments;
 4. available tool schemas when the agent adapter supplies the typed hook field.
 
@@ -84,6 +86,25 @@ Kontext never reads agent transcripts or assistant messages for this model, so
 agent Thought/reasoning is excluded. Missing hook fields remain empty and their
 presence flags are recorded so reviews can separate full-context from
 partial-context results.
+
+History is a compact, key-sorted JSON array that is semantically equivalent to
+ToolSafe-Lab's frozen structured-history proxy. Each event contains `tool`,
+optional `arguments`, and optional string `observation`; missing fields are
+omitted and empty history is exactly `[]`. Successful structured responses are
+rendered as compact JSON strings. Failed calls use the error text as the
+observation string. If an adapter supplies both a response and an error, the
+observation string is the compact JSON encoding of both. For example:
+
+```json
+[{"arguments":{"file_path":"README.md"},"observation":"{\"content\":\"Kontext\"}","tool":"Read"}]
+```
+
+The cross-language goldens were produced with ToolSafe-Lab revision
+`9c63e6191598b0ba72947a4394ac8297c41053d1`. Go tests reproduce the canonical
+history for empty, multiple, nested, response, error, Unicode, truncation, and
+missing-field cases. Python tests reproduce the pinned tokenizer IDs and model
+logits with the imported checkpoint. Raw inputs and reasoning are not added to
+telemetry by these tests or by serving.
 
 The current action is rendered exactly as the training parser's execution-only
 view:
@@ -113,10 +134,12 @@ For logits `[safe_logit, unsafe_logit]`, Kontext computes:
 
 ```text
 margin = unsafe_logit - safe_logit
-unsafe_probability = sigmoid(1.157280529495871 * margin + 1.1360845295110542)
+unsafe_probability = sigmoid(1.427213430140093 * margin + 2.953687013257505)
 ```
 
-The initial unsafe threshold is `0.5`.
+The initial unsafe threshold remains `0.5`. The validation-selected high-recall
+threshold is deliberately not served: validation recall did not transfer
+reliably to the combined evaluation sources.
 
 ## Health, telemetry, and feedback
 
@@ -160,7 +183,14 @@ acceptable worst-tool recall and false-positive cost on real deployment data,
 recalibrates or confirms the threshold without using the final test slice,
 validates missing-schema behavior, and sets operational budgets for latency and
 failures. The known cross-source recall failure is a blocking caveat, not a
-metric to average away.
+metric to average away. The structured-history result is exploratory because
+prior evaluation results were already inspected; confirmation requires the
+exact deployed representation and a new independent holdout.
+
+For context, at threshold 0.5 the structured DeBERTa result trails released
+TS-Guard by 2.17 points accuracy, 5.37 points recall, 2.56 points F1, 0.043 MCC,
+and 38.64 points worst-source recall. Its precision is 0.33 points higher. These
+are offline released-data comparisons, not a production equivalence claim.
 
 Run the local benchmark after installation:
 
@@ -170,13 +200,18 @@ kontext step-safety benchmark \
   --iterations 50 --json
 ```
 
-On the implementation host (Apple MPS, 20 measured calls after one warm-up),
-the initial integration measured p50 48.17 ms, p95 48.64 ms, p99 48.97 ms, with
-zero failures. Treat this as a local smoke benchmark, not a fleet SLO.
+On the implementation host (Apple MPS, 50 measured calls after one warm-up),
+the structured-history v2 integration measured p50 40.19 ms, p95 41.06 ms, and
+p99 41.41 ms, with zero failures. Treat this as a local smoke benchmark, not a
+fleet SLO.
 
 ## License and provenance
 
-The base checkpoint is
+The fine-tuned checkpoint and history serializer come from ToolSafe-Lab commit
+`9c63e6191598b0ba72947a4394ac8297c41053d1`, artifact path
+`artifacts/models/history_serialization/deberta_v3_xsmall`, with results in
+`results/history_serialization_ablation.json` and findings in
+`docs/HISTORY_SERIALIZATION_ABLATION_FINDINGS.md`. The base checkpoint is
 [`microsoft/deberta-v3-xsmall`](https://huggingface.co/microsoft/deberta-v3-xsmall/tree/4b419818330868dff6a60ad3e6b1c730f8b8c0c6)
 at revision `4b419818330868dff6a60ad3e6b1c730f8b8c0c6`. Its pinned model card declares
 MIT, and Microsoft's

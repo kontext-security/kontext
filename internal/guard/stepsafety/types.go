@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	ModelVersion = "toolsafe-deberta-v3-xsmall-no-thought-v1"
+	ModelVersion = "toolsafe-deberta-v3-xsmall-structured-history-v2"
 	Threshold    = 0.5
 
-	calibrationScale = 1.157280529495871
-	calibrationBias  = 1.1360845295110542
+	calibrationScale = 1.427213430140093
+	calibrationBias  = 2.953687013257505
 
 	defaultTimeout        = 250 * time.Millisecond
 	maxConfiguredTimeout  = 500 * time.Millisecond
@@ -236,7 +236,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, input Input) Evaluation {
 		ModelVersion:       ModelVersion,
 		Enforced:           false,
 		UserRequestPresent: strings.TrimSpace(input.UserRequest) != "",
-		HistoryPresent:     strings.TrimSpace(input.InteractionHistory) != "",
+		HistoryPresent:     historyIsPresent(input.InteractionHistory),
 		ToolSchemasPresent: input.AvailableToolSchemas != nil,
 	}
 	if e == nil {
@@ -282,6 +282,11 @@ func (e *Evaluator) Evaluate(ctx context.Context, input Input) Evaluation {
 		result.ShadowDecision = DecisionUnsafe
 	}
 	return result
+}
+
+func historyIsPresent(history string) bool {
+	normalized := strings.TrimSpace(history)
+	return normalized != "" && normalized != "[]"
 }
 
 func validateInputBounds(input Input) error {

@@ -1,14 +1,43 @@
 {
-  "schema_version": 1,
-  "model_version": "toolsafe-deberta-v3-xsmall-no-thought-v1",
+  "schema_version": 2,
+  "model_version": "toolsafe-deberta-v3-xsmall-structured-history-v2",
   "source_project": "kontext-security/toolsafe-lab",
-  "source_revision": "05c07583850c6ee037b826276d7aa87eb620fa80",
-  "source_artifact_path": "artifacts/models/standalone_encoders/deberta_v3_xsmall",
+  "source_revision": "9c63e6191598b0ba72947a4394ac8297c41053d1",
+  "source_artifact_path": "artifacts/models/history_serialization/deberta_v3_xsmall",
+  "source_results_path": "results/history_serialization_ablation.json",
+  "source_results_sha256": "09efd898c02dedb1ad8f83dd5b90888e84cbcf8919c51450c9289176c42db41a",
+  "source_findings_path": "docs/HISTORY_SERIALIZATION_ABLATION_FINDINGS.md",
+  "source_findings_sha256": "f4231362a77e8d622ace51c4d8ac323fc801cca6ebc6771d5295b55df2bef08f",
+  "source_serializer_path": "src/toolsafe_lab/history_serialization.py",
+  "source_serializer_sha256": "4b14a72a6825555d56c4be0549039428b78332940d3cdd25516ef278888642e2",
+  "source_packing_path": "src/toolsafe_lab/standalone_encoder.py",
+  "source_packing_sha256": "ca8db9401025c8489a142d9447140a857fd77df84e5246fde92c995ccbe173ff",
+  "source_protocol_path": "docs/HISTORY_SERIALIZATION_ABLATION_PROTOCOL.md",
+  "source_protocol_sha256": "6e44e1175be44573e6feef1130ef9f4faeaf8457025c79d5100212c568099089",
   "base_model": "microsoft/deberta-v3-xsmall",
   "base_model_revision": "4b419818330868dff6a60ad3e6b1c730f8b8c0c6",
   "base_model_license": "MIT",
-  "input_mode": "execution_context",
+  "input_mode": "execution_context + canonical structured history (agent Thought excluded)",
   "thought_included": false,
+  "history_serialization": {
+    "event_fields": [
+      "tool",
+      "arguments",
+      "observation"
+    ],
+    "empty_history": "[]",
+    "observations": "strings",
+    "json_encoding": "UTF-8, sorted keys, compact separators"
+  },
+  "evaluation": {
+    "threshold": 0.5,
+    "accuracy": 0.9118629908103593,
+    "precision": 0.9266195885784464,
+    "recall": 0.8845252051582649,
+    "f1": 0.9050832208726945,
+    "mcc": 0.8236797425872459,
+    "worst_source_recall": 0.5085227272727273
+  },
   "max_length": 512,
   "field_markers": {
     "request": "[USER_REQUEST]",
@@ -23,8 +52,8 @@
     "schema": 128
   },
   "calibration_kind": "sigmoid",
-  "calibration_scale": 1.157280529495871,
-  "calibration_bias": 1.1360845295110542,
+  "calibration_scale": 1.427213430140093,
+  "calibration_bias": 2.953687013257505,
   "initial_threshold": 0.5,
   "artifacts": [
     {
@@ -35,7 +64,7 @@
     {
       "name": "model.safetensors",
       "size_bytes": 283201512,
-      "sha256": "726ee0bafbe17688e47bc52f20176e98898b061aa026c93fbbeacadcb0fd8bd7"
+      "sha256": "075d68f8bb4c1b4b98e2d2b2c0d5b013056b202172b080b34e7364b698844c86"
     },
     {
       "name": "tokenizer.json",

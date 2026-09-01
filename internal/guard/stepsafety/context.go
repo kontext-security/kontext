@@ -1,7 +1,9 @@
 package stepsafety
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"sync"
 )
 
@@ -13,10 +15,10 @@ const (
 )
 
 type HistoryEntry struct {
-	ToolName      string         `json:"tool_name"`
-	ToolArguments map[string]any `json:"tool_arguments,omitempty"`
-	ToolResponse  map[string]any `json:"tool_response,omitempty"`
-	Error         string         `json:"error,omitempty"`
+	ToolName      string
+	ToolArguments map[string]any
+	ToolResponse  map[string]any
+	Error         string
 }
 
 type sessionContext struct {
@@ -72,37 +74,126 @@ func (s *ContextStore) RecordInteraction(sessionID string, entry HistoryEntry) {
 		ctx.history = append([]HistoryEntry(nil), ctx.history[len(ctx.history)-maxHistoryEntries:]...)
 	}
 	for len(ctx.history) > 1 {
-		encoded, err := json.Marshal(ctx.history)
+		encoded, err := serializeHistory(ctx.history)
 		if err == nil && len(encoded) <= maxHistoryBytes {
 			break
 		}
 		ctx.history = append([]HistoryEntry(nil), ctx.history[1:]...)
 	}
-	if encoded, err := json.Marshal(ctx.history); err != nil || len(encoded) > maxHistoryBytes {
+	if encoded, err := serializeHistory(ctx.history); err != nil || len(encoded) > maxHistoryBytes {
 		ctx.history = []HistoryEntry{{
 			ToolName: entry.ToolName,
-			Error:    "oversized structured interaction omitted",
+			Error:    "oversized structured observation omitted",
 		}}
 	}
 }
 
 func (s *ContextStore) Snapshot(sessionID string) (userRequest, interactionHistory string) {
 	if s == nil || sessionID == "" {
-		return "", ""
+		return "", "[]"
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx := s.sessions[sessionID]
 	if ctx == nil {
-		return "", ""
+		return "", "[]"
 	}
 	s.serial++
 	ctx.serial = s.serial
-	encoded, err := json.Marshal(ctx.history)
-	if err != nil || len(ctx.history) == 0 {
-		return ctx.request, ""
+	encoded, err := serializeHistory(ctx.history)
+	if err != nil {
+		return ctx.request, "[]"
 	}
-	return ctx.request, string(encoded)
+	return ctx.request, encoded
+}
+
+// serializeHistory implements the exact structured-history representation used
+// to train the v2 encoder: a compact, key-sorted JSON array with tool,
+// arguments, and string observation fields. Empty history is always [].
+// Tool results remain inert text so their contents can never become a trusted
+// instruction channel through a richer runtime type.
+func serializeHistory(entries []HistoryEntry) (string, error) {
+	events := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.ToolName) == "" {
+			continue
+		}
+		event := map[string]any{"tool": entry.ToolName}
+		if entry.ToolArguments != nil {
+			event["arguments"] = entry.ToolArguments
+		}
+		if observation, ok, err := observationText(entry.ToolResponse, entry.Error); err != nil {
+			return "", err
+		} else if ok {
+			event["observation"] = observation
+		}
+		events = append(events, event)
+	}
+	return compactSortedJSON(events)
+}
+
+func observationText(response map[string]any, errorText string) (string, bool, error) {
+	if response == nil {
+		if errorText == "" {
+			return "", false, nil
+		}
+		return errorText, true, nil
+	}
+	if errorText == "" {
+		encoded, err := compactSortedJSON(response)
+		return encoded, true, err
+	}
+	encoded, err := compactSortedJSON(map[string]any{
+		"error":    errorText,
+		"response": response,
+	})
+	return encoded, true, err
+}
+
+// compactSortedJSON matches Python json.dumps(..., ensure_ascii=False,
+// sort_keys=True, separators=(",", ":")) for the JSON values admitted by the
+// hook adapters. encoding/json sorts object keys; disabling HTML escaping keeps
+// ordinary Unicode and symbols byte-compatible with the training proxy.
+func compactSortedJSON(value any) (string, error) {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	return unescapeJSONLineSeparators(strings.TrimSuffix(output.String(), "\n")), nil
+}
+
+// encoding/json always escapes U+2028 and U+2029 for legacy JSONP safety,
+// while Python ensure_ascii=False keeps them as UTF-8. Only decode genuine JSON
+// escapes here; an input string containing the literal text `\u2028` must keep
+// its leading backslash.
+func unescapeJSONLineSeparators(value string) string {
+	if !strings.Contains(value, `\u2028`) && !strings.Contains(value, `\u2029`) {
+		return value
+	}
+	var output strings.Builder
+	output.Grow(len(value))
+	for index := 0; index < len(value); {
+		if index+6 <= len(value) && (value[index:index+6] == `\u2028` || value[index:index+6] == `\u2029`) {
+			precedingSlashes := 0
+			for prior := index - 1; prior >= 0 && value[prior] == '\\'; prior-- {
+				precedingSlashes++
+			}
+			if precedingSlashes%2 == 0 {
+				if value[index+5] == '8' {
+					output.WriteRune('\u2028')
+				} else {
+					output.WriteRune('\u2029')
+				}
+				index += 6
+				continue
+			}
+		}
+		output.WriteByte(value[index])
+		index++
+	}
+	return output.String()
 }
 
 func (s *ContextStore) CloseSession(sessionID string) {

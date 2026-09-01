@@ -22,10 +22,25 @@ type artifactSpec struct {
 
 var requiredArtifacts = []artifactSpec{
 	{Name: "config.json", Size: 924, SHA256: "41f89ae28c4f0549b92537d0ef5918ef9e1af25e9898af6456e3551bf0a93852"},
-	{Name: "model.safetensors", Size: 283201512, SHA256: "726ee0bafbe17688e47bc52f20176e98898b061aa026c93fbbeacadcb0fd8bd7"},
+	{Name: "model.safetensors", Size: 283201512, SHA256: "075d68f8bb4c1b4b98e2d2b2c0d5b013056b202172b080b34e7364b698844c86"},
 	{Name: "tokenizer.json", Size: 8340654, SHA256: "d6c20af053b5d86d986a9f70898c1fceccb9d93e7ce6f63dabc899a12a53b031"},
 	{Name: "tokenizer_config.json", Size: 601, SHA256: "141468772d3b095cc30275fd9c05dff92a78619c341487da9f5549a3564ea6cb"},
 }
+
+const (
+	sourceRevision       = "9c63e6191598b0ba72947a4394ac8297c41053d1"
+	sourceArtifactPath   = "artifacts/models/history_serialization/deberta_v3_xsmall"
+	sourceResultsPath    = "results/history_serialization_ablation.json"
+	sourceResultsSHA256  = "09efd898c02dedb1ad8f83dd5b90888e84cbcf8919c51450c9289176c42db41a"
+	sourceFindingsPath   = "docs/HISTORY_SERIALIZATION_ABLATION_FINDINGS.md"
+	sourceFindingsSHA256 = "f4231362a77e8d622ace51c4d8ac323fc801cca6ebc6771d5295b55df2bef08f"
+	sourceSerializerPath = "src/toolsafe_lab/history_serialization.py"
+	sourceSerializerSHA  = "4b14a72a6825555d56c4be0549039428b78332940d3cdd25516ef278888642e2"
+	sourcePackingPath    = "src/toolsafe_lab/standalone_encoder.py"
+	sourcePackingSHA     = "ca8db9401025c8489a142d9447140a857fd77df84e5246fde92c995ccbe173ff"
+	sourceProtocolPath   = "docs/HISTORY_SERIALIZATION_ABLATION_PROTOCOL.md"
+	sourceProtocolSHA    = "6e44e1175be44573e6feef1130ef9f4faeaf8457025c79d5100212c568099089"
+)
 
 const microsoftMITLicense = `MIT License
 
@@ -51,24 +66,53 @@ SOFTWARE
 `
 
 type Provenance struct {
-	SchemaVersion      int               `json:"schema_version"`
-	ModelVersion       string            `json:"model_version"`
-	SourceProject      string            `json:"source_project"`
-	SourceRevision     string            `json:"source_revision"`
-	SourceArtifactPath string            `json:"source_artifact_path,omitempty"`
-	BaseModel          string            `json:"base_model"`
-	BaseModelRevision  string            `json:"base_model_revision"`
-	BaseModelLicense   string            `json:"base_model_license"`
-	InputMode          string            `json:"input_mode"`
-	ThoughtIncluded    bool              `json:"thought_included"`
-	MaxLength          int               `json:"max_length"`
-	FieldMarkers       map[string]string `json:"field_markers"`
-	FieldBudgets       map[string]int    `json:"field_budgets"`
-	CalibrationScale   float64           `json:"calibration_scale"`
-	CalibrationBias    float64           `json:"calibration_bias"`
-	InitialThreshold   float64           `json:"initial_threshold"`
-	ImportedAt         time.Time         `json:"imported_at"`
-	Artifacts          []artifactSpec    `json:"artifacts"`
+	SchemaVersion        int                            `json:"schema_version"`
+	ModelVersion         string                         `json:"model_version"`
+	SourceProject        string                         `json:"source_project"`
+	SourceRevision       string                         `json:"source_revision"`
+	SourceArtifactPath   string                         `json:"source_artifact_path,omitempty"`
+	SourceResultsPath    string                         `json:"source_results_path,omitempty"`
+	SourceResultsSHA256  string                         `json:"source_results_sha256,omitempty"`
+	SourceFindingsPath   string                         `json:"source_findings_path,omitempty"`
+	SourceFindingsSHA256 string                         `json:"source_findings_sha256,omitempty"`
+	SourceSerializerPath string                         `json:"source_serializer_path,omitempty"`
+	SourceSerializerSHA  string                         `json:"source_serializer_sha256,omitempty"`
+	SourcePackingPath    string                         `json:"source_packing_path,omitempty"`
+	SourcePackingSHA     string                         `json:"source_packing_sha256,omitempty"`
+	SourceProtocolPath   string                         `json:"source_protocol_path,omitempty"`
+	SourceProtocolSHA    string                         `json:"source_protocol_sha256,omitempty"`
+	BaseModel            string                         `json:"base_model"`
+	BaseModelRevision    string                         `json:"base_model_revision"`
+	BaseModelLicense     string                         `json:"base_model_license"`
+	InputMode            string                         `json:"input_mode"`
+	ThoughtIncluded      bool                           `json:"thought_included"`
+	HistorySerialization historySerializationProvenance `json:"history_serialization"`
+	Evaluation           evaluationProvenance           `json:"evaluation"`
+	MaxLength            int                            `json:"max_length"`
+	FieldMarkers         map[string]string              `json:"field_markers"`
+	FieldBudgets         map[string]int                 `json:"field_budgets"`
+	CalibrationScale     float64                        `json:"calibration_scale"`
+	CalibrationBias      float64                        `json:"calibration_bias"`
+	InitialThreshold     float64                        `json:"initial_threshold"`
+	ImportedAt           time.Time                      `json:"imported_at"`
+	Artifacts            []artifactSpec                 `json:"artifacts"`
+}
+
+type historySerializationProvenance struct {
+	EventFields  []string `json:"event_fields"`
+	EmptyHistory string   `json:"empty_history"`
+	Observations string   `json:"observations"`
+	JSONEncoding string   `json:"json_encoding"`
+}
+
+type evaluationProvenance struct {
+	Threshold         float64 `json:"threshold"`
+	Accuracy          float64 `json:"accuracy"`
+	Precision         float64 `json:"precision"`
+	Recall            float64 `json:"recall"`
+	F1                float64 `json:"f1"`
+	MCC               float64 `json:"mcc"`
+	WorstSourceRecall float64 `json:"worst_source_recall"`
 }
 
 func DefaultModelDir(dbPath string) string {
@@ -130,17 +174,42 @@ func InstallModel(sourceDir, destinationDir string) (string, error) {
 		return "", err
 	}
 	provenance := Provenance{
-		SchemaVersion:      1,
-		ModelVersion:       ModelVersion,
-		SourceProject:      "kontext-security/toolsafe-lab",
-		SourceRevision:     "05c07583850c6ee037b826276d7aa87eb620fa80",
-		SourceArtifactPath: "artifacts/models/standalone_encoders/deberta_v3_xsmall",
-		BaseModel:          "microsoft/deberta-v3-xsmall",
-		BaseModelRevision:  "4b419818330868dff6a60ad3e6b1c730f8b8c0c6",
-		BaseModelLicense:   "MIT",
-		InputMode:          "execution_context (agent Thought excluded)",
-		ThoughtIncluded:    false,
-		MaxLength:          512,
+		SchemaVersion:        2,
+		ModelVersion:         ModelVersion,
+		SourceProject:        "kontext-security/toolsafe-lab",
+		SourceRevision:       sourceRevision,
+		SourceArtifactPath:   sourceArtifactPath,
+		SourceResultsPath:    sourceResultsPath,
+		SourceResultsSHA256:  sourceResultsSHA256,
+		SourceFindingsPath:   sourceFindingsPath,
+		SourceFindingsSHA256: sourceFindingsSHA256,
+		SourceSerializerPath: sourceSerializerPath,
+		SourceSerializerSHA:  sourceSerializerSHA,
+		SourcePackingPath:    sourcePackingPath,
+		SourcePackingSHA:     sourcePackingSHA,
+		SourceProtocolPath:   sourceProtocolPath,
+		SourceProtocolSHA:    sourceProtocolSHA,
+		BaseModel:            "microsoft/deberta-v3-xsmall",
+		BaseModelRevision:    "4b419818330868dff6a60ad3e6b1c730f8b8c0c6",
+		BaseModelLicense:     "MIT",
+		InputMode:            "execution_context + canonical structured history (agent Thought excluded)",
+		ThoughtIncluded:      false,
+		HistorySerialization: historySerializationProvenance{
+			EventFields:  []string{"tool", "arguments", "observation"},
+			EmptyHistory: "[]",
+			Observations: "strings",
+			JSONEncoding: "UTF-8, sorted keys, compact separators",
+		},
+		Evaluation: evaluationProvenance{
+			Threshold:         Threshold,
+			Accuracy:          0.9118629908103593,
+			Precision:         0.9266195885784464,
+			Recall:            0.8845252051582649,
+			F1:                0.9050832208726945,
+			MCC:               0.8236797425872459,
+			WorstSourceRecall: 0.5085227272727273,
+		},
+		MaxLength: 512,
 		FieldMarkers: map[string]string{
 			"request": "[USER_REQUEST]",
 			"history": "[INTERACTION_HISTORY]",

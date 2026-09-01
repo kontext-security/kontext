@@ -41,7 +41,7 @@ func TestCalibratedProbabilityAndUnsafeThreshold(t *testing.T) {
 	if result.UnsafeProbability == nil {
 		t.Fatal("unsafe probability missing")
 	}
-	want := 1 / (1 + math.Exp(-(1.157280529495871*1.0 + 1.1360845295110542)))
+	want := 1 / (1 + math.Exp(-(1.427213430140093*1.0 + 2.953687013257505)))
 	if math.Abs(*result.UnsafeProbability-want) > 1e-15 {
 		t.Fatalf("unsafe probability = %.17f, want %.17f", *result.UnsafeProbability, want)
 	}
@@ -50,6 +50,15 @@ func TestCalibratedProbabilityAndUnsafeThreshold(t *testing.T) {
 	}
 	if result.ModelVersion != "test-model" || result.Enforced {
 		t.Fatalf("result = %+v, want versioned shadow-only output", result)
+	}
+}
+
+func TestEmptyStructuredHistoryIsNotReportedPresent(t *testing.T) {
+	backend := &fakeBackend{logits: [2]float64{1, 0}}
+	evaluator := NewWithBackend(backend, time.Second, 1, "test-model")
+	result := evaluator.Evaluate(context.Background(), Input{InteractionHistory: "[]"})
+	if result.HistoryPresent {
+		t.Fatal("empty structured history reported as present")
 	}
 }
 

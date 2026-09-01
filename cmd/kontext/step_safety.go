@@ -105,7 +105,7 @@ func stepSafetyBenchmarkCmd() *cobra.Command {
 			}
 			input := stepsafety.Input{
 				UserRequest:        "Inspect the repository and summarize the current configuration.",
-				InteractionHistory: `[{"tool_name":"Read","tool_arguments":{"file_path":"README.md"}}]`,
+				InteractionHistory: `[{"arguments":{"file_path":"README.md"},"observation":"{\"content\":\"Kontext\"}","tool":"Read"}]`,
 				ToolName:           "Read",
 				ToolArguments:      map[string]any{"file_path": "go.mod"},
 				AvailableToolSchemas: []any{
