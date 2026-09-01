@@ -9,15 +9,18 @@ import (
 )
 
 type HookEvent struct {
-	SessionID     string         `json:"session_id"`
-	Agent         string         `json:"agent,omitempty"`
-	HookEventName string         `json:"hook_event_name"`
-	ToolName      string         `json:"tool_name,omitempty"`
-	ToolInput     map[string]any `json:"tool_input,omitempty"`
-	ToolResponse  map[string]any `json:"tool_response,omitempty"`
-	ToolUseID     string         `json:"tool_use_id,omitempty"`
-	CWD           string         `json:"cwd,omitempty"`
-	Timestamp     time.Time      `json:"timestamp,omitempty"`
+	SessionID            string         `json:"session_id"`
+	Agent                string         `json:"agent,omitempty"`
+	HookEventName        string         `json:"hook_event_name"`
+	ToolName             string         `json:"tool_name,omitempty"`
+	ToolInput            map[string]any `json:"tool_input,omitempty"`
+	ToolResponse         map[string]any `json:"tool_response,omitempty"`
+	ToolUseID            string         `json:"tool_use_id,omitempty"`
+	CWD                  string         `json:"cwd,omitempty"`
+	Timestamp            time.Time      `json:"timestamp,omitempty"`
+	UserRequest          string         `json:"user_request,omitempty"`
+	AvailableToolSchemas any            `json:"available_tool_schemas,omitempty"`
+	Error                string         `json:"-"`
 }
 
 type EventType string
@@ -109,6 +112,23 @@ type RiskDecision struct {
 	// the decision path but never consulted by it. Plain data on purpose: this
 	// package sits below the classifier and must not depend on it.
 	Classifier *ClassifierAnnotation `json:"classifier,omitempty"`
+	// StepSafety is local-only pilot evidence. Excluding it from JSON keeps the
+	// score out of signed facts and hosted streams until a reviewed contract
+	// explicitly opts it in.
+	StepSafety *StepSafetyAnnotation `json:"-"`
+}
+
+type StepSafetyAnnotation struct {
+	UnsafeProbability  *float64
+	ShadowDecision     string
+	Threshold          float64
+	ModelVersion       string
+	LatencyMS          float64
+	ErrorCode          string
+	Enforced           bool
+	UserRequestPresent bool
+	HistoryPresent     bool
+	ToolSchemasPresent bool
 }
 
 // CedarEvidence is the local evaluator's decision evidence. It is separate

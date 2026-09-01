@@ -345,6 +345,12 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureClassifierVerdictColumns(ctx); err != nil {
 		return err
 	}
+	if _, err := s.db.ExecContext(ctx, stepSafetyVerdictsDDL); err != nil {
+		return err
+	}
+	if err := s.ensureStepSafetyVerdictColumns(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureRiskTypeAnnotations(ctx); err != nil {
 		return err
 	}

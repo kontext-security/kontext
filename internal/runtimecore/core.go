@@ -13,6 +13,15 @@ type HookRuntime interface {
 	IngestEvent(context.Context, hook.Event) (hook.Result, error)
 }
 
+// AsyncEventObserver captures the small, ordering-sensitive in-memory portion
+// of a non-blocking hook before its acknowledgement is returned. Durable
+// ingestion may still happen asynchronously. Implementations must not perform
+// I/O here: this method exists so a following blocking hook observes prior
+// agent events in the same order in which the agent received acknowledgements.
+type AsyncEventObserver interface {
+	ObserveAsyncEvent(hook.Event)
+}
+
 type SessionSource string
 
 const (
@@ -97,11 +106,31 @@ func ValidateEvaluateHook(event hook.Event) error {
 }
 
 func (c *Core) IngestEvent(ctx context.Context, event hook.Event) (hook.Result, error) {
-	if err := ValidateIngestEvent(event); err != nil {
+	if err := c.ObserveAsyncEvent(event); err != nil {
 		return hook.Result{}, err
 	}
-	if event.HookName.CanBlock() {
-		return hook.Result{}, fmt.Errorf("hook event %q must be evaluated for enforcement", event.HookName)
+	return c.IngestObservedEvent(ctx, event)
+}
+
+// ObserveAsyncEvent records ordered, memory-only context for a non-blocking
+// hook. localruntime invokes it before acknowledging an asynchronously
+// ingested hook; direct Core callers get the same behavior through IngestEvent.
+func (c *Core) ObserveAsyncEvent(event hook.Event) error {
+	if err := ValidateIngestEvent(event); err != nil {
+		return err
+	}
+	if observer, ok := c.runtime.(AsyncEventObserver); ok {
+		observer.ObserveAsyncEvent(event)
+	}
+	return nil
+}
+
+// IngestObservedEvent performs durable/background ingestion after
+// ObserveAsyncEvent has already run. It prevents the ordered context mutation
+// from being applied twice when localruntime acknowledges before ingestion.
+func (c *Core) IngestObservedEvent(ctx context.Context, event hook.Event) (hook.Result, error) {
+	if err := ValidateIngestEvent(event); err != nil {
+		return hook.Result{}, err
 	}
 	var err error
 	event, err = c.EnsureSessionForEvent(ctx, event)

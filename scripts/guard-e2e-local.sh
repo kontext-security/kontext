@@ -44,6 +44,27 @@ done
 curl -fsS "${BASE_URL}/healthz" >/dev/null
 echo "==> daemon healthy"
 
+STEP_SAFETY_E2E=0
+case "${KONTEXT_STEP_SAFETY_SHADOW:-}" in
+  1|true|TRUE|yes|YES|on|ON) STEP_SAFETY_E2E=1 ;;
+esac
+if [[ "$STEP_SAFETY_E2E" == "1" ]]; then
+  curl -fsS "${BASE_URL}/healthz" | node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => raw += chunk);
+process.stdin.on("end", () => {
+  const health = JSON.parse(raw).step_safety ?? {};
+  if (health.status !== "ready") {
+    throw new Error(`expected real step-safety worker to be ready, got ${JSON.stringify(health)}`);
+  }
+  if (health.model_version !== "toolsafe-deberta-v3-xsmall-structured-history-v2") {
+    throw new Error(`unexpected step-safety model ${JSON.stringify(health)}`);
+  }
+});
+'
+  echo "ok step safety: real model ready"
+fi
+
 assert_hook() {
   local name="$1"
   local payload="$2"
@@ -165,6 +186,28 @@ process.stdin.on("end", () => {
   }
 });
 '
+
+if [[ "$STEP_SAFETY_E2E" == "1" ]]; then
+  curl -fsS "${BASE_URL}/api/sessions/${SESSION_ID}/step-safety" | node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => raw += chunk);
+process.stdin.on("end", () => {
+  const verdicts = JSON.parse(raw);
+  if (verdicts.length !== 3) {
+    throw new Error(`expected three pre-execution scores, got ${JSON.stringify(verdicts)}`);
+  }
+  for (const verdict of verdicts) {
+    if (typeof verdict.unsafe_probability !== "number" || verdict.error_code) {
+      throw new Error(`real model did not return a score: ${JSON.stringify(verdict)}`);
+    }
+    if (verdict.enforced !== false || verdict.model_version !== "toolsafe-deberta-v3-xsmall-structured-history-v2") {
+      throw new Error(`step-safety shadow contract changed: ${JSON.stringify(verdict)}`);
+    }
+  }
+});
+'
+  echo "ok step safety: pre-execution scores persisted without enforcement"
+fi
 
 go run ./cmd/kontext guard status --daemon-url "$BASE_URL" | grep -q "0 critical"
 go run ./cmd/kontext guard doctor --daemon-url "$BASE_URL" | grep -q "daemon healthy"

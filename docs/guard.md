@@ -1,5 +1,9 @@
 # Kontext Guard
 
+The optional no-Thought DeBERTa step-level safety pilot is documented in
+[Local step-safety shadow pilot](step-safety-shadow.md). It runs locally at
+`PreToolUse`, records redacted shadow evidence, fails open, and cannot enforce.
+
 Guard is the local safety runtime inside `kontext`. It watches tool calls locally, redacts captured data, and stores decisions in local SQLite.
 
 There are two supported ways to use it:

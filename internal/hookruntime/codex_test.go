@@ -298,3 +298,24 @@ func TestEncodeCodexRejectsUnsupportedEvent(t *testing.T) {
 		t.Fatal("EncodeCodexResult() error = nil, want unsupported event error")
 	}
 }
+
+func TestDecodeCodexEventPreservesStepSafetyContext(t *testing.T) {
+	t.Parallel()
+
+	event, err := DecodeCodexEvent([]byte(`{
+		"session_id":"s1",
+		"hook_event_name":"PreToolUse",
+		"user_request":"inspect the config",
+		"available_tool_schemas":[{"name":"Read","input_schema":{"type":"object"}}]
+	}`), "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.UserRequest != "inspect the config" {
+		t.Fatalf("UserRequest = %q", event.UserRequest)
+	}
+	schemas, ok := event.AvailableToolSchemas.([]any)
+	if !ok || len(schemas) != 1 {
+		t.Fatalf("AvailableToolSchemas = %#v", event.AvailableToolSchemas)
+	}
+}

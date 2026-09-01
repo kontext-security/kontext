@@ -10,6 +10,7 @@ import (
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/runtimecore"
@@ -21,6 +22,8 @@ type guardHookRuntime struct {
 	currentSessionID string
 	mode             string
 	classifier       *riskclassifier.Classifier
+	stepSafety       *stepsafety.Evaluator
+	stepContext      *stepsafety.ContextStore
 	// deferRecord, when non-nil, runs every store write for decision-gating
 	// hooks — session upsert, annotation, decision row — off the hook
 	// response path. The decision itself (Cedar) is always computed before
@@ -31,15 +34,20 @@ type guardHookRuntime struct {
 	deferRecord func(job func(context.Context) error)
 }
 
-func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier, deferRecord func(job func(context.Context) error)) guardHookRuntime {
-	return guardHookRuntime{
+func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier, stepSafety *stepsafety.Evaluator, deferRecord func(job func(context.Context) error)) guardHookRuntime {
+	runtime := guardHookRuntime{
 		store:            store,
 		policy:           policy,
 		currentSessionID: currentSessionID,
 		mode:             mode,
 		classifier:       classifier,
+		stepSafety:       stepSafety,
 		deferRecord:      deferRecord,
 	}
+	if stepSafety != nil {
+		runtime.stepContext = stepsafety.NewContextStore()
+	}
+	return runtime
 }
 
 func (r guardHookRuntime) OpenSession(ctx context.Context, session runtimecore.Session) (runtimecore.Session, error) {
@@ -61,6 +69,9 @@ func (r guardHookRuntime) OpenSession(ctx context.Context, session runtimecore.S
 }
 
 func (r guardHookRuntime) CloseSession(ctx context.Context, sessionID string) error {
+	if r.stepContext != nil {
+		r.stepContext.CloseSession(sessionID)
+	}
 	return r.store.CloseSession(ctx, sessionID)
 }
 
@@ -106,6 +117,7 @@ func (r guardHookRuntime) modeForSession(sessionID string) string {
 }
 
 func (r guardHookRuntime) EvaluateHook(ctx context.Context, event hook.Event) (hook.Result, error) {
+	r.observeStepContext(riskEventFromHookEvent(event))
 	decision, err := r.decideAndRecord(ctx, riskEventFromHookEvent(event))
 	if err != nil {
 		return hook.Result{}, err
@@ -121,6 +133,15 @@ func (r guardHookRuntime) IngestEvent(ctx context.Context, event hook.Event) (ho
 	return hookResultFromRiskDecision(decision), nil
 }
 
+// ObserveAsyncEvent is deliberately memory-only. localruntime calls it before
+// acknowledging PostToolUse so the next PreToolUse cannot race ahead of the
+// preceding interaction while SQLite ingestion continues in the background.
+func (r guardHookRuntime) ObserveAsyncEvent(event hook.Event) {
+	riskEvent := riskEventFromHookEvent(event)
+	riskEvent.SessionID = sqlite.NormalizeSessionID(riskEvent.SessionID)
+	r.observeStepContext(riskEvent)
+}
+
 func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
@@ -130,6 +151,9 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	if err != nil {
 		return risk.RiskDecision{}, err
 	}
+	// This synchronous shadow call is the last model stage before a successful
+	// PreToolUse response can release the tool. It never mutates decision.
+	r.annotateStepSafety(ctx, event, &decision)
 	// Annotate here, between the final decision and the write. Here is the only
 	// place that sees Cedar's actual answer, and the only place every path —
 	// observe, enforce, managed — passes through, so one call site covers them
@@ -161,6 +185,7 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 				return errors.Join(sessionErr, err)
 			}
 			r.recordAnnotation(recordCtx, record.ID, deferredEvent, deferredDecision)
+			r.recordStepSafety(recordCtx, record.ID, deferredEvent, deferredDecision)
 			return sessionErr
 		})
 		return decision, nil
@@ -172,7 +197,89 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	}
 	decision.EventID = record.ID
 	r.recordAnnotation(ctx, record.ID, event, decision)
+	r.recordStepSafety(ctx, record.ID, event, decision)
 	return decision, nil
+}
+
+func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.HookEvent, decision *risk.RiskDecision) {
+	if r.stepSafety == nil || event.HookEventName != hook.HookPreToolUse.String() {
+		return
+	}
+	request, history := r.stepContext.Snapshot(event.SessionID)
+	if event.UserRequest != "" {
+		request = event.UserRequest
+	}
+	result := r.stepSafety.Evaluate(ctx, stepsafety.Input{
+		UserRequest:          request,
+		InteractionHistory:   history,
+		ToolName:             event.ToolName,
+		ToolArguments:        event.ToolInput,
+		AvailableToolSchemas: event.AvailableToolSchemas,
+	})
+	decision.StepSafety = &risk.StepSafetyAnnotation{
+		UnsafeProbability:  result.UnsafeProbability,
+		ShadowDecision:     result.ShadowDecision,
+		Threshold:          result.Threshold,
+		ModelVersion:       result.ModelVersion,
+		LatencyMS:          result.LatencyMS,
+		ErrorCode:          result.ErrorCode,
+		Enforced:           false,
+		UserRequestPresent: result.UserRequestPresent,
+		HistoryPresent:     result.HistoryPresent,
+		ToolSchemasPresent: result.ToolSchemasPresent,
+	}
+}
+
+func (r guardHookRuntime) observeStepContext(event risk.HookEvent) {
+	if r.stepContext == nil {
+		return
+	}
+	switch event.HookEventName {
+	case hook.HookUserPromptSubmit.String():
+		prompt, _ := event.ToolInput["prompt"].(string)
+		r.stepContext.RecordUserRequest(event.SessionID, prompt)
+	case hook.HookPostToolUse.String(), hook.HookPostToolUseFailed.String():
+		r.stepContext.RecordInteraction(event.SessionID, stepsafety.HistoryEntry{
+			ToolName:      event.ToolName,
+			ToolArguments: event.ToolInput,
+			ToolResponse:  event.ToolResponse,
+			Error:         event.Error,
+		})
+	case hook.HookSessionEnd.String():
+		r.stepContext.CloseSession(event.SessionID)
+	}
+}
+
+func (r guardHookRuntime) recordStepSafety(ctx context.Context, actionID string, event risk.HookEvent, decision risk.RiskDecision) {
+	annotation := decision.StepSafety
+	if annotation == nil || actionID == "" {
+		return
+	}
+	toolName := redactEvidence(event.ToolName)
+	const maxToolNameBytes = 256
+	if len(toolName) > maxToolNameBytes {
+		cut := maxToolNameBytes
+		for cut > 0 && toolName[cut]&0xC0 == 0x80 {
+			cut--
+		}
+		toolName = toolName[:cut]
+	}
+	_, _ = r.store.SaveStepSafetyVerdict(ctx, sqlite.StepSafetyRecord{
+		ActionID:           actionID,
+		SessionID:          event.SessionID,
+		ToolUseID:          event.ToolUseID,
+		ToolName:           toolName,
+		UnsafeProbability:  annotation.UnsafeProbability,
+		ShadowDecision:     annotation.ShadowDecision,
+		Threshold:          annotation.Threshold,
+		ModelVersion:       annotation.ModelVersion,
+		LatencyMS:          annotation.LatencyMS,
+		ErrorCode:          annotation.ErrorCode,
+		Enforced:           false,
+		UserRequestPresent: annotation.UserRequestPresent,
+		HistoryPresent:     annotation.HistoryPresent,
+		ToolSchemasPresent: annotation.ToolSchemasPresent,
+	})
 }
 
 // annotate attaches the advisory risk verdict to a settled decision. The
@@ -336,27 +443,33 @@ func (r guardHookRuntime) observePrompt(event risk.HookEvent) {
 
 func riskEventFromHookEvent(event hook.Event) risk.HookEvent {
 	return risk.HookEvent{
-		SessionID:     event.SessionID,
-		Agent:         event.Agent,
-		HookEventName: event.HookName.String(),
-		ToolName:      event.ToolName,
-		ToolInput:     event.ToolInput,
-		ToolResponse:  event.ToolResponse,
-		ToolUseID:     event.ToolUseID,
-		CWD:           event.CWD,
+		SessionID:            event.SessionID,
+		Agent:                event.Agent,
+		HookEventName:        event.HookName.String(),
+		ToolName:             event.ToolName,
+		ToolInput:            event.ToolInput,
+		ToolResponse:         event.ToolResponse,
+		ToolUseID:            event.ToolUseID,
+		CWD:                  event.CWD,
+		UserRequest:          event.UserRequest,
+		AvailableToolSchemas: event.AvailableToolSchemas,
+		Error:                event.Error,
 	}
 }
 
 func hookEventFromRiskEvent(event risk.HookEvent) hook.Event {
 	return hook.Event{
-		SessionID:    event.SessionID,
-		Agent:        event.Agent,
-		HookName:     hook.HookName(event.HookEventName),
-		ToolName:     event.ToolName,
-		ToolInput:    event.ToolInput,
-		ToolResponse: event.ToolResponse,
-		ToolUseID:    event.ToolUseID,
-		CWD:          event.CWD,
+		SessionID:            event.SessionID,
+		Agent:                event.Agent,
+		HookName:             hook.HookName(event.HookEventName),
+		ToolName:             event.ToolName,
+		ToolInput:            event.ToolInput,
+		ToolResponse:         event.ToolResponse,
+		ToolUseID:            event.ToolUseID,
+		CWD:                  event.CWD,
+		UserRequest:          event.UserRequest,
+		AvailableToolSchemas: event.AvailableToolSchemas,
+		Error:                event.Error,
 	}
 }
 

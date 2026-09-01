@@ -15,6 +15,7 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/judge"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 	"github.com/kontext-security/kontext/internal/runtimecore"
@@ -35,6 +36,7 @@ type Server struct {
 	mode             string
 	classifier       *riskclassifier.Classifier
 	llmGate          *riskclassifier.LLMGate
+	stepSafety       *stepsafety.Evaluator
 }
 
 type ProcessResponse struct {
@@ -53,6 +55,9 @@ type Options struct {
 	// RiskClassifier enables observe-mode risk-classifier logging for
 	// intercepted commands. Nil disables it.
 	RiskClassifier *RiskClassifierOptions
+	// StepSafety enables the local no-Thought DeBERTa shadow pilot. It is
+	// advisory by construction and never participates in PolicyProvider.
+	StepSafety *stepsafety.Evaluator
 	// DeferRecord, when non-nil, receives every store write for each settled
 	// decision-gating hook — session upsert, annotation, decision row — so
 	// the hook response does not wait on classifier inference or SQLite.
@@ -138,7 +143,7 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		opts.RiskClassifier.Gate = riskclassifier.NewLLMGate()
 	}
 	classifier := newRiskClassifier(opts.RiskClassifier)
-	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier, opts.DeferRecord)
+	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier, opts.StepSafety, opts.DeferRecord)
 	core, err := runtimecore.New(runtime)
 	if err != nil {
 		return nil, fmt.Errorf("create runtime core: %w", err)
@@ -151,6 +156,7 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		mode:             mode,
 		classifier:       classifier,
 		llmGate:          riskClassifierGate(opts.RiskClassifier),
+		stepSafety:       opts.StepSafety,
 	}
 	server.routes()
 	return server, nil
@@ -250,6 +256,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	s.mux.HandleFunc("GET /api/sessions/", s.handleSession)
 	s.mux.HandleFunc("POST /api/verdicts/{action_id}/feedback", s.handleClassifierFeedback)
+	s.mux.HandleFunc("POST /api/step-safety/{action_id}/feedback", s.handleStepSafetyFeedback)
 }
 
 func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
@@ -276,8 +283,13 @@ func (s *Server) ProcessHookEvent(ctx context.Context, event risk.HookEvent) (ri
 	return riskDecisionFromHookResult(result), nil
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	healthCtx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
+	defer cancel()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "ok",
+		"step_safety": s.stepSafety.Health(healthCtx),
+	})
 }
 
 func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
@@ -400,9 +412,56 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, verdicts)
+	case "step-safety":
+		verdicts, err := s.store.StepSafetyVerdictsForSession(r.Context(), sessionID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, verdicts)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+// handleStepSafetyFeedback records eventual human review against the local
+// shadow verdict. It uses the same two-sided labels and same-origin boundary as
+// the existing classifier feedback endpoint.
+func (s *Server) handleStepSafetyFeedback(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginRequest(r) {
+		writeError(w, http.StatusForbidden, untrustedFeedbackOrigin)
+		return
+	}
+	if !hasJSONContentType(r) {
+		writeError(w, http.StatusUnsupportedMediaType, "step-safety feedback requires application/json")
+		return
+	}
+	actionID := r.PathValue("action_id")
+	if strings.TrimSpace(actionID) == "" {
+		writeError(w, http.StatusBadRequest, "action id is required")
+		return
+	}
+	var req ClassifierFeedbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid step-safety feedback request")
+		return
+	}
+	switch req.UserFeedback {
+	case riskclassifier.FeedbackShouldAllow, riskclassifier.FeedbackShouldBlock:
+	default:
+		writeError(w, http.StatusBadRequest, "unknown step-safety feedback")
+		return
+	}
+	record, err := s.store.SetStepSafetyFeedback(r.Context(), actionID, req.UserFeedback)
+	if errors.Is(err, sqlite.ErrStepSafetyVerdictNotFound) {
+		writeError(w, http.StatusNotFound, "step-safety verdict not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
 }
 
 // handleClassifierFeedback records the user's ground-truth label on an

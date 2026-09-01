@@ -32,6 +32,12 @@ type claudeHookInput struct {
 	DurationMs       *int64          `json:"duration_ms"`
 	Error            *string         `json:"error"`
 	IsInterrupt      *bool           `json:"is_interrupt"`
+	UserRequest      string          `json:"user_request"`
+	UserRequestAlt   string          `json:"userRequest"`
+	ToolSchemas      any             `json:"available_tool_schemas"`
+	ToolSchemasAlt   any             `json:"availableToolSchemas"`
+	ToolSchemasShort any             `json:"tool_schemas"`
+	ToolSchemasCamel any             `json:"toolSchemas"`
 }
 
 type claudeHookOutput struct {
@@ -69,6 +75,13 @@ func DecodeClaudeEvent(input []byte, agentName string) (hook.Event, error) {
 		DurationMs:     h.DurationMs,
 		Error:          stringPtrValue(h.Error),
 		IsInterrupt:    h.IsInterrupt,
+		UserRequest:    firstString(h.UserRequest, h.UserRequestAlt),
+		AvailableToolSchemas: firstValue(
+			h.ToolSchemas,
+			h.ToolSchemasAlt,
+			h.ToolSchemasShort,
+			h.ToolSchemasCamel,
+		),
 	}, nil
 }
 
@@ -99,6 +112,15 @@ func firstString(values ...string) string {
 }
 
 func firstMap(values ...map[string]any) map[string]any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstValue(values ...any) any {
 	for _, value := range values {
 		if value != nil {
 			return value

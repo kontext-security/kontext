@@ -12,16 +12,22 @@ import (
 const codexSessionPrefix = "codex-"
 
 type codexHookInput struct {
-	SessionID      string          `json:"session_id"`
-	HookEventName  string          `json:"hook_event_name"`
-	ToolName       string          `json:"tool_name"`
-	ToolInput      json.RawMessage `json:"tool_input"`
-	ToolResponse   json.RawMessage `json:"tool_response"`
-	ToolUseID      string          `json:"tool_use_id"`
-	CWD            string          `json:"cwd"`
-	PermissionMode *string         `json:"permission_mode"`
-	Prompt         *string         `json:"prompt"`
-	Source         *string         `json:"source"`
+	SessionID        string          `json:"session_id"`
+	HookEventName    string          `json:"hook_event_name"`
+	ToolName         string          `json:"tool_name"`
+	ToolInput        json.RawMessage `json:"tool_input"`
+	ToolResponse     json.RawMessage `json:"tool_response"`
+	ToolUseID        string          `json:"tool_use_id"`
+	CWD              string          `json:"cwd"`
+	PermissionMode   *string         `json:"permission_mode"`
+	Prompt           *string         `json:"prompt"`
+	Source           *string         `json:"source"`
+	UserRequest      string          `json:"user_request"`
+	UserRequestAlt   string          `json:"userRequest"`
+	ToolSchemas      json.RawMessage `json:"available_tool_schemas"`
+	ToolSchemasAlt   json.RawMessage `json:"availableToolSchemas"`
+	ToolSchemasOld   json.RawMessage `json:"tool_schemas"`
+	ToolSchemasCamel json.RawMessage `json:"toolSchemas"`
 }
 
 type codexHookOutput struct {
@@ -58,16 +64,22 @@ func DecodeCodexEvent(input []byte, agentName string) (hook.Event, error) {
 	if err != nil {
 		return hook.Event{}, err
 	}
+	toolSchemas, err := normalizeCodexJSONValue(h.ToolSchemas, h.ToolSchemasAlt, h.ToolSchemasOld, h.ToolSchemasCamel)
+	if err != nil {
+		return hook.Event{}, err
+	}
 	return hook.Event{
-		SessionID:      codexSessionID(h.SessionID),
-		Agent:          agentName,
-		HookName:       hookName,
-		ToolName:       h.ToolName,
-		ToolInput:      toolInput,
-		ToolResponse:   normalizeToolResponse(h.ToolResponse),
-		ToolUseID:      h.ToolUseID,
-		CWD:            h.CWD,
-		PermissionMode: stringPtrValue(h.PermissionMode),
+		SessionID:            codexSessionID(h.SessionID),
+		Agent:                agentName,
+		HookName:             hookName,
+		ToolName:             h.ToolName,
+		ToolInput:            toolInput,
+		ToolResponse:         normalizeToolResponse(h.ToolResponse),
+		ToolUseID:            h.ToolUseID,
+		CWD:                  h.CWD,
+		PermissionMode:       stringPtrValue(h.PermissionMode),
+		UserRequest:          firstString(h.UserRequest, h.UserRequestAlt),
+		AvailableToolSchemas: toolSchemas,
 	}, nil
 }
 
@@ -198,6 +210,21 @@ func normalizeCodexJSONMap(raw json.RawMessage) (map[string]any, error) {
 		return nil, fmt.Errorf("codex: decode JSON value: %w", err)
 	}
 	return map[string]any{"value": value}, nil
+}
+
+func normalizeCodexJSONValue(values ...json.RawMessage) (any, error) {
+	for _, raw := range values {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || string(trimmed) == "null" {
+			continue
+		}
+		var value any
+		if err := decodeUseNumber(trimmed, &value); err != nil {
+			return nil, fmt.Errorf("codex: decode available tool schemas: %w", err)
+		}
+		return value, nil
+	}
+	return nil, nil
 }
 
 func codexMeaningfulReason(result hook.Result) string {
