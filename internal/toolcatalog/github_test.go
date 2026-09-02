@@ -56,3 +56,14 @@ func TestCatalogDigestIsStable(t *testing.T) {
 		t.Fatalf("Digest() = %q, want %q", got, want)
 	}
 }
+
+func TestOperations(t *testing.T) {
+	if got := Operations(GitHubToolPrefix + "merge_pull_request"); len(got) != 1 || got[0] != "merge-pull-request" {
+		t.Fatalf("Operations(merge_pull_request) = %v", got)
+	}
+	for _, toolID := range []string{GitHubToolPrefix + "update_pull_request", GitHubToolPrefix + "create_branch", GitHubUnrecognizedTool, "shell", ""} {
+		if got := Operations(toolID); got != nil {
+			t.Errorf("Operations(%q) = %v, want nil", toolID, got)
+		}
+	}
+}

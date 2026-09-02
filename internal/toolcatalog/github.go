@@ -171,3 +171,24 @@ func validType(kind string, value any) bool {
 	}
 	return false
 }
+
+// githubOperations is the crosswalk from catalogued GitHub MCP write tools
+// to the github/operation vocabulary the shell projection emits for git, gh
+// and curl. Cedar matches MCP calls by resource id, so the presets list the
+// tool ids directly; this table keeps the two surfaces named consistently
+// for trace display and template authors. The pinned catalog has no
+// ref-deleting, release, workflow or settings tool, so merge is the only
+// row until it is re-pinned.
+var githubOperations = map[string][]string{
+	GitHubToolPrefix + "merge_pull_request": {"merge-pull-request"},
+}
+
+// Operations returns the github/operation values a resolved GitHub MCP tool
+// id performs, or nil for reads, unrecognized and non-GitHub tools.
+func Operations(toolID string) []string {
+	operations := githubOperations[toolID]
+	if len(operations) == 0 {
+		return nil
+	}
+	return append([]string(nil), operations...)
+}
