@@ -502,7 +502,15 @@ func classifyGit(args []string, complete bool) cedareval.ShellProjectionV2 {
 	if !dryRun {
 		force := hasArg(options, "-f", "--force", "--mirror") || hasForceRefspec(refspecs)
 		if force {
-			facts = append(facts, "github/force-push=true", "git/force=true")
+			facts = append(facts, "github/force-push=true", "git/force=true", OperationFact(OperationForcePush))
+		}
+		// Lease pushes are a separate operation: block-github-force-push
+		// promises to allow them, protect-git-history forbids them.
+		if hasForceWithLease(options) {
+			facts = append(facts, OperationFact(OperationForcePushWithLease))
+		}
+		if hasArg(options, "-d", "--delete", "--prune", "--mirror") || hasDeleteRefspec(refspecs) {
+			facts = append(facts, OperationFact(OperationDeleteRef))
 		}
 	}
 	return projection("git", facts, features, complete)
@@ -605,11 +613,21 @@ func classifyGH(args []string, complete bool) cedareval.ShellProjectionV2 {
 		return classifyGHAPI(args[1:], complete)
 	}
 	key := args[0]
-	if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
-		key += "/" + args[1]
+	rest := args[1:]
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		key += "/" + rest[0]
+		rest = rest[1:]
+		// `repo deploy-key add` and `repo autolink create` carry their verb
+		// in a third word.
+		if ghNestedCommands[key] && len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+			key += "/" + rest[0]
+			rest = rest[1:]
+		}
 	}
 	if ghWriteCommands[key] {
-		return projection("gh", []string{"gh/command=" + key, "github/route=catalogued", "github/write=true"}, nil, complete)
+		facts := []string{"gh/command=" + key, "github/route=catalogued", "github/write=true"}
+		facts = append(facts, operationFacts(ghOperations(key, rest))...)
+		return projection("gh", facts, nil, complete)
 	}
 	if ghReadCommands[key] || ghReadCommands[args[0]] {
 		return projection("gh", []string{"gh/command=" + key, "github/route=catalogued"}, nil, complete)
@@ -709,13 +727,49 @@ func classifyGHAPI(args []string, complete bool) cedareval.ShellProjectionV2 {
 	if isWriteMethod(method) {
 		facts = append(facts, "github/write=true")
 	}
-	if method == "PATCH" && strings.Contains(path, "/git/refs") && containsForceField(fields) {
+	force := method == "PATCH" && strings.Contains(path, "/git/refs") && containsForceField(fields)
+	if force {
 		facts = append(facts, "github/force-push=true")
 	}
+	operations, features, literal := githubOperations(path, method, fields, force)
+	facts = append(facts, operationFacts(operations)...)
+	complete = complete && literal
 	if !complete {
 		facts = replaceFact(facts, "github/route=catalogued", FactRouteUnrecognized)
 	}
-	return projection("gh", facts, nil, complete)
+	return projection("gh", facts, features, complete)
+}
+
+// githubOperations derives operation facts for a literal REST or GraphQL
+// call from its route (see githubRouteOperations) or its literal mutation
+// text. Route matching runs even for an incomplete call: the path is known
+// even when the body is not. literal is false when the call is GraphQL and
+// its query text cannot be read, which makes the route unrecognized.
+func githubOperations(path, method string, bodies []string, force bool) (operations, features []string, literal bool) {
+	literal = true
+	if path == "" {
+		return nil, nil, literal
+	}
+	host, segments, ok := githubAPISegments(path)
+	if !ok {
+		return nil, nil, literal
+	}
+	if host == hostGitHubAPI && len(segments) == 1 && segments[0] == "graphql" {
+		query, found := graphqlQueryText(bodies)
+		if !found {
+			return nil, []string{FeatureGraphQLNotLiteral}, false
+		}
+		operations = graphqlOperations(query)
+		if len(operations) > 0 {
+			features = append(features, FeatureOperationFromGraphQL)
+		}
+		return operations, features, literal
+	}
+	operations = githubRouteOperations(host, method, segments, force, bodyHasField(bodies, "event", "APPROVE"))
+	if len(operations) > 0 {
+		features = append(features, FeatureOperationFromRoute)
+	}
+	return operations, features, literal
 }
 
 // gh api flags that only affect output or transport; they never change what
@@ -826,10 +880,17 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	if isWriteMethod(method) {
 		facts = append(facts, "github/write=true")
 	}
-	if method == "PATCH" && strings.Contains(parsed.Path, "/git/refs") && containsForceBody(bodies) {
+	force := method == "PATCH" && strings.Contains(parsed.Path, "/git/refs") && containsForceBody(bodies)
+	if force {
 		facts = append(facts, "github/force-push=true")
 	}
-	return projection("curl", facts, nil, complete)
+	operations, features, literal := githubOperations("https://"+host+parsed.EscapedPath(), method, bodies, force)
+	facts = append(facts, operationFacts(operations)...)
+	if !literal && complete {
+		complete = false
+		facts = replaceFact(facts, "github/route=catalogued", FactRouteUnrecognized)
+	}
+	return projection("curl", facts, features, complete)
 }
 
 var curlDataFlags = map[string]bool{"-d": true, "--data": true, "--data-raw": true, "--data-binary": true, "--data-urlencode": true, "--data-ascii": true, "--json": true, "-F": true, "--form": true, "--form-string": true}
@@ -957,7 +1018,8 @@ var ghWriteCommands = map[string]bool{
 	"label/clone": true, "label/create": true, "label/delete": true, "label/edit": true,
 	"pr/close": true, "pr/comment": true, "pr/create": true, "pr/edit": true, "pr/merge": true, "pr/ready": true, "pr/reopen": true, "pr/review": true,
 	"release/create": true, "release/delete": true, "release/delete-asset": true, "release/edit": true, "release/upload": true,
-	"repo/archive": true, "repo/create": true, "repo/delete": true, "repo/edit": true, "repo/fork": true, "repo/rename": true, "repo/sync": true,
+	"repo/archive": true, "repo/create": true, "repo/delete": true, "repo/edit": true, "repo/fork": true, "repo/rename": true, "repo/sync": true, "repo/unarchive": true,
+	"repo/autolink/create": true, "repo/autolink/delete": true, "repo/deploy-key/add": true, "repo/deploy-key/delete": true,
 	"run/cancel": true, "run/delete": true, "run/rerun": true,
 	"secret/delete": true, "secret/set": true, "variable/delete": true, "variable/set": true,
 	"workflow/disable": true, "workflow/enable": true, "workflow/run": true,
@@ -969,6 +1031,10 @@ var ghReadCommands = map[string]bool{
 	"pr/checks": true, "pr/diff": true, "pr/list": true, "pr/status": true, "pr/view": true,
 	"release/download": true, "release/list": true, "release/view": true,
 	"repo/clone": true, "repo/list": true, "repo/view": true,
+	"repo/autolink/list": true, "repo/autolink/view": true, "repo/deploy-key/list": true,
 	"run/list": true, "run/view": true, "run/watch": true, "search": true,
 	"secret/list": true, "status": true, "variable/list": true, "workflow/list": true, "workflow/view": true,
 }
+
+// ghNestedCommands take their verb as a third word (`repo deploy-key add`).
+var ghNestedCommands = map[string]bool{"repo/autolink": true, "repo/deploy-key": true}
