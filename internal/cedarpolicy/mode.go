@@ -32,7 +32,10 @@ func DeploymentClaimsEnforce(snapshot Snapshot) bool {
 	if legacy == nil {
 		legacy = snapshot.LegacyLastKnownGood
 	}
-	return legacy != nil && legacy.RolloutMode == cedareval.RolloutModeEnforce
+	if legacy != nil {
+		return legacy.RolloutMode == cedareval.RolloutModeEnforce
+	}
+	return snapshot.PersistedEnforce
 }
 
 // PersistedDeploymentClaimsEnforce reads only the rollout claim from a cache.
@@ -48,13 +51,26 @@ func PersistedDeploymentClaimsEnforce(path string) bool {
 	if err != nil || len(data) > MaxResponseBytes {
 		return false
 	}
-	var cached cacheFile
+	return cacheDataClaimsEnforce(data)
+}
+
+func cacheDataClaimsEnforce(data []byte) bool {
+	var cached struct {
+		Version    int   `json:"version"`
+		State      State `json:"state"`
+		Deployment *struct {
+			RolloutMode cedareval.RolloutMode `json:"rolloutMode"`
+		} `json:"deployment"`
+		LastGood *struct {
+			RolloutMode cedareval.RolloutMode `json:"rolloutMode"`
+		} `json:"lastGood"`
+	}
 	if err := json.Unmarshal(data, &cached); err != nil || (cached.Version != 1 && cached.Version != cacheFileVersion) {
 		return false
 	}
-	return DeploymentClaimsEnforce(Snapshot{
-		State:         cached.State,
-		Deployment:    cached.Deployment,
-		LastKnownGood: cached.LastGood,
-	})
+	if cached.State == StateDisabled || cached.State == StateNoActivePolicy {
+		return false
+	}
+	return cached.Deployment != nil && cached.Deployment.RolloutMode == cedareval.RolloutModeEnforce ||
+		cached.LastGood != nil && cached.LastGood.RolloutMode == cedareval.RolloutModeEnforce
 }

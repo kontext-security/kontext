@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 )
 
@@ -30,6 +31,10 @@ type CacheStatus struct {
 	Expired       bool
 	LastError     string
 	Invalid       bool
+	// CatalogMismatch marks a deployment compiled against a different tool
+	// catalog than this binary's (CLI/cloud version skew). Enforcement keeps
+	// running on it; the flag is operator-visible so the skew gets fixed.
+	CatalogMismatch bool
 }
 
 type Snapshot struct {
@@ -37,6 +42,7 @@ type Snapshot struct {
 	LastKnownGood       *Deployment
 	LegacyDeployment    *LegacyDeployment
 	LegacyLastKnownGood *LegacyDeployment
+	PersistedEnforce    bool
 	State               State
 	Status              CacheStatus
 }
@@ -67,14 +73,15 @@ type Cache struct {
 	path string
 	now  func() time.Time
 
-	mu             sync.RWMutex
-	state          State
-	fetched        time.Time
-	active         *Deployment
-	lastGood       *Deployment
-	legacyActive   *LegacyDeployment
-	legacyLastGood *LegacyDeployment
-	status         CacheStatus
+	mu               sync.RWMutex
+	state            State
+	fetched          time.Time
+	active           *Deployment
+	lastGood         *Deployment
+	legacyActive     *LegacyDeployment
+	legacyLastGood   *LegacyDeployment
+	persistedEnforce bool
+	status           CacheStatus
 }
 
 func NewCache(path string, _ time.Duration) *Cache {
@@ -96,6 +103,9 @@ func (c *Cache) Load() error {
 		}
 		return fmt.Errorf("cedar policy cache: read: %w", err)
 	}
+	c.mu.Lock()
+	c.persistedEnforce = cacheDataClaimsEnforce(data)
+	c.mu.Unlock()
 	var version struct {
 		Version int `json:"version"`
 	}
@@ -137,6 +147,8 @@ func (c *Cache) Load() error {
 	c.lastGood = cloneDeployment(file.LastGood)
 	c.legacyActive = nil
 	c.legacyLastGood = nil
+	c.persistedEnforce = file.Deployment != nil && file.Deployment.RolloutMode == cedareval.RolloutModeEnforce ||
+		file.LastGood != nil && file.LastGood.RolloutMode == cedareval.RolloutModeEnforce
 	if c.lastGood == nil && file.Deployment != nil {
 		c.lastGood = cloneDeployment(file.Deployment)
 	}
@@ -146,8 +158,21 @@ func (c *Cache) Load() error {
 		Stale:     true,
 		LastError: "persisted deployment not yet confirmed",
 	}
+	if catalogMismatch(file.Deployment, file.LastGood) {
+		c.status.CatalogMismatch = true
+		c.status.LastError = "persisted deployment was compiled against a different tool catalog (CLI/cloud version skew); enforcing it until a refresh replaces it"
+	}
 	c.mu.Unlock()
 	return nil
+}
+
+func catalogMismatch(deployments ...*Deployment) bool {
+	for _, deployment := range deployments {
+		if deployment != nil && !deployment.MatchesToolCatalog() {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Cache) loadLegacy(data []byte) error {
@@ -180,6 +205,8 @@ func (c *Cache) loadLegacy(data []byte) error {
 	c.lastGood = nil
 	c.legacyActive = cloneLegacyDeployment(file.Deployment)
 	c.legacyLastGood = cloneLegacyDeployment(file.LastGood)
+	c.persistedEnforce = file.Deployment != nil && file.Deployment.RolloutMode == cedareval.RolloutModeEnforce ||
+		file.LastGood != nil && file.LastGood.RolloutMode == cedareval.RolloutModeEnforce
 	if c.legacyLastGood == nil && file.Deployment != nil {
 		c.legacyLastGood = cloneLegacyDeployment(file.Deployment)
 	}
@@ -246,13 +273,16 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	c.lastGood = cloneDeployment(file.LastGood)
 	c.legacyActive = nil
 	c.legacyLastGood = nil
+	c.persistedEnforce = file.Deployment != nil && file.Deployment.RolloutMode == cedareval.RolloutModeEnforce ||
+		file.LastGood != nil && file.LastGood.RolloutMode == cedareval.RolloutModeEnforce
 	if c.lastGood == nil && file.Deployment != nil {
 		c.lastGood = cloneDeployment(file.Deployment)
 	}
 	c.status = CacheStatus{
-		State:         file.State,
-		FetchedAt:     fetchedAt,
-		LastAttemptAt: fetchedAt,
+		State:           file.State,
+		FetchedAt:       fetchedAt,
+		LastAttemptAt:   fetchedAt,
+		CatalogMismatch: catalogMismatch(file.Deployment, file.LastGood),
 	}
 	c.mu.Unlock()
 	return nil
@@ -294,6 +324,7 @@ func (c *Cache) Current() Snapshot {
 	lastGood := cloneDeployment(c.lastGood)
 	legacyActive := cloneLegacyDeployment(c.legacyActive)
 	legacyLastGood := cloneLegacyDeployment(c.legacyLastGood)
+	persistedEnforce := c.persistedEnforce
 	status := c.status
 	c.mu.RUnlock()
 
@@ -308,6 +339,7 @@ func (c *Cache) Current() Snapshot {
 		LastKnownGood:       lastGood,
 		LegacyDeployment:    legacyActive,
 		LegacyLastKnownGood: legacyLastGood,
+		PersistedEnforce:    persistedEnforce,
 		State:               state,
 		Status:              status,
 	}
@@ -410,7 +442,8 @@ type Refresher struct {
 	// log-invisible.
 	Diagnostic diagnostic.Logger
 
-	lastFailure string
+	lastFailure   string
+	catalogWarned bool
 }
 
 func (r *Refresher) Refresh(ctx context.Context) error {
@@ -441,7 +474,19 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 		return err
 	}
 	r.recovered()
+	r.warnCatalogMismatch()
 	return nil
+}
+
+// warnCatalogMismatch logs once per skew episode that the fetched policy was
+// compiled against another tool catalog. It is not a refresh failure: the
+// policy is active, but the endpoint and the cloud disagree on tool ids.
+func (r *Refresher) warnCatalogMismatch() {
+	mismatch := r.Cache.Current().Status.CatalogMismatch
+	if mismatch && !r.catalogWarned {
+		diagnostic.LogAlways(r.Diagnostic, "cedar policy was compiled against a different tool catalog than this CLI (version skew); enforcing it as-is until the CLI or the cloud catches up\n")
+	}
+	r.catalogWarned = mismatch
 }
 
 func (r *Refresher) Run(ctx context.Context) {

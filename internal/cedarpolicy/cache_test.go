@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,6 +170,88 @@ func TestCacheCorruptPersistedFileDoesNotLoad(t *testing.T) {
 	}
 	if snapshot := cache.Current(); snapshot.Deployment != nil || !snapshot.Status.Invalid {
 		t.Fatalf("corrupt cache snapshot = %#v", snapshot)
+	}
+}
+
+// A daemon restart after a CLI or cloud upgrade must keep enforcing the
+// persisted policy even when its tool catalog digest no longer matches this
+// binary: the skew is flagged, not turned into a load failure that would
+// either deny every hook or drop the enforce claim.
+func TestCacheLoadsEnforcingDeploymentWhenCatalogChanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.json")
+	now := time.Now().UTC()
+	deployment := testDeployment(t, cedareval.RolloutModeEnforce)
+	deployment.ToolCatalogDigest = strings.Repeat("0", 64)
+	deployment.DeploymentIdentity = testDeploymentIdentity(t, deployment)
+	data, err := json.Marshal(cacheFile{Version: cacheFileVersion, State: StateSuccess, FetchedAt: now.Format(time.RFC3339Nano), Deployment: &deployment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := NewCache(path, time.Hour)
+	if err := cache.Load(); err != nil {
+		t.Fatalf("Load() error = %v, want catalog skew tolerated", err)
+	}
+	snapshot := cache.Current()
+	if snapshot.Deployment == nil || snapshot.Deployment.DeploymentIdentity != deployment.DeploymentIdentity {
+		t.Fatalf("snapshot = %#v, want the persisted deployment active", snapshot)
+	}
+	if !snapshot.PersistedEnforce || !DeploymentClaimsEnforce(snapshot) {
+		t.Fatalf("snapshot = %#v, want persisted enforce claim", snapshot)
+	}
+	if snapshot.Status.Invalid || !snapshot.Status.Stale || !snapshot.Status.CatalogMismatch {
+		t.Fatalf("status = %#v, want stale catalog-mismatch without invalid", snapshot.Status)
+	}
+	if !strings.Contains(snapshot.Status.LastError, "tool catalog") {
+		t.Fatalf("LastError = %q, want catalog skew explanation", snapshot.Status.LastError)
+	}
+}
+
+func TestCacheApplyFlagsCatalogMismatchWithoutRejecting(t *testing.T) {
+	cache := NewCache(filepath.Join(t.TempDir(), "cache.json"), time.Hour)
+	deployment := testDeployment(t, cedareval.RolloutModeEnforce)
+	deployment.ToolCatalogDigest = strings.Repeat("0", 64)
+	deployment.DeploymentIdentity = testDeploymentIdentity(t, deployment)
+	if err := cache.Apply(FetchResult{State: StateSuccess, Deployment: &deployment}, time.Now().UTC()); err != nil {
+		t.Fatalf("Apply() error = %v, want skewed catalog accepted", err)
+	}
+	snapshot := cache.Current()
+	if snapshot.Deployment == nil || !snapshot.Status.CatalogMismatch || snapshot.Status.Stale {
+		t.Fatalf("snapshot = %#v, want active deployment flagged as catalog mismatch", snapshot)
+	}
+
+	matching := testDeployment(t, cedareval.RolloutModeEnforce)
+	if err := cache.Apply(FetchResult{State: StateSuccess, Deployment: &matching}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if status := cache.Current().Status; status.CatalogMismatch {
+		t.Fatalf("status = %#v, want mismatch cleared by a matching deployment", status)
+	}
+}
+
+func TestCacheStillRejectsCorruptDeploymentWithSkewedCatalog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.json")
+	deployment := testDeployment(t, cedareval.RolloutModeEnforce)
+	deployment.ToolCatalogDigest = strings.Repeat("0", 64)
+	deployment.PolicySet.Source += " forbid(principal, action, resource);"
+	data, err := json.Marshal(cacheFile{Version: cacheFileVersion, State: StateSuccess, FetchedAt: time.Now().UTC().Format(time.RFC3339Nano), Deployment: &deployment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cache := NewCache(path, time.Hour)
+	if err := cache.Load(); err == nil {
+		t.Fatal("Load() error = nil, want tampered policy rejected")
+	} else {
+		cache.MarkInvalid(err)
+	}
+	if snapshot := cache.Current(); snapshot.Deployment != nil || !snapshot.Status.Invalid || !snapshot.PersistedEnforce {
+		t.Fatalf("snapshot = %#v, want invalid cache that still claims enforce", snapshot)
 	}
 }
 

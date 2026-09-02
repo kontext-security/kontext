@@ -10,6 +10,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/toolcatalog"
 )
 
 const (
@@ -148,6 +149,14 @@ func (d Deployment) Validate() error {
 		return errors.New("cedar policy: deployment identity does not match response metadata")
 	}
 	return nil
+}
+
+// MatchesToolCatalog reports whether the deployment was compiled against
+// the tool catalog this binary carries. A mismatch is version skew between
+// the CLI and the cloud, not corruption: the policy still evaluates against
+// the ids this endpoint knows, so it is flagged rather than rejected.
+func (d Deployment) MatchesToolCatalog() bool {
+	return d.ToolCatalogDigest == toolcatalog.Digest()
 }
 
 type State string

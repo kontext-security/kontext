@@ -42,7 +42,7 @@ const cedarTestSchema = `namespace Kontext {
   };
 }`
 
-const cedarTestToolCatalogDigest = "f86247e4b2a3f0121a482c1ba9cc8f6913e4d22f73478b66237bbdbe5ff26b92"
+const cedarTestToolCatalogDigest = "cf87ee7a167f1f07bdc41450467708f832c9d8c4aaf20651a5d0df070d3de436"
 
 func cedarHookEvent(tool string, input map[string]any) risk.HookEvent {
 	return risk.HookEvent{SessionID: "session-1", Agent: "claude", HookEventName: "PreToolUse", ToolName: tool, ToolInput: input}
@@ -361,6 +361,23 @@ func TestCedarRemoteFollowsEnforceRollout(t *testing.T) {
 	}
 }
 
+func TestCedarRemoteFailsClosedWhenPersistedEnforceCacheIsIncompatible(t *testing.T) {
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{
+		PersistedEnforce: true,
+		State:            cedarpolicy.StateSuccess,
+		Status:           cedarpolicy.CacheStatus{Invalid: true, Stale: true},
+	}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Read", map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.calls != 0 || decision.Decision != risk.DecisionDeny || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
+		t.Fatalf("calls = %d decision = %#v, want persisted enforce claim to fail closed", current.calls, decision)
+	}
+}
+
 func TestCedarStaticEvaluatesVersionOneCacheDuringUpgrade(t *testing.T) {
 	policy := `@id("permit") permit(principal, action, resource);`
 	principal := cedareval.EvaluationPrincipal{EntityType: cedareval.PrincipalEntityType, EntityID: "ins_12345678901234567890123456789012"}
@@ -405,6 +422,366 @@ func TestCedarRemoteStaysObserveUnderObserveRollout(t *testing.T) {
 	}
 	if decision.Cedar == nil || decision.Cedar.AppliedRolloutMode != cedareval.RolloutModeObserve {
 		t.Fatalf("Cedar evidence = %#v, want dry-run observe", decision.Cedar)
+	}
+}
+
+const githubForcePushPolicy = `@id("allow")
+permit(principal, action == Kontext::Action::"ToolUse", resource);
+
+@id("github-block-force-push")
+forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"shell")
+when { context.shell.facts.contains("github/force-push=true") };`
+
+func TestCedarShellForcePushObserveAndEnforce(t *testing.T) {
+	event := cedarHookEvent("Bash", map[string]any{"command": "git status; git push -f origin main"})
+	for _, test := range []struct {
+		name        string
+		enforcement CedarEnforcementSource
+		want        risk.Decision
+	}{
+		{"observe", CedarEnforcementOff, risk.DecisionAllow},
+		{"enforce", CedarEnforcementRemote, risk.DecisionDeny},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+			current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, ReasonCode: "current_allow", RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
+			provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, test.enforcement)
+
+			decision, err := provider.DecideHook(context.Background(), event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != test.want {
+				t.Fatalf("decision = %q, want %q", decision.Decision, test.want)
+			}
+			if decision.Cedar == nil || decision.Cedar.Mapping.DerivedCedarAction != cedareval.DerivedCedarActionDeny {
+				t.Fatalf("Cedar evidence = %#v, want force-push deny", decision.Cedar)
+			}
+		})
+	}
+}
+
+func TestCedarEnforceDenyReasonNamesRule(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": "git status; git push -f origin main"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionDeny || decision.Reason != "Blocked by rule github-block-force-push" {
+		t.Fatalf("decision = %#v, want deny naming the forbid rule", decision)
+	}
+	if ids := decision.Cedar.Mapping.DeterminingPolicyIDs; len(ids) != 1 || ids[0] != "github-block-force-push" {
+		t.Fatalf("determining policy ids = %v, want only the forbid that fired", ids)
+	}
+
+	allowed, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": "git status"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed.Decision != risk.DecisionAllow || allowed.Reason != "local Cedar policy decision" {
+		t.Fatalf("decision = %#v, want generic wording on allow", allowed)
+	}
+}
+
+func TestCedarEnforceKeepsGenericReasonWithoutRule(t *testing.T) {
+	provider := newCedarPolicyProvider(&countingHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: cedarpolicy.StateUnauthorized}}, CedarEnforcementStatic)
+	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Read", map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionDeny || decision.Reason != "local Cedar policy decision" {
+		t.Fatalf("decision = %#v, want generic fail-closed wording", decision)
+	}
+}
+
+func TestCedarEvidenceCarriesToolIDAndShellFacts(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeObserve, githubForcePushPolicy)
+	current := staticHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementOff)
+
+	shell, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": "git push -fu origin main"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shell.Decision != risk.DecisionAllow || shell.Cedar.AppliedRolloutMode != cedareval.RolloutModeObserve {
+		t.Fatalf("decision = %#v, want observe to keep current authority", shell)
+	}
+	if shell.Cedar.ToolID != cedareval.ToolShellV2 || len(shell.Cedar.Shell) != 1 || shell.Cedar.Shell[0].Program != "git" {
+		t.Fatalf("Cedar evidence = %#v, want shell tool id and one git projection", shell.Cedar)
+	}
+	if facts := shell.Cedar.Shell[0].Facts; !containsString(facts, "github/force-push=true") {
+		t.Fatalf("shell facts = %v, want force-push fact in observe evidence", facts)
+	}
+	if shell.Cedar.Mapping.DerivedCedarAction != cedareval.DerivedCedarActionDeny {
+		t.Fatalf("mapping = %#v, want observed deny", shell.Cedar.Mapping)
+	}
+
+	mcp, err := provider.DecideHook(context.Background(), cedarHookEvent("mcp__gh__get_me", map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mcp.Cedar.ToolID != "github-mcp/get_me" || mcp.Cedar.Shell != nil {
+		t.Fatalf("Cedar evidence = %#v, want resolved GitHub tool id without shell", mcp.Cedar)
+	}
+
+	other, err := provider.DecideHook(context.Background(), cedarHookEvent("Read", map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Cedar.ToolID != cedareval.ToolUnknownV2 {
+		t.Fatalf("Cedar evidence = %#v, want unknown tool id", other.Cedar)
+	}
+}
+
+func TestCedarEvidenceResolvesToolWithoutDeployment(t *testing.T) {
+	current := staticHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: cedarpolicy.StateUnavailable}}, CedarEnforcementRemote)
+	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": "git push -f origin main"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Cedar.ToolID != cedareval.ToolShellV2 || len(decision.Cedar.Shell) != 1 {
+		t.Fatalf("Cedar evidence = %#v, want tool id and projections even before the first deployment", decision.Cedar)
+	}
+}
+
+// TestCedarEnforceKeepsRunningOnCatalogSkew is the daemon-restart-after-
+// upgrade case: the cached deployment carries another catalog digest, and the
+// preset must still deny what it was written to deny.
+func TestCedarEnforceKeepsRunningOnCatalogSkew(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+	deployment.ToolCatalogDigest = "0000000000000000000000000000000000000000000000000000000000000000"
+	if deployment.MatchesToolCatalog() {
+		t.Fatal("test deployment must carry a skewed catalog digest")
+	}
+	snapshot := cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{Stale: true, CatalogMismatch: true}}
+	provider := newCedarPolicyProvider(&countingHookPolicy{}, staticCedarSnapshots{snapshot: snapshot}, CedarEnforcementRemote)
+
+	denied, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": "git push -f origin main"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denied.Decision != risk.DecisionDeny || denied.Reason != "Blocked by rule github-block-force-push" {
+		t.Fatalf("decision = %#v, want enforced deny on skewed catalog", denied)
+	}
+	allowed, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": "git status"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed.Decision != risk.DecisionAllow {
+		t.Fatalf("decision = %#v, want enforced allow on skewed catalog", allowed)
+	}
+}
+
+// TestCedarForcePushProbeCorpus runs the probe commands from the live hook
+// session through the force-push preset shape. Every bypass must now deny.
+func TestCedarForcePushProbeCorpus(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+
+	denied := []string{
+		"git push -f origin main",
+		"git push -fu origin main",
+		"git push -uf origin main",
+		"git push origin +main",
+		"git push origin +HEAD:main",
+		`\git push -f origin main`,
+		"exec git push -f origin main",
+		"timeout 30 git push -f origin main",
+		"bash -c 'git push -f origin main'",
+		`sh -c "git push --force origin main"`,
+		`eval "git push -f origin main"`,
+		"nohup git push -f origin main",
+		"nice -n 5 git push -f origin main",
+		"time git push -f origin main",
+		"echo main | xargs git push -f origin",
+		"git -c alias.x=y push -f origin main",
+		"git --no-optional-locks push -f origin main",
+		"git -p push -f origin main",
+		"git push -f $REMOTE main",
+		"git status; git push -f origin main",
+	}
+	for _, command := range denied {
+		decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": command}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Decision != risk.DecisionDeny {
+			t.Errorf("%q: decision = %#v, want deny", command, decision)
+		}
+	}
+
+	allowed := []string{
+		"git status",
+		"git push origin main",
+		"git push --force-with-lease origin main",
+		"git push --dry-run -f origin main",
+		"git push -fn origin main",
+		"bash -c 'git status'",
+		"command -v git",
+		"gh pr view 42",
+	}
+	for _, command := range allowed {
+		decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": command}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Decision != risk.DecisionAllow {
+			t.Errorf("%q: decision = %#v, want allow", command, decision)
+		}
+	}
+}
+
+// TestCedarParseFailureIsPolicyDecided keeps unparseable commands out of the
+// engine-error path: the projection reports the failure as a fact and the
+// force-push preset alone does not deny them.
+func TestCedarParseFailureIsPolicyDecided(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": "git push -f origin main; ("}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionAllow || decision.Cedar.EngineErrorCount != 0 {
+		t.Fatalf("decision = %#v, want policy-decided allow without engine error", decision)
+	}
+	if len(decision.Cedar.Shell) != 1 || !containsString(decision.Cedar.Shell[0].Features, "shell/parse-error") {
+		t.Fatalf("shell evidence = %#v, want parse-error feature", decision.Cedar.Shell)
+	}
+
+	strict := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy+`
+@id("github-block-unparseable")
+forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"shell")
+when { context.shell.features.contains("shell/parse-error") };`)
+	strictProvider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &strict, LastKnownGood: &strict, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+	decision, err = strictProvider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": "git push -f origin main; ("}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionDeny || decision.Reason != "Blocked by rule github-block-unparseable" {
+		t.Fatalf("decision = %#v, want strict policy to deny unparseable commands", decision)
+	}
+}
+
+// githubPresetsPolicy mirrors the three cloud GitHub presets: force pushes,
+// writes, and unrecognized GitHub operations. A typo in an unrelated command
+// or a dynamic program must not trip any of them.
+const githubPresetsPolicy = `@id("allow")
+permit(principal, action == Kontext::Action::"ToolUse", resource);
+
+@id("block-github-force-push")
+forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"shell")
+when { context.shell.facts.contains("github/force-push=true") };
+
+@id("block-github-writes")
+forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"shell")
+when { context.shell.facts.contains("github/write=true") };
+
+@id("block-unrecognized-github-operations")
+forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"shell")
+when { context.shell.facts.contains("github/route=unrecognized") };`
+
+func TestCedarGitHubPresetsIgnoreUnrelatedFailures(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubPresetsPolicy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+
+	allowed := []string{
+		`echo "unterminated`,
+		"ls -la $DIR",
+		`"$HOME/bin/x" --flag`,
+		"$GIT status",
+		`bash -c "$CMD"`,
+		"python -c 'print(1)'",
+		"git status",
+		"gh pr view 42",
+	}
+	for _, command := range allowed {
+		decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": command}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Decision != risk.DecisionAllow {
+			t.Errorf("%q: decision = %#v, want allow", command, decision)
+		}
+	}
+
+	denied := map[string]string{
+		"git --future-global push -f origin main": "block-unrecognized-github-operations",
+		"git -c alias.p='push -f' p":              "block-unrecognized-github-operations",
+		"git push $OPTS origin main":              "block-github-writes, block-unrecognized-github-operations",
+		"gh weird-command":                        "block-unrecognized-github-operations",
+		"git push origin main":                    "block-github-writes",
+		"git push -f origin main":                 "block-github-force-push, block-github-writes",
+	}
+	for command, rules := range denied {
+		decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": command}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Decision != risk.DecisionDeny || decision.Reason != "Blocked by rule "+rules {
+			t.Errorf("%q: decision = %#v, want deny by %s", command, decision, rules)
+		}
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCedarForceWithLeaseIsNotForcePush(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+
+	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": "git push --force-with-lease origin main"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionAllow {
+		t.Fatalf("decision = %#v, want allow", decision)
+	}
+}
+
+func TestCedarGitHubMCPUsesPinnedToolIDs(t *testing.T) {
+	policy := `@id("allow") permit(principal, action == Kontext::Action::"ToolUse", resource);
+@id("github-read-only") forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"github-mcp/create_issue");
+@id("github-block-unrecognized") forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"github-mcp/unrecognized");`
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, policy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+
+	tests := []struct {
+		name  string
+		tool  string
+		input map[string]any
+		want  risk.Decision
+	}{
+		{"known read", "mcp__github__get_me", map[string]any{}, risk.DecisionAllow},
+		{"known write", "mcp__github__create_issue", map[string]any{"owner": "acme", "repo": "api", "title": "bug"}, risk.DecisionDeny},
+		{"broken known schema", "mcp__github__create_issue", map[string]any{"owner": "acme"}, risk.DecisionDeny},
+		{"new GitHub tool", "mcp__github__future_tool", map[string]any{}, risk.DecisionDeny},
+		{"custom MCP", "mcp__custom__future_tool", map[string]any{}, risk.DecisionAllow},
+		{"renamed server known write", "mcp__gh-enterprise__create_issue", map[string]any{"owner": "acme", "repo": "api", "title": "bug"}, risk.DecisionDeny},
+		{"renamed server known read", "mcp__gh-enterprise__get_me", map[string]any{}, risk.DecisionAllow},
+		{"renamed server schema drift", "mcp__gh-enterprise__push_files", map[string]any{"owner": "o", "repo": "r", "branch": "main", "files": []any{}}, risk.DecisionDeny},
+		{"default server schema drift", "mcp__github__push_files", map[string]any{"owner": "o", "repo": "r", "branch": "main", "files": []any{}}, risk.DecisionDeny},
+		{"unrelated server same-named tool", "mcp__linear__create_issue", map[string]any{"teamId": "T1", "title": "bug"}, risk.DecisionAllow},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decision, err := provider.DecideHook(context.Background(), cedarHookEvent(test.tool, test.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != test.want {
+				t.Fatalf("decision = %#v, want %q", decision, test.want)
+			}
+		})
 	}
 }
 

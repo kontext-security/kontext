@@ -130,6 +130,11 @@ type CedarEvidence struct {
 	CacheExpired           bool                          `json:"cacheExpired"`
 	CacheInvalid           bool                          `json:"cacheInvalid"`
 	EvaluatorVersion       string                        `json:"evaluatorVersion"`
+	// ToolID is the catalog identity the hook resolved to (shell, a pinned
+	// GitHub MCP tool, or unknown) and Shell the projections a shell command
+	// was evaluated as. Together they show what the policy actually saw.
+	ToolID string                        `json:"toolId,omitempty"`
+	Shell  []cedareval.ShellProjectionV2 `json:"shell,omitempty"`
 }
 
 // ClassifierAnnotation is one action's risk annotation. AgentTask and the

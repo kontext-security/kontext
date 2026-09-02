@@ -3,12 +3,16 @@ package server
 import (
 	"context"
 	"errors"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/shellprojection"
+	"github.com/kontext-security/kontext/internal/toolcatalog"
 )
 
 const cedarEvaluatorVersion = "cedar-go/v1.8.0"
@@ -126,6 +130,11 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	}
 	outcome := cedareval.EvaluationOutcome{State: cedareval.EvaluationStateFailed, Reason: cedareval.ReasonPolicyMissing}
 	var principal *cedareval.EvaluationPrincipal
+	// Resolve the tool before any branch so the evidence always says what
+	// policy saw (or would have seen), including in observe mode.
+	toolID, projections := resolveTool(event)
+	evidence.ToolID = toolID
+	evidence.Shell = projections
 
 	metadata := snapshot.Deployment
 	if metadata == nil {
@@ -147,8 +156,8 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 			outcome.Reason = cedareval.ReasonInvalidCachedPolicy
 			evidence.EngineErrorCount = 1
 		} else {
-			input := cedarInputV2(principalValue, event)
-			if result, evaluateErr := evaluator.EvaluateV2(input); evaluateErr != nil {
+			inputs := cedarInputsV2(principalValue, event, toolID, projections)
+			if result, evaluateErr := evaluateAll(evaluator, inputs); evaluateErr != nil {
 				var conversionErr *cedareval.ConversionError
 				if errors.As(evaluateErr, &conversionErr) {
 					outcome.Reason = cedareval.ReasonRequestConversionFailed
@@ -306,7 +315,20 @@ func legacyDeployment(snapshot cedarpolicy.Snapshot) *cedarpolicy.LegacyDeployme
 	return snapshot.LegacyLastKnownGood
 }
 
-func cedarInputV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent) cedareval.ToolUseInputV2 {
+// resolveTool maps a hook event to its catalog tool id. Shell commands are
+// projected into one entry per call; every other tool is either a pinned
+// GitHub MCP tool or unknown.
+func resolveTool(event risk.HookEvent) (string, []cedareval.ShellProjectionV2) {
+	if event.ToolName == "Bash" {
+		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput))
+	}
+	if toolID, github := toolcatalog.Resolve(event.ToolName, event.ToolInput); github {
+		return toolID, nil
+	}
+	return cedareval.ToolUnknownV2, nil
+}
+
+func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent, toolID string, projections []cedareval.ShellProjectionV2) []cedareval.ToolUseInputV2 {
 	agentID := ""
 	switch event.Agent {
 	case "claude", "claude-code", cedareval.AgentClaudeCodeV2:
@@ -314,23 +336,60 @@ func cedarInputV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent)
 	case "codex", cedareval.AgentCodexV2:
 		agentID = cedareval.AgentCodexV2
 	}
-	input := cedareval.ToolUseInputV2{
+	base := cedareval.ToolUseInputV2{
 		Version:    cedareval.RequestContractVersionV2,
 		EndpointID: principal.EntityID,
 		AgentID:    agentID,
 		SessionID:  event.SessionID,
-		ToolID:     cedareval.ToolUnknownV2,
+		ToolID:     toolID,
 		ToolInput:  event.ToolInput,
 	}
-	if event.ToolName == "Bash" {
-		input.ToolID = cedareval.ToolShellV2
-		input.Shell = &cedareval.ShellProjectionV2{
-			Version:       1,
-			Program:       "unknown",
-			ParseComplete: false,
+	if toolID != cedareval.ToolShellV2 {
+		return []cedareval.ToolUseInputV2{base}
+	}
+	inputs := make([]cedareval.ToolUseInputV2, len(projections))
+	for i := range projections {
+		inputs[i] = base
+		inputs[i].Shell = &projections[i]
+	}
+	return inputs
+}
+
+// evaluateAll evaluates one input per shell call and combines them: a single
+// deny denies the command. The determining policies of a combined deny are
+// only the forbids that fired, so the deny reason can name the rule instead
+// of the permits that covered the harmless calls.
+func evaluateAll(evaluator *cedareval.Evaluator, inputs []cedareval.ToolUseInputV2) (cedareval.Result, error) {
+	combined := cedareval.Result{Decision: cedareval.DecisionAllow}
+	permitIDs := map[string]struct{}{}
+	forbidIDs := map[string]struct{}{}
+	for _, input := range inputs {
+		result, err := evaluator.EvaluateV2(input)
+		if err != nil {
+			return cedareval.Result{}, err
+		}
+		policyIDs := permitIDs
+		if result.Decision == cedareval.DecisionDeny {
+			combined.Decision = cedareval.DecisionDeny
+			policyIDs = forbidIDs
+		}
+		combined.Ask = combined.Ask || result.Ask
+		combined.ContextDiagnostics = append(combined.ContextDiagnostics, result.ContextDiagnostics...)
+		combined.EngineDiagnostics.Errors = append(combined.EngineDiagnostics.Errors, result.EngineDiagnostics.Errors...)
+		combined.EngineDiagnostics.Reasons = append(combined.EngineDiagnostics.Reasons, result.EngineDiagnostics.Reasons...)
+		for _, policyID := range result.DeterminingPolicyIDs {
+			policyIDs[policyID] = struct{}{}
 		}
 	}
-	return input
+	determining := permitIDs
+	if combined.Decision == cedareval.DecisionDeny {
+		determining = forbidIDs
+	}
+	for policyID := range determining {
+		combined.DeterminingPolicyIDs = append(combined.DeterminingPolicyIDs, policyID)
+	}
+	sort.Strings(combined.DeterminingPolicyIDs)
+	return combined, nil
 }
 
 func executionAction(decision risk.Decision) cedareval.EffectiveExecutionAction {
@@ -355,7 +414,7 @@ func isPrincipalState(state cedarpolicy.State) bool {
 
 func applyCedarDecision(decision *risk.RiskDecision, mapping cedareval.DecisionMapping) {
 	decision.ReasonCode = string(mapping.EffectiveReasonCode)
-	decision.Reason = "local Cedar policy decision"
+	decision.Reason = cedarDecisionReason(mapping)
 	decision.RiskEvent.ReasonCode = decision.ReasonCode
 	decision.RiskEvent.DecisionStage = "cedar_policy"
 	if mapping.EffectiveExecutionAction == cedareval.EffectiveExecutionActionDeny {
@@ -365,4 +424,17 @@ func applyCedarDecision(decision *risk.RiskDecision, mapping cedareval.DecisionM
 	}
 	decision.Decision = risk.DecisionAllow
 	decision.RiskEvent.Decision = risk.DecisionAllow
+}
+
+// cedarDecisionReason names the forbid rule (its @id) behind an enforced
+// deny, which is what the agent and the operator see in the hook message.
+// Denies without a rule (enforcement not ready, engine errors, unavailable
+// ask) keep the generic wording.
+func cedarDecisionReason(mapping cedareval.DecisionMapping) string {
+	if mapping.EffectiveExecutionAction == cedareval.EffectiveExecutionActionDeny &&
+		mapping.DerivedCedarAction == cedareval.DerivedCedarActionDeny &&
+		len(mapping.DeterminingPolicyIDs) > 0 {
+		return "Blocked by rule " + strings.Join(mapping.DeterminingPolicyIDs, ", ")
+	}
+	return "local Cedar policy decision"
 }

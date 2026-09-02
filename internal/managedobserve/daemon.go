@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
@@ -160,6 +161,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err := cedarCache.Load(); err != nil {
 		cedarCache.MarkInvalid(err)
 		opts.Diagnostic.Printf("cedar policy cache load: %v\n", err)
+	} else if status := cedarCache.Current().Status; status.CatalogMismatch {
+		opts.Diagnostic.Printf("cedar policy cache load: %s\n", status.LastError)
 	}
 	cedarClient, err := cedarpolicy.NewClient(loadedConfig.Config.CloudURL, opts.PolicyHTTPClient)
 	if err != nil {
@@ -239,7 +242,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	host.SetGuardrailLLMEnabled(guardrailLLMEnabled(endpointConfigCache.Current()))
 
 	policyCtx, stopPolicyRefresh := context.WithCancel(ctx)
-	defer stopPolicyRefresh()
+	var background sync.WaitGroup
 	cedarRefresher := cedarpolicy.Refresher{
 		Client:     cedarClient,
 		Cache:      cedarCache,
@@ -254,7 +257,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		InstallationID: installationState.InstallationID,
 		Interval:       opts.PolicyRefreshInterval,
 	}
-	go cedarRefresher.Run(policyCtx)
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		cedarRefresher.Run(policyCtx)
+	}()
 	endpointConfigRefresher := endpointconfig.Refresher{
 		Client:     endpointConfigClient,
 		Cache:      endpointConfigCache,
@@ -273,13 +280,23 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			host.SetGuardrailLLMEnabled(guardrailLLMEnabled(snapshot))
 		},
 	}
-	go endpointConfigRefresher.Run(policyCtx)
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		endpointConfigRefresher.Run(policyCtx)
+	}()
 
 	streamCtx, stopStream := context.WithCancel(ctx)
-	defer stopStream()
 	streamErr := make(chan error, 1)
+	background.Add(1)
 	go func() {
+		defer background.Done()
 		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID)
+	}()
+	defer func() {
+		stopPolicyRefresh()
+		stopStream()
+		background.Wait()
 	}()
 
 	startUpdater := opts.HomebrewUpdater

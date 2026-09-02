@@ -43,6 +43,22 @@ func TestDeploymentValidate(t *testing.T) {
 			},
 			wantErr: "schema hash",
 		},
+		{
+			// Version skew between CLI and cloud is flagged by the cache,
+			// not rejected here: the identity still binds the digest.
+			name: "tool catalog digest skew",
+			mutate: func(d *Deployment) {
+				d.ToolCatalogDigest = strings.Repeat("0", 64)
+				d.DeploymentIdentity = testDeploymentIdentity(t, *d)
+			},
+		},
+		{
+			name: "malformed tool catalog digest",
+			mutate: func(d *Deployment) {
+				d.ToolCatalogDigest = "not-a-digest"
+			},
+			wantErr: "hash encoding",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -53,6 +69,9 @@ func TestDeploymentValidate(t *testing.T) {
 			err := deployment.Validate()
 			if test.wantErr == "" && err != nil {
 				t.Fatalf("Validate() error = %v", err)
+			}
+			if test.wantErr == "" && deployment.MatchesToolCatalog() != (deployment.ToolCatalogDigest == testToolCatalogDigest) {
+				t.Fatalf("MatchesToolCatalog() = %t for digest %q", deployment.MatchesToolCatalog(), deployment.ToolCatalogDigest)
 			}
 			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
 				t.Fatalf("Validate() error = %v, want containing %q", err, test.wantErr)

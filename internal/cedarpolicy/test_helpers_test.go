@@ -24,7 +24,7 @@ const testSchema = `namespace Kontext {
   };
 }`
 
-const testToolCatalogDigest = "f86247e4b2a3f0121a482c1ba9cc8f6913e4d22f73478b66237bbdbe5ff26b92"
+const testToolCatalogDigest = "cf87ee7a167f1f07bdc41450467708f832c9d8c4aaf20651a5d0df070d3de436"
 
 func testDeployment(t *testing.T, mode cedareval.RolloutMode) Deployment {
 	t.Helper()
@@ -56,6 +56,25 @@ func testDeployment(t *testing.T, mode cedareval.RolloutMode) Deployment {
 		EvaluationPrincipal:    principal,
 		DeploymentIdentity:     identity,
 	}
+}
+
+// testDeploymentIdentity recomputes the identity after a test mutates a
+// deployment's metadata (for example its tool catalog digest).
+func testDeploymentIdentity(t *testing.T, d Deployment) string {
+	t.Helper()
+	identity, err := cedareval.ComputeDeploymentIdentityV2(cedareval.DeploymentIdentityV2Input{
+		ResponseVersion:        d.ResponseVersion,
+		RequestContractVersion: d.RequestContractVersion,
+		PolicySetSourceHash:    d.PolicySet.SourceHash,
+		SchemaHash:             d.Schema.Hash,
+		ToolCatalogDigest:      d.ToolCatalogDigest,
+		RolloutMode:            string(d.RolloutMode),
+		EvaluationPrincipal:    d.EvaluationPrincipal,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity
 }
 
 func testLegacyDeployment(t *testing.T, mode cedareval.RolloutMode) LegacyDeployment {
