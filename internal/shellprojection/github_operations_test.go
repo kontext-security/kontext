@@ -1,6 +1,7 @@
 package shellprojection
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -301,6 +302,20 @@ func TestMatchSegments(t *testing.T) {
 		got := matchSegments(pathSegments(test.pattern), pathSegments(test.path))
 		if got != test.want {
 			t.Errorf("matchSegments(%q, %q) = %t, want %t", test.pattern, test.path, got, test.want)
+		}
+	}
+}
+
+func TestGraphqlMutationFieldsIgnoresCommentsAndStrings(t *testing.T) {
+	cases := map[string][]string{
+		"# mutation {\nmutation { deleteRef(input: {refId: \"x\"}) { clientMutationId } }":               {"deleteRef"},
+		"mutation { updateRef(input: {refId: \"mutation { deleteRef }\"}) { clientMutationId } }":        {"updateRef"},
+		"mutation { createIssue(input: {body: \"\"\"mutation {\n deleteRef\n\"\"\"}) { issue { id } } }": {"createIssue"},
+		"# only a comment mentioning mutation { deleteRef }":                                             nil,
+	}
+	for query, want := range cases {
+		if got := graphqlMutationFields(query); fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("%q: fields = %v, want %v", query, got, want)
 		}
 	}
 }
