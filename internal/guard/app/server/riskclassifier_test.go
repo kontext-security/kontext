@@ -493,7 +493,7 @@ func TestCedarEnforceDenyIsStillAnnotated(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce,
-		`@id("forbid-bash") forbid(principal, action, resource == Kontext::Tool::"Bash");`)
+		`@id("forbid-bash") forbid(principal, action, resource == Kontext::Tool::"shell");`)
 	server, err := NewServerWithOptions(store, Options{
 		CurrentSessionID: "sess_cedar",
 		Mode:             "enforce",

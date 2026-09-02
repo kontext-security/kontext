@@ -160,8 +160,15 @@ func (e *Evaluator) Evaluate(input ToolUseInput) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	return e.evaluateRequest(request, contextDiagnostics)
+}
 
-	decision, diagnostic := cedar.Authorize(e.policies, nil, request)
+func (e *Evaluator) evaluateRequest(request cedar.Request, contextDiagnostics []ContextDiagnostic) (Result, error) {
+	return e.evaluateRequestWithEntities(request, nil, contextDiagnostics)
+}
+
+func (e *Evaluator) evaluateRequestWithEntities(request cedar.Request, entities cedar.EntityMap, contextDiagnostics []ContextDiagnostic) (Result, error) {
+	decision, diagnostic := cedar.Authorize(e.policies, entities, request)
 	engineDiagnostics := copyEngineDiagnostics(diagnostic)
 	determiningPolicyIDs := make([]string, 0, len(diagnostic.Reasons))
 	allAsk := len(diagnostic.Reasons) > 0

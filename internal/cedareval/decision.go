@@ -245,7 +245,7 @@ func validateMappingPrincipal(input DecisionMappingInput) error {
 	if input.EvaluationPrincipal == nil {
 		return nil
 	}
-	if input.EvaluationPrincipal.EntityType != PrincipalEntityType {
+	if input.EvaluationPrincipal.EntityType != PrincipalEntityType && input.EvaluationPrincipal.EntityType != EndpointEntityTypeV2 {
 		return fmt.Errorf(
 			"cedareval: unsupported principal entity type %q for decision contract v%d",
 			input.EvaluationPrincipal.EntityType,

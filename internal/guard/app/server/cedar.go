@@ -91,14 +91,21 @@ func (p *cedarPolicyProvider) claimsAuthority(snapshot cedarpolicy.Snapshot) boo
 		if deployment == nil {
 			deployment = snapshot.LastKnownGood
 		}
-		if deployment == nil {
+		if deployment != nil {
+			return deployment.RolloutMode == cedareval.RolloutModeEnforce
+		}
+		legacy := snapshot.LegacyDeployment
+		if legacy == nil {
+			legacy = snapshot.LegacyLastKnownGood
+		}
+		if legacy == nil {
 			// Once the local cutover gate is enabled, absence and untrusted
 			// response states cannot silently restore the previous evaluator.
 			// Only explicit disabled/no-active-policy states relinquish Cedar
 			// authority.
 			return true
 		}
-		return deployment.RolloutMode == cedareval.RolloutModeEnforce
+		return legacy.RolloutMode == cedareval.RolloutModeEnforce
 	case CedarEnforcementRemote:
 		return cedarpolicy.DeploymentClaimsEnforce(snapshot)
 	default:
@@ -128,7 +135,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 		deployment := metadata
 		evidence.ResponseVersion = deployment.ResponseVersion
 		evidence.RequestContractVersion = deployment.RequestContractVersion
-		evidence.PolicyHash = deployment.PolicyHash
+		evidence.PolicyHash = deployment.PolicySet.SourceHash
 		evidence.DeploymentIdentity = deployment.DeploymentIdentity
 		evidence.ConfiguredRolloutMode = deployment.RolloutMode
 		principalValue := deployment.EvaluationPrincipal
@@ -140,10 +147,8 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 			outcome.Reason = cedareval.ReasonInvalidCachedPolicy
 			evidence.EngineErrorCount = 1
 		} else {
-			input, inputErr := cedareval.InputFromEvent(principalValue, hookEvent(event))
-			if inputErr != nil {
-				outcome.Reason = cedareval.ReasonRequestConversionFailed
-			} else if result, evaluateErr := evaluator.Evaluate(input); evaluateErr != nil {
+			input := cedarInputV2(principalValue, event)
+			if result, evaluateErr := evaluator.EvaluateV2(input); evaluateErr != nil {
 				var conversionErr *cedareval.ConversionError
 				if errors.As(evaluateErr, &conversionErr) {
 					outcome.Reason = cedareval.ReasonRequestConversionFailed
@@ -169,6 +174,40 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 				}
 			}
 		}
+	} else if legacy := legacyDeployment(snapshot); legacy != nil {
+		evidence.ResponseVersion = legacy.ResponseVersion
+		evidence.RequestContractVersion = legacy.RequestContractVersion
+		evidence.PolicyHash = legacy.PolicyHash
+		evidence.DeploymentIdentity = legacy.DeploymentIdentity
+		evidence.ConfiguredRolloutMode = legacy.RolloutMode
+		principalValue := legacy.EvaluationPrincipal
+		principal = &principalValue
+
+		if snapshot.LegacyDeployment == nil {
+			outcome.Reason = cedareval.ReasonStaleCachedPolicy
+		} else if evaluator, parseErr := p.legacyEvaluatorFor(legacy); parseErr != nil {
+			outcome.Reason = cedareval.ReasonInvalidCachedPolicy
+			evidence.EngineErrorCount = 1
+		} else if input, inputErr := cedareval.InputFromEvent(principalValue, hookEvent(event)); inputErr != nil {
+			outcome.Reason = cedareval.ReasonRequestConversionFailed
+			evidence.EngineErrorCount = 1
+		} else if result, evaluateErr := evaluator.Evaluate(input); evaluateErr != nil {
+			var conversionErr *cedareval.ConversionError
+			if errors.As(evaluateErr, &conversionErr) {
+				outcome.Reason = cedareval.ReasonRequestConversionFailed
+			} else {
+				outcome.Reason = cedareval.ReasonEngineError
+			}
+			evidence.EngineErrorCount = 1
+		} else {
+			evidence.ContextDiagnostics = result.ContextDiagnostics
+			evidence.EngineErrorCount = len(result.EngineDiagnostics.Errors)
+			if evidence.EngineErrorCount > 0 {
+				outcome = cedareval.EvaluationOutcome{State: cedareval.EvaluationStateFailed, Reason: cedareval.ReasonEngineError}
+			} else {
+				outcome = cedareval.EvaluationOutcome{State: cedareval.EvaluationStateEvaluated, Decision: result.Decision, Ask: result.Ask, DeterminingPolicyIDs: result.DeterminingPolicyIDs}
+			}
+		}
 	} else if snapshot.Status.Invalid {
 		outcome.Reason = cedareval.ReasonInvalidCachedPolicy
 	} else if snapshot.Status.Stale {
@@ -184,7 +223,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	currentAuthority := current
 	if claimsAuthority {
 		appliedMode = cedareval.RolloutModeEnforce
-		enforcementReady = snapshot.Deployment != nil && !snapshot.Status.Expired && !snapshot.Status.Invalid
+		enforcementReady = (snapshot.Deployment != nil || snapshot.LegacyDeployment != nil) && !snapshot.Status.Expired && !snapshot.Status.Invalid
 		currentAuthority = ""
 		if !enforcementReady {
 			outcome = cedareval.EvaluationOutcome{State: cedareval.EvaluationStateNotEvaluated, Reason: cedareval.ReasonEnforcementNotReady}
@@ -245,9 +284,53 @@ func (p *cedarPolicyProvider) evaluatorFor(deployment *cedarpolicy.Deployment) (
 	defer p.mu.Unlock()
 	if p.identity != deployment.DeploymentIdentity {
 		p.identity = deployment.DeploymentIdentity
+		p.evaluator, p.parseErr = cedareval.New(deployment.PolicySet.Source)
+	}
+	return p.evaluator, p.parseErr
+}
+
+func (p *cedarPolicyProvider) legacyEvaluatorFor(deployment *cedarpolicy.LegacyDeployment) (*cedareval.Evaluator, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.identity != deployment.DeploymentIdentity {
+		p.identity = deployment.DeploymentIdentity
 		p.evaluator, p.parseErr = cedareval.New(deployment.PolicyText)
 	}
 	return p.evaluator, p.parseErr
+}
+
+func legacyDeployment(snapshot cedarpolicy.Snapshot) *cedarpolicy.LegacyDeployment {
+	if snapshot.LegacyDeployment != nil {
+		return snapshot.LegacyDeployment
+	}
+	return snapshot.LegacyLastKnownGood
+}
+
+func cedarInputV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent) cedareval.ToolUseInputV2 {
+	agentID := ""
+	switch event.Agent {
+	case "claude", "claude-code", cedareval.AgentClaudeCodeV2:
+		agentID = cedareval.AgentClaudeCodeV2
+	case "codex", cedareval.AgentCodexV2:
+		agentID = cedareval.AgentCodexV2
+	}
+	input := cedareval.ToolUseInputV2{
+		Version:    cedareval.RequestContractVersionV2,
+		EndpointID: principal.EntityID,
+		AgentID:    agentID,
+		SessionID:  event.SessionID,
+		ToolID:     cedareval.ToolUnknownV2,
+		ToolInput:  event.ToolInput,
+	}
+	if event.ToolName == "Bash" {
+		input.ToolID = cedareval.ToolShellV2
+		input.Shell = &cedareval.ShellProjectionV2{
+			Version:       1,
+			Program:       "unknown",
+			ParseComplete: false,
+		}
+	}
+	return input
 }
 
 func executionAction(decision risk.Decision) cedareval.EffectiveExecutionAction {

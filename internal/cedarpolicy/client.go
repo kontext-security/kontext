@@ -53,8 +53,8 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, deploy
 		return FetchResult{}, err
 	}
 	query := endpoint.Query()
-	query.Set("response_version", "1")
-	query.Set("request_contract_version", "1")
+	query.Set("response_version", fmt.Sprint(ResponseVersion))
+	query.Set("request_contract_version", fmt.Sprint(RequestContractVersion))
 	endpoint.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {

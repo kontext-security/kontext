@@ -12,6 +12,8 @@ import (
 const (
 	PolicyHashDomain         = "kontext:cedar-policy:v1\x00"
 	DeploymentIdentityDomain = "kontext:cedar-deployment:v2"
+	SchemaHashDomain         = "kontext:cedar-schema:v2\x00"
+	DeploymentV2Domain       = "kontext:cedar-deployment:v3"
 )
 
 type DeploymentIdentityInput struct {
@@ -91,6 +93,60 @@ func appendJSONString(builder *strings.Builder, value string) {
 
 func ComputeDeploymentIdentity(input DeploymentIdentityInput) (string, error) {
 	preimage, err := DeploymentIdentityPreimage(input)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(preimage))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+type DeploymentIdentityV2Input struct {
+	ResponseVersion        int
+	RequestContractVersion int
+	PolicySetSourceHash    string
+	SchemaHash             string
+	ToolCatalogDigest      string
+	RolloutMode            string
+	EvaluationPrincipal    EvaluationPrincipal
+}
+
+func ComputeSchemaHash(schemaSource string) string {
+	sum := sha256.Sum256([]byte(SchemaHashDomain + schemaSource))
+	return hex.EncodeToString(sum[:])
+}
+
+func DeploymentIdentityV2Preimage(input DeploymentIdentityV2Input) (string, error) {
+	stringsToValidate := []string{
+		input.PolicySetSourceHash,
+		input.SchemaHash,
+		input.ToolCatalogDigest,
+		input.RolloutMode,
+		input.EvaluationPrincipal.EntityType,
+		input.EvaluationPrincipal.EntityID,
+	}
+	for _, value := range stringsToValidate {
+		if !utf8.ValidString(value) {
+			return "", fmt.Errorf("cedareval: deployment identity contains invalid utf-8")
+		}
+	}
+
+	var builder strings.Builder
+	builder.WriteByte('[')
+	appendJSONString(&builder, DeploymentV2Domain)
+	builder.WriteByte(',')
+	builder.WriteString(strconv.Itoa(input.ResponseVersion))
+	builder.WriteByte(',')
+	builder.WriteString(strconv.Itoa(input.RequestContractVersion))
+	for _, value := range stringsToValidate {
+		builder.WriteByte(',')
+		appendJSONString(&builder, value)
+	}
+	builder.WriteByte(']')
+	return builder.String(), nil
+}
+
+func ComputeDeploymentIdentityV2(input DeploymentIdentityV2Input) (string, error) {
+	preimage, err := DeploymentIdentityV2Preimage(input)
 	if err != nil {
 		return "", err
 	}

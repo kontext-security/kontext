@@ -87,11 +87,9 @@ func loadManagedMode() string {
 // deployment that relocates the daemon state must export the env var to hook
 // processes too, or outage fallback will not see the enforcement claim.
 func remoteEnforceFromCache() bool {
-	cache := cedarpolicy.NewCache(cedarpolicy.DefaultCachePathForDB(DefaultDBPath()), 0)
-	if err := cache.Load(); err != nil {
-		return false
-	}
-	return cedarpolicy.DeploymentClaimsEnforce(cache.Current())
+	return cedarpolicy.PersistedDeploymentClaimsEnforce(
+		cedarpolicy.DefaultCachePathForDB(DefaultDBPath()),
+	)
 }
 
 func (l Lifecycle) enforcing() bool {

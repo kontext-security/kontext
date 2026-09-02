@@ -16,7 +16,10 @@ import (
 
 const (
 	DefaultRefreshInterval = time.Minute
-	DefaultMaxAge          = 15 * time.Minute
+	// DefaultMaxAge remains for source compatibility. Valid v2 bundles do not
+	// expire by age; they stay active until a valid replacement is installed.
+	DefaultMaxAge    = 15 * time.Minute
+	cacheFileVersion = 2
 )
 
 type CacheStatus struct {
@@ -30,10 +33,12 @@ type CacheStatus struct {
 }
 
 type Snapshot struct {
-	Deployment    *Deployment
-	LastKnownGood *Deployment
-	State         State
-	Status        CacheStatus
+	Deployment          *Deployment
+	LastKnownGood       *Deployment
+	LegacyDeployment    *LegacyDeployment
+	LegacyLastKnownGood *LegacyDeployment
+	State               State
+	Status              CacheStatus
 }
 
 // SnapshotProvider exposes validated in-memory policy state to the hook path.
@@ -50,24 +55,30 @@ type cacheFile struct {
 	LastGood   *Deployment `json:"lastGood,omitempty"`
 }
 
-type Cache struct {
-	path   string
-	maxAge time.Duration
-	now    func() time.Time
-
-	mu       sync.RWMutex
-	state    State
-	fetched  time.Time
-	active   *Deployment
-	lastGood *Deployment
-	status   CacheStatus
+type legacyCacheFile struct {
+	Version    int               `json:"version"`
+	State      State             `json:"state"`
+	FetchedAt  string            `json:"fetchedAt"`
+	Deployment *LegacyDeployment `json:"deployment,omitempty"`
+	LastGood   *LegacyDeployment `json:"lastGood,omitempty"`
 }
 
-func NewCache(path string, maxAge time.Duration) *Cache {
-	if maxAge <= 0 {
-		maxAge = DefaultMaxAge
-	}
-	return &Cache{path: path, maxAge: maxAge, now: time.Now}
+type Cache struct {
+	path string
+	now  func() time.Time
+
+	mu             sync.RWMutex
+	state          State
+	fetched        time.Time
+	active         *Deployment
+	lastGood       *Deployment
+	legacyActive   *LegacyDeployment
+	legacyLastGood *LegacyDeployment
+	status         CacheStatus
+}
+
+func NewCache(path string, _ time.Duration) *Cache {
+	return &Cache{path: path, now: time.Now}
 }
 
 func DefaultCachePathForDB(dbPath string) string {
@@ -85,11 +96,20 @@ func (c *Cache) Load() error {
 		}
 		return fmt.Errorf("cedar policy cache: read: %w", err)
 	}
+	var version struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &version); err != nil {
+		return fmt.Errorf("cedar policy cache: %w", err)
+	}
+	if version.Version == 1 {
+		return c.loadLegacy(data)
+	}
 	var file cacheFile
 	if err := decodeStrict(strings.NewReader(string(data)), &file); err != nil {
 		return fmt.Errorf("cedar policy cache: %w", err)
 	}
-	if file.Version != 1 {
+	if file.Version != cacheFileVersion {
 		return fmt.Errorf("cedar policy cache: unsupported version %d", file.Version)
 	}
 	if file.Deployment != nil {
@@ -115,6 +135,8 @@ func (c *Cache) Load() error {
 	c.fetched = fetchedAt
 	c.active = cloneDeployment(file.Deployment)
 	c.lastGood = cloneDeployment(file.LastGood)
+	c.legacyActive = nil
+	c.legacyLastGood = nil
 	if c.lastGood == nil && file.Deployment != nil {
 		c.lastGood = cloneDeployment(file.Deployment)
 	}
@@ -128,13 +150,51 @@ func (c *Cache) Load() error {
 	return nil
 }
 
+func (c *Cache) loadLegacy(data []byte) error {
+	var file legacyCacheFile
+	if err := decodeStrict(strings.NewReader(string(data)), &file); err != nil {
+		return fmt.Errorf("cedar policy cache: %w", err)
+	}
+	if file.Deployment != nil {
+		if err := file.Deployment.Validate(); err != nil {
+			return fmt.Errorf("cedar policy cache: invalid legacy deployment: %w", err)
+		}
+	}
+	if file.LastGood != nil {
+		if err := file.LastGood.Validate(); err != nil {
+			return fmt.Errorf("cedar policy cache: invalid legacy last-known-good deployment: %w", err)
+		}
+	}
+	if file.State == StateSuccess && file.Deployment == nil && file.LastGood == nil {
+		return errors.New("cedar policy cache: success state has no deployment")
+	}
+	fetchedAt, err := time.Parse(time.RFC3339Nano, file.FetchedAt)
+	if err != nil {
+		return fmt.Errorf("cedar policy cache: invalid fetchedAt: %w", err)
+	}
+
+	c.mu.Lock()
+	c.state = file.State
+	c.fetched = fetchedAt
+	c.active = nil
+	c.lastGood = nil
+	c.legacyActive = cloneLegacyDeployment(file.Deployment)
+	c.legacyLastGood = cloneLegacyDeployment(file.LastGood)
+	if c.legacyLastGood == nil && file.Deployment != nil {
+		c.legacyLastGood = cloneLegacyDeployment(file.Deployment)
+	}
+	c.status = CacheStatus{State: file.State, FetchedAt: fetchedAt, Stale: true, LastError: "persisted legacy deployment not yet replaced"}
+	c.mu.Unlock()
+	return nil
+}
+
 func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	if fetchedAt.IsZero() {
 		fetchedAt = c.now().UTC()
 	}
 	c.mu.RLock()
 	file := cacheFile{
-		Version:    1,
+		Version:    cacheFileVersion,
 		State:      c.state,
 		FetchedAt:  fetchedAt.UTC().Format(time.RFC3339Nano),
 		Deployment: cloneDeployment(c.active),
@@ -184,6 +244,8 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	c.fetched = fetchedAt
 	c.active = cloneDeployment(file.Deployment)
 	c.lastGood = cloneDeployment(file.LastGood)
+	c.legacyActive = nil
+	c.legacyLastGood = nil
 	if c.lastGood == nil && file.Deployment != nil {
 		c.lastGood = cloneDeployment(file.Deployment)
 	}
@@ -227,29 +289,27 @@ func (c *Cache) MarkInvalid(err error) {
 
 func (c *Cache) Current() Snapshot {
 	c.mu.RLock()
-	now := c.now()
 	state := c.state
-	fetched := c.fetched
 	active := cloneDeployment(c.active)
 	lastGood := cloneDeployment(c.lastGood)
+	legacyActive := cloneLegacyDeployment(c.legacyActive)
+	legacyLastGood := cloneLegacyDeployment(c.legacyLastGood)
 	status := c.status
 	c.mu.RUnlock()
 
 	if active == nil && state == StateSuccess {
 		active = lastGood
 	}
-	if !fetched.IsZero() && now.Sub(fetched) > c.maxAge {
-		status.Stale = true
-		status.Expired = true
-		if state == StateSuccess {
-			active = nil
-		}
+	if legacyActive == nil && state == StateSuccess {
+		legacyActive = legacyLastGood
 	}
 	return Snapshot{
-		Deployment:    active,
-		LastKnownGood: lastGood,
-		State:         state,
-		Status:        status,
+		Deployment:          active,
+		LastKnownGood:       lastGood,
+		LegacyDeployment:    legacyActive,
+		LegacyLastKnownGood: legacyLastGood,
+		State:               state,
+		Status:              status,
 	}
 }
 
@@ -257,9 +317,20 @@ func (c *Cache) ConditionalIdentity() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.lastGood == nil {
-		return ""
+		if c.legacyLastGood == nil {
+			return ""
+		}
+		return c.legacyLastGood.DeploymentIdentity
 	}
 	return c.lastGood.DeploymentIdentity
+}
+
+func cloneLegacyDeployment(deployment *LegacyDeployment) *LegacyDeployment {
+	if deployment == nil {
+		return nil
+	}
+	copy := *deployment
+	return &copy
 }
 
 func (c *Cache) persist(file cacheFile) error {

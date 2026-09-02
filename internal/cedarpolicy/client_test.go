@@ -22,7 +22,7 @@ func TestClientFetchDeploymentAndConditionalRefresh(t *testing.T) {
 			t.Fatalf("request path = %q", r.URL.Path)
 		}
 		query := r.URL.Query()
-		if len(query) != 2 || query.Get("response_version") != "1" || query.Get("request_contract_version") != "1" {
+		if len(query) != 2 || query.Get("response_version") != "2" || query.Get("request_contract_version") != "2" {
 			t.Fatalf("request query = %v", query)
 		}
 		if r.Header.Get("Authorization") != "Bearer token" {
@@ -66,12 +66,12 @@ func TestClientFetchStateResponses(t *testing.T) {
 		status int
 		body   StateResponse
 	}{
-		{name: "disabled", status: http.StatusOK, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateDisabled, RolloutMode: "disabled"}},
-		{name: "no active policy", status: http.StatusOK, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateNoActivePolicy}},
-		{name: "principal unavailable", status: http.StatusOK, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StatePrincipalUnavailable}},
-		{name: "unauthorized", status: http.StatusUnauthorized, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateUnauthorized}},
-		{name: "unsupported", status: http.StatusNotAcceptable, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateUnsupportedVersion, SupportedResponseVersions: []int{1}, SupportedRequestContractVersions: []int{1}}},
-		{name: "unavailable", status: http.StatusServiceUnavailable, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateUnavailable, Retryable: true}},
+		{name: "disabled", status: http.StatusOK, body: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateDisabled, RolloutMode: "disabled"}},
+		{name: "no active policy", status: http.StatusOK, body: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateNoActivePolicy}},
+		{name: "principal unavailable", status: http.StatusOK, body: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StatePrincipalUnavailable}},
+		{name: "unauthorized", status: http.StatusUnauthorized, body: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateUnauthorized}},
+		{name: "unsupported", status: http.StatusNotAcceptable, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateUnsupportedVersion, SupportedResponseVersions: []int{1, ResponseVersion}, SupportedRequestContractVersions: []int{1, RequestContractVersion}}},
+		{name: "unavailable", status: http.StatusServiceUnavailable, body: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateUnavailable, Retryable: true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -101,10 +101,10 @@ func TestClientRejectsStateThatDoesNotMatchHTTPStatus(t *testing.T) {
 		status int
 		body   StateResponse
 	}{
-		{name: "success with unavailable", status: http.StatusOK, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateUnavailable, Retryable: true}},
-		{name: "unauthorized with disabled", status: http.StatusUnauthorized, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateDisabled, RolloutMode: "disabled"}},
-		{name: "not acceptable with unauthorized", status: http.StatusNotAcceptable, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateUnauthorized}},
-		{name: "unavailable with disabled", status: http.StatusServiceUnavailable, body: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateDisabled, RolloutMode: "disabled"}},
+		{name: "success with unavailable", status: http.StatusOK, body: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateUnavailable, Retryable: true}},
+		{name: "unauthorized with disabled", status: http.StatusUnauthorized, body: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateDisabled, RolloutMode: "disabled"}},
+		{name: "not acceptable with unauthorized", status: http.StatusNotAcceptable, body: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateUnauthorized}},
+		{name: "unavailable with disabled", status: http.StatusServiceUnavailable, body: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateDisabled, RolloutMode: "disabled"}},
 	}
 
 	for _, test := range tests {
@@ -138,7 +138,7 @@ func TestClientRejectsUntrustedResponses(t *testing.T) {
 			return strings.TrimSuffix(string(data), "}") + `,"endpointConfig":{}}`
 		}, etag: "valid"},
 		{name: "known state field on wrong state", body: func(*Deployment) string {
-			return `{"responseVersion":1,"requestContractVersion":1,"state":"no_active_policy","retryable":true}`
+			return `{"responseVersion":2,"requestContractVersion":2,"state":"no_active_policy","retryable":true}`
 		}},
 		{name: "missing etag", body: marshalDeployment},
 		{name: "wrong etag", body: marshalDeployment, etag: strings.Repeat("f", 64)},
@@ -169,12 +169,14 @@ func TestClientRejectsUntrustedResponses(t *testing.T) {
 
 func TestClientAcceptsMaximumDecodedPolicyDespiteJSONEscaping(t *testing.T) {
 	deployment := testDeployment(t, cedareval.RolloutModeObserve)
-	deployment.PolicyText = strings.Repeat(`"`, cedareval.PolicyMaxBytes)
-	deployment.PolicyHash = cedareval.ComputePolicyHash(deployment.PolicyText)
-	identity, err := cedareval.ComputeDeploymentIdentity(cedareval.DeploymentIdentityInput{
+	deployment.PolicySet.Source = strings.Repeat(`"`, cedareval.PolicyMaxBytes)
+	deployment.PolicySet.SourceHash = cedareval.ComputePolicyHash(deployment.PolicySet.Source)
+	identity, err := cedareval.ComputeDeploymentIdentityV2(cedareval.DeploymentIdentityV2Input{
 		ResponseVersion:        deployment.ResponseVersion,
 		RequestContractVersion: deployment.RequestContractVersion,
-		PolicyHash:             deployment.PolicyHash,
+		PolicySetSourceHash:    deployment.PolicySet.SourceHash,
+		SchemaHash:             deployment.Schema.Hash,
+		ToolCatalogDigest:      deployment.ToolCatalogDigest,
 		RolloutMode:            string(deployment.RolloutMode),
 		EvaluationPrincipal:    deployment.EvaluationPrincipal,
 	})

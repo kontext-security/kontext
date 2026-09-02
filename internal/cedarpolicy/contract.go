@@ -13,17 +13,30 @@ import (
 )
 
 const (
-	ResponseVersion        = 1
-	RequestContractVersion = 1
+	ResponseVersion        = 2
+	RequestContractVersion = 2
 	// A valid 1 MiB UTF-8 policy can expand to six bytes per input byte when
 	// represented with JSON Unicode escapes. Bound the wire independently from
 	// the decoded policy contract so valid responses are never truncated.
-	MaxResponseBytes = 6*cedareval.PolicyMaxBytes + 64*1024
+	MaxResponseBytes = 12*cedareval.PolicyMaxBytes + 64*1024
 )
 
 var sha256HexPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type Deployment struct {
+	ResponseVersion        int                           `json:"responseVersion"`
+	RequestContractVersion int                           `json:"requestContractVersion"`
+	PolicySet              PolicySet                     `json:"policySet"`
+	Schema                 Schema                        `json:"schema"`
+	ToolCatalogDigest      string                        `json:"toolCatalogDigest"`
+	RolloutMode            cedareval.RolloutMode         `json:"rolloutMode"`
+	EvaluationPrincipal    cedareval.EvaluationPrincipal `json:"evaluationPrincipal"`
+	DeploymentIdentity     string                        `json:"deploymentIdentity"`
+}
+
+// LegacyDeployment is the version-1 shape kept only so an endpoint can finish
+// enforcing its last valid policy while it upgrades offline.
+type LegacyDeployment struct {
 	ResponseVersion        int                           `json:"responseVersion"`
 	RequestContractVersion int                           `json:"requestContractVersion"`
 	PolicyHash             string                        `json:"policyHash"`
@@ -34,12 +47,9 @@ type Deployment struct {
 	DeploymentIdentity     string                        `json:"deploymentIdentity"`
 }
 
-func (d Deployment) Validate() error {
-	if d.ResponseVersion != ResponseVersion {
-		return fmt.Errorf("cedar policy: unsupported response version %d", d.ResponseVersion)
-	}
-	if d.RequestContractVersion != RequestContractVersion {
-		return fmt.Errorf("cedar policy: unsupported request contract version %d", d.RequestContractVersion)
+func (d LegacyDeployment) Validate() error {
+	if d.ResponseVersion != 1 || d.RequestContractVersion != 1 {
+		return errors.New("cedar policy: legacy deployment uses unsupported contract versions")
 	}
 	if len([]byte(d.PolicyText)) > cedareval.PolicyMaxBytes {
 		return fmt.Errorf("cedar policy: policy text exceeds %d bytes", cedareval.PolicyMaxBytes)
@@ -49,7 +59,7 @@ func (d Deployment) Validate() error {
 	}
 	principalLength := utf16Length(d.EvaluationPrincipal.EntityID)
 	if d.EvaluationPrincipal.EntityType != cedareval.PrincipalEntityType || principalLength == 0 || principalLength > 1024 {
-		return errors.New("cedar policy: invalid evaluation principal")
+		return errors.New("cedar policy: invalid legacy evaluation principal")
 	}
 	if d.Signature != "" {
 		signatureLength := utf16Length(d.Signature)
@@ -60,14 +70,74 @@ func (d Deployment) Validate() error {
 	if !sha256HexPattern.MatchString(d.PolicyHash) || !sha256HexPattern.MatchString(d.DeploymentIdentity) {
 		return errors.New("cedar policy: invalid hash encoding")
 	}
-	expectedPolicyHash := cedareval.ComputePolicyHash(d.PolicyText)
-	if d.PolicyHash != expectedPolicyHash {
+	if d.PolicyHash != cedareval.ComputePolicyHash(d.PolicyText) {
 		return errors.New("cedar policy: policy hash does not match policy text")
 	}
-	expectedDeploymentIdentity, err := cedareval.ComputeDeploymentIdentity(cedareval.DeploymentIdentityInput{
+	expected, err := cedareval.ComputeDeploymentIdentity(cedareval.DeploymentIdentityInput{
 		ResponseVersion:        d.ResponseVersion,
 		RequestContractVersion: d.RequestContractVersion,
 		PolicyHash:             d.PolicyHash,
+		RolloutMode:            string(d.RolloutMode),
+		EvaluationPrincipal:    d.EvaluationPrincipal,
+	})
+	if err != nil {
+		return err
+	}
+	if d.DeploymentIdentity != expected {
+		return errors.New("cedar policy: deployment identity does not match response metadata")
+	}
+	return nil
+}
+
+type PolicySet struct {
+	Source     string `json:"source"`
+	SourceHash string `json:"sourceHash"`
+}
+
+type Schema struct {
+	Source string `json:"source"`
+	Hash   string `json:"hash"`
+}
+
+func (d Deployment) Validate() error {
+	if d.ResponseVersion != ResponseVersion {
+		return fmt.Errorf("cedar policy: unsupported response version %d", d.ResponseVersion)
+	}
+	if d.RequestContractVersion != RequestContractVersion {
+		return fmt.Errorf("cedar policy: unsupported request contract version %d", d.RequestContractVersion)
+	}
+	if len([]byte(d.PolicySet.Source)) > cedareval.PolicyMaxBytes {
+		return fmt.Errorf("cedar policy: policy text exceeds %d bytes", cedareval.PolicyMaxBytes)
+	}
+	if len([]byte(d.Schema.Source)) == 0 || len([]byte(d.Schema.Source)) > cedareval.PolicyMaxBytes {
+		return fmt.Errorf("cedar policy: schema source must contain 1 to %d bytes", cedareval.PolicyMaxBytes)
+	}
+	if d.RolloutMode != cedareval.RolloutModeObserve && d.RolloutMode != cedareval.RolloutModeEnforce {
+		return fmt.Errorf("cedar policy: unsupported rollout mode %q", d.RolloutMode)
+	}
+	principalLength := utf16Length(d.EvaluationPrincipal.EntityID)
+	if d.EvaluationPrincipal.EntityType != cedareval.EndpointEntityTypeV2 || principalLength == 0 || principalLength > 1024 {
+		return errors.New("cedar policy: invalid evaluation principal")
+	}
+	if !sha256HexPattern.MatchString(d.PolicySet.SourceHash) ||
+		!sha256HexPattern.MatchString(d.Schema.Hash) ||
+		!sha256HexPattern.MatchString(d.ToolCatalogDigest) ||
+		!sha256HexPattern.MatchString(d.DeploymentIdentity) {
+		return errors.New("cedar policy: invalid hash encoding")
+	}
+	expectedPolicyHash := cedareval.ComputePolicyHash(d.PolicySet.Source)
+	if d.PolicySet.SourceHash != expectedPolicyHash {
+		return errors.New("cedar policy: policy hash does not match policy text")
+	}
+	if d.Schema.Hash != cedareval.ComputeSchemaHash(d.Schema.Source) {
+		return errors.New("cedar policy: schema hash does not match schema source")
+	}
+	expectedDeploymentIdentity, err := cedareval.ComputeDeploymentIdentityV2(cedareval.DeploymentIdentityV2Input{
+		ResponseVersion:        d.ResponseVersion,
+		RequestContractVersion: d.RequestContractVersion,
+		PolicySetSourceHash:    d.PolicySet.SourceHash,
+		SchemaHash:             d.Schema.Hash,
+		ToolCatalogDigest:      d.ToolCatalogDigest,
 		RolloutMode:            string(d.RolloutMode),
 		EvaluationPrincipal:    d.EvaluationPrincipal,
 	})
@@ -144,6 +214,15 @@ func (s *StateResponse) UnmarshalJSON(data []byte) error {
 }
 
 func (s StateResponse) Validate() error {
+	switch s.State {
+	case StateUnsupportedVersion:
+		if s.ResponseVersion != 1 || s.RequestContractVersion != 1 ||
+			!supportedVersionsValid(s.SupportedResponseVersions) ||
+			!supportedVersionsValid(s.SupportedRequestContractVersions) {
+			return errors.New("cedar policy: unsupported-version response has invalid supported versions")
+		}
+		return nil
+	}
 	if s.ResponseVersion != ResponseVersion || s.RequestContractVersion != RequestContractVersion {
 		return errors.New("cedar policy: state response uses unsupported contract versions")
 	}
@@ -157,11 +236,6 @@ func (s StateResponse) Validate() error {
 			return errors.New("cedar policy: disabled response must declare disabled rollout mode")
 		}
 	case StateNoActivePolicy, StatePrincipalUnavailable, StateUnauthorized:
-	case StateUnsupportedVersion:
-		if len(s.SupportedResponseVersions) != 1 || s.SupportedResponseVersions[0] != ResponseVersion ||
-			len(s.SupportedRequestContractVersions) != 1 || s.SupportedRequestContractVersions[0] != RequestContractVersion {
-			return errors.New("cedar policy: unsupported-version response has invalid supported versions")
-		}
 	case StateUnavailable:
 		if !s.Retryable {
 			return errors.New("cedar policy: unavailable response must be retryable")
@@ -170,6 +244,11 @@ func (s StateResponse) Validate() error {
 		return fmt.Errorf("cedar policy: unknown response state %q", s.State)
 	}
 	return nil
+}
+
+func supportedVersionsValid(versions []int) bool {
+	return len(versions) == 1 && versions[0] == 1 ||
+		len(versions) == 2 && versions[0] == 1 && versions[1] == 2
 }
 
 func requireExactFields(fields map[string]json.RawMessage, allowed []string) error {

@@ -18,7 +18,7 @@ func TestDeploymentValidate(t *testing.T) {
 		{
 			name: "policy hash mismatch",
 			mutate: func(d *Deployment) {
-				d.PolicyHash = strings.Repeat("a", 64)
+				d.PolicySet.SourceHash = strings.Repeat("a", 64)
 			},
 			wantErr: "policy hash",
 		},
@@ -37,11 +37,11 @@ func TestDeploymentValidate(t *testing.T) {
 			wantErr: "rollout mode",
 		},
 		{
-			name: "oversized signature",
+			name: "schema hash mismatch",
 			mutate: func(d *Deployment) {
-				d.Signature = strings.Repeat("x", 8193)
+				d.Schema.Hash = strings.Repeat("a", 64)
 			},
-			wantErr: "signature",
+			wantErr: "schema hash",
 		},
 	}
 	for _, test := range tests {
@@ -68,23 +68,23 @@ func TestStateResponseRejectsWrongShape(t *testing.T) {
 	}{
 		{
 			name: "unknown field",
-			body: `{"responseVersion":1,"requestContractVersion":1,"state":"no_active_policy","extra":true}`,
+			body: `{"responseVersion":2,"requestContractVersion":2,"state":"no_active_policy","extra":true}`,
 		},
 		{
 			name: "known field on wrong state",
-			body: `{"responseVersion":1,"requestContractVersion":1,"state":"no_active_policy","retryable":true}`,
+			body: `{"responseVersion":2,"requestContractVersion":2,"state":"no_active_policy","retryable":true}`,
 		},
 		{
 			name: "missing disabled mode",
-			body: `{"responseVersion":1,"requestContractVersion":1,"state":"disabled"}`,
+			body: `{"responseVersion":2,"requestContractVersion":2,"state":"disabled"}`,
 		},
 		{
 			name: "unsupported versions not exact",
-			body: `{"responseVersion":1,"requestContractVersion":1,"state":"unsupported_version","supportedResponseVersions":[1,2],"supportedRequestContractVersions":[1]}`,
+			body: `{"responseVersion":2,"requestContractVersion":2,"state":"unsupported_version","supportedResponseVersions":[1,2],"supportedRequestContractVersions":[2]}`,
 		},
 		{
 			name: "retired principal detail state",
-			body: `{"responseVersion":1,"requestContractVersion":1,"state":"principal_unmatched"}`,
+			body: `{"responseVersion":2,"requestContractVersion":2,"state":"principal_unmatched"}`,
 		},
 	}
 	for _, test := range tests {
@@ -98,7 +98,7 @@ func TestStateResponseRejectsWrongShape(t *testing.T) {
 }
 
 func TestDecodeStrictRejectsTrailingData(t *testing.T) {
-	body := `{"responseVersion":1,"requestContractVersion":1,"state":"no_active_policy"}{}`
+	body := `{"responseVersion":2,"requestContractVersion":2,"state":"no_active_policy"}{}`
 	var response StateResponse
 	if err := decodeStrict(strings.NewReader(body), &response); err == nil {
 		t.Fatal("decodeStrict() error = nil")

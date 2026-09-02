@@ -1,6 +1,12 @@
 package cedarpolicy
 
-import "github.com/kontext-security/kontext/internal/cedareval"
+import (
+	"encoding/json"
+	"io"
+	"os"
+
+	"github.com/kontext-security/kontext/internal/cedareval"
+)
 
 // DeploymentClaimsEnforce reports whether the cached policy distribution asks
 // this endpoint to enforce: an active (or last-known-good) deployment exists
@@ -19,5 +25,36 @@ func DeploymentClaimsEnforce(snapshot Snapshot) bool {
 	if deployment == nil {
 		deployment = snapshot.LastKnownGood
 	}
-	return deployment != nil && deployment.RolloutMode == cedareval.RolloutModeEnforce
+	if deployment != nil {
+		return deployment.RolloutMode == cedareval.RolloutModeEnforce
+	}
+	legacy := snapshot.LegacyDeployment
+	if legacy == nil {
+		legacy = snapshot.LegacyLastKnownGood
+	}
+	return legacy != nil && legacy.RolloutMode == cedareval.RolloutModeEnforce
+}
+
+// PersistedDeploymentClaimsEnforce reads only the rollout claim from a cache.
+// It keeps outage behavior stable across compatible cache and catalog upgrades,
+// even when the cached policy itself can no longer be evaluated.
+func PersistedDeploymentClaimsEnforce(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, MaxResponseBytes+1))
+	if err != nil || len(data) > MaxResponseBytes {
+		return false
+	}
+	var cached cacheFile
+	if err := json.Unmarshal(data, &cached); err != nil || (cached.Version != 1 && cached.Version != cacheFileVersion) {
+		return false
+	}
+	return DeploymentClaimsEnforce(Snapshot{
+		State:         cached.State,
+		Deployment:    cached.Deployment,
+		LastKnownGood: cached.LastGood,
+	})
 }

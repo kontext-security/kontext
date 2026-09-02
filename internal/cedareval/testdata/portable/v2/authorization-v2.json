@@ -1,0 +1,83 @@
+[
+  {
+    "version": 2,
+    "name": "claude-code-git-force-push",
+    "input": {
+      "version": 2,
+      "endpointId": "ins_katana_mac_01",
+      "agentId": "anthropic-claude-code",
+      "sessionId": "session_01",
+      "toolId": "shell",
+      "toolInput": {
+        "timeout": 120000,
+        "command": "git push -f origin main"
+      },
+      "shell": {
+        "version": 1,
+        "program": "git",
+        "facts": ["git/force=true", "git/subcommand=push", "git/force=true"],
+        "features": ["github-write", "github"],
+        "parseComplete": true
+      }
+    },
+    "expected": {
+      "principal": {
+        "type": "Kontext::Endpoint",
+        "id": "ins_katana_mac_01"
+      },
+      "action": {
+        "type": "Kontext::Action",
+        "id": "ToolUse"
+      },
+      "resource": {
+        "type": "Kontext::Tool",
+        "id": "shell"
+      },
+      "context": {
+        "agent": {
+          "__entity": {
+            "type": "Kontext::Agent",
+            "id": "anthropic-claude-code"
+          }
+        },
+        "inputJson": "{\"command\":\"git push -f origin main\",\"timeout\":120000}",
+        "session": {
+          "id": "session_01"
+        },
+        "shell": {
+          "version": 1,
+          "program": "git",
+          "facts": ["git/force=true", "git/subcommand=push"],
+          "features": ["github", "github-write"],
+          "parseComplete": true
+        }
+      },
+      "entities": [
+        {
+          "uid": {
+            "type": "Kontext::Endpoint",
+            "id": "ins_katana_mac_01"
+          },
+          "attrs": {},
+          "parents": []
+        },
+        {
+          "uid": {
+            "type": "Kontext::Agent",
+            "id": "anthropic-claude-code"
+          },
+          "attrs": {},
+          "parents": []
+        },
+        {
+          "uid": {
+            "type": "Kontext::Tool",
+            "id": "shell"
+          },
+          "attrs": {},
+          "parents": []
+        }
+      ]
+    }
+  }
+]

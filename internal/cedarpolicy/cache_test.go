@@ -42,6 +42,30 @@ func TestCachePersistsDeploymentAndRestoresStale(t *testing.T) {
 	}
 }
 
+func TestCacheRestoresVersionOneDeploymentDuringUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cedar-policy.json")
+	now := time.Now().UTC()
+	legacy := testLegacyDeployment(t, cedareval.RolloutModeEnforce)
+	data, err := json.Marshal(legacyCacheFile{
+		Version: 1, State: StateSuccess, FetchedAt: now.Format(time.RFC3339Nano), Deployment: &legacy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := NewCache(path, time.Hour)
+	if err := cache.Load(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := cache.Current()
+	if snapshot.LegacyDeployment == nil || !DeploymentClaimsEnforce(snapshot) {
+		t.Fatalf("legacy snapshot = %#v, want evaluable enforce deployment", snapshot)
+	}
+}
+
 func TestCacheRejectsInvalidReplacementWithoutMutatingKnownGood(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cedar-policy.json")
 	now := time.Now().UTC()
@@ -51,7 +75,7 @@ func TestCacheRejectsInvalidReplacementWithoutMutatingKnownGood(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := good
-	bad.PolicyHash = "invalid"
+	bad.PolicySet.SourceHash = "invalid"
 	if err := cache.Apply(FetchResult{State: StateSuccess, Deployment: &bad}, now.Add(time.Minute)); err == nil {
 		t.Fatal("Apply() error = nil")
 	}
@@ -65,16 +89,16 @@ func TestCacheExplicitStateThenMatchingNotModifiedRestoresPolicy(t *testing.T) {
 		name     string
 		response StateResponse
 	}{
-		{name: "disabled", response: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateDisabled, RolloutMode: "disabled"}},
-		{name: "no active policy", response: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateNoActivePolicy}},
-		{name: "principal unavailable", response: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StatePrincipalUnavailable}},
-		{name: "unauthorized", response: StateResponse{ResponseVersion: 1, RequestContractVersion: 1, State: StateUnauthorized}},
+		{name: "disabled", response: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateDisabled, RolloutMode: "disabled"}},
+		{name: "no active policy", response: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateNoActivePolicy}},
+		{name: "principal unavailable", response: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StatePrincipalUnavailable}},
+		{name: "unauthorized", response: StateResponse{ResponseVersion: ResponseVersion, RequestContractVersion: RequestContractVersion, State: StateUnauthorized}},
 		{name: "unsupported version", response: StateResponse{
 			ResponseVersion:                  1,
 			RequestContractVersion:           1,
 			State:                            StateUnsupportedVersion,
-			SupportedResponseVersions:        []int{1},
-			SupportedRequestContractVersions: []int{1},
+			SupportedResponseVersions:        []int{1, ResponseVersion},
+			SupportedRequestContractVersions: []int{1, RequestContractVersion},
 		}},
 	}
 	for _, test := range tests {
@@ -117,7 +141,7 @@ func TestCacheUnavailableThenMatchingNotModifiedKeepsPolicy(t *testing.T) {
 	}
 }
 
-func TestCacheExpiresActivePolicyButRetainsLastKnownGood(t *testing.T) {
+func TestCacheKeepsValidPolicyWhileOffline(t *testing.T) {
 	now := time.Now().UTC()
 	cache := NewCache(filepath.Join(t.TempDir(), "cache.json"), 10*time.Minute)
 	cache.now = func() time.Time { return now }
@@ -127,8 +151,8 @@ func TestCacheExpiresActivePolicyButRetainsLastKnownGood(t *testing.T) {
 	}
 	cache.now = func() time.Time { return now.Add(11 * time.Minute) }
 	snapshot := cache.Current()
-	if snapshot.Deployment != nil || snapshot.LastKnownGood == nil || !snapshot.Status.Stale || !snapshot.Status.Expired {
-		t.Fatalf("expired snapshot = %#v", snapshot)
+	if snapshot.Deployment == nil || snapshot.LastKnownGood == nil || snapshot.Status.Expired {
+		t.Fatalf("offline snapshot = %#v", snapshot)
 	}
 }
 
@@ -177,8 +201,8 @@ func TestRefresherRecordsCacheApplyFailure(t *testing.T) {
 	}
 	cache := NewCache(filepath.Join(notDirectory, "cache.json"), time.Hour)
 	state := StateResponse{
-		ResponseVersion:        1,
-		RequestContractVersion: 1,
+		ResponseVersion:        ResponseVersion,
+		RequestContractVersion: RequestContractVersion,
 		State:                  StateDisabled,
 		RolloutMode:            "disabled",
 	}

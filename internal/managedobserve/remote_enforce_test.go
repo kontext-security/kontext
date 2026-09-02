@@ -1,7 +1,9 @@
 package managedobserve
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,22 +15,38 @@ const remoteEnforceTestPolicy = `@id("permit-read")
 permit (
   principal,
   action == Kontext::Action::"ToolUse",
-  resource == Kontext::Tool::"Read"
+  resource == Kontext::Tool::"unknown"
 );`
+
+const remoteEnforceTestSchema = `namespace Kontext {
+  entity Endpoint;
+  entity Agent;
+  entity Tool;
+  action "ToolUse" appliesTo {
+    principal: [Endpoint],
+    resource: [Tool],
+    context: {}
+  };
+}`
+
+const remoteEnforceTestCatalogDigest = "f86247e4b2a3f0121a482c1ba9cc8f6913e4d22f73478b66237bbdbe5ff26b92"
 
 // remoteEnforceTestDeployment mirrors the daemon-side deployment shape so the
 // cache write below goes through the exact production persistence path.
 func remoteEnforceTestDeployment(t *testing.T, mode cedareval.RolloutMode) cedarpolicy.Deployment {
 	t.Helper()
 	principal := cedareval.EvaluationPrincipal{
-		EntityType: cedareval.PrincipalEntityType,
-		EntityID:   "user@example.com",
+		EntityType: cedareval.EndpointEntityTypeV2,
+		EntityID:   "ins_12345678901234567890123456789012",
 	}
 	policyHash := cedareval.ComputePolicyHash(remoteEnforceTestPolicy)
-	identity, err := cedareval.ComputeDeploymentIdentity(cedareval.DeploymentIdentityInput{
+	schemaHash := cedareval.ComputeSchemaHash(remoteEnforceTestSchema)
+	identity, err := cedareval.ComputeDeploymentIdentityV2(cedareval.DeploymentIdentityV2Input{
 		ResponseVersion:        cedarpolicy.ResponseVersion,
 		RequestContractVersion: cedarpolicy.RequestContractVersion,
-		PolicyHash:             policyHash,
+		PolicySetSourceHash:    policyHash,
+		SchemaHash:             schemaHash,
+		ToolCatalogDigest:      remoteEnforceTestCatalogDigest,
 		RolloutMode:            string(mode),
 		EvaluationPrincipal:    principal,
 	})
@@ -38,10 +56,11 @@ func remoteEnforceTestDeployment(t *testing.T, mode cedareval.RolloutMode) cedar
 	return cedarpolicy.Deployment{
 		ResponseVersion:        cedarpolicy.ResponseVersion,
 		RequestContractVersion: cedarpolicy.RequestContractVersion,
-		PolicyHash:             policyHash,
+		PolicySet:              cedarpolicy.PolicySet{Source: remoteEnforceTestPolicy, SourceHash: policyHash},
+		Schema:                 cedarpolicy.Schema{Source: remoteEnforceTestSchema, Hash: schemaHash},
+		ToolCatalogDigest:      remoteEnforceTestCatalogDigest,
 		RolloutMode:            mode,
 		EvaluationPrincipal:    principal,
-		PolicyText:             remoteEnforceTestPolicy,
 		DeploymentIdentity:     identity,
 	}
 }
@@ -84,6 +103,34 @@ func TestRemoteEnforceFromCacheRoundTrip(t *testing.T) {
 		t.Setenv("KONTEXT_MANAGED_OBSERVE_DB", filepath.Join(t.TempDir(), "guard.db"))
 		if remoteEnforceFromCache() {
 			t.Fatal("remoteEnforceFromCache() = true, want no claim without a cache")
+		}
+	})
+
+	t.Run("version one enforce cache keeps its claim", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "guard.db")
+		t.Setenv("KONTEXT_MANAGED_OBSERVE_DB", dbPath)
+		path := cedarpolicy.DefaultCachePathForDB(DefaultDBPath())
+		if err := os.WriteFile(path, []byte(`{"version":1,"state":"success","deployment":{"rolloutMode":"enforce"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if !remoteEnforceFromCache() {
+			t.Fatal("remoteEnforceFromCache() = false, want enforcement claim from version one cache")
+		}
+	})
+
+	t.Run("old catalog digest keeps its enforce claim", func(t *testing.T) {
+		writeCache(t, cedareval.RolloutModeEnforce)
+		path := cedarpolicy.DefaultCachePathForDB(DefaultDBPath())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = []byte(strings.Replace(string(data), remoteEnforceTestCatalogDigest, strings.Repeat("0", 64), 1))
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if !remoteEnforceFromCache() {
+			t.Fatal("remoteEnforceFromCache() = false, want enforcement claim from previous catalog cache")
 		}
 	})
 }

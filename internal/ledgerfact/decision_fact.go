@@ -324,8 +324,8 @@ func (fact DecisionFact) validateEnums(invalid func(string, ...any)) {
 	}
 	if fact.Evidence.EvaluationPrincipal != nil {
 		principal := fact.Evidence.EvaluationPrincipal
-		if principal.EntityType != cedareval.PrincipalEntityType {
-			invalid("evaluation_principal entity_type must be %q", cedareval.PrincipalEntityType)
+		if principal.EntityType != cedareval.PrincipalEntityType && principal.EntityType != cedareval.EndpointEntityTypeV2 {
+			invalid("evaluation_principal entity_type is not supported")
 		}
 		if principal.EntityID == "" || len(principal.EntityID) > 1024 {
 			invalid("evaluation_principal entity_id must be 1..1024 bytes")
