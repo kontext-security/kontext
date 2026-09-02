@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/kontext-security/kontext/compare/v1.2.0...v1.3.0) (2026-09-02)
+
+
+### Features
+
+* **managed-observe:** report a stable device key for endpoint reconciliation ([#463](https://github.com/kontext-security/kontext/issues/463)) ([0419f86](https://github.com/kontext-security/kontext/commit/0419f86c22eed4c667c290c01c718b1ffb9522ce))
+* **riskclassifier:** add observe-only risk types ([#472](https://github.com/kontext-security/kontext/issues/472)) ([59ec3b4](https://github.com/kontext-security/kontext/commit/59ec3b474e83a170805176b9d8c58313f5db69f8))
+* **setup:** never overwrite an existing workspace on a plain re-run ([#474](https://github.com/kontext-security/kontext/issues/474)) ([8043996](https://github.com/kontext-security/kontext/commit/8043996f5c4d392f39426ba6687c186d1e0d4f9d))
+
+
+### Bug Fixes
+
+* **ci:** bump Go to 1.25.13 so govulncheck passes again ([#464](https://github.com/kontext-security/kontext/issues/464)) ([abba156](https://github.com/kontext-security/kontext/commit/abba1566fd792cc430805e5dd6596225379c977c))
+
 ## [1.2.0](https://github.com/kontext-security/kontext-cli/compare/v1.1.1...v1.2.0) (2026-08-11)
 
 
