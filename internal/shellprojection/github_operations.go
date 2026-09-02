@@ -494,7 +494,7 @@ func graphqlOperations(query string) []string {
 // every mutation body in the document, in order.
 func graphqlMutationFields(query string) []string {
 	var names []string
-	rest := query
+	rest := blankGraphqlNoise(query)
 	for {
 		loc := graphqlMutationKeyword.FindStringIndex(rest)
 		if loc == nil {
@@ -511,6 +511,52 @@ func graphqlMutationFields(query string) []string {
 		}
 		rest = rest[open+end:]
 	}
+}
+
+// blankGraphqlNoise replaces comments (# to end of line), string literals and
+// block strings with spaces, so neither a `# mutation {` comment nor a string
+// argument can pose as an operation or open a brace the parser then follows.
+func blankGraphqlNoise(query string) string {
+	out := []byte(query)
+	for i := 0; i < len(out); {
+		switch {
+		case out[i] == '#':
+			for i < len(out) && out[i] != '\n' {
+				out[i] = ' '
+				i++
+			}
+		case strings.HasPrefix(string(out[i:]), `"""`):
+			// A block string ends at the first """ that is not escaped as \""".
+			stop := len(out)
+			for j := i + 3; j+3 <= len(out); j++ {
+				if string(out[j:j+3]) == `"""` && out[j-1] != '\\' {
+					stop = j + 3
+					break
+				}
+			}
+			for ; i < stop; i++ {
+				out[i] = ' '
+			}
+		case out[i] == '"':
+			out[i] = ' '
+			i++
+			for i < len(out) && out[i] != '"' {
+				if out[i] == '\\' && i+1 < len(out) {
+					out[i] = ' '
+					i++
+				}
+				out[i] = ' '
+				i++
+			}
+			if i < len(out) {
+				out[i] = ' '
+				i++
+			}
+		default:
+			i++
+		}
+	}
+	return string(out)
 }
 
 // topLevelBody returns the text at brace depth one of the block that starts
