@@ -352,3 +352,51 @@ func TestAddSignalPreservesFirstSeenOrderAndSkipsDuplicates(t *testing.T) {
 		t.Fatalf("signals = %#v, want %#v", event.Signals, want)
 	}
 }
+
+func TestCommandFromInputArgv(t *testing.T) {
+	tests := []struct {
+		name  string
+		input map[string]any
+		want  string
+	}{
+		{"string", map[string]any{"command": "git status"}, "git status"},
+		{"bash -lc wrapper", map[string]any{"command": []any{"bash", "-lc", "git push --force origin main"}, "workdir": "/tmp/repo"}, "git push --force origin main"},
+		{"sh -c with positional params", map[string]any{"command": []any{"sh", "-c", "git push -f origin main", "sh", "x"}}, "git push -f origin main"},
+		{"absolute shell with long option", map[string]any{"command": []any{"/bin/zsh", "--login", "-c", "git status"}}, "git status"},
+		{"-o pair before -c", map[string]any{"command": []any{"bash", "-o", "pipefail", "-c", "git status"}}, "git status"},
+		{"plain argv", map[string]any{"command": []any{"git", "push", "--force", "origin", "main"}}, "git push --force origin main"},
+		{"argv needing quotes", map[string]any{"command": []any{"git", "commit", "-m", "fix it's broken"}}, `git commit -m "fix it's broken"`},
+		{"shell without -c", map[string]any{"command": []any{"bash", "-l"}}, "bash -l"},
+		{"shell -c without script", map[string]any{"command": []any{"bash", "-c"}}, "bash -c"},
+		{"non-string element", map[string]any{"command": []any{"git", true}}, ""},
+		{"empty argv", map[string]any{"command": []any{}}, ""},
+		{"nil input", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CommandFromInput(tt.input); got != tt.want {
+				t.Fatalf("CommandFromInput() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeHookEventReadsCodexArgv(t *testing.T) {
+	event := NormalizeHookEvent(HookEvent{Agent: "codex", ToolName: "shell", ToolInput: map[string]any{"command": []any{"bash", "-lc", "git push --force origin main"}}})
+	if event.CommandSummary != "git push --force origin main" {
+		t.Fatalf("command summary = %q, want the unwrapped script", event.CommandSummary)
+	}
+}
+
+func TestIsShellTool(t *testing.T) {
+	for _, name := range []string{"Bash", "shell", "unified_exec", "exec_command", "local_shell", "shell_command"} {
+		if !IsShellTool(name) {
+			t.Errorf("IsShellTool(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"apply_patch", "Read", "mcp__github__push_files", "", "shell-ish"} {
+		if IsShellTool(name) {
+			t.Errorf("IsShellTool(%q) = true, want false", name)
+		}
+	}
+}

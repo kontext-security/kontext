@@ -319,7 +319,7 @@ func legacyDeployment(snapshot cedarpolicy.Snapshot) *cedarpolicy.LegacyDeployme
 // projected into one entry per call; every other tool is either a pinned
 // GitHub MCP tool or unknown.
 func resolveTool(event risk.HookEvent) (string, []cedareval.ShellProjectionV2) {
-	if event.ToolName == "Bash" {
+	if risk.IsShellTool(event.ToolName) {
 		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput))
 	}
 	if toolID, github := toolcatalog.Resolve(event.ToolName, event.ToolInput); github {

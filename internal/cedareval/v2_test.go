@@ -144,3 +144,23 @@ func assertUID(t *testing.T, actual interface{ String() string }, expected entit
 		t.Fatalf("uid = %s, want %s", actual.String(), want)
 	}
 }
+
+func TestBuildRequestV2DefaultsMissingToolInput(t *testing.T) {
+	request, _, err := cedareval.BuildRequestV2(cedareval.ToolUseInputV2{
+		Version:    cedareval.RequestContractVersionV2,
+		EndpointID: "endpoint-1",
+		AgentID:    cedareval.AgentCodexV2,
+		SessionID:  "session-1",
+		ToolID:     cedareval.ToolUnknownV2,
+	})
+	if err != nil {
+		t.Fatalf("BuildRequestV2() error = %v, want nil tool input to evaluate as an empty object", err)
+	}
+	actualContext, err := json.Marshal(request.Context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(actualContext, []byte(`"inputJson":"{}"`)) {
+		t.Fatalf("context = %s, want empty inputJson", actualContext)
+	}
+}

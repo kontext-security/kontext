@@ -169,16 +169,15 @@ func normalizeCodexToolInput(h codexHookInput) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if toolInput == nil {
+		// Codex omits tool_input (or sends null) for calls without
+		// arguments; policy evaluation needs a JSON object either way.
+		toolInput = map[string]any{}
+	}
 	if h.HookEventName == hook.HookUserPromptSubmit.String() && h.Prompt != nil {
-		if toolInput == nil {
-			toolInput = map[string]any{}
-		}
 		toolInput["prompt"] = *h.Prompt
 	}
 	if h.HookEventName == hook.HookSessionStart.String() && h.Source != nil {
-		if toolInput == nil {
-			toolInput = map[string]any{}
-		}
 		toolInput["source"] = *h.Source
 	}
 	return toolInput, nil

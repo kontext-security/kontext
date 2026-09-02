@@ -2,6 +2,7 @@ package risk
 
 import (
 	"fmt"
+	"mvdan.cc/sh/v3/syntax"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -75,7 +76,7 @@ func NormalizeHookEvent(event HookEvent) RiskEvent {
 		riskEvent.Type = EventManagedToolCall
 		addSignal(&riskEvent, signalSet, "managed_tool")
 	}
-	if lowerTool == "bash" || strings.Contains(lowerTool, "bash") || strings.Contains(lowerTool, "shell") {
+	if IsShellTool(lowerTool) {
 		classifySourceControl(&riskEvent, signalSet, lowerCommand)
 	}
 	if isReadTool(lowerTool) && isCredentialPath(path) {
@@ -85,7 +86,7 @@ func NormalizeHookEvent(event HookEvent) RiskEvent {
 		riskEvent.PathClass = pathClass(path)
 		addSignal(&riskEvent, signalSet, "credential_path")
 	}
-	if lowerTool == "bash" || strings.Contains(lowerTool, "bash") || strings.Contains(lowerTool, "shell") {
+	if IsShellTool(lowerTool) {
 		classifyBash(&riskEvent, signalSet, lowerCommand, commandSignalText)
 	}
 	if strings.Contains(lowerCommand, "curl") {
@@ -207,8 +208,13 @@ func classifyProvider(event *RiskEvent, signalSet map[string]struct{}, text stri
 
 func commandFromInput(input map[string]any) string {
 	for _, key := range []string{"command", "cmd", "script"} {
-		if value, ok := input[key].(string); ok {
+		switch value := input[key].(type) {
+		case string:
 			return value
+		case []any:
+			if command := commandFromArgv(value); command != "" {
+				return command
+			}
 		}
 	}
 	return ""
@@ -217,8 +223,98 @@ func commandFromInput(input map[string]any) string {
 // CommandFromInput extracts the raw shell command from a tool input payload,
 // using the same keys the normalizer recognizes. Empty when the input carries
 // no command.
+//
+// Claude Code sends the command as one string. Codex sends an argv array
+// ({"command":["bash","-lc","git push -f origin main"]}); a `<shell> -c
+// <script>` wrapper yields the script itself and any other argv is joined
+// with POSIX quoting, so the result parses like a command a person typed.
 func CommandFromInput(input map[string]any) string {
 	return commandFromInput(input)
+}
+
+// IsShellTool reports whether a hook tool name is the agent's shell. Claude
+// Code calls it Bash; Codex has used shell, unified_exec, exec_command and
+// local_shell across versions. apply_patch and MCP tools are never shells,
+// whatever their input carries.
+func IsShellTool(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "bash", "shell", "shell_command", "unified_exec", "exec_command", "local_shell":
+		return true
+	default:
+		return false
+	}
+}
+
+var shellWrapperPrograms = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true}
+
+// commandFromArgv turns an argv array into shell text. Non-string elements
+// leave the array unrecognized.
+func commandFromArgv(values []any) string {
+	argv := make([]string, 0, len(values))
+	for _, value := range values {
+		switch v := value.(type) {
+		case string:
+			argv = append(argv, v)
+		case interface{ String() string }:
+			argv = append(argv, v.String())
+		default:
+			return ""
+		}
+	}
+	if len(argv) == 0 {
+		return ""
+	}
+	if script, ok := shellWrapperScript(argv); ok {
+		return script
+	}
+	quoted := make([]string, len(argv))
+	for i, word := range argv {
+		quoted[i] = quoteShellWord(word)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// shellWrapperScript unwraps `bash -lc <script>` and its siblings: a shell
+// program, short options that include -c (long options and -o/+o pairs are
+// skipped), then the script. Anything after the script is $0 and positional
+// parameters, which never change what runs.
+func shellWrapperScript(argv []string) (string, bool) {
+	if len(argv) < 3 || !shellWrapperPrograms[filepath.Base(argv[0])] {
+		return "", false
+	}
+	commandFlag := false
+	i := 1
+	for ; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "--" || arg == "-" {
+			i++
+			break
+		}
+		if !strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "+") {
+			break
+		}
+		if arg == "-o" || arg == "+o" || arg == "-O" || arg == "+O" || arg == "--rcfile" || arg == "--init-file" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			continue
+		}
+		if strings.Contains(arg, "c") {
+			commandFlag = true
+		}
+	}
+	if !commandFlag || i >= len(argv) {
+		return "", false
+	}
+	return argv[i], true
+}
+
+func quoteShellWord(word string) string {
+	if quoted, err := syntax.Quote(word, syntax.LangBash); err == nil {
+		return quoted
+	}
+	return "'" + strings.ReplaceAll(word, "'", "'\\''") + "'"
 }
 
 func pathFromInput(input map[string]any) string {

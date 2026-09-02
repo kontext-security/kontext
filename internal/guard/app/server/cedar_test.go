@@ -831,3 +831,102 @@ func TestCedarRemoteDisabledStateRelinquishesAuthority(t *testing.T) {
 		t.Fatalf("calls = %d decision = %#v, want current authority after explicit disable", current.calls, decision)
 	}
 }
+
+func codexHookEvent(tool string, input map[string]any) risk.HookEvent {
+	return risk.HookEvent{SessionID: "codex-session-1", Agent: "codex", HookEventName: "PreToolUse", ToolName: tool, ToolInput: input}
+}
+
+// TestCedarForcePushProbeCorpusCodex runs the probe corpus the way Codex
+// delivers it: argv arrays under its shell tool names, usually wrapped in
+// bash -lc and sometimes as plain argv. Every bypass must deny exactly as it
+// does for Claude Code.
+func TestCedarForcePushProbeCorpusCodex(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+	shellTools := []string{"shell", "unified_exec", "exec_command", "local_shell"}
+
+	denied := []map[string]any{
+		{"command": []any{"bash", "-lc", "git push --force origin main"}, "workdir": "/tmp/repo"},
+		{"command": []any{"bash", "-lc", "git push -f origin main"}},
+		{"command": []any{"/bin/zsh", "-lc", "git status; git push -f origin main"}},
+		{"command": []any{"sh", "-c", "exec git push -f origin main"}},
+		{"command": []any{"bash", "-lc", "bash -c 'git push -f origin main'"}},
+		{"command": []any{"bash", "-lc", "git push origin +HEAD:main"}},
+		{"command": []any{"git", "push", "--force", "origin", "main"}},
+		{"command": []any{"git", "push", "-fu", "origin", "main"}},
+		{"command": []any{"git", "push", "origin", "+main"}},
+		{"command": []any{"timeout", "30", "git", "push", "-f", "origin", "main"}},
+		{"command": []any{"git", "-c", "alias.x=y", "push", "-f", "origin", "main"}},
+		{"command": "git push -f origin main"},
+	}
+	for _, tool := range shellTools {
+		for _, input := range denied {
+			decision, err := provider.DecideHook(context.Background(), codexHookEvent(tool, input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != risk.DecisionDeny || decision.Reason != "Blocked by rule github-block-force-push" {
+				t.Errorf("%s %v: decision = %#v, want deny by the force-push rule", tool, input["command"], decision)
+			}
+			if decision.Cedar.ToolID != cedareval.ToolShellV2 {
+				t.Errorf("%s %v: tool id = %q, want shell", tool, input["command"], decision.Cedar.ToolID)
+			}
+		}
+	}
+
+	allowed := []map[string]any{
+		{"command": []any{"bash", "-lc", "git status"}},
+		{"command": []any{"bash", "-lc", "git push --force-with-lease origin main"}},
+		{"command": []any{"git", "push", "origin", "main"}},
+		{"command": []any{"git", "push", "--force-with-lease", "origin", "main"}},
+		{"command": []any{"git", "commit", "-m", "force push origin main later"}},
+		{"command": []any{"gh", "pr", "view", "42"}},
+		{"command": []any{"bash", "-lc", "command -v git"}},
+	}
+	for _, tool := range shellTools {
+		for _, input := range allowed {
+			decision, err := provider.DecideHook(context.Background(), codexHookEvent(tool, input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != risk.DecisionAllow {
+				t.Errorf("%s %v: decision = %#v, want allow", tool, input["command"], decision)
+			}
+		}
+	}
+}
+
+// TestCedarCodexNonShellAndEmptyInputs keeps Codex's other shapes out of the
+// engine-error path: apply_patch is never a shell however its input looks, a
+// missing tool_input evaluates as an empty object, and GitHub MCP tools
+// resolve to the same pinned ids as under Claude Code.
+func TestCedarCodexNonShellAndEmptyInputs(t *testing.T) {
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+
+	patch, err := provider.DecideHook(context.Background(), codexHookEvent("apply_patch", map[string]any{"command": "git push -f origin main", "patch": "*** Begin Patch"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.Decision != risk.DecisionAllow || patch.Cedar.ToolID != cedareval.ToolUnknownV2 || patch.Cedar.Shell != nil {
+		t.Fatalf("apply_patch decision = %#v, want allow as a non-shell tool", patch)
+	}
+
+	for _, tool := range []string{"shell", "view_image", "Read"} {
+		decision, err := provider.DecideHook(context.Background(), codexHookEvent(tool, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Decision != risk.DecisionAllow || decision.Cedar.EngineErrorCount != 0 || decision.Cedar.Mapping.DerivedCedarAction != cedareval.DerivedCedarActionAllow {
+			t.Fatalf("%s with nil input: decision = %#v, want policy-decided allow without engine error", tool, decision)
+		}
+	}
+
+	mcp, err := provider.DecideHook(context.Background(), codexHookEvent("mcp__github__get_me", map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mcp.Cedar.ToolID != "github-mcp/get_me" {
+		t.Fatalf("Cedar evidence = %#v, want pinned GitHub tool id", mcp.Cedar)
+	}
+}

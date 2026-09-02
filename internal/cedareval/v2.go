@@ -38,6 +38,11 @@ type ToolUseInputV2 struct {
 }
 
 func BuildRequestV2(input ToolUseInputV2) (cedar.Request, cedar.EntityMap, error) {
+	if input.ToolInput == nil {
+		// A call without arguments is still a call; evaluate it against an
+		// empty object instead of failing the request.
+		input.ToolInput = map[string]any{}
+	}
 	if err := validateInputV2(input); err != nil {
 		return cedar.Request{}, nil, newConversionError("invalid_v2_request", "", err.Error())
 	}
@@ -135,9 +140,6 @@ func validateInputV2(input ToolUseInputV2) error {
 	}
 	if !validText(input.ToolID, 4096) {
 		return fmt.Errorf("cedareval: tool id must contain 1 to 4096 characters")
-	}
-	if input.ToolInput == nil {
-		return fmt.Errorf("cedareval: tool input must be a JSON object")
 	}
 	if (input.ToolID == ToolShellV2) != (input.Shell != nil) {
 		return fmt.Errorf("cedareval: shell projection must be present only for the shell tool")

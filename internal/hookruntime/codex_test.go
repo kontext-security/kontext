@@ -298,3 +298,17 @@ func TestEncodeCodexRejectsUnsupportedEvent(t *testing.T) {
 		t.Fatal("EncodeCodexResult() error = nil, want unsupported event error")
 	}
 }
+
+func TestDecodeCodexEventMissingToolInputIsEmptyObject(t *testing.T) {
+	t.Parallel()
+
+	for _, toolInput := range []string{`"tool_input":null,`, ``} {
+		event, err := DecodeCodexEvent([]byte(`{"session_id":"abc","hook_event_name":"PreToolUse","tool_name":"shell",`+toolInput+`"cwd":"/tmp"}`), "codex")
+		if err != nil {
+			t.Fatalf("DecodeCodexEvent() error = %v", err)
+		}
+		if event.ToolInput == nil || len(event.ToolInput) != 0 {
+			t.Fatalf("ToolInput = %#v, want empty object for %q", event.ToolInput, toolInput)
+		}
+	}
+}
