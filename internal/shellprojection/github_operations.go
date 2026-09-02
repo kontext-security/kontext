@@ -526,10 +526,13 @@ func blankGraphqlNoise(query string) string {
 				i++
 			}
 		case strings.HasPrefix(string(out[i:]), `"""`):
-			end := strings.Index(string(out[i+3:]), `"""`)
+			// A block string ends at the first """ that is not escaped as \""".
 			stop := len(out)
-			if end >= 0 {
-				stop = i + 3 + end + 3
+			for j := i + 3; j+3 <= len(out); j++ {
+				if string(out[j:j+3]) == `"""` && out[j-1] != '\\' {
+					stop = j + 3
+					break
+				}
 			}
 			for ; i < stop; i++ {
 				out[i] = ' '

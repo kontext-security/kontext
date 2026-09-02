@@ -319,3 +319,12 @@ func TestGraphqlMutationFieldsIgnoresCommentsAndStrings(t *testing.T) {
 		}
 	}
 }
+
+func TestGraphqlMutationFieldsHonoursEscapedBlockStringQuotes(t *testing.T) {
+	query := "mutation { createIssue(input: {body: \"\"\"quote \\\"\"\" mutation { deleteRef }\"\"\"}) { issue { id } } }\n" +
+		"mutation { updateRef(input: {}) { clientMutationId } }"
+	want := []string{"createIssue", "updateRef"}
+	if got := graphqlMutationFields(query); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("fields = %v, want %v", got, want)
+	}
+}
