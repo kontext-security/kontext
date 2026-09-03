@@ -334,6 +334,53 @@ func TestLifecycleEnforceUnavailableNonBlockingHookDoesNotDeny(t *testing.T) {
 	}
 }
 
+func TestLifecycleEnforceUnavailablePromptSubmitFailsOpen(t *testing.T) {
+	t.Parallel()
+
+	// A slow or dead daemon must not block the person's prompt: the tool
+	// calls that follow are still gated by PreToolUse.
+	lifecycle := Lifecycle{Mode: "enforce"}
+	result := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookUserPromptSubmit})
+	if result.Decision != hook.DecisionAllow || result.Mode != "enforce" {
+		t.Fatalf("daemonUnavailable() = %+v, want enforce allow for prompt submit", result)
+	}
+	if result.Reason != "Kontext enforce: managed policy daemon unavailable" {
+		t.Fatalf("reason = %q, want the unavailable reason kept for diagnostics", result.Reason)
+	}
+}
+
+func TestLifecycleRemoteUnavailablePromptSubmitFailsOpenWhileEnforcing(t *testing.T) {
+	t.Parallel()
+
+	lifecycle := Lifecycle{Mode: "remote", RemoteEnforce: func() bool { return true }}
+	result := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookUserPromptSubmit})
+	if result.Decision != hook.DecisionAllow {
+		t.Fatalf("daemonUnavailable() = %+v, want allow for prompt submit", result)
+	}
+	tool := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookPreToolUse})
+	if tool.Decision != hook.DecisionDeny {
+		t.Fatalf("daemonUnavailable() = %+v, want deny for pre-tool-use", tool)
+	}
+}
+
+func TestLifecycleEnforcePromptSubmitDeadDaemonAllowsAfterKickstart(t *testing.T) {
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-prompt-down-%d.sock", time.Now().UnixNano()))
+	kickstarted := false
+	lifecycle := Lifecycle{
+		SocketPath: socketPath,
+		Label:      DefaultLaunchdLabel,
+		Mode:       "enforce",
+		Kickstart:  func(context.Context, string) error { kickstarted = true; return nil },
+	}
+	result := lifecycle.Process(context.Background(), hook.Event{HookName: hook.HookUserPromptSubmit})
+	if !kickstarted {
+		t.Fatal("prompt submit should kickstart a dead daemon like pre-tool-use does")
+	}
+	if result.Decision != hook.DecisionAllow {
+		t.Fatalf("result = %+v, want allow: a prompt is not a tool call", result)
+	}
+}
+
 func TestObserveResultFormatsBlockingPromptSubmit(t *testing.T) {
 	result := guardhookruntime.ObserveResult(hook.Event{HookName: hook.HookUserPromptSubmit}, hook.Result{
 		Decision: hook.DecisionDeny,
