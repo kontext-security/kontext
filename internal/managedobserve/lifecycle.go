@@ -119,7 +119,9 @@ func (l Lifecycle) Process(ctx context.Context, event hook.Event) hook.Result {
 	switch event.HookName {
 	case hook.HookSessionStart:
 		return l.processWithKickstart(ctx, event, sessionStartWait)
-	case hook.HookPreToolUse:
+	case hook.HookPreToolUse, hook.HookUserPromptSubmit:
+		// Both gate something the person is waiting on, so both get the
+		// decision budget and a kickstart of a dead daemon.
 		return l.processWithKickstart(ctx, event, preToolUseWait)
 	default:
 		return l.processIfAvailable(ctx, event, asyncHookWait)
@@ -185,17 +187,26 @@ func (l Lifecycle) finalize(event hook.Event, result hook.Result) hook.Result {
 	return guardhookruntime.ObserveResult(event, result)
 }
 
+// failsClosedWhenUnavailable names the one hook that must deny without an
+// authoritative decision: PreToolUse gates a tool call, which is what policy
+// judges. A user prompt is not a tool call. Denying it because the daemon was
+// slow blocks the person, not the agent, and protects nothing, since every
+// tool call that follows is still gated. So prompt submits fail open.
+func failsClosedWhenUnavailable(name hook.HookName) bool {
+	return name == hook.HookPreToolUse
+}
+
 // daemonUnavailable is the fail path when the managed daemon cannot be reached.
-// Observe fails open (it never blocks). Enforce fails closed for blocking
-// hooks: enforcement requires an authoritative decision and an unreachable
-// daemon cannot provide one. Non-blocking lifecycle hooks remain informational.
+// Observe fails open (it never blocks). Enforce fails closed for PreToolUse:
+// enforcement requires an authoritative decision and an unreachable daemon
+// cannot provide one. Prompt submits and lifecycle hooks remain informational.
 // Remote fails closed only while the cached policy distribution claims
 // enforcement; otherwise it fails open like observe, so a fresh self-serve
 // install without an enforcing deployment never hard-blocks the agent.
 func (l Lifecycle) daemonUnavailable(event hook.Event) hook.Result {
 	if l.remote() && l.RemoteEnforce != nil && l.RemoteEnforce() {
 		decision := hook.DecisionAllow
-		if event.HookName.CanBlock() {
+		if failsClosedWhenUnavailable(event.HookName) {
 			decision = hook.DecisionDeny
 		}
 		return hook.Result{
@@ -206,7 +217,7 @@ func (l Lifecycle) daemonUnavailable(event hook.Event) hook.Result {
 	}
 	if l.enforcing() {
 		decision := hook.DecisionAllow
-		if event.HookName.CanBlock() {
+		if failsClosedWhenUnavailable(event.HookName) {
 			decision = hook.DecisionDeny
 		}
 		return hook.Result{
