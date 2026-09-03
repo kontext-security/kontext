@@ -3,6 +3,7 @@ package ledgerfact
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
@@ -251,8 +252,29 @@ func factCedarRequest(cedar CedarInput) *CedarRequest {
 	if cedar.ToolID == "" {
 		return nil
 	}
-	shell := append([]cedareval.ShellProjectionV2{}, cedar.Shell...)
+	shell := make([]cedareval.ShellProjectionV2, 0, len(cedar.Shell))
+	for _, projection := range cedar.Shell {
+		projection.Facts = uploadableFacts(projection.Facts)
+		shell = append(shell, projection)
+	}
 	return &CedarRequest{ToolID: cedar.ToolID, Shell: shell}
+}
+
+// uploadableFacts keeps the projection replayable without shipping what a
+// route argument may carry beyond the route: query strings and fragments of
+// an `http/path=` fact are cut, everything else is vocabulary the policy
+// language already names (routes, methods, operations).
+func uploadableFacts(facts []string) []string {
+	out := make([]string, 0, len(facts))
+	for _, fact := range facts {
+		if strings.HasPrefix(fact, "http/path=") {
+			if cut := strings.IndexAny(fact, "?#"); cut >= 0 {
+				fact = fact[:cut]
+			}
+		}
+		out = append(out, fact)
+	}
+	return out
 }
 
 func factPrincipal(principal *cedareval.EvaluationPrincipal) *Principal {

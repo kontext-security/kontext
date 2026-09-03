@@ -244,7 +244,7 @@ func TestBuildCarriesCedarRequest(t *testing.T) {
 		t.Fatalf("decode fixture fact: %v", err)
 	}
 	decidedAt, _ := time.Parse(time.RFC3339Nano, fact.DecidedAt)
-	shell := []cedareval.ShellProjectionV2{{Version: 1, Program: "git", Facts: []string{"github/write=true"}, Features: []string{}, ParseComplete: true}}
+	shell := []cedareval.ShellProjectionV2{{Version: 1, Program: "gh", Facts: []string{"github/write=true", "http/path=repos/o/r/issues?access_token=secret"}, Features: []string{}, ParseComplete: true}}
 	mapping := fixtureMappings[fixtures[0].Name]
 	mapping.EvaluationPrincipal = &cedareval.EvaluationPrincipal{
 		EntityType: fact.Evidence.EvaluationPrincipal.EntityType,
@@ -268,6 +268,12 @@ func TestBuildCarriesCedarRequest(t *testing.T) {
 	}
 	if built.Evidence.CedarRequest == nil || built.Evidence.CedarRequest.ToolID != "shell" || len(built.Evidence.CedarRequest.Shell) != 1 {
 		t.Fatalf("cedar_request not carried: %+v", built.Evidence.CedarRequest)
+	}
+	if got := built.Evidence.CedarRequest.Shell[0].Facts[1]; got != "http/path=repos/o/r/issues" {
+		t.Fatalf("query string not cut from http/path fact: %q", got)
+	}
+	if shell[0].Facts[1] != "http/path=repos/o/r/issues?access_token=secret" {
+		t.Fatalf("input projection mutated")
 	}
 	input.Cedar.ToolID = ""
 	built, err = ledgerfact.Build(input)
