@@ -50,6 +50,8 @@ func applyDecisionFact(action map[string]any, event risk.HookEvent, decision ris
 			ContextDiagnostics:     evidence.ContextDiagnostics,
 			EngineErrorCount:       evidence.EngineErrorCount,
 			Mapping:                evidence.Mapping,
+			ToolID:                 evidence.ToolID,
+			Shell:                  evidence.Shell,
 		}
 	} else if evidence != nil {
 		input.Disabled = ledgerfact.DisabledInput{

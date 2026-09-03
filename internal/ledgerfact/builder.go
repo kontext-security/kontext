@@ -32,6 +32,11 @@ type CedarInput struct {
 	ContextDiagnostics     []cedareval.ContextDiagnostic
 	EngineErrorCount       int
 	Mapping                cedareval.DecisionMapping
+	// ToolID and Shell are the request the policy evaluated (catalog tool
+	// id plus shell projections). The cloud replays saved versions over
+	// them; empty ToolID means the daemon predates the field.
+	ToolID string
+	Shell  []cedareval.ShellProjectionV2
 }
 
 // DisabledInput describes why no Cedar deployment answered: an explicit kill
@@ -183,6 +188,7 @@ func cedarEvidence(cedar CedarInput) Evidence {
 		EvaluationReasonCode:   nullableReasonCode(cedar.Mapping.EvaluationReasonCode),
 		DecisionReasonCode:     nullableReasonCode(cedar.Mapping.DecisionReasonCode),
 		EffectiveReasonCode:    nullableReasonCode(cedar.Mapping.EffectiveReasonCode),
+		CedarRequest:           factCedarRequest(cedar),
 	}
 	if !cedar.CacheFetchedAt.IsZero() {
 		fetchedAt := cedar.CacheFetchedAt.UTC().Format(cacheFetchedAtLayout)
@@ -239,6 +245,14 @@ func cloneFloat64(value *float64) *float64 {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func factCedarRequest(cedar CedarInput) *CedarRequest {
+	if cedar.ToolID == "" {
+		return nil
+	}
+	shell := append([]cedareval.ShellProjectionV2{}, cedar.Shell...)
+	return &CedarRequest{ToolID: cedar.ToolID, Shell: shell}
 }
 
 func factPrincipal(principal *cedareval.EvaluationPrincipal) *Principal {
