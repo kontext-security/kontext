@@ -31,21 +31,28 @@
       "name": "permit-exact-tool",
       "description": "Resource scope may name one exact runtime tool.",
       "policyText": "@id(\"permit-read\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Read\");",
-      "expected": { "valid": true, "diagnosticCodes": [] }
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
+    },
+    {
+      "version": 1,
+      "name": "unsupported-tool-id",
+      "description": "A tool id no endpoint reports warns once per distinct id; catalogued ids stay silent.",
+      "policyText": "@id(\"never-matches\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Write\");\n@id(\"catalogued-tools\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"github-mcp/get_issue\");",
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
     },
     {
       "version": 1,
       "name": "ask-annotated-permit",
       "description": "ASK and description annotations are valid on permit policies.",
       "policyText": "@id(\"ask-bash\")\n@ask(\"prompt\")\n@description(\"ask before Bash runs\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Bash\");",
-      "expected": { "valid": true, "diagnosticCodes": [] }
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
     },
     {
       "version": 1,
       "name": "guarded-optional-context",
       "description": "Optional context access is valid when a has-guard dominates every evaluation path.",
       "policyText": "@id(\"guarded-git\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Bash\") when { context has command && context.command like \"git*\" };",
-      "expected": { "valid": true, "diagnosticCodes": [] }
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
     },
     {
       "version": 1,
@@ -59,14 +66,14 @@
       "name": "fail-closed-forbid",
       "description": "A forbid reading optional context is valid when it explicitly matches the absent case.",
       "policyText": "@id(\"forbid-curl\")\nforbid(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Bash\") when { !(context has command) || (context has command && context.command like \"curl*\") };",
-      "expected": { "valid": true, "diagnosticCodes": [] }
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
     },
     {
       "version": 1,
       "name": "multi-policy-set",
       "description": "A set combining permit and fail-closed forbid policies with distinct ids is valid.",
       "policyText": "@id(\"allow-tools\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource);\n@id(\"forbid-rm\")\nforbid(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Bash\") when { !(context has command) || (context has command && context.command == \"rm -rf /\") };",
-      "expected": { "valid": true, "diagnosticCodes": [] }
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
     },
     {
       "version": 1,
