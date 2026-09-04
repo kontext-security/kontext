@@ -106,9 +106,20 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.ExecContext(context.Background(), "pragma busy_timeout = 5000"); err != nil {
-		db.Close()
-		return nil, err
+	// WAL lets the doctor's and the menubar's read-only opens coexist with the
+	// daemon's writes; in the default rollback journal every reader blocks the
+	// writer and the deferred decision records time out on SQLITE_BUSY.
+	// synchronous=NORMAL is the WAL-safe fsync level (durable across crashes,
+	// one fsync per checkpoint instead of per commit).
+	for _, pragma := range []string{
+		"pragma busy_timeout = 5000",
+		"pragma journal_mode = WAL",
+		"pragma synchronous = NORMAL",
+	} {
+		if _, err := db.ExecContext(context.Background(), pragma); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	signer, err := newReceiptSigner(path)
 	if err != nil {

@@ -131,7 +131,7 @@ func renderLaunchAgentPlist(binary, logPath string, llm *localLLMAgentConfig) st
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 	<key>StandardOutPath</key>
 	<string>` + xmlEscape(logPath) + `</string>
 	<key>StandardErrorPath</key>

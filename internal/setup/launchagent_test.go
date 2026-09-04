@@ -30,7 +30,7 @@ func TestRenderLaunchAgentPlistGolden(t *testing.T) {
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 	<key>StandardOutPath</key>
 	<string>/Users/x/Library/Logs/Kontext/managed-observe.log</string>
 	<key>StandardErrorPath</key>
