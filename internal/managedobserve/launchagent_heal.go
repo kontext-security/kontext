@@ -11,19 +11,27 @@ import (
 	"github.com/kontext-security/kontext/internal/diagnostic"
 )
 
-const backgroundProcessType = "<key>ProcessType</key>\n\t<string>Background</string>"
-const standardProcessType = "<key>ProcessType</key>\n\t<string>Standard</string>"
+// plistFixes are the settings older setups wrote that make the hook see a
+// dead daemon. Background is macOS's throttled QoS: the daemon starves
+// whenever the user does anything, the hook times out and fails closed in
+// enforce. ThrottleInterval 30 makes launchd hold a relaunch for up to 30 s
+// when the daemon restarts twice in a row (doctor --fix after an upgrade),
+// longer than the hook waits; 10 is launchd's floor.
+var plistFixes = [][2]string{
+	{"<key>ProcessType</key>\n\t<string>Background</string>", "<key>ProcessType</key>\n\t<string>Standard</string>"},
+	{"<key>ThrottleInterval</key>\n\t<integer>30</integer>", "<key>ThrottleInterval</key>\n\t<integer>10</integer>"},
+}
 
-// raiseProcessType rewrites a LaunchAgent plist that runs the daemon in
-// launchd's Background class to Standard. Background is macOS's throttled
-// QoS: the daemon starves whenever the user does anything, and the hook,
-// a foreground process with a 250 ms budget, reads that as a dead daemon and
-// fails closed in enforce. Returns false when nothing needed changing.
-func raiseProcessType(plist string) (string, bool) {
-	if !strings.Contains(plist, backgroundProcessType) {
-		return plist, false
+// healPlist applies plistFixes. Returns false when nothing needed changing.
+func healPlist(plist string) (string, bool) {
+	changed := false
+	for _, fix := range plistFixes {
+		if strings.Contains(plist, fix[0]) {
+			plist = strings.Replace(plist, fix[0], fix[1], 1)
+			changed = true
+		}
 	}
-	return strings.Replace(plist, backgroundProcessType, standardProcessType, 1), true
+	return plist, changed
 }
 
 // healLaunchAgentPriority fixes an installed plist from an older setup and
@@ -32,6 +40,11 @@ func raiseProcessType(plist string) (string, bool) {
 // daemon is not ours to rewrite. The reload runs detached because bootout
 // ends this process.
 func healLaunchAgentPriority(label string, log diagnostic.Logger) {
+	// launchd names the service it started; a daemon run by hand or by a test
+	// must not rewrite and reload the user's agent.
+	if os.Getenv("XPC_SERVICE_NAME") != label {
+		return
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return
@@ -41,7 +54,7 @@ func healLaunchAgentPriority(label string, log diagnostic.Logger) {
 	if err != nil {
 		return
 	}
-	next, changed := raiseProcessType(string(raw))
+	next, changed := healPlist(string(raw))
 	if !changed {
 		return
 	}
@@ -57,5 +70,5 @@ func healLaunchAgentPriority(label string, log diagnostic.Logger) {
 		logAlways(log, "launch agent priority: reload: %v\n", err)
 		return
 	}
-	logAlways(log, "launch agent priority: plist ran the daemon in the Background class; rewrote it to Standard and reloading\n")
+	logAlways(log, "launch agent: plist used the Background class or a 30 s relaunch throttle; rewrote it and reloading\n")
 }

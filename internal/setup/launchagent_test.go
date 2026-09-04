@@ -28,7 +28,7 @@ func TestRenderLaunchAgentPlistGolden(t *testing.T) {
 	<key>KeepAlive</key>
 	<true/>
 	<key>ThrottleInterval</key>
-	<integer>30</integer>
+	<integer>10</integer>
 	<key>ProcessType</key>
 	<string>Standard</string>
 	<key>StandardOutPath</key>
