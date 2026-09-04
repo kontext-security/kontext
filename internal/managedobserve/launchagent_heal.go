@@ -62,9 +62,26 @@ func healLaunchAgentPriority(label string, log diagnostic.Logger) {
 		logAlways(log, "launch agent priority: rewrite %s: %v\n", plistPath, err)
 		return
 	}
+	// bootout tears the job down asynchronously; a bootstrap that lands
+	// during the teardown fails with "Input/output error" and would leave
+	// the job unloaded, beyond the reach of KeepAlive and the hook's
+	// kickstart. So bootstrap retries for a while and reports the outcome on
+	// the daemon's own stdout/stderr, which launchd already points at the log.
 	domain := fmt.Sprintf("gui/%d", os.Getuid())
-	script := fmt.Sprintf("sleep 2; launchctl bootout %s/%s; launchctl bootstrap %s %q", domain, label, domain, plistPath)
+	script := fmt.Sprintf(`sleep 2
+launchctl bootout %[1]s/%[2]s
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+	if launchctl bootstrap %[1]s %[3]q; then
+		echo "launch agent: reloaded after rewrite (bootstrap attempt $attempt)"
+		exit 0
+	fi
+	sleep 1
+done
+echo "launch agent: bootstrap failed after rewrite; the daemon is unloaded, run kontext setup" >&2
+exit 1`, domain, label, plistPath)
 	cmd := exec.Command("/bin/sh", "-c", script)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		logAlways(log, "launch agent priority: reload: %v\n", err)
