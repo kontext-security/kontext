@@ -51,7 +51,7 @@ func expectedWarningCodes(policyText string) []string {
 	for _, match := range toolResourcePattern.FindAllStringSubmatch(policyText, -1) {
 		id := match[1]
 		if id == cedareval.ToolShellV2 || id == cedareval.ToolUnknownV2 ||
-			strings.HasPrefix(id, toolcatalog.GitHubToolPrefix) || seen[id] {
+			toolcatalog.Known(id) || seen[id] {
 			continue
 		}
 		seen[id] = true

@@ -36,8 +36,22 @@
     {
       "version": 1,
       "name": "unsupported-tool-id",
-      "description": "A tool id no endpoint reports warns once per distinct id; catalogued ids stay silent.",
-      "policyText": "@id(\"never-matches\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Write\");\n@id(\"catalogued-tools\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"github-mcp/get_issue\");",
+      "description": "A tool id no endpoint reports warns once per distinct id.",
+      "policyText": "@id(\"never-matches\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Write\");",
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
+    },
+    {
+      "version": 1,
+      "name": "catalogued-github-tool",
+      "description": "A github-mcp/ id in the pinned catalogue is one an endpoint reports; no warning.",
+      "policyText": "@id(\"catalogued-tool\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"github-mcp/merge_pull_request\");",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "uncatalogued-github-tool",
+      "description": "A github-mcp/ id outside the pinned catalogue never matches, prefix or not; it warns.",
+      "policyText": "@id(\"typo\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"github-mcp/merge_pull_requset\");",
       "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
     },
     {
