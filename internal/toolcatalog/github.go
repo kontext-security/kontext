@@ -53,6 +53,22 @@ func Digest() string {
 	return hex.EncodeToString(combined[:])
 }
 
+// Known reports whether toolID is one the daemon can produce for a GitHub
+// MCP call: a catalogued tool under the github-mcp/ prefix, or the
+// unrecognized fallback. A policy naming any other github-mcp/ id never
+// matches.
+func Known(toolID string) bool {
+	if toolID == GitHubUnrecognizedTool {
+		return true
+	}
+	name, ok := strings.CutPrefix(toolID, GitHubToolPrefix)
+	if !ok {
+		return false
+	}
+	_, ok = githubTools[name]
+	return ok
+}
+
 // Resolve maps an MCP tool call to the pinned GitHub catalog. The server
 // name is whatever the operator registered it as, so a catalogued tool name
 // is recognised under any mcp__<server>__ prefix and held to its pinned

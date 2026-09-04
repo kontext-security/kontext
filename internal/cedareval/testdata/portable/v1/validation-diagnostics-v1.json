@@ -37,7 +37,7 @@
       "version": 1,
       "name": "unsupported-tool-id",
       "description": "A tool id no endpoint reports warns once per distinct id; catalogued ids stay silent.",
-      "policyText": "@id(\"never-matches\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Write\");\n@id(\"catalogued-tools\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"github-mcp/get_issue\");",
+      "policyText": "@id(\"never-matches\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Write\");\n@id(\"catalogued-tools\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"github-mcp/merge_pull_request\");",
       "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
     },
     {
