@@ -3,6 +3,7 @@ package ledgerfact
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
@@ -32,6 +33,11 @@ type CedarInput struct {
 	ContextDiagnostics     []cedareval.ContextDiagnostic
 	EngineErrorCount       int
 	Mapping                cedareval.DecisionMapping
+	// ToolID and Shell are the request the policy evaluated (catalog tool
+	// id plus shell projections). The cloud replays saved versions over
+	// them; empty ToolID means the daemon predates the field.
+	ToolID string
+	Shell  []cedareval.ShellProjectionV2
 }
 
 // DisabledInput describes why no Cedar deployment answered: an explicit kill
@@ -183,6 +189,7 @@ func cedarEvidence(cedar CedarInput) Evidence {
 		EvaluationReasonCode:   nullableReasonCode(cedar.Mapping.EvaluationReasonCode),
 		DecisionReasonCode:     nullableReasonCode(cedar.Mapping.DecisionReasonCode),
 		EffectiveReasonCode:    nullableReasonCode(cedar.Mapping.EffectiveReasonCode),
+		CedarRequest:           factCedarRequest(cedar),
 	}
 	if !cedar.CacheFetchedAt.IsZero() {
 		fetchedAt := cedar.CacheFetchedAt.UTC().Format(cacheFetchedAtLayout)
@@ -239,6 +246,35 @@ func cloneFloat64(value *float64) *float64 {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func factCedarRequest(cedar CedarInput) *CedarRequest {
+	if cedar.ToolID == "" {
+		return nil
+	}
+	shell := make([]cedareval.ShellProjectionV2, 0, len(cedar.Shell))
+	for _, projection := range cedar.Shell {
+		projection.Facts = uploadableFacts(projection.Facts)
+		shell = append(shell, projection)
+	}
+	return &CedarRequest{ToolID: cedar.ToolID, Shell: shell}
+}
+
+// uploadableFacts keeps the projection replayable without shipping what a
+// route argument may carry beyond the route: query strings and fragments of
+// an `http/path=` fact are cut, everything else is vocabulary the policy
+// language already names (routes, methods, operations).
+func uploadableFacts(facts []string) []string {
+	out := make([]string, 0, len(facts))
+	for _, fact := range facts {
+		if strings.HasPrefix(fact, "http/path=") {
+			if cut := strings.IndexAny(fact, "?#"); cut >= 0 {
+				fact = fact[:cut]
+			}
+		}
+		out = append(out, fact)
+	}
+	return out
 }
 
 func factPrincipal(principal *cedareval.EvaluationPrincipal) *Principal {

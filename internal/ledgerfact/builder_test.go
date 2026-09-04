@@ -237,6 +237,54 @@ func TestBuildReproducesGoldenCorpus(t *testing.T) {
 	}
 }
 
+func TestBuildCarriesCedarRequest(t *testing.T) {
+	fixtures, _ := loadFixtures(t)
+	var fact ledgerfact.DecisionFact
+	if err := json.Unmarshal(fixtures[0].Fact, &fact); err != nil {
+		t.Fatalf("decode fixture fact: %v", err)
+	}
+	decidedAt, _ := time.Parse(time.RFC3339Nano, fact.DecidedAt)
+	shell := []cedareval.ShellProjectionV2{{Version: 1, Program: "gh", Facts: []string{"github/write=true", "http/path=repos/o/r/issues?access_token=secret"}, Features: []string{}, ParseComplete: true}}
+	mapping := fixtureMappings[fixtures[0].Name]
+	mapping.EvaluationPrincipal = &cedareval.EvaluationPrincipal{
+		EntityType: fact.Evidence.EvaluationPrincipal.EntityType,
+		EntityID:   fact.Evidence.EvaluationPrincipal.EntityID,
+	}
+	input := ledgerfact.BuildInput{
+		ToolCallID: fact.ToolCallID, DecidedAt: decidedAt, ToolName: fact.ToolName,
+		ExecutionAction: fact.ExecutionAction, Risk: fact.Risk, Classifier: fact.Classifier,
+		Cedar: &ledgerfact.CedarInput{
+			AppliedMode: fact.AppliedMode, ConfiguredMode: derefRolloutMode(fact.Evidence.ConfiguredMode),
+			DistributionState: deref(fact.Evidence.DistributionState), PolicyHash: deref(fact.PolicyHash),
+			DeploymentID: deref(fact.DeploymentID), ResponseVersion: derefInt(fact.Evidence.ResponseVersion),
+			RequestContractVersion: 2, EvaluatorVersion: deref(fact.Evidence.EvaluatorVersion),
+			ContextDiagnostics: fact.Evidence.ContextDiagnostics, Mapping: mapping,
+			ToolID: "shell", Shell: shell,
+		},
+	}
+	built, err := ledgerfact.Build(input)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.Evidence.CedarRequest == nil || built.Evidence.CedarRequest.ToolID != "shell" || len(built.Evidence.CedarRequest.Shell) != 1 {
+		t.Fatalf("cedar_request not carried: %+v", built.Evidence.CedarRequest)
+	}
+	if got := built.Evidence.CedarRequest.Shell[0].Facts[1]; got != "http/path=repos/o/r/issues" {
+		t.Fatalf("query string not cut from http/path fact: %q", got)
+	}
+	if shell[0].Facts[1] != "http/path=repos/o/r/issues?access_token=secret" {
+		t.Fatalf("input projection mutated")
+	}
+	input.Cedar.ToolID = ""
+	built, err = ledgerfact.Build(input)
+	if err != nil {
+		t.Fatalf("build without tool id: %v", err)
+	}
+	if built.Evidence.CedarRequest != nil {
+		t.Fatalf("expected cedar_request omitted without a tool id")
+	}
+}
+
 func TestBuildRejectsContractViolations(t *testing.T) {
 	input := ledgerfact.BuildInput{
 		ToolCallID:      "toolu_invalid",

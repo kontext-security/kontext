@@ -1,9 +1,12 @@
 package cedareval_test
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/toolcatalog"
 )
 
 // The validation-diagnostics corpus pins the portable policy dialect: entries
@@ -31,7 +34,31 @@ type validationDiagnosticsFixture struct {
 	} `json:"expected"`
 }
 
-const validationDiagnosticsCorpusVersion = 1
+const (
+	validationDiagnosticsCorpusVersion = 1
+	unsupportedToolIDCode              = "unsupported_tool_id"
+)
+
+var toolResourcePattern = regexp.MustCompile(`Kontext::Tool::"([^"]*)"`)
+
+// expectedWarningCodes mirrors the management plane's unsupported_tool_id
+// emission: resolveTool only ever names shell, unknown, or a catalogued
+// github-mcp tool, so any other literal is a policy that can never match. The
+// warning never rejects the policy, so an accepted fixture may carry it.
+func expectedWarningCodes(policyText string) []string {
+	seen := map[string]bool{}
+	codes := []string{}
+	for _, match := range toolResourcePattern.FindAllStringSubmatch(policyText, -1) {
+		id := match[1]
+		if id == cedareval.ToolShellV2 || id == cedareval.ToolUnknownV2 ||
+			strings.HasPrefix(id, toolcatalog.GitHubToolPrefix) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		codes = append(codes, unsupportedToolIDCode)
+	}
+	return codes
+}
 
 func TestPortableValidationDiagnosticsFixtures(t *testing.T) {
 	var corpus validationDiagnosticsCorpus
@@ -66,11 +93,13 @@ func TestPortableValidationDiagnosticsFixtures(t *testing.T) {
 				}
 				return
 			}
-			if len(fixture.Expected.DiagnosticCodes) != 0 {
-				t.Fatal("accepted fixture lists diagnostic codes")
-			}
 			if fixture.PolicyText == nil {
 				t.Fatal("accepted fixture carries no inline policy text")
+			}
+			want := expectedWarningCodes(*fixture.PolicyText)
+			got := fixture.Expected.DiagnosticCodes
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("accepted fixture diagnostic codes = %v, want %v", got, want)
 			}
 
 			evaluator, err := cedareval.New(*fixture.PolicyText)
