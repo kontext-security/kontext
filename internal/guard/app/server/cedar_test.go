@@ -485,14 +485,14 @@ func TestCedarEnforceDenyReasonNamesRule(t *testing.T) {
 	}
 }
 
-func TestCedarEnforceKeepsGenericReasonWithoutRule(t *testing.T) {
+func TestCedarEnforceNamesNotReadyDeny(t *testing.T) {
 	provider := newCedarPolicyProvider(&countingHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: cedarpolicy.StateUnauthorized}}, CedarEnforcementStatic)
 	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Read", map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Decision != risk.DecisionDeny || decision.Reason != "local Cedar policy decision" {
-		t.Fatalf("decision = %#v, want generic fail-closed wording", decision)
+	if decision.Decision != risk.DecisionDeny || decision.Reason != "Cedar enforcement is not ready" {
+		t.Fatalf("decision = %#v, want the not-ready deny named", decision)
 	}
 }
 
@@ -928,5 +928,72 @@ func TestCedarCodexNonShellAndEmptyInputs(t *testing.T) {
 	}
 	if mcp.Cedar.ToolID != "github-mcp/get_me" {
 		t.Fatalf("Cedar evidence = %#v, want pinned GitHub tool id", mcp.Cedar)
+	}
+}
+
+func TestCedarDecisionReasonDistinguishesDenyCauses(t *testing.T) {
+	cases := []struct {
+		name    string
+		mapping cedareval.DecisionMapping
+		want    string
+	}{
+		{
+			name: "named forbid",
+			mapping: cedareval.DecisionMapping{
+				EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
+				DerivedCedarAction:       cedareval.DerivedCedarActionDeny,
+				DeterminingPolicyIDs:     []string{"block-force-push"},
+			},
+			want: "Blocked by rule block-force-push",
+		},
+		{
+			name: "default deny",
+			mapping: cedareval.DecisionMapping{
+				EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
+				DerivedCedarAction:       cedareval.DerivedCedarActionDeny,
+				EffectiveReasonCode:      cedareval.ReasonDefaultDeny,
+			},
+			want: "No policy permits this action",
+		},
+		{
+			name: "ask unavailable",
+			mapping: cedareval.DecisionMapping{
+				EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
+				DerivedCedarAction:       cedareval.DerivedCedarActionAsk,
+				EffectiveReasonCode:      cedareval.ReasonAskUnavailable,
+			},
+			want: "Approval required but unavailable",
+		},
+		{
+			name: "not ready",
+			mapping: cedareval.DecisionMapping{
+				EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
+				EffectiveReasonCode:      cedareval.ReasonEnforcementNotReady,
+			},
+			want: "Cedar enforcement is not ready",
+		},
+		{
+			name: "engine error",
+			mapping: cedareval.DecisionMapping{
+				EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
+				EffectiveReasonCode:      cedareval.ReasonEngineError,
+			},
+			want: "Policy evaluation failed",
+		},
+		{
+			name: "allow keeps generic",
+			mapping: cedareval.DecisionMapping{
+				EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow,
+				EffectiveReasonCode:      cedareval.ReasonPermit,
+			},
+			want: "local Cedar policy decision",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cedarDecisionReason(tc.mapping); got != tc.want {
+				t.Fatalf("cedarDecisionReason = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

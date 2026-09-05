@@ -309,8 +309,25 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := s.backfillAuthorizationActionCursorKeys(ctx); err != nil {
+	// The cursor-key backfill is a one-time migration of rows written before
+	// the column existed; every write since keeps the key in step with
+	// updated_at, so once done no row drifts. Gate it on user_version so it
+	// runs once per database rather than on every OpenStore: the managed
+	// stream flusher reopens the store every 10s, and an ungated full-table
+	// scan there burned CPU that starved the enforce hook's 250ms budget.
+	// ponytail: user_version is this store's single migration counter; a later
+	// backfill bumps it to 2.
+	var cursorBackfillVersion int
+	if err := s.db.QueryRowContext(ctx, "pragma user_version").Scan(&cursorBackfillVersion); err != nil {
 		return err
+	}
+	if cursorBackfillVersion < 1 {
+		if err := s.backfillAuthorizationActionCursorKeys(ctx); err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx, "pragma user_version = 1"); err != nil {
+			return err
+		}
 	}
 	if _, err := s.db.ExecContext(ctx, `
 	create index if not exists idx_authorization_actions_session_updated

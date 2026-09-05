@@ -1891,3 +1891,42 @@ func TestSaveDecisionHonorsPresetEventID(t *testing.T) {
 		t.Fatalf("record.ID = %q, want preset %q", record.ID, preset)
 	}
 }
+
+func TestOpenStoreGatesCursorBackfillOnUserVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/guard.db"
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore() error = %v", err)
+	}
+	var version int
+	if err := store.db.QueryRowContext(context.Background(), "pragma user_version").Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("user_version = %d, want 1 after first open runs the one-time backfill", version)
+	}
+	// A row whose cursor key is deliberately wrong: a re-run of the backfill
+	// would rewrite it, so if it survives a reopen the backfill was skipped.
+	actions := insertLifecycleActions(t, store)
+	if _, err := store.db.ExecContext(context.Background(),
+		`update authorization_actions set updated_at_cursor_key = 'sentinel' where id = ?`, actions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer reopened.Close()
+	var key string
+	if err := reopened.db.QueryRowContext(context.Background(),
+		`select updated_at_cursor_key from authorization_actions where id = ?`, actions[0].ID).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	if key != "sentinel" {
+		t.Fatalf("cursor key = %q, want the backfill skipped on reopen (user_version already 1)", key)
+	}
+}
