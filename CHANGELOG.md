@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0](https://github.com/kontext-security/kontext/compare/v1.3.0...v1.4.0) (2026-09-05)
+
+
+### Features
+
+* **ledger:** carry the evaluated Cedar request in decision facts ([#487](https://github.com/kontext-security/kontext/issues/487)) ([6f08b96](https://github.com/kontext-security/kontext/commit/6f08b96f9c5a42f424b8514848f70e6ad46d9871))
+* **toolcatalog:** Known names the GitHub tool ids a Mac can report ([#489](https://github.com/kontext-security/kontext/issues/489)) ([c82a75b](https://github.com/kontext-security/kontext/commit/c82a75b2d3e6231be4d5a48c9ca65d024c99a1cf))
+
 ## [1.3.0](https://github.com/kontext-security/kontext/compare/v1.2.0...v1.3.0) (2026-09-02)
 
 
