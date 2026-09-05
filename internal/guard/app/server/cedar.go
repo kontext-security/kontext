@@ -431,10 +431,27 @@ func applyCedarDecision(decision *risk.RiskDecision, mapping cedareval.DecisionM
 // Denies without a rule (enforcement not ready, engine errors, unavailable
 // ask) keep the generic wording.
 func cedarDecisionReason(mapping cedareval.DecisionMapping) string {
-	if mapping.EffectiveExecutionAction == cedareval.EffectiveExecutionActionDeny &&
-		mapping.DerivedCedarAction == cedareval.DerivedCedarActionDeny &&
+	if mapping.EffectiveExecutionAction != cedareval.EffectiveExecutionActionDeny {
+		return "local Cedar policy decision"
+	}
+	if mapping.DerivedCedarAction == cedareval.DerivedCedarActionDeny &&
 		len(mapping.DeterminingPolicyIDs) > 0 {
 		return "Blocked by rule " + strings.Join(mapping.DeterminingPolicyIDs, ", ")
 	}
-	return "local Cedar policy decision"
+	// A deny with no forbid rule to name: the effective reason code already
+	// tells default-deny, an unavailable approval, a not-ready policy and an
+	// evaluation failure apart, so the message should too.
+	switch mapping.EffectiveReasonCode {
+	case cedareval.ReasonAskUnavailable:
+		return "Approval required but unavailable"
+	case cedareval.ReasonEnforcementNotReady:
+		return "Cedar enforcement is not ready"
+	case cedareval.ReasonDefaultDeny:
+		return "No policy permits this action"
+	case cedareval.ReasonEngineError, cedareval.ReasonRequestConversionFailed,
+		cedareval.ReasonInvalidCachedPolicy, cedareval.ReasonStaleCachedPolicy:
+		return "Policy evaluation failed"
+	default:
+		return "local Cedar policy decision"
+	}
 }

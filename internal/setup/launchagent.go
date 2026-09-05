@@ -129,9 +129,9 @@ func renderLaunchAgentPlist(binary, logPath string, llm *localLLMAgentConfig) st
 	<key>KeepAlive</key>
 	<true/>
 	<key>ThrottleInterval</key>
-	<integer>30</integer>
+	<integer>10</integer>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 	<key>StandardOutPath</key>
 	<string>` + xmlEscape(logPath) + `</string>
 	<key>StandardErrorPath</key>
