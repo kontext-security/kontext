@@ -408,6 +408,36 @@ func TestCedarStaticEvaluatesVersionOneCacheDuringUpgrade(t *testing.T) {
 	}
 }
 
+// A policy set written before tool names passed through targets
+// Kontext::Tool::"unknown" as "every other tool". It keeps meaning that after
+// the update: the forbid below still stops a built-in, and a policy set that
+// never names unknown sees the built-in under its own id.
+func TestCedarUnknownToolRuleKeepsItsMeaning(t *testing.T) {
+	legacy := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("allow") permit(principal, action, resource);
+@id("forbid-others") forbid(principal, action, resource == Kontext::Tool::"unknown");`)
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, ReasonCode: "current_allow", RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &legacy, LastKnownGood: &legacy, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{FetchedAt: time.Now()}}}, CedarEnforcementStatic)
+
+	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("WebFetch", map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionDeny || decision.Cedar == nil || decision.Cedar.ToolID != cedareval.ToolUnknownV2 {
+		t.Fatalf("decision = %#v, want the legacy unknown forbid to still deny", decision)
+	}
+
+	named := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("allow") permit(principal, action, resource);
+@id("forbid-fetch") forbid(principal, action, resource == Kontext::Tool::"WebFetch");`)
+	provider = newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &named, LastKnownGood: &named, State: cedarpolicy.StateSuccess, Status: cedarpolicy.CacheStatus{FetchedAt: time.Now()}}}, CedarEnforcementStatic)
+	decision, err = provider.DecideHook(context.Background(), cedarHookEvent("WebFetch", map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionDeny || decision.Cedar == nil || decision.Cedar.ToolID != "WebFetch" {
+		t.Fatalf("decision = %#v, want the named forbid to deny under the tool's own id", decision)
+	}
+}
+
 func TestCedarRemoteStaysObserveUnderObserveRollout(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeObserve, `@id("forbid-read") forbid(principal, action, resource == Kontext::Tool::"Read");`)
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow, ReasonCode: "current_allow", RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow}}}
