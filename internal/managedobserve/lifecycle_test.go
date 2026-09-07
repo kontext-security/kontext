@@ -141,13 +141,12 @@ func TestLifecycleHealthySocketDoesNotKickstart(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 2; i++ {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close()
+		// One probe, then the call: a healthy socket is dialled once.
+		probe, err := ln.Accept()
+		if err != nil {
+			return
 		}
+		_ = probe.Close()
 		conn, err := ln.Accept()
 		if err != nil {
 			return
@@ -198,13 +197,12 @@ func TestLifecycleEnforcePassesDaemonDenyThroughToAgent(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 2; i++ {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close()
+		// One probe, then the call: a healthy socket is dialled once.
+		probe, err := ln.Accept()
+		if err != nil {
+			return
 		}
+		_ = probe.Close()
 		conn, err := ln.Accept()
 		if err != nil {
 			return
@@ -499,5 +497,59 @@ func TestLifecycleRemoteUnavailableFailsOpenWithoutEnforceClaim(t *testing.T) {
 				t.Fatalf("daemonUnavailable() = %+v, want observe fail-open", result)
 			}
 		})
+	}
+}
+
+func TestMain(m *testing.M) {
+	// Keep the unavailable-daemon tests fast; the restart wait is exercised
+	// by TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget.
+	daemonRestartWait = 500 * time.Millisecond
+	os.Exit(m.Run())
+}
+
+func TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget(t *testing.T) {
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-restart-%d.sock", time.Now().UnixNano()))
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
+	done := make(chan struct{})
+	lifecycle := Lifecycle{
+		SocketPath: socketPath,
+		Label:      DefaultLaunchdLabel,
+		Mode:       "enforce",
+		Kickstart: func(context.Context, string) error {
+			go func() {
+				// Longer than the 250 ms decision budget, shorter than the
+				// restart wait: a daemon coming back from a launchd reload.
+				time.Sleep(preToolUseWait + 100*time.Millisecond)
+				ln, err := net.Listen("unix", socketPath)
+				if err != nil {
+					return
+				}
+				defer ln.Close()
+				defer close(done)
+				for {
+					conn, err := ln.Accept()
+					if err != nil {
+						return
+					}
+					var req localruntime.EvaluateRequest
+					if err := localruntime.ReadMessage(conn, &req); err == nil {
+						_ = localruntime.WriteMessage(conn, localruntime.EvaluateResult{Decision: "allow", Allowed: true, Reason: "local Cedar policy decision", Mode: "enforce"})
+						_ = conn.Close()
+						return
+					}
+					_ = conn.Close()
+				}
+			}()
+			return nil
+		},
+	}
+	result := lifecycle.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse})
+	if result.Decision != hook.DecisionAllow {
+		t.Fatalf("result = %+v, want the restarted daemon's allow, not a fail-closed deny", result)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("restarted daemon did not receive the request")
 	}
 }

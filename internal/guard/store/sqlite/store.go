@@ -106,9 +106,20 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.ExecContext(context.Background(), "pragma busy_timeout = 5000"); err != nil {
-		db.Close()
-		return nil, err
+	// WAL lets the doctor's and the menubar's read-only opens coexist with the
+	// daemon's writes; in the default rollback journal every reader blocks the
+	// writer and the deferred decision records time out on SQLITE_BUSY.
+	// synchronous=NORMAL is the WAL-safe fsync level (durable across crashes,
+	// one fsync per checkpoint instead of per commit).
+	for _, pragma := range []string{
+		"pragma busy_timeout = 5000",
+		"pragma journal_mode = WAL",
+		"pragma synchronous = NORMAL",
+	} {
+		if _, err := db.ExecContext(context.Background(), pragma); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	signer, err := newReceiptSigner(path)
 	if err != nil {
@@ -298,8 +309,25 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := s.backfillAuthorizationActionCursorKeys(ctx); err != nil {
+	// The cursor-key backfill is a one-time migration of rows written before
+	// the column existed; every write since keeps the key in step with
+	// updated_at, so once done no row drifts. Gate it on user_version so it
+	// runs once per database rather than on every OpenStore: the managed
+	// stream flusher reopens the store every 10s, and an ungated full-table
+	// scan there burned CPU that starved the enforce hook's 250ms budget.
+	// ponytail: user_version is this store's single migration counter; a later
+	// backfill bumps it to 2.
+	var cursorBackfillVersion int
+	if err := s.db.QueryRowContext(ctx, "pragma user_version").Scan(&cursorBackfillVersion); err != nil {
 		return err
+	}
+	if cursorBackfillVersion < 1 {
+		if err := s.backfillAuthorizationActionCursorKeys(ctx); err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx, "pragma user_version = 1"); err != nil {
+			return err
+		}
 	}
 	if _, err := s.db.ExecContext(ctx, `
 	create index if not exists idx_authorization_actions_session_updated

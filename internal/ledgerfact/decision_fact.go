@@ -139,6 +139,16 @@ type Evidence struct {
 	EvaluationReasonCode   *cedareval.ReasonCode         `json:"evaluation_reason_code"`
 	DecisionReasonCode     *cedareval.ReasonCode         `json:"decision_reason_code"`
 	EffectiveReasonCode    *cedareval.ReasonCode         `json:"effective_reason_code"`
+	// CedarRequest is what the policy evaluated; omitted when unknown so
+	// older fixtures and daemons stay byte-identical.
+	CedarRequest *CedarRequest `json:"cedar_request,omitempty"`
+}
+
+// CedarRequest is the replayable request: the catalog tool id and the shell
+// projections a command was evaluated as.
+type CedarRequest struct {
+	ToolID string                        `json:"tool_id"`
+	Shell  []cedareval.ShellProjectionV2 `json:"shell"`
 }
 
 // DecisionFact is the one request.decided record for an attempted tool call.

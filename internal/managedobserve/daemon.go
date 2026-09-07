@@ -65,6 +65,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		binaryVersion = "dev"
 	}
 	logAlways(opts.Diagnostic, "managed-observe daemon %s (pid %d) started\n", binaryVersion, os.Getpid())
+	healLaunchAgentPriority(DefaultLabel(), opts.Diagnostic)
 
 	loadedConfig, err := managedconfig.Load()
 	if err != nil {

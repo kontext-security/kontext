@@ -3,11 +3,13 @@ package managedobserve
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
@@ -24,6 +26,14 @@ const (
 	asyncHookWait    = 120 * time.Millisecond
 	probeTimeout     = 60 * time.Millisecond
 )
+
+// daemonRestartWait bounds how long a gating hook waits for the daemon's
+// socket to come back. A dead or restarting daemon refuses the dial at once,
+// so this only spends time while the daemon is genuinely away (brew upgrade,
+// launchd reload, the plist self-heal), never on a slow one: the decision
+// itself still gets its own budget from the moment the socket accepts. The
+// agents give the hook 20 s, so waiting a few of them beats a false deny.
+var daemonRestartWait = 3 * time.Second
 
 var launchdMu sync.Mutex
 
@@ -129,26 +139,49 @@ func (l Lifecycle) Process(ctx context.Context, event hook.Event) hook.Result {
 }
 
 func (l Lifecycle) processWithKickstart(ctx context.Context, event hook.Event, budget time.Duration) hook.Result {
-	ctx, cancel := context.WithTimeout(ctx, budget)
+	restartCtx, cancel := context.WithTimeout(ctx, daemonRestartWait)
 	defer cancel()
 
-	if !l.probe(ctx) {
-		launchdMu.Lock()
-		if !l.probe(ctx) {
-			if err := l.Kickstart(ctx, l.Label); err != nil {
-				l.Diagnostic.Printf("managed observe kickstart: %v\n", err)
-			}
-		}
-		launchdMu.Unlock()
-	}
-	if l.waitForProbe(ctx) {
-		result, err := l.call(ctx, event)
-		if err != nil {
+	for attempt := 0; ; attempt++ {
+		if !l.reach(restartCtx) {
 			return l.daemonUnavailable(event)
 		}
-		return l.finalize(event, result)
+		callCtx, cancelCall := context.WithTimeout(ctx, budget)
+		result, err := l.call(callCtx, event)
+		cancelCall()
+		if err == nil {
+			return l.finalize(event, result)
+		}
+		// The daemon went away between the probe and its reply, which is what
+		// a restart looks like from here. One more round through reach waits
+		// for the successor. A slow reply is not retried; that would double
+		// the decision budget.
+		if attempt == 0 && connectionLost(err) {
+			continue
+		}
+		return l.daemonUnavailable(event)
 	}
-	return l.daemonUnavailable(event)
+}
+
+// reach makes sure something is listening on the socket, kickstarting launchd
+// when nothing is, and waits for the listener within ctx.
+func (l Lifecycle) reach(ctx context.Context) bool {
+	if l.probe(ctx) {
+		return true
+	}
+	launchdMu.Lock()
+	if !l.probe(ctx) {
+		if err := l.Kickstart(ctx, l.Label); err != nil {
+			l.Diagnostic.Printf("managed observe kickstart: %v\n", err)
+		}
+	}
+	launchdMu.Unlock()
+	return l.waitForProbe(ctx)
+}
+
+func connectionLost(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 func (l Lifecycle) processIfAvailable(ctx context.Context, event hook.Event, budget time.Duration) hook.Result {
