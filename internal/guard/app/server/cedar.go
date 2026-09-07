@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
@@ -132,7 +133,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	var principal *cedareval.EvaluationPrincipal
 	// Resolve the tool before any branch so the evidence always says what
 	// policy saw (or would have seen), including in observe mode.
-	toolID, projections := resolveTool(event)
+	toolID, projections := resolveTool(event, namesUnknownTool(snapshot))
 	evidence.ToolID = toolID
 	evidence.Shell = projections
 
@@ -315,17 +316,44 @@ func legacyDeployment(snapshot cedarpolicy.Snapshot) *cedarpolicy.LegacyDeployme
 	return snapshot.LegacyLastKnownGood
 }
 
-// resolveTool maps a hook event to its catalog tool id. Shell commands are
-// projected into one entry per call; every other tool is either a pinned
-// GitHub MCP tool or unknown.
-func resolveTool(event risk.HookEvent) (string, []cedareval.ShellProjectionV2) {
+// resolveTool maps a hook event to its tool id. Shell commands are projected
+// into one entry per call; pinned GitHub MCP tools resolve to their catalog
+// id; every other tool keeps the name the agent reported (an MCP tool as
+// mcp__<server>__<tool>, a built-in as Write, Read, WebFetch), so a policy
+// can name it. Only a nameless call is unknown.
+//
+// A policy set written before names passed through may target
+// Kontext::Tool::"unknown" to mean "every other tool"; `legacyUnknown` keeps
+// that mapping for such a policy set, so updating the daemon cannot turn its
+// permits into denies or let its forbids stop applying.
+func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.ShellProjectionV2) {
 	if risk.IsShellTool(event.ToolName) {
 		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput))
 	}
 	if toolID, github := toolcatalog.Resolve(event.ToolName, event.ToolInput); github {
 		return toolID, nil
 	}
+	if legacyUnknown {
+		return cedareval.ToolUnknownV2, nil
+	}
+	if name := strings.TrimSpace(event.ToolName); name != "" && utf8.ValidString(name) && len(name) <= 4096 {
+		return name, nil
+	}
 	return cedareval.ToolUnknownV2, nil
+}
+
+// unknownToolLiteral is how a policy names the pre-pass-through catch-all.
+const unknownToolLiteral = `Kontext::Tool::"` + cedareval.ToolUnknownV2 + `"`
+
+// namesUnknownTool reports whether the policy set the daemon evaluates (the
+// current deployment, else the last known good one) still targets the
+// catch-all tool id, and so predates named tool ids.
+func namesUnknownTool(snapshot cedarpolicy.Snapshot) bool {
+	deployment := snapshot.Deployment
+	if deployment == nil {
+		deployment = snapshot.LastKnownGood
+	}
+	return deployment != nil && strings.Contains(deployment.PolicySet.Source, unknownToolLiteral)
 }
 
 func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent, toolID string, projections []cedareval.ShellProjectionV2) []cedareval.ToolUseInputV2 {
