@@ -101,6 +101,9 @@ type doctorOptions struct {
 	// scope instead of inheriting whatever this machine happens to have under
 	// /Library — a real MDM install would otherwise decide the answer.
 	LoadConfig func() (managedconfig.LoadedConfig, error)
+	// InstallTokenFile is the token file an MDM install wrapper writes for the
+	// LaunchAgent launcher. Defaults to managedconfig.InstallTokenFilePath.
+	InstallTokenFile string
 }
 
 // The returns are NAMED so the deferred summary sync below actually reaches the
@@ -141,6 +144,9 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	}
 	if opts.LoadConfig == nil {
 		opts.LoadConfig = managedconfig.Load
+	}
+	if opts.InstallTokenFile == "" {
+		opts.InstallTokenFile = managedconfig.InstallTokenFilePath
 	}
 
 	fmt.Fprintln(out, "Managed observe:")
@@ -235,9 +241,22 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	// not running" alone points the user in the wrong direction.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := managedconfig.ResolveInstallToken(ctx, loaded.Config.Credentials.InstallTokenRef); err == nil {
+	tokenRef := loaded.Config.Credentials.InstallTokenRef
+	if _, err := managedconfig.ResolveInstallToken(ctx, tokenRef); err == nil {
 		report.InstallTokenReadable = true
-		fmt.Fprintf(out, "  install token: readable (%s)\n", loaded.Config.Credentials.InstallTokenRef)
+		fmt.Fprintf(out, "  install token: readable (%s)\n", tokenRef)
+	} else if tokenRef.Source == "env" && loaded.Scope == managedconfig.ScopeSystem {
+		// An organization-managed install never has the token in this shell:
+		// the MDM wrapper writes it to a file and the LaunchAgent launcher
+		// exports it for the daemon alone. Judge the file the launcher reads,
+		// not the environment doctor happens to run in.
+		if fileErr := installTokenFileReadable(opts.InstallTokenFile); fileErr == nil {
+			report.InstallTokenReadable = true
+			fmt.Fprintf(out, "  install token: readable (%s, exported to the daemon by the launcher)\n", opts.InstallTokenFile)
+		} else {
+			warn("install token file is not readable (%v) — the daemon cannot stream; re-run the MDM install action while a user is logged in so the wrapper rewrites %s", fileErr, opts.InstallTokenFile)
+			status.Healthy = false
+		}
 	} else {
 		warn("install token is not readable (%v) — the agent cannot stream; re-run `kontext setup` or unlock your login keychain", err)
 		status.Healthy = false
@@ -338,6 +357,20 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 		status.Healthy = false
 	}
 	return status, report
+}
+
+// installTokenFileReadable reports whether the launcher's token file holds a
+// token this user can read; the daemon runs as the GUI user, so doctor run by
+// that user sees exactly what the launcher will see.
+func installTokenFileReadable(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return fmt.Errorf("%s is empty", path)
+	}
+	return nil
 }
 
 func selfServeLaunchAgentPresent() bool {
