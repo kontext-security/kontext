@@ -90,7 +90,7 @@ var (
 	// matter: between the duplicate check and the write.
 	boundProfileLookup  = profileBoundToWorkspace
 	systemConfigPath    = managedconfig.DefaultPath
-	orgInstallTokenPath = "/Library/Application Support/Kontext/install-token"
+	orgInstallTokenPath = managedconfig.InstallTokenFilePath
 	managedSettingsPath = claudemanaged.ManagedSettingsDropInPath
 	managedSettingsFile = claudemanaged.ManagedSettingsPath
 	goos                = runtime.GOOS

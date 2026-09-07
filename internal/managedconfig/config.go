@@ -35,9 +35,13 @@ const (
 	ModeRemote  = "remote"
 	Agent       = "claude"
 
-	DefaultPath  = "/Library/Application Support/Kontext/managed.json"
-	EnvPath      = "KONTEXT_MANAGED_CONFIG"
-	EnvAllowHTTP = "KONTEXT_MANAGED_ALLOW_HTTP_LOCALHOST"
+	DefaultPath = "/Library/Application Support/Kontext/managed.json"
+	// InstallTokenFilePath is where an MDM install wrapper writes the install
+	// token (0600, owned by the GUI user). The LaunchAgent launcher reads it
+	// and exports KONTEXT_INSTALL_TOKEN for the daemon process only.
+	InstallTokenFilePath = "/Library/Application Support/Kontext/install-token"
+	EnvPath              = "KONTEXT_MANAGED_CONFIG"
+	EnvAllowHTTP         = "KONTEXT_MANAGED_ALLOW_HTTP_LOCALHOST"
 
 	DeploymentVersionPath    = "/Library/Application Support/Kontext/deployment-version"
 	EnvDeploymentVersionPath = "KONTEXT_DEPLOYMENT_VERSION_PATH"

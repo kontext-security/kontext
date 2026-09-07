@@ -322,10 +322,16 @@ func PrintManagedHookStatus(out io.Writer) HookStatus {
 }
 
 // PrintOrganizationManagedHookStatus checks the policy-owned Claude settings
-// used by organization-managed installs. Codex user hooks are intentionally a
-// self-serve requirement only.
+// used by organization-managed installs: the Kontext drop-in an MDM package
+// installs under managed-settings.d, or the base managed settings file when
+// an organization ships the hooks there instead. Codex user hooks are
+// intentionally a self-serve requirement only.
 func PrintOrganizationManagedHookStatus(out io.Writer) HookStatus {
-	return HookStatus{Healthy: printManagedClaudeHookStatus(out, claudemanaged.DefaultManagedSettingsPath())}
+	return HookStatus{Healthy: printManagedClaudeHookStatus(out, organizationManagedHookPaths()...)}
+}
+
+func organizationManagedHookPaths() []string {
+	return []string{claudemanaged.ManagedSettingsDropInPath, claudemanaged.DefaultManagedSettingsPath()}
 }
 
 func printManagedClaudeHookStatus(out io.Writer, paths ...string) bool {
