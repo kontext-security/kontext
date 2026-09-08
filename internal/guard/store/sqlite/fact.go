@@ -54,8 +54,12 @@ func applyDecisionFact(action map[string]any, event risk.HookEvent, decision ris
 			Shell:                  evidence.Shell,
 		}
 	} else if evidence != nil {
+		// The server's state is the cause, not the cached deployment's mode:
+		// the cache keeps last-known-good through disabled/no_active_policy,
+		// and carrying its observe/enforce here fails the contract check —
+		// and with it the whole PreToolUse write, proposed row included.
 		input.Disabled = ledgerfact.DisabledInput{
-			ConfiguredMode:    evidence.ConfiguredRolloutMode,
+			ConfiguredMode:    disabledConfiguredMode(evidence.DistributionState),
 			DistributionState: evidence.DistributionState,
 			CacheStale:        evidence.CacheStale,
 			CacheExpired:      evidence.CacheExpired,
@@ -97,6 +101,15 @@ func applyDecisionFact(action map[string]any, event risk.HookEvent, decision ris
 // the disabled fact shape; every other state (including principal_unavailable
 // and cache failures) is Cedar answering — possibly with a failure outcome —
 // and is recorded as such.
+// disabledConfiguredMode names what the server declared for a call no
+// deployment answered: an explicit kill switch, or nothing at all.
+func disabledConfiguredMode(distributionState string) cedareval.RolloutMode {
+	if distributionState == "disabled" {
+		return cedareval.RolloutModeDisabled
+	}
+	return ""
+}
+
 func cedarIsEngineOfRecord(evidence risk.CedarEvidence) bool {
 	switch evidence.DistributionState {
 	case "disabled", "no_active_policy":
