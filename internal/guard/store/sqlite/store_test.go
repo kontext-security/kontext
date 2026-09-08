@@ -272,6 +272,52 @@ where id = 'act_legacy_deny'
 	}
 }
 
+// A daemon that cached a policy and then hears no_active_policy (or disabled)
+// keeps the old deployment as last-known-good, so its evidence still names
+// that deployment's mode. The decided row must still be written; before this
+// guard, the fact failed the contract check and the PreToolUse write rolled
+// back, which is how Katana lost every decision on 2026-09-07.
+func TestSaveDecisionRecordsWithdrawnDeploymentAsDisabledFact(t *testing.T) {
+	for _, tc := range []struct {
+		state      string
+		wantReason cedareval.ReasonCode
+	}{
+		{state: "no_active_policy", wantReason: cedareval.ReasonPolicyMissing},
+		{state: "disabled", wantReason: cedareval.ReasonPolicyDisabled},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			store, err := OpenStore(t.TempDir() + "/guard.db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			_, err = store.SaveDecision(context.Background(), risk.HookEvent{SessionID: "s1", HookEventName: "PreToolUse", ToolName: "Bash", ToolUseID: "tool-1"}, risk.RiskDecision{
+				Decision:  risk.DecisionAllow,
+				RiskEvent: risk.RiskEvent{Decision: risk.DecisionAllow},
+				Cedar: &risk.CedarEvidence{
+					PolicyHash:            strings.Repeat("a", 64),
+					DeploymentIdentity:    strings.Repeat("b", 64),
+					AppliedRolloutMode:    cedareval.RolloutModeObserve,
+					ConfiguredRolloutMode: cedareval.RolloutModeObserve,
+					DistributionState:     tc.state,
+					EvaluatorVersion:      "cedar-go/test",
+				},
+			})
+			if err != nil {
+				t.Fatalf("SaveDecision: %v", err)
+			}
+			var appliedMode, reasonCode string
+			var proposed int
+			if err := store.db.QueryRowContext(context.Background(), `select applied_mode, reason_code, (select count(*) from authorization_actions where canonical_event_type = 'request.proposed') from authorization_actions where canonical_event_type = 'request.decided'`).Scan(&appliedMode, &reasonCode, &proposed); err != nil {
+				t.Fatal(err)
+			}
+			if appliedMode != string(cedareval.RolloutModeDisabled) || reasonCode != string(tc.wantReason) || proposed != 1 {
+				t.Fatalf("applied_mode=%q reason_code=%q proposed=%d, want disabled/%s/1", appliedMode, reasonCode, proposed, tc.wantReason)
+			}
+		})
+	}
+}
+
 func TestSaveDecisionGeneratesUniqueIDsConcurrently(t *testing.T) {
 	store, err := OpenStore(t.TempDir() + "/guard.db")
 	if err != nil {
