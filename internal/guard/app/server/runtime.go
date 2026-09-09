@@ -336,27 +336,35 @@ func (r guardHookRuntime) observePrompt(event risk.HookEvent) {
 
 func riskEventFromHookEvent(event hook.Event) risk.HookEvent {
 	return risk.HookEvent{
-		SessionID:     event.SessionID,
-		Agent:         event.Agent,
-		HookEventName: event.HookName.String(),
-		ToolName:      event.ToolName,
-		ToolInput:     event.ToolInput,
-		ToolResponse:  event.ToolResponse,
-		ToolUseID:     event.ToolUseID,
-		CWD:           event.CWD,
+		SessionID:      event.SessionID,
+		Agent:          event.Agent,
+		HookEventName:  event.HookName.String(),
+		ToolName:       event.ToolName,
+		ToolInput:      event.ToolInput,
+		ToolResponse:   event.ToolResponse,
+		ToolUseID:      event.ToolUseID,
+		CWD:            event.CWD,
+		PermissionMode: event.PermissionMode,
+		DurationMs:     event.DurationMs,
+		Error:          event.Error,
+		IsInterrupt:    event.IsInterrupt,
 	}
 }
 
 func hookEventFromRiskEvent(event risk.HookEvent) hook.Event {
 	return hook.Event{
-		SessionID:    event.SessionID,
-		Agent:        event.Agent,
-		HookName:     hook.HookName(event.HookEventName),
-		ToolName:     event.ToolName,
-		ToolInput:    event.ToolInput,
-		ToolResponse: event.ToolResponse,
-		ToolUseID:    event.ToolUseID,
-		CWD:          event.CWD,
+		SessionID:      event.SessionID,
+		Agent:          event.Agent,
+		HookName:       hook.HookName(event.HookEventName),
+		ToolName:       event.ToolName,
+		ToolInput:      event.ToolInput,
+		ToolResponse:   event.ToolResponse,
+		ToolUseID:      event.ToolUseID,
+		CWD:            event.CWD,
+		PermissionMode: event.PermissionMode,
+		DurationMs:     event.DurationMs,
+		Error:          event.Error,
+		IsInterrupt:    event.IsInterrupt,
 	}
 }
 

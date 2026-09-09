@@ -18,6 +18,12 @@ type HookEvent struct {
 	ToolUseID     string         `json:"tool_use_id,omitempty"`
 	CWD           string         `json:"cwd,omitempty"`
 	Timestamp     time.Time      `json:"timestamp,omitempty"`
+	// Provider-reported hook metadata, not a risk or policy decision. Pointer
+	// fields preserve the distinction between missing values and zero/false.
+	PermissionMode string `json:"permission_mode,omitempty"`
+	DurationMs     *int64 `json:"duration_ms,omitempty"`
+	Error          string `json:"error,omitempty"`
+	IsInterrupt    *bool  `json:"is_interrupt,omitempty"`
 }
 
 type EventType string

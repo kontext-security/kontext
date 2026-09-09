@@ -65,6 +65,10 @@ Receipt signing is intentionally small for the local implementation. Set `KONTEX
 
 The SQLite store also exposes raw ledger export and verification helpers for follow-on managed streaming work. `LedgerBatch` returns sessions, selected actions plus any bridge actions needed by a contiguous receipt range, receipts, and a receipt-chain anchor for incremental batches. `VerifyReceipts` checks receipt hashes, previous-hash links, and local Ed25519 signatures when signing is enabled.
 
+Provider-reported hook metadata is preserved under `authorization_actions.context_json.hook_metadata` and in new receipt payloads under `action.hook_metadata`. Optional fields are `duration_ms` (provider-reported execution time, not observer elapsed time), `is_interrupt` (whether the reported failure was due to user interruption), `permission_mode` (the agent's permission setting, separate from Kontext's observe/enforce mode), and `error_redacted`. Missing fields remain absent; explicit zero durations and `false` interruption flags are retained. Claude's adapter accepts all four; Codex currently supplies the permission-mode field through its adapter, without synthesizing the other fields from tool output.
+
+Error text is redacted before truncation to 4 KiB, and permission-mode text is redacted and capped at 256 bytes. Text exceeding the 1 MiB redaction-input limit is omitted with a marker. The provider error also populates the existing `error_redacted` action column and outcome receipt field; a policy explanation is not substituted when no tool error was supplied. Metadata recording adds no model calls, changes neither allow/deny decisions nor the existing hook-name-based outcome labels, and does not rewrite historical receipts or change the Decision Fact v1 schema.
+
 ## Local judge
 
 The standalone `kontext guard start` daemon can use a local OpenAI-compatible judge, such as `llama-server`. The managed-observe daemon does not download or start a model by default; configure it explicitly as described in [Guardrail LLM](#guardrail-llm).
