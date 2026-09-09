@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/buildinfo"
 )
 
@@ -62,4 +63,24 @@ func LoadDaemonStatus(dbPath string) *DaemonStatus {
 		return nil
 	}
 	return &status
+}
+
+func AgentInventoryPath(dbPath string) string {
+	return filepath.Join(filepath.Dir(dbPath), "agent-inventory.json")
+}
+
+// LoadAgentInventory is a breadcrumb read only. Doctor never rescans the disk.
+func LoadAgentInventory(dbPath string) *agentinventory.Inventory {
+	data, err := os.ReadFile(AgentInventoryPath(dbPath))
+	if err != nil {
+		return nil
+	}
+	var inv agentinventory.Inventory
+	if json.Unmarshal(data, &inv) != nil || inv.Agents == nil {
+		return nil
+	}
+	if _, err := time.Parse(time.RFC3339, inv.ReportedAt); err != nil {
+		return nil
+	}
+	return &inv
 }

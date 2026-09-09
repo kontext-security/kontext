@@ -13,6 +13,8 @@ import (
 )
 
 const (
+	DefaultAgentInventoryInterval = 10 * time.Minute
+
 	DefaultLaunchdLabel = "security.kontext.managed-observe"
 
 	// EnvExpectedConfigScope marks which managed-config scope a daemon was
@@ -104,4 +106,13 @@ func EnsureSocketDir(socketPath string) error {
 		}
 	}
 	return nil
+}
+
+func agentInventoryIntervalFromEnv() time.Duration {
+	if value := strings.TrimSpace(os.Getenv("KONTEXT_AGENT_INVENTORY_INTERVAL")); value != "" {
+		if interval, err := time.ParseDuration(value); err == nil && interval > 0 {
+			return interval
+		}
+	}
+	return DefaultAgentInventoryInterval
 }

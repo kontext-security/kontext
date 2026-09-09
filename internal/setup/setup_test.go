@@ -183,6 +183,10 @@ func TestRunFullFlow(t *testing.T) {
 		t.Fatalf("Run() error = %v\nstdout:\n%s\nstderr:\n%s", err, h.out.String(), h.errOut.String())
 	}
 
+	if !strings.Contains(h.out.String(), "✓ Agent discovery:") || !strings.Contains(h.out.String(), "Codex (governed)") {
+		t.Fatalf("missing discovery summary: %s", h.out.String())
+	}
+
 	// Keychain holds the raw token.
 	if h.keychain[KeychainItemName] != "tok-123" {
 		t.Fatalf("keychain = %q", h.keychain[KeychainItemName])
