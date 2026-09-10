@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
@@ -69,6 +70,9 @@ type Options struct {
 	// settings file is unreadable) — the fact is then omitted entirely, which
 	// the hosted side reads as "unknown", never as "missing".
 	HooksFact func() (HooksFact, bool)
+	// AgentsFact reads the cached discovery scan. False means no scan yet;
+	// omit both fields so older or unavailable discovery stays unknown.
+	AgentsFact func() (agentinventory.Inventory, bool)
 	// DeviceKey resolves the endpoint's stable reconciliation key per flush.
 	// Empty means unknown — the field is omitted, and the hosted side must
 	// read absence as "no key reported", never as "a different device":
@@ -128,7 +132,9 @@ type Device struct {
 	// the raw hardware identifier. The hosted side uses it to reconcile a
 	// fresh installation_id with the stale instance it replaces. It is
 	// self-reported: a reconciliation hint, never an authentication input.
-	DeviceKey string `json:"device_key,omitempty"`
+	DeviceKey        string                  `json:"device_key,omitempty"`
+	Agents           *[]agentinventory.Agent `json:"agents,omitempty"`
+	AgentsReportedAt string                  `json:"agents_reported_at,omitempty"`
 }
 
 // HooksFact is the per-flush answer to "are the Claude Code managed hooks for
@@ -426,7 +432,18 @@ func newPayload(
 	if opts.DeviceKey != nil {
 		deviceKey = strings.TrimSpace(opts.DeviceKey())
 	}
-	if label != "" || deploymentVersion != "" || userEmail != "" || hooksPresent != nil || deviceKey != "" {
+	var agents *[]agentinventory.Agent
+	var agentsReportedAt string
+	if opts.AgentsFact != nil {
+		if fact, ok := opts.AgentsFact(); ok && fact.ReportedAt != "" {
+			list := fact.Agents
+			if list == nil {
+				list = []agentinventory.Agent{}
+			}
+			agents, agentsReportedAt = &list, fact.ReportedAt
+		}
+	}
+	if agents != nil || label != "" || deploymentVersion != "" || userEmail != "" || hooksPresent != nil || deviceKey != "" {
 		payload.Device = &Device{
 			Label:             label,
 			DeploymentVersion: deploymentVersion,
@@ -434,6 +451,8 @@ func newPayload(
 			HooksPresent:      hooksPresent,
 			DisabledAllHooks:  disabledAllHooks,
 			DeviceKey:         deviceKey,
+			Agents:            agents,
+			AgentsReportedAt:  agentsReportedAt,
 		}
 	}
 	return payload

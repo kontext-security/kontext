@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 	"github.com/kontext-security/kontext/internal/setup"
 )
@@ -104,6 +105,7 @@ func fullyPopulatedReport() managedobserve.Report {
 		DaemonVersion:        "1.2.3",
 		DaemonPID:            4242,
 		InstalledVersion:     "1.2.3",
+		Agents:               &agentinventory.Inventory{Agents: []agentinventory.Agent{}, ReportedAt: "2026-09-09T08:20:00Z"},
 		HeartbeatAgeSeconds:  &age,
 		ExportPending:        &pending,
 		Warnings:             []string{"example warning"},

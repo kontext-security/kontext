@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/buildinfo"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/installation"
@@ -67,8 +68,9 @@ type Report struct {
 	DaemonPID        int    `json:"daemon_pid,omitempty"`
 	InstalledVersion string `json:"installed_version,omitempty"`
 
-	HeartbeatAgeSeconds *float64 `json:"heartbeat_age_seconds,omitempty"`
-	ExportPending       *int     `json:"export_pending,omitempty"`
+	Agents              *agentinventory.Inventory `json:"agents,omitempty"`
+	HeartbeatAgeSeconds *float64                  `json:"heartbeat_age_seconds,omitempty"`
+	ExportPending       *int                      `json:"export_pending,omitempty"`
 
 	// Warnings mirrors every WARNING line in the text output, so a GUI can show
 	// the same findings without parsing prose.
@@ -130,6 +132,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	if opts.DBPath == "" {
 		opts.DBPath = DefaultDBPath()
 	}
+	report.Agents = LoadAgentInventory(opts.DBPath)
 	if opts.SocketPath == "" {
 		opts.SocketPath = DefaultSocketPath()
 	}
@@ -303,6 +306,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	state, err := managedstream.LoadState(managedstream.DefaultStatePathForDB(opts.DBPath))
 	if err != nil {
 		fmt.Fprintf(out, "  heartbeat: ERROR %v\n", err)
+		printAgentInventory(out, report.Agents, opts.Now())
 		fmt.Fprintf(out, "  export: ERROR %v\n", err)
 		status.Healthy = false
 	} else {
@@ -311,6 +315,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 		if !ok {
 			status.Healthy = false
 		}
+		printAgentInventory(out, report.Agents, opts.Now())
 		ok, pending := printExportLag(exportCtx, out, opts.DBPath, state, warn)
 		report.ExportPending = pending
 		if !ok {
@@ -597,4 +602,33 @@ func DaemonLive(dbPath, socketPath string) bool {
 	conn.Close()
 	status := LoadDaemonStatus(dbPath)
 	return status != nil && pidAlive(status.PID)
+}
+
+func printAgentInventory(out io.Writer, inv *agentinventory.Inventory, now time.Time) {
+	if inv == nil {
+		fmt.Fprintln(out, "  agents: not scanned yet")
+		return
+	}
+	labels := make([]string, 0, len(inv.Agents))
+	for _, agent := range inv.Agents {
+		state := string(agent.Wired)
+		switch agent.Wired {
+		case agentinventory.WiredYes:
+			state = "wired"
+		case agentinventory.WiredNo:
+			state = "not wired"
+		}
+		labels = append(labels, agentinventory.DisplayName(agent.ID)+" ("+state+")")
+	}
+	summary := strings.Join(labels, ", ")
+	if summary == "" {
+		summary = "none found"
+	}
+	scanned, _ := time.Parse(time.RFC3339, inv.ReportedAt)
+	age := max(now.Sub(scanned), 0)
+	incomplete := ""
+	if inv.Incomplete {
+		incomplete = " (incomplete)"
+	}
+	fmt.Fprintf(out, "  agents: %s — scanned %s ago%s\n", summary, doctorDuration(age), incomplete)
 }

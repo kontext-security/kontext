@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
@@ -102,11 +103,24 @@ func TestDaemonSessionEndClosesHookSessionID(t *testing.T) {
 }
 
 func TestDaemonStreamsLedgerBatches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, d := range agentinventory.Catalog {
+		if d.ConfigEnv != "" {
+			t.Setenv(d.ConfigEnv, "")
+		}
+	}
+	t.Setenv("OPENCLAW_HOME", "")
+	if err := os.Mkdir(filepath.Join(home, ".cursor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	type ledgerBatchRequest struct {
 		OrganizationID string `json:"organization_id"`
 		InstallationID string `json:"installation_id"`
 		Device         *struct {
-			Label string `json:"label"`
+			Label            string                 `json:"label"`
+			Agents           []agentinventory.Agent `json:"agents"`
+			AgentsReportedAt string                 `json:"agents_reported_at"`
 		} `json:"device,omitempty"`
 		Actions []struct {
 			SessionID string `json:"session_id"`
@@ -188,6 +202,12 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 	for {
 		select {
 		case body := <-requests:
+			if body.Device == nil || len(body.Device.Agents) != 1 || body.Device.Agents[0].ID != "cursor" || body.Device.AgentsReportedAt == "" {
+				t.Fatalf("heartbeat discovery = %+v", body.Device)
+			}
+			if inv := LoadAgentInventory(dbPath); inv == nil || len(inv.Agents) != 1 || inv.Agents[0].ID != "cursor" {
+				t.Fatalf("breadcrumb = %+v", inv)
+			}
 			if len(body.Actions) == 0 {
 				continue
 			}
