@@ -43,6 +43,7 @@ type DaemonOptions struct {
 	PolicyHTTPClient              *http.Client
 	EndpointConfigRefreshInterval time.Duration
 	EndpointConfigHTTPClient      *http.Client
+	AgentInventoryInterval        time.Duration
 	Diagnostic                    diagnostic.Logger
 	// BinaryVersion is the CLI binary version, for startup logging and future
 	// status reporting.
@@ -287,12 +288,27 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		endpointConfigRefresher.Run(policyCtx)
 	}()
 
+	inventoryHolder := &agentInventoryHolder{}
+	inventoryReady := make(chan struct{})
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		inventoryHolder.run(policyCtx, opts, dbPath, inventoryReady)
+	}()
+
 	streamCtx, stopStream := context.WithCancel(ctx)
 	streamErr := make(chan error, 1)
 	background.Add(1)
 	go func() {
 		defer background.Done()
-		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID)
+		// Keep the first heartbeat from racing the initial scan. The hook
+		// socket is already serving while discovery runs.
+		select {
+		case <-inventoryReady:
+		case <-streamCtx.Done():
+			return
+		}
+		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder)
 	}()
 	defer func() {
 		stopPolicyRefresh()
@@ -572,7 +588,7 @@ func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token string, c
 	return s.key
 }
 
-func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string) error {
+func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder) error {
 	interval := opts.StreamInterval
 	if interval == 0 {
 		interval = managedstream.DefaultIntervalFromEnv()
@@ -580,7 +596,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	deviceKeys := &deviceKeySource{}
 	var consecutiveAuthFailures, consecutiveFlushFailures int
 	flush := func() {
-		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys)
+		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder)
 		if err == nil {
 			consecutiveAuthFailures = 0
 			consecutiveFlushFailures = 0
@@ -615,7 +631,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	}
 }
 
-func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource) error {
+func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder) error {
 	loadedConfig, installToken, err := loadManagedConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("managed stream config reload: %w", err)
@@ -634,6 +650,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		UserEmail:         loadedConfig.Config.Device.UserEmail,
 		DeploymentVersion: deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
 		HooksFact:         managedObserveHooksFact,
+		AgentsFact:        inventoryHolder.Fact,
 		DeviceKey:         func() string { return deviceKey },
 		HTTPClient:        opts.StreamHTTPClient,
 		Diagnostic:        opts.Diagnostic,

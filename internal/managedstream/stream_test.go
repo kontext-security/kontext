@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1401,5 +1402,54 @@ func TestFlushRestoresBatchLimitAfterReduction(t *testing.T) {
 	}
 	if maxSize < 8 {
 		t.Fatalf("accepted batch sizes = %v, want at least one >= 8 (limit recovered)", batchSizes)
+	}
+}
+
+func TestPayloadDiscoveryAtomicPair(t *testing.T) {
+	for _, name := range []string{"no callback", "no scan", "missing timestamp", "empty", "nil list", "agents"} {
+		t.Run(name, func(t *testing.T) {
+			opts := Options{}
+			inv := agentinventory.Inventory{Agents: []agentinventory.Agent{}, ReportedAt: "2026-09-09T08:20:00Z", Incomplete: true}
+			if name == "nil list" {
+				inv.Agents = nil
+			}
+			if name == "agents" {
+				inv.Agents = []agentinventory.Agent{{ID: "cursor", ConfigPath: "~/.cursor", Wired: agentinventory.WiredUnsupported}}
+			}
+			if name == "missing timestamp" {
+				inv.ReportedAt = ""
+			}
+			if name != "no callback" {
+				opts.AgentsFact = func() (agentinventory.Inventory, bool) { return inv, name != "no scan" }
+			}
+			body, err := json.Marshal(newPayload(opts, nil, nil, nil, nil, nil, time.Now()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatal(err)
+			}
+			present := name == "empty" || name == "nil list" || name == "agents"
+			if !present {
+				if payload["device"] != nil {
+					t.Fatalf("unexpected device: %s", body)
+				}
+				return
+			}
+			var device map[string]json.RawMessage
+			if err := json.Unmarshal(payload["device"], &device); err != nil {
+				t.Fatal(err)
+			}
+			if len(device) != 2 || string(device["agents_reported_at"]) != `"2026-09-09T08:20:00Z"` {
+				t.Fatalf("atomic pair: %s", body)
+			}
+			if name != "agents" && string(device["agents"]) != "[]" {
+				t.Fatalf("empty scan: %s", body)
+			}
+			if name == "agents" && string(device["agents"]) != `[{"id":"cursor","config_path":"~/.cursor","wired":"unsupported","last_activity_at":null}]` {
+				t.Fatalf("wire contract: %s", body)
+			}
+		})
 	}
 }

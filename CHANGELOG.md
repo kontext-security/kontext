@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.0](https://github.com/kontext-security/kontext/compare/v1.4.0...v1.5.0) (2026-09-10)
+
+
+### Features
+
+* **discovery:** report installed endpoint agents ([#496](https://github.com/kontext-security/kontext/issues/496)) ([05b4d64](https://github.com/kontext-security/kontext/commit/05b4d6405abf9de49f391ab5cf1787424c3d604b))
+
+
+### Bug Fixes
+
+* **doctor:** judge organization-managed installs by what the launcher sees ([#492](https://github.com/kontext-security/kontext/issues/492)) ([45cfb4b](https://github.com/kontext-security/kontext/commit/45cfb4b180ee8ba134e3b696c22c9fa4b7fd5555))
+* **guard:** record a withdrawn deployment as a disabled fact instead of dropping the decision ([#494](https://github.com/kontext-security/kontext/issues/494)) ([e0ac7a3](https://github.com/kontext-security/kontext/commit/e0ac7a3b75a81a3e5b77964823981c2ef083dca8))
+
 ## [1.4.0](https://github.com/kontext-security/kontext/compare/v1.3.0...v1.4.0) (2026-09-05)
 
 

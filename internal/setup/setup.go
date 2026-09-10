@@ -27,6 +27,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/guard/judge"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/installation"
@@ -444,6 +445,12 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks feature enabled ([features].hooks in %s)\n", configPath)
 	}
 	fmt.Fprintln(opts.Stderr, "note: Codex hooks require review before they run; open `/hooks` in Codex to trust the Kontext hooks.")
+	if home, err := os.UserHomeDir(); err == nil {
+		scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		inv := agentinventory.Scan(scanCtx, home, os.Getenv, time.Now(), managedobserve.AgentWiring())
+		cancel()
+		fmt.Fprintf(opts.Stdout, "  ✓ Agent discovery: %s\n", summariseInventory(inv))
+	}
 
 	// The pointer moves BEFORE the agent is (re)installed: the daemon resolves
 	// the active profile's config at startup, so this ordering makes the restart
@@ -1159,4 +1166,28 @@ func probeDaemon() error {
 		}
 	}
 	return lastErr
+}
+
+func summariseInventory(inv agentinventory.Inventory) string {
+	labels := make([]string, 0, len(inv.Agents))
+	for _, agent := range inv.Agents {
+		state := "not governed"
+		switch agent.Wired {
+		case agentinventory.WiredYes:
+			state = "governed"
+		case agentinventory.WiredUnsupported:
+			state = "not yet supported"
+		case agentinventory.WiredError:
+			state = "hook status unavailable"
+		}
+		labels = append(labels, agentinventory.DisplayName(agent.ID)+" ("+state+")")
+	}
+	summary := strings.Join(labels, ", ")
+	if summary == "" {
+		summary = "none found"
+	}
+	if inv.Incomplete {
+		summary += " (incomplete scan)"
+	}
+	return summary
 }
