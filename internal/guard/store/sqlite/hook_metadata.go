@@ -14,7 +14,12 @@ import (
 // absent, including on historical rows. This is evidence, not policy input.
 func hookMetadata(event risk.HookEvent, errorRedacted string) map[string]any {
 	metadata := map[string]any{}
-	if event.DurationMs != nil {
+	// The ledger exporter and hosted JavaScript API use float64 JSON numbers.
+	// Omit invalid durations before hashing/signing rather than let an unsafe
+	// integer round during export and invalidate the receipt. Match the hosted
+	// hook-metadata contract; explicit zero is still valid.
+	const maxSafeDurationMs = int64(1<<53 - 1)
+	if event.DurationMs != nil && *event.DurationMs >= 0 && *event.DurationMs <= maxSafeDurationMs {
 		metadata["duration_ms"] = *event.DurationMs
 	}
 	if event.IsInterrupt != nil {

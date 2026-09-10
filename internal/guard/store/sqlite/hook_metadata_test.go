@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -22,7 +23,7 @@ func TestSaveDecisionPreservesHookMetadata(t *testing.T) {
 		{"zero and false", risk.HookEvent{HookEventName: "PostToolUse", DurationMs: &zero, IsInterrupt: &notInterrupted}, map[string]any{"duration_ms": zero, "is_interrupt": false}},
 		{"absent", risk.HookEvent{HookEventName: "PostToolUseFailure"}, nil},
 		{"pre-tool permission", risk.HookEvent{HookEventName: "PreToolUse", PermissionMode: "acceptEdits"}, map[string]any{"permission_mode": "acceptEdits"}},
-		{"large integer", risk.HookEvent{HookEventName: "PreToolUse", DurationMs: &large}, map[string]any{"duration_ms": large}},
+		{"unsafe integer omitted", risk.HookEvent{HookEventName: "PreToolUse", DurationMs: &large}, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -99,6 +100,70 @@ func TestSaveDecisionPreservesHookMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestHookDurationExportIntegrity(t *testing.T) {
+	t.Setenv(ledgerSigningEnv, "1")
+	const maxSafeDuration = int64(1<<53 - 1)
+	for _, hookName := range []string{"PostToolUse", "PostToolUseFailure"} {
+		for _, duration := range []int64{0, 4187, maxSafeDuration, maxSafeDuration + 1, maxSafeDuration + 2, 1<<63 - 1, -1} {
+			t.Run(fmt.Sprintf("%s/%d", hookName, duration), func(t *testing.T) {
+				ctx := context.Background()
+				store, err := OpenStore(t.TempDir() + "/guard.db")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer store.Close()
+				notInterrupted := false
+				_, err = store.SaveDecision(ctx, risk.HookEvent{
+					SessionID: "session", ToolUseID: "tool", ToolName: "Bash",
+					HookEventName: hookName, DurationMs: &duration, IsInterrupt: &notInterrupted,
+				}, risk.RiskDecision{Decision: risk.DecisionAllow})
+				if err != nil {
+					t.Fatal(err)
+				}
+				batch, err := store.LedgerBatch(ctx, LedgerExportOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				wire, err := json.Marshal(batch)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Exercise the actual wire payload through a float64 JSON consumer,
+				// as used by the exporter and the hosted JavaScript API.
+				var exported LedgerBatch
+				if err := json.Unmarshal(wire, &exported); err != nil {
+					t.Fatal(err)
+				}
+				if len(exported.Actions) != 1 || len(exported.Receipts) != 1 {
+					t.Fatalf("export counts = %d actions, %d receipts", len(exported.Actions), len(exported.Receipts))
+				}
+				contextPayload := exported.Actions[0]["context_json"].(map[string]any)
+				metadata := contextPayload["hook_metadata"].(map[string]any)
+				got, present := metadata["duration_ms"]
+				wantPresent := duration >= 0 && duration <= maxSafeDuration
+				if present != wantPresent || (present && got != float64(duration)) {
+					t.Fatalf("exported duration = %v (present %t), input = %d", got, present, duration)
+				}
+				if metadata["is_interrupt"] != false {
+					t.Fatal("invalid duration must not remove other provider metadata")
+				}
+				receipt := exported.Receipts[0]
+				payload, err := json.Marshal(receipt["receipt_payload_json"])
+				if err != nil {
+					t.Fatal(err)
+				}
+				receiptHash := hashString(string(payload))
+				if receiptHash != receipt["receipt_hash"] {
+					t.Fatal("exported receipt no longer matches its signed hash")
+				}
+				if err := store.verifyReceiptSignature(receiptHash, stringValue(receipt["signature"]), stringValue(receipt["signature_algorithm"]), stringValue(receipt["key_id"])); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 
