@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -132,37 +133,73 @@ func lastActivity(ctx context.Context, root string) (*string, bool) {
 	var newest time.Time
 	var incomplete bool
 	visited := 0
-	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if ctx.Err() != nil {
+	info, err := os.Lstat(root)
+	if err != nil || (!info.IsDir() && !info.Mode().IsRegular()) {
+		return nil, ctx.Err() != nil
+	}
+	newest = info.ModTime()
+	var walk func(string, int)
+	walk = func(dir string, depth int) {
+		if incomplete || ctx.Err() != nil {
 			incomplete = true
-			return fs.SkipAll
+			return
 		}
+		file, err := os.Open(dir)
 		if err != nil {
-			if entry != nil && entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
+			return
 		}
-		rel, _ := filepath.Rel(root, path)
-		if rel != "." {
-			visited++
-			if visited > 2000 {
+		defer file.Close()
+		var directories []fs.FileInfo
+		for {
+			if ctx.Err() != nil {
 				incomplete = true
-				return fs.SkipAll
+				return
+			}
+			// Bound reads as well as metadata work, including very wide roots.
+			entries, readErr := file.ReadDir(min(64, 2001-visited))
+			for _, entry := range entries {
+				visited++
+				if visited > 2000 || ctx.Err() != nil {
+					incomplete = true
+					return
+				}
+				if !entry.IsDir() && entry.Type() != 0 {
+					continue
+				}
+				info, err := entry.Info()
+				if err != nil || (!info.IsDir() && !info.Mode().IsRegular()) {
+					continue
+				}
+				if info.ModTime().After(newest) {
+					newest = info.ModTime()
+				}
+				if info.IsDir() && depth+1 < 4 {
+					directories = append(directories, info)
+				}
+			}
+			if readErr != nil {
+				break
 			}
 		}
-		if !entry.IsDir() && entry.Type() != 0 {
-			return nil
+		// ponytail: directory mtimes prioritize the bounded sample, not prove
+		// subtree freshness. Never prune an old directory based on its mtime:
+		// appending to an existing transcript leaves that directory unchanged.
+		sort.Slice(directories, func(i, j int) bool {
+			if directories[i].ModTime().Equal(directories[j].ModTime()) {
+				return directories[i].Name() < directories[j].Name()
+			}
+			return directories[i].ModTime().After(directories[j].ModTime())
+		})
+		for _, child := range directories {
+			walk(filepath.Join(dir, child.Name()), depth+1)
+			if incomplete {
+				return
+			}
 		}
-		info, err := entry.Info()
-		if err == nil && (info.IsDir() || info.Mode().IsRegular()) && info.ModTime().After(newest) {
-			newest = info.ModTime()
-		}
-		if entry.IsDir() && rel != "." && strings.Count(rel, string(filepath.Separator))+1 >= 4 {
-			return fs.SkipDir
-		}
-		return nil
-	})
+	}
+	if info.IsDir() {
+		walk(root, 0)
+	}
 	incomplete = incomplete || ctx.Err() != nil
 	if newest.IsZero() {
 		return nil, incomplete

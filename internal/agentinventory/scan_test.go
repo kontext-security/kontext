@@ -204,3 +204,51 @@ func BenchmarkScanEmptyHome(b *testing.B) {
 		Scan(context.Background(), home, func(string) string { return "" }, now, nil)
 	}
 }
+
+func TestLastActivityPrioritizesRecentDirectoriesWithoutPruningOldOnes(t *testing.T) {
+	now := time.Date(2026, 9, 10, 9, 0, 0, 0, time.UTC)
+	old := now.Add(-48 * time.Hour)
+	want := now.Add(-time.Minute)
+	for _, capped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("capped=%t", capped), func(t *testing.T) {
+			root := t.TempDir()
+			stamp := func(path string, at time.Time) {
+				t.Helper()
+				if err := os.Chtimes(path, at, at); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write := func(path string, at time.Time) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, nil, 0o000); err != nil {
+					t.Fatal(err)
+				}
+				stamp(path, at)
+			}
+			if capped {
+				// Lexical order exhausts the budget before reaching today's folder.
+				for i := 0; i < 2100; i++ {
+					write(filepath.Join(root, "a-old", fmt.Sprint(i)), old)
+				}
+				write(filepath.Join(root, "z-recent", "session"), want)
+				stamp(filepath.Join(root, "a-old"), old)
+				stamp(filepath.Join(root, "z-recent"), now.Add(-time.Hour))
+			} else {
+				// Appending to a transcript does not change its parent's mtime.
+				write(filepath.Join(root, "a-recent", "session"), now.Add(-time.Hour))
+				write(filepath.Join(root, "z-old", "session"), old)
+				stamp(filepath.Join(root, "a-recent"), now.Add(-time.Hour))
+				stamp(filepath.Join(root, "z-old"), old)
+				stamp(filepath.Join(root, "z-old", "session"), want)
+			}
+			stamp(root, old)
+			got, incomplete := lastActivity(context.Background(), root)
+			if got == nil || *got != want.Format(time.RFC3339) || incomplete != capped {
+				t.Fatalf("activity=%v, incomplete=%t; want %s, incomplete=%t", got, incomplete, want.Format(time.RFC3339), capped)
+			}
+		})
+	}
+}
