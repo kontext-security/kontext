@@ -60,8 +60,8 @@ message whether it is:
 `doctor --json` optionally includes `agents`, the daemon's cached inventory:
 `agents.agents` is an array of `{id, config_path, wired, last_activity_at}`,
 `agents.agents_reported_at` is the scan time in RFC 3339 UTC, and
-`agents.incomplete` is present when a scan hit a limit or skipped unreadable
-metadata. `last_activity_at` is a timestamp or null. Paths under home use `~/`;
+`agents.incomplete` is present when a scan hits an entry or time limit.
+Unreadable metadata is skipped. `last_activity_at` is a timestamp or null. Paths under home use `~/`;
 environment overrides outside home use absolute paths, capped at 1024 characters.
 An absent `agents` means no readable scan breadcrumb; an empty array means a
 reported scan found no agents. Doctor only reads this file, without scanning or
