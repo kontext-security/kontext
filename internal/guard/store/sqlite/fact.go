@@ -235,7 +235,9 @@ func nonEmptyStringsOnly(values []string) []string {
 func mergeDecisionContext(action map[string]any, fact ledgerfact.DecisionFact, decision risk.RiskDecision) error {
 	contextPayload := map[string]any{}
 	if existing, ok := action["context_json"].(string); ok && existing != "" {
-		if err := json.Unmarshal([]byte(existing), &contextPayload); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(existing))
+		decoder.UseNumber()
+		if err := decoder.Decode(&contextPayload); err != nil {
 			return fmt.Errorf("decode decided-row context: %w", err)
 		}
 	}

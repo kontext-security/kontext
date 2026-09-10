@@ -1038,6 +1038,10 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 		"hook_event_name": event.HookEventName,
 		"payload_capture": captureConfig,
 	}
+	outcome, outputSummary, outputHash, errorRedacted := outcomeValues(event, decision)
+	if metadata := hookMetadata(event, errorRedacted); len(metadata) > 0 {
+		contextPayload["hook_metadata"] = metadata
+	}
 	if branch != "" {
 		contextPayload["github"] = map[string]any{"branch_or_ref": branch}
 	}
@@ -1061,7 +1065,6 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 	if isDecisionEvent {
 		decisionResult = canonicalDecisionResult(decision.Decision)
 	}
-	outcome, outputSummary, outputHash, errorRedacted := outcomeValues(event, decision)
 	toolInputCaptured := capturedInputJSON(event, canonicalEvent, captureConfig.EffectiveMode)
 	toolOutputCaptured := capturedOutputJSON(event, canonicalEvent, captureConfig.EffectiveMode)
 	proposedAt := ""
@@ -1194,6 +1197,11 @@ func receiptInputFromAction(action map[string]any, receiptType string, now time.
 		// than only mirroring selected columns whose meaning may evolve.
 		actionPayload["decision_fact"] = json.RawMessage(decisionFactJSON)
 	}
+	if metadata := hookMetadataFromContext(stringValue(action["context_json"])); len(metadata) > 0 {
+		// Add evidence to new receipts without changing DecisionFact v1 or
+		// rewriting any historical signed payloads.
+		actionPayload["hook_metadata"] = metadata
+	}
 	if decisionResult != "" {
 		actionPayload["decision_result"] = decisionResult
 	}
@@ -1263,7 +1271,7 @@ func receiptActionValues(ctx context.Context, tx *sql.Tx, actionID string) (map[
 		decisionCategory, reason, riskLevel, riskSignalsJSON  string
 		policyID, policyVersion, matchedRulesJSON             string
 		outcome, outputSummary, errorRedacted                 string
-		decisionFactJSON                                      string
+		decisionFactJSON, contextJSON                         string
 		decisionResult                                        sql.NullString
 		riskScore, riskThreshold                              sql.NullFloat64
 	)
@@ -1276,7 +1284,7 @@ select id, session_id, coalesce(tool_use_id, ''), coalesce(tool_name, ''),
   risk_score, risk_threshold, coalesce(risk_signals_json, '[]'),
   coalesce(policy_id, ''), coalesce(policy_version, ''), coalesce(matched_rules_json, '[]'),
   coalesce(outcome, ''), coalesce(output_summary, ''), coalesce(error_redacted, ''),
-  coalesce(decision_fact_json, '')
+  coalesce(decision_fact_json, ''), coalesce(context_json, '{}')
 from authorization_actions
 where id = ?
 	`, actionID).Scan(
@@ -1285,7 +1293,7 @@ where id = ?
 		&decisionResult, &reasonCode, &riskEventJSON, &outputHash,
 		&decisionCategory, &reason, &riskLevel, &riskScore, &riskThreshold,
 		&riskSignalsJSON, &policyID, &policyVersion, &matchedRulesJSON,
-		&outcome, &outputSummary, &errorRedacted, &decisionFactJSON,
+		&outcome, &outputSummary, &errorRedacted, &decisionFactJSON, &contextJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -1316,6 +1324,7 @@ where id = ?
 		"output_summary":     outputSummary,
 		"error_redacted":     errorRedacted,
 		"decision_fact_json": decisionFactJSON,
+		"context_json":       contextJSON,
 	}, nil
 }
 
@@ -1440,12 +1449,12 @@ func adapterDecision(decision risk.Decision) string {
 }
 
 func outcomeValues(event risk.HookEvent, decision risk.RiskDecision) (outcome, summary, outputHash, errorRedacted string) {
+	errorRedacted = redactHookText(event.Error, 4096)
 	switch event.HookEventName {
 	case "PostToolUse":
 		outcome = "success"
 	case "PostToolUseFailure":
 		outcome = "error"
-		errorRedacted = decision.Reason
 	default:
 		outcome = "not_executed"
 	}
