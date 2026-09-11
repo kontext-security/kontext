@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/kontext-security/kontext/compare/v1.5.0...v1.5.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **guard:** preserve provider hook metadata in ledger receipts ([#495](https://github.com/kontext-security/kontext/issues/495)) ([08b26cc](https://github.com/kontext-security/kontext/commit/08b26cc41f75e8a9e9ab07b03feee078501bf542))
+
 ## [1.5.0](https://github.com/kontext-security/kontext/compare/v1.4.0...v1.5.0) (2026-09-10)
 
 
