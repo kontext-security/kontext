@@ -117,13 +117,19 @@ type RiskDecision struct {
 	// the decision path but never consulted by it. Plain data on purpose: this
 	// package sits below the classifier and must not depend on it.
 	Classifier *ClassifierAnnotation `json:"classifier,omitempty"`
-	// StepSafety is local-only pilot evidence. Excluding it from JSON keeps the
-	// score out of signed facts and hosted streams until a reviewed contract
-	// explicitly opts it in.
+	// StepSafety is advisory evidence, excluded from signed decision facts.
+	// Managed upload uses a separate Merlin annotation contract.
 	StepSafety *StepSafetyAnnotation `json:"-"`
 }
 
+type MerlinReviewContext struct {
+	UserRequest        string `json:"user_request"`
+	InteractionHistory string `json:"interaction_history"`
+	Truncated          bool   `json:"truncated"`
+}
+
 type StepSafetyAnnotation struct {
+	ReviewContext      *MerlinReviewContext
 	HistoryOmitted     bool
 	UnsafeProbability  *float64
 	ShadowDecision     string

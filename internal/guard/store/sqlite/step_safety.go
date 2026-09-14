@@ -3,12 +3,14 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 )
@@ -16,25 +18,26 @@ import (
 var ErrStepSafetyVerdictNotFound = errors.New("step-safety verdict not found")
 
 type StepSafetyRecord struct {
-	HistoryOmitted     bool       `json:"history_omitted"`
-	ID                 string     `json:"id"`
-	ActionID           string     `json:"action_id"`
-	SessionID          string     `json:"session_id"`
-	ToolUseID          string     `json:"tool_use_id,omitempty"`
-	ToolName           string     `json:"tool_name"`
-	UnsafeProbability  *float64   `json:"unsafe_probability,omitempty"`
-	ShadowDecision     string     `json:"shadow_decision"`
-	Threshold          float64    `json:"threshold"`
-	ModelVersion       string     `json:"model_version"`
-	LatencyMS          float64    `json:"latency_ms"`
-	ErrorCode          string     `json:"error_code,omitempty"`
-	Enforced           bool       `json:"enforced"`
-	UserRequestPresent bool       `json:"user_request_present"`
-	HistoryPresent     bool       `json:"history_present"`
-	ToolSchemasPresent bool       `json:"tool_schemas_present"`
-	UserFeedback       string     `json:"user_feedback,omitempty"`
-	FeedbackAt         *time.Time `json:"feedback_at,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
+	ReviewContext      *risk.MerlinReviewContext `json:"review_context,omitempty"`
+	HistoryOmitted     bool                      `json:"history_omitted"`
+	ID                 string                    `json:"id"`
+	ActionID           string                    `json:"action_id"`
+	SessionID          string                    `json:"session_id"`
+	ToolUseID          string                    `json:"tool_use_id,omitempty"`
+	ToolName           string                    `json:"tool_name"`
+	UnsafeProbability  *float64                  `json:"unsafe_probability,omitempty"`
+	ShadowDecision     string                    `json:"shadow_decision"`
+	Threshold          float64                   `json:"threshold"`
+	ModelVersion       string                    `json:"model_version"`
+	LatencyMS          float64                   `json:"latency_ms"`
+	ErrorCode          string                    `json:"error_code,omitempty"`
+	Enforced           bool                      `json:"enforced"`
+	UserRequestPresent bool                      `json:"user_request_present"`
+	HistoryPresent     bool                      `json:"history_present"`
+	ToolSchemasPresent bool                      `json:"tool_schemas_present"`
+	UserFeedback       string                    `json:"user_feedback,omitempty"`
+	FeedbackAt         *time.Time                `json:"feedback_at,omitempty"`
+	CreatedAt          time.Time                 `json:"created_at"`
 }
 
 const stepSafetyVerdictsDDL = `
@@ -58,11 +61,15 @@ create table if not exists step_safety_verdicts (
   user_feedback text,
   feedback_at text,
   created_at text not null,
+  review_context_json text,
   unique(action_id)
 );
 
 create index if not exists idx_step_safety_session_created
 on step_safety_verdicts(session_id, created_at);
+
+create index if not exists idx_step_safety_created
+on step_safety_verdicts(created_at, id);
 
 create index if not exists idx_step_safety_action
 on step_safety_verdicts(action_id);
@@ -74,6 +81,7 @@ func (s *Store) ensureStepSafetyVerdictColumns(ctx context.Context) error {
 		{name: "history_present", def: "integer not null default 0"},
 		{name: "history_omitted", def: "integer not null default 0"},
 		{name: "tool_schemas_present", def: "integer not null default 0"},
+		{name: "review_context_json", def: "text"},
 	} {
 		if err := s.ensureColumn(ctx, "step_safety_verdicts", column.name, column.def); err != nil {
 			return err
@@ -100,20 +108,24 @@ func (s *Store) SaveStepSafetyVerdict(ctx context.Context, record StepSafetyReco
 	if record.ID == "" {
 		record.ID = "ssv_" + uuid.NewString()
 	}
-	_, err := s.db.ExecContext(ctx, `
+	reviewJSON, err := json.Marshal(record.ReviewContext)
+	if err != nil {
+		return StepSafetyRecord{}, err
+	}
+	_, err = s.db.ExecContext(ctx, `
 insert into step_safety_verdicts(
   id, action_id, session_id, tool_use_id, tool_name,
   unsafe_probability, shadow_decision, threshold, model_version,
   latency_ms, error_code, enforced,
   user_request_present, history_present, history_omitted, tool_schemas_present,
-  user_feedback, feedback_at, created_at
-) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  user_feedback, feedback_at, created_at, review_context_json
+) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.ID, record.ActionID, record.SessionID, nullIfEmpty(record.ToolUseID), record.ToolName,
 		record.UnsafeProbability, record.ShadowDecision, record.Threshold, record.ModelVersion,
 		record.LatencyMS, nullIfEmpty(record.ErrorCode), record.Enforced,
 		record.UserRequestPresent, record.HistoryPresent, record.HistoryOmitted, record.ToolSchemasPresent,
-		nullIfEmpty(record.UserFeedback), storedOptionalTime(record.FeedbackAt), record.CreatedAt.Format(time.RFC3339Nano),
+		nullIfEmpty(record.UserFeedback), storedOptionalTime(record.FeedbackAt), record.CreatedAt.Format(time.RFC3339Nano), string(reviewJSON),
 	)
 	if err != nil {
 		return StepSafetyRecord{}, err
@@ -183,7 +195,7 @@ select id, action_id, session_id, coalesce(tool_use_id, ''), tool_name,
   latency_ms, coalesce(error_code, ''), enforced,
   user_request_present, history_present, history_omitted, tool_schemas_present,
   coalesce(user_feedback, ''),
-  feedback_at, created_at
+  feedback_at, created_at, coalesce(review_context_json, 'null')
 from step_safety_verdicts
 `
 
@@ -191,15 +203,18 @@ func scanStepSafetyVerdict(scanner interface{ Scan(...any) error }) (StepSafetyR
 	var record StepSafetyRecord
 	var probability sql.NullFloat64
 	var feedbackAt sql.NullString
-	var createdAt string
+	var createdAt, reviewJSON string
 	if err := scanner.Scan(
 		&record.ID, &record.ActionID, &record.SessionID, &record.ToolUseID, &record.ToolName,
 		&probability, &record.ShadowDecision, &record.Threshold, &record.ModelVersion,
 		&record.LatencyMS, &record.ErrorCode, &record.Enforced,
 		&record.UserRequestPresent, &record.HistoryPresent, &record.HistoryOmitted, &record.ToolSchemasPresent,
 		&record.UserFeedback,
-		&feedbackAt, &createdAt,
+		&feedbackAt, &createdAt, &reviewJSON,
 	); err != nil {
+		return StepSafetyRecord{}, err
+	}
+	if err := json.Unmarshal([]byte(reviewJSON), &record.ReviewContext); err != nil {
 		return StepSafetyRecord{}, err
 	}
 	if probability.Valid {

@@ -196,6 +196,9 @@ func TestStepSafetyRunsAtPreExecutionHook(t *testing.T) {
 	if !records[0].UserRequestPresent || !records[0].HistoryPresent || !records[0].ToolSchemasPresent {
 		t.Fatalf("context coverage telemetry = %+v", records[0])
 	}
+	if records[0].ReviewContext == nil || records[0].ReviewContext.UserRequest != input.UserRequest || !strings.Contains(records[0].ReviewContext.InteractionHistory, "get_config") {
+		t.Fatalf("review context did not preserve the assessed action snapshot: %+v", records[0].ReviewContext)
+	}
 
 	feedback := httptest.NewRequest(http.MethodPost, "/api/step-safety/"+result.EventID+"/feedback", strings.NewReader(`{"user_feedback":"should_allow"}`))
 	feedback.Header.Set("Content-Type", "application/json")

@@ -88,6 +88,9 @@ func TestStepSafetyHistoryCoverageMigratesExistingDatabase(t *testing.T) {
 	if _, err := store.db.Exec(`alter table step_safety_verdicts drop column history_omitted`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.db.Exec(`alter table step_safety_verdicts drop column review_context_json`); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +100,7 @@ func TestStepSafetyHistoryCoverageMigratesExistingDatabase(t *testing.T) {
 	}
 	defer reopened.Close()
 	record, err := reopened.StepSafetyVerdictForAction(context.Background(), "old")
-	if err != nil || record.HistoryOmitted {
+	if err != nil || record.HistoryOmitted || record.ReviewContext != nil {
 		t.Fatalf("migration failed: %+v / %v", record, err)
 	}
 }

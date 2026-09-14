@@ -233,6 +233,9 @@ func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.Hoo
 		HistoryOmitted:     result.HistoryOmitted,
 		ToolSchemasPresent: result.ToolSchemasPresent,
 	}
+	if result.ShadowDecision == stepsafety.DecisionUnsafe {
+		decision.StepSafety.ReviewContext = merlinReviewContext(request, snapshot.InteractionHistory)
+	}
 }
 
 func (r guardHookRuntime) observeStepContext(event risk.HookEvent) {
@@ -270,6 +273,7 @@ func (r guardHookRuntime) recordStepSafety(ctx context.Context, actionID string,
 		toolName = toolName[:cut]
 	}
 	_, _ = r.store.SaveStepSafetyVerdict(ctx, sqlite.StepSafetyRecord{
+		ReviewContext:      annotation.ReviewContext,
 		ActionID:           actionID,
 		SessionID:          event.SessionID,
 		ToolUseID:          event.ToolUseID,

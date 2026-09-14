@@ -111,6 +111,7 @@ type Payload struct {
 	Sessions            []sqlite.LedgerRecord             `json:"agent_sessions"`
 	Actions             []sqlite.LedgerRecord             `json:"authorization_actions"`
 	Receipts            []sqlite.LedgerRecord             `json:"authorization_receipts"`
+	MerlinAnnotations   []sqlite.MerlinAnnotationRecord   `json:"merlin_annotations,omitempty"`
 	RiskTypeAnnotations []sqlite.RiskTypeAnnotationRecord `json:"risk_type_annotations,omitempty"`
 	ReceiptChainAnchor  *sqlite.LedgerReceiptChainAnchor  `json:"receipt_chain_anchor,omitempty"`
 }
@@ -150,6 +151,8 @@ type HooksFact struct {
 type State struct {
 	UpdatedAfter           *time.Time
 	ActionID               string
+	MerlinCreatedAfter     *time.Time
+	MerlinAnnotationID     string
 	RiskTypeCreatedAfter   *time.Time
 	RiskTypeAnnotationID   string
 	LastHeartbeatAttemptAt string
@@ -159,6 +162,8 @@ type State struct {
 type persistedState struct {
 	UpdatedAfter           string `json:"updated_after,omitempty"`
 	ActionID               string `json:"action_id,omitempty"`
+	MerlinCreatedAfter     string `json:"merlin_created_after,omitempty"`
+	MerlinAnnotationID     string `json:"merlin_annotation_id,omitempty"`
 	RiskTypeCreatedAfter   string `json:"risk_type_created_after,omitempty"`
 	RiskTypeAnnotationID   string `json:"risk_type_annotation_id,omitempty"`
 	LastHeartbeatAttemptAt string `json:"last_heartbeat_attempt_at,omitempty"`
@@ -219,6 +224,8 @@ func Flush(ctx context.Context, opts Options) error {
 	// cursorSafetyLag (see clampCursor).
 	pageUpdatedAfter := state.UpdatedAfter
 	pageActionID := state.ActionID
+	pageMerlinCreatedAfter := state.MerlinCreatedAfter
+	pageMerlinAnnotationID := state.MerlinAnnotationID
 	pageRiskTypeCreatedAfter := state.RiskTypeCreatedAfter
 	pageRiskTypeAnnotationID := state.RiskTypeAnnotationID
 	for {
@@ -267,11 +274,23 @@ func Flush(ctx context.Context, opts Options) error {
 				return err
 			}
 		}
-		if len(batch.Actions) == 0 && len(riskTypeAnnotations) == 0 {
+		var merlinAnnotations []sqlite.MerlinAnnotationRecord
+		var merlinCursor *sqlite.MerlinAnnotationCursor
+		if len(batch.Actions) == 0 && len(riskTypeAnnotations) == 0 && state.UpdatedAfter != nil {
+			merlinAnnotations, merlinCursor, err = store.MerlinAnnotations(ctx, sqlite.MerlinAnnotationExportOptions{
+				CreatedAfter: pageMerlinCreatedAfter, CreatedAfterID: pageMerlinAnnotationID,
+				ActionUpdatedThrough: state.UpdatedAfter, ActionUpdatedThroughID: state.ActionID, Limit: limit,
+			})
+			if err != nil {
+				return err
+			}
+		}
+		if len(batch.Actions) == 0 && len(riskTypeAnnotations) == 0 && len(merlinAnnotations) == 0 {
 			return postHeartbeatIfDue(ctx, opts, statePath, state, now)
 		}
 
 		payload := newPayload(opts, batch.Sessions, batch.Actions, batch.Receipts, riskTypeAnnotations, batch.ReceiptChainAnchor, now)
+		payload.MerlinAnnotations = merlinAnnotations
 
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -349,6 +368,14 @@ func Flush(ctx context.Context, opts Options) error {
 			}
 			pageRiskTypeCreatedAfter = &cursorAt
 			pageRiskTypeAnnotationID = riskTypeCursor.AnnotationID
+		}
+		if merlinCursor != nil {
+			cursorAt := merlinCursor.CreatedAt.UTC()
+			safeAt, safeID := clampCursor(cursorAt, merlinCursor.AnnotationID, now)
+			if state.MerlinCreatedAfter == nil || safeAt.After(*state.MerlinCreatedAfter) || (safeAt.Equal(*state.MerlinCreatedAfter) && safeID > state.MerlinAnnotationID) {
+				state.MerlinCreatedAfter, state.MerlinAnnotationID = &safeAt, safeID
+			}
+			pageMerlinCreatedAfter, pageMerlinAnnotationID = &cursorAt, merlinCursor.AnnotationID
 		}
 		if err := SaveState(statePath, state); err != nil {
 			return err
@@ -543,6 +570,8 @@ func payloadLimitViolation(payload Payload, bodyBytes int) string {
 		return fmt.Sprintf("authorization_actions=%d exceeds max %d", len(payload.Actions), maxPayloadActions)
 	case len(payload.Receipts) > maxPayloadReceipts:
 		return fmt.Sprintf("authorization_receipts=%d exceeds max %d", len(payload.Receipts), maxPayloadReceipts)
+	case len(payload.MerlinAnnotations) > maxPayloadRiskTypeAnnotations:
+		return "merlin_annotations exceeds limit"
 	case len(payload.RiskTypeAnnotations) > maxPayloadRiskTypeAnnotations:
 		return fmt.Sprintf("risk_type_annotations=%d exceeds max %d", len(payload.RiskTypeAnnotations), maxPayloadRiskTypeAnnotations)
 	case bodyBytes > MaxPayloadBytes:
@@ -743,6 +772,14 @@ func LoadState(path string) (State, error) {
 		state.RiskTypeCreatedAfter = &parsed
 	}
 	state.RiskTypeAnnotationID = strings.TrimSpace(persisted.RiskTypeAnnotationID)
+	if value := strings.TrimSpace(persisted.MerlinCreatedAfter); value != "" {
+		parsed, err := parseStateUpdatedAfter(value)
+		if err != nil {
+			return State{}, fmt.Errorf("parse managed stream Merlin state: %w", err)
+		}
+		state.MerlinCreatedAfter = &parsed
+	}
+	state.MerlinAnnotationID = strings.TrimSpace(persisted.MerlinAnnotationID)
 	state.LastHeartbeatAttemptAt = strings.TrimSpace(persisted.LastHeartbeatAttemptAt)
 	state.LastHeartbeatAt = strings.TrimSpace(persisted.LastHeartbeatAt)
 	return state, nil
@@ -753,6 +790,7 @@ func SaveState(path string, state State) error {
 		return err
 	}
 	persisted := persistedState{
+		MerlinAnnotationID:     strings.TrimSpace(state.MerlinAnnotationID),
 		ActionID:               strings.TrimSpace(state.ActionID),
 		RiskTypeAnnotationID:   strings.TrimSpace(state.RiskTypeAnnotationID),
 		LastHeartbeatAttemptAt: strings.TrimSpace(state.LastHeartbeatAttemptAt),
@@ -763,6 +801,9 @@ func SaveState(path string, state State) error {
 	}
 	if state.RiskTypeCreatedAfter != nil {
 		persisted.RiskTypeCreatedAfter = state.RiskTypeCreatedAfter.UTC().Format(time.RFC3339Nano)
+	}
+	if state.MerlinCreatedAfter != nil {
+		persisted.MerlinCreatedAfter = state.MerlinCreatedAfter.UTC().Format(time.RFC3339Nano)
 	}
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {

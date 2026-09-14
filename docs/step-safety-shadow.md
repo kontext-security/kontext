@@ -165,8 +165,17 @@ version, latency, error category, context-presence flags, `history_omitted`, and
 `enforced=false`. Exclusions and failures have `shadow_decision=unavailable` and
 no probability. They must not be counted as safe predictions.
 
-This table contains no raw requests, histories, arguments, schemas, or logits.
-The annotation is excluded from signed decision facts and hosted streams.
+Unsafe predictions also retain a separately bounded, redacted review context:
+up to 2,000 bytes of the user request and 6,000 bytes of supported tool history.
+This snapshot supplies the cloud AI assessment with evidence from the time of
+the action. It does not alter Merlin's inference input or restore excluded file
+tools. Context omission is explicit; no schemas or logits are stored.
+
+Managed streams upload `merlin_annotation/v1` records in a separate optional
+`merlin_annotations` array after the referenced action has been acknowledged.
+The annotation remains excluded from signed decision facts. Retries use an
+independent persisted cursor; mutable local feedback is not exported. Deploy
+the cloud receiver and its migration before releasing this stream extension.
 Results are available at `GET /api/sessions/{session_id}/step-safety`; same-origin
 feedback can be posted to `POST /api/step-safety/{action_id}/feedback`:
 
