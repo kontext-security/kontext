@@ -58,6 +58,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(managedObserveDaemonCmd())
 	root.AddCommand(doctorCmd())
 	root.AddCommand(riskTypesCmd())
+	root.AddCommand(stepSafetyCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(guardCmd())
 	return root

@@ -20,10 +20,12 @@ type HookEvent struct {
 	Timestamp     time.Time      `json:"timestamp,omitempty"`
 	// Provider-reported hook metadata, not a risk or policy decision. Pointer
 	// fields preserve the distinction between missing values and zero/false.
-	PermissionMode string `json:"permission_mode,omitempty"`
-	DurationMs     *int64 `json:"duration_ms,omitempty"`
-	Error          string `json:"error,omitempty"`
-	IsInterrupt    *bool  `json:"is_interrupt,omitempty"`
+	PermissionMode       string `json:"permission_mode,omitempty"`
+	DurationMs           *int64 `json:"duration_ms,omitempty"`
+	Error                string `json:"error,omitempty"`
+	IsInterrupt          *bool  `json:"is_interrupt,omitempty"`
+	UserRequest          string `json:"user_request,omitempty"`
+	AvailableToolSchemas any    `json:"available_tool_schemas,omitempty"`
 }
 
 type EventType string
@@ -115,6 +117,24 @@ type RiskDecision struct {
 	// the decision path but never consulted by it. Plain data on purpose: this
 	// package sits below the classifier and must not depend on it.
 	Classifier *ClassifierAnnotation `json:"classifier,omitempty"`
+	// StepSafety is local-only pilot evidence. Excluding it from JSON keeps the
+	// score out of signed facts and hosted streams until a reviewed contract
+	// explicitly opts it in.
+	StepSafety *StepSafetyAnnotation `json:"-"`
+}
+
+type StepSafetyAnnotation struct {
+	HistoryOmitted     bool
+	UnsafeProbability  *float64
+	ShadowDecision     string
+	Threshold          float64
+	ModelVersion       string
+	LatencyMS          float64
+	ErrorCode          string
+	Enforced           bool
+	UserRequestPresent bool
+	HistoryPresent     bool
+	ToolSchemasPresent bool
 }
 
 // CedarEvidence is the local evaluator's decision evidence. It is separate

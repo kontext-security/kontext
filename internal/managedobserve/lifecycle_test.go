@@ -242,6 +242,65 @@ func TestLifecycleEnforcePassesDaemonDenyThroughToAgent(t *testing.T) {
 	}
 }
 
+func TestLifecycleReservesShadowBudgetAfterAuthoritativePolicy(t *testing.T) {
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-shadow-budget-%d.sock", time.Now().UnixNano()))
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer listener.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Probes connect without an RPC. Accept until the actual request;
+		// the newer restart logic needs only one probe on a healthy socket.
+		var connection net.Conn
+		for {
+			candidate, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			var request localruntime.EvaluateRequest
+			if localruntime.ReadMessage(candidate, &request) == nil {
+				connection = candidate
+				break
+			}
+			_ = candidate.Close()
+		}
+		defer connection.Close()
+		// Longer than the former complete 250 ms PreToolUse budget, but still
+		// within the independently reserved shadow-inference window.
+		time.Sleep(600 * time.Millisecond)
+		_ = localruntime.WriteMessage(connection, localruntime.EvaluateResult{
+			Decision: "allow",
+			Allowed:  true,
+			Reason:   "policy allowed; shadow timed out open",
+			Mode:     "enforce",
+		})
+	}()
+
+	lifecycle := Lifecycle{
+		SocketPath: socketPath,
+		Label:      DefaultLaunchdLabel,
+		Mode:       "enforce",
+		Kickstart: func(context.Context, string) error {
+			t.Fatal("kickstart should not be called")
+			return nil
+		},
+	}
+	result := lifecycle.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse})
+	if result.Decision != hook.DecisionAllow || result.Mode != "enforce" {
+		t.Fatalf("result = %+v, want authoritative allow after shadow budget", result)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("server did not complete delayed shadow response")
+	}
+}
+
 func TestLifecycleEnforceFailsClosedWhenDaemonUnavailable(t *testing.T) {
 	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-enforce-down-%d.sock", time.Now().UnixNano()))
 	lifecycle := Lifecycle{
@@ -508,6 +567,11 @@ func TestMain(m *testing.M) {
 }
 
 func TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget(t *testing.T) {
+	// This test must allow a restart beyond the complete (now one-second)
+	// decision budget, unlike the short default used by unavailable tests.
+	previousRestartWait := daemonRestartWait
+	daemonRestartWait = preToolUseWait + time.Second
+	t.Cleanup(func() { daemonRestartWait = previousRestartWait })
 	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-restart-%d.sock", time.Now().UnixNano()))
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	done := make(chan struct{})
@@ -517,7 +581,7 @@ func TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget(t *testing.T) {
 		Mode:       "enforce",
 		Kickstart: func(context.Context, string) error {
 			go func() {
-				// Longer than the 250 ms decision budget, shorter than the
+				// Longer than the complete decision budget, shorter than the
 				// restart wait: a daemon coming back from a launchd reload.
 				time.Sleep(preToolUseWait + 100*time.Millisecond)
 				ln, err := net.Listen("unix", socketPath)

@@ -84,18 +84,20 @@ func NormalizeDecision(value string) (Decision, bool) {
 }
 
 type Event struct {
-	SessionID      string
-	Agent          string
-	HookName       HookName
-	ToolName       string
-	ToolInput      map[string]any
-	ToolResponse   map[string]any
-	ToolUseID      string
-	CWD            string
-	PermissionMode string
-	DurationMs     *int64
-	Error          string
-	IsInterrupt    *bool
+	SessionID            string
+	Agent                string
+	HookName             HookName
+	ToolName             string
+	ToolInput            map[string]any
+	ToolResponse         map[string]any
+	ToolUseID            string
+	CWD                  string
+	PermissionMode       string
+	DurationMs           *int64
+	Error                string
+	IsInterrupt          *bool
+	UserRequest          string
+	AvailableToolSchemas any
 }
 
 type Result struct {

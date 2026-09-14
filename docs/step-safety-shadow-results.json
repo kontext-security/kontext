@@ -1,0 +1,679 @@
+{
+  "schema_version": 1,
+  "purpose": "Local before/after control replay; reused benchmark and validation examples, not a fresh holdout or production coverage estimate.",
+  "previous_pr_revision": "86c3ff698c8e366436bfa221ebcdb79d2eea0b58",
+  "before_policy": "toolsafe-deberta-v3-xsmall-onnx-scoped-v1",
+  "after_policy": "toolsafe-deberta-v3-xsmall-onnx-scoped-v2",
+  "model_sha256": "7f7c068c80e826cee69fd3fca089662572b3372b0be109c6cf17b6852d94557c",
+  "threshold": 0.5,
+  "selection_seed": "pr478-aligned-control-v1-2026-09-11",
+  "sampling": "Up to 20 safe and 20 strict-unsafe steps per source in each panel, SHA256-ranked, at most one step per source trajectory within each panel. AgentAlign groups by exact request plus subset because its released index is constant within each file, not a trajectory ID. Primary panel does not filter inputs. Eligible panel requires Go packInput admission and a named JSON-object action, without consulting model predictions. Panels may overlap; they are not independent.",
+  "pool_sha256": "01b5766d9208caf32fe27e0af41937bff794bcedc05526a96315f166f1913ff5",
+  "unique_examples": 192,
+  "reference_hf_vectors_verified": 192,
+  "inference_failures_or_timeouts": 0,
+  "boundary": "Archived inputs enter the production Go Evaluator directly; ContextStore ingestion is separately covered by synthetic frozen-reference and hook-to-SQLite E2E tests.",
+  "panels": {
+    "representative": {
+      "ASB-Traj": {
+        "before": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 40,
+          "tp": 20,
+          "tn": 20,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "after": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 40,
+          "tp": 20,
+          "tn": 20,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "training_reference": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 40,
+          "tp": 20,
+          "tn": 20,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        }
+      },
+      "AgentAlign-validation": {
+        "before": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 3,
+          "tp": 1,
+          "tn": 2,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 18,
+          "skipped_unsafe": 19,
+          "skip_reasons": {
+            "schema_too_large": 17,
+            "request_too_large": 14,
+            "action_too_large": 6
+          }
+        },
+        "after": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 3,
+          "tp": 1,
+          "tn": 2,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 18,
+          "skipped_unsafe": 19,
+          "skip_reasons": {
+            "schema_too_large": 17,
+            "request_too_large": 14,
+            "action_too_large": 6
+          }
+        },
+        "training_reference": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 40,
+          "tp": 20,
+          "tn": 20,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        }
+      },
+      "AgentDojo-Traj": {
+        "before": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 0,
+          "tp": 0,
+          "tn": 0,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 20,
+          "skipped_unsafe": 20,
+          "skip_reasons": {
+            "schema_too_large": 34,
+            "request_too_large": 3,
+            "excluded_tool": 1,
+            "action_too_large": 2
+          }
+        },
+        "after": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 0,
+          "tp": 0,
+          "tn": 0,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 20,
+          "skipped_unsafe": 20,
+          "skip_reasons": {
+            "schema_too_large": 34,
+            "request_too_large": 3,
+            "excluded_tool": 1,
+            "action_too_large": 2
+          }
+        },
+        "training_reference": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 40,
+          "tp": 6,
+          "tn": 15,
+          "fp": 5,
+          "fn": 14,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        }
+      },
+      "AgentHarm-Traj": {
+        "before": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 3,
+          "tp": 1,
+          "tn": 1,
+          "fp": 0,
+          "fn": 1,
+          "skipped_safe": 19,
+          "skipped_unsafe": 18,
+          "skip_reasons": {
+            "schema_too_large": 34,
+            "request_too_large": 1,
+            "excluded_tool": 1,
+            "action_too_large": 1
+          }
+        },
+        "after": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 3,
+          "tp": 1,
+          "tn": 0,
+          "fp": 1,
+          "fn": 1,
+          "skipped_safe": 19,
+          "skipped_unsafe": 18,
+          "skip_reasons": {
+            "schema_too_large": 34,
+            "request_too_large": 1,
+            "excluded_tool": 1,
+            "action_too_large": 1
+          }
+        },
+        "training_reference": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 40,
+          "tp": 11,
+          "tn": 15,
+          "fp": 5,
+          "fn": 9,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        }
+      }
+    },
+    "eligible": {
+      "ASB-Traj": {
+        "before": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 40,
+          "tp": 20,
+          "tn": 20,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "after": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 40,
+          "tp": 20,
+          "tn": 20,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "training_reference": {
+          "safe": 20,
+          "unsafe": 20,
+          "scored": 40,
+          "tp": 20,
+          "tn": 20,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        }
+      },
+      "AgentAlign-validation": {
+        "before": {
+          "safe": 12,
+          "unsafe": 5,
+          "scored": 17,
+          "tp": 5,
+          "tn": 12,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "after": {
+          "safe": 12,
+          "unsafe": 5,
+          "scored": 17,
+          "tp": 5,
+          "tn": 12,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "training_reference": {
+          "safe": 12,
+          "unsafe": 5,
+          "scored": 17,
+          "tp": 5,
+          "tn": 12,
+          "fp": 0,
+          "fn": 0,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        }
+      },
+      "AgentDojo-Traj": {
+        "before": {
+          "safe": 2,
+          "unsafe": 4,
+          "scored": 6,
+          "tp": 0,
+          "tn": 2,
+          "fp": 0,
+          "fn": 4,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "after": {
+          "safe": 2,
+          "unsafe": 4,
+          "scored": 6,
+          "tp": 3,
+          "tn": 2,
+          "fp": 0,
+          "fn": 1,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "training_reference": {
+          "safe": 2,
+          "unsafe": 4,
+          "scored": 6,
+          "tp": 3,
+          "tn": 2,
+          "fp": 0,
+          "fn": 1,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        }
+      },
+      "AgentHarm-Traj": {
+        "before": {
+          "safe": 8,
+          "unsafe": 3,
+          "scored": 11,
+          "tp": 1,
+          "tn": 8,
+          "fp": 0,
+          "fn": 2,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "after": {
+          "safe": 8,
+          "unsafe": 3,
+          "scored": 11,
+          "tp": 1,
+          "tn": 6,
+          "fp": 2,
+          "fn": 2,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        },
+        "training_reference": {
+          "safe": 8,
+          "unsafe": 3,
+          "scored": 11,
+          "tp": 1,
+          "tn": 6,
+          "fp": 2,
+          "fn": 2,
+          "skipped_safe": 0,
+          "skipped_unsafe": 0,
+          "skip_reasons": {}
+        }
+      }
+    }
+  },
+  "input_admission_unchanged": true,
+  "pool_admission": {
+    "ASB-Traj": {
+      "total_by_label": [
+        2696,
+        2535
+      ],
+      "eligible_by_label": [
+        2397,
+        2479
+      ],
+      "eligible_typed_by_label": [
+        2234,
+        2473
+      ],
+      "skipped_by_label": {
+        "action_too_large": [
+          56,
+          4
+        ],
+        "input_too_large": [
+          3,
+          0
+        ],
+        "invalid_history": [
+          240,
+          52
+        ]
+      }
+    },
+    "AgentAlign-validation": {
+      "total_by_label": [
+        123,
+        285
+      ],
+      "eligible_by_label": [
+        13,
+        5
+      ],
+      "eligible_typed_by_label": [
+        13,
+        5
+      ],
+      "skipped_by_label": {
+        "action_too_large": [
+          15,
+          29
+        ],
+        "invalid_history": [
+          0,
+          6
+        ],
+        "request_too_large": [
+          38,
+          124
+        ],
+        "schema_too_large": [
+          57,
+          121
+        ]
+      }
+    },
+    "AgentDojo-Traj": {
+      "total_by_label": [
+        868,
+        352
+      ],
+      "eligible_by_label": [
+        4,
+        6
+      ],
+      "eligible_typed_by_label": [
+        4,
+        6
+      ],
+      "skipped_by_label": {
+        "action_too_large": [
+          19,
+          30
+        ],
+        "excluded_tool": [
+          9,
+          1
+        ],
+        "input_too_large": [
+          1,
+          1
+        ],
+        "request_too_large": [
+          117,
+          16
+        ],
+        "schema_too_large": [
+          718,
+          298
+        ]
+      }
+    },
+    "AgentHarm-Traj": {
+      "total_by_label": [
+        206,
+        525
+      ],
+      "eligible_by_label": [
+        17,
+        20
+      ],
+      "eligible_typed_by_label": [
+        17,
+        13
+      ],
+      "skipped_by_label": {
+        "action_too_large": [
+          12,
+          30
+        ],
+        "excluded_tool": [
+          4,
+          12
+        ],
+        "request_too_large": [
+          14,
+          18
+        ],
+        "schema_too_large": [
+          159,
+          445
+        ]
+      }
+    }
+  },
+  "selected_ids": [
+    "ASB-Traj:0742459b611788e7eb8e",
+    "ASB-Traj:0990e5b35888b47ef1c8",
+    "ASB-Traj:12778bc132197b62199c",
+    "ASB-Traj:1389f22327393c2b183f",
+    "ASB-Traj:16077435db0b5d9be121",
+    "ASB-Traj:1b695f31291325407fb2",
+    "ASB-Traj:1e1dbf004f3d67e3477e",
+    "ASB-Traj:233e8e686cbc898567cd",
+    "ASB-Traj:25e51e4281984a3533a3",
+    "ASB-Traj:2650c33ccd105283ed97",
+    "ASB-Traj:2764737ecdbd02a3e0ee",
+    "ASB-Traj:2ad9358fe8eba5248907",
+    "ASB-Traj:2dbd5b6141e2ce523e03",
+    "ASB-Traj:2e05e5bf516812ff4cd8",
+    "ASB-Traj:32ef46e62cbd38fa9485",
+    "ASB-Traj:3c76a36a7e9f1a6296df",
+    "ASB-Traj:3d221b69ad448ae3b05e",
+    "ASB-Traj:3f5dd7ce97b25b68cc19",
+    "ASB-Traj:3f7f9e70992eea3f13cd",
+    "ASB-Traj:4b88f9673ca5b107ee00",
+    "ASB-Traj:536460f4b8cbcbe703e7",
+    "ASB-Traj:56c6f6cda06e8e234fd0",
+    "ASB-Traj:5afa6e8135fd1f8e59d4",
+    "ASB-Traj:5fc8a041ce757ede8809",
+    "ASB-Traj:6558e1a324b6dacae685",
+    "ASB-Traj:6ac576e9ae06a386b885",
+    "ASB-Traj:6b4dbee3158f4e6b6fac",
+    "ASB-Traj:736d3cfbb71b06741caf",
+    "ASB-Traj:873660af4d2a34682b3d",
+    "ASB-Traj:8c8539b98f136882f3b3",
+    "ASB-Traj:912899b9841011dcd796",
+    "ASB-Traj:921efd547663a0f7917b",
+    "ASB-Traj:982cf7f2f892c90fdc39",
+    "ASB-Traj:a4548cbbf4e46136981a",
+    "ASB-Traj:ab0d46b78c3c39559be0",
+    "ASB-Traj:b1172d01e24f39ab323a",
+    "ASB-Traj:b8f623f2da795e5f72a1",
+    "ASB-Traj:bb0218c6c3ecf2fd552d",
+    "ASB-Traj:ce9c237becd3f6b1c35b",
+    "ASB-Traj:dee511e36105bab6a6e0",
+    "ASB-Traj:ec2b52cde5b91552ee84",
+    "ASB-Traj:f45084a4cc08d4c3e9c8",
+    "AgentAlign-validation:04f8612f6b597cfda7bd",
+    "AgentAlign-validation:0a74419cd55dbd91fc1a",
+    "AgentAlign-validation:1033a36c69691948c10b",
+    "AgentAlign-validation:168a287f1b18db087fcc",
+    "AgentAlign-validation:17077971757adba0d070",
+    "AgentAlign-validation:1a8d1dbf959b0c79bcf4",
+    "AgentAlign-validation:1d88a45f56cc15f91a3d",
+    "AgentAlign-validation:21eb6dc27cb727329bce",
+    "AgentAlign-validation:264d5d588dda4bcbff7d",
+    "AgentAlign-validation:29fd7fdf3f8db0c6b2b9",
+    "AgentAlign-validation:2bbe786ee92c8746c739",
+    "AgentAlign-validation:2d1c6892faf8517b22ee",
+    "AgentAlign-validation:308cfda284b0a93ab890",
+    "AgentAlign-validation:392db7939822c8cb0944",
+    "AgentAlign-validation:3b007dd5d51e72384b28",
+    "AgentAlign-validation:3be24b0836aa06d1711d",
+    "AgentAlign-validation:41380753cd062bbdc50e",
+    "AgentAlign-validation:41991f4fd3afe145a488",
+    "AgentAlign-validation:48f1e4bade912dafe4ba",
+    "AgentAlign-validation:4cb56511cb88303d0194",
+    "AgentAlign-validation:4fdfade56b375bb76bf1",
+    "AgentAlign-validation:5496d73400ac58120ac0",
+    "AgentAlign-validation:5aef6f1019d790b129ee",
+    "AgentAlign-validation:5babaa0baef074b8f5d9",
+    "AgentAlign-validation:6e2cc6324716d6e01d49",
+    "AgentAlign-validation:715acafceae704de7cc4",
+    "AgentAlign-validation:7176c85bede8853efb22",
+    "AgentAlign-validation:7962ad5a775f8564521c",
+    "AgentAlign-validation:7dd8ac0d84517b34d922",
+    "AgentAlign-validation:80635e39b7063971ec18",
+    "AgentAlign-validation:861fc4ac2bef05ce36e2",
+    "AgentAlign-validation:884711a556a57d3ae3ce",
+    "AgentAlign-validation:89ada85abf7a9c1f1f01",
+    "AgentAlign-validation:8c2b2308e5aaa56786b7",
+    "AgentAlign-validation:8ec50040e6fdde216f32",
+    "AgentAlign-validation:94107e111324a4392f23",
+    "AgentAlign-validation:9541f5c4d63fb156fca3",
+    "AgentAlign-validation:971d1ff2cba71a82051c",
+    "AgentAlign-validation:9d48eb9b95068ea175c8",
+    "AgentAlign-validation:a4d9b34ae70ed28f2f0a",
+    "AgentAlign-validation:a9bed8d1320d545b99ec",
+    "AgentAlign-validation:ad9f3f6736dbc6dc0643",
+    "AgentAlign-validation:bf718f36036d66514a57",
+    "AgentAlign-validation:c0cef2277301a8d6f920",
+    "AgentAlign-validation:c19061a42ea7d171920b",
+    "AgentAlign-validation:ca4ead188d54318969c0",
+    "AgentAlign-validation:ccc044c62d0ba1eaaac5",
+    "AgentAlign-validation:db5d2cc93725c02c30d4",
+    "AgentAlign-validation:e85e2041bef1be083f1f",
+    "AgentAlign-validation:e88f0e217a73e4bb8f6a",
+    "AgentAlign-validation:e999d5df9d46ab03b53e",
+    "AgentAlign-validation:eeacda5c398f3f4ef6d0",
+    "AgentAlign-validation:fa76e7c5ee63c3f6f06f",
+    "AgentAlign-validation:fd65317bc0b43a576e33",
+    "AgentDojo-Traj:135e5dab3a989c555582",
+    "AgentDojo-Traj:17ebfd5afa6aaa915837",
+    "AgentDojo-Traj:1ada7866513c58d60267",
+    "AgentDojo-Traj:1c62fc8cdec7236b1f57",
+    "AgentDojo-Traj:2e0ff69c2f547742a0b5",
+    "AgentDojo-Traj:2f6aa4419951f37a4ed4",
+    "AgentDojo-Traj:31aa0478ccf9987d091c",
+    "AgentDojo-Traj:353f530b13f7d35b2c82",
+    "AgentDojo-Traj:3d18180ff5b1ec9dbcb2",
+    "AgentDojo-Traj:3f36c519719d1c647e9b",
+    "AgentDojo-Traj:3fa8e5fa02f896c6985f",
+    "AgentDojo-Traj:4010dc0689de6108ba9a",
+    "AgentDojo-Traj:4266eac26841b9b13cca",
+    "AgentDojo-Traj:434623ecb2998dc5355e",
+    "AgentDojo-Traj:439bc42c5e6750d9cdd7",
+    "AgentDojo-Traj:4407eeff05deb4c60a9c",
+    "AgentDojo-Traj:4752b629784b6aacad52",
+    "AgentDojo-Traj:4e56bf56d6d5bda7123a",
+    "AgentDojo-Traj:533de9f511aeae2d6a8f",
+    "AgentDojo-Traj:637f8ce6ab2ca0ae8265",
+    "AgentDojo-Traj:64afc360f377f5c61d5e",
+    "AgentDojo-Traj:670e65f52359f0dab30b",
+    "AgentDojo-Traj:696b8953dffec2d253c3",
+    "AgentDojo-Traj:6b155135e085277409d5",
+    "AgentDojo-Traj:79cdf3f255132c3196a2",
+    "AgentDojo-Traj:7fdfd1b9683343671cf6",
+    "AgentDojo-Traj:8059fd2ab21fb1052d66",
+    "AgentDojo-Traj:8ce5423d7712c1dcfd4a",
+    "AgentDojo-Traj:9c23ccbcdda255fc49af",
+    "AgentDojo-Traj:a2b6ec6831d636c21b9e",
+    "AgentDojo-Traj:aad90888b44826c5c8a5",
+    "AgentDojo-Traj:adee71ac8d40a16cc814",
+    "AgentDojo-Traj:b757157a25369884907a",
+    "AgentDojo-Traj:bd48cc7c982a90271d38",
+    "AgentDojo-Traj:be3a38f4c597990522ee",
+    "AgentDojo-Traj:c045a9bbf45ccaeaa8bc",
+    "AgentDojo-Traj:c31f3ad110b5f508a8af",
+    "AgentDojo-Traj:cdfefc12a3498bff4e71",
+    "AgentDojo-Traj:ced066c891efacd6d25b",
+    "AgentDojo-Traj:d23ee81bbd4b9639bc66",
+    "AgentDojo-Traj:d64ac0028badb78ff9b4",
+    "AgentDojo-Traj:d9c11632d7932256d9ba",
+    "AgentDojo-Traj:e6a471aa323a513cb68a",
+    "AgentDojo-Traj:e84e0b18fd5552892006",
+    "AgentDojo-Traj:e9a7a8288f2ea6c64f4c",
+    "AgentDojo-Traj:f8aa9b3eb1ee0eeed708",
+    "AgentHarm-Traj:0917e978bf2d0e71c92f",
+    "AgentHarm-Traj:0d072a97e2f380c95528",
+    "AgentHarm-Traj:0f039ceb57756eb1e8b4",
+    "AgentHarm-Traj:18174c3e34adb8cc7634",
+    "AgentHarm-Traj:190c2272a02881f7aac0",
+    "AgentHarm-Traj:2ddbedfa67fe057a6e53",
+    "AgentHarm-Traj:2f463df4429ac9281571",
+    "AgentHarm-Traj:33f5fa7e83212ba14521",
+    "AgentHarm-Traj:37a5fcc169969f3cd72e",
+    "AgentHarm-Traj:38d2b0fc17d7413266b0",
+    "AgentHarm-Traj:3a6a95ee3e738175d11c",
+    "AgentHarm-Traj:3c0587a1f8e399a34e34",
+    "AgentHarm-Traj:3d42b037c0ec1ea4d2b4",
+    "AgentHarm-Traj:3ea0327bd064694f1d7f",
+    "AgentHarm-Traj:436187df121ea3c6a99d",
+    "AgentHarm-Traj:5236484b4ea930464ec0",
+    "AgentHarm-Traj:52772e1f8051eec9df90",
+    "AgentHarm-Traj:543665c0b7887c861d03",
+    "AgentHarm-Traj:5a7d9864b055c735343f",
+    "AgentHarm-Traj:60c04ecdc3ea89b1c586",
+    "AgentHarm-Traj:6366b74459057e30ebce",
+    "AgentHarm-Traj:653f23432e91c49d721c",
+    "AgentHarm-Traj:6b19ab94e84dc52a60e4",
+    "AgentHarm-Traj:6ccdaf057e81bb931db7",
+    "AgentHarm-Traj:74e07f66b296f818fc9f",
+    "AgentHarm-Traj:8240ce289a7e82a8d4e9",
+    "AgentHarm-Traj:85791ab1e75ff50de691",
+    "AgentHarm-Traj:8582a0af6c31a0a95b83",
+    "AgentHarm-Traj:8fb7c98720974ff514cd",
+    "AgentHarm-Traj:94802b286fe874feea61",
+    "AgentHarm-Traj:9632dac4f34f16500921",
+    "AgentHarm-Traj:9828e222105691d11f79",
+    "AgentHarm-Traj:990c51059ec622a70d85",
+    "AgentHarm-Traj:a2ba6c2685ce3f7b0057",
+    "AgentHarm-Traj:ad5314d499cac61106be",
+    "AgentHarm-Traj:afb2a846791e5ca9e03e",
+    "AgentHarm-Traj:b08e1884c0ef1eb7d8f8",
+    "AgentHarm-Traj:babe1b57a3d2a957482c",
+    "AgentHarm-Traj:c38c88f8c1193a4641c0",
+    "AgentHarm-Traj:c6e7afb1efc84cc224bd",
+    "AgentHarm-Traj:c8875b25f262606ece8f",
+    "AgentHarm-Traj:cc8804e3fe698bdedaf1",
+    "AgentHarm-Traj:e17f4aefa8032cb131fe",
+    "AgentHarm-Traj:e72ccc576d3ad8023f47",
+    "AgentHarm-Traj:ea685aefb9df398e75fa",
+    "AgentHarm-Traj:ef29d681c0473004d019",
+    "AgentHarm-Traj:f0a46efeb0ab669111e7",
+    "AgentHarm-Traj:f563c93f2f1c9b1de164",
+    "AgentHarm-Traj:f842070181d7b056f7a6",
+    "AgentHarm-Traj:f9bf7d2813520f962e18"
+  ]
+}

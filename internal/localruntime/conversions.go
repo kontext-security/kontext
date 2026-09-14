@@ -23,6 +23,7 @@ func EvaluateRequestFromEvent(event hook.Event) (EvaluateRequest, error) {
 		DurationMs:     event.DurationMs,
 		Error:          event.Error,
 		IsInterrupt:    event.IsInterrupt,
+		UserRequest:    event.UserRequest,
 	}
 
 	if event.ToolInput != nil {
@@ -38,6 +39,13 @@ func EvaluateRequestFromEvent(event hook.Event) (EvaluateRequest, error) {
 			return EvaluateRequest{}, fmt.Errorf("marshal tool response: %w", err)
 		}
 		req.ToolResponse = data
+	}
+	if event.AvailableToolSchemas != nil {
+		data, err := json.Marshal(event.AvailableToolSchemas)
+		if err != nil {
+			return EvaluateRequest{}, fmt.Errorf("marshal available tool schemas: %w", err)
+		}
+		req.ToolSchemas = data
 	}
 	return req, nil
 }
@@ -71,6 +79,7 @@ func EventFromEvaluateRequest(sessionID, fallbackAgent string, req *EvaluateRequ
 		DurationMs:     req.DurationMs,
 		Error:          req.Error,
 		IsInterrupt:    req.IsInterrupt,
+		UserRequest:    req.UserRequest,
 	}
 
 	var err error
@@ -81,6 +90,13 @@ func EventFromEvaluateRequest(sessionID, fallbackAgent string, req *EvaluateRequ
 	event.ToolResponse, err = rawMap(req.ToolResponse)
 	if err != nil {
 		return hook.Event{}, fmt.Errorf("decode tool response: %w", err)
+	}
+	if len(req.ToolSchemas) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(req.ToolSchemas))
+		decoder.UseNumber()
+		if err := decoder.Decode(&event.AvailableToolSchemas); err != nil {
+			return hook.Event{}, fmt.Errorf("decode available tool schemas: %w", err)
+		}
 	}
 	return event, nil
 }

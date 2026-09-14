@@ -101,6 +101,55 @@ func TestServiceCanAckTelemetryBeforeAsyncIngest(t *testing.T) {
 	}
 }
 
+func TestServiceObservesTelemetryBeforeAckWithoutDoubleObservation(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{
+		observed:      make(chan hook.Event, 1),
+		ingestStarted: make(chan struct{}),
+		releaseIngest: make(chan struct{}),
+	}
+	service := newTestService(t, runtime, true)
+	client := NewClient(service.SocketPath())
+
+	result, err := client.Process(context.Background(), hook.Event{
+		SessionID: "ordered-session",
+		HookName:  hook.HookPostToolUse,
+		ToolName:  "Read",
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Decision != hook.DecisionAllow {
+		t.Fatalf("Process().Decision = %q, want allow", result.Decision)
+	}
+	select {
+	case event := <-runtime.observed:
+		if event.ToolName != "Read" || event.SessionID != "ordered-session" {
+			t.Fatalf("observed event = %+v", event)
+		}
+	default:
+		t.Fatal("PostToolUse was acknowledged before ordered context observation")
+	}
+	select {
+	case <-runtime.ingestStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("durable ingest did not start")
+	}
+	if got := runtime.observeCalls.Load(); got != 1 {
+		t.Fatalf("ObserveAsyncEvent calls = %d, want 1", got)
+	}
+	close(runtime.releaseIngest)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := service.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if got := runtime.observeCalls.Load(); got != 1 {
+		t.Fatalf("ObserveAsyncEvent calls after ingest = %d, want no duplicate", got)
+	}
+}
+
 func TestServiceDoesNotAsyncIngestBlockingPromptSubmit(t *testing.T) {
 	t.Parallel()
 
@@ -364,11 +413,20 @@ type stubRuntime struct {
 	evaluateResult hook.Result
 	evaluateErr    error
 	ingested       chan hook.Event
+	observed       chan hook.Event
 	ingestStarted  chan struct{}
 	releaseIngest  chan struct{}
 	evaluateCalls  atomic.Int32
 	ingestCalls    atomic.Int32
+	observeCalls   atomic.Int32
 	startedIngest  atomic.Bool
+}
+
+func (s *stubRuntime) ObserveAsyncEvent(event hook.Event) {
+	s.observeCalls.Add(1)
+	if s.observed != nil {
+		s.observed <- event
+	}
 }
 
 func (s *stubRuntime) EvaluateHook(_ context.Context, _ hook.Event) (hook.Result, error) {

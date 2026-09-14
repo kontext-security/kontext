@@ -189,7 +189,7 @@ func (s *Service) ingestEvent(ctx context.Context, req *EvaluateRequest) {
 		s.diagnostic.Printf("local runtime ingest decode: %v\n", err)
 		return
 	}
-	if _, err := s.core.IngestEvent(ctx, event); err != nil {
+	if _, err := s.core.IngestObservedEvent(ctx, event); err != nil {
 		s.diagnostic.Printf("local runtime ingest: %v\n", err)
 		return
 	}
@@ -211,6 +211,14 @@ func (s *Service) process(ctx context.Context, req *EvaluateRequest) EvaluateRes
 		return EvaluateResultFromResult(decodeFailureResult(req))
 	}
 	if s.asyncIngest && !event.HookName.CanBlock() {
+		// Capture ordering-sensitive in-memory context before acknowledging the
+		// hook. The agent can issue its next PreToolUse as soon as this result is
+		// written, while durable ingestion intentionally continues in the
+		// background.
+		if err := s.core.ObserveAsyncEvent(event); err != nil {
+			s.diagnostic.Printf("local runtime observe async event: %v\n", err)
+			return s.result(event, processFailureResult(event))
+		}
 		return s.result(event, hook.Result{Decision: hook.DecisionAllow})
 	}
 	result, err := s.core.ProcessHook(ctx, event)

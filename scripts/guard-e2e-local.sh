@@ -44,6 +44,27 @@ done
 curl -fsS "${BASE_URL}/healthz" >/dev/null
 echo "==> daemon healthy"
 
+STEP_SAFETY_E2E=0
+case "${KONTEXT_STEP_SAFETY_SHADOW:-}" in
+  1|true|TRUE|yes|YES|on|ON) STEP_SAFETY_E2E=1 ;;
+esac
+if [[ "$STEP_SAFETY_E2E" == "1" ]]; then
+  curl -fsS "${BASE_URL}/healthz" | node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => raw += chunk);
+process.stdin.on("end", () => {
+  const health = JSON.parse(raw).step_safety ?? {};
+  if (health.status !== "ready") {
+    throw new Error(`expected real step-safety model to be ready, got ${JSON.stringify(health)}`);
+  }
+  if (health.model_version !== "toolsafe-deberta-v3-xsmall-onnx-scoped-v2") {
+    throw new Error(`unexpected step-safety model ${JSON.stringify(health)}`);
+  }
+});
+'
+  echo "ok step safety: real model ready"
+fi
+
 assert_hook() {
   local name="$1"
   local payload="$2"
@@ -165,6 +186,64 @@ process.stdin.on("end", () => {
   }
 });
 '
+
+if [[ "$STEP_SAFETY_E2E" == "1" ]]; then
+  curl -fsS "${BASE_URL}/api/sessions/${SESSION_ID}/step-safety" | node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => raw += chunk);
+process.stdin.on("end", () => {
+  const verdicts = JSON.parse(raw);
+  if (verdicts.length !== 3) {
+    throw new Error(`expected three pre-execution results, got ${JSON.stringify(verdicts)}`);
+  }
+  for (const verdict of verdicts) {
+    if (verdict.tool_name === "Read") {
+      if (verdict.unsafe_probability != null || verdict.error_code !== "excluded_tool") {
+        throw new Error(`file tool was not excluded: ${JSON.stringify(verdict)}`);
+      }
+    } else if (typeof verdict.unsafe_probability !== "number" || verdict.error_code) {
+      throw new Error(`eligible tool did not receive a real score: ${JSON.stringify(verdict)}`);
+    }
+    if (verdict.enforced !== false || verdict.model_version !== "toolsafe-deberta-v3-xsmall-onnx-scoped-v2") {
+      throw new Error(`step-safety shadow contract changed: ${JSON.stringify(verdict)}`);
+    }
+  }
+});
+'
+  echo "ok step safety: shell scored, file tools excluded, policy unchanged"
+
+  assert_telemetry_hook \
+    "shadow history request" \
+    '{"session_id":"e2e-step-history","hook_event_name":"UserPromptSubmit","prompt":"Summarize the search results."}'
+
+  HISTORY_PAYLOAD="$(node -e '
+const content = "prefix " + Array.from({length: 600}, (_, i) => `event-token-${String(i).padStart(3, "0")}`).join(" ") + " suffix";
+process.stdout.write(JSON.stringify({session_id: "e2e-step-history", hook_event_name: "PostToolUse", tool_name: "search", tool_input: {query: "public docs"}, tool_response: {content, status: "complete"}}));
+')"
+  assert_telemetry_hook "large supported history" "$HISTORY_PAYLOAD"
+  assert_hook \
+    "shadow after large history" \
+    '{"session_id":"e2e-step-history","hook_event_name":"PreToolUse","tool_name":"summarize","tool_input":{"topic":"public docs"}}' \
+    "observed; no local analysis wired" \
+    "would allow"
+
+  curl -fsS "${BASE_URL}/api/sessions/e2e-step-history/step-safety" | node -e '
+const fs = require("node:fs");
+const reference = JSON.parse(fs.readFileSync("internal/guard/stepsafety/testdata/context_history_golden.json", "utf8")).cases.find(c => c.generated_words === 600);
+const margin = reference.logits[1] - reference.logits[0];
+const expected = 1 / (1 + Math.exp(-(1.427213430140093 * margin + 2.953687013257505)));
+let raw = "";
+process.stdin.on("data", chunk => raw += chunk);
+process.stdin.on("end", () => {
+  const verdicts = JSON.parse(raw);
+  const verdict = verdicts[0];
+  if (verdicts.length !== 1 || !verdict.history_present || !verdict.history_omitted || verdict.enforced || verdict.error_code || typeof verdict.unsafe_probability !== "number" || Math.abs(verdict.unsafe_probability - expected) > 2e-5) {
+    throw new Error(`large history did not reach training-aligned shadow inference: ${JSON.stringify(verdicts)}`);
+  }
+});
+'
+  echo "ok step safety: large history matches training reference through hook and SQLite"
+fi
 
 go run ./cmd/kontext guard status --daemon-url "$BASE_URL" | grep -q "0 critical"
 go run ./cmd/kontext guard doctor --daemon-url "$BASE_URL" | grep -q "daemon healthy"

@@ -22,6 +22,7 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/judge"
 	"github.com/kontext-security/kontext/internal/guard/judgeruntime"
 	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
@@ -154,6 +155,12 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	if err := ui.Err(); err != nil {
 		return fmt.Errorf("write startup output: %w", err)
 	}
+	stepSafetyConfig, err := stepsafety.ConfigFromEnv(*dbPath)
+	if err != nil {
+		return err
+	}
+	stepSafety := stepsafety.New(ctx, stepSafetyConfig)
+	defer stepSafety.Close()
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(*dbPath, server.Options{
 		Judge: localJudge,
 		RiskClassifier: &server.RiskClassifierOptions{
@@ -161,6 +168,7 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 			GuardrailBaseURL: judgeRuntime.BaseURL,
 			GuardrailModel:   judgeRuntime.Model,
 		},
+		StepSafety: stepSafety,
 	})
 	if err != nil {
 		return err

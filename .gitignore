@@ -20,6 +20,8 @@ data/
 *.sqlite
 *.sqlite3
 models/generated/
+__pycache__/
+*.py[cod]
 
 # Local agent/browser artifacts — never commit
 .playwright-mcp/

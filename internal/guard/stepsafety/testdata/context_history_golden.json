@@ -1,0 +1,22 @@
+{
+  "description": "Synthetic supported-tool results above the former 4 KiB cache limit; HF tokenizer and original training head/tail packer references. No semantic label assertions. ONNX reference runtime 1.29.0; existing checkpoint goldens separately verify model conversion.",
+  "tokenizer_sha256": "d6c20af053b5d86d986a9f70898c1fceccb9d93e7ce6f63dabc899a12a53b031",
+  "cases": [
+    {
+      "generated_words": 600,
+      "packed_sha256": "51770f73e9dc2534bc2595992e00301077963d7909b2baa5ad3902e34d3ae450",
+      "logits": [
+        -0.8334271311759949,
+        0.6205937266349792
+      ]
+    },
+    {
+      "generated_words": 2000,
+      "packed_sha256": "54c8d3a1eab3d5cafe821174f69ff0a6a1c466cf9514099da6dd9b082e2e4a04",
+      "logits": [
+        -0.30951905250549316,
+        0.03391691669821739
+      ]
+    }
+  ]
+}
