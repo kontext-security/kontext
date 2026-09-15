@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 )
 
+const SystemHooksPath = "/etc/codex/hooks.json"
+
 // InstallationPaths describes the system and user hook layers. Diagnostics
 // receive explicit paths so tests never inspect the host's managed policy.
 type InstallationPaths struct {
@@ -26,7 +28,7 @@ func DefaultInstallationPaths() (InstallationPaths, error) {
 		home = filepath.Join(userHome, ".codex")
 	}
 	return InstallationPaths{
-		SystemHooks: "/etc/codex/hooks.json",
+		SystemHooks: SystemHooksPath,
 		UserHooks:   filepath.Join(home, "hooks.json"),
 		UserConfig:  filepath.Join(home, "config.toml"),
 	}, nil
