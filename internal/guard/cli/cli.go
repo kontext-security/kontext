@@ -386,34 +386,26 @@ func printManagedClaudeHookStatus(out io.Writer, paths ...string) bool {
 }
 
 func printCodexHookStatus(out io.Writer) bool {
-	hooksPath, err := codexmanaged.UserHooksPathNoCreate()
+	paths, err := codexmanaged.DefaultInstallationPaths()
 	if err != nil {
 		fmt.Fprintf(out, "Codex hooks: unavailable (%v)\n", err)
 		return false
 	}
-	raw, err := os.ReadFile(hooksPath)
+	return printCodexHookStatusAt(out, paths)
+}
+
+func printCodexHookStatusAt(out io.Writer, paths codexmanaged.InstallationPaths) bool {
+	installation, err := codexmanaged.InspectInstallation(paths)
 	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintf(out, "Codex hooks: none installed (%s)\n", hooksPath)
-		} else {
-			fmt.Fprintf(out, "Codex hooks: ERROR %v\n", err)
-		}
+		fmt.Fprintf(out, "Codex hooks: %v\n", err)
 		return false
 	}
-	binary, err := codexmanaged.ValidateInstalled(raw)
-	if err != nil {
-		fmt.Fprintf(out, "Codex hooks: incomplete (%v)\n", err)
-		return false
-	}
-	if info, err := os.Stat(binary); err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+	binary := installation.Binary
+	if info, err := os.Stat(binary); err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
 		fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s)\n", binary)
 		return false
 	}
-	configPath, err := codexmanaged.UserConfigPathNoCreate()
-	if err != nil {
-		fmt.Fprintf(out, "Codex hooks feature: unavailable (%v)\n", err)
-		return false
-	}
+	configPath := paths.UserConfig
 	enabled, err := codexmanaged.HooksEnabled(configPath)
 	if err != nil || !enabled {
 		if err != nil && !os.IsNotExist(err) {
@@ -423,7 +415,7 @@ func printCodexHookStatus(out io.Writer) bool {
 		}
 		return false
 	}
-	fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", hooksPath, binary)
+	fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", strings.Join(installation.Paths, ", "), binary)
 	fmt.Fprintf(out, "Codex hooks feature: enabled (%s)\n", configPath)
 	return true
 }

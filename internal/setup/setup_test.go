@@ -14,10 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
 type execCall struct {
@@ -41,6 +43,13 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{t: t, home: t.TempDir(), keychain: map[string]string{}}
 	t.Setenv("HOME", h.home)
+	t.Setenv("CODEX_HOME", "")
+	overrideVar(t, &agentWiring, func() map[string]func() agentinventory.Wired {
+		return managedobserve.AgentWiringWithCodexPaths(codexmanaged.InstallationPaths{
+			SystemHooks: filepath.Join(h.home, "etc/codex/hooks.json"),
+			UserHooks:   filepath.Join(h.home, ".codex/hooks.json"),
+		})
+	})
 	t.Setenv(managedconfig.EnvPath, "")
 	t.Setenv(installation.EnvPath, "")
 

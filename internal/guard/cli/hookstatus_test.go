@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/codexmanaged"
 )
 
 // An MDM package installs only the managed-settings.d drop-in; the base
@@ -87,5 +88,47 @@ func TestOrganizationManagedHookPathsStartWithDropIn(t *testing.T) {
 	paths := organizationManagedHookPaths()
 	if len(paths) != 2 || paths[0] != claudemanaged.ManagedSettingsDropInPath || paths[1] != claudemanaged.DefaultManagedSettingsPath() {
 		t.Fatalf("paths = %v", paths)
+	}
+}
+
+func TestCodexHookStatusRecognizesSystemInstallation(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		missingBinary, disabled bool
+	}{
+		{name: "healthy"}, {name: "missing binary", missingBinary: true}, {name: "disabled feature", disabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			binary := filepath.Join(dir, "kontext")
+			if !tc.missingBinary {
+				if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			paths := codexmanaged.InstallationPaths{SystemHooks: filepath.Join(dir, "system.json"), UserHooks: filepath.Join(dir, "user.json"), UserConfig: filepath.Join(dir, "config.toml")}
+			raw, err := codexmanaged.TemplateJSON(binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := "[features]\nhooks = true\n"
+			if tc.disabled {
+				config = "[features]\nhooks = false\n"
+			}
+			for path, data := range map[string][]byte{paths.SystemHooks: raw, paths.UserHooks: []byte(`{"hooks":{}}`), paths.UserConfig: []byte(config)} {
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out bytes.Buffer
+			got := printCodexHookStatusAt(&out, paths)
+			want := !tc.missingBinary && !tc.disabled
+			if got != want {
+				t.Fatalf("healthy=%t, output=%s", got, &out)
+			}
+			if want && (!strings.Contains(out.String(), paths.SystemHooks) || strings.Contains(out.String(), "incomplete")) {
+				t.Fatalf("output=%s", &out)
+			}
+		})
 	}
 }

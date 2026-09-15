@@ -53,6 +53,7 @@ const (
 // process and terminal interactions go through these so tests never touch
 // launchctl/security/scutil or a real TTY.
 var (
+	agentWiring = managedobserve.AgentWiring
 	execCommand = func(ctx context.Context, stdin string, name string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, name, args...)
 		if stdin != "" {
@@ -447,7 +448,7 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	fmt.Fprintln(opts.Stderr, "note: Codex hooks require review before they run; open `/hooks` in Codex to trust the Kontext hooks.")
 	if home, err := os.UserHomeDir(); err == nil {
 		scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		inv := agentinventory.Scan(scanCtx, home, os.Getenv, time.Now(), managedobserve.AgentWiring())
+		inv := agentinventory.Scan(scanCtx, home, os.Getenv, time.Now(), agentWiring())
 		cancel()
 		fmt.Fprintf(opts.Stdout, "  ✓ Agent discovery: %s\n", summariseInventory(inv))
 	}
