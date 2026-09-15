@@ -2,7 +2,6 @@ package managedobserve
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"sync"
@@ -15,6 +14,17 @@ import (
 // AgentWiring shares the daemon's hook facts with the one-shot setup scan.
 // The scanner itself must not import managedobserve (managedstream uses it).
 func AgentWiring() map[string]func() agentinventory.Wired {
+	paths, err := codexmanaged.DefaultInstallationPaths()
+	return agentWiring(paths, err)
+}
+
+// AgentWiringWithCodexPaths lets callers inspecting a staged installation keep
+// system hook discovery inside that installation instead of reading host policy.
+func AgentWiringWithCodexPaths(paths codexmanaged.InstallationPaths) map[string]func() agentinventory.Wired {
+	return agentWiring(paths, nil)
+}
+
+func agentWiring(paths codexmanaged.InstallationPaths, pathsErr error) map[string]func() agentinventory.Wired {
 	claude := func() agentinventory.Wired {
 		fact, ok := managedObserveHooksFact()
 		if !ok {
@@ -28,23 +38,15 @@ func AgentWiring() map[string]func() agentinventory.Wired {
 	return map[string]func() agentinventory.Wired{
 		"claude_code": claude, "claude_cowork": claude,
 		"codex": func() agentinventory.Wired {
-			path, err := codexmanaged.UserHooksPathNoCreate()
-			if err != nil {
+			if pathsErr != nil {
 				return agentinventory.WiredError
 			}
-			data, err := os.ReadFile(path)
-			if errors.Is(err, os.ErrNotExist) {
+			_, err := codexmanaged.InspectInstallation(paths)
+			if errors.Is(err, codexmanaged.ErrIncompleteInstallation) {
 				return agentinventory.WiredNo
 			}
 			if err != nil {
 				return agentinventory.WiredError
-			}
-			var settings codexmanaged.Settings
-			if json.Unmarshal(data, &settings) != nil {
-				return agentinventory.WiredError
-			}
-			if _, err := codexmanaged.ValidateInstalled(data); err != nil {
-				return agentinventory.WiredNo
 			}
 			return agentinventory.WiredYes
 		},

@@ -71,7 +71,7 @@ func TestAgentWiring(t *testing.T) {
 	previousDropIn, previousFile := managedSettingsDropInPath, managedSettingsFilePath
 	managedSettingsDropInPath, managedSettingsFilePath = filepath.Join(home, "missing-dropin"), filepath.Join(home, "missing-file")
 	t.Cleanup(func() { managedSettingsDropInPath, managedSettingsFilePath = previousDropIn, previousFile })
-	evaluators := AgentWiring()
+	evaluators := agentWiring(codexmanaged.InstallationPaths{SystemHooks: filepath.Join(home, "system-hooks.json"), UserHooks: filepath.Join(home, ".codex/hooks.json")}, nil)
 	for _, id := range []string{"claude_code", "claude_cowork", "codex"} {
 		if got := evaluators[id](); got != agentinventory.WiredNo {
 			t.Fatalf("%s=%s", id, got)
@@ -107,6 +107,26 @@ func TestAgentWiring(t *testing.T) {
 		if got := evaluators["codex"](); got != tt.want {
 			t.Fatalf("codex=%s,want %s", got, tt.want)
 		}
+	}
+}
+
+func TestAgentWiringRecognizesSystemCodexHooks(t *testing.T) {
+	dir := t.TempDir()
+	paths := codexmanaged.InstallationPaths{SystemHooks: filepath.Join(dir, "system.json"), UserHooks: filepath.Join(dir, "user.json")}
+	if err := os.WriteFile(paths.SystemHooks, mustCodexHooks(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.UserHooks, []byte(`{"hooks":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := agentWiring(paths, nil)["codex"](); got != agentinventory.WiredYes {
+		t.Fatalf("wired=%s", got)
+	}
+	if err := os.Remove(paths.SystemHooks); err != nil {
+		t.Fatal(err)
+	}
+	if got := agentWiring(paths, nil)["codex"](); got != agentinventory.WiredNo {
+		t.Fatalf("wired=%s", got)
 	}
 }
 

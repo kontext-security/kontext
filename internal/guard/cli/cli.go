@@ -330,23 +330,29 @@ func PrintManagedHookStatus(out io.Writer) HookStatus {
 }
 
 // PrintOrganizationManagedHookStatus checks the policy-owned Claude settings
-// used by organization-managed installs: the Kontext drop-in an MDM package
-// installs under managed-settings.d, or the base managed settings file when
-// an organization ships the hooks there instead. Codex user hooks are
-// intentionally a self-serve requirement only.
+// and the system Codex hooks installed by the organization package. Personal
+// Codex hooks cannot substitute for a missing or broken system installation.
 func PrintOrganizationManagedHookStatus(out io.Writer) HookStatus {
-	return HookStatus{Healthy: printOrganizationManagedHookStatus(out, organizationManagedHookPaths()...)}
+	return HookStatus{Healthy: printOrganizationManagedHookStatus(out, codexmanaged.SystemHooksPath, organizationManagedHookPaths()...)}
+}
+
+func printOrganizationManagedHookStatus(out io.Writer, systemHooks string, claudePaths ...string) bool {
+	claudeHealthy := printOrganizationClaudeHookStatus(out, claudePaths...)
+	// Organization policy owns Codex feature enablement. Validate its installed
+	// system commands without requiring an employee's personal config opt-in.
+	codexHealthy := printCodexInstallationStatus(out, codexmanaged.InstallationPaths{SystemHooks: systemHooks})
+	return claudeHealthy && codexHealthy
 }
 
 func organizationManagedHookPaths() []string {
 	return []string{claudemanaged.ManagedSettingsDropInPath, claudemanaged.DefaultManagedSettingsPath()}
 }
 
-// printOrganizationManagedHookStatus judges the first settings layer that
+// printOrganizationClaudeHookStatus judges the first settings layer that
 // exists, in order: an organization ships the Kontext hooks in ONE of them,
 // and the other may hold unrelated enterprise settings that must not read
 // as an incomplete hook set. Only when none exists are the hooks missing.
-func printOrganizationManagedHookStatus(out io.Writer, paths ...string) bool {
+func printOrganizationClaudeHookStatus(out io.Writer, paths ...string) bool {
 	for _, path := range paths {
 		if _, err := os.Stat(path); err == nil {
 			return printManagedClaudeHookStatus(out, path)
@@ -386,34 +392,34 @@ func printManagedClaudeHookStatus(out io.Writer, paths ...string) bool {
 }
 
 func printCodexHookStatus(out io.Writer) bool {
-	hooksPath, err := codexmanaged.UserHooksPathNoCreate()
+	paths, err := codexmanaged.DefaultInstallationPaths()
 	if err != nil {
 		fmt.Fprintf(out, "Codex hooks: unavailable (%v)\n", err)
 		return false
 	}
-	raw, err := os.ReadFile(hooksPath)
+	return printCodexHookStatusAt(out, paths)
+}
+
+func printCodexInstallationStatus(out io.Writer, paths codexmanaged.InstallationPaths) bool {
+	installation, err := codexmanaged.InspectInstallation(paths)
 	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintf(out, "Codex hooks: none installed (%s)\n", hooksPath)
-		} else {
-			fmt.Fprintf(out, "Codex hooks: ERROR %v\n", err)
-		}
+		fmt.Fprintf(out, "Codex hooks: %v\n", err)
 		return false
 	}
-	binary, err := codexmanaged.ValidateInstalled(raw)
-	if err != nil {
-		fmt.Fprintf(out, "Codex hooks: incomplete (%v)\n", err)
-		return false
-	}
-	if info, err := os.Stat(binary); err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+	binary := installation.Binary
+	if info, err := os.Stat(binary); err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
 		fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s)\n", binary)
 		return false
 	}
-	configPath, err := codexmanaged.UserConfigPathNoCreate()
-	if err != nil {
-		fmt.Fprintf(out, "Codex hooks feature: unavailable (%v)\n", err)
+	fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", strings.Join(installation.Paths, ", "), binary)
+	return true
+}
+
+func printCodexHookStatusAt(out io.Writer, paths codexmanaged.InstallationPaths) bool {
+	if !printCodexInstallationStatus(out, paths) {
 		return false
 	}
+	configPath := paths.UserConfig
 	enabled, err := codexmanaged.HooksEnabled(configPath)
 	if err != nil || !enabled {
 		if err != nil && !os.IsNotExist(err) {
@@ -423,7 +429,6 @@ func printCodexHookStatus(out io.Writer) bool {
 		}
 		return false
 	}
-	fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", hooksPath, binary)
 	fmt.Fprintf(out, "Codex hooks feature: enabled (%s)\n", configPath)
 	return true
 }
