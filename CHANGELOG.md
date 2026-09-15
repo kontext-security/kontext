@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/kontext-security/kontext/compare/v1.5.1...v1.6.0) (2026-09-15)
+
+
+### Features
+
+* **guard:** run scoped step-safety inference with ONNX ([#478](https://github.com/kontext-security/kontext/issues/478)) ([ba9d52c](https://github.com/kontext-security/kontext/commit/ba9d52c955f573bc4ac2b6637fef390bcfdd7fa5))
+* **guard:** stream Merlin predictions with review context ([#500](https://github.com/kontext-security/kontext/issues/500)) ([2bd746b](https://github.com/kontext-security/kontext/commit/2bd746ba59135063264def5be1d25c9d8e101e91))
+
+
+### Bug Fixes
+
+* **doctor:** detect system-managed Codex hooks ([#503](https://github.com/kontext-security/kontext/issues/503)) ([05e0423](https://github.com/kontext-security/kontext/commit/05e04230b880102fe3751d613c5755f144322e49))
+
 ## [1.5.1](https://github.com/kontext-security/kontext/compare/v1.5.0...v1.5.1) (2026-09-10)
 
 
