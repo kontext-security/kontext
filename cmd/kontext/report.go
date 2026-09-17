@@ -86,7 +86,7 @@ func writeReport(out io.Writer, report managedstream.Report) error {
 		if !credential.Present {
 			continue
 		}
-		label := map[string]string{"gh_token": "gh", "ssh_key": "SSH key", "aws_credentials": "AWS profile", "aws_config_profiles": "AWS config profile", "gcloud_adc": "gcloud ADC", "kubeconfig": "Kubernetes context", "npm_token": "npm token", "docker_config_auth": "Docker registry login", "project_env": "project environment credential"}[credential.Kind]
+		label := map[string]string{"gh_token": "gh", "ssh_key": "SSH key", "aws_credentials": "AWS profile", "aws_config_profiles": "AWS config profile", "gcloud_adc": "gcloud ADC", "kubeconfig": "Kubernetes context", "npm_token": "npm token", "docker_config_auth": "Docker registry login"}[credential.Kind]
 		if label == "" {
 			label = credential.Kind
 		}

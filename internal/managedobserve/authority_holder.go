@@ -13,17 +13,18 @@ import (
 
 // Discovery owns locations;
 // the public authority package knows nothing about internal discovery types.
-func scanAuthority(ctx context.Context, home string, inv agentinventory.Inventory) agentauthority.Report {
+func scanAuthority(ctx context.Context, scanner *agentauthority.Scanner, home string, inv agentinventory.Inventory) agentauthority.Report {
 	locations := make([]agentauthority.AgentLocation, 0, len(inv.Agents))
 	for _, agent := range inv.Agents {
 		locations = append(locations, agentauthority.AgentLocation{ID: agent.ID, ConfigPath: agent.ConfigPath})
 	}
 	scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	return agentauthority.Scan(scanCtx, home, agentauthority.ProbeEnvironment(), locations, time.Now())
+	return scanner.Scan(scanCtx, home, agentauthority.ProbeEnvironment(), locations, time.Now())
 }
 
 type authorityHolder struct {
+	scanner   agentauthority.Scanner
 	mu        sync.RWMutex
 	report    agentauthority.Report
 	present   bool
@@ -57,7 +58,10 @@ func (h *authorityHolder) refresh(ctx context.Context, inv agentinventory.Invent
 	if err != nil {
 		return
 	}
-	report := scanAuthority(ctx, home, inv)
+	if h.scanner.BeginRead != nil {
+		defer h.scanner.BeginRead()()
+	}
+	report := scanAuthority(ctx, &h.scanner, home, inv)
 	if ctx.Err() != nil {
 		return
 	}
