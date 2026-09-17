@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
 var fixtureTime = time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
@@ -271,11 +273,147 @@ func TestPerFileTimeout(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	r := Report{}
-	g := guard{ctx: context.Background(), roots: []string{home}, report: &r, readFile: func(string, string) fileResult { <-release; return fileResult{} }}
+	g := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &r, readFile: func(string, string) fileResult { <-release; return fileResult{} }}
 	start := time.Now()
 	result := g.access(filepath.Join(home, "blocked"), "read")
-	if result.err != context.DeadlineExceeded || !r.Truncated || r.Coverage.SkippedFiles != 1 || time.Since(start) > time.Second {
+	if result.err != context.DeadlineExceeded || r.Truncated || g.opened != 0 || r.Coverage.SkippedFiles != 1 || !slices.Equal(r.Coverage.Errors, []string{"read timeout: ~/blocked"}) || time.Since(start) > time.Second {
 		t.Fatalf("timeout not enforced: %+v %+v", result, r)
+	}
+}
+
+func TestProjectEnvTimeoutPreservesAgentFacts(t *testing.T) {
+	home := fixtureHome(t, "home_claude_full")
+	project := filepath.Join(home, "repo")
+	writeFixture(t, home, ".claude/settings.json", `{"permissions":{"defaultMode":"auto"},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"kontext hook"}]}]}}`)
+	release := make(chan struct{})
+	defer close(release)
+	r := Report{SchemaVersion: "authority/v1", Agents: []Agent{{ID: "claude_code"}}}
+	g := guard{ctx: context.Background(), home: home, managed: filepath.Join(home, "managed"), roots: []string{home}, report: &r, readFile: func(path, mode string) fileResult {
+		if path == filepath.Join(project, ".env") {
+			<-release
+			return fileResult{}
+		}
+		return readGuarded(path, mode)
+	}}
+	g.credentials([]string{project})
+	g.claude(&r.Agents[0], filepath.Join(home, ".claude"), readers.ClaudeRoot{}, nil)
+	for _, read := range append(g.scanDetails, g.scanSkills...) {
+		read()
+	}
+	r.finish()
+	a := r.Agents[0]
+	if r.Truncated || r.Coverage.SkippedFiles != 1 || !slices.Equal(r.Coverage.Errors, []string{"read timeout: ~/repo/.env"}) || len(a.Plugins) == 0 || len(a.Hooks) != 1 || a.Permissions.DefaultMode == nil || *a.Permissions.DefaultMode != "auto" {
+		t.Fatalf("slow project env lost agent facts: %+v", r)
+	}
+}
+
+func TestReadTimeoutDiagnosticsRedactPaths(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"ghp_private", strings.Repeat("a1", 16)} {
+		r := Report{}
+		g := guard{home: home, report: &r}
+		g.readError(filepath.Join(home, name, ".env"), "read timeout")
+		if !slices.Equal(r.Coverage.Errors, []string{"read timeout: <redacted>"}) {
+			t.Fatalf("unsafe diagnostic: %q", r.Coverage.Errors)
+		}
+	}
+}
+
+func TestWholeScanDeadlineStopsReads(t *testing.T) {
+	home := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	release := make(chan struct{})
+	defer close(release)
+	r := Report{}
+	g := guard{ctx: ctx, home: home, roots: []string{home}, report: &r, readFile: func(string, string) fileResult { <-release; return fileResult{} }}
+	result := g.access(filepath.Join(home, "blocked"), "read")
+	if result.err != context.DeadlineExceeded || !r.Truncated || r.Coverage.SkippedFiles != 1 || len(r.Coverage.Errors) != 0 {
+		t.Fatalf("whole-scan deadline not enforced: %+v %+v", result, r)
+	}
+	g.readFile = func(string, string) fileResult { t.Error("read after scan deadline"); return fileResult{} }
+	g.read(filepath.Join(home, "later"))
+}
+
+func TestPendingReadsAreBoundedAcrossScans(t *testing.T) {
+	home := fixtureHome(t, "home_empty")
+	writeFixture(t, home, "available", "still readable")
+	release := make(chan struct{})
+	defer func() {
+		close(release)
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			pendingReads.Lock()
+			remaining := len(pendingReads.paths)
+			pendingReads.Unlock()
+			if remaining == 0 {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Error("completed workers did not release their slots")
+	}()
+	for i := 0; i < maxPendingReads; i++ {
+		path := filepath.Join(home, fmt.Sprintf("blocked-%d", i))
+		started := make(chan struct{})
+		finished := make(chan struct{})
+		ctx, cancel := context.WithCancel(context.Background())
+		r := Report{}
+		g := guard{ctx: ctx, home: home, roots: []string{home}, report: &r, readFile: func(string, string) fileResult {
+			close(started)
+			<-release
+			return fileResult{}
+		}}
+		go func() { g.access(path, "read"); close(finished) }()
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			cancel()
+			t.Fatal("worker did not start")
+		}
+		cancel()
+		<-finished
+		if i == 0 {
+			// A later scan must not duplicate the blocked read or poison other paths.
+			next := Report{}
+			later := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &next}
+			if later.read(path) != nil || string(later.read(filepath.Join(home, "available"))) != "still readable" || next.Truncated || next.Coverage.SkippedFiles != 1 {
+				t.Fatalf("pending file poisoned later scan: %+v", next)
+			}
+		}
+	}
+	r := Report{}
+	g := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &r, readFile: func(string, string) fileResult {
+		t.Error("started worker beyond pending read cap")
+		return fileResult{}
+	}}
+	if g.read(filepath.Join(home, "one-too-many")) != nil || r.Truncated || r.Coverage.SkippedFiles != 1 || len(r.Coverage.Errors) != 1 {
+		t.Fatalf("pending reads were not bounded: %+v", r)
+	}
+}
+
+func TestProjectEnvSkipsProtectedRoots(t *testing.T) {
+	home := fixtureHome(t, "home_empty")
+	projects := []string{}
+	for _, root := range []string{"Documents", "Desktop", "Downloads", "Library/Mobile Documents"} {
+		projects = append(projects, filepath.Join(home, root), filepath.Join(home, root, "repo"))
+	}
+	for _, root := range []string{"Documents-local", "Desktop-local", "Downloads-local", "Library/Mobile Documents-local"} {
+		projects = append(projects, filepath.Join(home, root, "repo"))
+		writeFixture(t, home, filepath.Join(root, "repo/.env"), "TEST_TOKEN=fixture")
+	}
+	r := Report{}
+	g := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &r, readFile: func(path, mode string) fileResult {
+		for _, project := range projects[:8] {
+			if path == filepath.Join(project, ".env") {
+				t.Errorf("accessed protected project env: %s", path)
+			}
+		}
+		return readGuarded(path, mode)
+	}}
+	g.credentials(projects)
+	if r.Truncated || r.Coverage.SkippedFiles != 0 || len(r.Coverage.Errors) != 0 || !slices.Equal(r.Coverage.Limits, []string{"project env skipped under Documents/Desktop/Downloads"}) || len(r.Credentials) != 4 {
+		t.Fatalf("wrong protected-project coverage: %+v", r)
 	}
 }
 

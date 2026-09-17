@@ -8,15 +8,24 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
 const maxFiles = 2000
+const maxPendingReads = 32
 const maxFileBytes = 1024 * 1024
 const maxReportBytes = 64 * 1024
 const managedRoot = "/Library/Application Support/ClaudeCode"
+
+// Filesystem calls cannot be cancelled. Retain at most 32 workers across scans,
+// and never start another worker for a path that is still blocked.
+var pendingReads = struct {
+	sync.Mutex
+	paths map[string]bool
+}{paths: make(map[string]bool)}
 
 type guard struct {
 	ctx           context.Context
@@ -53,8 +62,8 @@ type fileResult struct {
 	opened  bool
 }
 
-// One time budget includes metadata, ancestor checks, open, and read. A timed-out
-// filesystem stops this scan, leaving at most one worker to close its own file.
+// One per-file budget includes metadata, ancestor checks, open, and read.
+// A timed-out worker finishes and closes its own file without blocking later reads.
 func (g *guard) access(path, mode string) fileResult {
 	if g.ctx.Err() != nil || g.opened >= maxFiles {
 		g.report.Truncated = true
@@ -73,13 +82,33 @@ func (g *guard) access(path, mode string) fileResult {
 		g.skip()
 		return fileResult{err: os.ErrPermission}
 	}
+	pendingReads.Lock()
+	if pendingReads.paths[path] || len(pendingReads.paths) >= maxPendingReads {
+		pendingReads.Unlock()
+		err := errors.New("read pending or worker limit reached")
+		g.skip()
+		g.readError(path, err.Error())
+		return fileResult{err: err}
+	}
+	pendingReads.paths[path] = true
+	pendingReads.Unlock()
 	done := make(chan fileResult, 1)
 	read := g.readFile
 	if read == nil {
 		read = readGuarded
 	}
-	go func() { done <- read(path, mode) }()
-	timer := time.NewTimer(200 * time.Millisecond)
+	go func() {
+		result := read(path, mode)
+		pendingReads.Lock()
+		delete(pendingReads.paths, path)
+		pendingReads.Unlock()
+		done <- result
+	}()
+	timeout := 200 * time.Millisecond
+	if filepath.Base(path) == ".env" {
+		timeout = 100 * time.Millisecond
+	}
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case result := <-done:
@@ -91,15 +120,23 @@ func (g *guard) access(path, mode string) fileResult {
 		}
 		return result
 	case <-g.ctx.Done():
-		g.opened = maxFiles
 		g.report.Truncated = true
 		g.skip()
 		return fileResult{err: g.ctx.Err()}
 	case <-timer.C:
-		g.opened = maxFiles
-		g.report.Truncated = true
 		g.skip()
+		g.readError(path, "read timeout")
 		return fileResult{err: context.DeadlineExceeded}
+	}
+}
+
+func (g *guard) readError(path, reason string) {
+	if len(g.report.Coverage.Errors) < 200 {
+		source := safe(g.source(path), 200)
+		if source == "" || secret(source, "errors") {
+			source = "<redacted>"
+		}
+		g.report.Coverage.Errors = append(g.report.Coverage.Errors, reason+": "+source)
 	}
 }
 func readGuarded(path, mode string) (result fileResult) {

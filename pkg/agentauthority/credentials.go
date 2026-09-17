@@ -111,7 +111,18 @@ func (g *guard) credentials(projects []string) {
 			g.credential("docker_config_auth", docker, len(config.Auths), "", "")
 		}
 	}
+	skippedProtectedProject := false
+projects:
 	for _, project := range projects {
+		for _, root := range []string{"Documents", "Desktop", "Downloads", "Library/Mobile Documents"} {
+			if within(filepath.Join(g.home, root), project) {
+				if !skippedProtectedProject {
+					g.report.Coverage.Limits = append(g.report.Coverage.Limits, "project env skipped under Documents/Desktop/Downloads")
+					skippedProtectedProject = true
+				}
+				continue projects
+			}
+		}
 		path := filepath.Join(project, ".env")
 		if data := g.read(path); data != nil {
 			count := 0
