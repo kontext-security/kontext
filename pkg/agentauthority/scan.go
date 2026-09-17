@@ -19,7 +19,8 @@ func Scan(ctx context.Context, home string, env Environment, agents []AgentLocat
 }
 
 func scan(ctx context.Context, home string, env Environment, agents []AgentLocation, now time.Time, managed string) Report {
-	r := Report{SchemaVersion: "authority/v1", ScannedAt: now.UTC().Format(time.RFC3339), Agents: []Agent{}, Environment: env, Credentials: []Credential{}, Coverage: Coverage{UnknownFormat: []string{}, Errors: []string{}}}
+	// Keep agent addresses stable while detail and skill reads wait for configs.
+	r := Report{SchemaVersion: "authority/v1", ScannedAt: now.UTC().Format(time.RFC3339), Agents: make([]Agent, 0, len(agents)), Environment: env, Credentials: []Credential{}, Coverage: Coverage{UnknownFormat: []string{}, Errors: []string{}}}
 	g := guard{ctx: ctx, home: filepath.Clean(home), managed: managed, roots: []string{filepath.Clean(home), managed}, report: &r}
 	root := readers.ClaudeRoot{}
 	if data := g.read(filepath.Join(home, ".claude.json")); data != nil {
@@ -31,8 +32,7 @@ func scan(ctx context.Context, home string, env Environment, agents []AgentLocat
 	}
 	projects := keys(root.Projects)
 	if len(projects) > 32 {
-		r.Coverage.SkippedFiles += len(projects) - 32
-		r.Coverage.Errors = append(r.Coverage.Errors, "claude_code: projects limited to 32")
+		r.Coverage.Limits = append(r.Coverage.Limits, "claude_code: projects limited to 32")
 		projects = projects[:32]
 	}
 	for _, project := range projects {
@@ -50,21 +50,22 @@ func scan(ctx context.Context, home string, env Environment, agents []AgentLocat
 		if id == "" {
 			continue
 		}
-		a := Agent{ID: id, MCPServers: []MCPServer{}, Plugins: []Plugin{}, Skills: []Skill{}, Hooks: []Hook{}, Subagents: []Subagent{}, Permissions: Permissions{Allow: []Grant{}}}
+		r.Agents = append(r.Agents, Agent{ID: id, MCPServers: []MCPServer{}, Plugins: []Plugin{}, Skills: []Skill{}, Hooks: []Hook{}, Subagents: []Subagent{}, Permissions: Permissions{Allow: []Grant{}}})
+		a := &r.Agents[len(r.Agents)-1]
 		base := location.ConfigPath
 		if strings.HasPrefix(base, "~/") {
 			base = filepath.Join(home, base[2:])
 		}
 		switch id {
 		case "claude_code":
-			g.claude(&a, base, root, projects)
+			g.claude(a, base, root, projects)
 		case "codex":
 			if data := g.read(filepath.Join(base, "config.toml")); data != nil {
 				c, err := readers.Codex(data)
 				if err != nil {
 					g.parseError(id, "config.toml")
 				} else {
-					g.servers(&a, c.MCPServers, filepath.Join(base, "config.toml"), "user", nil)
+					g.servers(a, c.MCPServers, filepath.Join(base, "config.toml"), "user", nil)
 					mode := c.SandboxMode
 					if mode != "read-only" && mode != "workspace-write" && mode != "danger-full-access" {
 						mode = ""
@@ -72,30 +73,35 @@ func scan(ctx context.Context, home string, env Environment, agents []AgentLocat
 					a.Permissions.Codex = &CodexPermissions{SandboxMode: pointer(mode), ApprovalPolicy: pointer(safe(c.ApprovalPolicy, 128))}
 				}
 			}
-			g.skills(&a, filepath.Join(base, "skills"))
+			g.scanSkills = append(g.scanSkills, func() { g.skills(a, filepath.Join(base, "skills")) })
 		case "claude_cowork":
-			g.desktop(&a)
+			g.desktop(a)
 		case "cursor":
-			g.generic(&a, filepath.Join(base, "mcp.json"), "mcpServers")
+			g.generic(a, filepath.Join(base, "mcp.json"), "mcpServers")
 		case "windsurf":
-			g.generic(&a, filepath.Join(home, ".codeium/windsurf/mcp_config.json"), "mcpServers")
+			g.generic(a, filepath.Join(home, ".codeium/windsurf/mcp_config.json"), "mcpServers")
 		case "copilot_cli":
-			g.generic(&a, filepath.Join(base, "mcp-config.json"), "mcpServers")
-			g.generic(&a, filepath.Join(home, "Library/Application Support/Code/User/mcp.json"), "servers")
+			g.generic(a, filepath.Join(base, "mcp-config.json"), "mcpServers")
+			g.generic(a, filepath.Join(home, "Library/Application Support/Code/User/mcp.json"), "servers")
 		case "gemini_cli":
-			g.generic(&a, filepath.Join(base, "settings.json"), "mcpServers")
+			g.generic(a, filepath.Join(base, "settings.json"), "mcpServers")
 		case "antigravity":
-			g.generic(&a, filepath.Join(home, ".gemini/antigravity/mcp_config.json"), "mcpServers")
+			g.generic(a, filepath.Join(home, ".gemini/antigravity/mcp_config.json"), "mcpServers")
 		case "kiro":
-			g.generic(&a, filepath.Join(base, "settings/mcp.json"), "mcpServers")
+			g.generic(a, filepath.Join(base, "settings/mcp.json"), "mcpServers")
 		case "amp":
-			g.generic(&a, filepath.Join(base, "settings.json"), "amp.mcpServers")
+			g.generic(a, filepath.Join(base, "settings.json"), "amp.mcpServers")
 		case "opencode":
-			g.generic(&a, filepath.Join(base, "opencode.json"), "mcp")
+			g.generic(a, filepath.Join(base, "opencode.json"), "mcp")
 		default:
 			r.Coverage.UnknownFormat = append(r.Coverage.UnknownFormat, id)
 		}
-		r.Agents = append(r.Agents, a)
+	}
+	for _, read := range g.scanDetails {
+		read()
+	}
+	for _, read := range g.scanSkills {
+		read()
 	}
 	if ctx.Err() != nil {
 		r.Truncated = true
@@ -164,6 +170,16 @@ func (g *guard) servers(a *Agent, entries map[string]readers.MCP, source, scope 
 }
 func (g *guard) claude(a *Agent, base string, root readers.ClaudeRoot, projects []string) {
 	g.servers(a, root.MCPServers, filepath.Join(g.home, ".claude.json"), "user", nil)
+	enabled := map[string]bool{}
+	for _, path := range []string{filepath.Join(base, "settings.json"), filepath.Join(base, "settings.local.json"), filepath.Join(g.managed, "managed-settings.json")} {
+		g.settings(a, path, enabled)
+	}
+	for _, entry := range g.entries(filepath.Join(g.managed, "managed-settings.d")) {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			g.settings(a, filepath.Join(g.managed, "managed-settings.d", entry.Name()), enabled)
+		}
+	}
+	g.plugins(a, base, enabled)
 	for _, project := range projects {
 		label := pointer(safe(filepath.Base(project), 128))
 		g.servers(a, root.Projects[project].MCPServers, filepath.Join(g.home, ".claude.json"), "project", label)
@@ -177,18 +193,8 @@ func (g *guard) claude(a *Agent, base string, root readers.ClaudeRoot, projects 
 			}
 		}
 	}
-	enabled := map[string]bool{}
-	for _, path := range []string{filepath.Join(base, "settings.json"), filepath.Join(base, "settings.local.json"), filepath.Join(g.managed, "managed-settings.json")} {
-		g.settings(a, path, enabled)
-	}
-	for _, entry := range g.entries(filepath.Join(g.managed, "managed-settings.d")) {
-		if strings.HasSuffix(entry.Name(), ".json") {
-			g.settings(a, filepath.Join(g.managed, "managed-settings.d", entry.Name()), enabled)
-		}
-	}
-	g.skills(a, filepath.Join(base, "skills"))
-	g.subagents(a, filepath.Join(base, "agents"))
-	g.plugins(a, base, enabled)
+	g.scanDetails = append(g.scanDetails, func() { g.subagents(a, filepath.Join(base, "agents")) })
+	g.scanSkills = append(g.scanSkills, func() { g.skills(a, filepath.Join(base, "skills")) })
 }
 func (g *guard) settings(a *Agent, path string, enabled map[string]bool) {
 	data := g.read(path)
@@ -405,17 +411,6 @@ func (g *guard) plugins(a *Agent, base string, enabled map[string]bool) {
 			plugin := Plugin{Name: name, Marketplace: pointer(market), Enabled: active}
 			// Inventory plugin contents even when disabled; only enabled MCPs imply reach.
 			scratch := Agent{ID: a.ID, MCPServers: []MCPServer{}, Skills: []Skill{}, Hooks: []Hook{}, Subagents: []Subagent{}, Permissions: Permissions{Allow: []Grant{}}}
-			for _, item := range g.entries(filepath.Join(entry.InstallPath, "skills")) {
-				if item.IsDir() {
-					plugin.Skills++
-				}
-			}
-			for _, item := range g.entries(filepath.Join(entry.InstallPath, "agents")) {
-				if item.Type().IsRegular() && strings.HasSuffix(item.Name(), ".md") {
-					plugin.Subagents++
-				}
-			}
-			g.settings(&scratch, filepath.Join(entry.InstallPath, "hooks/hooks.json"), nil)
 			if data := g.read(filepath.Join(entry.InstallPath, ".mcp.json")); data != nil {
 				entries, err := readers.GenericMCP(data, "mcpServers")
 				if err == nil {
@@ -425,8 +420,24 @@ func (g *guard) plugins(a *Agent, base string, enabled map[string]bool) {
 				}
 			}
 			plugin.MCPServers = len(scratch.MCPServers)
-			plugin.Hooks = len(scratch.Hooks)
+			pluginIndex := len(a.Plugins)
 			a.Plugins = append(a.Plugins, plugin)
+			g.scanDetails = append(g.scanDetails, func() {
+				for _, item := range g.entries(filepath.Join(entry.InstallPath, "agents")) {
+					if item.Type().IsRegular() && strings.HasSuffix(item.Name(), ".md") {
+						a.Plugins[pluginIndex].Subagents++
+					}
+				}
+				g.settings(&scratch, filepath.Join(entry.InstallPath, "hooks/hooks.json"), nil)
+				a.Plugins[pluginIndex].Hooks = len(scratch.Hooks)
+			})
+			g.scanSkills = append(g.scanSkills, func() {
+				for _, item := range g.entries(filepath.Join(entry.InstallPath, "skills")) {
+					if item.IsDir() {
+						a.Plugins[pluginIndex].Skills++
+					}
+				}
+			})
 			if active {
 				a.MCPServers = append(a.MCPServers, scratch.MCPServers...)
 			}

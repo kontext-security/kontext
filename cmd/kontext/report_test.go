@@ -64,7 +64,7 @@ func TestReportJSONFixtureProfile(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("report changed stream state")
 	}
-	for _, text := range []string{"Claude Code:", "Environment:", "Ambient credentials:", "values never read", "Coverage:", "1 MCP server, 1 plugin, prompts bypassed", "gh (github.com, sam-example)", "codex: config.toml parse error"} {
+	for _, text := range []string{"Claude Code:", "Environment:", "Ambient credentials:", "values never read", "Coverage:", "1 MCP server, 1 plugin, prompts bypassed", "gh (github.com, sam-example)", "codex: config.toml parse error", "limits [claude_code: projects limited to 32]"} {
 		if !bytes.Contains(out.Bytes(), []byte(text)) {
 			t.Fatalf("missing %s", text)
 		}

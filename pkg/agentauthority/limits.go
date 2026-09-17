@@ -13,7 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const maxFiles = 200
+const maxFiles = 2000
 const maxFileBytes = 1024 * 1024
 const maxReportBytes = 64 * 1024
 const managedRoot = "/Library/Application Support/ClaudeCode"
@@ -25,6 +25,8 @@ type guard struct {
 	opened        int
 	report        *Report
 	readFile      func(string, string) fileResult
+	scanDetails   []func()
+	scanSkills    []func()
 }
 
 func (g *guard) skip() { g.report.Coverage.SkippedFiles++ }
@@ -138,7 +140,9 @@ func readGuarded(path, mode string) (result fileResult) {
 	}
 	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
-	result.opened = true
+	// Only opened regular files spend the file budget, not directory traversal
+	// or Lstat calls (including probes for files that do not exist).
+	result.opened = result.info.Mode().IsRegular()
 	actual, err := file.Stat()
 	if err != nil || !os.SameFile(result.info, actual) {
 		result.err = os.ErrPermission

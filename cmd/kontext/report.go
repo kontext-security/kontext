@@ -109,7 +109,7 @@ func writeReport(out io.Writer, report managedstream.Report) error {
 		credentials = append(credentials, "none found")
 	}
 	fmt.Fprintf(out, "Ambient credentials: %s; values never read\n", strings.Join(credentials, ", "))
-	_, err := fmt.Fprintf(out, "Coverage: %d skipped files, %d errors, unknown formats [%s], truncated %t; %s\n", authority.Coverage.SkippedFiles, len(authority.Coverage.Errors), strings.Join(authority.Coverage.UnknownFormat, ", "), authority.Truncated, strings.Join(authority.Coverage.Errors, "; "))
+	_, err := fmt.Fprintf(out, "Coverage: %d skipped files, %d errors, unknown formats [%s], limits [%s], truncated %t; %s\n", authority.Coverage.SkippedFiles, len(authority.Coverage.Errors), strings.Join(authority.Coverage.UnknownFormat, ", "), strings.Join(authority.Coverage.Limits, "; "), authority.Truncated, strings.Join(authority.Coverage.Errors, "; "))
 	return err
 }
 

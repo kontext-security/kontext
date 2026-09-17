@@ -11,7 +11,7 @@
   "authority": {
     "schema_version": "authority/v1",
     "scanned_at": "2026-09-16T12:00:00Z",
-    "hash": "155d0c509cc034af26283b9d81fd52ac28e20f06c7bdd02f8a24a018826a954c",
+    "hash": "c4603d91e34f58e8a2e658b35493b1700c95b6bbd88972dc035e8a3f6ef1f8eb",
     "agents": [
       {
         "id": "claude_code",
@@ -101,6 +101,9 @@
       ],
       "errors": [
         "codex: config.toml parse error"
+      ],
+      "limits": [
+        "claude_code: projects limited to 32"
       ],
       "skipped_files": 0
     },

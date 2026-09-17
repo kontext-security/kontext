@@ -1,0 +1,1 @@
+Real developer fixture: 8 installed plugins with manifests and MCP configuration, 150 project roots, and one user MCP server. The test adds 40 skills and enough cache assets to reach 400 cache files, without checking hundreds of duplicate files into the repository.

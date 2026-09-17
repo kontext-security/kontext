@@ -20,10 +20,22 @@ func (g *guard) credential(kind, path string, detail int, host, login string) {
 }
 func (g *guard) credentials(projects []string) {
 	ssh := filepath.Join(g.home, ".ssh")
+	keys := 0
+	var newest time.Time
 	for _, entry := range g.entries(ssh) {
 		if strings.HasPrefix(entry.Name(), "id_") && !strings.HasSuffix(entry.Name(), ".pub") {
-			g.credential("ssh_key", filepath.Join(ssh, entry.Name()), 1, "", "")
+			result := g.access(filepath.Join(ssh, entry.Name()), "stat")
+			if result.err == nil {
+				keys++
+				if result.info.ModTime().After(newest) {
+					newest = result.info.ModTime()
+				}
+			}
 		}
+	}
+	if keys > 0 {
+		stamp := newest.UTC().Format(time.RFC3339)
+		g.report.Credentials = append(g.report.Credentials, Credential{Kind: "ssh_key", Path: "~/.ssh", Present: true, ModifiedAt: &stamp, Detail: keys})
 	}
 	gh := filepath.Join(g.home, ".config/gh/hosts.yml")
 	if data := g.read(gh); data != nil {

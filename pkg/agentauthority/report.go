@@ -98,6 +98,7 @@ type Credential struct {
 type Coverage struct {
 	UnknownFormat []string `json:"unknown_format"`
 	Errors        []string `json:"errors"`
+	Limits        []string `json:"limits,omitempty"`
 	SkippedFiles  int      `json:"skipped_files"`
 }
 

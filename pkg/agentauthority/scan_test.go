@@ -105,8 +105,8 @@ func TestGoldenHomes(t *testing.T) {
 				// The bounded directory read returns a filesystem-dependent subset.
 				// Verify the cap and provenance; normalize only the selected names.
 				skills := report.Agents[0].Skills
-				if len(skills) != maxFiles-1 {
-					t.Fatalf("read %d skills, want %d", len(skills), maxFiles-1)
+				if len(skills) != 256 {
+					t.Fatalf("retained %d skills, want the report limit of 256", len(skills))
 				}
 				seen := make(map[string]bool)
 				for i, skill := range skills {
@@ -292,7 +292,7 @@ func TestProjectsAndPluginCountsPreserveCredentials(t *testing.T) {
 		writeFixture(t, home, fmt.Sprintf(".claude/plugins/cache/team/design/v1/agents/agent-%03d.md", i), "agent")
 	}
 	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}})
-	if r.Truncated || r.Coverage.SkippedFiles != 8 || len(r.Credentials) != 2 || r.Agents[0].Plugins[0].Skills != 101 || r.Agents[0].Plugins[0].Subagents != 100 {
+	if r.Truncated || r.Coverage.SkippedFiles != 0 || !slices.Equal(r.Coverage.Limits, []string{"claude_code: projects limited to 32"}) || len(r.Coverage.Errors) != 0 || len(r.Credentials) != 2 || r.Agents[0].Plugins[0].Skills != 101 || r.Agents[0].Plugins[0].Subagents != 100 {
 		t.Fatalf("budget lost facts: %+v", r)
 	}
 }
@@ -340,5 +340,94 @@ func TestSecretFlagsRemovedFromEveryCommandSource(t *testing.T) {
 	a := r.Agents[0]
 	if len(a.MCPServers) != 1 || len(a.MCPServers[0].Args) != 1 || a.MCPServers[0].Args[0] != "--verbose" || len(a.Hooks) != 1 || a.Hooks[0].Command != "node --verbose" || len(a.Permissions.Allow) != 1 {
 		t.Fatalf("lost non-secret command evidence: %+v", a)
+	}
+}
+
+func realDeveloperHome(t *testing.T) string {
+	t.Helper()
+	home := fixtureHome(t, "home_real_developer")
+	for i := 0; i < 40; i++ {
+		writeFixture(t, home, fmt.Sprintf(".claude/skills/skill-%02d/SKILL.md", i), "# Skill\n")
+	}
+	// Sixteen committed manifests/MCP files plus these assets make 400 cache files.
+	for i := 0; i < 384; i++ {
+		writeFixture(t, home, fmt.Sprintf(".claude/plugins/cache/local/plugin-%d/v1/assets/file-%03d.txt", i%8, i), "cache asset")
+	}
+	return home
+}
+
+func TestRealDeveloperHome(t *testing.T) {
+	home := realDeveloperHome(t)
+	agents := []AgentLocation{{"claude_code", "~/.claude"}}
+	scanFixture(home, agents) // Warm filesystem caches before measuring the scan.
+	start := time.Now()
+	r := scanFixture(home, agents)
+	elapsed := time.Since(start)
+	a := r.Agents[0]
+	if len(a.Plugins) != 8 || len(a.MCPServers) != 1 || len(a.Skills) != 40 || r.Truncated || r.Coverage.SkippedFiles != 0 || len(r.Coverage.Errors) != 0 || !slices.Equal(r.Coverage.Limits, []string{"claude_code: projects limited to 32"}) {
+		t.Fatalf("real developer facts lost: %+v", r)
+	}
+	if elapsed >= 250*time.Millisecond {
+		t.Fatalf("warm scan took %s, want under 250ms", elapsed)
+	}
+	t.Logf("warm scan: %s; 8 plugins, 1 MCP, 40 skills, no truncation", elapsed)
+}
+
+func TestSkillsCannotStarveAgentConfigs(t *testing.T) {
+	home := realDeveloperHome(t)
+	for i := 0; i < maxFiles+1; i++ {
+		writeFixture(t, home, fmt.Sprintf(".claude/skills/bulk-%04d/SKILL.md", i), "# Skill\n")
+	}
+	writeFixture(t, home, ".codex/config.toml", "sandbox_mode = \"danger-full-access\"\n")
+	writeFixture(t, home, ".claude/agents/reviewer.md", "---\ntools: Read\n---\n")
+	writeFixture(t, home, ".claude/plugins/cache/local/plugin-7/v1/.mcp.json", `{"mcpServers":{"plugin-server":{"command":"node"}}}`)
+	writeFixture(t, home, ".claude/plugins/cache/local/plugin-7/v1/hooks/hooks.json", `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"echo test"}]}]}}`)
+	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}, {"codex", "~/.codex"}})
+	if !r.Truncated || len(r.Agents[0].Plugins) != 8 || len(r.Agents[0].MCPServers) != 2 || r.Agents[0].Plugins[7].Hooks != 1 || len(r.Agents[0].Subagents) != 1 || r.Agents[1].Permissions.Codex == nil || *r.Agents[1].Permissions.Codex.SandboxMode != "danger-full-access" {
+		t.Fatalf("skills starved higher priority facts: %+v", r)
+	}
+}
+
+func TestFileBudgetCountsOnlyOpenedFiles(t *testing.T) {
+	home := fixtureHome(t, "home_empty")
+	writeFixture(t, home, "file", "content")
+	r := Report{}
+	g := guard{ctx: context.Background(), roots: []string{home}, report: &r}
+	for i := 0; i < 3; i++ {
+		g.entries(home)
+		g.read(filepath.Join(home, "missing"))
+	}
+	if g.opened != 0 {
+		t.Fatalf("directory or missing file spent budget: %d", g.opened)
+	}
+	for i := 0; i < maxFiles; i++ {
+		if string(g.read(filepath.Join(home, "file"))) != "content" {
+			t.Fatalf("read %d of %d was denied", i+1, maxFiles)
+		}
+	}
+	if g.opened != 2000 || r.Truncated || g.read(filepath.Join(home, "file")) != nil || !r.Truncated {
+		t.Fatalf("file cap not enforced: opened=%d, report=%+v", g.opened, r)
+	}
+}
+
+func TestSSHKeysCountAndNewestModification(t *testing.T) {
+	home := fixtureHome(t, "home_empty")
+	for _, name := range []string{"id_rsa", "id_ed25519", "id_work", "id_rsa.pub"} {
+		writeFixture(t, home, ".ssh/"+name, "private content must never be read")
+	}
+	newest := fixtureTime.Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(home, ".ssh/id_work"), newest, newest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(home, ".ssh/id_escape")); err != nil {
+		t.Fatal(err)
+	}
+	r := scanFixture(home, nil)
+	if len(r.Credentials) != 1 {
+		t.Fatalf("want one SSH credential: %+v", r.Credentials)
+	}
+	c := r.Credentials[0]
+	if c.Kind != "ssh_key" || c.Path != "~/.ssh" || c.Detail != 3 || !c.Present || c.ModifiedAt == nil || *c.ModifiedAt != newest.Format(time.RFC3339) {
+		t.Fatalf("wrong SSH aggregate: %+v", c)
 	}
 }

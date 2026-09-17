@@ -167,6 +167,7 @@ func (r *Report) finish() {
 	trimSlice(&r.Agents, 25, &r.Coverage.SkippedFiles)
 	trimSlice(&r.Credentials, 32, &r.Coverage.SkippedFiles)
 	trimSlice(&r.Coverage.Errors, 200, &r.Coverage.SkippedFiles)
+	trimSlice(&r.Coverage.Limits, 25, &r.Coverage.SkippedFiles)
 	trimSlice(&r.Coverage.UnknownFormat, 25, &r.Coverage.SkippedFiles)
 	r.Hash = strings.Repeat("0", 64)
 	for {
