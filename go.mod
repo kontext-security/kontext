@@ -1,6 +1,6 @@
 module github.com/kontext-security/kontext
 
-go 1.25.13
+go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -11,11 +11,11 @@ require (
 	github.com/shota3506/onnxruntime-purego v0.0.0-20260315223538-8db8bd7424b2
 	github.com/spf13/cobra v1.10.2
 	github.com/tggo/goSentencePiece v1.1.0
-	golang.org/x/sys v0.47.0
-	golang.org/x/term v0.45.0
-	golang.org/x/text v0.39.0
-	modernc.org/sqlite v1.54.0
-	mvdan.cc/sh/v3 v3.13.1
+	golang.org/x/sys v0.48.0
+	golang.org/x/term v0.46.0
+	golang.org/x/text v0.42.0
+	modernc.org/sqlite v1.58.0
+	mvdan.cc/sh/v3 v3.14.1
 )
 
 require (
@@ -28,7 +28,7 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	golang.org/x/exp v0.0.0-20220921023135-46d9e7742f1e // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	modernc.org/libc v1.74.1 // indirect
+	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.11.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
 )
