@@ -1,0 +1,1 @@
+{"mcpServers": {"github": {"command": "/usr/bin/npx", "args": ["-y", "@github/mcp"]}}, "projects": {"{{HOME}}/repo": {"mcpServers": {}}}}

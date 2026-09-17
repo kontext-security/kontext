@@ -1,0 +1,1 @@
+{"mcp": {"github": {"type": "local", "command": ["npx", "@github/mcp"]}}}

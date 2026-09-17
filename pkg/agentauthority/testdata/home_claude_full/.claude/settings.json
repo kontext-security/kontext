@@ -1,0 +1,1 @@
+{"permissions": {"defaultMode": "bypassPermissions", "allow": ["Bash(*)", "Bash(sudo:*)", "Read(*)"], "deny": ["Read(.env)"]}, "sandbox": {"enabled": false}, "enabledPlugins": {"design@team": true}, "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "kontext hook"}]}]}}

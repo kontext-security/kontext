@@ -1,0 +1,5 @@
+sandbox_mode = "danger-full-access"
+approval_policy = "never"
+[mcp_servers.github]
+command = "npx"
+args = ["-y", "@github/mcp"]

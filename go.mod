@@ -3,6 +3,7 @@ module github.com/kontext-security/kontext
 go 1.25.13
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/google/uuid v1.6.0
 	github.com/gowebpki/jcs v1.0.1
