@@ -18,8 +18,8 @@ func TestRiskHookEventPreservesProviderMetadata(t *testing.T) {
 	duration, zero := int64(4187), int64(0)
 	interrupted, notInterrupted := true, false
 	for name, event := range map[string]hook.Event{
-		"present":        {DurationMs: &duration, Error: "command failed", IsInterrupt: &interrupted, PermissionMode: "default"},
-		"zero and false": {DurationMs: &zero, IsInterrupt: &notInterrupted},
+		"present":        {DurationMs: &duration, Error: "command failed", IsInterrupt: &interrupted, PermissionMode: "default", FullDiskAccess: &interrupted},
+		"zero and false": {DurationMs: &zero, IsInterrupt: &notInterrupted, FullDiskAccess: &notInterrupted},
 		"absent":         {},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -48,20 +48,23 @@ func TestRiskHookEventPreservesProviderMetadata(t *testing.T) {
 func TestProviderMetadataReachesLedgerThroughHookTransport(t *testing.T) {
 	for _, test := range []struct {
 		name, input string
+		fda         *bool
 		decode      func([]byte, string) (hook.Event, error)
 		want        map[string]any
 	}{
 		{
 			name:   "claude failure without tool response",
+			fda:    boolPointer(true),
 			input:  `{"session_id":"sess_e2e","hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tool-1","tool_input":{"command":"npm test"},"duration_ms":4187,"error":"failed: Bearer secret-for-hook-test","is_interrupt":false,"permission_mode":"default"}`,
 			decode: hookruntime.DecodeClaudeEvent,
-			want:   map[string]any{"duration_ms": float64(4187), "error_redacted": "failed: Bearer [REDACTED_SECRET]", "is_interrupt": false, "permission_mode": "default"},
+			want:   map[string]any{"duration_ms": float64(4187), "error_redacted": "failed: Bearer [REDACTED_SECRET]", "is_interrupt": false, "permission_mode": "default", "full_disk_access": true},
 		},
 		{
 			name:   "codex permission mode with unavailable execution fields",
+			fda:    boolPointer(false),
 			input:  `{"session_id":"sess_e2e","hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tool-1","tool_input":{"command":"npm test"},"tool_response":{"exit_code":0},"permission_mode":"default"}`,
 			decode: hookruntime.DecodeCodexEvent,
-			want:   map[string]any{"permission_mode": "default"},
+			want:   map[string]any{"permission_mode": "default", "full_disk_access": false},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -69,6 +72,7 @@ func TestProviderMetadataReachesLedgerThroughHookTransport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			event.FullDiskAccess = test.fda
 			req, err := localruntime.EvaluateRequestFromEvent(event)
 			if err != nil {
 				t.Fatal(err)
@@ -176,3 +180,5 @@ func TestDeferredRecordingPreservesProviderPermissionMode(t *testing.T) {
 		t.Fatal("deferred decision lost its preassigned action ID")
 	}
 }
+
+func boolPointer(value bool) *bool { return &value }

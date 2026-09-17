@@ -157,3 +157,17 @@ func TestResultFromEvaluateResultFallsBackToAllowedFlag(t *testing.T) {
 		t.Fatalf("decision = %q, want allow", result.Decision)
 	}
 }
+
+func TestOldEvaluateRequestOmitsFullDiskAccess(t *testing.T) {
+	var req EvaluateRequest
+	if err := json.Unmarshal([]byte(`{"type":"evaluate","agent":"claude","hook_event":"PreToolUse","tool_name":"Bash","tool_input":{}}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	event, err := EventFromEvaluateRequest("session", "claude", &req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.FullDiskAccess != nil {
+		t.Fatal("old hook asserted FDA")
+	}
+}

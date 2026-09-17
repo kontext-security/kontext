@@ -1,0 +1,109 @@
+{
+  "agents": [
+    {
+      "id": "claude_code",
+      "config_path": "~/.claude",
+      "wired": "yes",
+      "last_activity_at": null
+    }
+  ],
+  "agents_reported_at": "2026-09-16T12:00:00Z",
+  "authority": {
+    "schema_version": "authority/v1",
+    "scanned_at": "2026-09-16T12:00:00Z",
+    "hash": "155d0c509cc034af26283b9d81fd52ac28e20f06c7bdd02f8a24a018826a954c",
+    "agents": [
+      {
+        "id": "claude_code",
+        "mcp_servers": [
+          {
+            "name": "github",
+            "transport": "stdio",
+            "command": "npx",
+            "args": [
+              "-y",
+              "@modelcontextprotocol/server-github"
+            ],
+            "url_host": null,
+            "source": "~/.claude/plugins/cache/team/design/v1/.mcp.json",
+            "scope": "plugin",
+            "project": null
+          }
+        ],
+        "plugins": [
+          {
+            "name": "frontend-design",
+            "marketplace": "anthropics/claude-plugins",
+            "enabled": true,
+            "mcp_servers": 0,
+            "skills": 2,
+            "hooks": 0,
+            "subagents": 0
+          }
+        ],
+        "skills": [
+          {
+            "name": "kontext-admin",
+            "source": "~/.claude/skills"
+          }
+        ],
+        "hooks": [
+          {
+            "event": "PreToolUse",
+            "command": "kontext hook",
+            "source": "managed-settings"
+          }
+        ],
+        "subagents": [
+          {
+            "name": "pr-reviewer",
+            "tools_wildcard": false
+          }
+        ],
+        "permissions": {
+          "default_mode": "bypassPermissions",
+          "allow": [
+            {
+              "pattern": "Bash(*)",
+              "risk": "any_shell"
+            }
+          ],
+          "deny_count": 3,
+          "sandbox": {
+            "enabled": false,
+            "allow_unsandboxed": null,
+            "allowed_domains": 0
+          },
+          "codex": null
+        }
+      }
+    ],
+    "environment": {
+      "uid": 501,
+      "root": false,
+      "admin": true,
+      "container": false
+    },
+    "credentials": [
+      {
+        "kind": "gh_token",
+        "path": "~/.config/gh/hosts.yml",
+        "present": true,
+        "modified_at": "2026-09-01T09:00:00Z",
+        "detail": 1,
+        "host": "github.com",
+        "login": "sam-example"
+      }
+    ],
+    "coverage": {
+      "unknown_format": [
+        "kiro"
+      ],
+      "errors": [
+        "codex: config.toml parse error"
+      ],
+      "skipped_files": 0
+    },
+    "truncated": false
+  }
+}

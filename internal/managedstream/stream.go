@@ -20,6 +20,7 @@ import (
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
 const (
@@ -72,7 +73,9 @@ type Options struct {
 	HooksFact func() (HooksFact, bool)
 	// AgentsFact reads the cached discovery scan. False means no scan yet;
 	// omit both fields so older or unavailable discovery stays unknown.
-	AgentsFact func() (agentinventory.Inventory, bool)
+	AgentsFact    func() (agentinventory.Inventory, bool)
+	AuthorityFact func() (agentauthority.Report, bool)
+	Now           func() time.Time
 	// DeviceKey resolves the endpoint's stable reconciliation key per flush.
 	// Empty means unknown — the field is omitted, and the hosted side must
 	// read absence as "no key reported", never as "a different device":
@@ -117,9 +120,10 @@ type Payload struct {
 }
 
 type Device struct {
-	Label             string `json:"label,omitempty"`
-	DeploymentVersion string `json:"deployment_version,omitempty"`
-	UserEmail         string `json:"user_email,omitempty"`
+	Authority         *agentauthority.Report `json:"authority,omitempty"`
+	Label             string                 `json:"label,omitempty"`
+	DeploymentVersion string                 `json:"deployment_version,omitempty"`
+	UserEmail         string                 `json:"user_email,omitempty"`
 	// Hook health, pointers so an endpoint that cannot determine the state
 	// omits the fields instead of asserting false. Without this fact a device
 	// whose managed hooks were deleted is indistinguishable server-side from
@@ -148,7 +152,17 @@ type HooksFact struct {
 	DisabledAllHooks bool
 }
 
+// Report is the discovery and authority payload most recently accepted by the
+// cloud. An omitted authority field on later heartbeats retains the prior value.
+type Report struct {
+	Agents           *[]agentinventory.Agent `json:"agents,omitempty"`
+	AgentsReportedAt string                  `json:"agents_reported_at,omitempty"`
+	Authority        *agentauthority.Report  `json:"authority,omitempty"`
+}
+
 type State struct {
+	LastReport             Report
+	LastAuthorityAt        string
 	UpdatedAfter           *time.Time
 	ActionID               string
 	MerlinCreatedAfter     *time.Time
@@ -160,6 +174,8 @@ type State struct {
 }
 
 type persistedState struct {
+	LastReport             Report `json:"last_report"`
+	LastAuthorityAt        string `json:"last_authority_at,omitempty"`
 	UpdatedAfter           string `json:"updated_after,omitempty"`
 	ActionID               string `json:"action_id,omitempty"`
 	MerlinCreatedAfter     string `json:"merlin_created_after,omitempty"`
@@ -232,6 +248,9 @@ func Flush(ctx context.Context, opts Options) error {
 		// Stamped per page: a full drain can run for minutes, and sent_at /
 		// heartbeat marks should reflect when each batch actually shipped.
 		now := time.Now().UTC()
+		if opts.Now != nil {
+			now = opts.Now().UTC()
+		}
 		batch, err := store.LedgerBatch(ctx, sqlite.LedgerExportOptions{
 			UpdatedAfter:   pageUpdatedAfter,
 			UpdatedAfterID: pageActionID,
@@ -291,10 +310,20 @@ func Flush(ctx context.Context, opts Options) error {
 
 		payload := newPayload(opts, batch.Sessions, batch.Actions, batch.Receipts, riskTypeAnnotations, batch.ReceiptChainAnchor, now)
 		payload.MerlinAnnotations = merlinAnnotations
+		addAuthority(&payload, opts, state, now)
 
 		body, err := json.Marshal(payload)
 		if err != nil {
 			return err
+		}
+		// Authority is independently retryable. Do not skip an otherwise valid
+		// minimum ledger batch just because the optional report filled it up.
+		if limit == 1 && len(body) > MaxPayloadBytes && payload.Device != nil && payload.Device.Authority != nil {
+			payload.Device.Authority = nil
+			body, err = json.Marshal(payload)
+			if err != nil {
+				return err
+			}
 		}
 		if reason := payloadLimitViolation(payload, len(body)); reason != "" {
 			if limit == 1 {
@@ -345,6 +374,7 @@ func Flush(ctx context.Context, opts Options) error {
 
 		state.LastHeartbeatAttemptAt = now.Format(time.RFC3339Nano)
 		state.LastHeartbeatAt = now.Format(time.RFC3339Nano)
+		recordReport(&state, payload, now)
 		if batch.Cursor != nil {
 			cursorAt := batch.Cursor.UpdatedAt.UTC()
 			safeAt, safeID := clampCursor(cursorAt, batch.Cursor.ActionID, now)
@@ -400,6 +430,7 @@ func postHeartbeatIfDue(ctx context.Context, opts Options, statePath string, sta
 	}
 
 	payload := newPayload(opts, nil, nil, nil, nil, nil, now)
+	addAuthority(&payload, opts, state, now)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -412,6 +443,7 @@ func postHeartbeatIfDue(ctx context.Context, opts Options, statePath string, sta
 		opts.OnFlushSuccess()
 	}
 	state.LastHeartbeatAt = now.Format(time.RFC3339Nano)
+	recordReport(&state, payload, now)
 	return SaveState(statePath, state)
 }
 
@@ -763,6 +795,7 @@ func LoadState(path string) (State, error) {
 		}
 		state.UpdatedAfter = &parsed
 	}
+	state.LastReport, state.LastAuthorityAt = persisted.LastReport, persisted.LastAuthorityAt
 	state.ActionID = strings.TrimSpace(persisted.ActionID)
 	if createdAfter := strings.TrimSpace(persisted.RiskTypeCreatedAfter); createdAfter != "" {
 		parsed, err := parseStateUpdatedAfter(createdAfter)
@@ -790,6 +823,7 @@ func SaveState(path string, state State) error {
 		return err
 	}
 	persisted := persistedState{
+		LastReport: state.LastReport, LastAuthorityAt: state.LastAuthorityAt,
 		MerlinAnnotationID:     strings.TrimSpace(state.MerlinAnnotationID),
 		ActionID:               strings.TrimSpace(state.ActionID),
 		RiskTypeAnnotationID:   strings.TrimSpace(state.RiskTypeAnnotationID),

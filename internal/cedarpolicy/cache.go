@@ -38,6 +38,8 @@ type CacheStatus struct {
 }
 
 type Snapshot struct {
+	AuthorityScan       bool
+	AuthorityScanKnown  bool
 	Deployment          *Deployment
 	LastKnownGood       *Deployment
 	LegacyDeployment    *LegacyDeployment
@@ -73,15 +75,17 @@ type Cache struct {
 	path string
 	now  func() time.Time
 
-	mu               sync.RWMutex
-	state            State
-	fetched          time.Time
-	active           *Deployment
-	lastGood         *Deployment
-	legacyActive     *LegacyDeployment
-	legacyLastGood   *LegacyDeployment
-	persistedEnforce bool
-	status           CacheStatus
+	authorityScan      bool
+	authorityScanKnown bool
+	mu                 sync.RWMutex
+	state              State
+	fetched            time.Time
+	active             *Deployment
+	lastGood           *Deployment
+	legacyActive       *LegacyDeployment
+	legacyLastGood     *LegacyDeployment
+	persistedEnforce   bool
+	status             CacheStatus
 }
 
 func NewCache(path string, _ time.Duration) *Cache {
@@ -267,6 +271,10 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 		return err
 	}
 	c.mu.Lock()
+	if result.State != StateNotModified || result.AuthorityScan != nil {
+		c.authorityScan = result.AuthorityScan != nil && *result.AuthorityScan
+		c.authorityScanKnown = result.AuthorityScan != nil
+	}
 	c.state = file.State
 	c.fetched = fetchedAt
 	c.active = cloneDeployment(file.Deployment)
@@ -326,6 +334,8 @@ func (c *Cache) Current() Snapshot {
 	legacyLastGood := cloneLegacyDeployment(c.legacyLastGood)
 	persistedEnforce := c.persistedEnforce
 	status := c.status
+	authorityScan := c.authorityScan
+	authorityScanKnown := c.authorityScanKnown
 	c.mu.RUnlock()
 
 	if active == nil && state == StateSuccess {
@@ -335,6 +345,8 @@ func (c *Cache) Current() Snapshot {
 		legacyActive = legacyLastGood
 	}
 	return Snapshot{
+		AuthorityScan:       authorityScan,
+		AuthorityScanKnown:  authorityScanKnown,
 		Deployment:          active,
 		LastKnownGood:       lastGood,
 		LegacyDeployment:    legacyActive,
@@ -428,14 +440,22 @@ func cloneDeployment(input *Deployment) *Deployment {
 
 type TokenSource func(context.Context) (string, error)
 
+type tokenResult struct {
+	token string
+	err   error
+}
+
 type Refresher struct {
-	Client         *Client
-	Cache          *Cache
-	TokenSource    TokenSource
-	InstallationID string
-	Interval       time.Duration
-	MaxBackoff     time.Duration
-	Now            func() time.Time
+	OnAuthorityScanAvailable func()
+	tokenPending             chan tokenResult
+	InitialRefreshDone       chan<- struct{}
+	Client                   *Client
+	Cache                    *Cache
+	TokenSource              TokenSource
+	InstallationID           string
+	Interval                 time.Duration
+	MaxBackoff               time.Duration
+	Now                      func() time.Time
 	// Diagnostic surfaces refresh state transitions in the daemon log. A
 	// refresh loop that fails silently leaves enforcement running on a stale
 	// policy with no operator-visible signal, so failures must not be
@@ -454,7 +474,24 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 		}
 		return err
 	}
-	token, err := r.TokenSource(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	// A hung credential helper may ignore cancellation. Keep at most one worker
+	// outstanding while allowing the initial refresh and daemon shutdown to finish.
+	if r.tokenPending == nil {
+		pending := make(chan tokenResult, 1)
+		r.tokenPending = pending
+		go func() { token, err := r.TokenSource(ctx); pending <- tokenResult{token, err} }()
+	}
+	var token string
+	var err error
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case result := <-r.tokenPending:
+		r.tokenPending = nil
+		token, err = result.token, result.err
+	}
 	if err != nil {
 		r.recordFailure(err)
 		return err
@@ -469,9 +506,13 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 		r.recordFailure(err)
 		return err
 	}
+	previous := r.Cache.Current()
 	if err := r.Cache.Apply(result, r.now()); err != nil {
 		r.recordFailure(err)
 		return err
+	}
+	if (!previous.AuthorityScanKnown || !previous.AuthorityScan) && r.Cache.Current().AuthorityScan && r.OnAuthorityScanAvailable != nil {
+		r.OnAuthorityScanAvailable()
 	}
 	r.recovered()
 	r.warnCatalogMismatch()
@@ -499,6 +540,7 @@ func (r *Refresher) Run(ctx context.Context) {
 		maxBackoff = 10 * interval
 	}
 	delay := interval
+	first := true
 	for {
 		if ctx.Err() != nil {
 			return
@@ -510,6 +552,12 @@ func (r *Refresher) Run(ctx context.Context) {
 			if delay > maxBackoff {
 				delay = maxBackoff
 			}
+		}
+		if first {
+			if r.InitialRefreshDone != nil {
+				close(r.InitialRefreshDone)
+			}
+			first = false
 		}
 		timer := time.NewTimer(delay)
 		select {

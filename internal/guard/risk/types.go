@@ -21,6 +21,7 @@ type HookEvent struct {
 	// Provider-reported hook metadata, not a risk or policy decision. Pointer
 	// fields preserve the distinction between missing values and zero/false.
 	PermissionMode       string `json:"permission_mode,omitempty"`
+	FullDiskAccess       *bool  `json:"full_disk_access,omitempty"`
 	DurationMs           *int64 `json:"duration_ms,omitempty"`
 	Error                string `json:"error,omitempty"`
 	IsInterrupt          *bool  `json:"is_interrupt,omitempty"`

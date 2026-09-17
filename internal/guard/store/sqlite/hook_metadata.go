@@ -25,6 +25,9 @@ func hookMetadata(event risk.HookEvent, errorRedacted string) map[string]any {
 	if event.IsInterrupt != nil {
 		metadata["is_interrupt"] = *event.IsInterrupt
 	}
+	if event.FullDiskAccess != nil {
+		metadata["full_disk_access"] = *event.FullDiskAccess
+	}
 	if event.PermissionMode != "" {
 		metadata["permission_mode"] = redactHookText(event.PermissionMode, 256)
 	}

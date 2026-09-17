@@ -170,6 +170,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err != nil {
 		return fmt.Errorf("configure cedar policy client: %w", err)
 	}
+	cedarClient.Diagnostic = opts.Diagnostic
 	endpointConfigCachePath := opts.EndpointConfigCachePath
 	if endpointConfigCachePath == "" {
 		endpointConfigCachePath = endpointconfig.DefaultCachePathForDB(dbPath)
@@ -245,7 +246,16 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 
 	policyCtx, stopPolicyRefresh := context.WithCancel(ctx)
 	var background sync.WaitGroup
+	policyReady := make(chan struct{})
+	authorityAvailable := make(chan struct{}, 1)
 	cedarRefresher := cedarpolicy.Refresher{
+		InitialRefreshDone: policyReady,
+		OnAuthorityScanAvailable: func() {
+			select {
+			case authorityAvailable <- struct{}{}:
+			default:
+			}
+		},
 		Client:     cedarClient,
 		Cache:      cedarCache,
 		Diagnostic: opts.Diagnostic,
@@ -296,6 +306,20 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		inventoryHolder.run(policyCtx, opts, dbPath, inventoryReady)
 	}()
 
+	authorityHolder := &authorityHolder{available: authorityAvailable, enabled: func() bool { return cedarCache.Current().AuthorityScan }}
+	authorityReady := make(chan struct{})
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		for _, ready := range []chan struct{}{inventoryReady, policyReady} {
+			select {
+			case <-ready:
+			case <-policyCtx.Done():
+				return
+			}
+		}
+		authorityHolder.run(policyCtx, inventoryHolder, authorityReady)
+	}()
 	streamCtx, stopStream := context.WithCancel(ctx)
 	streamErr := make(chan error, 1)
 	background.Add(1)
@@ -304,11 +328,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// Keep the first heartbeat from racing the initial scan. The hook
 		// socket is already serving while discovery runs.
 		select {
-		case <-inventoryReady:
+		case <-authorityReady:
 		case <-streamCtx.Done():
 			return
 		}
-		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder)
+		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder, authorityHolder)
 	}()
 	defer func() {
 		stopPolicyRefresh()
@@ -588,7 +612,7 @@ func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token string, c
 	return s.key
 }
 
-func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder) error {
+func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder) error {
 	interval := opts.StreamInterval
 	if interval == 0 {
 		interval = managedstream.DefaultIntervalFromEnv()
@@ -596,7 +620,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	deviceKeys := &deviceKeySource{}
 	var consecutiveAuthFailures, consecutiveFlushFailures int
 	flush := func() {
-		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder)
+		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder, authorityHolder)
 		if err == nil {
 			consecutiveAuthFailures = 0
 			consecutiveFlushFailures = 0
@@ -631,7 +655,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	}
 }
 
-func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder) error {
+func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder) error {
 	loadedConfig, installToken, err := loadManagedConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("managed stream config reload: %w", err)
@@ -651,6 +675,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		DeploymentVersion: deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
 		HooksFact:         managedObserveHooksFact,
 		AgentsFact:        inventoryHolder.Fact,
+		AuthorityFact:     authorityHolder.Fact,
 		DeviceKey:         func() string { return deviceKey },
 		HTTPClient:        opts.StreamHTTPClient,
 		Diagnostic:        opts.Diagnostic,

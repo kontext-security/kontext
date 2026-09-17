@@ -93,6 +93,7 @@ type Event struct {
 	ToolUseID            string
 	CWD                  string
 	PermissionMode       string
+	FullDiskAccess       *bool
 	DurationMs           *int64
 	Error                string
 	IsInterrupt          *bool

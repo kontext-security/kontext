@@ -57,6 +57,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(hookCmd())
 	root.AddCommand(managedObserveDaemonCmd())
 	root.AddCommand(doctorCmd())
+	root.AddCommand(reportCmd())
 	root.AddCommand(riskTypesCmd())
 	root.AddCommand(stepSafetyCmd())
 	root.AddCommand(claudeCmd())
@@ -472,6 +473,7 @@ func evaluateHookWithSidecar(socketPath string, event hook.Event) (hook.Result, 
 }
 
 func evaluateHookWithSidecarForMode(socketPath string, event hook.Event, mode string) (hook.Result, error) {
+	event.FullDiskAccess = hookFullDiskAccess()
 	if socketPath == "" {
 		return sidecarFailureResult(event, "sidecar socket missing", mode), nil
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/kontext-security/kontext/internal/ledgerping"
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
 const testRuntimeTimeout = 5 * time.Second
@@ -105,6 +106,7 @@ func TestDaemonSessionEndClosesHookSessionID(t *testing.T) {
 func TestDaemonStreamsLedgerBatches(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("KONTEXT_AUTHORITY_SCAN", "")
 	for _, d := range agentinventory.Catalog {
 		if d.ConfigEnv != "" {
 			t.Setenv(d.ConfigEnv, "")
@@ -118,6 +120,7 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 		OrganizationID string `json:"organization_id"`
 		InstallationID string `json:"installation_id"`
 		Device         *struct {
+			Authority        *agentauthority.Report `json:"authority"`
 			Label            string                 `json:"label"`
 			Agents           []agentinventory.Agent `json:"agents"`
 			AgentsReportedAt string                 `json:"agents_reported_at"`
@@ -129,6 +132,13 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 
 	requests := make(chan ledgerBatchRequest, 1)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/policy") {
+			if r.URL.Query().Get("include_authority_scan") != "true" {
+				t.Error("missing scan opt-in")
+			}
+			w.Write([]byte(`{"responseVersion":2,"requestContractVersion":2,"state":"no_active_policy","authority_scan":true}`))
+			return
+		}
 		if r.URL.Path == ledgerping.Path {
 			// The daemon resolves its device key against the same backend;
 			// answer so the flush keeps exercising the full path.
@@ -171,6 +181,7 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 			StreamStatePath:  filepath.Join(dir, "stream-state.json"),
 			StreamInterval:   20 * time.Millisecond,
 			StreamHTTPClient: server.Client(),
+			PolicyHTTPClient: server.Client(),
 		})
 	}()
 	t.Cleanup(func() {
@@ -198,10 +209,19 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 		t.Fatalf("Process() error = %v", err)
 	}
 
+	first := true
 	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case body := <-requests:
+			if first {
+				if body.Device == nil || body.Device.Authority == nil || len(body.Device.Authority.Agents) != 1 || body.Device.Authority.Agents[0].ID != "cursor" {
+					t.Fatalf("first heartbeat authority missing: %+v", body.Device)
+				}
+				first = false
+			} else if body.Device != nil && body.Device.Authority != nil {
+				t.Fatal("unchanged second batch resent authority")
+			}
 			if body.Device == nil || len(body.Device.Agents) != 1 || body.Device.Agents[0].ID != "cursor" || body.Device.AgentsReportedAt == "" {
 				t.Fatalf("heartbeat discovery = %+v", body.Device)
 			}

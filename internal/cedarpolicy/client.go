@@ -11,20 +11,24 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/diagnostic"
 )
 
 var installationIDPattern = regexp.MustCompile(`^ins_[A-Za-z0-9_-]{32}$`)
 
 type FetchResult struct {
-	State      State
-	Deployment *Deployment
-	Response   *StateResponse
-	ETag       string
+	AuthorityScan *bool
+	State         State
+	Deployment    *Deployment
+	Response      *StateResponse
+	ETag          string
 }
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	Diagnostic diagnostic.Logger
+	baseURL    string
+	http       *http.Client
 }
 
 func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
@@ -41,7 +45,13 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: httpClient}, nil
 }
 
-func (c *Client) Fetch(ctx context.Context, installToken, installationID, deploymentIdentity string) (FetchResult, error) {
+func (c *Client) Fetch(ctx context.Context, installToken, installationID, deploymentIdentity string) (result FetchResult, fetchErr error) {
+	var authorityScan *bool
+	defer func() {
+		if fetchErr == nil {
+			result.AuthorityScan = authorityScan
+		}
+	}()
 	if !installationIDPattern.MatchString(installationID) {
 		return FetchResult{}, errors.New("cedar policy: invalid installation ID")
 	}
@@ -53,6 +63,7 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, deploy
 		return FetchResult{}, err
 	}
 	query := endpoint.Query()
+	query.Set("include_authority_scan", "true")
 	query.Set("response_version", fmt.Sprint(ResponseVersion))
 	query.Set("request_contract_version", fmt.Sprint(RequestContractVersion))
 	endpoint.RawQuery = query.Encode()
@@ -73,6 +84,10 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, deploy
 		return FetchResult{}, fmt.Errorf("cedar policy fetch: %w", err)
 	}
 	defer resp.Body.Close()
+	if header := resp.Header.Get("X-Kontext-Authority-Scan"); header == "true" || header == "false" {
+		enabled := header == "true"
+		authorityScan = &enabled
+	}
 	etag := parseETag(resp.Header.Get("ETag"))
 	if resp.StatusCode == http.StatusNotModified {
 		if deploymentIdentity == "" || etag != deploymentIdentity {
@@ -92,6 +107,28 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, deploy
 		}
 		if len(body) > MaxResponseBytes {
 			return FetchResult{}, fmt.Errorf("cedar policy: response exceeds %d bytes", MaxResponseBytes)
+		}
+		// This unsigned organization setting is outside the policy identity.
+		// Strip only the opted-in field; retain strict decoding for policy data.
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(body, &fields); err != nil {
+			return FetchResult{}, err
+		}
+		if raw, ok := fields["authority_scan"]; ok {
+			var enabled *bool
+			if err := json.Unmarshal(raw, &enabled); err != nil || enabled == nil {
+				diagnostic.LogAlways(c.Diagnostic, "cedar policy: ignoring invalid authority_scan setting\n")
+			} else {
+				if authorityScan != nil && *authorityScan != *enabled {
+					diagnostic.LogAlways(c.Diagnostic, "cedar policy: authority_scan header disagrees with body; using body\n")
+				}
+				authorityScan = enabled
+			}
+			delete(fields, "authority_scan")
+			body, err = json.Marshal(fields)
+			if err != nil {
+				return FetchResult{}, err
+			}
 		}
 		if err := json.Unmarshal(body, &probe); err != nil {
 			return FetchResult{}, fmt.Errorf("cedar policy: decode response: %w", err)

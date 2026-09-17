@@ -371,3 +371,12 @@ go vet ./...
 - Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a contribution.
 - Report vulnerabilities through our [Security Policy](SECURITY.md).
 - Kontext is released under the [MIT License](LICENSE).
+
+### Authority report
+
+`kontext report` shows discovered agents and authority exactly as last accepted
+by the cloud. Use `kontext report --json` for the raw payload. Before the first
+successful send, it reports no data.
+
+Set `KONTEXT_AUTHORITY_SCAN=off` in the daemon environment to disable authority
+collection and transmission on this Mac.
