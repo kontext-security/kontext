@@ -2,45 +2,52 @@ package agentauthority
 
 import (
 	"context"
-	"encoding/json"
 	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
-// Scan accepts already-discovered locations and an injected runtime snapshot.
-// It never discovers arbitrary projects, executes commands, or uses the network.
+// Scanner keeps parsed files in memory between scans. The daemon owns its lifetime.
+// BeginRead applies the daemon's disk policy on each filesystem worker thread.
+type Scanner struct {
+	mu        sync.Mutex
+	cache     map[string]fileResult
+	BeginRead func() func()
+}
+
 func Scan(ctx context.Context, home string, env Environment, agents []AgentLocation, now time.Time) Report {
-	return scan(ctx, home, env, agents, now, managedRoot)
+	return new(Scanner).Scan(ctx, home, env, agents, now)
+}
+
+func (s *Scanner) Scan(ctx context.Context, home string, env Environment, agents []AgentLocation, now time.Time) Report {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cache == nil {
+		s.cache = make(map[string]fileResult)
+	}
+	return scanCached(ctx, home, env, agents, now, managedRoot, s.cache, s.BeginRead)
 }
 
 func scan(ctx context.Context, home string, env Environment, agents []AgentLocation, now time.Time, managed string) Report {
-	// Keep agent addresses stable while detail and skill reads wait for configs.
+	return scanCached(ctx, home, env, agents, now, managed, nil, nil)
+}
+
+func scanCached(ctx context.Context, home string, env Environment, agents []AgentLocation, now time.Time, managed string, cache map[string]fileResult, beginRead func() func()) Report {
+	// Read only the fixed configuration roots; never add paths found in content.
 	r := Report{SchemaVersion: "authority/v1", ScannedAt: now.UTC().Format(time.RFC3339), Agents: make([]Agent, 0, len(agents)), Environment: env, Credentials: []Credential{}, Coverage: Coverage{UnknownFormat: []string{}, Errors: []string{}}}
-	g := guard{ctx: ctx, home: filepath.Clean(home), managed: managed, roots: []string{filepath.Clean(home), managed}, report: &r}
-	root := readers.ClaudeRoot{}
-	if data := g.read(filepath.Join(home, ".claude.json")); data != nil {
-		var err error
-		root, err = readers.Claude(data)
-		if err != nil {
-			g.parseError("claude_code", ".claude.json")
-		}
-	}
+	g := guard{ctx: ctx, home: filepath.Clean(home), managed: managed, roots: allowedRoots(home, managed), report: &r, cache: cache, beginRead: beginRead, seen: map[string]bool{}}
+	g.credentials()
+	root, _ := readConfig(&g, "claude_code", filepath.Join(home, ".claude.json"), readers.Claude)
 	projects := keys(root.Projects)
 	if len(projects) > 32 {
 		r.Coverage.Limits = append(r.Coverage.Limits, "claude_code: projects limited to 32")
 		projects = projects[:32]
 	}
-	for _, project := range projects {
-		if filepath.IsAbs(project) {
-			g.roots = append(g.roots, filepath.Clean(project))
-		}
-	}
-	g.credentials(projects)
 	for _, location := range agents {
 		if ctx.Err() != nil {
 			r.Truncated = true
@@ -50,7 +57,7 @@ func scan(ctx context.Context, home string, env Environment, agents []AgentLocat
 		if id == "" {
 			continue
 		}
-		r.Agents = append(r.Agents, Agent{ID: id, MCPServers: []MCPServer{}, Plugins: []Plugin{}, Skills: []Skill{}, Hooks: []Hook{}, Subagents: []Subagent{}, Permissions: Permissions{Allow: []Grant{}}})
+		r.Agents = append(r.Agents, Agent{ID: id, MCPServers: []MCPServer{}, Plugins: []Plugin{}, Permissions: Permissions{Allow: []Grant{}}})
 		a := &r.Agents[len(r.Agents)-1]
 		base := location.ConfigPath
 		if strings.HasPrefix(base, "~/") {
@@ -60,20 +67,14 @@ func scan(ctx context.Context, home string, env Environment, agents []AgentLocat
 		case "claude_code":
 			g.claude(a, base, root, projects)
 		case "codex":
-			if data := g.read(filepath.Join(base, "config.toml")); data != nil {
-				c, err := readers.Codex(data)
-				if err != nil {
-					g.parseError(id, "config.toml")
-				} else {
-					g.servers(a, c.MCPServers, filepath.Join(base, "config.toml"), "user", nil)
-					mode := c.SandboxMode
-					if mode != "read-only" && mode != "workspace-write" && mode != "danger-full-access" {
-						mode = ""
-					}
-					a.Permissions.Codex = &CodexPermissions{SandboxMode: pointer(mode), ApprovalPolicy: pointer(safe(c.ApprovalPolicy, 128))}
+			if c, ok := readConfig(&g, id, filepath.Join(base, "config.toml"), readers.Codex); ok {
+				g.servers(a, c.MCPServers, filepath.Join(base, "config.toml"), "user", nil)
+				mode := c.SandboxMode
+				if mode != "read-only" && mode != "workspace-write" && mode != "danger-full-access" {
+					mode = ""
 				}
+				a.Permissions.Codex = &CodexPermissions{SandboxMode: pointer(mode), ApprovalPolicy: pointer(safe(c.ApprovalPolicy, 128))}
 			}
-			g.scanSkills = append(g.scanSkills, func() { g.skills(a, filepath.Join(base, "skills")) })
 		case "claude_cowork":
 			g.desktop(a)
 		case "cursor":
@@ -97,14 +98,13 @@ func scan(ctx context.Context, home string, env Environment, agents []AgentLocat
 			r.Coverage.UnknownFormat = append(r.Coverage.UnknownFormat, id)
 		}
 	}
-	for _, read := range g.scanDetails {
-		read()
-	}
-	for _, read := range g.scanSkills {
-		read()
-	}
 	if ctx.Err() != nil {
 		r.Truncated = true
+	}
+	for path := range cache {
+		if !g.seen[path] {
+			delete(cache, path)
+		}
 	}
 	r.finish()
 	return r
@@ -123,15 +123,11 @@ func (g *guard) parseError(id, file string) {
 	}
 }
 func (g *guard) generic(a *Agent, path, key string) {
-	if data := g.read(path); data != nil {
-		servers, err := readers.GenericMCP(data, key)
-		if err != nil {
-			g.parseError(a.ID, filepath.Base(path))
-			return
-		}
+	if servers, ok := readConfig(g, a.ID, path, func(data []byte) (map[string]readers.MCP, error) { return readers.GenericMCP(data, key) }); ok {
 		g.servers(a, servers, path, "user", nil)
 	}
 }
+
 func (g *guard) servers(a *Agent, entries map[string]readers.MCP, source, scope string, project *string) {
 	for _, key := range keys(entries) {
 		if len(a.MCPServers) >= 64 {
@@ -149,14 +145,14 @@ func (g *guard) servers(a *Agent, entries map[string]readers.MCP, source, scope 
 		}
 		server := MCPServer{Name: name, Args: []string{}, Source: safe(g.source(source), 1024), Scope: scope, Project: project}
 		if entry.Command != "" {
-			server.Transport = "stdio"
+			server.Transport = pointer("stdio")
 			server.Command = pointer(safe(filepath.Base(entry.Command), 128))
 		} else if entry.URL != "" {
 			u, err := url.Parse(entry.URL)
 			if err != nil || u.Hostname() == "" {
 				continue
 			}
-			server.Transport = "http"
+			server.Transport = pointer("http")
 			server.URLHost = pointer(safe(u.Hostname(), 128))
 		} else {
 			continue
@@ -181,29 +177,22 @@ func (g *guard) claude(a *Agent, base string, root readers.ClaudeRoot, projects 
 	}
 	g.plugins(a, base, enabled)
 	for _, project := range projects {
-		label := pointer(safe(filepath.Base(project), 128))
-		g.servers(a, root.Projects[project].MCPServers, filepath.Join(g.home, ".claude.json"), "project", label)
-		path := filepath.Join(project, ".mcp.json")
-		if data := g.read(path); data != nil {
-			entries, err := readers.GenericMCP(data, "mcpServers")
-			if err == nil {
-				g.servers(a, entries, path, "project", label)
-			} else {
-				g.parseError(a.ID, ".mcp.json")
+		config := root.Projects[project]
+		names := append(keys(config.MCPServers), config.EnabledMcpjsonServers...)
+		seen := map[string]bool{}
+		for _, raw := range names {
+			name := safe(raw, 128)
+			if !validText(name) || seen[name] {
+				continue
 			}
+			seen[name] = true
+			a.MCPServers = append(a.MCPServers, MCPServer{Name: name, Args: []string{}, Source: "~/.claude.json", Scope: "project", Project: pointer(safe(filepath.Base(project), 128))})
 		}
 	}
-	g.scanDetails = append(g.scanDetails, func() { g.subagents(a, filepath.Join(base, "agents")) })
-	g.scanSkills = append(g.scanSkills, func() { g.skills(a, filepath.Join(base, "skills")) })
 }
 func (g *guard) settings(a *Agent, path string, enabled map[string]bool) {
-	data := g.read(path)
-	if data == nil {
-		return
-	}
-	c, err := readers.Settings(data)
-	if err != nil {
-		g.parseError(a.ID, filepath.Base(path))
+	c, ok := readConfig(g, a.ID, path, readers.Settings)
+	if !ok {
 		return
 	}
 	if c.Permissions.DefaultMode != nil {
@@ -229,25 +218,7 @@ func (g *guard) settings(a *Agent, path string, enabled map[string]bool) {
 			enabled[key] = value
 		}
 	}
-	for _, event := range keys(c.Hooks) {
-		for _, matcher := range c.Hooks[event] {
-			for _, hook := range matcher.Hooks {
-				if hook.Type != "command" {
-					continue
-				}
-				parts := strings.Fields(hook.Command)
-				if len(parts) == 0 {
-					continue
-				}
-				words := []string{safe(filepath.Base(strings.Trim(parts[0], "\"'")), 128)}
-				words = append(words, safeArgs(parts[1:min(len(parts), 7)])...)
-				command := safe(strings.Join(words, " "), 128)
-				if command != "" {
-					a.Hooks = append(a.Hooks, Hook{safe(event, 128), command, safe(g.source(path), 1024)})
-				}
-			}
-		}
-	}
+
 }
 func safeGrant(pattern string) string {
 	if !strings.HasPrefix(pattern, "Bash(") {
@@ -308,56 +279,12 @@ func grantRisk(pattern string) string {
 	}
 	return ""
 }
-func (g *guard) skills(a *Agent, dir string) {
-	for _, entry := range g.entries(dir) {
-		path := filepath.Join(dir, entry.Name(), "SKILL.md")
-		if data := g.read(path); data != nil {
-			if name := safe(entry.Name(), 128); name != "" {
-				a.Skills = append(a.Skills, Skill{name, safe(g.source(dir), 1024)})
-			}
-		}
-	}
-}
-func (g *guard) subagents(a *Agent, dir string) {
-	for _, entry := range g.entries(dir) {
-		if !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		data := g.read(filepath.Join(dir, entry.Name()))
-		if data == nil {
-			continue
-		}
-		wildcard := true
-		lines := strings.Split(string(data), "\n")
-		if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
-			for _, line := range lines[1:] {
-				if strings.TrimSpace(line) == "---" {
-					break
-				}
-				if strings.HasPrefix(line, "tools:") {
-					value := strings.TrimSpace(strings.TrimPrefix(line, "tools:"))
-					wildcard = value == "" || strings.Contains(value, "*")
-					break
-				}
-			}
-		}
-
-		if name := safe(strings.TrimSuffix(entry.Name(), ".md"), 128); name != "" {
-			a.Subagents = append(a.Subagents, Subagent{name, wildcard})
-		}
-	}
-}
 func (g *guard) desktop(a *Agent) {
 	base := filepath.Join(g.home, "Library/Application Support/Claude")
 	g.generic(a, filepath.Join(base, "claude_desktop_config.json"), "mcpServers")
 	for _, entry := range g.entries(filepath.Join(base, "Claude Extensions")) {
-		data := g.read(filepath.Join(base, "Claude Extensions", entry.Name(), "manifest.json"))
-		if data == nil {
-			continue
-		}
-		e, err := readers.DesktopExtension(data)
-		if err != nil {
-			g.parseError(a.ID, "manifest.json")
+		e, ok := readConfig(g, a.ID, filepath.Join(base, "Claude Extensions", entry.Name(), "manifest.json"), readers.DesktopExtension)
+		if !ok {
 			continue
 		}
 		if name := safe(e.Name, 128); name != "" {
@@ -366,17 +293,13 @@ func (g *guard) desktop(a *Agent) {
 	}
 }
 func (g *guard) plugins(a *Agent, base string, enabled map[string]bool) {
-	data := g.read(filepath.Join(base, "plugins/installed_plugins.json"))
-	if data == nil {
-		return
-	}
-	var index struct {
+	type pluginIndex struct {
 		Plugins map[string][]struct {
 			InstallPath string `json:"installPath"`
 		} `json:"plugins"`
 	}
-	if json.Unmarshal(data, &index) != nil {
-		g.parseError(a.ID, "installed_plugins.json")
+	index, ok := readConfig(g, a.ID, filepath.Join(base, "plugins/installed_plugins.json"), parseJSON[pluginIndex])
+	if !ok {
 		return
 	}
 	for _, key := range keys(index.Plugins) {
@@ -385,15 +308,11 @@ func (g *guard) plugins(a *Agent, base string, enabled map[string]bool) {
 				g.skip()
 				continue
 			}
-			manifest := g.read(filepath.Join(entry.InstallPath, ".claude-plugin/plugin.json"))
-			if manifest == nil {
-				continue
-			}
-			var meta struct {
+			type pluginMeta struct {
 				Name string `json:"name"`
 			}
-			if json.Unmarshal(manifest, &meta) != nil {
-				g.parseError(a.ID, "plugin.json")
+			meta, ok := readConfig(g, a.ID, filepath.Join(entry.InstallPath, ".claude-plugin/plugin.json"), parseJSON[pluginMeta])
+			if !ok {
 				continue
 			}
 			name := safe(meta.Name, 128)
@@ -410,34 +329,13 @@ func (g *guard) plugins(a *Agent, base string, enabled map[string]bool) {
 			}
 			plugin := Plugin{Name: name, Marketplace: pointer(market), Enabled: active}
 			// Inventory plugin contents even when disabled; only enabled MCPs imply reach.
-			scratch := Agent{ID: a.ID, MCPServers: []MCPServer{}, Skills: []Skill{}, Hooks: []Hook{}, Subagents: []Subagent{}, Permissions: Permissions{Allow: []Grant{}}}
-			if data := g.read(filepath.Join(entry.InstallPath, ".mcp.json")); data != nil {
-				entries, err := readers.GenericMCP(data, "mcpServers")
-				if err == nil {
-					g.servers(&scratch, entries, filepath.Join(entry.InstallPath, ".mcp.json"), "plugin", nil)
-				} else {
-					g.parseError(a.ID, ".mcp.json")
-				}
+			scratch := Agent{ID: a.ID, MCPServers: []MCPServer{}, Permissions: Permissions{Allow: []Grant{}}}
+			path := filepath.Join(entry.InstallPath, ".mcp.json")
+			if entries, ok := readConfig(g, a.ID, path, func(data []byte) (map[string]readers.MCP, error) { return readers.GenericMCP(data, "mcpServers") }); ok {
+				g.servers(&scratch, entries, path, "plugin", nil)
 			}
 			plugin.MCPServers = len(scratch.MCPServers)
-			pluginIndex := len(a.Plugins)
 			a.Plugins = append(a.Plugins, plugin)
-			g.scanDetails = append(g.scanDetails, func() {
-				for _, item := range g.entries(filepath.Join(entry.InstallPath, "agents")) {
-					if item.Type().IsRegular() && strings.HasSuffix(item.Name(), ".md") {
-						a.Plugins[pluginIndex].Subagents++
-					}
-				}
-				g.settings(&scratch, filepath.Join(entry.InstallPath, "hooks/hooks.json"), nil)
-				a.Plugins[pluginIndex].Hooks = len(scratch.Hooks)
-			})
-			g.scanSkills = append(g.scanSkills, func() {
-				for _, item := range g.entries(filepath.Join(entry.InstallPath, "skills")) {
-					if item.IsDir() {
-						a.Plugins[pluginIndex].Skills++
-					}
-				}
-			})
 			if active {
 				a.MCPServers = append(a.MCPServers, scratch.MCPServers...)
 			}

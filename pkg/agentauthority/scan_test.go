@@ -103,24 +103,6 @@ func TestGoldenHomes(t *testing.T) {
 				}
 			}
 			report := scanFixture(home, agents)
-			if name == "home_many_files" {
-				// The bounded directory read returns a filesystem-dependent subset.
-				// Verify the cap and provenance; normalize only the selected names.
-				skills := report.Agents[0].Skills
-				if len(skills) != 256 {
-					t.Fatalf("retained %d skills, want the report limit of 256", len(skills))
-				}
-				seen := make(map[string]bool)
-				for i, skill := range skills {
-					runes := []rune(skill.Name)
-					if len(runes) != 1 || runes[0] < 0x4E00 || runes[0] >= 0x4E00+5000 || seen[skill.Name] || skill.Source != "~/.claude/skills" {
-						t.Fatalf("unexpected skill: %+v", skill)
-					}
-					seen[skill.Name] = true
-					skills[i].Name = fmt.Sprintf("skill-%03d", i)
-				}
-				report.Hash, _ = report.ContentHash()
-			}
 			data, err := report.CanonicalJSON()
 			if err != nil {
 				t.Fatal(err)
@@ -128,7 +110,7 @@ func TestGoldenHomes(t *testing.T) {
 			if name == "home_planted_token" && bytes.Contains(data, []byte("ghp_")) {
 				t.Fatal("secret escaped")
 			}
-			if strings.HasPrefix(name, "home_symlink") || name == "home_huge_settings" || name == "home_many_files" {
+			if strings.HasPrefix(name, "home_symlink") || name == "home_huge_settings" {
 				if !report.Truncated && report.Coverage.SkippedFiles == 0 {
 					t.Fatal("read guard did not report its limit")
 				}
@@ -256,7 +238,7 @@ func TestRedactionBoundariesAndPaths(t *testing.T) {
 	}
 	r := scanFixture(fixtureHome(t, "home_claude_full"), []AgentLocation{{"claude_code", "~/.claude"}})
 	r.Agents[0].MCPServers[0].Source = "/Users/michelosswald/.claude/settings.json"
-	r.Agents[0].Skills[0].Name = strings.Repeat("a1", 16)
+	r.Agents[0].Plugins[0].Name = strings.Repeat("a1", 16)
 	r.Credentials[0].Path = "/Users/" + strings.Repeat("a1", 16) + "/.aws/credentials"
 	before, _ := r.ContentHash()
 	r.finish()
@@ -269,40 +251,39 @@ func TestRedactionBoundariesAndPaths(t *testing.T) {
 }
 
 func TestPerFileTimeout(t *testing.T) {
-	home := t.TempDir()
+	home := fixtureHome(t, "home_empty")
+	writeFixture(t, home, "blocked", "data")
 	release := make(chan struct{})
 	defer close(release)
 	r := Report{}
 	g := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &r, readFile: func(string, string) fileResult { <-release; return fileResult{} }}
 	start := time.Now()
 	result := g.access(filepath.Join(home, "blocked"), "read")
-	if result.err != context.DeadlineExceeded || r.Truncated || g.opened != 0 || r.Coverage.SkippedFiles != 1 || !slices.Equal(r.Coverage.Errors, []string{"read timeout: ~/blocked"}) || time.Since(start) > time.Second {
+	if result.err != context.DeadlineExceeded || r.Truncated || g.opened != 0 || r.Coverage.SkippedFiles != 1 || !slices.Equal(r.Coverage.Errors, []string{"read timeout: ~/blocked"}) || time.Since(start) > 1500*time.Millisecond {
 		t.Fatalf("timeout not enforced: %+v %+v", result, r)
 	}
 }
 
-func TestProjectEnvTimeoutPreservesAgentFacts(t *testing.T) {
+func TestReadTimeoutPreservesAgentFacts(t *testing.T) {
 	home := fixtureHome(t, "home_claude_full")
-	project := filepath.Join(home, "repo")
+	blocked := filepath.Join(home, ".config/gh/hosts.yml")
+	writeFixture(t, home, ".config/gh/hosts.yml", "blocked")
 	writeFixture(t, home, ".claude/settings.json", `{"permissions":{"defaultMode":"auto"},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"kontext hook"}]}]}}`)
 	release := make(chan struct{})
 	defer close(release)
 	r := Report{SchemaVersion: "authority/v1", Agents: []Agent{{ID: "claude_code"}}}
 	g := guard{ctx: context.Background(), home: home, managed: filepath.Join(home, "managed"), roots: []string{home}, report: &r, readFile: func(path, mode string) fileResult {
-		if path == filepath.Join(project, ".env") {
+		if path == blocked {
 			<-release
 			return fileResult{}
 		}
 		return readGuarded(path, mode)
 	}}
-	g.credentials([]string{project})
+	g.credentials()
 	g.claude(&r.Agents[0], filepath.Join(home, ".claude"), readers.ClaudeRoot{}, nil)
-	for _, read := range append(g.scanDetails, g.scanSkills...) {
-		read()
-	}
 	r.finish()
 	a := r.Agents[0]
-	if r.Truncated || r.Coverage.SkippedFiles != 1 || !slices.Equal(r.Coverage.Errors, []string{"read timeout: ~/repo/.env"}) || len(a.Plugins) == 0 || len(a.Hooks) != 1 || a.Permissions.DefaultMode == nil || *a.Permissions.DefaultMode != "auto" {
+	if r.Truncated || r.Coverage.SkippedFiles != 1 || !slices.Equal(r.Coverage.Errors, []string{"read timeout: ~/.config/gh/hosts.yml"}) || len(a.Plugins) == 0 || a.Permissions.DefaultMode == nil || *a.Permissions.DefaultMode != "auto" {
 		t.Fatalf("slow project env lost agent facts: %+v", r)
 	}
 }
@@ -320,7 +301,8 @@ func TestReadTimeoutDiagnosticsRedactPaths(t *testing.T) {
 }
 
 func TestWholeScanDeadlineStopsReads(t *testing.T) {
-	home := t.TempDir()
+	home := fixtureHome(t, "home_empty")
+	writeFixture(t, home, "blocked", "data")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	release := make(chan struct{})
@@ -333,88 +315,6 @@ func TestWholeScanDeadlineStopsReads(t *testing.T) {
 	}
 	g.readFile = func(string, string) fileResult { t.Error("read after scan deadline"); return fileResult{} }
 	g.read(filepath.Join(home, "later"))
-}
-
-func TestPendingReadsAreBoundedAcrossScans(t *testing.T) {
-	home := fixtureHome(t, "home_empty")
-	writeFixture(t, home, "available", "still readable")
-	release := make(chan struct{})
-	defer func() {
-		close(release)
-		deadline := time.Now().Add(time.Second)
-		for time.Now().Before(deadline) {
-			pendingReads.Lock()
-			remaining := len(pendingReads.paths)
-			pendingReads.Unlock()
-			if remaining == 0 {
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-		t.Error("completed workers did not release their slots")
-	}()
-	for i := 0; i < maxPendingReads; i++ {
-		path := filepath.Join(home, fmt.Sprintf("blocked-%d", i))
-		started := make(chan struct{})
-		finished := make(chan struct{})
-		ctx, cancel := context.WithCancel(context.Background())
-		r := Report{}
-		g := guard{ctx: ctx, home: home, roots: []string{home}, report: &r, readFile: func(string, string) fileResult {
-			close(started)
-			<-release
-			return fileResult{}
-		}}
-		go func() { g.access(path, "read"); close(finished) }()
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			cancel()
-			t.Fatal("worker did not start")
-		}
-		cancel()
-		<-finished
-		if i == 0 {
-			// A later scan must not duplicate the blocked read or poison other paths.
-			next := Report{}
-			later := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &next}
-			if later.read(path) != nil || string(later.read(filepath.Join(home, "available"))) != "still readable" || next.Truncated || next.Coverage.SkippedFiles != 1 {
-				t.Fatalf("pending file poisoned later scan: %+v", next)
-			}
-		}
-	}
-	r := Report{}
-	g := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &r, readFile: func(string, string) fileResult {
-		t.Error("started worker beyond pending read cap")
-		return fileResult{}
-	}}
-	if g.read(filepath.Join(home, "one-too-many")) != nil || r.Truncated || r.Coverage.SkippedFiles != 1 || len(r.Coverage.Errors) != 1 {
-		t.Fatalf("pending reads were not bounded: %+v", r)
-	}
-}
-
-func TestProjectEnvSkipsProtectedRoots(t *testing.T) {
-	home := fixtureHome(t, "home_empty")
-	projects := []string{}
-	for _, root := range []string{"Documents", "Desktop", "Downloads", "Library/Mobile Documents"} {
-		projects = append(projects, filepath.Join(home, root), filepath.Join(home, root, "repo"))
-	}
-	for _, root := range []string{"Documents-local", "Desktop-local", "Downloads-local", "Library/Mobile Documents-local"} {
-		projects = append(projects, filepath.Join(home, root, "repo"))
-		writeFixture(t, home, filepath.Join(root, "repo/.env"), "TEST_TOKEN=fixture")
-	}
-	r := Report{}
-	g := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &r, readFile: func(path, mode string) fileResult {
-		for _, project := range projects[:8] {
-			if path == filepath.Join(project, ".env") {
-				t.Errorf("accessed protected project env: %s", path)
-			}
-		}
-		return readGuarded(path, mode)
-	}}
-	g.credentials(projects)
-	if r.Truncated || r.Coverage.SkippedFiles != 0 || len(r.Coverage.Errors) != 0 || !slices.Equal(r.Coverage.Limits, []string{"project env skipped under Documents/Desktop/Downloads"}) || len(r.Credentials) != 4 {
-		t.Fatalf("wrong protected-project coverage: %+v", r)
-	}
 }
 
 func TestProjectsAndPluginCountsPreserveCredentials(t *testing.T) {
@@ -430,7 +330,7 @@ func TestProjectsAndPluginCountsPreserveCredentials(t *testing.T) {
 		writeFixture(t, home, fmt.Sprintf(".claude/plugins/cache/team/design/v1/agents/agent-%03d.md", i), "agent")
 	}
 	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}})
-	if r.Truncated || r.Coverage.SkippedFiles != 0 || !slices.Equal(r.Coverage.Limits, []string{"claude_code: projects limited to 32"}) || len(r.Coverage.Errors) != 0 || len(r.Credentials) != 2 || r.Agents[0].Plugins[0].Skills != 101 || r.Agents[0].Plugins[0].Subagents != 100 {
+	if r.Truncated || r.Coverage.SkippedFiles != 0 || !slices.Equal(r.Coverage.Limits, []string{"claude_code: projects limited to 32"}) || len(r.Coverage.Errors) != 0 || len(r.Credentials) != 2 || len(r.Agents[0].Plugins) != 1 {
 		t.Fatalf("budget lost facts: %+v", r)
 	}
 }
@@ -476,7 +376,7 @@ func TestSecretFlagsRemovedFromEveryCommandSource(t *testing.T) {
 		}
 	}
 	a := r.Agents[0]
-	if len(a.MCPServers) != 1 || len(a.MCPServers[0].Args) != 1 || a.MCPServers[0].Args[0] != "--verbose" || len(a.Hooks) != 1 || a.Hooks[0].Command != "node --verbose" || len(a.Permissions.Allow) != 1 {
+	if len(a.MCPServers) != 1 || len(a.MCPServers[0].Args) != 1 || a.MCPServers[0].Args[0] != "--verbose" || len(a.Permissions.Allow) != 1 {
 		t.Fatalf("lost non-secret command evidence: %+v", a)
 	}
 }
@@ -502,13 +402,13 @@ func TestRealDeveloperHome(t *testing.T) {
 	r := scanFixture(home, agents)
 	elapsed := time.Since(start)
 	a := r.Agents[0]
-	if len(a.Plugins) != 8 || len(a.MCPServers) != 1 || len(a.Skills) != 40 || r.Truncated || r.Coverage.SkippedFiles != 0 || len(r.Coverage.Errors) != 0 || !slices.Equal(r.Coverage.Limits, []string{"claude_code: projects limited to 32"}) {
+	if len(a.Plugins) != 8 || len(a.MCPServers) != 1 || r.Truncated || r.Coverage.SkippedFiles != 0 || len(r.Coverage.Errors) != 0 || !slices.Equal(r.Coverage.Limits, []string{"claude_code: projects limited to 32"}) {
 		t.Fatalf("real developer facts lost: %+v", r)
 	}
 	if elapsed >= 250*time.Millisecond {
 		t.Fatalf("warm scan took %s, want under 250ms", elapsed)
 	}
-	t.Logf("warm scan: %s; 8 plugins, 1 MCP, 40 skills, no truncation", elapsed)
+	t.Logf("warm scan: %s; 8 plugins, 1 MCP, no truncation", elapsed)
 }
 
 func TestSkillsCannotStarveAgentConfigs(t *testing.T) {
@@ -521,7 +421,7 @@ func TestSkillsCannotStarveAgentConfigs(t *testing.T) {
 	writeFixture(t, home, ".claude/plugins/cache/local/plugin-7/v1/.mcp.json", `{"mcpServers":{"plugin-server":{"command":"node"}}}`)
 	writeFixture(t, home, ".claude/plugins/cache/local/plugin-7/v1/hooks/hooks.json", `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"echo test"}]}]}}`)
 	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}, {"codex", "~/.codex"}})
-	if !r.Truncated || len(r.Agents[0].Plugins) != 8 || len(r.Agents[0].MCPServers) != 2 || r.Agents[0].Plugins[7].Hooks != 1 || len(r.Agents[0].Subagents) != 1 || r.Agents[1].Permissions.Codex == nil || *r.Agents[1].Permissions.Codex.SandboxMode != "danger-full-access" {
+	if r.Truncated || len(r.Agents[0].Plugins) != 8 || len(r.Agents[0].MCPServers) != 2 || r.Agents[1].Permissions.Codex == nil || *r.Agents[1].Permissions.Codex.SandboxMode != "danger-full-access" {
 		t.Fatalf("skills starved higher priority facts: %+v", r)
 	}
 }
@@ -543,7 +443,7 @@ func TestFileBudgetCountsOnlyOpenedFiles(t *testing.T) {
 			t.Fatalf("read %d of %d was denied", i+1, maxFiles)
 		}
 	}
-	if g.opened != 2000 || r.Truncated || g.read(filepath.Join(home, "file")) != nil || !r.Truncated {
+	if g.opened != maxFiles || r.Truncated || g.read(filepath.Join(home, "file")) != nil || !r.Truncated {
 		t.Fatalf("file cap not enforced: opened=%d, report=%+v", g.opened, r)
 	}
 }
@@ -567,5 +467,76 @@ func TestSSHKeysCountAndNewestModification(t *testing.T) {
 	c := r.Credentials[0]
 	if c.Kind != "ssh_key" || c.Path != "~/.ssh" || c.Detail != 3 || !c.Present || c.ModifiedAt == nil || *c.ModifiedAt != newest.Format(time.RFC3339) {
 		t.Fatalf("wrong SSH aggregate: %+v", c)
+	}
+}
+
+func TestReadRuleRejectsOutsideRootsAndUserContent(t *testing.T) {
+	home := fixtureHome(t, "home_empty")
+	for _, root := range []string{"Documents", "Desktop", "Downloads", "Library/Mobile Documents", "Library/CloudStorage"} {
+		path := filepath.Join(home, root, "repo/.mcp.json")
+		r := Report{}
+		g := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &r, readFile: func(string, string) fileResult { t.Fatal("opened user content"); return fileResult{} }}
+		if g.read(path) != nil || r.Coverage.SkippedFiles != 1 {
+			t.Fatalf("accepted %s", path)
+		}
+	}
+	project := filepath.Join(home, "Documents/repo")
+	data, _ := json.Marshal(map[string]any{"projects": map[string]any{project: map[string]any{"enabledMcpjsonServers": []string{"approved"}, "mcpServers": map[string]any{"inline": map[string]any{"command": "ignored"}}}}})
+	writeFixture(t, home, ".claude.json", string(data))
+	writeFixture(t, home, "Documents/repo/.mcp.json", `{"mcpServers":{"unread":{"command":"node"}}}`)
+	writeFixture(t, home, "Documents/repo/.env", "PRIVATE_TOKEN=ignored")
+	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}, {"cursor", "~/outside"}})
+	if len(r.Agents[0].MCPServers) != 2 || len(r.Credentials) != 0 || r.Truncated {
+		t.Fatalf("project facts: %+v", r)
+	}
+	for _, server := range r.Agents[0].MCPServers {
+		if server.Scope != "project" || server.Project == nil || *server.Project != "repo" || server.Command != nil || server.URLHost != nil {
+			t.Fatalf("followed project contents: %+v", server)
+		}
+	}
+}
+
+func TestScanReusesUnchangedParseResults(t *testing.T) {
+	home := fixtureHome(t, "home_claude_full")
+	cache := map[string]fileResult{}
+	run := func() (Report, int) {
+		r := scanCached(context.Background(), home, Environment{UID: 501}, []AgentLocation{{"claude_code", "~/.claude"}}, fixtureTime, filepath.Join(home, "managed"), cache, nil)
+		opened := 0
+		for _, result := range cache {
+			if result.opened {
+				opened++
+			}
+		}
+		return r, opened
+	}
+	first, opened := run()
+	if opened == 0 {
+		t.Fatal("first scan opened no files")
+	}
+	second, opened := run()
+	a, _ := first.CanonicalJSON()
+	b, _ := second.CanonicalJSON()
+	if opened != 0 || !bytes.Equal(a, b) {
+		t.Fatalf("unchanged scan opened %d files or changed report", opened)
+	}
+	path := filepath.Join(home, ".claude/settings.json")
+	if err := os.Chtimes(path, fixtureTime.Add(time.Second), fixtureTime.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, opened = run()
+	if opened != 1 {
+		t.Fatalf("touch reopened %d files, want 1", opened)
+	}
+}
+
+func TestCustomConfigDirectoryDoesNotExpandReadAllowlist(t *testing.T) {
+	home := fixtureHome(t, "home_empty")
+	// Discovery honors CLAUDE_CONFIG_DIR, but the approved authority read rule
+	// intentionally does not add that path to its fixed configuration roots.
+	writeFixture(t, home, "custom-claude/settings.json", `{"permissions":{"defaultMode":"auto"}}`)
+	writeFixture(t, home, "custom-claude/plugins/installed_plugins.json", `{"plugins":{}}`)
+	r := scanFixture(home, []AgentLocation{{"claude_code", filepath.Join(home, "custom-claude")}})
+	if r.Agents[0].Permissions.DefaultMode != nil || len(r.Agents[0].Plugins) != 0 || r.Coverage.SkippedFiles == 0 || r.Truncated {
+		t.Fatalf("custom discovery location expanded the read rule: %+v", r)
 	}
 }

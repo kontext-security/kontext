@@ -23,14 +23,11 @@ type Agent struct {
 	ID          string      `json:"id"`
 	MCPServers  []MCPServer `json:"mcp_servers"`
 	Plugins     []Plugin    `json:"plugins"`
-	Skills      []Skill     `json:"skills"`
-	Hooks       []Hook      `json:"hooks"`
-	Subagents   []Subagent  `json:"subagents"`
 	Permissions Permissions `json:"permissions"`
 }
 type MCPServer struct {
 	Name      string   `json:"name"`
-	Transport string   `json:"transport"`
+	Transport *string  `json:"transport"`
 	Command   *string  `json:"command"`
 	Args      []string `json:"args"`
 	URLHost   *string  `json:"url_host"`
@@ -43,22 +40,6 @@ type Plugin struct {
 	Marketplace *string `json:"marketplace"`
 	Enabled     bool    `json:"enabled"`
 	MCPServers  int     `json:"mcp_servers"`
-	Skills      int     `json:"skills"`
-	Hooks       int     `json:"hooks"`
-	Subagents   int     `json:"subagents"`
-}
-type Skill struct {
-	Name   string `json:"name"`
-	Source string `json:"source"`
-}
-type Hook struct {
-	Event   string `json:"event"`
-	Command string `json:"command"`
-	Source  string `json:"source"`
-}
-type Subagent struct {
-	Name          string `json:"name"`
-	ToolsWildcard bool   `json:"tools_wildcard"`
 }
 type Grant struct {
 	Pattern string `json:"pattern"`
@@ -96,6 +77,7 @@ type Credential struct {
 	Login      *string `json:"login"`
 }
 type Coverage struct {
+	// Deprecated: retained for one compatibility cycle.
 	UnknownFormat []string `json:"unknown_format"`
 	Errors        []string `json:"errors"`
 	Limits        []string `json:"limits,omitempty"`

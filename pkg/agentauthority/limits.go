@@ -2,30 +2,33 @@ package agentauthority
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-const maxFiles = 2000
-const maxPendingReads = 32
+const maxFiles = 500
 const maxFileBytes = 1024 * 1024
 const maxReportBytes = 64 * 1024
 const managedRoot = "/Library/Application Support/ClaudeCode"
 
-// Filesystem calls cannot be cancelled. Retain at most 32 workers across scans,
-// and never start another worker for a path that is still blocked.
-var pendingReads = struct {
-	sync.Mutex
-	paths map[string]bool
-}{paths: make(map[string]bool)}
+// Each root is resolved relative to home once, never from configuration contents.
+// Custom discovery/config environment paths do not expand this approved allowlist.
+func allowedRoots(home, managed string) []string {
+	roots := []string{managed}
+	for _, root := range []string{".claude.json", ".claude", ".codex", ".cursor", ".codeium/windsurf", ".copilot", ".gemini", ".kiro", ".config/amp", ".config/opencode", ".config/gh", ".config/gcloud", ".aws", ".kube", ".ssh", ".npmrc", ".docker/config.json", "Library/Application Support/Claude", "Library/Application Support/Code/User/mcp.json"} {
+		roots = append(roots, filepath.Join(home, root))
+	}
+	return roots
+}
 
 type guard struct {
 	ctx           context.Context
@@ -34,8 +37,10 @@ type guard struct {
 	opened        int
 	report        *Report
 	readFile      func(string, string) fileResult
-	scanDetails   []func()
-	scanSkills    []func()
+	lstat         func(string) (os.FileInfo, error)
+	cache         map[string]fileResult
+	beginRead     func() func()
+	seen          map[string]bool
 }
 
 func (g *guard) skip() { g.report.Coverage.SkippedFiles++ }
@@ -55,11 +60,13 @@ func (g *guard) source(path string) string {
 }
 
 type fileResult struct {
-	data    []byte
-	entries []os.DirEntry
-	info    os.FileInfo
-	err     error
-	opened  bool
+	data     []byte
+	entries  []os.DirEntry
+	info     os.FileInfo
+	err      error
+	opened   bool
+	parsed   any
+	parseErr error
 }
 
 // One per-file budget includes metadata, ancestor checks, open, and read.
@@ -82,33 +89,51 @@ func (g *guard) access(path, mode string) fileResult {
 		g.skip()
 		return fileResult{err: os.ErrPermission}
 	}
-	pendingReads.Lock()
-	if pendingReads.paths[path] || len(pendingReads.paths) >= maxPendingReads {
-		pendingReads.Unlock()
-		err := errors.New("read pending or worker limit reached")
-		g.skip()
-		g.readError(path, err.Error())
-		return fileResult{err: err}
+	for _, root := range []string{filepath.Join(g.home, "Desktop"), filepath.Join(g.home, "Documents"), filepath.Join(g.home, "Downloads"), filepath.Join(g.home, "Library/Mobile Documents"), filepath.Join(g.home, "Library/CloudStorage"), "/Volumes"} {
+		if within(root, path) {
+			g.skip()
+			return fileResult{err: os.ErrPermission}
+		}
 	}
-	pendingReads.paths[path] = true
-	pendingReads.Unlock()
 	done := make(chan fileResult, 1)
 	read := g.readFile
 	if read == nil {
 		read = readGuarded
 	}
-	go func() {
-		result := read(path, mode)
-		pendingReads.Lock()
-		delete(pendingReads.paths, path)
-		pendingReads.Unlock()
-		done <- result
-	}()
-	timeout := 200 * time.Millisecond
-	if filepath.Base(path) == ".env" {
-		timeout = 100 * time.Millisecond
+	stat := g.lstat
+	if stat == nil {
+		stat = os.Lstat
 	}
-	timer := time.NewTimer(timeout)
+	if g.seen != nil {
+		g.seen[path] = true
+	}
+	cached, hasCache := g.cache[path]
+	beginRead := g.beginRead
+	go func() {
+		if beginRead != nil {
+			defer beginRead()()
+		}
+		info, err := guardedInfo(path, stat)
+		if err != nil {
+			done <- fileResult{err: err}
+			return
+		}
+		if mode == "stat" {
+			if !info.Mode().IsRegular() {
+				done <- fileResult{err: os.ErrPermission}
+				return
+			}
+			done <- fileResult{info: info}
+			return
+		}
+		if hasCache && os.SameFile(cached.info, info) && cached.info.Size() == info.Size() && cached.info.ModTime().Equal(info.ModTime()) {
+			cached.opened = false
+			done <- cached
+			return
+		}
+		done <- read(path, mode)
+	}()
+	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 	select {
 	case result := <-done:
@@ -117,6 +142,14 @@ func (g *guard) access(path, mode string) fileResult {
 		}
 		if result.err != nil && !errors.Is(result.err, os.ErrNotExist) {
 			g.skip()
+		}
+		if result.err == nil && g.cache != nil && mode != "stat" {
+			g.cache[path] = result
+		} else if result.err != nil && g.cache != nil {
+			delete(g.cache, path)
+		}
+		if errors.Is(result.err, unix.EDEADLK) {
+			g.readError(path, "evicted, skipped")
 		}
 		return result
 	case <-g.ctx.Done():
@@ -136,9 +169,54 @@ func (g *guard) readError(path, reason string) {
 		if source == "" || secret(source, "errors") {
 			source = "<redacted>"
 		}
-		g.report.Coverage.Errors = append(g.report.Coverage.Errors, reason+": "+source)
+		message := reason + ": " + source
+		if !slices.Contains(g.report.Coverage.Errors, message) {
+			g.report.Coverage.Errors = append(g.report.Coverage.Errors, message)
+		}
 	}
 }
+
+// Check every ancestor before opening anything, including dataless directories.
+func guardedInfo(path string, stat func(string) (os.FileInfo, error)) (os.FileInfo, error) {
+	prefix := "/"
+	var info os.FileInfo
+	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+		prefix = filepath.Join(prefix, part)
+		var err error
+		info, err = stat(prefix)
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) || isDataless(info) || (!info.IsDir() && info.Size() > maxFileBytes) {
+			return nil, os.ErrPermission
+		}
+	}
+	return info, nil
+}
+
+var errParse = errors.New("configuration parse error")
+
+// Cache parsed values, never raw file contents (which can contain credentials).
+func readParsed[T any](g *guard, path string, parse func([]byte) (T, error)) (T, error) {
+	result := g.access(path, "read")
+	if result.err != nil {
+		var zero T
+		return zero, result.err
+	}
+	if parsed, ok := result.parsed.(T); ok {
+		return parsed, result.parseErr
+	}
+	value, err := parse(result.data)
+	if err != nil {
+		err = errors.Join(errParse, err)
+	}
+	if g.cache != nil {
+		result.data, result.parsed, result.parseErr = nil, value, err
+		g.cache[filepath.Clean(path)] = result
+	}
+	return value, err
+}
+
 func readGuarded(path, mode string) (result fileResult) {
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -155,7 +233,7 @@ func readGuarded(path, mode string) (result fileResult) {
 			result.err = statErr
 			return
 		}
-		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) || !info.IsDir() && info.Size() > maxFileBytes {
+		if info.Mode()&os.ModeSymlink != 0 || isDataless(info) || (!info.IsDir() && !info.Mode().IsRegular()) || !info.IsDir() && info.Size() > maxFileBytes {
 			unix.Close(fd)
 			result.err = os.ErrPermission
 			return
@@ -222,10 +300,23 @@ func (g *guard) entries(path string) []os.DirEntry {
 		return nil
 	}
 	if len(result.entries) > maxFiles {
-		g.report.Truncated = true
+		g.report.Coverage.Limits = append(g.report.Coverage.Limits, "directory entries limited to 500")
 		g.skip()
 		result.entries = result.entries[:maxFiles]
 	}
 	sort.Slice(result.entries, func(i, j int) bool { return result.entries[i].Name() < result.entries[j].Name() })
 	return result.entries
+}
+
+func readConfig[T any](g *guard, id, path string, parse func([]byte) (T, error)) (T, bool) {
+	value, err := readParsed(g, path, parse)
+	if errors.Is(err, errParse) {
+		g.parseError(id, filepath.Base(path))
+	}
+	return value, err == nil
+}
+func parseJSON[T any](data []byte) (T, error) {
+	var value T
+	err := json.Unmarshal(data, &value)
+	return value, err
 }

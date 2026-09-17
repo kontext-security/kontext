@@ -18,7 +18,7 @@ func (g *guard) credential(kind, path string, detail int, host, login string) {
 	stamp := info.ModTime().UTC().Format(time.RFC3339)
 	g.report.Credentials = append(g.report.Credentials, Credential{Kind: kind, Path: safe(g.source(path), 1024), Present: true, ModifiedAt: &stamp, Detail: detail, Host: pointer(safe(host, 128)), Login: pointer(safe(login, 128))})
 }
-func (g *guard) credentials(projects []string) {
+func (g *guard) credentials() {
 	ssh := filepath.Join(g.home, ".ssh")
 	keys := 0
 	var newest time.Time
@@ -37,12 +37,39 @@ func (g *guard) credentials(projects []string) {
 		stamp := newest.UTC().Format(time.RFC3339)
 		g.report.Credentials = append(g.report.Credentials, Credential{Kind: "ssh_key", Path: "~/.ssh", Present: true, ModifiedAt: &stamp, Detail: keys})
 	}
-	gh := filepath.Join(g.home, ".config/gh/hosts.yml")
-	if data := g.read(gh); data != nil {
+	for _, entry := range []struct{ path, kind string }{
+		{".config/gh/hosts.yml", "gh_token"}, {".aws/credentials", "aws_credentials"}, {".aws/config", "aws_config_profiles"},
+		{".kube/config", "kubeconfig"}, {".npmrc", "npm_token"}, {".docker/config.json", "docker_config_auth"},
+	} {
+		path := filepath.Join(g.home, entry.path)
+		facts, err := readParsed(g, path, func(data []byte) ([]Credential, error) { return credentialFacts(entry.kind, data) })
+		if err != nil {
+			continue
+		}
+		for _, fact := range facts {
+			host, login := "", ""
+			if fact.Host != nil {
+				host = *fact.Host
+			}
+			if fact.Login != nil {
+				login = *fact.Login
+			}
+			g.credential(entry.kind, path, fact.Detail, host, login)
+		}
+	}
+	g.credential("gcloud_adc", filepath.Join(g.home, ".config/gcloud/application_default_credentials.json"), 1, "", "")
+}
+
+// Only presence metadata is retained in the scanner cache.
+func credentialFacts(kind string, data []byte) ([]Credential, error) {
+	facts := []Credential{}
+	count := 0
+	switch kind {
+	case "gh_token":
 		host, login := "", ""
 		flush := func() {
 			if host != "" {
-				g.credential("gh_token", gh, 1, host, login)
+				facts = append(facts, Credential{Detail: 1, Host: pointer(safe(host, 128)), Login: pointer(safe(login, 128))})
 			}
 		}
 		lines := bufio.NewScanner(bytes.NewReader(data))
@@ -58,26 +85,14 @@ func (g *guard) credentials(projects []string) {
 			}
 		}
 		flush()
-	}
-	for _, entry := range []struct{ path, kind string }{{".aws/credentials", "aws_credentials"}, {".aws/config", "aws_config_profiles"}} {
-		path := filepath.Join(g.home, entry.path)
-		if data := g.read(path); data != nil {
-			profiles := 0
-			for _, line := range bytes.Split(data, []byte("\n")) {
-				line = bytes.TrimSpace(line)
-				if bytes.HasPrefix(line, []byte("[")) && bytes.HasSuffix(line, []byte("]")) {
-					profiles++
-				}
-			}
-			if profiles > 0 {
-				g.credential(entry.kind, path, profiles, "", "")
+	case "aws_credentials", "aws_config_profiles":
+		for _, line := range bytes.Split(data, []byte("\n")) {
+			line = bytes.TrimSpace(line)
+			if bytes.HasPrefix(line, []byte("[")) && bytes.HasSuffix(line, []byte("]")) {
+				count++
 			}
 		}
-	}
-	g.credential("gcloud_adc", filepath.Join(g.home, ".config/gcloud/application_default_credentials.json"), 1, "", "")
-	kube := filepath.Join(g.home, ".kube/config")
-	if data := g.read(kube); data != nil {
-		contexts := 0
+	case "kubeconfig":
 		inContexts := false
 		for _, line := range strings.Split(string(data), "\n") {
 			if line == "contexts:" {
@@ -85,63 +100,32 @@ func (g *guard) credentials(projects []string) {
 				continue
 			}
 			if inContexts && strings.HasPrefix(line, "- context:") {
-				contexts++
+				count++
 			} else if line != "" && line[0] != ' ' && line[0] != '-' {
 				inContexts = false
 			}
 		}
-		g.credential("kubeconfig", kube, contexts, "", "")
-	}
-	npm := filepath.Join(g.home, ".npmrc")
-	if data := g.read(npm); data != nil {
+		facts = append(facts, Credential{Detail: count})
+		count = 0
+	case "npm_token":
 		for _, line := range bytes.Split(data, []byte("\n")) {
 			key, _, ok := bytes.Cut(bytes.TrimSpace(line), []byte("="))
 			if ok && bytes.HasSuffix(bytes.TrimSpace(key), []byte("_authToken")) {
-				g.credential("npm_token", npm, 1, "", "")
+				count = 1
 				break
 			}
 		}
-	}
-	docker := filepath.Join(g.home, ".docker/config.json")
-	if data := g.read(docker); data != nil {
+	case "docker_config_auth":
 		var config struct {
 			Auths map[string]json.RawMessage `json:"auths"`
 		}
-		if json.Unmarshal(data, &config) == nil && len(config.Auths) > 0 {
-			g.credential("docker_config_auth", docker, len(config.Auths), "", "")
+		if err := json.Unmarshal(data, &config); err != nil {
+			return nil, err
 		}
+		count = len(config.Auths)
 	}
-	skippedProtectedProject := false
-projects:
-	for _, project := range projects {
-		for _, root := range []string{"Documents", "Desktop", "Downloads", "Library/Mobile Documents"} {
-			if within(filepath.Join(g.home, root), project) {
-				if !skippedProtectedProject {
-					g.report.Coverage.Limits = append(g.report.Coverage.Limits, "project env skipped under Documents/Desktop/Downloads")
-					skippedProtectedProject = true
-				}
-				continue projects
-			}
-		}
-		path := filepath.Join(project, ".env")
-		if data := g.read(path); data != nil {
-			count := 0
-			for _, line := range bytes.Split(data, []byte("\n")) {
-				key, _, ok := bytes.Cut(line, []byte("="))
-				if !ok {
-					continue
-				}
-				name := string(bytes.TrimSpace(key))
-				for _, suffix := range []string{"_TOKEN", "_KEY", "_SECRET", "PASSWORD"} {
-					if strings.HasSuffix(name, suffix) {
-						count++
-						break
-					}
-				}
-			}
-			if count > 0 {
-				g.credential("project_env", path, count, "", "")
-			}
-		}
+	if count > 0 {
+		facts = append(facts, Credential{Detail: count})
 	}
+	return facts, nil
 }

@@ -5,7 +5,8 @@ import "encoding/json"
 type ClaudeRoot struct {
 	MCPServers map[string]MCP `json:"mcpServers"`
 	Projects   map[string]struct {
-		MCPServers map[string]MCP `json:"mcpServers"`
+		MCPServers            map[string]MCP `json:"mcpServers"`
+		EnabledMcpjsonServers []string       `json:"enabledMcpjsonServers"`
 	} `json:"projects"`
 }
 type ClaudeSettings struct {
@@ -22,12 +23,6 @@ type ClaudeSettings struct {
 		} `json:"network"`
 	} `json:"sandbox"`
 	EnabledPlugins map[string]bool `json:"enabledPlugins"`
-	Hooks          map[string][]struct {
-		Hooks []struct {
-			Type    string `json:"type"`
-			Command string `json:"command"`
-		} `json:"hooks"`
-	} `json:"hooks"`
 }
 
 func Claude(data []byte) (ClaudeRoot, error) {

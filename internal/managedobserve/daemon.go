@@ -307,6 +307,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}()
 
 	authorityHolder := &authorityHolder{available: authorityAvailable, enabled: func() bool { return cedarCache.Current().AuthorityScan }}
+	authorityHolder.scanner.BeginRead = authorityIOPolicy(opts.Diagnostic)
 	authorityReady := make(chan struct{})
 	background.Add(1)
 	go func() {
