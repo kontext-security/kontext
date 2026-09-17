@@ -30,6 +30,7 @@ type authorityHolder struct {
 	present   bool
 	enabled   func() bool
 	available <-chan struct{}
+	resend    <-chan struct{}
 }
 
 func (h *authorityHolder) Fact() (agentauthority.Report, bool) {

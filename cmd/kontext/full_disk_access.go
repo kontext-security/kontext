@@ -2,10 +2,11 @@ package main
 
 import (
 	"errors"
-	"io/fs"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 )
 
 // Run in the hook process: macOS grants follow the invoking agent's app,
@@ -18,12 +19,24 @@ func hookFullDiskAccess() *bool {
 	if err != nil {
 		return nil
 	}
-	_, err = os.Stat(filepath.Join(home, "Library", "Mail"))
+	return probeFullDiskAccess(filepath.Join(home, "Library", "Mail"))
+}
+
+func probeFullDiskAccess(path string) *bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return fullDiskAccessResult(err)
+	}
+	defer file.Close()
+	_, err = file.Readdirnames(1)
 	return fullDiskAccessResult(err)
 }
 
 func fullDiskAccessResult(err error) *bool {
-	if err != nil && !errors.Is(err, fs.ErrPermission) {
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	if err != nil && !errors.Is(err, syscall.EPERM) {
 		return nil
 	}
 	accessible := err == nil

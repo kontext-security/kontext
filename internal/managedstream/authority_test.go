@@ -89,7 +89,7 @@ func TestAuthorityFlushCadenceAndLastSent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.LastReport.Authority.Hash != "changed" {
+	if state.LastReport.Authority != nil {
 		t.Fatal("failed post advanced last sent report")
 	}
 	now = now.Add(time.Minute)
@@ -121,4 +121,47 @@ func TestAuthorityReportDoesNotDiscardMinimumLedgerBatch(t *testing.T) {
 	if state.LastReport.Authority != nil || state.LastAuthorityAt != "" {
 		t.Fatal("omitted authority marked sent")
 	}
+}
+
+func TestAuthoritySwitchRecovery(t *testing.T) {
+	t.Setenv("KONTEXT_AUTHORITY_SCAN", "")
+	_, dbPath := testStore(t)
+	now := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
+	report := agentauthority.Report{Hash: "unchanged"}
+	available := make(chan struct{}, 1)
+	var payload Payload
+	server := capturePayloadServer(t, &payload)
+	defer server.Close()
+	opts := Options{DBPath: dbPath, StatePath: filepath.Join(t.TempDir(), "state.json"), CloudURL: server.URL, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", InstallToken: "test-install-token", Now: func() time.Time { return now }, AuthorityAvailable: available, AuthorityFact: func() (agentauthority.Report, bool) { return report, true }}
+	flush := func(wantReport, wantOff bool) {
+		t.Helper()
+		now = now.Add(time.Minute)
+		payload = Payload{}
+		if err := Flush(context.Background(), opts); err != nil {
+			t.Fatal(err)
+		}
+		gotReport := payload.Device != nil && payload.Device.Authority != nil
+		gotOff := payload.Device != nil && payload.Device.AuthorityScan != nil && !*payload.Device.AuthorityScan
+		if gotReport != wantReport || gotOff != wantOff {
+			t.Fatalf("payload = %+v; want report=%t off=%t", payload.Device, wantReport, wantOff)
+		}
+	}
+	flush(true, false)
+	flush(false, false)
+	// Policy refresh observed off -> on; the unchanged hash must resend immediately.
+	available <- struct{}{}
+	flush(true, false)
+	flush(false, false)
+	t.Setenv("KONTEXT_AUTHORITY_SCAN", "off")
+	flush(false, true)
+	flush(false, true)
+	state, err := LoadState(opts.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastReport.Authority != nil || state.LastAuthorityAt != "" {
+		t.Fatal("accepted local clear retained last authority")
+	}
+	t.Setenv("KONTEXT_AUTHORITY_SCAN", "")
+	flush(true, false)
 }

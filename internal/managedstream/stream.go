@@ -75,7 +75,9 @@ type Options struct {
 	// omit both fields so older or unavailable discovery stays unknown.
 	AgentsFact    func() (agentinventory.Inventory, bool)
 	AuthorityFact func() (agentauthority.Report, bool)
-	Now           func() time.Time
+	// AuthorityAvailable invalidates the resend cadence after the org switch returns.
+	AuthorityAvailable <-chan struct{}
+	Now                func() time.Time
 	// DeviceKey resolves the endpoint's stable reconciliation key per flush.
 	// Empty means unknown — the field is omitted, and the hosted side must
 	// read absence as "no key reported", never as "a different device":
@@ -120,6 +122,7 @@ type Payload struct {
 }
 
 type Device struct {
+	AuthorityScan     *bool                  `json:"authority_scan,omitempty"`
 	Authority         *agentauthority.Report `json:"authority,omitempty"`
 	Label             string                 `json:"label,omitempty"`
 	DeploymentVersion string                 `json:"deployment_version,omitempty"`
@@ -231,6 +234,17 @@ func Flush(ctx context.Context, opts Options) error {
 	state, err := LoadState(statePath)
 	if err != nil {
 		return err
+	}
+
+	// Only the stream writer mutates persisted state; policy refresh may run concurrently.
+	select {
+	case <-opts.AuthorityAvailable:
+		state.LastReport.Authority = nil
+		state.LastAuthorityAt = ""
+		if err := SaveState(statePath, state); err != nil {
+			return err
+		}
+	default:
 	}
 
 	limit := batchLimit(opts.BatchLimit)

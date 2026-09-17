@@ -11,7 +11,16 @@ func AuthorityScanLocallyEnabled() bool {
 }
 
 func addAuthority(payload *Payload, opts Options, state State, now time.Time) {
-	if opts.AuthorityFact == nil || !AuthorityScanLocallyEnabled() {
+	if !AuthorityScanLocallyEnabled() {
+		if payload.Device == nil {
+			payload.Device = &Device{}
+		}
+		enabled := false
+		payload.Device.AuthorityScan = &enabled
+		payload.Device.Authority = nil
+		return
+	}
+	if opts.AuthorityFact == nil {
 		return
 	}
 	report, ok := opts.AuthorityFact()
@@ -31,6 +40,10 @@ func addAuthority(payload *Payload, opts Options, state State, now time.Time) {
 func recordReport(state *State, payload Payload, now time.Time) {
 	if payload.Device == nil {
 		return
+	}
+	if payload.Device.AuthorityScan != nil && !*payload.Device.AuthorityScan {
+		state.LastReport.Authority = nil
+		state.LastAuthorityAt = ""
 	}
 	if payload.Device.Agents != nil {
 		state.LastReport.Agents = payload.Device.Agents

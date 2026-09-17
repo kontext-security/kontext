@@ -248,9 +248,14 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	var background sync.WaitGroup
 	policyReady := make(chan struct{})
 	authorityAvailable := make(chan struct{}, 1)
+	authorityResend := make(chan struct{}, 1)
 	cedarRefresher := cedarpolicy.Refresher{
 		InitialRefreshDone: policyReady,
 		OnAuthorityScanAvailable: func() {
+			select {
+			case authorityResend <- struct{}{}:
+			default:
+			}
 			select {
 			case authorityAvailable <- struct{}{}:
 			default:
@@ -306,7 +311,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		inventoryHolder.run(policyCtx, opts, dbPath, inventoryReady)
 	}()
 
-	authorityHolder := &authorityHolder{available: authorityAvailable, enabled: func() bool { return cedarCache.Current().AuthorityScan }}
+	authorityHolder := &authorityHolder{available: authorityAvailable, resend: authorityResend, enabled: func() bool { return cedarCache.Current().AuthorityScan }}
 	authorityHolder.scanner.BeginRead = authorityIOPolicy(opts.Diagnostic)
 	authorityReady := make(chan struct{})
 	background.Add(1)
@@ -666,20 +671,21 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 	// would stack its timeout onto every page of the drain.
 	deviceKey := deviceKeys.resolve(ctx, loadedConfig.Config.CloudURL, installToken, opts.StreamHTTPClient, opts.Diagnostic)
 	if err := managedstream.Flush(ctx, managedstream.Options{
-		DBPath:            dbPath,
-		StatePath:         opts.StreamStatePath,
-		CloudURL:          loadedConfig.Config.CloudURL,
-		InstallationID:    installationID,
-		InstallToken:      installToken,
-		DeviceLabel:       loadedConfig.Config.Device.Label,
-		UserEmail:         loadedConfig.Config.Device.UserEmail,
-		DeploymentVersion: deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
-		HooksFact:         managedObserveHooksFact,
-		AgentsFact:        inventoryHolder.Fact,
-		AuthorityFact:     authorityHolder.Fact,
-		DeviceKey:         func() string { return deviceKey },
-		HTTPClient:        opts.StreamHTTPClient,
-		Diagnostic:        opts.Diagnostic,
+		DBPath:             dbPath,
+		StatePath:          opts.StreamStatePath,
+		CloudURL:           loadedConfig.Config.CloudURL,
+		InstallationID:     installationID,
+		InstallToken:       installToken,
+		DeviceLabel:        loadedConfig.Config.Device.Label,
+		UserEmail:          loadedConfig.Config.Device.UserEmail,
+		DeploymentVersion:  deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
+		HooksFact:          managedObserveHooksFact,
+		AgentsFact:         inventoryHolder.Fact,
+		AuthorityFact:      authorityHolder.Fact,
+		AuthorityAvailable: authorityHolder.resend,
+		DeviceKey:          func() string { return deviceKey },
+		HTTPClient:         opts.StreamHTTPClient,
+		Diagnostic:         opts.Diagnostic,
 		OnFlushSuccess: func() {
 			if err := ClearAuthError(dbPath); err != nil {
 				opts.Diagnostic.Printf("clear auth-error breadcrumb: %v\n", err)
