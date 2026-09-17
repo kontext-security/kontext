@@ -52,28 +52,32 @@ func TestFlushDoesNotFireOnFlushSuccessWithoutPosting(t *testing.T) {
 }
 
 func TestAuthFailureStatusReportsHostedAuthError(t *testing.T) {
-	dbPath := seededStore(t)
+	for _, rejectedStatus := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict} {
+		t.Run(http.StatusText(rejectedStatus), func(t *testing.T) {
+			dbPath := seededStore(t)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer server.Close()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(rejectedStatus)
+			}))
+			defer server.Close()
 
-	err := Flush(context.Background(), Options{
-		DBPath:         dbPath,
-		StatePath:      filepath.Join(filepath.Dir(dbPath), "state.json"),
-		CloudURL:       server.URL,
-		InstallationID: "ins_test",
-		InstallToken:   "revoked-token",
-		HTTPClient:     server.Client(),
-		Diagnostic:     diagnostic.New(nil, false),
-	})
-	if err == nil {
-		t.Fatal("Flush() error = nil, want hosted auth error")
-	}
-	status, ok := AuthFailureStatus(err)
-	if !ok || status != http.StatusUnauthorized {
-		t.Fatalf("AuthFailureStatus() = %d, %v; want 401, true", status, ok)
+			err := Flush(context.Background(), Options{
+				DBPath:         dbPath,
+				StatePath:      filepath.Join(filepath.Dir(dbPath), "state.json"),
+				CloudURL:       server.URL,
+				InstallationID: "ins_test",
+				InstallToken:   "revoked-token",
+				HTTPClient:     server.Client(),
+				Diagnostic:     diagnostic.New(nil, false),
+			})
+			if err == nil {
+				t.Fatal("Flush() error = nil, want hosted auth error")
+			}
+			status, ok := AuthFailureStatus(err)
+			if !ok || status != rejectedStatus {
+				t.Fatalf("AuthFailureStatus() = %d, %v; want %d, true", status, ok, rejectedStatus)
+			}
+		})
 	}
 }
 

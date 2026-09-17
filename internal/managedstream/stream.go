@@ -195,7 +195,7 @@ type persistedState struct {
 }
 
 func isAuthStatus(status int) bool {
-	return status == http.StatusUnauthorized || status == http.StatusForbidden
+	return status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusConflict
 }
 
 func AuthFailureStatus(err error) (int, bool) {

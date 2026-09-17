@@ -49,6 +49,8 @@ const (
 	settingsBackupLabel = "kontext-setup"
 )
 
+var errPersonalKeyBoundElsewhere = errors.New("this setup command was already used on another Mac; copy a fresh one from Get started in the dashboard")
+
 // Test seams (repo convention, cf. update.go's brewUpgradeFn). All external
 // process and terminal interactions go through these so tests never touch
 // launchctl/security/scutil or a real TTY.
@@ -150,12 +152,6 @@ func CloudURL() string {
 	return DefaultCloudURL
 }
 
-type pingResponse struct {
-	OrganizationID string `json:"organization_id"`
-	// JSON null (the legacy env-fallback org) decodes to "".
-	OrganizationName string `json:"organization_name"`
-}
-
 // Run connects this Mac to the org owning the install token. Steps are
 // ordered so every irreversible action happens after the token is proven
 // valid, and re-running is always safe (token rotation restarts the agent).
@@ -211,7 +207,8 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		return err
 	}
 
-	ping, err := validateToken(ctx, opts.HTTPClient, cloudURL, token)
+	// Discover the workspace without binding: it determines the final profile.
+	ping, err := ValidateToken(ctx, opts.HTTPClient, cloudURL, token, "")
 	if err != nil {
 		return err
 	}
@@ -220,7 +217,6 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		orgLabel = fmt.Sprintf("%s (%s)", ping.OrganizationName, ping.OrganizationID)
 	}
 	fmt.Fprintln(opts.Stdout, "\nWorkspace")
-	fmt.Fprintf(opts.Stdout, "  ✓ %s\n", orgLabel)
 
 	// Never a SECOND profile for a workspace already bound on this backend. Two
 	// profiles differing only by name would hold the same workspace's records in
@@ -278,6 +274,14 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	}
 	switch {
 	case duplicate != "" && !plain:
+		// A second profile is another installation. Recognize reuse of the
+		// existing personal key without binding a fresh key to a refused target.
+		if ping.UserEmail != "" {
+			stored, err := resolveToken(ctx, managedconfig.TokenRef{Source: "keychain", Name: profile.KeychainItemName(duplicate)})
+			if err == nil && stored == token {
+				return errPersonalKeyBoundElsewhere
+			}
+		}
 		return fmt.Errorf(
 			"workspace %s is already set up as profile %q on %s\n\nSwitch to it with `kontext profile use %s`, or remove it first to re-create it.",
 			orgLabel, duplicate, cloudURL, duplicate)
@@ -370,6 +374,60 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		defer func() { release(retErr != nil) }()
 	}
 
+	identityPath := slot.IdentityPath
+	if identityPath == "" {
+		return errors.New("cannot resolve your home directory")
+	}
+	identity, err := installation.EnsureFile(identityPath)
+	if err != nil {
+		return fmt.Errorf("ensure installation identity: %w", err)
+	}
+
+	if slot.Profile != "" && opts.Profile == "" {
+		defer func() {
+			if retErr != nil {
+				flags := ""
+				if activate != "" {
+					flags += " --use"
+				}
+				if opts.AllowHTTPLoopback {
+					flags += " --allow-http-loopback"
+				}
+				fmt.Fprintf(opts.Stderr, "Retry with `kontext profile add %s --cloud-url '%s'%s` to reuse this installation identity.\n", slot.Profile, strings.ReplaceAll(cloudURL, "'", "'\"'\"'"), flags)
+			}
+		}()
+	}
+
+	// Keep this identity on failure: the server may have bound the key even if
+	// its response was lost. A retry must present the same installation ID.
+	bound, err := ValidateToken(ctx, opts.HTTPClient, cloudURL, token, identity.InstallationID)
+	if err != nil {
+		return err
+	}
+	if bound.OrganizationID != ping.OrganizationID {
+		return errors.New("workspace changed during setup; rerun with a fresh command from Get started")
+	}
+	// The network request can outlive a profile switch, rename, or removal.
+	// Newly claimed profiles are pinned; existing targets must be checked again.
+	if snapshot.existed {
+		if err := snapshot.confirm(); err != nil {
+			return err
+		}
+	}
+	currentIdentity, err := installation.LoadFile(identityPath)
+	if err != nil || currentIdentity.InstallationID != identity.InstallationID {
+		return errors.New("installation identity changed while setup was running; retry using the original profile")
+	}
+	workspace := bound.OrganizationName
+	if workspace == "" {
+		workspace = bound.OrganizationID
+	}
+	if bound.UserEmail != "" {
+		fmt.Fprintf(opts.Stdout, "  ✓ Connected to %s as %s\n", workspace, bound.UserEmail)
+	} else {
+		fmt.Fprintf(opts.Stdout, "  ✓ Connected to %s (workspace key, no person attached)\n", workspace)
+	}
+
 	if err := writeKeychainToken(ctx, slot.KeychainItem, token); err != nil {
 		return err
 	}
@@ -385,6 +443,7 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	fmt.Fprintf(opts.Stdout, "  ✓ Token saved to Keychain (%s)\n", slot.KeychainItem)
 
 	fmt.Fprintln(opts.Stdout, "\nMac")
+	fmt.Fprintf(opts.Stdout, "  ✓ Installation identity ready (%s)\n", identity.InstallationID)
 
 	// A named profile needs its directory before anything is written into it.
 	// Create is idempotent here by construction: re-running setup for an
@@ -404,16 +463,6 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		return err
 	}
 	fmt.Fprintf(opts.Stdout, "  ✓ Config written (%s)\n", configPath)
-
-	identityPath := slot.IdentityPath
-	if identityPath == "" {
-		return errors.New("cannot resolve your home directory")
-	}
-	identity, err := installation.EnsureFile(identityPath)
-	if err != nil {
-		return fmt.Errorf("ensure installation identity: %w", err)
-	}
-	fmt.Fprintf(opts.Stdout, "  ✓ Installation identity ready (%s)\n", identity.InstallationID)
 
 	// Cache the workspace label so listings can name the workspace instead of a
 	// backend hostname. Failing here must not fail the setup — it is a display
@@ -767,23 +816,28 @@ func validateTokenShape(token string) error {
 	return nil
 }
 
-// validateToken delegates the wire work to ledgerping — the daemon resolves
+// ValidateToken delegates the wire work to ledgerping — the daemon resolves
 // tokens through the same call, so the two cannot drift — and keeps only the
-// setup-specific copy: this is the one caller with a human at a terminal who
-// can go mint a fresh token.
-func validateToken(ctx context.Context, client *http.Client, cloudURL, token string) (pingResponse, error) {
-	ping, err := ledgerping.Ping(ctx, client, cloudURL, token)
+// user-facing errors shared by setup and whoami.
+func ValidateToken(ctx context.Context, client *http.Client, cloudURL, token, installationID string) (ledgerping.Response, error) {
+	ping, err := ledgerping.Ping(ctx, client, cloudURL, token, installationID)
 	if err != nil {
 		if errors.Is(err, ledgerping.ErrUnauthorized) {
-			return pingResponse{}, errors.New("install token was rejected — it may be revoked or mistyped; create a new one in the dashboard (Deployments page)")
+			return ledgerping.Response{}, errors.New("install token was rejected — it may be revoked or mistyped; create a new one in the dashboard under Settings → API keys")
+		}
+		if errors.Is(err, ledgerping.ErrBoundElsewhere) {
+			return ledgerping.Response{}, errPersonalKeyBoundElsewhere
+		}
+		if errors.Is(err, ledgerping.ErrExpired) {
+			return ledgerping.Response{}, errors.New("this setup command has expired; copy a fresh one from Get started in the dashboard")
 		}
 		var status *ledgerping.StatusError
 		if errors.As(err, &status) {
-			return pingResponse{}, fmt.Errorf("token validation failed: %s returned HTTP %d", cloudURL, status.StatusCode)
+			return ledgerping.Response{}, fmt.Errorf("token validation failed: %s returned HTTP %d", cloudURL, status.StatusCode)
 		}
-		return pingResponse{}, err
+		return ledgerping.Response{}, err
 	}
-	return pingResponse{OrganizationID: ping.OrganizationID, OrganizationName: ping.OrganizationName}, nil
+	return ping, nil
 }
 
 func deviceLabel(ctx context.Context) string {
