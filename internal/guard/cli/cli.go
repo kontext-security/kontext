@@ -329,19 +329,16 @@ func PrintManagedHookStatus(out io.Writer) HookStatus {
 	return HookStatus{Healthy: claudeHealthy && codexHealthy}
 }
 
-// PrintOrganizationManagedHookStatus checks the policy-owned Claude settings
-// and the system Codex hooks installed by the organization package. Personal
-// Codex hooks cannot substitute for a missing or broken system installation.
+// PrintOrganizationManagedHookStatus checks policy-owned Claude settings.
+// Managed configuration currently accepts only agent: "claude".
 func PrintOrganizationManagedHookStatus(out io.Writer) HookStatus {
-	return HookStatus{Healthy: printOrganizationManagedHookStatus(out, codexmanaged.SystemHooksPath, organizationManagedHookPaths()...)}
+	return HookStatus{Healthy: printOrganizationManagedHookStatus(out, organizationManagedHookPaths()...)}
 }
 
-func printOrganizationManagedHookStatus(out io.Writer, systemHooks string, claudePaths ...string) bool {
+func printOrganizationManagedHookStatus(out io.Writer, claudePaths ...string) bool {
 	claudeHealthy := printOrganizationClaudeHookStatus(out, claudePaths...)
-	// Organization policy owns Codex feature enablement. Validate its installed
-	// system commands without requiring an employee's personal config opt-in.
-	codexHealthy := printCodexInstallationStatus(out, codexmanaged.InstallationPaths{SystemHooks: systemHooks})
-	return claudeHealthy && codexHealthy
+	fmt.Fprintln(out, "Codex hooks: not managed by this organization")
+	return claudeHealthy
 }
 
 func organizationManagedHookPaths() []string {
