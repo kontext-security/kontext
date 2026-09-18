@@ -189,6 +189,12 @@ reasoning or reconstruct full conversation history.
 Managed deployments can export redacted records to the Kontext dashboard for
 organization-wide review, retention, and investigation.
 
+Ledger exports and idle heartbeats report the running daemon's CLI release as
+`device.cli_version`, separately from the package marker in
+`device.deployment_version` (or its self-serve fallback). A package marker update
+does not change the reported CLI release until a daemon running the new binary
+sends telemetry.
+
 ---
 
 ## Policy where the agent runs
