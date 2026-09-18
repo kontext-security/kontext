@@ -376,7 +376,24 @@ func isCoworkPath(value string) bool {
 	}
 	suffix := strings.TrimPrefix(strings.TrimPrefix(normalized, root), "/")
 	parts := strings.Split(suffix, "/")
-	return len(parts) >= 3 && parts[0] != "" && parts[1] != "" && strings.HasPrefix(parts[2], "local_")
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	sessionDir := parts[2]
+	if strings.HasPrefix(sessionDir, "local_") {
+		return true
+	}
+	// Claude also stores local_<uuid> sessions under the UUID's first eight
+	// lowercase hex characters, while retaining full names for older folders.
+	if len(sessionDir) != 8 {
+		return false
+	}
+	for _, c := range sessionDir {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func shouldUseManagedObserve(explicitSocket, explicitMode bool) bool {

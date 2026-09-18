@@ -30,7 +30,7 @@ func TestPortableDecisionContractFixture(t *testing.T) {
 	t.Parallel()
 
 	var fixture decisionContractFixture
-	readFixture(t, "decision-contract-v1.json", &fixture)
+	readFixture(t, "decision-contract-v2.json", &fixture)
 
 	expected := decisionContractFixture{
 		Version: cedareval.DecisionContractVersion,
@@ -87,7 +87,7 @@ func TestPortableDecisionContractFixture(t *testing.T) {
 
 func TestPortableDecisionMappingFixtures(t *testing.T) {
 	var fixtures []decisionMappingFixture
-	readFixture(t, "decision-mapping-v1.json", &fixtures)
+	readFixture(t, "decision-mapping-v2.json", &fixtures)
 
 	for _, fixture := range fixtures {
 		fixture := fixture

@@ -292,20 +292,20 @@ func TestBuildRejectsContractViolations(t *testing.T) {
 		ToolName:        "Bash",
 		ExecutionAction: cedareval.EffectiveExecutionActionAllow,
 		Cedar: &ledgerfact.CedarInput{
-			// Enforce that fails open: evaluation failed but the hook allowed.
+			// Missing enforcement readiness still cannot authorize a tool call.
 			AppliedMode:       cedareval.RolloutModeEnforce,
 			ConfiguredMode:    cedareval.RolloutModeEnforce,
 			DistributionState: "success",
 			Mapping: cedareval.DecisionMapping{
-				EvaluationState:          cedareval.EvaluationStateFailed,
+				EvaluationState:          cedareval.EvaluationStateNotEvaluated,
 				EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
-				EvaluationReasonCode:     cedareval.ReasonEngineError,
-				EffectiveReasonCode:      cedareval.ReasonEngineError,
+				EvaluationReasonCode:     cedareval.ReasonEnforcementNotReady,
+				EffectiveReasonCode:      cedareval.ReasonEnforcementNotReady,
 			},
 		},
 	}
 	if _, err := ledgerfact.Build(input); err == nil {
-		t.Fatal("expected build to reject a fail-open enforce fact")
+		t.Fatal("expected build to reject an allow without enforcement readiness")
 	}
 }
 
@@ -367,6 +367,30 @@ func derefInt(value *int) int {
 		return 0
 	}
 	return *value
+}
+
+func TestBuildAcceptsErrorAllowMapperOutput(t *testing.T) {
+	mapping, err := cedareval.MapDecision(cedareval.DecisionMappingInput{
+		RolloutMode: cedareval.RolloutModeEnforce, EnforcementReady: true,
+		Evaluation: cedareval.EvaluationOutcome{State: cedareval.EvaluationStateFailed, Reason: cedareval.ReasonRequestConversionFailed},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact, err := ledgerfact.Build(ledgerfact.BuildInput{
+		ToolCallID: "toolu_error_allow", ToolName: "Read", DecidedAt: time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC),
+		ExecutionAction: mapping.EffectiveExecutionAction,
+		Cedar: &ledgerfact.CedarInput{
+			AppliedMode: cedareval.RolloutModeEnforce, ConfiguredMode: cedareval.RolloutModeEnforce,
+			DistributionState: "success", Mapping: mapping,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build rejected error-allow mapper output: %v", err)
+	}
+	if fact.ExecutionAction != cedareval.EffectiveExecutionActionAllow || fact.EvaluationState != cedareval.EvaluationStateFailed || fact.ReasonCode != cedareval.ReasonRequestConversionFailed || fact.CedarAction != nil || len(fact.DeterminingPolicyIDs) != 0 {
+		t.Fatalf("error evidence lost or replaced with a permit: %#v", fact)
+	}
 }
 
 // TestBuildAcceptsRealMapperOutput pipes the actual decision mapper into

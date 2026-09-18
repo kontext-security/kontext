@@ -48,6 +48,93 @@ func cedarHookEvent(tool string, input map[string]any) risk.HookEvent {
 	return risk.HookEvent{SessionID: "session-1", Agent: "claude", HookEventName: "PreToolUse", ToolName: tool, ToolInput: input}
 }
 
+func TestCedarCoworkEvaluatesPolicies(t *testing.T) {
+	// Cowork shares the Claude Code policy identity, including agent-scoped
+	// forbids, while retaining its own agent name in hook and ledger events.
+	policy := `@id("allow") permit(principal, action, resource);
+@id("claude-write-block") forbid(principal, action, resource == Kontext::Tool::"Write")
+when { context.agent == Kontext::Agent::"anthropic-claude-code" };`
+	tests := []struct {
+		tool  string
+		input map[string]any
+		want  risk.Decision
+	}{
+		{"Read", map[string]any{"file_path": "/tmp/example.txt"}, risk.DecisionAllow},
+		{"Glob", map[string]any{"pattern": "*.txt"}, risk.DecisionAllow},
+		{"mcp__workspace__bash", map[string]any{"command": "echo hello"}, risk.DecisionAllow},
+		{"ToolSearch", nil, risk.DecisionAllow},
+		{"Write", map[string]any{"file_path": "/tmp/example.txt", "content": "hello"}, risk.DecisionDeny},
+	}
+	for _, agent := range []string{"cowork", "claude-cowork"} {
+		for _, mode := range []cedareval.RolloutMode{cedareval.RolloutModeObserve, cedareval.RolloutModeEnforce} {
+			for _, test := range tests {
+				t.Run(agent+"/"+string(mode)+"/"+test.tool, func(t *testing.T) {
+					deployment := cedarTestDeployment(t, mode, policy)
+					current := staticHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
+					provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+					event := cedarHookEvent(test.tool, test.input)
+					event.Agent = agent
+					decision, err := provider.DecideHook(context.Background(), event)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := test.want
+					if mode == cedareval.RolloutModeObserve {
+						want = risk.DecisionAllow
+					}
+					if decision.Decision != want {
+						t.Fatalf("decision = %q, want %q", decision.Decision, want)
+					}
+					if decision.Cedar == nil || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateEvaluated || decision.Cedar.EngineErrorCount != 0 {
+						t.Fatalf("Cedar evidence = %#v, want successful evaluation", decision.Cedar)
+					}
+					wantAction := cedareval.DerivedCedarActionAllow
+					wantRule := "allow"
+					if test.want == risk.DecisionDeny {
+						wantAction = cedareval.DerivedCedarActionDeny
+						wantRule = "claude-write-block"
+					}
+					if decision.Cedar.Mapping.DerivedCedarAction != wantAction || !containsString(decision.Cedar.Mapping.DeterminingPolicyIDs, wantRule) {
+						t.Fatalf("mapping = %#v, want %s by %s", decision.Cedar.Mapping, wantAction, wantRule)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCedarCoworkWorkspaceBashEnforcesShellPolicy(t *testing.T) {
+	for _, agent := range []string{"cowork", "claude-cowork", "claude"} {
+		for _, command := range []string{"echo hello", "git push -f origin main"} {
+			t.Run(agent+"/"+command, func(t *testing.T) {
+				deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+				provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+				event := cedarHookEvent("mcp__workspace__bash", map[string]any{"command": command})
+				event.Agent = agent
+				decision, err := provider.DecideHook(context.Background(), event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := risk.DecisionAllow
+				wantTool := event.ToolName
+				// This reserved Cowork tool is a shell only in the Cowork adapter.
+				if agent != "claude" {
+					wantTool = cedareval.ToolShellV2
+					if command != "echo hello" {
+						want = risk.DecisionDeny
+					}
+				}
+				if decision.Decision != want || decision.Cedar == nil || decision.Cedar.ToolID != wantTool || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateEvaluated {
+					t.Fatalf("decision = %#v, want %s with tool %s", decision, want, wantTool)
+				}
+				if want == risk.DecisionDeny && decision.Reason != "Blocked by rule github-block-force-push" {
+					t.Fatalf("reason = %q, want the force-push rule", decision.Reason)
+				}
+			})
+		}
+	}
+}
+
 func (p *countingHookPolicy) DecideHook(context.Context, risk.HookEvent) (risk.RiskDecision, error) {
 	p.calls++
 	return p.decision, nil
@@ -158,7 +245,7 @@ func TestCedarEnforceDeniesAskWithoutApprovalChannel(t *testing.T) {
 	}
 }
 
-func TestCedarEnforceFailsClosedOnEngineDiagnostics(t *testing.T) {
+func TestCedarEnforceAllowsOnEngineDiagnostics(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, portableEngineErrorPolicy)
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
 	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementStatic)
@@ -170,14 +257,55 @@ func TestCedarEnforceFailsClosedOnEngineDiagnostics(t *testing.T) {
 	if current.calls != 0 {
 		t.Fatalf("previous evaluator calls = %d, want zero after cutover", current.calls)
 	}
-	if decision.Decision != risk.DecisionDeny || decision.ReasonCode != string(cedareval.ReasonEngineError) {
-		t.Fatalf("decision = %#v, want fail-closed engine_error deny", decision)
+	if decision.Decision != risk.DecisionAllow || decision.ReasonCode != string(cedareval.ReasonEngineError) {
+		t.Fatalf("decision = %#v, want allow with engine_error evidence", decision)
 	}
 	if decision.Cedar == nil || decision.Cedar.EngineErrorCount != 1 || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateFailed {
 		t.Fatalf("Cedar evidence = %#v, want failed evaluation with one engine error", decision.Cedar)
 	}
 	if len(decision.Cedar.Mapping.DeterminingPolicyIDs) != 0 {
 		t.Fatalf("determining policy ids = %v, want none for failed evaluation", decision.Cedar.Mapping.DeterminingPolicyIDs)
+	}
+}
+
+func TestCedarEnforceAllowsEvaluationErrorsAndPreservesDenies(t *testing.T) {
+	cases := []struct {
+		name, policy string
+		input        map[string]any
+		want         risk.Decision
+		state        cedareval.EvaluationState
+		reason       cedareval.ReasonCode
+	}{
+		{"conversion error", `@id("permit") permit(principal, action, resource);`, map[string]any{"bad": make(chan struct{})}, risk.DecisionAllow, cedareval.EvaluationStateFailed, cedareval.ReasonRequestConversionFailed},
+		{"policy parse error", `not a Cedar policy`, nil, risk.DecisionAllow, cedareval.EvaluationStateFailed, cedareval.ReasonInvalidCachedPolicy},
+		{"engine error without default permit", `@id("error") forbid(principal, action, resource) when { context.shell.program == "git" };`, nil, risk.DecisionAllow, cedareval.EvaluationStateFailed, cedareval.ReasonEngineError},
+		{"forbid despite another policy error", portableEngineErrorPolicy + ` @id("block-read") forbid(principal, action, resource == Kontext::Tool::"Read");`, nil, risk.DecisionDeny, cedareval.EvaluationStateEvaluated, cedareval.ReasonExplicitForbid},
+		{"successful default deny", `@id("permit-write") permit(principal, action, resource == Kontext::Tool::"Write");`, nil, risk.DecisionDeny, cedareval.EvaluationStateEvaluated, cedareval.ReasonDefaultDeny},
+	}
+	for _, source := range []CedarEnforcementSource{CedarEnforcementStatic, CedarEnforcementRemote} {
+		for _, tc := range cases {
+			t.Run(string(source)+"/"+tc.name, func(t *testing.T) {
+				deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, tc.policy)
+				current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionDeny}}
+				provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, source)
+				decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Read", tc.input))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if current.calls != 0 || decision.Decision != tc.want || decision.ReasonCode != string(tc.reason) {
+					t.Fatalf("legacy calls = %d, decision = %#v; want %s/%s", current.calls, decision, tc.want, tc.reason)
+				}
+				if decision.Cedar == nil || decision.Cedar.AppliedRolloutMode != cedareval.RolloutModeEnforce || decision.Cedar.Mapping.EvaluationState != tc.state {
+					t.Fatalf("Cedar evidence = %#v, want enforce/%s", decision.Cedar, tc.state)
+				}
+				if tc.state == cedareval.EvaluationStateFailed && (decision.Cedar.Mapping.DerivedCedarAction != "" || len(decision.Cedar.Mapping.DeterminingPolicyIDs) != 0) {
+					t.Fatalf("failed evaluation fabricated a policy verdict: %#v", decision.Cedar.Mapping)
+				}
+				if tc.reason == cedareval.ReasonExplicitForbid && (decision.Cedar.EngineErrorCount != 1 || len(decision.Cedar.Mapping.DeterminingPolicyIDs) != 1 || decision.Cedar.Mapping.DeterminingPolicyIDs[0] != "block-read") {
+					t.Fatalf("lost decisive forbid or error evidence: %#v", decision.Cedar)
+				}
+			})
+		}
 	}
 }
 
@@ -202,6 +330,47 @@ func TestCedarEnforceFailsClosedWithoutFallback(t *testing.T) {
 				t.Fatalf("calls = %d decision = %#v, want no fallback and deny", current.calls, decision)
 			}
 		})
+	}
+}
+
+func TestCedarCompoundCommandPreservesCompletedDenies(t *testing.T) {
+	const errorPolicy = `@id("error") forbid(principal, action, resource) when { context.shell.program == "bad" && context.missing };`
+	const forbidPolicy = `@id("allow") permit(principal, action, resource); @id("block-git") forbid(principal, action, resource) when { context.shell.program == "git" };`
+	cases := []struct{ name, policy, command, reason string }{
+		{"forbid then error", forbidPolicy + errorPolicy, "git status; bad", "explicit_forbid"},
+		{"error then forbid", forbidPolicy + errorPolicy, "bad; git status", "explicit_forbid"},
+		{"default deny then error", `@id("echo") permit(principal, action, resource) when { context.shell.program == "echo" };` + errorPolicy, "ls; bad", "default_deny"},
+		{"ask then forbid", `@id("ask") @ask("prompt") permit(principal, action, resource) when { context.shell.program == "echo" }; @id("block-git") forbid(principal, action, resource) when { context.shell.program == "git" };`, "echo hello; git status", "explicit_forbid"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, tc.policy)
+			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+			decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": tc.command}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != risk.DecisionDeny || decision.ReasonCode != tc.reason || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateEvaluated {
+				t.Fatalf("lost completed policy deny: %#v", decision)
+			}
+		})
+	}
+}
+
+func TestCedarConversionErrorDoesNotDiscardCompletedDeny(t *testing.T) {
+	evaluator, err := cedareval.New(`@id("block") forbid(principal, action, resource);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := cedareval.EvaluationPrincipal{EntityType: cedareval.EndpointEntityTypeV2, EntityID: "ins_test"}
+	good := cedarInputsV2(principal, cedarHookEvent("Read", nil), "Read", nil)[0]
+	bad := good
+	bad.AgentID = "unsupported-agent"
+	for _, inputs := range [][]cedareval.ToolUseInputV2{{good, bad}, {bad, good}} {
+		result, err := evaluateAll(evaluator, inputs)
+		if err != nil || !result.hasDecisiveDeny || result.Decision != cedareval.DecisionDeny || len(result.EngineDiagnostics.Errors) != 1 || len(result.DeterminingPolicyIDs) != 1 || result.DeterminingPolicyIDs[0] != "block" {
+			t.Fatalf("result = %#v, err = %v; want deny with error evidence", result, err)
+		}
 	}
 }
 

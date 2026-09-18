@@ -1,0 +1,52 @@
+[
+  {
+    "version": 2,
+    "name": "erroring-forbid-records-failure-and-allows",
+    "description": "A matching permit plus a forbid evaluation error returns a raw Cedar allow, but the application classifies the evaluation as failed before rollout mapping.",
+    "policies": [
+      "@id(\"allow\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource);",
+      "@id(\"erroring_forbid\")\nforbid(principal, action == Kontext::Action::\"ToolUse\", resource) when { !(context has command) || (context has command && context.command like \"git*\") };"
+    ],
+    "request": {
+      "evaluationPrincipal": {
+        "entityType": "Kontext::User",
+        "entityId": "alice@example.com"
+      },
+      "toolName": "Bash",
+      "toolInput": {
+        "command": 1
+      }
+    },
+    "expected": {
+      "decision": "allow",
+      "engineErrorCount": 1,
+      "determiningPolicyIds": [
+        "allow"
+      ],
+      "contextDiagnostics": [],
+      "observeCurrentAuthorityAction": "allow",
+      "observe": {
+        "evaluationState": "failed",
+        "evaluationPrincipal": {
+          "entityType": "Kontext::User",
+          "entityId": "alice@example.com"
+        },
+        "effectiveExecutionAction": "allow",
+        "evaluationReasonCode": "engine_error",
+        "effectiveReasonCode": "observe_non_authoritative",
+        "determiningPolicyIds": []
+      },
+      "enforce": {
+        "evaluationState": "failed",
+        "evaluationPrincipal": {
+          "entityType": "Kontext::User",
+          "entityId": "alice@example.com"
+        },
+        "effectiveExecutionAction": "allow",
+        "evaluationReasonCode": "engine_error",
+        "effectiveReasonCode": "engine_error",
+        "determiningPolicyIds": []
+      }
+    }
+  }
+]

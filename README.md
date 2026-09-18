@@ -32,6 +32,11 @@ and records the decision and outcome in an authorization ledger.
 Start in observe mode. See what policy would stop. Move supported boundaries
 into enforcement when you are ready.
 
+Policy evaluation errors allow the tool call, including in enforce mode, and
+remain visible as failures in the activity record. Completed policy denies and
+unavailable required approvals still block. This error fallback does not change
+behavior when the daemon is unavailable or enforcement has no usable policy.
+
 - **Local decisions:** policy evaluation happens alongside the agent.
 - **Pre-action enforcement:** matching actions can be denied at supported
   synchronous hooks.
@@ -45,6 +50,9 @@ into enforcement when you are ready.
 Kontext currently supports **Claude Code, Claude Cowork, and Codex**. Exact
 event and enforcement coverage varies by agent—see the
 [agent support matrix](docs/coverage.md).
+
+Managed Claude hooks recognize Cowork sessions with either full or shortened
+session directory names, preserving their Cowork identity in activity records.
 
 ---
 

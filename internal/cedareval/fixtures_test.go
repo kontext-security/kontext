@@ -24,6 +24,10 @@ import (
 const portableFixtureContractVersion = 1
 
 var fixtureDigests = map[string]string{
+	"decision-contract-v2.json": "17a5bb7c93e7fffb7aa9879bd97d46c15554f644aba8d74a6b1ea211dba732d9",
+	"decision-mapping-v2.json":  "a5b6dc52a62d62ac9fcd59299582d1da3000d135bacbf63e95db311686ceec6d",
+	"evaluation-errors-v2.json": "0fa793d084cbb6c95142f7b3554fef12ae1a12cebb29a54049b090e8e7d56147",
+
 	"authorization-v1.json":          "c7f8aaf5da2acbf9a5d832ebf2bcf3ca531a617cdea3a6aed1b6b1840c4735b5",
 	"context-errors-v1.json":         "945e6be23af02aa4d0c7bd382f5963b6342f46a02602bfbc8f134ae283b6773e",
 	"decision-contract-v1.json":      "8d33cd7924de64b9000c18fdc3cb532250653f768e2a65c7acb001c26376a3c4",
@@ -190,7 +194,7 @@ func TestPortableContextErrorFixtures(t *testing.T) {
 
 func TestPortableEvaluationErrorFixtures(t *testing.T) {
 	var fixtures []evaluationErrorFixture
-	readFixture(t, "evaluation-errors-v1.json", &fixtures)
+	readFixture(t, "evaluation-errors-v2.json", &fixtures)
 
 	for _, fixture := range fixtures {
 		fixture := fixture
@@ -449,13 +453,18 @@ func readFixture(t *testing.T, name string, destination any) {
 	} else if err := json.Unmarshal(contents, &metadata); err != nil {
 		t.Fatalf("Decode() fixture metadata error = %v", err)
 	}
+	wantVersion := portableFixtureContractVersion
+	switch name {
+	case "decision-contract-v2.json", "decision-mapping-v2.json", "evaluation-errors-v2.json":
+		wantVersion = cedareval.DecisionContractVersion
+	}
 	for index, fixture := range metadata {
-		if fixture.Version != portableFixtureContractVersion {
+		if fixture.Version != wantVersion {
 			t.Fatalf(
 				"fixture %d version = %d, want %d",
 				index,
 				fixture.Version,
-				portableFixtureContractVersion,
+				wantVersion,
 			)
 		}
 	}
