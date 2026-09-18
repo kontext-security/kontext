@@ -33,6 +33,8 @@ var SupportedEvents = []Event{
 	{Name: hook.HookPostToolUse, Alias: "post-tool-use"},
 	{Name: hook.HookPostToolUseFailed, Alias: "post-tool-use-failure"},
 	{Name: hook.HookSessionEnd, Alias: "session-end", Async: true},
+	{Name: hook.HookStop, Alias: "stop", Async: true},
+	{Name: hook.HookSubagentStop, Alias: "subagent-stop", Async: true},
 }
 
 func DefaultManagedSettingsPath() string {
@@ -163,11 +165,24 @@ func IsManagedSettingsDropIn(data []byte) bool {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return false
 	}
-	if len(settings.Hooks) != len(SupportedEvents) {
+	if len(settings.Hooks) > len(SupportedEvents) || len(settings.Hooks) < len(SupportedEvents)-2 {
 		return false
+	}
+	for name := range settings.Hooks {
+		known := false
+		for _, event := range SupportedEvents {
+			known = known || event.Name.String() == name
+		}
+		if !known {
+			return false
+		}
 	}
 	for _, event := range SupportedEvents {
 		groups := settings.Hooks[event.Name.String()]
+		// Recognize our older five-event drop-in so setup can upgrade it.
+		if (event.Name == hook.HookStop || event.Name == hook.HookSubagentStop) && len(groups) == 0 {
+			continue
+		}
 		if len(groups) != 1 || groups[0].Matcher != "" || len(groups[0].Hooks) != 1 {
 			return false
 		}

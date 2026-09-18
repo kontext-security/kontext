@@ -382,6 +382,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureRiskTypeAnnotations(ctx); err != nil {
 		return err
 	}
+	if _, err := s.db.ExecContext(ctx, toolUsageDDL); err != nil {
+		return err
+	}
 	return nil
 }
 

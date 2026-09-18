@@ -124,6 +124,7 @@ type Payload struct {
 	MerlinAnnotations   []sqlite.MerlinAnnotationRecord   `json:"merlin_annotations,omitempty"`
 	RiskTypeAnnotations []sqlite.RiskTypeAnnotationRecord `json:"risk_type_annotations,omitempty"`
 	ReceiptChainAnchor  *sqlite.LedgerReceiptChainAnchor  `json:"receipt_chain_anchor,omitempty"`
+	ToolUsage           []sqlite.ToolUsageRecord          `json:"tool_usage,omitempty"`
 }
 
 type Device struct {
@@ -223,6 +224,18 @@ func ShouldReportAuthFailure(consecutiveFailures int) bool {
 }
 
 func Flush(ctx context.Context, opts Options) error {
+	// Capture locally before network I/O so an outage cannot prevent durable
+	// collection while the agent's transcript is still available.
+	if err := reconcileToolUsage(ctx, opts); err != nil {
+		return err
+	}
+	if err := flushLedger(ctx, opts); err != nil {
+		return err
+	}
+	return flushToolUsage(ctx, opts)
+}
+
+func flushLedger(ctx context.Context, opts Options) error {
 	if err := validateOptions(opts); err != nil {
 		return err
 	}

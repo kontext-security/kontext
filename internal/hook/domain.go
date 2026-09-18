@@ -12,6 +12,7 @@ const (
 	HookSessionEnd        HookName = "SessionEnd"
 	HookUserPromptSubmit  HookName = "UserPromptSubmit"
 	HookStop              HookName = "Stop"
+	HookSubagentStop      HookName = "SubagentStop"
 )
 
 func (h HookName) String() string {
@@ -20,7 +21,7 @@ func (h HookName) String() string {
 
 func (h HookName) IsKnown() bool {
 	switch h {
-	case HookSessionStart, HookPreToolUse, HookPostToolUse, HookPostToolUseFailed, HookSessionEnd, HookUserPromptSubmit, HookStop:
+	case HookSessionStart, HookPreToolUse, HookPostToolUse, HookPostToolUseFailed, HookSessionEnd, HookUserPromptSubmit, HookStop, HookSubagentStop:
 		return true
 	default:
 		return false
@@ -44,6 +45,7 @@ var eventAliases = []EventAlias{
 	{Name: HookSessionEnd, Alias: "session-end"},
 	{Name: HookUserPromptSubmit, Alias: "user-prompt-submit"},
 	{Name: HookStop, Alias: "stop"},
+	{Name: HookSubagentStop, Alias: "subagent-stop"},
 }
 
 func ParseEventAlias(value string) (HookName, bool) {
@@ -84,14 +86,17 @@ func NormalizeDecision(value string) (Decision, bool) {
 }
 
 type Event struct {
-	SessionID            string
-	Agent                string
-	HookName             HookName
-	ToolName             string
-	ToolInput            map[string]any
-	ToolResponse         map[string]any
-	ToolUseID            string
-	CWD                  string
+	SessionID    string
+	Agent        string
+	HookName     HookName
+	ToolName     string
+	ToolInput    map[string]any
+	ToolResponse map[string]any
+	ToolUseID    string
+	CWD          string
+	// TranscriptPath is local metadata for usage capture, not tool input.
+	TranscriptPath       string
+	AgentTranscriptPath  string
 	PermissionMode       string
 	FullDiskAccess       *bool
 	DurationMs           *int64
