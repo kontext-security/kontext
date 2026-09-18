@@ -448,7 +448,7 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	fmt.Fprintln(opts.Stderr, "note: Codex hooks require review before they run; open `/hooks` in Codex to trust the Kontext hooks.")
 	if home, err := os.UserHomeDir(); err == nil {
 		scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		inv := agentinventory.Scan(scanCtx, home, os.Getenv, time.Now(), agentWiring())
+		inv := agentinventory.Scan(scanCtx, home, os.Getenv, time.Now(), agentinventory.ScanOptions{Wired: agentWiring()})
 		cancel()
 		fmt.Fprintf(opts.Stdout, "  ✓ Agent discovery: %s\n", summariseInventory(inv))
 	}

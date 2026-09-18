@@ -1,0 +1,12 @@
+{
+  "agents": [
+    {
+      "id": "claude_cowork",
+      "config_path": "~/Library/Application Support/Claude/vm_bundles/claudevm.bundle",
+      "wired": "yes",
+      "last_activity_at": null,
+      "sandboxed": true
+    }
+  ],
+  "agents_reported_at": "2026-09-18T14:00:00Z"
+}
