@@ -74,8 +74,8 @@ func TestCodexTokenNormalization(t *testing.T) {
 func TestCodexScopeBoundariesAndDedup(t *testing.T) {
 	raw := `{"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}
 {"type":"turn_context","payload":{"model":"gpt-6-astra"}}
-{"type":"response_item","payload":{"type":"function_call","call_id":"a","name":"exec_command"}}
-{"type":"response_item","payload":{"type":"function_call","call_id":"b","name":"mcp__test"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"a","name":"exec","input":"private code"}}
+{"type":"response_item","payload":{"type":"function_call","call_id":"b","name":"js","namespace":"mcp__cua_repl","arguments":"private arguments"}}
 {"timestamp":"2026-09-17T10:00:00Z","type":"token_usage_record","payload":{"thread_id":"s","response_id":"r1","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2}}}
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"a"}}
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"b"}}
@@ -93,6 +93,12 @@ func TestCodexScopeBoundariesAndDedup(t *testing.T) {
 	}
 	if len(rows) != 2 || len(rows[0].ToolUseIDs) != 2 || len(rows[1].ConsumedToolUseIDs) != 2 || len(rows[1].Tools) != 2 {
 		t.Fatalf("scope: %+v", rows)
+	}
+	for _, row := range rows {
+		if row.Tools[0] != (Tool{ID: "a", Name: "exec", Type: "custom_tool_call"}) ||
+			row.Tools[1] != (Tool{ID: "b", Name: "js", Type: "function_call", Namespace: "mcp__cua_repl"}) {
+			t.Fatalf("tool identity must survive on both generated and consumed calls: %+v", row.Tools)
+		}
 	}
 	// Repeat the entire file to exercise resume/re-read idempotence.
 	rows, err = ReadCodexTranscript(strings.NewReader(raw + raw))

@@ -43,8 +43,12 @@ type Record struct {
 }
 
 type Tool struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Type        string `json:"type,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
+	ToolsetName string `json:"toolset_name,omitempty"`
+	ServerName  string `json:"server_name,omitempty"`
 }
 
 func (r Record) ToolRelated() bool {
@@ -82,7 +86,7 @@ func ReadClaudeTranscript(reader io.Reader) ([]Record, error) {
 	// Only the next assistant request consumes a tool-result user message.
 	// A later ordinary user prompt clears the association.
 	pendingResults := make(map[string][]string)
-	tools := make(map[[2]string]string)
+	tools := make(map[[2]string]Tool)
 	line := 0
 	for scanner.Scan() {
 		line++
@@ -137,11 +141,7 @@ func ReadClaudeTranscript(reader io.Reader) ([]Record, error) {
 				ID      string          `json:"id"`
 				Model   string          `json:"model"`
 				Usage   *anthropicUsage `json:"usage"`
-				Content []struct {
-					Type string `json:"type"`
-					ID   string `json:"id"`
-					Name string `json:"name"`
-				} `json:"content"`
+				Content []Tool          `json:"content"`
 			} `json:"message"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
@@ -206,9 +206,24 @@ func ReadClaudeTranscript(reader io.Reader) ([]Record, error) {
 				if !slices.Contains(record.ToolUseIDs, block.ID) {
 					record.ToolUseIDs = append(record.ToolUseIDs, block.ID)
 				}
-				if block.Name != "" {
-					tools[[2]string{row.SessionID, block.ID}] = block.Name
+				key := [2]string{row.SessionID, block.ID}
+				// Streamed snapshots can add metadata; missing later fields must
+				// not erase an earlier name or toolset identity.
+				tool := tools[key]
+				tool.ID = block.ID
+				for _, field := range []struct {
+					dst *string
+					src string
+				}{
+					{&tool.Name, block.Name}, {&tool.Type, block.Type},
+					{&tool.Namespace, block.Namespace}, {&tool.ToolsetName, block.ToolsetName},
+					{&tool.ServerName, block.ServerName},
+				} {
+					if field.src != "" {
+						*field.dst = field.src
+					}
 				}
+				tools[key] = tool
 			}
 		}
 	}
@@ -216,7 +231,9 @@ func ReadClaudeTranscript(reader io.Reader) ([]Record, error) {
 		seen := make(map[string]bool)
 		for _, id := range append(slices.Clone(records[i].ToolUseIDs), records[i].ConsumedToolUseIDs...) {
 			if !seen[id] {
-				records[i].Tools = append(records[i].Tools, Tool{ID: id, Name: tools[[2]string{records[i].SessionID, id}]})
+				tool := tools[[2]string{records[i].SessionID, id}]
+				tool.ID = id
+				records[i].Tools = append(records[i].Tools, tool)
 				seen[id] = true
 			}
 		}

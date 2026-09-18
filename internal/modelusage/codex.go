@@ -53,7 +53,7 @@ func ReadCodexTranscript(reader io.Reader) ([]Record, error) {
 	var session, provider, model, serviceTier string
 	var current *Record
 	var pending []string
-	names := map[string]string{}
+	tools := map[string]Tool{}
 	seen := map[string]bool{}
 	sawLegacy, sawResponse := false, false
 	line := 0
@@ -74,6 +74,9 @@ func ReadCodexTranscript(reader io.Reader) ([]Record, error) {
 				Role          string      `json:"role"`
 				CallID        string      `json:"call_id"`
 				Name          string      `json:"name"`
+				Namespace     string      `json:"namespace"`
+				ToolsetName   string      `json:"toolset_name"`
+				ServerName    string      `json:"server_name"`
 				ThreadID      string      `json:"thread_id"`
 				ResponseID    string      `json:"response_id"`
 				Usage         *codexUsage `json:"usage"`
@@ -106,7 +109,7 @@ func ReadCodexTranscript(reader io.Reader) ([]Record, error) {
 		case "response_item":
 			switch p.Type {
 			case "function_call_output", "custom_tool_call_output":
-				if p.CallID != "" && names[p.CallID] != "" && !slices.Contains(pending, p.CallID) {
+				if p.CallID != "" && tools[p.CallID].Name != "" && !slices.Contains(pending, p.CallID) {
 					pending = append(pending, p.CallID)
 				}
 			case "message":
@@ -126,7 +129,8 @@ func ReadCodexTranscript(reader io.Reader) ([]Record, error) {
 					if !slices.Contains(current.ToolUseIDs, p.CallID) {
 						current.ToolUseIDs = append(current.ToolUseIDs, p.CallID)
 					}
-					names[p.CallID] = p.Name
+					tools[p.CallID] = Tool{ID: p.CallID, Name: p.Name, Type: p.Type,
+						Namespace: p.Namespace, ToolsetName: p.ToolsetName, ServerName: p.ServerName}
 				}
 			}
 		case "token_usage_record":
@@ -173,7 +177,7 @@ func ReadCodexTranscript(reader io.Reader) ([]Record, error) {
 	for i := range records {
 		for _, id := range append(slices.Clone(records[i].ToolUseIDs), records[i].ConsumedToolUseIDs...) {
 			if !slices.ContainsFunc(records[i].Tools, func(t Tool) bool { return t.ID == id }) {
-				records[i].Tools = append(records[i].Tools, Tool{ID: id, Name: names[id]})
+				records[i].Tools = append(records[i].Tools, tools[id])
 			}
 		}
 	}

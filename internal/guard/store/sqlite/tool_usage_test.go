@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -110,6 +112,41 @@ func TestCodexToolUsageReconciliation(t *testing.T) {
 	}
 	if rows[0].Agent != "codex" || rows[0].SessionID != event.SessionID {
 		t.Fatalf("identity: %+v", rows[0])
+	}
+	if err := store.AcknowledgeToolUsage(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the previous collector: old metadata and an unchanged transcript.
+	oldRevision := rows[1].Revision
+	for _, row := range rows {
+		for i := range row.Tools {
+			row.Tools[i].Type = ""
+		}
+		payload, err := json.Marshal(row.Record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `update tool_usage_records set payload=? where revision=?`, string(payload), row.Revision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `update tool_usage_sources set fingerprint=?`, fmt.Sprintf("%d:%d", stat.Size(), stat.ModTime().UnixNano())); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = store.PendingToolUsage(ctx, 50)
+	if err != nil || len(rows) != 2 || rows[0].Revision <= oldRevision || rows[0].Tools[0].Type == "" {
+		t.Fatalf("metadata upgrade must replace existing usage: %+v %v", rows, err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `select count(*) from tool_usage_records`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("metadata refresh duplicated usage: %d %v", count, err)
 	}
 	if err := store.AcknowledgeToolUsage(ctx, rows); err != nil {
 		t.Fatal(err)

@@ -131,7 +131,9 @@ func (s *Store) reconcileToolTranscript(ctx context.Context, session, path, agen
 	if !stat.Mode().IsRegular() || stat.Size() > 256*1024*1024 {
 		return "", fmt.Errorf("usage transcript must be a regular file up to 256 MiB")
 	}
-	fingerprint := fmt.Sprintf("%d:%d", stat.Size(), stat.ModTime().UnixNano())
+	// Re-read existing active sources once when the metadata adapter changes.
+	// Stable request IDs replace the old snapshots rather than adding usage.
+	fingerprint := fmt.Sprintf("tool-metadata-v2:%d:%d", stat.Size(), stat.ModTime().UnixNano())
 	if fingerprint == previous {
 		return previous, nil
 	}

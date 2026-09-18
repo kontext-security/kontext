@@ -45,10 +45,11 @@ response twice. Copied parent records in a fork are rejected by owning thread ID
 Only the `openai` model provider is accepted; custom OpenAI-compatible providers
 must not inherit OpenAI rates based on a model name alone.
 
-Transcript content stays local. Only IDs, tool names, model, timestamp, usage,
-and optional service tier enter the usage payload. In code mode, `exec` is the
-model-facing wrapper. Its inner tool calls/classes cannot be inferred safely
-from the usage record; it remains in Other tools. Hosted tool service fees and
+Transcript content stays local. Only IDs, tool names and optional type/namespace/
+toolset/server metadata, model, timestamp, usage, and optional service tier enter
+the usage payload. In code mode, `exec` is the model-facing wrapper. Its inner
+tool calls cannot be inferred safely from the usage record; the cloud groups it
+under Code execution. Hosted tool service fees and
 whole-session usage are outside this feature. Subagent rollouts require their
 own registered hook/session path; parent usage is not used to guess their cost.
 

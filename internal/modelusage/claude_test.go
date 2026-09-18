@@ -153,3 +153,20 @@ func TestReadClaudeTranscriptIdentityIncludesSession(t *testing.T) {
 		t.Fatal("expected conflicting message identity to be rejected")
 	}
 }
+
+func TestClaudeToolMetadataSurvivesSnapshotsAndResultConsumption(t *testing.T) {
+	input := `{"type":"assistant","sessionId":"s","message":{"id":"a","model":"claude","content":[{"type":"tool_use","id":"t","name":"navigate","toolset_name":"browser","input":{"url":"private"}}],"usage":{"output_tokens":5}}}
+{"type":"assistant","sessionId":"s","message":{"id":"a","model":"claude","content":[{"type":"tool_use","id":"t"}],"usage":{"output_tokens":6}}}
+{"type":"user","sessionId":"s","message":{"content":[{"type":"tool_result","tool_use_id":"t"}]}}
+{"type":"assistant","sessionId":"s","message":{"id":"b","model":"claude","usage":{"output_tokens":7}}}
+`
+	rows, err := ReadClaudeTranscript(strings.NewReader(input))
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("records: %+v, %v", rows, err)
+	}
+	for _, row := range rows {
+		if len(row.Tools) != 1 || row.Tools[0] != (Tool{ID: "t", Name: "navigate", Type: "tool_use", ToolsetName: "browser"}) {
+			t.Fatalf("lost toolset identity: %+v", row.Tools)
+		}
+	}
+}
