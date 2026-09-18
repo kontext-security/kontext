@@ -113,7 +113,7 @@ func (g *guard) access(path, mode string) fileResult {
 		if beginRead != nil {
 			defer beginRead()()
 		}
-		info, err := guardedInfo(path, stat)
+		info, err := guardedInfo(path, stat, mode == "tail")
 		if err != nil {
 			done <- fileResult{err: err}
 			return
@@ -177,7 +177,7 @@ func (g *guard) readError(path, reason string) {
 }
 
 // Check every ancestor before opening anything, including dataless directories.
-func guardedInfo(path string, stat func(string) (os.FileInfo, error)) (os.FileInfo, error) {
+func guardedInfo(path string, stat func(string) (os.FileInfo, error), tail bool) (os.FileInfo, error) {
 	prefix := "/"
 	var info os.FileInfo
 	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
@@ -187,7 +187,7 @@ func guardedInfo(path string, stat func(string) (os.FileInfo, error)) (os.FileIn
 		if err != nil {
 			return nil, err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) || isDataless(info) || (!info.IsDir() && info.Size() > maxFileBytes) {
+		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) || isDataless(info) || (!tail && !info.IsDir() && info.Size() > maxFileBytes) {
 			return nil, os.ErrPermission
 		}
 	}
@@ -233,7 +233,7 @@ func readGuarded(path, mode string) (result fileResult) {
 			result.err = statErr
 			return
 		}
-		if info.Mode()&os.ModeSymlink != 0 || isDataless(info) || (!info.IsDir() && !info.Mode().IsRegular()) || !info.IsDir() && info.Size() > maxFileBytes {
+		if info.Mode()&os.ModeSymlink != 0 || isDataless(info) || (!info.IsDir() && !info.Mode().IsRegular()) || mode != "tail" && !info.IsDir() && info.Size() > maxFileBytes {
 			unix.Close(fd)
 			result.err = os.ErrPermission
 			return
@@ -279,6 +279,16 @@ func readGuarded(path, mode string) (result fileResult) {
 			result.data = nil
 			result.err = os.ErrPermission
 		}
+	case "tail":
+		if !actual.Mode().IsRegular() {
+			result.err = os.ErrPermission
+			return
+		}
+		const tailBytes = 64 * 1024
+		_, result.err = file.Seek(max(0, actual.Size()-tailBytes), io.SeekStart)
+		if result.err == nil {
+			result.data, result.err = io.ReadAll(io.LimitReader(file, tailBytes))
+		}
 	case "list":
 		result.entries, result.err = file.ReadDir(maxFiles + 1)
 		if result.err == io.EOF {
@@ -319,4 +329,13 @@ func parseJSON[T any](data []byte) (T, error) {
 	var value T
 	err := json.Unmarshal(data, &value)
 	return value, err
+}
+
+// CoworkVMLogTail reads only the last 64 KB of the fixed Cowork VM log, through
+// the same deadline, no-symlink and dataless guard as configuration reads.
+func CoworkVMLogTail(ctx context.Context, home string) ([]byte, error) {
+	path := filepath.Join(home, "Library/Logs/Claude/cowork_vm_swift.log")
+	g := guard{ctx: ctx, home: home, roots: []string{path}, report: &Report{}}
+	result := g.access(path, "tail")
+	return result.data, result.err
 }

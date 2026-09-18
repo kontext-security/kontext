@@ -1,0 +1,12 @@
+{
+  "agents": [
+    {
+      "id": "claude_cowork",
+      "config_path": "~/Library/Application Support/Claude/local-agent-mode-sessions",
+      "wired": "yes",
+      "last_activity_at": "2026-09-18T14:00:00Z",
+      "sandboxed": false
+    }
+  ],
+  "agents_reported_at": "2026-09-18T14:00:00Z"
+}

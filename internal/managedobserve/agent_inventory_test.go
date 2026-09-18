@@ -12,6 +12,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
 
 func TestAgentInventoryRefresh(t *testing.T) {
@@ -164,4 +165,61 @@ func TestDoctorReadsInventoryWithoutScanning(t *testing.T) {
 	if LoadAgentInventory(e.dbPath) != nil {
 		t.Fatal("corrupt breadcrumb must be absent")
 	}
+}
+
+func TestCoworkInventoryUsesLocalHookSessions(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	for _, d := range agentinventory.Catalog {
+		if d.ConfigEnv != "" {
+			t.Setenv(d.ConfigEnv, "")
+		}
+	}
+	t.Setenv("OPENCLAW_HOME", "")
+	logPath := filepath.Join(home, "Library/Logs/Claude/cowork_vm_swift.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, []byte("[VM] "+time.Now().Format("2006-01-02 15:04:05")+" [info] vm_boot completed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(home, "guard.db")
+	store, err := sqlite.OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	holder := &agentInventoryHolder{}
+	ready, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		holder.run(ctx, DaemonOptions{AgentInventoryInterval: 20 * time.Millisecond}, dbPath, ready)
+	}()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial scan did not finish")
+	}
+	inv, _ := holder.Fact()
+	if len(inv.Agents) != 1 || inv.Agents[0].Sandboxed == nil || !*inv.Agents[0].Sandboxed {
+		t.Fatalf("boot without sessions: %+v", inv)
+	}
+	// isCoworkHookContext emits "cowork"; the store canonicalizes it.
+	if _, err := store.EnsureObservedSession(ctx, "host-hook", "cowork", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		inv, _ := holder.Fact()
+		if len(inv.Agents) == 1 && inv.Agents[0].Sandboxed != nil && !*inv.Agents[0].Sandboxed {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("recent host hook session did not override the VM boot")
 }

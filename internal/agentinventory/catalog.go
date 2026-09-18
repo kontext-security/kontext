@@ -1,5 +1,7 @@
-// Package agentinventory discovers known agents from directory metadata only.
+// Package agentinventory discovers known agents from metadata and a bounded Cowork VM log tail.
 package agentinventory
+
+import "encoding/json"
 
 type Wired string
 
@@ -15,6 +17,21 @@ type Agent struct {
 	ConfigPath     string  `json:"config_path"`
 	Wired          Wired   `json:"wired"`
 	LastActivityAt *string `json:"last_activity_at"`
+	Sandboxed      *bool   `json:"sandboxed,omitempty"`
+}
+
+// MarshalJSON keeps the optional sandbox fact exclusive to Cowork, including an
+// explicit null when its execution mode cannot be established.
+func (a Agent) MarshalJSON() ([]byte, error) {
+	type plain Agent
+	if a.ID == "claude_cowork" {
+		return json.Marshal(struct {
+			plain
+			Sandboxed *bool `json:"sandboxed"`
+		}{plain(a), a.Sandboxed})
+	}
+	a.Sandboxed = nil
+	return json.Marshal(plain(a))
 }
 
 type Inventory struct {
@@ -34,7 +51,7 @@ type Descriptor struct {
 // Catalog has the same ids and order as DISCOVERED_AGENT_IDS in the API.
 var Catalog = []Descriptor{
 	{"claude_code", "Claude Code", []string{".claude"}, "CLAUDE_CONFIG_DIR", "<config>/projects"},
-	{"claude_cowork", "Claude Cowork", []string{"Library/Application Support/Claude/local-agent-mode-sessions"}, "", "<config>"},
+	{"claude_cowork", "Claude Cowork", []string{coworkHostSessions, coworkVMBundle, coworkVMLog, coworkVMSessions}, "", "<config>"},
 	{"codex", "Codex", []string{".codex"}, "CODEX_HOME", "<config>/sessions"},
 	{"gemini_cli", "Gemini CLI", []string{".gemini"}, "GEMINI_CLI_HOME", "<config>/tmp"},
 	{"cursor", "Cursor", []string{".cursor"}, "", "<config>/projects"},
