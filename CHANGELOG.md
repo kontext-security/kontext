@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.6.0](https://github.com/kontext-security/kontext/compare/v1.5.1...v1.6.0) (2026-09-18)
+
+
+### Features
+
+* **authority:** report daemon scans and hook disk access ([#505](https://github.com/kontext-security/kontext/issues/505)) ([b7b702f](https://github.com/kontext-security/kontext/commit/b7b702ffef88f239c630e68828c293847f5c0b63))
+* **authority:** scan agent configuration and ambient credential presence ([#504](https://github.com/kontext-security/kontext/issues/504)) ([26d8998](https://github.com/kontext-security/kontext/commit/26d8998114cecb4fd1784d5fa19ae61a87ec02df))
+* **guard:** run scoped step-safety inference with ONNX ([#478](https://github.com/kontext-security/kontext/issues/478)) ([ba9d52c](https://github.com/kontext-security/kontext/commit/ba9d52c955f573bc4ac2b6637fef390bcfdd7fa5))
+* **guard:** stream Merlin predictions with review context ([#500](https://github.com/kontext-security/kontext/issues/500)) ([2bd746b](https://github.com/kontext-security/kontext/commit/2bd746ba59135063264def5be1d25c9d8e101e91))
+
+
+### Bug Fixes
+
+* **authority:** keep agent facts after a file read timeout ([#508](https://github.com/kontext-security/kontext/issues/508)) ([9544858](https://github.com/kontext-security/kontext/commit/95448585101f0951c257efb2fd12ac9ed45ab85d))
+* **authority:** preserve facts on real developer Macs ([#507](https://github.com/kontext-security/kontext/issues/507)) ([cfcf641](https://github.com/kontext-security/kontext/commit/cfcf6417dea5e6dee6497ce68d5f60568e0cb6b4))
+* **authority:** preserve hook access and resume reporting after switches ([#510](https://github.com/kontext-security/kontext/issues/510)) ([e7ded0f](https://github.com/kontext-security/kontext/commit/e7ded0fd06f21474d7752642780666e85ef30873))
+* **authority:** restrict reads and reuse unchanged configuration ([#509](https://github.com/kontext-security/kontext/issues/509)) ([90253a3](https://github.com/kontext-security/kontext/commit/90253a366239aa292e70a7c4d496beeea64f6650))
+* **authority:** send the local opt-out marker only to servers that know the scan flag ([#512](https://github.com/kontext-security/kontext/issues/512)) ([793cbd6](https://github.com/kontext-security/kontext/commit/793cbd6c3afac53c94e3e2ba04a628677b4efc29))
+* **cowork:** evaluate Cedar policies for Cowork hooks ([#511](https://github.com/kontext-security/kontext/issues/511)) ([5c67a1e](https://github.com/kontext-security/kontext/commit/5c67a1e434596514c24c2316d81a410d35d617ef))
+* **cowork:** recognize shortened session directories ([#513](https://github.com/kontext-security/kontext/issues/513)) ([982afbe](https://github.com/kontext-security/kontext/commit/982afbe6f6669f24ce8916e4aeeeaeb371066398))
+* **doctor:** detect system-managed Codex hooks ([#503](https://github.com/kontext-security/kontext/issues/503)) ([05e0423](https://github.com/kontext-security/kontext/commit/05e04230b880102fe3751d613c5755f144322e49))
+* **policy:** allow tool calls when evaluation errors ([#515](https://github.com/kontext-security/kontext/issues/515)) ([23e66d2](https://github.com/kontext-security/kontext/commit/23e66d2285538dac4b54ce1a3147b67f7a6da0c9))
+
 ## [1.5.1](https://github.com/kontext-security/kontext/compare/v1.5.0...v1.5.1) (2026-09-10)
 
 
