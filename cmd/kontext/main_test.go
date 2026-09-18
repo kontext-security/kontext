@@ -123,20 +123,42 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 	if !ok {
 		t.Fatal("claude agent not registered")
 	}
-	tests := []struct{ name, input, want string }{
-		{"cowork cwd", `{"session_id":"s1","hook_event_name":"PreToolUse","cwd":"/Users/michel/Library/Application Support/Claude/local-agent-mode-sessions/acme/ws/local_123/repo"}`, "cowork"},
-		{"cowork transcript", `{"session_id":"s1","hook_event_name":"PreToolUse","transcript_path":"/Users/michel/Library/Application Support/Claude/local-agent-mode-sessions/acme/ws/local_123/transcript.jsonl"}`, "cowork"},
-		{"ordinary claude", `{"session_id":"s1","hook_event_name":"PreToolUse","cwd":"/Users/michel/project"}`, "claude"},
-		{"lookalike path", `{"session_id":"s1","hook_event_name":"PreToolUse","cwd":"/Users/michel/work/Library/Application Support/Claude/local-agent-mode-sessions/acme/ws/local_123/repo"}`, "claude"},
+	const root = "/Users/michel/Library/Application Support/Claude/local-agent-mode-sessions"
+	tests := []struct{ name, path, want string }{
+		{"full session directory", root + "/acme/ws/local_123/outputs", "cowork"},
+		{"short session directory", root + "/acme/ws/abc123ef/outputs", "cowork"},
+		{"short account and workspace directories", root + "/1234abcd/5678efab/abc123ef/.claude/transcript.jsonl", "cowork"},
+		{"short session root", root + "/acme/ws/abc123ef", "cowork"},
+		{"ordinary claude", "/Users/michel/project", "claude"},
+		{"lookalike path", "/Users/michel/work/Library/Application Support/Claude/local-agent-mode-sessions/acme/ws/abc123ef/outputs", "claude"},
+		{"lookalike root", root + "-other/acme/ws/abc123ef/outputs", "claude"},
+		{"account directory", root + "/abc123ef", "claude"},
+		{"workspace directory", root + "/acme/abc123ef", "claude"},
+		{"non-session directory", root + "/acme/ws/rpm/plugin", "claude"},
+		{"short name too short", root + "/acme/ws/abc123e/outputs", "claude"},
+		{"short name too long", root + "/acme/ws/abc123ef0/outputs", "claude"},
+		{"short name not hex", root + "/acme/ws/abc123eg/outputs", "claude"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event, err := (managedHookAgent{Agent: a}).DecodeHookInput([]byte(tt.input))
-			if err != nil {
-				t.Fatalf("DecodeHookInput() error = %v", err)
-			}
-			if event.Agent != tt.want {
-				t.Fatalf("Agent = %q, want %q", event.Agent, tt.want)
+			for _, field := range []string{"cwd", "transcript_path", "transcriptPath", "session_path", "sessionPath"} {
+				t.Run(field, func(t *testing.T) {
+					input, err := json.Marshal(map[string]string{
+						"session_id":      "s1",
+						"hook_event_name": "PreToolUse",
+						field:             tt.path,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					event, err := (managedHookAgent{Agent: a}).DecodeHookInput(input)
+					if err != nil {
+						t.Fatalf("DecodeHookInput() error = %v", err)
+					}
+					if event.Agent != tt.want {
+						t.Fatalf("Agent = %q, want %q", event.Agent, tt.want)
+					}
+				})
 			}
 		})
 	}
