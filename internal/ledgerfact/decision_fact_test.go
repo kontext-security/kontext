@@ -137,7 +137,7 @@ func TestValidateRejectsContractViolations(t *testing.T) {
 		"evaluated fact without provenance": func(fact *ledgerfact.DecisionFact) {
 			fact.PolicyHash = nil
 		},
-		"enforce failing open": func(fact *ledgerfact.DecisionFact) {
+		"error allow with stale permit evidence": func(fact *ledgerfact.DecisionFact) {
 			fact.EvaluationState = cedareval.EvaluationStateFailed
 			fact.CedarAction = nil
 			fact.ExecutionAction = cedareval.EffectiveExecutionActionAllow
@@ -182,5 +182,26 @@ func TestValidateRejectsContractViolations(t *testing.T) {
 				t.Fatal("expected validation to fail")
 			}
 		})
+	}
+}
+
+func TestValidateAcceptsErrorAllowsAndHistoricalDenies(t *testing.T) {
+	fixtures, _ := loadFixtures(t)
+	for _, fixture := range fixtures {
+		var fact ledgerfact.DecisionFact
+		if err := json.Unmarshal(fixture.Fact, &fact); err != nil {
+			t.Fatal(err)
+		}
+		if fact.AppliedMode != cedareval.RolloutModeEnforce || fact.EvaluationState != cedareval.EvaluationStateFailed {
+			continue
+		}
+		for _, action := range []cedareval.EffectiveExecutionAction{cedareval.EffectiveExecutionActionAllow, cedareval.EffectiveExecutionActionDeny} {
+			t.Run(fixture.Name+"/"+string(action), func(t *testing.T) {
+				fact.ExecutionAction = action
+				if err := fact.Validate(); err != nil {
+					t.Fatalf("error record rejected: %v", err)
+				}
+			})
+		}
 	}
 }
