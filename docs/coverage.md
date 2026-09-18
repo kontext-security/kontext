@@ -17,6 +17,10 @@ supported hook. What varies is the event surface the agent exposes.
 | Codex | Session start; pre-tool-use; post-tool-use; user-prompt-submit; stop | Pre-tool-use. Codex can also receive a block result for post-tool-use or user-prompt-submit events. | `kontext setup` adds user hooks and enables the Codex hooks feature; the hooks must then be trusted in Codex. | Supported. User-scoped setup is currently macOS-only. Hook status verifies the configuration, not that a hook has executed. |
 | Other agents | — | — | — | Not yet a shipped integration. A compatible hook adapter can use the local runtime, but it is not covered by this matrix until its event contract and enforcement behavior are documented and tested. |
 
+For Cedar v2 policy scoping, Claude Cowork uses the Claude Code agent identity.
+Its `mcp__workspace__bash` tool is evaluated as a shell, including shell block
+rules. Hook and ledger records still identify the agent as Cowork.
+
 ## What every supported hook records
 
 For each event that reaches the runtime, Kontext records the agent, session,

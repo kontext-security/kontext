@@ -322,7 +322,10 @@ func legacyDeployment(snapshot cedarpolicy.Snapshot) *cedarpolicy.LegacyDeployme
 // that mapping for such a policy set, so updating the daemon cannot turn its
 // permits into denies or let its forbids stop applying.
 func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.ShellProjectionV2) {
-	if risk.IsShellTool(event.ToolName) {
+	// Cowork exposes its built-in shell through a workspace MCP tool. Scope
+	// this alias to Cowork so unrelated MCP servers keep their named tool id.
+	coworkShell := (event.Agent == "cowork" || event.Agent == "claude-cowork") && event.ToolName == "mcp__workspace__bash"
+	if risk.IsShellTool(event.ToolName) || coworkShell {
 		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput))
 	}
 	if toolID, github := toolcatalog.Resolve(event.ToolName, event.ToolInput); github {
@@ -354,7 +357,9 @@ func namesUnknownTool(snapshot cedarpolicy.Snapshot) bool {
 func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent, toolID string, projections []cedareval.ShellProjectionV2) []cedareval.ToolUseInputV2 {
 	agentID := ""
 	switch event.Agent {
-	case "claude", "claude-code", cedareval.AgentClaudeCodeV2:
+	case "claude", "claude-code", "cowork", "claude-cowork", cedareval.AgentClaudeCodeV2:
+		// Cowork embeds Claude Code and shares its v2 policy identity. Keep
+		// event.Agent unchanged so the ledger still distinguishes Cowork.
 		agentID = cedareval.AgentClaudeCodeV2
 	case "codex", cedareval.AgentCodexV2:
 		agentID = cedareval.AgentCodexV2
