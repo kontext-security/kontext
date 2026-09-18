@@ -46,6 +46,9 @@ Kontext currently supports **Claude Code, Claude Cowork, and Codex**. Exact
 event and enforcement coverage varies by agent—see the
 [agent support matrix](docs/coverage.md).
 
+Managed Claude hooks recognize Cowork sessions with either full or shortened
+session directory names, preserving their Cowork identity in activity records.
+
 ---
 
 ## Quickstart
