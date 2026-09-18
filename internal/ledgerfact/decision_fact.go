@@ -416,10 +416,14 @@ func (fact DecisionFact) validateAuthority(invalid func(string, ...any)) {
 		invalid("only an enforce deployment can deny execution")
 	}
 	if fact.AppliedMode == cedareval.RolloutModeEnforce {
+		if fact.EvaluationState == cedareval.EvaluationStateFailed {
+			// Accept error-allow records from decision contract v2 and historical
+			// error-deny records from v1. Neither claims a Cedar verdict.
+			return
+		}
 		if fact.EvaluationState != cedareval.EvaluationStateEvaluated {
-			// Fail closed: enforce without a completed evaluation always denies.
 			if fact.ExecutionAction != cedareval.EffectiveExecutionActionDeny {
-				invalid("enforce fails closed when Cedar did not evaluate")
+				invalid("enforce denies when policy is not ready or the principal is unresolved")
 			}
 		} else {
 			expected := cedareval.EffectiveExecutionActionDeny

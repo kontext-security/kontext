@@ -1,0 +1,524 @@
+[
+  {
+    "version": 2,
+    "name": "disabled-preserves-current-allow",
+    "description": "Disabled mode does not evaluate Cedar and preserves an allowing migration authority.",
+    "input": {
+      "rolloutMode": "disabled",
+      "currentAuthorityAction": "allow",
+      "evaluation": {
+        "state": "not_evaluated",
+        "reason": "policy_disabled"
+      }
+    },
+    "expected": {
+      "evaluationState": "not_evaluated",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "policy_disabled",
+      "effectiveReasonCode": "policy_disabled",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "disabled-preserves-current-deny",
+    "description": "Disabled mode preserves a denying migration authority without manufacturing a Cedar decision.",
+    "input": {
+      "rolloutMode": "disabled",
+      "currentAuthorityAction": "deny",
+      "evaluation": {
+        "state": "not_evaluated",
+        "reason": "policy_disabled"
+      }
+    },
+    "expected": {
+      "evaluationState": "not_evaluated",
+      "effectiveExecutionAction": "deny",
+      "evaluationReasonCode": "policy_disabled",
+      "effectiveReasonCode": "policy_disabled",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "observe-records-permit-but-preserves-deny",
+    "description": "Observe mode records a Cedar permit but keeps the current denying authority effective.",
+    "input": {
+      "rolloutMode": "observe",
+      "currentAuthorityAction": "deny",
+      "evaluationPrincipal": {
+        "entityType": "Kontext::User",
+        "entityId": "alice@example.com"
+      },
+      "evaluation": {
+        "state": "evaluated",
+        "decision": "allow",
+        "ask": false,
+        "determiningPolicyIds": [
+          "permit-z",
+          "permit-a",
+          "permit-z"
+        ]
+      }
+    },
+    "expected": {
+      "evaluationState": "evaluated",
+      "evaluationPrincipal": {
+        "entityType": "Kontext::User",
+        "entityId": "alice@example.com"
+      },
+      "cedarDecision": "allow",
+      "derivedCedarAction": "allow",
+      "effectiveExecutionAction": "deny",
+      "evaluationReasonCode": "policy_evaluated",
+      "decisionReasonCode": "permit",
+      "effectiveReasonCode": "observe_non_authoritative",
+      "determiningPolicyIds": [
+        "permit-a",
+        "permit-z"
+      ]
+    }
+  },
+  {
+    "version": 2,
+    "name": "utf8-policy-id-ordering",
+    "description": "Determining policy evidence is deduplicated and ordered by UTF-8 bytes across runtimes.",
+    "input": {
+      "rolloutMode": "observe",
+      "currentAuthorityAction": "allow",
+      "evaluation": {
+        "state": "evaluated",
+        "decision": "allow",
+        "ask": false,
+        "determiningPolicyIds": [
+          "permit-\ud800\udc00",
+          "permit-\ue000",
+          "permit-\ud800\udc00"
+        ]
+      }
+    },
+    "expected": {
+      "evaluationState": "evaluated",
+      "cedarDecision": "allow",
+      "derivedCedarAction": "allow",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "policy_evaluated",
+      "decisionReasonCode": "permit",
+      "effectiveReasonCode": "observe_non_authoritative",
+      "determiningPolicyIds": [
+        "permit-\ue000",
+        "permit-\ud800\udc00"
+      ]
+    }
+  },
+  {
+    "version": 2,
+    "name": "observe-records-explicit-forbid-but-preserves-allow",
+    "description": "Observe mode records a determining forbid while current authority still allows execution.",
+    "input": {
+      "rolloutMode": "observe",
+      "currentAuthorityAction": "allow",
+      "evaluation": {
+        "state": "evaluated",
+        "decision": "deny",
+        "ask": false,
+        "determiningPolicyIds": [
+          "forbid-delete"
+        ]
+      }
+    },
+    "expected": {
+      "evaluationState": "evaluated",
+      "cedarDecision": "deny",
+      "derivedCedarAction": "deny",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "policy_evaluated",
+      "decisionReasonCode": "explicit_forbid",
+      "effectiveReasonCode": "observe_non_authoritative",
+      "determiningPolicyIds": [
+        "forbid-delete"
+      ]
+    }
+  },
+  {
+    "version": 2,
+    "name": "observe-records-ask-without-prompting",
+    "description": "Observe mode records ask derivation and does not invoke an approval flow.",
+    "input": {
+      "rolloutMode": "observe",
+      "currentAuthorityAction": "allow",
+      "evaluation": {
+        "state": "evaluated",
+        "decision": "allow",
+        "ask": true,
+        "determiningPolicyIds": [
+          "ask-shell"
+        ]
+      }
+    },
+    "expected": {
+      "evaluationState": "evaluated",
+      "cedarDecision": "allow",
+      "derivedCedarAction": "ask",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "policy_evaluated",
+      "decisionReasonCode": "ask_derived",
+      "effectiveReasonCode": "observe_non_authoritative",
+      "determiningPolicyIds": [
+        "ask-shell"
+      ]
+    }
+  },
+  {
+    "version": 2,
+    "name": "observe-preserves-authority-when-principal-unresolved",
+    "description": "An unresolved principal is evidence, not a synthetic Cedar deny, during observe rollout.",
+    "input": {
+      "rolloutMode": "observe",
+      "currentAuthorityAction": "allow",
+      "evaluation": {
+        "state": "principal_unresolved",
+        "reason": "principal_unresolved"
+      }
+    },
+    "expected": {
+      "evaluationState": "principal_unresolved",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "principal_unresolved",
+      "effectiveReasonCode": "observe_non_authoritative",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "observe-preserves-authority-on-engine-error",
+    "description": "An engine failure does not become a new blocker in observe mode.",
+    "input": {
+      "rolloutMode": "observe",
+      "currentAuthorityAction": "deny",
+      "evaluation": {
+        "state": "failed",
+        "reason": "engine_error"
+      }
+    },
+    "expected": {
+      "evaluationState": "failed",
+      "effectiveExecutionAction": "deny",
+      "evaluationReasonCode": "engine_error",
+      "effectiveReasonCode": "observe_non_authoritative",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-allows-permit",
+    "description": "A normal Cedar permit is authoritative in ready enforce mode.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "evaluated",
+        "decision": "allow",
+        "ask": false,
+        "determiningPolicyIds": [
+          "permit-read"
+        ]
+      }
+    },
+    "expected": {
+      "evaluationState": "evaluated",
+      "cedarDecision": "allow",
+      "derivedCedarAction": "allow",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "policy_evaluated",
+      "decisionReasonCode": "permit",
+      "effectiveReasonCode": "permit",
+      "determiningPolicyIds": [
+        "permit-read"
+      ]
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-denies-default-deny",
+    "description": "A Cedar deny without determining policies is classified as default deny.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "evaluated",
+        "decision": "deny",
+        "ask": false,
+        "determiningPolicyIds": []
+      }
+    },
+    "expected": {
+      "evaluationState": "evaluated",
+      "cedarDecision": "deny",
+      "derivedCedarAction": "deny",
+      "effectiveExecutionAction": "deny",
+      "evaluationReasonCode": "policy_evaluated",
+      "decisionReasonCode": "default_deny",
+      "effectiveReasonCode": "default_deny",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-denies-explicit-forbid",
+    "description": "A Cedar deny with determining policies is classified as explicit forbid.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "evaluated",
+        "decision": "deny",
+        "ask": false,
+        "determiningPolicyIds": [
+          "forbid-force-push"
+        ]
+      }
+    },
+    "expected": {
+      "evaluationState": "evaluated",
+      "cedarDecision": "deny",
+      "derivedCedarAction": "deny",
+      "effectiveExecutionAction": "deny",
+      "evaluationReasonCode": "policy_evaluated",
+      "decisionReasonCode": "explicit_forbid",
+      "effectiveReasonCode": "explicit_forbid",
+      "determiningPolicyIds": [
+        "forbid-force-push"
+      ]
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-denies-ask-when-approval-is-unavailable",
+    "description": "Ask remains derived evidence, while v1 enforce mode fails closed without an approval channel.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "evaluated",
+        "decision": "allow",
+        "ask": true,
+        "determiningPolicyIds": [
+          "ask-write"
+        ]
+      }
+    },
+    "expected": {
+      "evaluationState": "evaluated",
+      "cedarDecision": "allow",
+      "derivedCedarAction": "ask",
+      "effectiveExecutionAction": "deny",
+      "evaluationReasonCode": "policy_evaluated",
+      "decisionReasonCode": "ask_derived",
+      "effectiveReasonCode": "ask_unavailable",
+      "determiningPolicyIds": [
+        "ask-write"
+      ]
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-denies-unresolved-principal",
+    "description": "Enforce mode fails closed without manufacturing a Cedar decision for an unresolved principal.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "principal_unresolved",
+        "reason": "principal_unresolved"
+      }
+    },
+    "expected": {
+      "evaluationState": "principal_unresolved",
+      "effectiveExecutionAction": "deny",
+      "evaluationReasonCode": "principal_unresolved",
+      "effectiveReasonCode": "principal_unresolved",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-allows-request-conversion-failure",
+    "description": "An evaluation failure allows execution in enforce mode while preserving its failure reason.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "failed",
+        "reason": "request_conversion_failed"
+      }
+    },
+    "expected": {
+      "evaluationState": "failed",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "request_conversion_failed",
+      "effectiveReasonCode": "request_conversion_failed",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-allows-stale-policy",
+    "description": "An evaluation failure allows execution in enforce mode while preserving its failure reason.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "failed",
+        "reason": "stale_cached_policy"
+      }
+    },
+    "expected": {
+      "evaluationState": "failed",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "stale_cached_policy",
+      "effectiveReasonCode": "stale_cached_policy",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-denies-when-readiness-fails",
+    "description": "Enforce mode is fail closed and does not evaluate when readiness is false.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": false,
+      "evaluation": {
+        "state": "not_evaluated",
+        "reason": "enforcement_not_ready"
+      }
+    },
+    "expected": {
+      "evaluationState": "not_evaluated",
+      "effectiveExecutionAction": "deny",
+      "evaluationReasonCode": "enforcement_not_ready",
+      "effectiveReasonCode": "enforcement_not_ready",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-allows-missing-policy",
+    "description": "An evaluation failure allows execution in enforce mode while preserving its failure reason.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "failed",
+        "reason": "policy_missing"
+      }
+    },
+    "expected": {
+      "evaluationState": "failed",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "policy_missing",
+      "effectiveReasonCode": "policy_missing",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-allows-unsupported-response-version",
+    "description": "An evaluation failure allows execution in enforce mode while preserving its failure reason.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "failed",
+        "reason": "unsupported_response_version"
+      }
+    },
+    "expected": {
+      "evaluationState": "failed",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "unsupported_response_version",
+      "effectiveReasonCode": "unsupported_response_version",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-allows-unsupported-request-contract-version",
+    "description": "An evaluation failure allows execution in enforce mode while preserving its failure reason.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "failed",
+        "reason": "unsupported_request_contract_version"
+      }
+    },
+    "expected": {
+      "evaluationState": "failed",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "unsupported_request_contract_version",
+      "effectiveReasonCode": "unsupported_request_contract_version",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-allows-invalid-cached-policy",
+    "description": "An evaluation failure allows execution in enforce mode while preserving its failure reason.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "failed",
+        "reason": "invalid_cached_policy"
+      }
+    },
+    "expected": {
+      "evaluationState": "failed",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "invalid_cached_policy",
+      "effectiveReasonCode": "invalid_cached_policy",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-allows-engine-error",
+    "description": "An evaluation failure allows execution in enforce mode while preserving its failure reason.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "failed",
+        "reason": "engine_error"
+      }
+    },
+    "expected": {
+      "evaluationState": "failed",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "engine_error",
+      "effectiveReasonCode": "engine_error",
+      "determiningPolicyIds": []
+    }
+  },
+  {
+    "version": 2,
+    "name": "enforce-allows-reserved-remote-timeout",
+    "description": "An evaluation failure allows execution in enforce mode while preserving its failure reason.",
+    "input": {
+      "rolloutMode": "enforce",
+      "enforcementReady": true,
+      "evaluation": {
+        "state": "failed",
+        "reason": "remote_timeout"
+      }
+    },
+    "expected": {
+      "evaluationState": "failed",
+      "effectiveExecutionAction": "allow",
+      "evaluationReasonCode": "remote_timeout",
+      "effectiveReasonCode": "remote_timeout",
+      "determiningPolicyIds": []
+    }
+  }
+]

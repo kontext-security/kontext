@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-const DecisionContractVersion = 1
+const DecisionContractVersion = 2
 
 type EvaluationState string
 
@@ -161,10 +161,16 @@ func mapEnforceDecision(
 	}
 
 	if input.Evaluation.State != EvaluationStateEvaluated {
+		action := EffectiveExecutionActionDeny
+		if input.Evaluation.State == EvaluationStateFailed {
+			// An evaluation error is not a policy deny. Preserve the failure
+			// evidence while allowing execution under decision contract v2.
+			action = EffectiveExecutionActionAllow
+		}
 		return DecisionMapping{
 			EvaluationState:          input.Evaluation.State,
 			EvaluationPrincipal:      principal,
-			EffectiveExecutionAction: EffectiveExecutionActionDeny,
+			EffectiveExecutionAction: action,
 			EvaluationReasonCode:     input.Evaluation.Reason,
 			EffectiveReasonCode:      input.Evaluation.Reason,
 			DeterminingPolicyIDs:     []string{},

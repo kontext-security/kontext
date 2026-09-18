@@ -1,0 +1,48 @@
+{
+  "version": 2,
+  "evaluationStates": [
+    "not_evaluated",
+    "evaluated",
+    "failed",
+    "principal_unresolved"
+  ],
+  "derivedCedarActions": [
+    "allow",
+    "deny",
+    "ask"
+  ],
+  "effectiveExecutionActions": [
+    "allow",
+    "deny"
+  ],
+  "rolloutModes": [
+    "disabled",
+    "observe",
+    "enforce"
+  ],
+  "evaluationProviders": [
+    "local",
+    "remote"
+  ],
+  "reasonCodes": [
+    "policy_disabled",
+    "policy_evaluated",
+    "default_deny",
+    "explicit_forbid",
+    "permit",
+    "ask_derived",
+    "ask_unavailable",
+    "principal_unresolved",
+    "request_conversion_failed",
+    "policy_missing",
+    "unsupported_response_version",
+    "unsupported_request_contract_version",
+    "invalid_cached_policy",
+    "stale_cached_policy",
+    "engine_error",
+    "remote_timeout",
+    "observe_non_authoritative",
+    "enforcement_not_ready",
+    "remote_delegated"
+  ]
+}

@@ -169,7 +169,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 			} else {
 				evidence.ContextDiagnostics = result.ContextDiagnostics
 				evidence.EngineErrorCount = len(result.EngineDiagnostics.Errors)
-				if evidence.EngineErrorCount > 0 {
+				if evidence.EngineErrorCount > 0 && !result.hasDecisiveDeny {
 					outcome = cedareval.EvaluationOutcome{
 						State:  cedareval.EvaluationStateFailed,
 						Reason: cedareval.ReasonEngineError,
@@ -212,7 +212,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 		} else {
 			evidence.ContextDiagnostics = result.ContextDiagnostics
 			evidence.EngineErrorCount = len(result.EngineDiagnostics.Errors)
-			if evidence.EngineErrorCount > 0 {
+			if evidence.EngineErrorCount > 0 && !hasDecisiveDeny(result) {
 				outcome = cedareval.EvaluationOutcome{State: cedareval.EvaluationStateFailed, Reason: cedareval.ReasonEngineError}
 			} else {
 				outcome = cedareval.EvaluationOutcome{State: cedareval.EvaluationStateEvaluated, Decision: result.Decision, Ask: result.Ask, DeterminingPolicyIDs: result.DeterminingPolicyIDs}
@@ -249,13 +249,8 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	})
 	if err != nil {
 		if claimsAuthority {
-			// Fail closed: a ready-but-failed evaluation is the valid enforce
-			// input and maps to a deny with the engine-error reason. Passing
-			// EnforcementReady:false alongside a failed evaluation is the
-			// contradictory input the mapper rejects, which would leave a
-			// zero-value mapping that applyCedarDecision reads as allow. Never
-			// discard the mapping error; if it somehow does not map, deny
-			// explicitly.
+			// A mapping failure is also an evaluation error. Explicitly record
+			// the error-allow fallback instead of losing evidence in a zero value.
 			fallback, ferr := cedareval.MapDecision(cedareval.DecisionMappingInput{
 				RolloutMode:      cedareval.RolloutModeEnforce,
 				EnforcementReady: true,
@@ -264,7 +259,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 			if ferr != nil {
 				fallback = cedareval.DecisionMapping{
 					EvaluationState:          cedareval.EvaluationStateFailed,
-					EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
+					EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow,
 					EvaluationReasonCode:     cedareval.ReasonEngineError,
 					EffectiveReasonCode:      cedareval.ReasonEngineError,
 					DeterminingPolicyIDs:     []string{},
@@ -388,19 +383,29 @@ func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent
 	return inputs
 }
 
-// evaluateAll evaluates one input per shell call and combines them: a single
-// deny denies the command. The determining policies of a combined deny are
-// only the forbids that fired, so the deny reason can name the rule instead
-// of the permits that covered the harmless calls.
-func evaluateAll(evaluator *cedareval.Evaluator, inputs []cedareval.ToolUseInputV2) (cedareval.Result, error) {
-	combined := cedareval.Result{Decision: cedareval.DecisionAllow}
+type combinedCedarResult struct {
+	cedareval.Result
+	hasDecisiveDeny bool
+}
+
+// evaluateAll evaluates every shell call so a conversion error cannot hide a
+// completed deny elsewhere in the command. A combined deny names only the
+// forbids that fired, rather than permits covering other shell calls.
+func evaluateAll(evaluator *cedareval.Evaluator, inputs []cedareval.ToolUseInputV2) (combinedCedarResult, error) {
+	combined := combinedCedarResult{Result: cedareval.Result{Decision: cedareval.DecisionAllow}}
 	permitIDs := map[string]struct{}{}
 	forbidIDs := map[string]struct{}{}
+	var firstErr error
 	for _, input := range inputs {
 		result, err := evaluator.EvaluateV2(input)
 		if err != nil {
-			return cedareval.Result{}, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			combined.EngineDiagnostics.Errors = append(combined.EngineDiagnostics.Errors, cedareval.EngineError{Message: "request evaluation failed"})
+			continue
 		}
+		combined.hasDecisiveDeny = combined.hasDecisiveDeny || hasDecisiveDeny(result)
 		policyIDs := permitIDs
 		if result.Decision == cedareval.DecisionDeny {
 			combined.Decision = cedareval.DecisionDeny
@@ -417,11 +422,15 @@ func evaluateAll(evaluator *cedareval.Evaluator, inputs []cedareval.ToolUseInput
 	determining := permitIDs
 	if combined.Decision == cedareval.DecisionDeny {
 		determining = forbidIDs
+		combined.Ask = false
 	}
 	for policyID := range determining {
 		combined.DeterminingPolicyIDs = append(combined.DeterminingPolicyIDs, policyID)
 	}
 	sort.Strings(combined.DeterminingPolicyIDs)
+	if firstErr != nil && !combined.hasDecisiveDeny {
+		return combined, firstErr
+	}
 	return combined, nil
 }
 
@@ -430,6 +439,12 @@ func executionAction(decision risk.Decision) cedareval.EffectiveExecutionAction 
 		return cedareval.EffectiveExecutionActionDeny
 	}
 	return cedareval.EffectiveExecutionActionAllow
+}
+
+// A successful deny still blocks when another policy or shell call errors.
+// A default-deny with engine errors cannot establish a completed decision.
+func hasDecisiveDeny(result cedareval.Result) bool {
+	return result.Decision == cedareval.DecisionDeny && (len(result.EngineDiagnostics.Errors) == 0 || len(result.DeterminingPolicyIDs) > 0)
 }
 
 func hookEvent(event risk.HookEvent) hook.Event {
@@ -465,6 +480,9 @@ func applyCedarDecision(decision *risk.RiskDecision, mapping cedareval.DecisionM
 // ask) keep the generic wording.
 func cedarDecisionReason(mapping cedareval.DecisionMapping) string {
 	if mapping.EffectiveExecutionAction != cedareval.EffectiveExecutionActionDeny {
+		if mapping.EvaluationState == cedareval.EvaluationStateFailed {
+			return "Policy evaluation failed; allowing tool call"
+		}
 		return "local Cedar policy decision"
 	}
 	if mapping.DerivedCedarAction == cedareval.DerivedCedarActionDeny &&
