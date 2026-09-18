@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,10 +135,9 @@ func TestCodexHookStatusRecognizesSystemInstallation(t *testing.T) {
 	}
 }
 
-// Exercise the combined organization path used by doctor, with valid Claude
-// settings in every case. A good personal Codex installation must not mask
-// a missing or invalid system installation.
-func TestOrganizationManagedHookStatusRequiresSystemCodex(t *testing.T) {
+// Organization config accepts only agent: claude. Codex hook failures must
+// remain visible to the Codex checker without affecting organization health.
+func TestOrganizationManagedHookStatusIgnoresSystemCodex(t *testing.T) {
 	for _, name := range []string{"valid", "missing", "malformed", "partial", "missing executable", "not executable"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -195,15 +195,16 @@ func TestOrganizationManagedHookStatusRequiresSystemCodex(t *testing.T) {
 				}
 			}
 			var out bytes.Buffer
-			got := printOrganizationManagedHookStatus(&out, systemPath, claudePath)
-			if got != (name == "valid") {
+			codexHealthy := printCodexInstallationStatus(io.Discard, codexmanaged.InstallationPaths{SystemHooks: systemPath})
+			if codexHealthy != (name == "valid") {
+				t.Fatalf("Codex health = %t, want %t", codexHealthy, name == "valid")
+			}
+			got := printOrganizationManagedHookStatus(&out, claudePath)
+			if !got {
 				t.Fatalf("healthy=%t; output=%s", got, &out)
 			}
-			if !strings.Contains(out.String(), "Codex hooks:") {
-				t.Fatalf("Codex check skipped: %s", &out)
-			}
-			if name == "valid" && !strings.Contains(out.String(), systemPath) {
-				t.Fatalf("system path not reported: %s", &out)
+			if !strings.Contains(out.String(), "Codex hooks: not managed by this organization\n") {
+				t.Fatalf("missing organization scope explanation: %s", &out)
 			}
 		})
 	}
