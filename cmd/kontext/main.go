@@ -336,6 +336,7 @@ func (a managedHookAgent) DecodeHookInput(input []byte) (hook.Event, error) {
 	if err != nil {
 		return hook.Event{}, err
 	}
+	event.FullDiskAccess = hookFullDiskAccess()
 	if isCoworkHookContext(input, event) {
 		event.Agent = "cowork"
 	}
