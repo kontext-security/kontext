@@ -311,7 +311,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		inventoryHolder.run(policyCtx, opts, dbPath, inventoryReady)
 	}()
 
-	authorityHolder := &authorityHolder{available: authorityAvailable, resend: authorityResend, enabled: func() bool { return cedarCache.Current().AuthorityScan }}
+	authorityHolder := &authorityHolder{available: authorityAvailable, resend: authorityResend, enabled: func() bool { return cedarCache.Current().AuthorityScan }, known: func() bool { return cedarCache.Current().AuthorityScanKnown }}
 	authorityHolder.scanner.BeginRead = authorityIOPolicy(opts.Diagnostic)
 	authorityReady := make(chan struct{})
 	background.Add(1)
@@ -683,6 +683,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		AgentsFact:         inventoryHolder.Fact,
 		AuthorityFact:      authorityHolder.Fact,
 		AuthorityAvailable: authorityHolder.resend,
+		AuthorityScanKnown: authorityHolder.known,
 		DeviceKey:          func() string { return deviceKey },
 		HTTPClient:         opts.StreamHTTPClient,
 		Diagnostic:         opts.Diagnostic,

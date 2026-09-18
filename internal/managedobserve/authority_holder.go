@@ -24,11 +24,13 @@ func scanAuthority(ctx context.Context, scanner *agentauthority.Scanner, home st
 }
 
 type authorityHolder struct {
-	scanner   agentauthority.Scanner
-	mu        sync.RWMutex
-	report    agentauthority.Report
-	present   bool
-	enabled   func() bool
+	scanner agentauthority.Scanner
+	mu      sync.RWMutex
+	report  agentauthority.Report
+	present bool
+	enabled func() bool
+	// known reports whether the server has ever answered the scan flag.
+	known     func() bool
 	available <-chan struct{}
 	resend    <-chan struct{}
 }

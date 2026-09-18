@@ -75,6 +75,11 @@ type Options struct {
 	// omit both fields so older or unavailable discovery stays unknown.
 	AgentsFact    func() (agentinventory.Inventory, bool)
 	AuthorityFact func() (agentauthority.Report, bool)
+	// AuthorityScanKnown reports whether the server has ever answered the
+	// authority-scan flag. A server that never did (an older release) has a
+	// strict device schema without authority fields, so the local opt-out
+	// marker is only sent once the server is known to understand it.
+	AuthorityScanKnown func() bool
 	// AuthorityAvailable invalidates the resend cadence after the org switch returns.
 	AuthorityAvailable <-chan struct{}
 	Now                func() time.Time

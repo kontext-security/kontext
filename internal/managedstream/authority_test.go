@@ -41,7 +41,7 @@ func TestAuthorityFlushCadenceAndLastSent(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	opts := Options{DBPath: dbPath, StatePath: filepath.Join(t.TempDir(), "state.json"), CloudURL: server.URL, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", InstallToken: "test", Now: func() time.Time { return now }, AuthorityFact: func() (agentauthority.Report, bool) { return report, enabled }, AgentsFact: func() (agentinventory.Inventory, bool) {
+	opts := Options{DBPath: dbPath, StatePath: filepath.Join(t.TempDir(), "state.json"), CloudURL: server.URL, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", InstallToken: "test", Now: func() time.Time { return now }, AuthorityScanKnown: func() bool { return true }, AuthorityFact: func() (agentauthority.Report, bool) { return report, enabled }, AgentsFact: func() (agentinventory.Inventory, bool) {
 		return agentinventory.Inventory{Agents: []agentinventory.Agent{}, ReportedAt: now.Format(time.RFC3339)}, true
 	}}
 	flush := func(want bool) {
@@ -129,10 +129,11 @@ func TestAuthoritySwitchRecovery(t *testing.T) {
 	now := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
 	report := agentauthority.Report{Hash: "unchanged"}
 	available := make(chan struct{}, 1)
+	known := true
 	var payload Payload
 	server := capturePayloadServer(t, &payload)
 	defer server.Close()
-	opts := Options{DBPath: dbPath, StatePath: filepath.Join(t.TempDir(), "state.json"), CloudURL: server.URL, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", InstallToken: "test-install-token", Now: func() time.Time { return now }, AuthorityAvailable: available, AuthorityFact: func() (agentauthority.Report, bool) { return report, true }}
+	opts := Options{DBPath: dbPath, StatePath: filepath.Join(t.TempDir(), "state.json"), CloudURL: server.URL, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", InstallToken: "test-install-token", Now: func() time.Time { return now }, AuthorityAvailable: available, AuthorityFact: func() (agentauthority.Report, bool) { return report, true }, AuthorityScanKnown: func() bool { return known }}
 	flush := func(wantReport, wantOff bool) {
 		t.Helper()
 		now = now.Add(time.Minute)
@@ -164,4 +165,9 @@ func TestAuthoritySwitchRecovery(t *testing.T) {
 	}
 	t.Setenv("KONTEXT_AUTHORITY_SCAN", "")
 	flush(true, false)
+	// A server that never answered the scan flag (older release, strict device
+	// schema) must not receive the opt-out marker either.
+	known = false
+	t.Setenv("KONTEXT_AUTHORITY_SCAN", "off")
+	flush(false, false)
 }
