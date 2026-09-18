@@ -12,19 +12,21 @@ import (
 
 func EvaluateRequestFromEvent(event hook.Event) (EvaluateRequest, error) {
 	req := EvaluateRequest{
-		Type:           "evaluate",
-		SessionID:      event.SessionID,
-		Agent:          event.Agent,
-		HookEvent:      event.HookName.String(),
-		ToolName:       event.ToolName,
-		ToolUseID:      event.ToolUseID,
-		CWD:            event.CWD,
-		PermissionMode: event.PermissionMode,
-		FullDiskAccess: event.FullDiskAccess,
-		DurationMs:     event.DurationMs,
-		Error:          event.Error,
-		IsInterrupt:    event.IsInterrupt,
-		UserRequest:    event.UserRequest,
+		Type:                "evaluate",
+		SessionID:           event.SessionID,
+		Agent:               event.Agent,
+		HookEvent:           event.HookName.String(),
+		ToolName:            event.ToolName,
+		ToolUseID:           event.ToolUseID,
+		CWD:                 event.CWD,
+		TranscriptPath:      event.TranscriptPath,
+		AgentTranscriptPath: event.AgentTranscriptPath,
+		PermissionMode:      event.PermissionMode,
+		FullDiskAccess:      event.FullDiskAccess,
+		DurationMs:          event.DurationMs,
+		Error:               event.Error,
+		IsInterrupt:         event.IsInterrupt,
+		UserRequest:         event.UserRequest,
 	}
 
 	if event.ToolInput != nil {
@@ -70,18 +72,20 @@ func EventFromEvaluateRequest(sessionID, fallbackAgent string, req *EvaluateRequ
 		sessionID = req.SessionID
 	}
 	event := hook.Event{
-		SessionID:      sessionID,
-		Agent:          agent,
-		HookName:       hookName,
-		ToolName:       req.ToolName,
-		ToolUseID:      req.ToolUseID,
-		CWD:            req.CWD,
-		PermissionMode: req.PermissionMode,
-		FullDiskAccess: req.FullDiskAccess,
-		DurationMs:     req.DurationMs,
-		Error:          req.Error,
-		IsInterrupt:    req.IsInterrupt,
-		UserRequest:    req.UserRequest,
+		SessionID:           sessionID,
+		Agent:               agent,
+		HookName:            hookName,
+		ToolName:            req.ToolName,
+		ToolUseID:           req.ToolUseID,
+		CWD:                 req.CWD,
+		TranscriptPath:      req.TranscriptPath,
+		AgentTranscriptPath: req.AgentTranscriptPath,
+		PermissionMode:      req.PermissionMode,
+		FullDiskAccess:      req.FullDiskAccess,
+		DurationMs:          req.DurationMs,
+		Error:               req.Error,
+		IsInterrupt:         req.IsInterrupt,
+		UserRequest:         req.UserRequest,
 	}
 
 	var err error
@@ -164,7 +168,7 @@ func rawMap(data json.RawMessage) (map[string]any, error) {
 
 func normalizeHookName(value string) (hook.HookName, bool) {
 	switch hookName := hook.HookName(strings.TrimSpace(value)); hookName {
-	case hook.HookSessionStart, hook.HookPreToolUse, hook.HookPostToolUse, hook.HookPostToolUseFailed, hook.HookSessionEnd, hook.HookUserPromptSubmit, hook.HookStop:
+	case hook.HookSessionStart, hook.HookPreToolUse, hook.HookPostToolUse, hook.HookPostToolUseFailed, hook.HookSessionEnd, hook.HookUserPromptSubmit, hook.HookStop, hook.HookSubagentStop:
 		return hookName, true
 	default:
 		return "", false

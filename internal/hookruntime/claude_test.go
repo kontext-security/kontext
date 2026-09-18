@@ -2,8 +2,32 @@ package hookruntime
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 )
+
+func TestDecodeClaudeEventLiveUsageProbe(t *testing.T) {
+	input, err := os.ReadFile("testdata/claude-post-tool-usage-probe.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []string{"claude", "cowork"} {
+		event, err := DecodeClaudeEvent(input, agent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.TranscriptPath != "/tmp/usage-probe/transcript.jsonl" || event.Agent != agent || event.ToolResponse["stdout"] != "kontext-usage-probe" {
+			t.Fatalf("lost transcript or tool metadata: %+v", event)
+		}
+	}
+}
+
+func TestDecodeClaudeSubagentTranscript(t *testing.T) {
+	event, err := DecodeClaudeEvent([]byte(`{"hook_event_name":"SubagentStop","session_id":"parent","transcript_path":"/tmp/parent.jsonl","agent_transcript_path":"/tmp/subagents/agent.jsonl"}`), "claude")
+	if err != nil || event.TranscriptPath != "/tmp/parent.jsonl" || event.AgentTranscriptPath != "/tmp/subagents/agent.jsonl" {
+		t.Fatalf("subagent transcript metadata: %+v, %v", event, err)
+	}
+}
 
 func TestDecodeClaudeEventToolResponseObject(t *testing.T) {
 	t.Parallel()

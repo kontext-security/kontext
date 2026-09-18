@@ -6,6 +6,30 @@ import (
 	"testing"
 )
 
+func TestRecognizeLegacyDropInForUsageHookUpgrade(t *testing.T) {
+	settings := Template("")
+	delete(settings.Hooks, "Stop")
+	delete(settings.Hooks, "SubagentStop")
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsManagedSettingsDropIn(data) {
+		t.Fatal("must recognize our old settings so setup can add Stop")
+	}
+	if HasManagedObserveHooks(data) {
+		t.Fatal("old hooks must not claim complete usage coverage")
+	}
+	settings.Hooks["PreCompact"] = settings.Hooks["SessionStart"]
+	foreign, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if IsManagedSettingsDropIn(foreign) {
+		t.Fatal("legacy settings with a foreign event must not be overwritten")
+	}
+}
+
 func TestTemplateIncludesManagedKontextHooks(t *testing.T) {
 	t.Parallel()
 

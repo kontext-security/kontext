@@ -12,32 +12,34 @@ import (
 )
 
 type claudeHookInput struct {
-	SessionID        string          `json:"session_id"`
-	SessionIDAlt     string          `json:"sessionId"`
-	HookEventName    string          `json:"hook_event_name"`
-	HookEventNameAlt string          `json:"hookEventName"`
-	HookEventLegacy  string          `json:"hook_event"`
-	ToolName         string          `json:"tool_name"`
-	ToolNameAlt      string          `json:"toolName"`
-	ToolInput        map[string]any  `json:"tool_input"`
-	ToolInputAlt     map[string]any  `json:"toolInput"`
-	ToolResponse     json.RawMessage `json:"tool_response"`
-	ToolResponseAlt  json.RawMessage `json:"toolResponse"`
-	ToolUseID        string          `json:"tool_use_id"`
-	ToolUseIDAlt     string          `json:"toolUseId"`
-	ToolUseIDUpper   string          `json:"toolUseID"`
-	Prompt           *string         `json:"prompt"`
-	CWD              string          `json:"cwd"`
-	PermissionMode   *string         `json:"permission_mode"`
-	DurationMs       *int64          `json:"duration_ms"`
-	Error            *string         `json:"error"`
-	IsInterrupt      *bool           `json:"is_interrupt"`
-	UserRequest      string          `json:"user_request"`
-	UserRequestAlt   string          `json:"userRequest"`
-	ToolSchemas      any             `json:"available_tool_schemas"`
-	ToolSchemasAlt   any             `json:"availableToolSchemas"`
-	ToolSchemasShort any             `json:"tool_schemas"`
-	ToolSchemasCamel any             `json:"toolSchemas"`
+	SessionID           string          `json:"session_id"`
+	SessionIDAlt        string          `json:"sessionId"`
+	HookEventName       string          `json:"hook_event_name"`
+	HookEventNameAlt    string          `json:"hookEventName"`
+	HookEventLegacy     string          `json:"hook_event"`
+	ToolName            string          `json:"tool_name"`
+	ToolNameAlt         string          `json:"toolName"`
+	ToolInput           map[string]any  `json:"tool_input"`
+	ToolInputAlt        map[string]any  `json:"toolInput"`
+	ToolResponse        json.RawMessage `json:"tool_response"`
+	ToolResponseAlt     json.RawMessage `json:"toolResponse"`
+	ToolUseID           string          `json:"tool_use_id"`
+	ToolUseIDAlt        string          `json:"toolUseId"`
+	ToolUseIDUpper      string          `json:"toolUseID"`
+	Prompt              *string         `json:"prompt"`
+	CWD                 string          `json:"cwd"`
+	TranscriptPath      string          `json:"transcript_path"`
+	AgentTranscriptPath string          `json:"agent_transcript_path"`
+	PermissionMode      *string         `json:"permission_mode"`
+	DurationMs          *int64          `json:"duration_ms"`
+	Error               *string         `json:"error"`
+	IsInterrupt         *bool           `json:"is_interrupt"`
+	UserRequest         string          `json:"user_request"`
+	UserRequestAlt      string          `json:"userRequest"`
+	ToolSchemas         any             `json:"available_tool_schemas"`
+	ToolSchemasAlt      any             `json:"availableToolSchemas"`
+	ToolSchemasShort    any             `json:"tool_schemas"`
+	ToolSchemasCamel    any             `json:"toolSchemas"`
 }
 
 type claudeHookOutput struct {
@@ -63,19 +65,21 @@ func DecodeClaudeEvent(input []byte, agentName string) (hook.Event, error) {
 		return hook.Event{}, fmt.Errorf("claude: hook event name missing")
 	}
 	return hook.Event{
-		SessionID:      firstString(h.SessionID, h.SessionIDAlt),
-		Agent:          agentName,
-		HookName:       hook.HookName(hookName),
-		ToolName:       firstString(h.ToolName, h.ToolNameAlt),
-		ToolInput:      normalizeClaudeToolInput(hookName, h),
-		ToolResponse:   normalizeToolResponse(h.ToolResponse, h.ToolResponseAlt),
-		ToolUseID:      firstString(h.ToolUseID, h.ToolUseIDAlt, h.ToolUseIDUpper),
-		CWD:            h.CWD,
-		PermissionMode: stringPtrValue(h.PermissionMode),
-		DurationMs:     h.DurationMs,
-		Error:          stringPtrValue(h.Error),
-		IsInterrupt:    h.IsInterrupt,
-		UserRequest:    firstString(h.UserRequest, h.UserRequestAlt),
+		SessionID:           firstString(h.SessionID, h.SessionIDAlt),
+		Agent:               agentName,
+		HookName:            hook.HookName(hookName),
+		ToolName:            firstString(h.ToolName, h.ToolNameAlt),
+		ToolInput:           normalizeClaudeToolInput(hookName, h),
+		ToolResponse:        normalizeToolResponse(h.ToolResponse, h.ToolResponseAlt),
+		ToolUseID:           firstString(h.ToolUseID, h.ToolUseIDAlt, h.ToolUseIDUpper),
+		CWD:                 h.CWD,
+		TranscriptPath:      h.TranscriptPath,
+		AgentTranscriptPath: h.AgentTranscriptPath,
+		PermissionMode:      stringPtrValue(h.PermissionMode),
+		DurationMs:          h.DurationMs,
+		Error:               stringPtrValue(h.Error),
+		IsInterrupt:         h.IsInterrupt,
+		UserRequest:         firstString(h.UserRequest, h.UserRequestAlt),
 		AvailableToolSchemas: firstValue(
 			h.ToolSchemas,
 			h.ToolSchemasAlt,

@@ -9,22 +9,24 @@ import (
 )
 
 type EvaluateRequest struct {
-	Type           string          `json:"type"`
-	SessionID      string          `json:"session_id,omitempty"`
-	Agent          string          `json:"agent"`
-	HookEvent      string          `json:"hook_event"`
-	ToolName       string          `json:"tool_name"`
-	ToolInput      json.RawMessage `json:"tool_input,omitempty"`
-	ToolResponse   json.RawMessage `json:"tool_response,omitempty"`
-	ToolUseID      string          `json:"tool_use_id"`
-	CWD            string          `json:"cwd"`
-	PermissionMode string          `json:"permission_mode,omitempty"`
-	FullDiskAccess *bool           `json:"full_disk_access,omitempty"`
-	DurationMs     *int64          `json:"duration_ms,omitempty"`
-	Error          string          `json:"error,omitempty"`
-	IsInterrupt    *bool           `json:"is_interrupt,omitempty"`
-	UserRequest    string          `json:"user_request,omitempty"`
-	ToolSchemas    json.RawMessage `json:"available_tool_schemas,omitempty"`
+	Type                string          `json:"type"`
+	SessionID           string          `json:"session_id,omitempty"`
+	Agent               string          `json:"agent"`
+	HookEvent           string          `json:"hook_event"`
+	ToolName            string          `json:"tool_name"`
+	ToolInput           json.RawMessage `json:"tool_input,omitempty"`
+	ToolResponse        json.RawMessage `json:"tool_response,omitempty"`
+	ToolUseID           string          `json:"tool_use_id"`
+	CWD                 string          `json:"cwd"`
+	TranscriptPath      string          `json:"transcript_path,omitempty"`
+	AgentTranscriptPath string          `json:"agent_transcript_path,omitempty"`
+	PermissionMode      string          `json:"permission_mode,omitempty"`
+	FullDiskAccess      *bool           `json:"full_disk_access,omitempty"`
+	DurationMs          *int64          `json:"duration_ms,omitempty"`
+	Error               string          `json:"error,omitempty"`
+	IsInterrupt         *bool           `json:"is_interrupt,omitempty"`
+	UserRequest         string          `json:"user_request,omitempty"`
+	ToolSchemas         json.RawMessage `json:"available_tool_schemas,omitempty"`
 }
 
 type EvaluateResult struct {
