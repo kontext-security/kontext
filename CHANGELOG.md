@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.1](https://github.com/kontext-security/kontext/compare/v1.6.0...v1.6.1) (2026-09-18)
+
+
+### Features
+
+* **discovery:** derive Cowork sandbox status from hook sessions ([#516](https://github.com/kontext-security/kontext/issues/516)) ([796bd17](https://github.com/kontext-security/kontext/commit/796bd176f4551c45a0d3ed19f743c04a3a5beeb4))
+
+
+### Bug Fixes
+
+* **doctor:** organization installs do not require system Codex hooks ([#519](https://github.com/kontext-security/kontext/issues/519)) ([85ce3d0](https://github.com/kontext-security/kontext/commit/85ce3d003db91d069e1ffe69a1f852f8d57a4d31))
+
 ## [1.6.0](https://github.com/kontext-security/kontext/compare/v1.5.1...v1.6.0) (2026-09-18)
 
 
