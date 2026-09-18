@@ -12,6 +12,9 @@ func AuthorityScanLocallyEnabled() bool {
 
 func addAuthority(payload *Payload, opts Options, state State, now time.Time) {
 	if !AuthorityScanLocallyEnabled() {
+		if opts.AuthorityScanKnown == nil || !opts.AuthorityScanKnown() {
+			return
+		}
 		if payload.Device == nil {
 			payload.Device = &Device{}
 		}
