@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/kontext-security/kontext/compare/v1.8.0...v1.8.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* **hooks:** validate Codex installation layers independently ([#523](https://github.com/kontext-security/kontext/issues/523)) ([82c7b7a](https://github.com/kontext-security/kontext/commit/82c7b7a260d06afcf172620f2cd38e450cd22a50))
+
 ## [1.8.0](https://github.com/kontext-security/kontext/compare/v1.7.0...v1.8.0) (2026-09-19)
 
 
