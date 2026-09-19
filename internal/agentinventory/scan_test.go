@@ -153,6 +153,7 @@ func TestConfigResolution(t *testing.T) {
 		{"kiro", map[string]string{"KIRO_HOME": "~/custom"}, []string{"custom", ".kiro"}},
 		{"crush", map[string]string{"CRUSH_GLOBAL_CONFIG": "~/custom/crush.json", "XDG_CONFIG_HOME": "~/config"}, []string{"custom"}},
 		{"crush", map[string]string{"XDG_CONFIG_HOME": "~"}, []string{"crush"}},
+		{"cline", map[string]string{"CLINE_DIR": "~/cline-root", "CLINE_DATA_DIR": "~/cline-data"}, []string{"cline-data"}},
 		{"windsurf", nil, []string{".windsurf", ".codeium/windsurf"}},
 	} {
 		t.Run(tt.id+fmt.Sprint(tt.env), func(t *testing.T) {

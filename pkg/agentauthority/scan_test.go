@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -66,11 +67,31 @@ func scanFixture(home string, agents []AgentLocation) Report {
 	return scan(context.Background(), home, Environment{UID: 501, Admin: true}, agents, fixtureTime, filepath.Join(home, "managed"))
 }
 func TestGoldenHomes(t *testing.T) {
-	for _, name := range []string{"home_claude_full", "home_codex", "home_desktop", "home_generic", "home_empty", "home_planted_token", "home_symlink_to_root", "home_huge_settings", "home_many_files", "home_malformed_json", "home_malformed_toml"} {
+	for _, key := range []string{"CLINE_DATA_DIR", "CLINE_DIR", "OPENCODE_CONFIG_DIR"} {
+		t.Setenv(key, "")
+	}
+	for _, name := range []string{"home_cursor", "home_windsurf", "home_gemini", "home_cline", "home_opencode", "home_no_prompt_off", "home_claude_full", "home_codex", "home_desktop", "home_generic", "home_empty", "home_planted_token", "home_symlink_to_root", "home_huge_settings", "home_many_files", "home_malformed_json", "home_malformed_toml"} {
 		t.Run(name, func(t *testing.T) {
 			home := fixtureHome(t, name)
 			agents := []AgentLocation{{"claude_code", "~/.claude"}}
 			switch name {
+			case "home_cursor":
+				createCursorFixture(t, home)
+				agents = []AgentLocation{{"cursor", "~/.cursor"}}
+			case "home_windsurf":
+				agents = []AgentLocation{{"windsurf", "~/.windsurf"}}
+			case "home_gemini":
+				agents = []AgentLocation{{"gemini_cli", "~/.gemini"}}
+			case "home_cline":
+				agents = []AgentLocation{{"cline", "~/.cline"}}
+			case "home_opencode":
+				agents = []AgentLocation{{"opencode", "~/.config/opencode"}}
+			case "home_no_prompt_off":
+				path := createCursorFixture(t, home)
+				if output, err := exec.Command("/usr/bin/sqlite3", path, `UPDATE ItemTable SET value='{"composerState":{"useYoloMode":false}}';`).CombinedOutput(); err != nil {
+					t.Fatalf("Cursor off fixture: %s %v", output, err)
+				}
+				agents = []AgentLocation{{"cursor", "~/.cursor"}, {"windsurf", "~/.windsurf"}, {"gemini_cli", "~/.gemini"}, {"cline", "~/.cline"}, {"opencode", "~/.config/opencode"}}
 			case "home_codex", "home_malformed_toml":
 				agents = []AgentLocation{{"codex", "~/.codex"}}
 			case "home_desktop":
@@ -277,7 +298,7 @@ func TestReadTimeoutPreservesAgentFacts(t *testing.T) {
 			<-release
 			return fileResult{}
 		}
-		return readGuarded(path, mode)
+		return readGuarded(context.Background(), path, mode)
 	}}
 	g.credentials()
 	g.claude(&r.Agents[0], filepath.Join(home, ".claude"), readers.ClaudeRoot{}, nil)
