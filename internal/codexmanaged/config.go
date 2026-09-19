@@ -2,12 +2,16 @@ package codexmanaged
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
+
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/kontext-security/kontext/internal/agenthooks"
 )
 
@@ -70,7 +74,7 @@ func EnsureHooksEnabled(path, backupLabel string) (changed bool, err error) {
 		return false, nil
 	}
 
-	next, err := enableHooksFeature(content)
+	next, err := EnableHooksFeature(content)
 	if err != nil {
 		return false, err
 	}
@@ -103,28 +107,58 @@ func HooksEnabled(path string) (bool, error) {
 // engine on, via either the canonical `hooks` key or the deprecated
 // `codex_hooks` alias, in `[features]` table or top-level dotted form.
 func hooksFeatureEnabled(content string) bool {
-	table := ""
-	for _, line := range strings.Split(content, "\n") {
-		if m := tomlTableRe.FindStringSubmatch(line); m != nil {
-			table = strings.TrimSpace(m[1])
-			continue
-		}
-		key, value, ok := parseTOMLAssignment(line)
-		if !ok {
-			continue
-		}
-		switch table {
-		case "features":
-			if (key == "hooks" || key == "codex_hooks") && value == "true" {
-				return true
-			}
-		case "":
-			if (key == "features.hooks" || key == "features.codex_hooks") && value == "true" {
-				return true
-			}
+	value, _, err := HooksFeature(content)
+	return err == nil && value
+}
+
+// HooksFeature parses the canonical flag, falling back to its deprecated alias.
+// The second result distinguishes an unset flag from an explicit false override.
+func HooksFeature(content string) (bool, bool, error) {
+	var config struct {
+		Features map[string]bool `toml:"features"`
+	}
+	if _, err := toml.Decode(content, &config); err != nil {
+		return false, false, err
+	}
+	for _, key := range []string{"hooks", "codex_hooks"} {
+		if value, ok := config.Features[key]; ok {
+			return value, true, nil
 		}
 	}
-	return false
+	return false, false, nil
+}
+
+// EnableHooksFeature preserves formatting and refuses edits whose parsed result
+// changes anything except features.hooks (including multiline-string lookalikes).
+func EnableHooksFeature(content string) (string, error) {
+	var before, after map[string]any
+	if _, err := toml.Decode(content, &before); err != nil {
+		return "", err
+	}
+	enabled, _, err := HooksFeature(content)
+	if err != nil {
+		return "", err
+	}
+	if enabled {
+		return content, nil
+	}
+	next, err := enableHooksFeature(content)
+	if err != nil {
+		return "", err
+	}
+	if _, err := toml.Decode(next, &after); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrFeaturesNotEditable, err)
+	}
+	features, ok := before["features"].(map[string]any)
+	if !ok {
+		features = map[string]any{}
+		before["features"] = features
+	}
+	features["hooks"] = true
+	if !reflect.DeepEqual(before, after) {
+		return "", ErrFeaturesNotEditable
+	}
+	return next, nil
 }
 
 // enableHooksFeature returns content with `[features].hooks = true` ensured.
