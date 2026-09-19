@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
-	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/app/server"
 	"github.com/kontext-security/kontext/internal/guard/judge"
@@ -25,6 +24,7 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/startupui"
 )
@@ -321,116 +321,22 @@ func PrintHookStatus(out io.Writer) HookStatus {
 	return status
 }
 
-// PrintManagedHookStatus verifies the integrations installed by `kontext
-// setup`: Claude Code managed settings and Codex hooks plus their feature flag.
+// Both channels validate the complete hook set from hookinstall.
 func PrintManagedHookStatus(out io.Writer) HookStatus {
-	claudeHealthy := printManagedClaudeHookStatus(out, claudemanaged.ManagedSettingsDropInPath)
-	codexHealthy := printCodexHookStatus(out)
-	return HookStatus{Healthy: claudeHealthy && codexHealthy}
+	return printInstalledHookStatus(out, hookinstall.User)
 }
 
-// PrintOrganizationManagedHookStatus checks the policy-owned Claude settings
-// and the system Codex hooks installed by the organization package. Personal
-// Codex hooks cannot substitute for a missing or broken system installation.
 func PrintOrganizationManagedHookStatus(out io.Writer) HookStatus {
-	return HookStatus{Healthy: printOrganizationManagedHookStatus(out, codexmanaged.SystemHooksPath, organizationManagedHookPaths()...)}
+	return printInstalledHookStatus(out, hookinstall.System)
 }
 
-func printOrganizationManagedHookStatus(out io.Writer, systemHooks string, claudePaths ...string) bool {
-	claudeHealthy := printOrganizationClaudeHookStatus(out, claudePaths...)
-	// Organization policy owns Codex feature enablement. Validate its installed
-	// system commands without requiring an employee's personal config opt-in.
-	codexHealthy := printCodexInstallationStatus(out, codexmanaged.InstallationPaths{SystemHooks: systemHooks})
-	return claudeHealthy && codexHealthy
-}
-
-func organizationManagedHookPaths() []string {
-	return []string{claudemanaged.ManagedSettingsDropInPath, claudemanaged.DefaultManagedSettingsPath()}
-}
-
-// printOrganizationClaudeHookStatus judges the first settings layer that
-// exists, in order: an organization ships the Kontext hooks in ONE of them,
-// and the other may hold unrelated enterprise settings that must not read
-// as an incomplete hook set. Only when none exists are the hooks missing.
-func printOrganizationClaudeHookStatus(out io.Writer, paths ...string) bool {
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			return printManagedClaudeHookStatus(out, path)
-		}
-	}
-	return printManagedClaudeHookStatus(out, paths...)
-}
-
-func printManagedClaudeHookStatus(out io.Writer, paths ...string) bool {
-	found, healthy := false, true
-	for _, path := range paths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			fmt.Fprintf(out, "Claude Code managed hooks: ERROR reading %s: %v\n", path, err)
-			return false
-		}
-		found = true
-		if binary, ok := claudemanaged.ManagedObserveHookBinary(data); ok {
-			if info, err := os.Stat(binary); err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-				fmt.Fprintf(out, "Claude Code managed hooks: configured binary is not executable (%s)\n", binary)
-				healthy = false
-				continue
-			}
-			fmt.Fprintf(out, "Claude Code managed hooks: installed (%s; binary %s)\n", path, binary)
-			continue
-		}
-		fmt.Fprintf(out, "Claude Code managed hooks: incomplete or disabled (%s)\n", path)
-		healthy = false
-	}
-	if !found {
-		fmt.Fprintln(out, "Claude Code managed hooks: none installed")
-	}
-	return found && healthy
-}
-
-func printCodexHookStatus(out io.Writer) bool {
-	paths, err := codexmanaged.DefaultInstallationPaths()
+func printInstalledHookStatus(out io.Writer, scope hookinstall.Scope) HookStatus {
+	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(out, "Codex hooks: unavailable (%v)\n", err)
-		return false
+		fmt.Fprintf(out, "Hooks: %v\n", err)
+		return HookStatus{}
 	}
-	return printCodexHookStatusAt(out, paths)
-}
-
-func printCodexInstallationStatus(out io.Writer, paths codexmanaged.InstallationPaths) bool {
-	installation, err := codexmanaged.InspectInstallation(paths)
-	if err != nil {
-		fmt.Fprintf(out, "Codex hooks: %v\n", err)
-		return false
-	}
-	binary := installation.Binary
-	if info, err := os.Stat(binary); err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-		fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s)\n", binary)
-		return false
-	}
-	fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", strings.Join(installation.Paths, ", "), binary)
-	return true
-}
-
-func printCodexHookStatusAt(out io.Writer, paths codexmanaged.InstallationPaths) bool {
-	if !printCodexInstallationStatus(out, paths) {
-		return false
-	}
-	configPath := paths.UserConfig
-	enabled, err := codexmanaged.HooksEnabled(configPath)
-	if err != nil || !enabled {
-		if err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(out, "Codex hooks feature: ERROR %v\n", err)
-		} else {
-			fmt.Fprintf(out, "Codex hooks feature: disabled (set [features].hooks = true in %s)\n", configPath)
-		}
-		return false
-	}
-	fmt.Fprintf(out, "Codex hooks feature: enabled (%s)\n", configPath)
-	return true
+	return HookStatus{Healthy: hookinstall.Diagnose(out, scope, home)}
 }
 
 func visitHookCommands(raw any, visit func(string)) {

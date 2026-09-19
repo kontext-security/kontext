@@ -275,7 +275,7 @@ func disableDeviceKeyResolution(t *testing.T) {
 	t.Helper()
 	stubDeviceKeyResolution(t,
 		func(context.Context) (string, error) { return "", errors.New("device key disabled in this test") },
-		func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+		func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
 			return ledgerping.Response{}, errors.New("device key disabled in this test")
 		})
 }
@@ -368,12 +368,18 @@ func TestDaemonRefreshesStreamInstallToken(t *testing.T) {
 }
 
 func TestDaemonWritesAuthErrorAfterConsecutiveStreamAuthFailures(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusConflict} {
+		t.Run(http.StatusText(status), func(t *testing.T) { testDaemonAuthFailure(t, status) })
+	}
+}
+
+func testDaemonAuthFailure(t *testing.T, rejectedStatus int) {
 	disableDeviceKeyResolution(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/authorization-ledger/batches" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusUnauthorized)
+		w.WriteHeader(rejectedStatus)
 	}))
 	t.Cleanup(server.Close)
 
@@ -434,8 +440,8 @@ func TestDaemonWritesAuthErrorAfterConsecutiveStreamAuthFailures(t *testing.T) {
 	deadline := time.After(2 * time.Second)
 	for {
 		if got := LoadAuthError(dbPath); got != nil {
-			if got.Kind != "auth" || got.Status != http.StatusUnauthorized {
-				t.Fatalf("LoadAuthError() = %+v, want auth 401", got)
+			if got.Kind != "auth" || got.Status != rejectedStatus {
+				t.Fatalf("LoadAuthError() = %+v, want auth %d", got, rejectedStatus)
 			}
 			stop()
 			return
@@ -1014,7 +1020,7 @@ func TestMigrateSelfServeModeToRemote(t *testing.T) {
 func stubDeviceKeyResolution(
 	t *testing.T,
 	uuidFn func(context.Context) (string, error),
-	pingFn func(context.Context, *http.Client, string, string) (ledgerping.Response, error),
+	pingFn func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error),
 ) {
 	t.Helper()
 	previousUUID, previousPing := platformUUIDFn, workspacePingFn
@@ -1034,17 +1040,20 @@ func TestDeviceKeySource(t *testing.T) {
 		pings := 0
 		stubDeviceKeyResolution(t,
 			func(context.Context) (string, error) { return testUUID, nil },
-			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+			func(_ context.Context, _ *http.Client, _, _, installationID string) (ledgerping.Response, error) {
+				if installationID != "ins_test" {
+					t.Fatalf("ping installation id = %q", installationID)
+				}
 				pings++
 				return ledgerping.Response{OrganizationID: "org_katana"}, nil
 			})
 
 		source := &deviceKeySource{}
-		key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet)
+		key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet)
 		if key != "dk_r9NpM1vh94fxqPIcsnx6DalBNVfubPTNYHUBLGUoUcc" {
 			t.Fatalf("resolve() = %q, want the pinned deviceid vector", key)
 		}
-		if again := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); again != key {
+		if again := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); again != key {
 			t.Fatalf("second resolve() = %q, want cached %q", again, key)
 		}
 		if pings != 1 {
@@ -1061,15 +1070,15 @@ func TestDeviceKeySource(t *testing.T) {
 		pings := 0
 		stubDeviceKeyResolution(t,
 			func(context.Context) (string, error) { return testUUID, nil },
-			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
 				pings++
 				return ledgerping.Response{OrganizationID: org}, nil
 			})
 
 		source := &deviceKeySource{}
-		first := source.resolve(context.Background(), "https://api.test", "token-a", nil, quiet)
+		first := source.resolve(context.Background(), "https://api.test", "token-a", "ins_test", nil, quiet)
 		org = "org_other"
-		second := source.resolve(context.Background(), "https://api.test", "token-b", nil, quiet)
+		second := source.resolve(context.Background(), "https://api.test", "token-b", "ins_test", nil, quiet)
 		if pings != 2 {
 			t.Fatalf("workspace pings = %d, want a fresh derivation after the token changed", pings)
 		}
@@ -1078,7 +1087,7 @@ func TestDeviceKeySource(t *testing.T) {
 		}
 		// A rotation back within one workspace re-pings but derives the same key.
 		org = "org_katana"
-		if rotated := source.resolve(context.Background(), "https://api.test", "token-c", nil, quiet); rotated != first {
+		if rotated := source.resolve(context.Background(), "https://api.test", "token-c", "ins_test", nil, quiet); rotated != first {
 			t.Fatalf("resolve() after rotation = %q, want %q re-derived", rotated, first)
 		}
 	})
@@ -1087,17 +1096,17 @@ func TestDeviceKeySource(t *testing.T) {
 		pingErr := errors.New("cannot reach backend")
 		stubDeviceKeyResolution(t,
 			func(context.Context) (string, error) { return testUUID, nil },
-			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
 				err := pingErr
 				return ledgerping.Response{OrganizationID: "org_katana"}, err
 			})
 
 		source := &deviceKeySource{}
-		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
+		if key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); key != "" {
 			t.Fatalf("resolve() = %q, want empty while the workspace is unreachable", key)
 		}
 		pingErr = nil
-		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key == "" {
+		if key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); key == "" {
 			t.Fatal("resolve() after the network came up = empty, want the key resolved on retry")
 		}
 	})
@@ -1114,16 +1123,16 @@ func TestDeviceKeySource(t *testing.T) {
 				}
 				return testUUID, nil
 			},
-			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
 				return ledgerping.Response{OrganizationID: "org_katana"}, nil
 			})
 
 		source := &deviceKeySource{}
-		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
+		if key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); key != "" {
 			t.Fatalf("resolve() = %q, want empty while the UUID is unreadable", key)
 		}
 		uuidErr = nil
-		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key == "" {
+		if key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); key == "" {
 			t.Fatal("resolve() after ioreg recovered = empty, want the key resolved on retry")
 		}
 	})
@@ -1134,15 +1143,39 @@ func TestDeviceKeySource(t *testing.T) {
 				t.Fatal("platform UUID read despite kill switch")
 				return "", nil
 			},
-			func(context.Context, *http.Client, string, string) (ledgerping.Response, error) {
+			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
 				t.Fatal("workspace pinged despite kill switch")
 				return ledgerping.Response{}, nil
 			})
 		t.Setenv(envNoDeviceKey, "1")
 
 		source := &deviceKeySource{}
-		if key := source.resolve(context.Background(), "https://api.test", "token", nil, quiet); key != "" {
+		if key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); key != "" {
 			t.Fatalf("resolve() = %q, want empty under %s", key, envNoDeviceKey)
 		}
 	})
+}
+
+func TestBoundElsewhereAlertMessage(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(managedconfig.EnvPath, filepath.Join(dir, "no-config"))
+	output, err := os.CreateTemp(dir, "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Stderr
+	os.Stderr = output
+	t.Cleanup(func() { os.Stderr = previous; output.Close() })
+	dbPath := filepath.Join(dir, "guard.db")
+	writeStreamAuthFailure(DaemonOptions{}, dbPath, http.StatusConflict)
+	data, err := os.ReadFile(output.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "personal key is bound to another Mac; run kontext setup with a fresh command from Get started\n" {
+		t.Fatalf("alert = %q", data)
+	}
+	if got := LoadAuthError(dbPath); got == nil || got.Status != http.StatusConflict {
+		t.Fatalf("breadcrumb = %+v", got)
+	}
 }

@@ -1,0 +1,1 @@
+{"mcpServers": {"sample": {"command": "/usr/local/bin/npx", "args": ["-y", "@example/mcp-server"]}}}

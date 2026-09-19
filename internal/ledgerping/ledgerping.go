@@ -1,6 +1,6 @@
 // Package ledgerping resolves an install token to the workspace that owns it,
 // via the hosted ledger API's ping endpoint. Setup uses it to validate a
-// pasted token before anything is written; the daemon uses it to learn the
+// pasted token before credentials are written; the daemon uses it to learn the
 // organization id that keys the device reconciliation key. It is the one
 // place the CLI answers "whose token is this", so the two callers cannot
 // drift apart.
@@ -22,7 +22,11 @@ const Path = "/api/v1/authorization-ledger/ping"
 // ErrUnauthorized reports a 401/403: the token itself was rejected. Callers
 // own the user-facing copy — setup tells a human where to mint a new token,
 // the daemon just logs — so this stays a bare sentinel.
-var ErrUnauthorized = errors.New("install token rejected")
+var (
+	ErrUnauthorized   = errors.New("install token rejected")
+	ErrBoundElsewhere = errors.New("personal key is bound to another Mac")
+	ErrExpired        = errors.New("personal key has expired")
+)
 
 // StatusError reports any other non-2xx answer, preserving the code so
 // callers can phrase their own message around it.
@@ -35,6 +39,7 @@ func (e *StatusError) Error() string {
 }
 
 type Response struct {
+	UserEmail      string `json:"user_email"`
 	OrganizationID string `json:"organization_id"`
 	// JSON null (the legacy env-fallback org) decodes to "".
 	OrganizationName string `json:"organization_name"`
@@ -42,13 +47,18 @@ type Response struct {
 
 // Ping resolves token against cloudURL. A nil client gets a 10s-timeout
 // default, matching what setup has always used.
-func Ping(ctx context.Context, client *http.Client, cloudURL, token string) (Response, error) {
+func Ping(ctx context.Context, client *http.Client, cloudURL, token, installationID string) (Response, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cloudURL, "/")+Path, nil)
 	if err != nil {
 		return Response{}, err
+	}
+	if installationID != "" {
+		query := req.URL.Query()
+		query.Set("installation_id", installationID)
+		req.URL.RawQuery = query.Encode()
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
@@ -61,6 +71,10 @@ func Ping(ctx context.Context, client *http.Client, cloudURL, token string) (Res
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return Response{}, ErrUnauthorized
+	case resp.StatusCode == http.StatusConflict:
+		return Response{}, ErrBoundElsewhere
+	case resp.StatusCode == http.StatusGone:
+		return Response{}, ErrExpired
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
 		return Response{}, &StatusError{StatusCode: resp.StatusCode}
 	}

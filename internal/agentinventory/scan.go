@@ -10,9 +10,14 @@ import (
 	"time"
 )
 
-// Scan never opens activity files. Hook evaluators are injected by the daemon
-// (also used by setup), keeping discovery independent of managedstream.
-func Scan(ctx context.Context, home string, env func(string) string, now time.Time, wired map[string]func() Wired) Inventory {
+type ScanOptions struct {
+	Wired                  map[string]func() Wired
+	HasCoworkSessionsSince func(time.Time) (bool, error)
+}
+
+// Scan reads activity metadata and the guarded Cowork VM log tail. The daemon
+// injects hook and session facts, keeping discovery independent of its store.
+func Scan(ctx context.Context, home string, env func(string) string, now time.Time, opts ScanOptions) Inventory {
 	inv := Inventory{Agents: []Agent{}, ReportedAt: now.UTC().Format(time.RFC3339)}
 	for _, descriptor := range Catalog {
 		if ctx.Err() != nil {
@@ -25,7 +30,7 @@ func Scan(ctx context.Context, home string, env func(string) string, now time.Ti
 			if err != nil {
 				continue
 			}
-			if info.IsDir() {
+			if info.IsDir() || (descriptor.ID == "claude_cowork" && info.Mode().IsRegular() && candidate == filepath.Join(home, coworkVMLog)) {
 				config = candidate
 				break
 			}
@@ -46,13 +51,16 @@ func Scan(ctx context.Context, home string, env func(string) string, now time.Ti
 			continue
 		}
 		agent := Agent{ID: descriptor.ID, ConfigPath: path, Wired: WiredUnsupported}
+		if descriptor.ID == "claude_cowork" {
+			agent.Sandboxed = coworkSandbox(ctx, home, now, opts.HasCoworkSessionsSince)
+		}
 		if descriptor.ID == "claude_code" || descriptor.ID == "claude_cowork" || descriptor.ID == "codex" {
 			agent.Wired = WiredError
-			if evaluate := wired[descriptor.ID]; evaluate != nil {
+			if evaluate := opts.Wired[descriptor.ID]; evaluate != nil {
 				agent.Wired = evaluate()
 			}
 		}
-		if descriptor.ActivityRoot != "" {
+		if descriptor.ActivityRoot != "" && (descriptor.ID != "claude_cowork" || config == filepath.Join(home, coworkHostSessions)) {
 			root := descriptor.ActivityRoot
 			if strings.HasPrefix(root, "<config>") {
 				root = filepath.Join(config, strings.TrimPrefix(strings.TrimPrefix(root, "<config>"), "/"))
@@ -94,7 +102,15 @@ func expand(home, path string) string {
 }
 
 func configDirs(d Descriptor, home string, env func(string) string) []string {
+	if d.ID == "cline" {
+		if dataDir := envValue(env, "CLINE_DATA_DIR"); dataDir != "" {
+			return []string{expand(home, dataDir)}
+		}
+	}
 	value := envValue(env, d.ConfigEnv)
+	if d.ID == "kimi_code" && value == "" {
+		value = envValue(env, "KIMI_SHARE_DIR")
+	}
 	if value != "" {
 		base := expand(home, value)
 		switch d.ConfigEnv {
@@ -103,7 +119,10 @@ func configDirs(d Descriptor, home string, env func(string) string) []string {
 		case "XDG_CONFIG_HOME":
 			return []string{filepath.Join(base, strings.TrimPrefix(d.ConfigDirs[0], ".config/"))}
 		case "CRUSH_GLOBAL_CONFIG":
-			return []string{filepath.Dir(base)}
+			if strings.HasSuffix(base, ".json") {
+				return []string{filepath.Dir(base)}
+			}
+			return []string{base}
 		case "KIRO_HOME":
 			return []string{base, filepath.Join(home, ".kiro")}
 		default:

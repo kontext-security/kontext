@@ -12,6 +12,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
 
 func TestAgentInventoryRefresh(t *testing.T) {
@@ -163,5 +164,107 @@ func TestDoctorReadsInventoryWithoutScanning(t *testing.T) {
 	}
 	if LoadAgentInventory(e.dbPath) != nil {
 		t.Fatal("corrupt breadcrumb must be absent")
+	}
+}
+
+func TestCoworkInventoryUsesLocalHookSessions(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	for _, d := range agentinventory.Catalog {
+		if d.ConfigEnv != "" {
+			t.Setenv(d.ConfigEnv, "")
+		}
+	}
+	t.Setenv("OPENCLAW_HOME", "")
+	logPath := filepath.Join(home, "Library/Logs/Claude/cowork_vm_swift.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, []byte("[VM] "+time.Now().Format("2006-01-02 15:04:05")+" [info] vm_boot completed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(home, "guard.db")
+	store, err := sqlite.OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	holder := &agentInventoryHolder{}
+	ready, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		holder.run(ctx, DaemonOptions{AgentInventoryInterval: 20 * time.Millisecond}, dbPath, ready)
+	}()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial scan did not finish")
+	}
+	inv, _ := holder.Fact()
+	if len(inv.Agents) != 1 || inv.Agents[0].Sandboxed == nil || !*inv.Agents[0].Sandboxed {
+		t.Fatalf("boot without sessions: %+v", inv)
+	}
+	// isCoworkHookContext emits "cowork"; the store canonicalizes it.
+	if _, err := store.EnsureObservedSession(ctx, "host-hook", "cowork", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		inv, _ := holder.Fact()
+		if len(inv.Agents) == 1 && inv.Agents[0].Sandboxed != nil && !*inv.Agents[0].Sandboxed {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("recent host hook session did not override the VM boot")
+}
+
+func TestAgentWiringCodexLayers(t *testing.T) {
+	valid := mustCodexHooks(t)
+	other, err := codexmanaged.TemplateJSON("/Applications/Kontext/runtime/bin/kontext")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := codexmanaged.TemplateJSON("/enterprise/other-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name         string
+		system, user []byte
+		want         agentinventory.Wired
+	}{
+		{"system only", valid, nil, agentinventory.WiredYes},
+		{"user only", nil, valid, agentinventory.WiredYes},
+		{"both same", valid, valid, agentinventory.WiredYes},
+		{"both different", valid, other, agentinventory.WiredYes},
+		{"foreign system with valid user", foreign, valid, agentinventory.WiredYes},
+		{"valid system with foreign user", valid, foreign, agentinventory.WiredYes},
+		{"malformed system with valid user", []byte(`{`), valid, agentinventory.WiredYes},
+		{"valid system with malformed user", valid, []byte(`{`), agentinventory.WiredYes},
+		{"foreign only", foreign, nil, agentinventory.WiredNo},
+		{"both foreign", foreign, foreign, agentinventory.WiredNo},
+		{"malformed only", nil, []byte(`{`), agentinventory.WiredError},
+		{"neither", nil, nil, agentinventory.WiredNo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := codexmanaged.InstallationPaths{SystemHooks: filepath.Join(dir, "system.json"), UserHooks: filepath.Join(dir, "user.json")}
+			for path, raw := range map[string][]byte{paths.SystemHooks: tc.system, paths.UserHooks: tc.user} {
+				if raw != nil {
+					if err := os.WriteFile(path, raw, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if got := agentWiring(paths, nil)["codex"](); got != tc.want {
+				t.Fatalf("wired=%s, want %s", got, tc.want)
+			}
+		})
 	}
 }

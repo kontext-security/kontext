@@ -1,0 +1,8 @@
+{
+  "permission": {
+    "bash": {
+      "*": "deny"
+    },
+    "edit": "allow"
+  }
+}

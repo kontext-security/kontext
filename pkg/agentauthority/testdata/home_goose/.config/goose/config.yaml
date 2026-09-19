@@ -1,0 +1,7 @@
+GOOSE_MODE: auto
+extensions:
+  sample:
+    type: stdio
+    enabled: true
+    cmd: npx
+    args: ["-y", "@example/mcp-server"]

@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
-	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/profile"
@@ -59,54 +59,64 @@ func Uninstall(ctx context.Context, opts Options) error {
 		fmt.Fprintf(opts.Stdout, "  ✓ Background agent removed (%s)\n", plistPath)
 	}
 
-	if organizationManaged {
-		fmt.Fprintf(opts.Stdout, "  • Kept Claude Code managed hooks because an organization-managed install is active (%s)\n", managedSettingsPath)
-	} else {
-		removed, err := removeManagedSettings(ctx)
-		if err != nil {
-			return err
-		}
-		if removed {
-			fmt.Fprintf(opts.Stdout, "  ✓ Claude Code managed hooks removed (%s)\n", managedSettingsPath)
-		} else {
-			fmt.Fprintf(opts.Stdout, "  • Kept Claude Code managed hooks because ownership is unknown (%s)\n", managedSettingsPath)
-		}
-	}
-
-	settingsPath, err := userSettingsPathNoCreate()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	if _, err := os.Lstat(settingsPath); errors.Is(err, os.ErrNotExist) {
-		// A removal must never CREATE settings: on a machine without Claude
-		// settings (or after the user deleted them) there is nothing to do.
-		fmt.Fprintln(opts.Stdout, "  • No Claude Code settings file; no hooks to remove")
-	} else if err != nil {
+	if err := hookinstall.Remove(hookinstall.Options{
+		Scope: hookinstall.User, Home: home, Setup: true, KeepClaude: organizationManaged, ClaudePath: managedSettingsPath,
+		RemoveClaude: func(_ string) error { _, err := removeManagedSettings(ctx); return err },
+		AfterClaude: func() error {
+			settingsPath, err := userSettingsPathNoCreate()
+			if err != nil {
+				return err
+			}
+			if _, err := os.Lstat(settingsPath); errors.Is(err, os.ErrNotExist) {
+				// A removal must never CREATE settings: on a machine without Claude
+				// settings (or after the user deleted them) there is nothing to do.
+				fmt.Fprintln(opts.Stdout, "  • No Claude Code settings file; no hooks to remove")
+			} else if err != nil {
+				return err
+			} else {
+				settings, err := claudemanaged.ReadUserSettings(settingsPath)
+				if err != nil {
+					return err
+				}
+				if err := claudemanaged.BackupUserSettings(settingsPath, settingsBackupLabel); err != nil {
+					return err
+				}
+				if err := claudemanaged.RemoveManagedHooks(settings); err != nil {
+					return err
+				}
+				if err := claudemanaged.WriteUserSettings(settingsPath, settings); err != nil {
+					return err
+				}
+				fmt.Fprintln(opts.Stdout, "  ✓ Claude Code hooks removed from ~/.claude/settings.json")
+			}
+			return nil
+		},
+		Report: func(r hookinstall.Result) {
+			switch r.File.Kind {
+			case "claude":
+				if organizationManaged {
+					fmt.Fprintf(opts.Stdout, "  • Kept Claude Code managed hooks because an organization-managed install is active (%s)\n", r.File.Path)
+				} else if r.Action == "remove" {
+					fmt.Fprintf(opts.Stdout, "  ✓ Claude Code managed hooks removed (%s)\n", r.File.Path)
+				} else {
+					fmt.Fprintf(opts.Stdout, "  • Kept Claude Code managed hooks because ownership is unknown (%s)\n", r.File.Path)
+				}
+			case "codex":
+				if r.Err != nil {
+					fmt.Fprintf(opts.Stderr, "warning: Codex hooks could not be removed from ~/.codex/hooks.json (%v)\n", r.Err)
+				} else if r.Reason == "absent" {
+					fmt.Fprintln(opts.Stdout, "  • No Codex hooks file; no hooks to remove")
+				} else {
+					fmt.Fprintln(opts.Stdout, "✓ Codex hooks removed from ~/.codex/hooks.json")
+				}
+			}
+		},
+	}); err != nil {
 		return err
-	} else {
-		settings, err := claudemanaged.ReadUserSettings(settingsPath)
-		if err != nil {
-			return err
-		}
-		if err := claudemanaged.BackupUserSettings(settingsPath, settingsBackupLabel); err != nil {
-			return err
-		}
-		if err := claudemanaged.RemoveManagedHooks(settings); err != nil {
-			return err
-		}
-		if err := claudemanaged.WriteUserSettings(settingsPath, settings); err != nil {
-			return err
-		}
-		fmt.Fprintln(opts.Stdout, "  ✓ Claude Code hooks removed from ~/.claude/settings.json")
-	}
-
-	removedCodexHooks, err := removeCodexUserHooks()
-	if err != nil {
-		fmt.Fprintf(opts.Stderr, "warning: Codex hooks could not be removed from ~/.codex/hooks.json (%v)\n", err)
-	} else if removedCodexHooks {
-		fmt.Fprintln(opts.Stdout, "✓ Codex hooks removed from ~/.codex/hooks.json")
-	} else {
-		fmt.Fprintln(opts.Stdout, "  • No Codex hooks file; no hooks to remove")
 	}
 
 	// Every profile's token, not just the active one: leaving another
@@ -193,32 +203,6 @@ func allInstallationPaths() []string {
 		}
 	}
 	return paths
-}
-
-func removeCodexUserHooks() (bool, error) {
-	codexHooksPath, err := codexmanaged.UserHooksPathNoCreate()
-	if err != nil {
-		return false, err
-	}
-	if _, err := os.Lstat(codexHooksPath); errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	} else if err != nil {
-		return false, err
-	}
-	settings, err := codexmanaged.ReadHooks(codexHooksPath)
-	if err != nil {
-		return false, err
-	}
-	if err := codexmanaged.BackupHooks(codexHooksPath, settingsBackupLabel); err != nil {
-		return false, err
-	}
-	if err := codexmanaged.RemoveManagedHooks(settings); err != nil {
-		return false, err
-	}
-	if err := codexmanaged.WriteHooks(codexHooksPath, settings); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func removeSelfServeLaunchAgentIfPresent(ctx context.Context) (bool, string, error) {
