@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/kontext-security/kontext/compare/v1.6.1...v1.7.0) (2026-09-19)
+
+
+### Features
+
+* **setup:** report the connected person, add whoami, refuse a reused setup command ([#506](https://github.com/kontext-security/kontext/issues/506)) ([45a0bcf](https://github.com/kontext-security/kontext/commit/45a0bcf1d5ff02844295b933c00de89c52e279b9))
+
 ## [1.6.1](https://github.com/kontext-security/kontext/compare/v1.6.0...v1.6.1) (2026-09-18)
 
 
