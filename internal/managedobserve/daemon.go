@@ -45,8 +45,8 @@ type DaemonOptions struct {
 	EndpointConfigHTTPClient      *http.Client
 	AgentInventoryInterval        time.Duration
 	Diagnostic                    diagnostic.Logger
-	// BinaryVersion is the CLI binary version, for startup logging and future
-	// status reporting.
+	// BinaryVersion is this process's linked CLI version, used for startup
+	// logging, daemon status, and the ledger's device.cli_version fact.
 	BinaryVersion string
 	// FallbackDeploymentVersion is reported to the ledger when no MDM
 	// deployment-version marker exists (self-serve brew installs).
@@ -65,6 +65,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if binaryVersion == "" {
 		binaryVersion = "dev"
 	}
+	opts.BinaryVersion = binaryVersion
 	logAlways(opts.Diagnostic, "managed-observe daemon %s (pid %d) started\n", binaryVersion, os.Getpid())
 	healLaunchAgentPriority(DefaultLabel(), opts.Diagnostic)
 
@@ -679,6 +680,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		DeviceLabel:        loadedConfig.Config.Device.Label,
 		UserEmail:          loadedConfig.Config.Device.UserEmail,
 		DeploymentVersion:  deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
+		CLIVersion:         opts.BinaryVersion,
 		HooksFact:          managedObserveHooksFact,
 		AgentsFact:         inventoryHolder.Fact,
 		AuthorityFact:      authorityHolder.Fact,

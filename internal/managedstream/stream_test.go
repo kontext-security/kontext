@@ -333,6 +333,7 @@ func TestFlushResolvesDeploymentVersionPerFlush(t *testing.T) {
 			InstallationID:    "ins_0123456789abcdefghijklmnopqrstuv",
 			InstallToken:      "test-install-token",
 			DeploymentVersion: func() string { return version },
+			CLIVersion:        "1.5.2",
 			HTTPClient:        server.Client(),
 		}
 	}
@@ -343,6 +344,9 @@ func TestFlushResolvesDeploymentVersionPerFlush(t *testing.T) {
 	if got.Device == nil || got.Device.DeploymentVersion != "0.2.0" {
 		t.Fatalf("device = %+v, want deployment_version 0.2.0", got.Device)
 	}
+	if got.Device.CLIVersion != "1.5.2" {
+		t.Fatalf("cli_version = %q, want running binary 1.5.2", got.Device.CLIVersion)
+	}
 
 	// A later flush reflects a marker change (e.g. in-place upgrade) without
 	// rebuilding the daemon's options. Fresh state path re-posts the decision.
@@ -352,6 +356,9 @@ func TestFlushResolvesDeploymentVersionPerFlush(t *testing.T) {
 	}
 	if got.Device == nil || got.Device.DeploymentVersion != "0.3.0" {
 		t.Fatalf("device = %+v, want deployment_version 0.3.0", got.Device)
+	}
+	if got.Device.CLIVersion != "1.5.2" {
+		t.Fatalf("cli_version = %q, marker change must not change the running binary version", got.Device.CLIVersion)
 	}
 }
 

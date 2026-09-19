@@ -120,10 +120,12 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 		OrganizationID string `json:"organization_id"`
 		InstallationID string `json:"installation_id"`
 		Device         *struct {
-			Authority        *agentauthority.Report `json:"authority"`
-			Label            string                 `json:"label"`
-			Agents           []agentinventory.Agent `json:"agents"`
-			AgentsReportedAt string                 `json:"agents_reported_at"`
+			Authority         *agentauthority.Report `json:"authority"`
+			Label             string                 `json:"label"`
+			CLIVersion        string                 `json:"cli_version"`
+			DeploymentVersion string                 `json:"deployment_version"`
+			Agents            []agentinventory.Agent `json:"agents"`
+			AgentsReportedAt  string                 `json:"agents_reported_at"`
 		} `json:"device,omitempty"`
 		Actions []struct {
 			SessionID string `json:"session_id"`
@@ -171,17 +173,24 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 	dbPath := filepath.Join(dir, "guard.db")
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)
 	writeTestInstallation(t, filepath.Join(dir, "installation.json"))
+	marker := filepath.Join(dir, "deployment-version")
+	t.Setenv(managedconfig.EnvDeploymentVersionPath, marker)
+	if err := os.WriteFile(marker, []byte("1.5.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- RunDaemon(ctx, DaemonOptions{
-			SocketPath:       socketPath,
-			DBPath:           dbPath,
-			IdleTimeout:      time.Hour,
-			StreamStatePath:  filepath.Join(dir, "stream-state.json"),
-			StreamInterval:   20 * time.Millisecond,
-			StreamHTTPClient: server.Client(),
-			PolicyHTTPClient: server.Client(),
+			SocketPath:                socketPath,
+			DBPath:                    dbPath,
+			IdleTimeout:               time.Hour,
+			StreamStatePath:           filepath.Join(dir, "stream-state.json"),
+			StreamInterval:            20 * time.Millisecond,
+			StreamHTTPClient:          server.Client(),
+			PolicyHTTPClient:          server.Client(),
+			BinaryVersion:             "1.5.2",
+			FallbackDeploymentVersion: "cli-1.5.2",
 		})
 	}()
 	t.Cleanup(func() {
@@ -214,6 +223,9 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 	for {
 		select {
 		case body := <-requests:
+			if body.Device == nil || body.Device.CLIVersion != "1.5.2" || body.Device.DeploymentVersion != "1.5.1" {
+				t.Fatalf("device versions = %+v, want running CLI 1.5.2 and deployment marker 1.5.1", body.Device)
+			}
 			if first {
 				if body.Device == nil || body.Device.Authority == nil || len(body.Device.Authority.Agents) != 1 || body.Device.Authority.Agents[0].ID != "cursor" {
 					t.Fatalf("first heartbeat authority missing: %+v", body.Device)
