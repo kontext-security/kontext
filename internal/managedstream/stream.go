@@ -65,6 +65,9 @@ type Options struct {
 	DeviceLabel       string
 	UserEmail         string
 	DeploymentVersion func() string
+	// CLIVersion identifies the running binary, independently of the deployment
+	// marker, which can change while this process is still running.
+	CLIVersion string
 	// HooksFact resolves the endpoint's Claude Code hook health per flush, so a
 	// drop-in deleted under a running daemon is reported on the next batch. A
 	// false second return means the state could not be determined (e.g. the
@@ -131,6 +134,7 @@ type Device struct {
 	Authority         *agentauthority.Report `json:"authority,omitempty"`
 	Label             string                 `json:"label,omitempty"`
 	DeploymentVersion string                 `json:"deployment_version,omitempty"`
+	CLIVersion        string                 `json:"cli_version,omitempty"`
 	UserEmail         string                 `json:"user_email,omitempty"`
 	// Hook health, pointers so an endpoint that cannot determine the state
 	// omits the fields instead of asserting false. Without this fact a device
@@ -490,6 +494,7 @@ func newPayload(
 	// is reflected without restarting the daemon.
 	label := strings.TrimSpace(opts.DeviceLabel)
 	userEmail := strings.TrimSpace(opts.UserEmail)
+	cliVersion := strings.TrimSpace(opts.CLIVersion)
 	deploymentVersion := ""
 	if opts.DeploymentVersion != nil {
 		deploymentVersion = strings.TrimSpace(opts.DeploymentVersion())
@@ -521,10 +526,11 @@ func newPayload(
 			agents, agentsReportedAt = &list, fact.ReportedAt
 		}
 	}
-	if agents != nil || label != "" || deploymentVersion != "" || userEmail != "" || hooksPresent != nil || deviceKey != "" {
+	if agents != nil || label != "" || deploymentVersion != "" || cliVersion != "" || userEmail != "" || hooksPresent != nil || deviceKey != "" {
 		payload.Device = &Device{
 			Label:             label,
 			DeploymentVersion: deploymentVersion,
+			CLIVersion:        cliVersion,
 			UserEmail:         userEmail,
 			HooksPresent:      hooksPresent,
 			DisabledAllHooks:  disabledAllHooks,
