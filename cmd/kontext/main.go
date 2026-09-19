@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,8 +20,12 @@ import (
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/hookcmd"
+	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/localruntime"
+	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/profile"
+	"github.com/kontext-security/kontext/internal/setup"
 	"github.com/spf13/cobra"
 
 	_ "github.com/kontext-security/kontext/internal/agent/claude"
@@ -53,6 +58,7 @@ func newRootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(setupCmd())
+	root.AddCommand(whoamiCmd())
 	root.AddCommand(profileCmd())
 	root.AddCommand(hookCmd())
 	root.AddCommand(managedObserveDaemonCmd())
@@ -63,6 +69,74 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(claudeCmd())
 	root.AddCommand(guardCmd())
 	return root
+}
+
+var whoamiLoadConfig = managedconfig.Load
+var whoamiInstallTokenFile = managedconfig.InstallTokenFilePath
+
+func whoamiCmd() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:           "whoami",
+		Short:         "Show the workspace and person connected to this Mac",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			loaded, err := whoamiLoadConfig()
+			if err != nil {
+				return err
+			}
+			token, err := managedconfig.ResolveInstallToken(cmd.Context(), loaded.Config.Credentials.InstallTokenRef)
+			ref := loaded.Config.Credentials.InstallTokenRef
+			if err != nil && loaded.Scope == managedconfig.ScopeSystem && ref.Source == "env" && ref.Name == "KONTEXT_INSTALL_TOKEN" {
+				// The MDM launcher exports this only to the daemon, not the user's shell.
+				data, readErr := os.ReadFile(whoamiInstallTokenFile)
+				if readErr == nil && strings.TrimSpace(string(data)) != "" {
+					token, err = strings.TrimSpace(string(data)), nil
+				}
+			}
+			if err != nil {
+				return err
+			}
+			identityPath := installation.PathFromEnv()
+			if loaded.Scope == managedconfig.ScopeUser && strings.TrimSpace(os.Getenv(installation.EnvPath)) == "" {
+				// Keep the identity paired with the config if the active profile changes mid-command.
+				identityPath = filepath.Join(filepath.Dir(loaded.Path), profile.InstallationFile)
+			}
+			identity, err := installation.LoadFile(identityPath)
+			if err != nil {
+				return fmt.Errorf("read installation identity: %w", err)
+			}
+			ping, err := setup.ValidateToken(cmd.Context(), nil, loaded.Config.CloudURL, token, identity.InstallationID)
+			if err != nil {
+				return err
+			}
+			workspace := ping.OrganizationName
+			if workspace == "" {
+				workspace = ping.OrganizationID
+			}
+			if asJSON {
+				var person *string
+				if ping.UserEmail != "" {
+					person = &ping.UserEmail
+				}
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
+					Workspace      string  `json:"workspace"`
+					OrganizationID string  `json:"organization_id"`
+					Person         *string `json:"person"`
+				}{workspace, ping.OrganizationID, person})
+			}
+			person := ping.UserEmail
+			if person == "" {
+				person = "none (workspace key)"
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "workspace: %s\nperson: %s\n", workspace, person)
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable JSON instead of the human readout")
+	return cmd
 }
 
 func doctorCmd() *cobra.Command {

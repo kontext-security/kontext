@@ -270,8 +270,8 @@ func TestRunFullFlow(t *testing.T) {
 	stdout := h.out.String()
 	for _, want := range []string{
 		"Kontext setup",
-		"Workspace\n  ✓ Acme (org_test)",
-		"Mac\n  ✓ Config written",
+		"Workspace\n  ✓ Connected to Acme (workspace key, no person attached)",
+		"Mac\n  ✓ Installation identity ready",
 		"  ✓ Claude Code managed hooks installed",
 		"  ✓ Codex hooks installed",
 		"  • Installing background agent...",
@@ -527,7 +527,7 @@ func TestRunRemovesOrganizationManagedInstallAndContinues(t *testing.T) {
 		"Remove organization-managed install and continue? [y/N]",
 		"Organization-managed files removed",
 		"Organization-managed background agent stopped",
-		"Workspace\n  ✓ Acme (org_test)",
+		"Workspace\n  ✓ Connected to Acme (workspace key, no person attached)",
 		"Next\n  Return to the Kontext dashboard.",
 	} {
 		if !strings.Contains(stdout, want) {
@@ -1455,5 +1455,117 @@ func TestStableBinaryPathPrefersBrewSymlink(t *testing.T) {
 	got, note := stableBinaryPath()
 	if got != "/usr/local/Cellar/kontext/1.0.0/bin/kontext" || !strings.Contains(note, "brew upgrade") {
 		t.Fatalf("stableBinaryPath() = %q, %q", got, note)
+	}
+}
+
+func TestSetupBindsTheSelectedIdentityBeforeSavingCredentials(t *testing.T) {
+	for _, email := range []string{"person@example.com", ""} {
+		t.Run("person="+email, func(t *testing.T) {
+			h := profileHarness(t)
+			slot, err := resolveTarget("work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var boundID string
+			lookups, bindings := 0, 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				id := r.URL.Query().Get("installation_id")
+				if id == "" {
+					lookups++
+				} else {
+					bindings++
+					identity, err := installation.LoadFile(slot.IdentityPath)
+					if err != nil || identity.InstallationID != id {
+						t.Errorf("identity before binding = %+v, %v; sent %q", identity, err, id)
+					}
+					if boundID != "" && boundID != id {
+						t.Errorf("rerun changed bound identity")
+					}
+					boundID = id
+					if bindings == 1 {
+						if len(h.keychain) != 0 || len(h.calls) != 0 {
+							t.Error("credentials or commands written before validation")
+						}
+						if _, err := os.Stat(slot.ConfigPath); !errors.Is(err, os.ErrNotExist) {
+							t.Errorf("config exists before binding: %v", err)
+						}
+					}
+				}
+				json.NewEncoder(w).Encode(map[string]string{"organization_id": "org_test", "organization_name": "Acme", "user_email": email})
+			}))
+			defer server.Close()
+			opts := h.options("kt_personal", server)
+			opts.Profile = "work"
+			for range 2 {
+				if err := Run(context.Background(), opts); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if lookups != 2 || bindings != 2 || boundID == "" {
+				t.Fatalf("lookups=%d bindings=%d id=%q", lookups, bindings, boundID)
+			}
+			if email != "" {
+				for _, second := range []string{"second", ""} {
+					opts.Profile = second
+					opts.DeriveProfileName = second == ""
+					if err := Run(context.Background(), opts); !errors.Is(err, errPersonalKeyBoundElsewhere) {
+						t.Fatalf("same personal key in second profile: %v", err)
+					}
+				}
+				if bindings != 2 {
+					t.Fatal("second profile attempted to bind the key")
+				}
+			}
+
+			want := "✓ Connected to Acme as " + email
+			if email == "" {
+				want = "✓ Connected to Acme (workspace key, no person attached)"
+			}
+			if !strings.Contains(h.out.String(), want) {
+				t.Fatalf("missing %q in %s", want, h.out.String())
+			}
+		})
+	}
+}
+
+func TestSetupRejectsPersonalKeyBeforeSavingCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		message string
+	}{
+		{409, "this setup command was already used on another Mac; copy a fresh one from Get started in the dashboard"},
+		{410, "this setup command has expired; copy a fresh one from Get started in the dashboard"},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			h := profileHarness(t)
+			slot, err := resolveTarget("second")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("installation_id") == "" {
+					io.WriteString(w, `{"organization_id":"org_test","organization_name":"Acme","user_email":"person@example.com"}`)
+					return
+				}
+				identity, err := installation.LoadFile(slot.IdentityPath)
+				if err != nil || identity.InstallationID != r.URL.Query().Get("installation_id") {
+					t.Errorf("binding without saved identity: %v", err)
+				}
+				w.WriteHeader(tc.status)
+			}))
+			defer server.Close()
+			opts := h.options("kt_personal", server)
+			opts.Profile = "second"
+			err = Run(context.Background(), opts)
+			if err == nil || err.Error() != tc.message {
+				t.Fatalf("error = %v, want %s", err, tc.message)
+			}
+			if len(h.keychain) != 0 || len(h.calls) != 0 {
+				t.Fatal("rejected key caused credential or hook writes")
+			}
+			if _, err := os.Stat(slot.ConfigPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("config exists after rejection: %v", err)
+			}
+		})
 	}
 }
