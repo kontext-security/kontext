@@ -285,3 +285,19 @@ func TestUserHooksPathCreatesCodexDirectory(t *testing.T) {
 		t.Fatalf(".codex dir missing: %v", err)
 	}
 }
+
+func TestValidateInstalledReportsMixedBinariesOnce(t *testing.T) {
+	settings := Template("/usr/local/bin/kontext")
+	other := Template("/Applications/Kontext/runtime/bin/kontext")
+	for event, groups := range other.Hooks {
+		settings.Hooks[event] = append(settings.Hooks[event], groups...)
+	}
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ValidateInstalled(raw)
+	if err == nil || err.Error() != "Kontext hooks use different binary paths" {
+		t.Fatalf("error=%v, want a single mixed-binary diagnostic", err)
+	}
+}

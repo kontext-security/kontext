@@ -142,6 +142,7 @@ func ValidateInstalled(data []byte) (string, error) {
 		return "", errors.New("hooks missing")
 	}
 	var binary string
+	var differentBinaries bool
 	var problems []string
 	for _, event := range SupportedEvents {
 		groups := settings.Hooks[event.Name.String()]
@@ -160,13 +161,15 @@ func ValidateInstalled(data []byte) (string, error) {
 					problems = append(problems, fmt.Sprintf("%s hook uses %q, want %q", event.Name, fields[4], event.Alias))
 					continue
 				}
+				found = true
 				if binary == "" {
 					binary = fields[0]
 				} else if binary != fields[0] {
-					problems = append(problems, "Kontext hooks use different binary paths")
-					continue
+					if !differentBinaries {
+						problems = append(problems, "Kontext hooks use different binary paths")
+						differentBinaries = true
+					}
 				}
-				found = true
 			}
 		}
 		if !found {

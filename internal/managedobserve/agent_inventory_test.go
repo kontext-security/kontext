@@ -223,3 +223,48 @@ func TestCoworkInventoryUsesLocalHookSessions(t *testing.T) {
 	}
 	t.Fatal("recent host hook session did not override the VM boot")
 }
+
+func TestAgentWiringCodexLayers(t *testing.T) {
+	valid := mustCodexHooks(t)
+	other, err := codexmanaged.TemplateJSON("/Applications/Kontext/runtime/bin/kontext")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := codexmanaged.TemplateJSON("/enterprise/other-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name         string
+		system, user []byte
+		want         agentinventory.Wired
+	}{
+		{"system only", valid, nil, agentinventory.WiredYes},
+		{"user only", nil, valid, agentinventory.WiredYes},
+		{"both same", valid, valid, agentinventory.WiredYes},
+		{"both different", valid, other, agentinventory.WiredYes},
+		{"foreign system with valid user", foreign, valid, agentinventory.WiredYes},
+		{"valid system with foreign user", valid, foreign, agentinventory.WiredYes},
+		{"malformed system with valid user", []byte(`{`), valid, agentinventory.WiredYes},
+		{"valid system with malformed user", valid, []byte(`{`), agentinventory.WiredYes},
+		{"foreign only", foreign, nil, agentinventory.WiredNo},
+		{"both foreign", foreign, foreign, agentinventory.WiredNo},
+		{"malformed only", nil, []byte(`{`), agentinventory.WiredError},
+		{"neither", nil, nil, agentinventory.WiredNo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := codexmanaged.InstallationPaths{SystemHooks: filepath.Join(dir, "system.json"), UserHooks: filepath.Join(dir, "user.json")}
+			for path, raw := range map[string][]byte{paths.SystemHooks: tc.system, paths.UserHooks: tc.user} {
+				if raw != nil {
+					if err := os.WriteFile(path, raw, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if got := agentWiring(paths, nil)["codex"](); got != tc.want {
+				t.Fatalf("wired=%s, want %s", got, tc.want)
+			}
+		})
+	}
+}
