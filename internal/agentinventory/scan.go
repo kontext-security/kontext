@@ -102,6 +102,11 @@ func expand(home, path string) string {
 }
 
 func configDirs(d Descriptor, home string, env func(string) string) []string {
+	if d.ID == "cline" {
+		if dataDir := envValue(env, "CLINE_DATA_DIR"); dataDir != "" {
+			return []string{expand(home, dataDir)}
+		}
+	}
 	value := envValue(env, d.ConfigEnv)
 	if value != "" {
 		base := expand(home, value)

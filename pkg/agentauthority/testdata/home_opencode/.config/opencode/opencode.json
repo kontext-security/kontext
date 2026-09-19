@@ -1,0 +1,12 @@
+{
+  "permission": {
+    "bash": "ask"
+  },
+  "mcp": {
+    "example": {
+      "command": [
+        "example-mcp"
+      ]
+    }
+  }
+}

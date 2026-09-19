@@ -2,7 +2,9 @@ package agentauthority
 
 import (
 	"context"
+	"maps"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -41,6 +43,20 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 	// Read only the fixed configuration roots; never add paths found in content.
 	r := Report{SchemaVersion: "authority/v1", ScannedAt: now.UTC().Format(time.RFC3339), Agents: make([]Agent, 0, len(agents)), Environment: env, Credentials: []Credential{}, Coverage: Coverage{UnknownFormat: []string{}, Errors: []string{}}}
 	g := guard{ctx: ctx, home: filepath.Clean(home), managed: managed, roots: allowedRoots(home, managed), report: &r, cache: cache, beginRead: beginRead, seen: map[string]bool{}}
+	// These environment overrides authorize only the exact config files, never a tree.
+	clineData := filepath.Join(home, ".cline/data")
+	if dir := strings.TrimSpace(os.Getenv("CLINE_DIR")); dir != "" {
+		clineData = filepath.Join(configPath(home, dir), "data")
+	}
+	if dir := strings.TrimSpace(os.Getenv("CLINE_DATA_DIR")); dir != "" {
+		clineData = configPath(home, dir)
+	}
+	g.roots = append(g.roots, filepath.Join(clineData, "globalState.json"))
+	opencodeDir := strings.TrimSpace(os.Getenv("OPENCODE_CONFIG_DIR"))
+	if opencodeDir != "" {
+		opencodeDir = configPath(home, opencodeDir)
+		g.roots = append(g.roots, filepath.Join(opencodeDir, "opencode.json"), filepath.Join(opencodeDir, "opencode.jsonc"))
+	}
 	g.credentials()
 	root, _ := readConfig(&g, "claude_code", filepath.Join(home, ".claude.json"), readers.Claude)
 	projects := keys(root.Projects)
@@ -79,13 +95,24 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 			g.desktop(a)
 		case "cursor":
 			g.generic(a, filepath.Join(base, "mcp.json"), "mcpServers")
+			path := filepath.Join(home, "Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+			if enabled, ok := readConfig(&g, id, path, parseJSON[*bool], "cursor"); ok && enabled != nil {
+				mode := "default"
+				if *enabled {
+					mode = "auto"
+				}
+				a.Permissions.DefaultMode = pointer(safe(mode, 128))
+			}
 		case "windsurf":
 			g.generic(a, filepath.Join(home, ".codeium/windsurf/mcp_config.json"), "mcpServers")
+			g.permissionConfig(a, filepath.Join(home, "Library/Application Support/Windsurf/User/settings.json"), readers.Windsurf)
+		case "cline":
+			g.permissionConfig(a, filepath.Join(clineData, "globalState.json"), readers.Cline)
 		case "copilot_cli":
 			g.generic(a, filepath.Join(base, "mcp-config.json"), "mcpServers")
 			g.generic(a, filepath.Join(home, "Library/Application Support/Code/User/mcp.json"), "servers")
 		case "gemini_cli":
-			g.generic(a, filepath.Join(base, "settings.json"), "mcpServers")
+			g.permissionConfig(a, filepath.Join(base, "settings.json"), readers.Gemini)
 		case "antigravity":
 			g.generic(a, filepath.Join(home, ".gemini/antigravity/mcp_config.json"), "mcpServers")
 		case "kiro":
@@ -93,7 +120,27 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 		case "amp":
 			g.generic(a, filepath.Join(base, "settings.json"), "amp.mcpServers")
 		case "opencode":
-			g.generic(a, filepath.Join(base, "opencode.json"), "mcp")
+			if opencodeDir != "" {
+				base = opencodeDir
+			}
+			// Merge by raw name before report truncation/redaction can create collisions.
+			paths := [2]string{filepath.Join(base, "opencode.json"), filepath.Join(base, "opencode.jsonc")}
+			var configs [2]readers.PermissionConfig
+			for i, path := range paths {
+				if c, ok := readConfig(&g, id, path, readers.OpenCode); ok {
+					configs[i] = c
+					if c.DefaultMode != "" {
+						a.Permissions.DefaultMode = pointer(safe(c.DefaultMode, 128))
+					}
+				}
+			}
+			// Clone before removing overridden entries: cached values must remain intact.
+			servers := maps.Clone(configs[0].MCPServers)
+			for name := range configs[1].MCPServers {
+				delete(servers, name)
+			}
+			g.servers(a, servers, paths[0], "user", nil)
+			g.servers(a, configs[1].MCPServers, paths[1], "user", nil)
 		default:
 			r.Coverage.UnknownFormat = append(r.Coverage.UnknownFormat, id)
 		}
@@ -109,6 +156,28 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 	r.finish()
 	return r
 }
+func configPath(home, path string) string {
+	if path == "~" {
+		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(home, path[2:])
+	}
+	if !filepath.IsAbs(path) {
+		return filepath.Join(home, path)
+	}
+	return filepath.Clean(path)
+}
+
+func (g *guard) permissionConfig(a *Agent, path string, parse func([]byte) (readers.PermissionConfig, error)) {
+	if c, ok := readConfig(g, a.ID, path, parse); ok {
+		g.servers(a, c.MCPServers, path, "user", nil)
+		if c.DefaultMode != "" {
+			a.Permissions.DefaultMode = pointer(safe(c.DefaultMode, 128))
+		}
+	}
+}
+
 func keys[T any](m map[string]T) []string {
 	result := make([]string, 0, len(m))
 	for key := range m {

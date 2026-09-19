@@ -1,0 +1,10 @@
+{
+  "general": {
+    "defaultApprovalMode": "auto_edit"
+  },
+  "mcpServers": {
+    "example": {
+      "command": "example-mcp"
+    }
+  }
+}

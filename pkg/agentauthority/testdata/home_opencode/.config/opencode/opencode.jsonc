@@ -1,0 +1,4 @@
+{
+ // Explicit wildcard overrides the earlier ask.
+ "permission": {"bash": {"*": "allow", "sudo *": "ask"}, "edit": "allow",},
+}
