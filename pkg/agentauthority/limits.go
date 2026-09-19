@@ -22,10 +22,10 @@ const managedRoot = "/Library/Application Support/ClaudeCode"
 
 // Each root is resolved relative to home once, never from configuration contents.
 // Custom discovery paths do not expand this allowlist; explicit environment
-// overrides for Cline/OpenCode add only their named configuration files.
+// overrides add only their named configuration files inside home.
 func allowedRoots(home, managed string) []string {
 	roots := []string{managed}
-	for _, root := range []string{".claude.json", ".claude", ".codex", ".cursor", ".cline/data/globalState.json", "Library/Application Support/Cursor/User/globalStorage/state.vscdb", "Library/Application Support/Windsurf/User/settings.json", ".codeium/windsurf", ".copilot", ".gemini", ".kiro", ".config/amp", ".config/opencode", ".config/gh", ".config/gcloud", ".aws", ".kube", ".ssh", ".npmrc", ".docker/config.json", "Library/Application Support/Claude", "Library/Application Support/Code/User/mcp.json"} {
+	for _, root := range []string{".openclaw", ".clawdbot", ".qwen", ".config/goose", ".factory", ".config/devin", ".pi/agent", ".kimi", ".kimi-code", ".augment", ".config/kilo", ".config/crush", ".junie", ".grok", ".hermes", ".cline/data/settings/cline_mcp_settings.json", ".claude.json", ".claude", ".codex", ".cursor", ".cline/data/globalState.json", "Library/Application Support/Cursor/User/globalStorage/state.vscdb", "Library/Application Support/Windsurf/User/settings.json", ".codeium/windsurf", ".copilot", ".gemini", ".kiro", ".config/amp", ".config/opencode", ".config/gh", ".config/gcloud", ".aws", ".kube", ".ssh", ".npmrc", ".docker/config.json", "Library/Application Support/Claude", "Library/Application Support/Code/User/mcp.json"} {
 		roots = append(roots, filepath.Join(home, root))
 	}
 	return roots

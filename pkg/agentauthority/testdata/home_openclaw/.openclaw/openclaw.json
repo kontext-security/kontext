@@ -1,0 +1,1 @@
+{"tools": {"exec": {"mode": "full"}}, "mcp": {"servers": {"sample": {"command": "/usr/local/bin/npx", "args": ["-y", "@example/mcp-server"]}}}, "plugins": {"entries": {"sample-plugin": {"enabled": false}}}}

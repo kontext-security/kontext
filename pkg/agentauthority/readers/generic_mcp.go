@@ -3,9 +3,9 @@ package readers
 import "encoding/json"
 
 type MCP struct {
-	Command string   `json:"command" toml:"command"`
-	Args    []string `json:"args" toml:"args"`
-	URL     string   `json:"url" toml:"url"`
+	Command string   `json:"command" toml:"command" yaml:"command"`
+	Args    []string `json:"args" toml:"args" yaml:"args"`
+	URL     string   `json:"url" toml:"url" yaml:"url"`
 }
 
 func GenericMCP(data []byte, key string) (map[string]MCP, error) {

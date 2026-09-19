@@ -151,9 +151,13 @@ func TestConfigResolution(t *testing.T) {
 		{"openclaw", map[string]string{"OPENCLAW_HOME": "undefined"}, []string{".openclaw", ".clawdbot"}},
 		{"openclaw", map[string]string{"OPENCLAW_HOME": "~/custom", "OPENCLAW_STATE_DIR": "~/state"}, []string{"state"}},
 		{"kiro", map[string]string{"KIRO_HOME": "~/custom"}, []string{"custom", ".kiro"}},
+		{"crush", map[string]string{"CRUSH_GLOBAL_CONFIG": "~/custom/crush-dir"}, []string{"custom/crush-dir"}},
 		{"crush", map[string]string{"CRUSH_GLOBAL_CONFIG": "~/custom/crush.json", "XDG_CONFIG_HOME": "~/config"}, []string{"custom"}},
 		{"crush", map[string]string{"XDG_CONFIG_HOME": "~"}, []string{"crush"}},
 		{"cline", map[string]string{"CLINE_DIR": "~/cline-root", "CLINE_DATA_DIR": "~/cline-data"}, []string{"cline-data"}},
+		{"kimi_code", nil, []string{".kimi-code", ".kimi"}},
+		{"kimi_code", map[string]string{"KIMI_SHARE_DIR": "~/legacy"}, []string{"legacy"}},
+		{"kimi_code", map[string]string{"KIMI_CODE_HOME": "~/current", "KIMI_SHARE_DIR": "~/legacy"}, []string{"current"}},
 		{"windsurf", nil, []string{".windsurf", ".codeium/windsurf"}},
 	} {
 		t.Run(tt.id+fmt.Sprint(tt.env), func(t *testing.T) {

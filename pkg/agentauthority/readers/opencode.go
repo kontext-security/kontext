@@ -8,12 +8,19 @@ func OpenCode(data []byte) (PermissionConfig, error) {
 		return PermissionConfig{}, err
 	}
 	var config struct {
-		Permission map[string]json.RawMessage `json:"permission"`
+		Permission json.RawMessage `json:"permission"`
 	}
 	if err = json.Unmarshal(data, &config); err != nil {
 		return PermissionConfig{}, err
 	}
-	raw := config.Permission["bash"]
+	raw := config.Permission
+	if len(raw) > 0 && raw[0] == '{' {
+		var permissions map[string]json.RawMessage
+		if err = json.Unmarshal(raw, &permissions); err != nil {
+			return PermissionConfig{}, err
+		}
+		raw = permissions["bash"]
+	}
 	var permission *string
 	if len(raw) > 0 {
 		if err = json.Unmarshal(raw, &permission); err != nil {
