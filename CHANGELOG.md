@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/kontext-security/kontext/compare/v1.8.1...v1.9.0) (2026-09-19)
+
+
+### Features
+
+* **authority:** read no-prompt settings for Cursor, Windsurf, Gemini CLI, Cline, OpenCode ([#525](https://github.com/kontext-security/kontext/issues/525)) ([a8be693](https://github.com/kontext-security/kontext/commit/a8be693df96901580eaaba642666a3308f06ed15))
+
 ## [1.8.1](https://github.com/kontext-security/kontext/compare/v1.8.0...v1.8.1) (2026-09-19)
 
 
