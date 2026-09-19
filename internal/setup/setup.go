@@ -30,6 +30,7 @@ import (
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/ledgerping"
 	"github.com/kontext-security/kontext/internal/managedconfig"
@@ -478,21 +479,29 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		fmt.Fprintln(opts.Stderr, binaryNote)
 	}
 
-	settingsPath, err := installManagedSettings(ctx, settingsData)
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(opts.Stdout, "  ✓ Claude Code managed hooks installed (%s)\n", settingsPath)
-
-	codexHooksPath, err := installCodexUserHooks(binary)
-	if err != nil {
-		return fmt.Errorf("install Codex hooks: %w\n\nFix or move ~/.codex/hooks.json, then rerun setup.", err)
-	}
-	fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", codexHooksPath)
-	if configPath, enabled, err := enableCodexHooksFeature(); err != nil {
-		fmt.Fprintf(opts.Stderr, "note: could not enable the Codex hooks feature automatically (%v); set `[features].hooks = true` in ~/.codex/config.toml or the hooks will not run.\n", err)
-	} else if enabled {
-		fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks feature enabled ([features].hooks in %s)\n", configPath)
+	if err := hookinstall.Install(hookinstall.Options{
+		Scope: hookinstall.User, Home: home, Binary: binary, Setup: true, ClaudePath: managedSettingsPath,
+		WriteClaude: func(_ string, data []byte) error { _, err := installManagedSettings(ctx, data); return err },
+		Report: func(r hookinstall.Result) {
+			switch r.File.Kind {
+			case "claude":
+				fmt.Fprintf(opts.Stdout, "  ✓ Claude Code managed hooks installed (%s)\n", r.File.Path)
+			case "codex":
+				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", r.File.Path)
+			case "feature":
+				if r.Err != nil {
+					fmt.Fprintf(opts.Stderr, "note: could not enable the Codex hooks feature automatically (%v); set `[features].hooks = true` in ~/.codex/config.toml or the hooks will not run.\n", r.Err)
+				} else if r.Action == "write" {
+					fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks feature enabled ([features].hooks in %s)\n", r.File.Path)
+				}
+			}
+		},
+	}); err != nil {
+		return err
 	}
 	fmt.Fprintln(opts.Stderr, "note: Codex hooks require review before they run; open `/hooks` in Codex to trust the Kontext hooks.")
 	if home, err := os.UserHomeDir(); err == nil {
@@ -984,58 +993,7 @@ func installManagedSettings(ctx context.Context, data []byte) (string, error) {
 }
 
 func writePrivilegedFile(ctx context.Context, path string, data []byte) error {
-	if geteuid() == 0 {
-		dir := filepath.Dir(path)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		temp, err := os.CreateTemp(dir, ".managed-settings-*.tmp")
-		if err != nil {
-			return err
-		}
-		tempPath := temp.Name()
-		defer os.Remove(tempPath)
-		if err := temp.Chmod(0o644); err != nil {
-			temp.Close()
-			return err
-		}
-		if _, err := temp.Write(data); err != nil {
-			temp.Close()
-			return err
-		}
-		if err := temp.Sync(); err != nil {
-			temp.Close()
-			return err
-		}
-		if err := temp.Close(); err != nil {
-			return err
-		}
-		if err := os.Rename(tempPath, path); err != nil {
-			return err
-		}
-		return os.Chmod(path, 0o644)
-	}
-
-	temp, err := os.CreateTemp("", "kontext-managed-settings-*.json")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if _, err := temp.Write(data); err != nil {
-		temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := runPrivilegedCommand(ctx, "sudo", "mkdir", "-p", filepath.Dir(path)); err != nil {
-		return fmt.Errorf("create Claude managed settings directory: %w", err)
-	}
-	if err := runPrivilegedCommand(ctx, "sudo", "install", "-m", "0644", tempPath, path); err != nil {
-		return fmt.Errorf("install Claude managed settings: %w", err)
-	}
-	return nil
+	return hookinstall.WriteClaudeFile(path, data, geteuid(), func(name string, args ...string) error { return runPrivilegedCommand(ctx, name, args...) })
 }
 
 func removeLegacyUserHooks() error {
@@ -1119,57 +1077,6 @@ func preflightCodexUserHooks(binary string) error {
 		return fmt.Errorf("check Codex hooks: %w\n\nFix or move ~/.codex/hooks.json, then rerun setup.", err)
 	}
 	return nil
-}
-
-func installCodexUserHooks(binary string) (string, error) {
-	path, err := codexmanaged.UserHooksPath()
-	if err != nil {
-		return "", err
-	}
-	before, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		before = nil
-	} else if err != nil {
-		return "", err
-	}
-	settings, err := codexmanaged.ReadHooks(path)
-	if err != nil {
-		return "", err
-	}
-	if err := codexmanaged.MergeManagedHooks(settings, binary); err != nil {
-		return "", err
-	}
-	after, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	after = append(after, '\n')
-	if bytes.Equal(before, after) {
-		return path, nil
-	}
-	if err := codexmanaged.BackupHooks(path, settingsBackupLabel); err != nil {
-		return "", err
-	}
-	if err := codexmanaged.WriteHooks(path, settings); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-// enableCodexHooksFeature turns on `[features].hooks` in ~/.codex/config.toml so
-// the hooks we just installed actually fire — Codex gates its hook engine off
-// by default. Non-fatal in the caller: a failure here should warn, not abort a
-// setup whose durable state is already written.
-func enableCodexHooksFeature() (configPath string, enabled bool, err error) {
-	path, err := codexmanaged.UserConfigPath()
-	if err != nil {
-		return "", false, err
-	}
-	enabled, err = codexmanaged.EnsureHooksEnabled(path, settingsBackupLabel)
-	if err != nil {
-		return "", false, err
-	}
-	return path, enabled, nil
 }
 
 func waitForDaemon(out io.Writer) error {

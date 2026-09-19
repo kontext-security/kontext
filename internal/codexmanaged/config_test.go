@@ -159,3 +159,28 @@ func TestEnsureHooksEnabledPreservesModeAndBacksUp(t *testing.T) {
 		t.Fatalf("backups = %d, want 1", backups)
 	}
 }
+
+func TestEnableHooksFeatureRejectsUnsafeTOMLEdits(t *testing.T) {
+	for _, content := range []string{
+		"[features]\nhooks = false\nhooks = true\n",
+		"description = '''\n[features]\nhooks = false\n'''\n",
+		"[features]\n[[items]]\nhooks = false\n",
+		"features = { hooks = false }\n",
+		"features.hooks = false\n",
+	} {
+		path := writeConfig(t, content)
+		if _, err := EnsureHooksEnabled(path, "test"); err == nil {
+			t.Fatalf("accepted unsafe edit %q", content)
+		}
+		if got := readConfig(t, path); got != content {
+			t.Fatalf("changed rejected config: %q", got)
+		}
+	}
+}
+
+func TestHooksFeatureCanonicalFalseWins(t *testing.T) {
+	enabled, set, err := HooksFeature("[features]\nhooks = false\ncodex_hooks = true\n")
+	if err != nil || enabled || !set {
+		t.Fatalf("got (%v,%v,%v)", enabled, set, err)
+	}
+}

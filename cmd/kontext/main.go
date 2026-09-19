@@ -20,6 +20,7 @@ import (
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/hookcmd"
+	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/managedconfig"
@@ -63,6 +64,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(hookCmd())
 	root.AddCommand(managedObserveDaemonCmd())
 	root.AddCommand(doctorCmd())
+	root.AddCommand(hooksCmd())
 	root.AddCommand(reportCmd())
 	root.AddCommand(riskTypesCmd())
 	root.AddCommand(stepSafetyCmd())
@@ -206,6 +208,8 @@ func doctorCmd() *cobra.Command {
 	return cmd
 }
 
+var doctorAgentPresent = hookinstall.AgentPresent
+
 // checkHooks reports hook health for a managed-observe status, writing its
 // readout to out. Shared by the text and JSON paths so the two can never
 // disagree about what "healthy" means.
@@ -216,7 +220,11 @@ func checkHooks(out io.Writer, managed managedobserve.DoctorStatus) (managedHook
 	} else if managed.Configured {
 		managedHooks = guardcli.PrintOrganizationManagedHookStatus(out).Healthy
 	}
-	localHooks = guardcli.PrintHookStatus(out).Healthy
+	localHooks = true
+	home, err := os.UserHomeDir()
+	if err != nil || doctorAgentPresent("claude_code", home) {
+		localHooks = guardcli.PrintHookStatus(out).Healthy
+	}
 	return managedHooks, localHooks
 }
 
