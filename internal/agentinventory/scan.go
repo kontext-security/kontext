@@ -108,6 +108,9 @@ func configDirs(d Descriptor, home string, env func(string) string) []string {
 		}
 	}
 	value := envValue(env, d.ConfigEnv)
+	if d.ID == "kimi_code" && value == "" {
+		value = envValue(env, "KIMI_SHARE_DIR")
+	}
 	if value != "" {
 		base := expand(home, value)
 		switch d.ConfigEnv {
@@ -116,7 +119,10 @@ func configDirs(d Descriptor, home string, env func(string) string) []string {
 		case "XDG_CONFIG_HOME":
 			return []string{filepath.Join(base, strings.TrimPrefix(d.ConfigDirs[0], ".config/"))}
 		case "CRUSH_GLOBAL_CONFIG":
-			return []string{filepath.Dir(base)}
+			if strings.HasSuffix(base, ".json") {
+				return []string{filepath.Dir(base)}
+			}
+			return []string{base}
 		case "KIRO_HOME":
 			return []string{base, filepath.Join(home, ".kiro")}
 		default:

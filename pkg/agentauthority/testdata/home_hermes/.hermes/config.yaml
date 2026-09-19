@@ -1,0 +1,8 @@
+approvals:
+  mode: off
+mcp_servers:
+  sample:
+    command: npx
+    args: ["-y", "@example/mcp-server"]
+plugins:
+  enabled: [sample-plugin]

@@ -60,7 +60,7 @@ var Catalog = []Descriptor{
 	{"opencode", "OpenCode", []string{".config/opencode"}, "OPENCODE_CONFIG_DIR", ".local/share/opencode/storage"},
 	{"openclaw", "OpenClaw", []string{".openclaw", ".clawdbot"}, "OPENCLAW_STATE_DIR", "<config>/agents"},
 	{"pi", "Pi", []string{".pi/agent"}, "PI_CODING_AGENT_DIR", "<config>/sessions"},
-	{"kimi_code", "Kimi Code", []string{".kimi-code"}, "KIMI_CODE_HOME", "<config>/sessions"},
+	{"kimi_code", "Kimi Code", []string{".kimi-code", ".kimi"}, "KIMI_CODE_HOME", "<config>/sessions"},
 	{"qwen_code", "Qwen Code", []string{".qwen"}, "QWEN_HOME", ""},
 	{"cline", "Cline", []string{".cline"}, "CLINE_DIR", ""},
 	{"amp", "Amp", []string{".config/amp"}, "XDG_CONFIG_HOME", ""},

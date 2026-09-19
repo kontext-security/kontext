@@ -1,0 +1,1 @@
+{"mcp":{"sample":{"command":"/usr/local/bin/npx","args":["-y","@example/mcp-server"]}},"permissions":{"allowed_tools":["bash","SECRET_TOOL_NOT_REPORTED"]}}
