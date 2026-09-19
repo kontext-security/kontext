@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/kontext-security/kontext/compare/v1.7.0...v1.8.0) (2026-09-19)
+
+
+### Features
+
+* **hooks:** share hook installation across scopes ([#521](https://github.com/kontext-security/kontext/issues/521)) ([68113c4](https://github.com/kontext-security/kontext/commit/68113c408225f572c674b93e4eb893ea9ccbd8ea))
+
 ## [1.7.0](https://github.com/kontext-security/kontext/compare/v1.6.1...v1.7.0) (2026-09-19)
 
 
