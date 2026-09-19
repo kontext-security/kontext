@@ -42,7 +42,10 @@ func agentWiring(paths codexmanaged.InstallationPaths, pathsErr error) map[strin
 			if pathsErr != nil {
 				return agentinventory.WiredError
 			}
-			_, err := codexmanaged.InspectInstallation(paths)
+			installation, err := codexmanaged.InspectInstallation(paths)
+			if len(installation.Layers) > 0 {
+				return agentinventory.WiredYes
+			}
 			if errors.Is(err, codexmanaged.ErrIncompleteInstallation) {
 				return agentinventory.WiredNo
 			}

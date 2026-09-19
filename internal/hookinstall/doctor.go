@@ -52,11 +52,6 @@ func diagnose(out io.Writer, defs []Definition, present func(string) bool, userC
 			if err == nil {
 				binary, err = def.Validate(raw)
 			}
-			if err == nil && def.Agent == "codex" && otherCodexHooks != "" {
-				// Codex loads both hook layers. A broken sibling file is a runtime error
-				// even when this channel's required file is complete.
-				_, err = codexmanaged.InspectInstallation(codexmanaged.InstallationPaths{SystemHooks: file.Path, UserHooks: otherCodexHooks})
-			}
 			if err == nil && !executable(binary) {
 				err = fmt.Errorf("configured binary is not executable (%s)", binary)
 			}
@@ -65,6 +60,30 @@ func diagnose(out io.Writer, defs []Definition, present func(string) bool, userC
 				healthy = false
 			} else {
 				fmt.Fprintf(out, "%s hooks: installed (%s; binary %s)\n", def.Name, file.Path, binary)
+				if def.Agent == "codex" && otherCodexHooks != "" {
+					installation, err := codexmanaged.InspectInstallation(codexmanaged.InstallationPaths{SystemHooks: file.Path, UserHooks: otherCodexHooks})
+					if err != nil {
+						fmt.Fprintf(out, "Codex hooks: %v\n", err)
+						healthy = false
+					}
+					for _, layer := range installation.Layers {
+						if layer.Path == file.Path {
+							continue
+						}
+						if !executable(layer.Binary) {
+							fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s; binary %s)\n", layer.Path, layer.Binary)
+							healthy = false
+						} else if layer.Binary != binary {
+							path := layer.Path
+							if home, err := os.UserHomeDir(); err == nil && path == filepath.Join(home, ".codex", "hooks.json") {
+								path = "~/.codex/hooks.json"
+							}
+							fmt.Fprintf(out, "Codex hooks: another Kontext install also hooks Codex (%s → %s); run kontext setup --uninstall on an organization-managed Mac\n", path, layer.Binary)
+							// Match the existing both-scopes LaunchAgent warning's health effect.
+							healthy = false
+						}
+					}
+				}
 			}
 		}
 	}

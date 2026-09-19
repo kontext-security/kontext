@@ -454,3 +454,76 @@ func TestInstallRejectsUnusableBinary(t *testing.T) {
 		})
 	}
 }
+
+func TestDoctorCodexLayers(t *testing.T) {
+	for _, scope := range []Scope{System, User} {
+		for _, state := range []string{"only owned", "same binary", "different binary", "foreign owned", "foreign other", "malformed owned", "malformed other", "missing other binary"} {
+			t.Run(string(scope)+"/"+state, func(t *testing.T) {
+				opts, defs := fixture(t, scope)
+				if err := runDefinitions(opts, defs, false); err != nil {
+					t.Fatal(err)
+				}
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				other := filepath.Join(home, ".codex", "hooks.json")
+				otherBinary := opts.Binary
+				if state == "different binary" || state == "missing other binary" {
+					otherBinary = filepath.Join(home, "runtime", "bin", "kontext")
+					if state == "different binary" {
+						write(t, otherBinary, "#!/bin/sh\n", 0755)
+					}
+				}
+				if state != "only owned" {
+					raw, err := codexmanaged.TemplateJSON(otherBinary)
+					if err != nil {
+						t.Fatal(err)
+					}
+					write(t, other, string(raw), 0600)
+				}
+				owned := defs[1].Files[0].Path
+				switch state {
+				case "foreign owned", "foreign other":
+					raw, err := codexmanaged.TemplateJSON("/enterprise/other-agent")
+					if err != nil {
+						t.Fatal(err)
+					}
+					path := owned
+					if state == "foreign other" {
+						path = other
+					}
+					write(t, path, string(raw), 0600)
+				case "malformed owned":
+					write(t, owned, "{", 0600)
+				case "malformed other":
+					write(t, other, "{", 0600)
+				}
+				var out bytes.Buffer
+				healthy := diagnose(&out, defs, func(id string) bool { return id == "codex" }, filepath.Join(home, ".codex", "config.toml"), other)
+				wantHealthy := state == "only owned" || state == "same binary"
+				if healthy != wantHealthy {
+					t.Fatalf("healthy=%v, want %v: %s", healthy, wantHealthy, &out)
+				}
+				wantWarnings := 0
+				if state == "different binary" {
+					wantWarnings = 1
+					warning := "Codex hooks: another Kontext install also hooks Codex (~/.codex/hooks.json → " + otherBinary + "); run kontext setup --uninstall on an organization-managed Mac\n"
+					if !strings.Contains(out.String(), warning) {
+						t.Fatal(&out)
+					}
+					if strings.Contains(out.String(), "incomplete") || strings.Contains(out.String(), "different binary paths") {
+						t.Fatal(&out)
+					}
+				}
+				if got := strings.Count(out.String(), "another Kontext install"); got != wantWarnings {
+					t.Fatalf("warnings=%d, want %d: %s", got, wantWarnings, &out)
+				}
+				if state != "foreign owned" && state != "malformed owned" {
+					installed := "Codex hooks: installed (" + owned + "; binary " + opts.Binary + ")\n"
+					if !strings.Contains(out.String(), installed) {
+						t.Fatal(&out)
+					}
+				}
+			})
+		}
+	}
+}
