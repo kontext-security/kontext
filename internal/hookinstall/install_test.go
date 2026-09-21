@@ -457,7 +457,7 @@ func TestInstallRejectsUnusableBinary(t *testing.T) {
 
 func TestDoctorCodexLayers(t *testing.T) {
 	for _, scope := range []Scope{System, User} {
-		for _, state := range []string{"only owned", "same binary", "different binary", "foreign owned", "foreign other", "malformed owned", "malformed other", "missing other binary"} {
+		for _, state := range []string{"only owned", "only other", "empty owned", "both empty", "incomplete owned", "same binary", "different binary", "foreign owned", "foreign other", "malformed owned", "malformed other", "missing other binary"} {
 			t.Run(string(scope)+"/"+state, func(t *testing.T) {
 				opts, defs := fixture(t, scope)
 				if err := runDefinitions(opts, defs, false); err != nil {
@@ -482,6 +482,17 @@ func TestDoctorCodexLayers(t *testing.T) {
 				}
 				owned := defs[1].Files[0].Path
 				switch state {
+				case "only other":
+					if err := os.Remove(owned); err != nil {
+						t.Fatal(err)
+					}
+				case "empty owned":
+					write(t, owned, `{"hooks":{}}`, 0600)
+				case "both empty":
+					write(t, owned, `{"hooks":{}}`, 0600)
+					write(t, other, `{"hooks":{}}`, 0600)
+				case "incomplete owned":
+					write(t, owned, `{"hooks":{"Stop":[]}}`, 0600)
 				case "foreign owned", "foreign other":
 					raw, err := codexmanaged.TemplateJSON("/enterprise/other-agent")
 					if err != nil {
@@ -499,7 +510,7 @@ func TestDoctorCodexLayers(t *testing.T) {
 				}
 				var out bytes.Buffer
 				healthy := diagnose(&out, defs, func(id string) bool { return id == "codex" }, filepath.Join(home, ".codex", "config.toml"), other)
-				wantHealthy := state == "only owned" || state == "same binary"
+				wantHealthy := state == "only owned" || state == "same binary" || state == "only other" || state == "empty owned"
 				if healthy != wantHealthy {
 					t.Fatalf("healthy=%v, want %v: %s", healthy, wantHealthy, &out)
 				}
@@ -517,7 +528,12 @@ func TestDoctorCodexLayers(t *testing.T) {
 				if got := strings.Count(out.String(), "another Kontext install"); got != wantWarnings {
 					t.Fatalf("warnings=%d, want %d: %s", got, wantWarnings, &out)
 				}
-				if state != "foreign owned" && state != "malformed owned" {
+				if state == "only other" || state == "empty owned" {
+					installed := "Codex hooks: installed (" + other + "; binary " + opts.Binary + ")\n"
+					if !strings.Contains(out.String(), installed) {
+						t.Fatal(&out)
+					}
+				} else if state != "foreign owned" && state != "malformed owned" && state != "both empty" && state != "incomplete owned" {
 					installed := "Codex hooks: installed (" + owned + "; binary " + opts.Binary + ")\n"
 					if !strings.Contains(out.String(), installed) {
 						t.Fatal(&out)

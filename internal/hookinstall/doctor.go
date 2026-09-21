@@ -47,6 +47,12 @@ func diagnose(out io.Writer, defs []Definition, present func(string) bool, userC
 				}
 				continue
 			}
+			if def.Agent == "codex" {
+				if !diagnoseCodexHooks(out, file.Path, otherCodexHooks) {
+					healthy = false
+				}
+				continue
+			}
 			raw, err := os.ReadFile(file.Path)
 			binary := ""
 			if err == nil {
@@ -60,31 +66,39 @@ func diagnose(out io.Writer, defs []Definition, present func(string) bool, userC
 				healthy = false
 			} else {
 				fmt.Fprintf(out, "%s hooks: installed (%s; binary %s)\n", def.Name, file.Path, binary)
-				if def.Agent == "codex" && otherCodexHooks != "" {
-					installation, err := codexmanaged.InspectInstallation(codexmanaged.InstallationPaths{SystemHooks: file.Path, UserHooks: otherCodexHooks})
-					if err != nil {
-						fmt.Fprintf(out, "Codex hooks: %v\n", err)
-						healthy = false
-					}
-					for _, layer := range installation.Layers {
-						if layer.Path == file.Path {
-							continue
-						}
-						if !executable(layer.Binary) {
-							fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s; binary %s)\n", layer.Path, layer.Binary)
-							healthy = false
-						} else if layer.Binary != binary {
-							path := layer.Path
-							if home, err := os.UserHomeDir(); err == nil && path == filepath.Join(home, ".codex", "hooks.json") {
-								path = "~/.codex/hooks.json"
-							}
-							fmt.Fprintf(out, "Codex hooks: another Kontext install also hooks Codex (%s → %s); run kontext setup --uninstall on an organization-managed Mac\n", path, layer.Binary)
-							// Match the existing both-scopes LaunchAgent warning's health effect.
-							healthy = false
-						}
-					}
-				}
 			}
+		}
+	}
+	return healthy
+}
+
+// Both Codex hook layers are additive. An absent or empty preferred layer is
+// fine when the other is complete; a malformed or partial layer still fails.
+// Validate both before choosing the installed binary instead of requiring the
+// daemon's setup scope to contain hooks of its own.
+func diagnoseCodexHooks(out io.Writer, preferred, other string) bool {
+	installation, err := codexmanaged.InspectInstallation(codexmanaged.InstallationPaths{SystemHooks: preferred, UserHooks: other})
+	healthy := err == nil
+	if err != nil {
+		fmt.Fprintf(out, "Codex hooks: %v\n", err)
+	}
+	var binary string
+	for _, layer := range installation.Layers {
+		if !executable(layer.Binary) {
+			fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s; binary %s)\n", layer.Path, layer.Binary)
+			healthy = false
+			continue
+		}
+		fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", layer.Path, layer.Binary)
+		if binary == "" {
+			binary = layer.Binary
+		} else if layer.Binary != binary {
+			path := layer.Path
+			if home, err := os.UserHomeDir(); err == nil && path == filepath.Join(home, ".codex", "hooks.json") {
+				path = "~/.codex/hooks.json"
+			}
+			fmt.Fprintf(out, "Codex hooks: another Kontext install also hooks Codex (%s → %s); run kontext setup --uninstall on an organization-managed Mac\n", path, layer.Binary)
+			healthy = false
 		}
 	}
 	return healthy

@@ -322,7 +322,8 @@ func validateEvent(groups []MatcherGroup, event Event, kontextBinary string) err
 	firstRestrictiveMatcher := ""
 	for _, group := range groups {
 		for _, handler := range group.Hooks {
-			if handler.Command != hookCommand(kontextBinary, event.Alias) {
+			fields, ok := agenthooks.SplitLiteralCommand(handler.Command)
+			if !ok || len(fields) != 3 || fields[0] != kontextBinary || fields[1] != "hook" || fields[2] != event.Alias {
 				continue
 			}
 			if handler.Type != "command" {
