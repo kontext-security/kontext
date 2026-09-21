@@ -21,10 +21,11 @@ const maxReportBytes = 64 * 1024
 const managedRoot = "/Library/Application Support/ClaudeCode"
 
 // Each root is resolved relative to home once, never from configuration contents.
-// Custom discovery/config environment paths do not expand this approved allowlist.
+// Custom discovery paths do not expand this allowlist; explicit environment
+// overrides add only their named configuration files inside home.
 func allowedRoots(home, managed string) []string {
 	roots := []string{managed}
-	for _, root := range []string{".claude.json", ".claude", ".codex", ".cursor", ".codeium/windsurf", ".copilot", ".gemini", ".kiro", ".config/amp", ".config/opencode", ".config/gh", ".config/gcloud", ".aws", ".kube", ".ssh", ".npmrc", ".docker/config.json", "Library/Application Support/Claude", "Library/Application Support/Code/User/mcp.json"} {
+	for _, root := range []string{".openclaw", ".clawdbot", ".qwen", ".config/goose", ".factory", ".config/devin", ".pi/agent", ".kimi", ".kimi-code", ".augment", ".config/kilo", ".config/crush", ".junie", ".grok", ".hermes", ".cline/data/settings/cline_mcp_settings.json", ".claude.json", ".claude", ".codex", ".cursor", ".cline/data/globalState.json", "Library/Application Support/Cursor/User/globalStorage/state.vscdb", "Library/Application Support/Windsurf/User/settings.json", ".codeium/windsurf", ".copilot", ".gemini", ".kiro", ".config/amp", ".config/opencode", ".config/gh", ".config/gcloud", ".aws", ".kube", ".ssh", ".npmrc", ".docker/config.json", "Library/Application Support/Claude", "Library/Application Support/Code/User/mcp.json"} {
 		roots = append(roots, filepath.Join(home, root))
 	}
 	return roots
@@ -63,6 +64,7 @@ type fileResult struct {
 	data     []byte
 	entries  []os.DirEntry
 	info     os.FileInfo
+	walInfo  os.FileInfo
 	err      error
 	opened   bool
 	parsed   any
@@ -95,10 +97,12 @@ func (g *guard) access(path, mode string) fileResult {
 			return fileResult{err: os.ErrPermission}
 		}
 	}
+	readCtx, cancel := context.WithTimeout(g.ctx, time.Second)
+	defer cancel()
 	done := make(chan fileResult, 1)
 	read := g.readFile
 	if read == nil {
-		read = readGuarded
+		read = func(path, mode string) fileResult { return readGuarded(readCtx, path, mode) }
 	}
 	stat := g.lstat
 	if stat == nil {
@@ -113,10 +117,18 @@ func (g *guard) access(path, mode string) fileResult {
 		if beginRead != nil {
 			defer beginRead()()
 		}
-		info, err := guardedInfo(path, stat)
+		info, err := guardedInfo(path, stat, mode == "tail" || mode == "cursor")
 		if err != nil {
 			done <- fileResult{err: err}
 			return
+		}
+		var walInfo os.FileInfo
+		if mode == "cursor" {
+			walInfo, err = guardedInfo(path+"-wal", stat, true)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				done <- fileResult{err: err}
+				return
+			}
 		}
 		if mode == "stat" {
 			if !info.Mode().IsRegular() {
@@ -126,12 +138,16 @@ func (g *guard) access(path, mode string) fileResult {
 			done <- fileResult{info: info}
 			return
 		}
-		if hasCache && os.SameFile(cached.info, info) && cached.info.Size() == info.Size() && cached.info.ModTime().Equal(info.ModTime()) {
+		if hasCache && sameFileVersion(cached.info, info) && sameFileVersion(cached.walInfo, walInfo) {
 			cached.opened = false
 			done <- cached
 			return
 		}
-		done <- read(path, mode)
+		result := read(path, mode)
+		// Keep the pre-query WAL version: a commit during the query invalidates the
+		// next scan instead of caching an older value against newer metadata.
+		result.walInfo = walInfo
+		done <- result
 	}()
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
@@ -177,7 +193,7 @@ func (g *guard) readError(path, reason string) {
 }
 
 // Check every ancestor before opening anything, including dataless directories.
-func guardedInfo(path string, stat func(string) (os.FileInfo, error)) (os.FileInfo, error) {
+func guardedInfo(path string, stat func(string) (os.FileInfo, error), tail bool) (os.FileInfo, error) {
 	prefix := "/"
 	var info os.FileInfo
 	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
@@ -187,18 +203,29 @@ func guardedInfo(path string, stat func(string) (os.FileInfo, error)) (os.FileIn
 		if err != nil {
 			return nil, err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) || isDataless(info) || (!info.IsDir() && info.Size() > maxFileBytes) {
+		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) || isDataless(info) || (!tail && !info.IsDir() && info.Size() > maxFileBytes) {
 			return nil, os.ErrPermission
 		}
 	}
 	return info, nil
 }
 
+func sameFileVersion(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
 var errParse = errors.New("configuration parse error")
 
 // Cache parsed values, never raw file contents (which can contain credentials).
-func readParsed[T any](g *guard, path string, parse func([]byte) (T, error)) (T, error) {
-	result := g.access(path, "read")
+func readParsed[T any](g *guard, path string, parse func([]byte) (T, error), modes ...string) (T, error) {
+	mode := "read"
+	if len(modes) > 0 {
+		mode = modes[0]
+	}
+	result := g.access(path, mode)
 	if result.err != nil {
 		var zero T
 		return zero, result.err
@@ -217,7 +244,7 @@ func readParsed[T any](g *guard, path string, parse func([]byte) (T, error)) (T,
 	return value, err
 }
 
-func readGuarded(path, mode string) (result fileResult) {
+func readGuarded(ctx context.Context, path, mode string) (result fileResult) {
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		result.err = err
@@ -233,7 +260,7 @@ func readGuarded(path, mode string) (result fileResult) {
 			result.err = statErr
 			return
 		}
-		if info.Mode()&os.ModeSymlink != 0 || isDataless(info) || (!info.IsDir() && !info.Mode().IsRegular()) || !info.IsDir() && info.Size() > maxFileBytes {
+		if info.Mode()&os.ModeSymlink != 0 || isDataless(info) || (!info.IsDir() && !info.Mode().IsRegular()) || mode != "tail" && mode != "cursor" && !info.IsDir() && info.Size() > maxFileBytes {
 			unix.Close(fd)
 			result.err = os.ErrPermission
 			return
@@ -265,6 +292,16 @@ func readGuarded(path, mode string) (result fileResult) {
 	}
 	result.info = actual
 	switch mode {
+	case "cursor":
+		if !actual.Mode().IsRegular() {
+			result.err = os.ErrPermission
+			return
+		}
+		value, err := readCursor(ctx, file)
+		result.parsed = value
+		if err != nil {
+			result.parseErr = errParse
+		}
 	case "stat":
 		if !actual.Mode().IsRegular() {
 			result.err = os.ErrPermission
@@ -278,6 +315,16 @@ func readGuarded(path, mode string) (result fileResult) {
 		if len(result.data) > maxFileBytes {
 			result.data = nil
 			result.err = os.ErrPermission
+		}
+	case "tail":
+		if !actual.Mode().IsRegular() {
+			result.err = os.ErrPermission
+			return
+		}
+		const tailBytes = 64 * 1024
+		_, result.err = file.Seek(max(0, actual.Size()-tailBytes), io.SeekStart)
+		if result.err == nil {
+			result.data, result.err = io.ReadAll(io.LimitReader(file, tailBytes))
 		}
 	case "list":
 		result.entries, result.err = file.ReadDir(maxFiles + 1)
@@ -308,8 +355,8 @@ func (g *guard) entries(path string) []os.DirEntry {
 	return result.entries
 }
 
-func readConfig[T any](g *guard, id, path string, parse func([]byte) (T, error)) (T, bool) {
-	value, err := readParsed(g, path, parse)
+func readConfig[T any](g *guard, id, path string, parse func([]byte) (T, error), modes ...string) (T, bool) {
+	value, err := readParsed(g, path, parse, modes...)
 	if errors.Is(err, errParse) {
 		g.parseError(id, filepath.Base(path))
 	}
@@ -319,4 +366,13 @@ func parseJSON[T any](data []byte) (T, error) {
 	var value T
 	err := json.Unmarshal(data, &value)
 	return value, err
+}
+
+// CoworkVMLogTail reads only the last 64 KB of the fixed Cowork VM log, through
+// the same deadline, no-symlink and dataless guard as configuration reads.
+func CoworkVMLogTail(ctx context.Context, home string) ([]byte, error) {
+	path := filepath.Join(home, "Library/Logs/Claude/cowork_vm_swift.log")
+	g := guard{ctx: ctx, home: home, roots: []string{path}, report: &Report{}}
+	result := g.access(path, "tail")
+	return result.data, result.err
 }

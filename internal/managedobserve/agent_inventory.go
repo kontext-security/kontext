@@ -9,6 +9,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
 
 // AgentWiring shares the daemon's hook facts with the one-shot setup scan.
@@ -41,7 +42,10 @@ func agentWiring(paths codexmanaged.InstallationPaths, pathsErr error) map[strin
 			if pathsErr != nil {
 				return agentinventory.WiredError
 			}
-			_, err := codexmanaged.InspectInstallation(paths)
+			installation, err := codexmanaged.InspectInstallation(paths)
+			if len(installation.Layers) > 0 {
+				return agentinventory.WiredYes
+			}
 			if errors.Is(err, codexmanaged.ErrIncompleteInstallation) {
 				return agentinventory.WiredNo
 			}
@@ -84,7 +88,12 @@ func (h *agentInventoryHolder) run(ctx context.Context, opts DaemonOptions, dbPa
 	for {
 		started := time.Now()
 		scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		inv := agentinventory.Scan(scanCtx, home, os.Getenv, started, AgentWiring())
+		inv := agentinventory.Scan(scanCtx, home, os.Getenv, started, agentinventory.ScanOptions{
+			Wired: AgentWiring(),
+			HasCoworkSessionsSince: func(since time.Time) (bool, error) {
+				return sqlite.HasCoworkSessionsSince(scanCtx, dbPath, since)
+			},
+		})
 		cancel()
 		opts.Diagnostic.Printf("agent inventory: scanned %d agents in %s (incomplete=%t)\n", len(inv.Agents), time.Since(started), inv.Incomplete)
 		if ctx.Err() == nil {

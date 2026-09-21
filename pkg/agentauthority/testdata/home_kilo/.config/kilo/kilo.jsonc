@@ -1,0 +1,1 @@
+{"permission": {"bash": "allow"}, "mcp": {"sample": {"type": "local", "command": ["npx", "-y", "@example/mcp-server"]}}}

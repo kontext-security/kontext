@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.8.1](https://github.com/kontext-security/kontext/compare/v1.8.0...v1.8.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* **hooks:** validate Codex installation layers independently ([#523](https://github.com/kontext-security/kontext/issues/523)) ([82c7b7a](https://github.com/kontext-security/kontext/commit/82c7b7a260d06afcf172620f2cd38e450cd22a50))
+
+## [1.8.0](https://github.com/kontext-security/kontext/compare/v1.7.0...v1.8.0) (2026-09-19)
+
+
+### Features
+
+* **hooks:** share hook installation across scopes ([#521](https://github.com/kontext-security/kontext/issues/521)) ([68113c4](https://github.com/kontext-security/kontext/commit/68113c408225f572c674b93e4eb893ea9ccbd8ea))
+
+## [1.7.0](https://github.com/kontext-security/kontext/compare/v1.6.1...v1.7.0) (2026-09-19)
+
+
+### Features
+
+* **setup:** report the connected person, add whoami, refuse a reused setup command ([#506](https://github.com/kontext-security/kontext/issues/506)) ([45a0bcf](https://github.com/kontext-security/kontext/commit/45a0bcf1d5ff02844295b933c00de89c52e279b9))
+
+## [1.6.1](https://github.com/kontext-security/kontext/compare/v1.6.0...v1.6.1) (2026-09-18)
+
+
+### Features
+
+* **discovery:** derive Cowork sandbox status from hook sessions ([#516](https://github.com/kontext-security/kontext/issues/516)) ([796bd17](https://github.com/kontext-security/kontext/commit/796bd176f4551c45a0d3ed19f743c04a3a5beeb4))
+
+
+### Bug Fixes
+
+* **doctor:** organization installs do not require system Codex hooks ([#519](https://github.com/kontext-security/kontext/issues/519)) ([85ce3d0](https://github.com/kontext-security/kontext/commit/85ce3d003db91d069e1ffe69a1f852f8d57a4d31))
+
 ## [1.6.0](https://github.com/kontext-security/kontext/compare/v1.5.1...v1.6.0) (2026-09-18)
 
 

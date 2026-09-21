@@ -45,8 +45,8 @@ type DaemonOptions struct {
 	EndpointConfigHTTPClient      *http.Client
 	AgentInventoryInterval        time.Duration
 	Diagnostic                    diagnostic.Logger
-	// BinaryVersion is the CLI binary version, for startup logging and future
-	// status reporting.
+	// BinaryVersion is this process's linked CLI version, used for startup
+	// logging, daemon status, and the ledger's device.cli_version fact.
 	BinaryVersion string
 	// FallbackDeploymentVersion is reported to the ledger when no MDM
 	// deployment-version marker exists (self-serve brew installs).
@@ -65,6 +65,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if binaryVersion == "" {
 		binaryVersion = "dev"
 	}
+	opts.BinaryVersion = binaryVersion
 	logAlways(opts.Diagnostic, "managed-observe daemon %s (pid %d) started\n", binaryVersion, os.Getpid())
 	healLaunchAgentPriority(DefaultLabel(), opts.Diagnostic)
 
@@ -587,7 +588,7 @@ type deviceKeySource struct {
 // the network coming up, and even the local ioreg read can fail transiently
 // under resource pressure — so nothing short of the kill switch disables
 // reporting for the daemon's lifetime.
-func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token string, client *http.Client, diag diagnostic.Logger) string {
+func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token, installationID string, client *http.Client, diag diagnostic.Logger) string {
 	if strings.TrimSpace(os.Getenv(envNoDeviceKey)) != "" {
 		return ""
 	}
@@ -601,7 +602,7 @@ func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token string, c
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, deviceKeyPingTimeout)
 	defer cancel()
-	ping, err := workspacePingFn(pingCtx, client, cloudURL, token)
+	ping, err := workspacePingFn(pingCtx, client, cloudURL, token, installationID)
 	if err != nil {
 		diag.Printf("device key: workspace ping: %v\n", err)
 		return ""
@@ -669,7 +670,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 	// Resolved once per flush, not per payload: a Flush drains the backlog in
 	// pages and builds a payload for each, and a hung ping retried per page
 	// would stack its timeout onto every page of the drain.
-	deviceKey := deviceKeys.resolve(ctx, loadedConfig.Config.CloudURL, installToken, opts.StreamHTTPClient, opts.Diagnostic)
+	deviceKey := deviceKeys.resolve(ctx, loadedConfig.Config.CloudURL, installToken, installationID, opts.StreamHTTPClient, opts.Diagnostic)
 	if err := managedstream.Flush(ctx, managedstream.Options{
 		DBPath:             dbPath,
 		StatePath:          opts.StreamStatePath,
@@ -679,6 +680,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		DeviceLabel:        loadedConfig.Config.Device.Label,
 		UserEmail:          loadedConfig.Config.Device.UserEmail,
 		DeploymentVersion:  deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
+		CLIVersion:         opts.BinaryVersion,
 		HooksFact:          managedObserveHooksFact,
 		AgentsFact:         inventoryHolder.Fact,
 		AuthorityFact:      authorityHolder.Fact,
@@ -705,9 +707,14 @@ func writeStreamAuthFailure(opts DaemonOptions, dbPath string, status int) {
 	if loadedConfig, err := managedconfig.Load(); err == nil && strings.TrimSpace(loadedConfig.Config.CloudURL) != "" {
 		target = loadedConfig.Config.CloudURL
 	}
-	fmt.Fprintf(os.Stderr,
-		"Kontext install token rejected by %s (HTTP %d). It may have been revoked — run `kontext setup` with a new token from the dashboard.\n",
-		target, status)
+	if status == http.StatusConflict {
+		fmt.Fprintln(os.Stderr, "personal key is bound to another Mac; run kontext setup with a fresh command from Get started")
+	} else {
+		fmt.Fprintf(os.Stderr,
+			"Kontext install token rejected by %s (HTTP %d). It may have been revoked — run `kontext setup` with a new token from the dashboard.\n",
+			target, status)
+	}
+
 	if err := WriteAuthError(dbPath, status); err != nil {
 		opts.Diagnostic.Printf("write auth-error breadcrumb: %v\n", err)
 	}

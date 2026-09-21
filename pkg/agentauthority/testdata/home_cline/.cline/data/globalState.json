@@ -1,0 +1,9 @@
+{
+  "autoApprovalSettings": {
+    "actions": {
+      "executeAllCommands": true,
+      "executeSafeCommands": true,
+      "editFiles": true
+    }
+  }
+}

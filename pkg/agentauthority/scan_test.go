@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -66,17 +67,63 @@ func scanFixture(home string, agents []AgentLocation) Report {
 	return scan(context.Background(), home, Environment{UID: 501, Admin: true}, agents, fixtureTime, filepath.Join(home, "managed"))
 }
 func TestGoldenHomes(t *testing.T) {
-	for _, name := range []string{"home_claude_full", "home_codex", "home_desktop", "home_generic", "home_empty", "home_planted_token", "home_symlink_to_root", "home_huge_settings", "home_many_files", "home_malformed_json", "home_malformed_toml"} {
+	for _, key := range []string{"CLINE_DATA_DIR", "CLINE_DIR", "OPENCODE_CONFIG_DIR", "CRUSH_GLOBAL_CONFIG", "KIMI_CODE_HOME", "KIMI_SHARE_DIR"} {
+		t.Setenv(key, "")
+	}
+	for _, name := range []string{"home_openclaw", "home_qwen_code", "home_goose", "home_factory_droid", "home_devin_cli", "home_pi", "home_kimi_code", "home_auggie", "home_kilo", "home_crush", "home_junie", "home_grok_build", "home_hermes", "home_cursor", "home_windsurf", "home_gemini", "home_cline", "home_opencode", "home_no_prompt_off", "home_claude_full", "home_codex", "home_desktop", "home_generic", "home_empty", "home_planted_token", "home_symlink_to_root", "home_huge_settings", "home_many_files", "home_malformed_json", "home_malformed_toml"} {
 		t.Run(name, func(t *testing.T) {
 			home := fixtureHome(t, name)
 			agents := []AgentLocation{{"claude_code", "~/.claude"}}
 			switch name {
+			case "home_openclaw":
+				agents = []AgentLocation{{"openclaw", "~/.openclaw"}}
+			case "home_qwen_code":
+				agents = []AgentLocation{{"qwen_code", "~/.qwen"}}
+			case "home_goose":
+				agents = []AgentLocation{{"goose", "~/.config/goose"}}
+			case "home_factory_droid":
+				agents = []AgentLocation{{"factory_droid", "~/.factory"}}
+			case "home_devin_cli":
+				agents = []AgentLocation{{"devin_cli", "~/.config/devin"}}
+			case "home_pi":
+				agents = []AgentLocation{{"pi", "~/.pi/agent"}}
+			case "home_kimi_code":
+				agents = []AgentLocation{{"kimi_code", "~/.kimi-code"}}
+			case "home_auggie":
+				agents = []AgentLocation{{"auggie", "~/.augment"}}
+			case "home_kilo":
+				agents = []AgentLocation{{"kilo", "~/.config/kilo"}}
+			case "home_crush":
+				agents = []AgentLocation{{"crush", "~/.config/crush"}}
+			case "home_junie":
+				agents = []AgentLocation{{"junie", "~/.junie"}}
+			case "home_grok_build":
+				agents = []AgentLocation{{"grok_build", "~/.grok"}}
+			case "home_hermes":
+				agents = []AgentLocation{{"hermes", "~/.hermes"}}
+			case "home_cursor":
+				createCursorFixture(t, home)
+				agents = []AgentLocation{{"cursor", "~/.cursor"}}
+			case "home_windsurf":
+				agents = []AgentLocation{{"windsurf", "~/.windsurf"}}
+			case "home_gemini":
+				agents = []AgentLocation{{"gemini_cli", "~/.gemini"}}
+			case "home_cline":
+				agents = []AgentLocation{{"cline", "~/.cline"}}
+			case "home_opencode":
+				agents = []AgentLocation{{"opencode", "~/.config/opencode"}}
+			case "home_no_prompt_off":
+				path := createCursorFixture(t, home)
+				if output, err := exec.Command("/usr/bin/sqlite3", path, `UPDATE ItemTable SET value='{"composerState":{"useYoloMode":false}}';`).CombinedOutput(); err != nil {
+					t.Fatalf("Cursor off fixture: %s %v", output, err)
+				}
+				agents = []AgentLocation{{"cursor", "~/.cursor"}, {"windsurf", "~/.windsurf"}, {"gemini_cli", "~/.gemini"}, {"cline", "~/.cline"}, {"opencode", "~/.config/opencode"}}
 			case "home_codex", "home_malformed_toml":
 				agents = []AgentLocation{{"codex", "~/.codex"}}
 			case "home_desktop":
 				agents = []AgentLocation{{"claude_cowork", "~/Library/Application Support/Claude/local-agent-mode-sessions"}}
 			case "home_generic":
-				agents = []AgentLocation{{"cursor", "~/.cursor"}, {"amp", "~/.config/amp"}, {"opencode", "~/.config/opencode"}, {"goose", "~/.config/goose"}}
+				agents = append([]AgentLocation{{"cursor", "~/.cursor"}, {"amp", "~/.config/amp"}, {"opencode", "~/.config/opencode"}}, []AgentLocation{{"openclaw", "~/.openclaw"}, {"qwen_code", "~/.qwen"}, {"goose", "~/.config/goose"}, {"factory_droid", "~/.factory"}, {"devin_cli", "~/.config/devin"}, {"pi", "~/.pi/agent"}, {"kimi_code", "~/.kimi"}, {"auggie", "~/.augment"}, {"kilo", "~/.config/kilo"}, {"crush", "~/.config/crush"}, {"junie", "~/.junie"}, {"grok_build", "~/.grok"}, {"hermes", "~/.hermes"}}...)
 			case "home_empty":
 				agents = nil
 			case "home_planted_token":
@@ -277,7 +324,7 @@ func TestReadTimeoutPreservesAgentFacts(t *testing.T) {
 			<-release
 			return fileResult{}
 		}
-		return readGuarded(path, mode)
+		return readGuarded(context.Background(), path, mode)
 	}}
 	g.credentials()
 	g.claude(&r.Agents[0], filepath.Join(home, ".claude"), readers.ClaudeRoot{}, nil)

@@ -5,6 +5,13 @@
       "config_path": "~/.claude",
       "wired": "yes",
       "last_activity_at": null
+    },
+    {
+      "id": "claude_cowork",
+      "config_path": "~/Library/Application Support/Claude/vm_bundles/claudevm.bundle",
+      "wired": "yes",
+      "last_activity_at": null,
+      "sandboxed": false
     }
   ],
   "agents_reported_at": "2026-09-16T12:00:00Z",

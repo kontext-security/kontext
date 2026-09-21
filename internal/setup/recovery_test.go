@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/profile"
 )
@@ -958,9 +959,8 @@ func TestClaimTargetRefusesAnExistingDirectory(t *testing.T) {
 	}
 }
 
-// A claim the run then fails out of is removed again, so a refused setup does
-// not leave a hollow profile for `profile ls` to report as broken.
-func TestFailedRunRemovesAnEmptyClaimedProfile(t *testing.T) {
+// Preserve an identity already sent to ping so a retry can use the bound key.
+func TestFailedRunPreservesTheBoundIdentity(t *testing.T) {
 	h := profileHarness(t)
 	backend := multiWorkspacePingServer(t, map[string]string{
 		"kt_work": "org_work",
@@ -975,7 +975,7 @@ func TestFailedRunRemovesAnEmptyClaimedProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Fail the keychain write — the first write after the claim.
+	// Fail credential persistence after the identity has been sent to ping.
 	original := execCommand
 	overrideVar(t, &execCommand, func(ctx context.Context, stdin, name string, args ...string) (string, error) {
 		if name == "security" && len(args) > 0 && args[0] == "-i" {
@@ -994,8 +994,25 @@ func TestFailedRunRemovesAnEmptyClaimedProfile(t *testing.T) {
 	if derived == "" {
 		t.Fatal("OnProfileResolved never reported the derived profile")
 	}
-	if exists, _ := profile.Exists(derived); exists {
-		t.Errorf("profile %q survived a failed run as an empty claim", derived)
+	slot, err := resolveTarget(derived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installation.LoadFile(slot.IdentityPath); err != nil {
+		t.Fatalf("bound identity must survive for retry: %v", err)
+	}
+	if !strings.Contains(h.errOut.String(), "kontext profile add "+derived+" --cloud-url '"+backend.URL+"' --use") {
+		t.Fatalf("missing retry guidance for retained identity: %s", h.errOut.String())
+	}
+	identity, _ := installation.LoadFile(slot.IdentityPath)
+	execCommand = original
+	rerun.Profile = derived
+	if err := Run(context.Background(), rerun); err != nil {
+		t.Fatal(err)
+	}
+	after, err := installation.LoadFile(slot.IdentityPath)
+	if err != nil || after.InstallationID != identity.InstallationID {
+		t.Fatalf("retry lost bound identity: %v", err)
 	}
 }
 
@@ -1178,5 +1195,36 @@ func TestUseActiveProfileRestartsWhenAForeignDaemonHoldsTheSocket(t *testing.T) 
 	}
 	if strings.Contains(out.String(), "is running") {
 		t.Errorf("reported a running agent over a foreign daemon:\n%s", out.String())
+	}
+}
+
+func TestSetupRefusesProfileRenameDuringBinding(t *testing.T) {
+	h := profileHarness(t)
+	opts := h.options("kt_original", pingServer(t, "kt_original"))
+	opts.Profile = "work"
+	if err := Run(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	beforeCalls := len(h.calls)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("installation_id") != "" {
+			if _, err := profile.Rename("work", "renamed"); err != nil {
+				t.Error(err)
+			}
+		}
+		io.WriteString(w, `{"organization_id":"org_test","organization_name":"Acme","user_email":"person@example.com"}`)
+	}))
+	defer server.Close()
+	opts = h.options("kt_personal", server)
+	opts.Profile = "work"
+	err := Run(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "renamed or removed") {
+		t.Fatalf("error = %v", err)
+	}
+	if exists, _ := profile.Exists("work"); exists {
+		t.Fatal("setup recreated the renamed profile")
+	}
+	if h.keychain[profile.KeychainItemName("work")] != "kt_original" || len(h.calls) != beforeCalls {
+		t.Fatal("setup wrote credentials or hooks after profile rename")
 	}
 }

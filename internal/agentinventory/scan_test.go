@@ -126,7 +126,7 @@ func TestScan(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			got := Scan(ctx, home, func(key string) string { return env[key] }, now, wired)
+			got := Scan(ctx, home, func(key string) string { return env[key] }, now, ScanOptions{Wired: wired})
 			if !reflect.DeepEqual(got, Inventory{Agents: want, ReportedAt: now.Format(time.RFC3339), Incomplete: incomplete}) {
 				t.Fatalf("Scan = %+v, want agents %+v, incomplete %t", got, want, incomplete)
 			}
@@ -151,8 +151,13 @@ func TestConfigResolution(t *testing.T) {
 		{"openclaw", map[string]string{"OPENCLAW_HOME": "undefined"}, []string{".openclaw", ".clawdbot"}},
 		{"openclaw", map[string]string{"OPENCLAW_HOME": "~/custom", "OPENCLAW_STATE_DIR": "~/state"}, []string{"state"}},
 		{"kiro", map[string]string{"KIRO_HOME": "~/custom"}, []string{"custom", ".kiro"}},
+		{"crush", map[string]string{"CRUSH_GLOBAL_CONFIG": "~/custom/crush-dir"}, []string{"custom/crush-dir"}},
 		{"crush", map[string]string{"CRUSH_GLOBAL_CONFIG": "~/custom/crush.json", "XDG_CONFIG_HOME": "~/config"}, []string{"custom"}},
 		{"crush", map[string]string{"XDG_CONFIG_HOME": "~"}, []string{"crush"}},
+		{"cline", map[string]string{"CLINE_DIR": "~/cline-root", "CLINE_DATA_DIR": "~/cline-data"}, []string{"cline-data"}},
+		{"kimi_code", nil, []string{".kimi-code", ".kimi"}},
+		{"kimi_code", map[string]string{"KIMI_SHARE_DIR": "~/legacy"}, []string{"legacy"}},
+		{"kimi_code", map[string]string{"KIMI_CODE_HOME": "~/current", "KIMI_SHARE_DIR": "~/legacy"}, []string{"current"}},
 		{"windsurf", nil, []string{".windsurf", ".codeium/windsurf"}},
 	} {
 		t.Run(tt.id+fmt.Sprint(tt.env), func(t *testing.T) {
@@ -181,7 +186,7 @@ func TestCatalogAndWireContract(t *testing.T) {
 		t.Fatalf("catalog ids=%v", got)
 	}
 	activity := "2026-09-09T08:12:00Z"
-	data, err := json.Marshal(Inventory{Agents: []Agent{{"claude_code", "~/.claude", WiredYes, &activity}, {"cursor", "~/.cursor", WiredUnsupported, nil}}, ReportedAt: "2026-09-09T08:20:00Z"})
+	data, err := json.Marshal(Inventory{Agents: []Agent{{"claude_code", "~/.claude", WiredYes, &activity, nil}, {"cursor", "~/.cursor", WiredUnsupported, nil, nil}}, ReportedAt: "2026-09-09T08:20:00Z"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +199,7 @@ func TestCatalogAndWireContract(t *testing.T) {
 func TestScanEmptyHomeDuration(t *testing.T) {
 	home := t.TempDir()
 	start := time.Now()
-	Scan(context.Background(), home, func(string) string { return "" }, start, nil)
+	Scan(context.Background(), home, func(string) string { return "" }, start, ScanOptions{})
 	if elapsed := time.Since(start); elapsed >= 20*time.Millisecond {
 		t.Fatalf("empty-home scan took %s; must be under 20 ms", elapsed)
 	}
@@ -205,7 +210,7 @@ func BenchmarkScanEmptyHome(b *testing.B) {
 	now := time.Now()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		Scan(context.Background(), home, func(string) string { return "" }, now, nil)
+		Scan(context.Background(), home, func(string) string { return "" }, now, ScanOptions{})
 	}
 }
 

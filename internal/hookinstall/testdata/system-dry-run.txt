@@ -1,0 +1,3 @@
+would-write	system	<root>/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json	missing
+would-write	system	<root>/etc/codex/hooks.json	missing
+would-write	system	<root>/etc/codex/config.toml	missing

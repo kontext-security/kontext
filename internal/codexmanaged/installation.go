@@ -36,18 +36,23 @@ func DefaultInstallationPaths() (InstallationPaths, error) {
 
 var ErrIncompleteInstallation = errors.New("Kontext Codex hooks are incomplete")
 
+// Installation retains complete layers even when another layer is broken, so
+// discovery can report wiring independently of doctor's stricter health check.
 type Installation struct {
-	Paths  []string
-	Binary string
+	Layers []InstallationLayer
 }
 
-// InspectInstallation reads both additive hook layers. Empty hook maps and foreign
-// hooks do not hide a complete Kontext installation in the other layer. Invalid
-// JSON and invalid Kontext commands are still reported, even beside valid hooks.
+type InstallationLayer struct {
+	Path, Binary string
+}
+
+// InspectInstallation validates each additive layer independently. A complete
+// layer cannot fill gaps in another one, and two installs need not use the same
+// binary. Empty hook maps are inert; nonempty layers need valid Kontext hooks.
 // This checks configuration, not Codex's runtime trust or approval state.
 func InspectInstallation(paths InstallationPaths) (Installation, error) {
 	result := Installation{}
-	combined := Settings{Hooks: make(map[string][]MatcherGroup)}
+	var problems []error
 	for _, path := range []string{paths.SystemHooks, paths.UserHooks} {
 		if path == "" {
 			continue
@@ -57,32 +62,26 @@ func InspectInstallation(paths InstallationPaths) (Installation, error) {
 			continue
 		}
 		if err != nil {
-			return result, fmt.Errorf("read %s: %w", path, err)
+			problems = append(problems, fmt.Errorf("read %s: %w", path, err))
+			continue
 		}
 		var settings Settings
 		if err := json.Unmarshal(raw, &settings); err != nil {
-			return result, fmt.Errorf("parse %s: %w", path, err)
+			problems = append(problems, fmt.Errorf("parse %s: %w", path, err))
+			continue
 		}
-		found := false
-		for event, groups := range settings.Hooks {
-			combined.Hooks[event] = append(combined.Hooks[event], groups...)
-			for _, group := range groups {
-				for _, handler := range group.Hooks {
-					found = found || IsManagedHookCommand(handler.Command)
-				}
-			}
+		if settings.Hooks != nil && len(settings.Hooks) == 0 {
+			continue
 		}
-		if found {
-			result.Paths = append(result.Paths, path)
+		binary, err := ValidateInstalled(raw)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("%w (%s): %v", ErrIncompleteInstallation, path, err))
+			continue
 		}
+		result.Layers = append(result.Layers, InstallationLayer{Path: path, Binary: binary})
 	}
-	raw, err := json.Marshal(combined)
-	if err != nil {
-		return result, err
+	if len(result.Layers) == 0 && len(problems) == 0 {
+		return result, ErrIncompleteInstallation
 	}
-	result.Binary, err = ValidateInstalled(raw)
-	if err != nil {
-		return result, fmt.Errorf("%w: %v", ErrIncompleteInstallation, err)
-	}
-	return result, nil
+	return result, errors.Join(problems...)
 }

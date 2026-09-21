@@ -16,22 +16,31 @@ func TestInspectInstallationLayers(t *testing.T) {
 	partial := Template("/opt/homebrew/bin/kontext")
 	delete(partial.Hooks, "Stop")
 	partialJSON, _ := json.Marshal(partial)
+	other, err := TemplateJSON("/Applications/Kontext/runtime/bin/kontext")
+	if err != nil {
+		t.Fatal(err)
+	}
 	foreign := []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/enterprise/audit"}]}]}}`)
 	for _, tc := range []struct {
 		name                string
 		system, user        []byte
 		wantErr, incomplete bool
 		source              string
+		layers              int
 	}{
 		{name: "system only", system: valid, source: "system"},
 		{name: "system with empty user hooks", system: valid, user: []byte(`{"hooks":{}}`), source: "system"},
-		{name: "system with foreign user hooks", system: valid, user: foreign, source: "system"},
-		{name: "foreign system with user hooks", system: foreign, user: valid, source: "user"},
+		{name: "system with foreign user hooks", system: valid, user: foreign, source: "system", wantErr: true, incomplete: true},
+		{name: "foreign system with user hooks", system: foreign, user: valid, source: "user", wantErr: true, incomplete: true},
 		{name: "user only", user: valid, source: "user"},
+		{name: "both same binary", system: valid, user: valid, layers: 2},
+		{name: "both different binaries", system: valid, user: other, layers: 2},
+		{name: "partial system with valid user", system: partialJSON, user: valid, source: "user", wantErr: true, incomplete: true},
+		{name: "valid system with partial user", system: valid, user: partialJSON, source: "system", wantErr: true, incomplete: true},
 		{name: "missing", wantErr: true, incomplete: true},
 		{name: "partial system", system: partialJSON, wantErr: true, incomplete: true},
-		{name: "corrupt system with valid user", system: []byte(`{`), user: valid, wantErr: true},
-		{name: "valid system with corrupt user", system: valid, user: []byte(`{`), wantErr: true},
+		{name: "corrupt system with valid user", system: []byte(`{`), user: valid, source: "user", wantErr: true},
+		{name: "valid system with corrupt user", system: valid, user: []byte(`{`), source: "system", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -47,7 +56,14 @@ func TestInspectInstallationLayers(t *testing.T) {
 			if (err != nil) != tc.wantErr || errors.Is(err, ErrIncompleteInstallation) != tc.incomplete {
 				t.Fatalf("installation=%+v, err=%v", got, err)
 			}
-			if !tc.wantErr && (got.Binary != "/opt/homebrew/bin/kontext" || len(got.Paths) != 1 || got.Paths[0] != filepath.Join(dir, tc.source)) {
+			wantLayers := tc.layers
+			if tc.source != "" {
+				wantLayers = 1
+			}
+			if len(got.Layers) != wantLayers {
+				t.Fatalf("installation=%+v, want %d complete layers", got, wantLayers)
+			}
+			if tc.source != "" && got.Layers[0] != (InstallationLayer{Path: filepath.Join(dir, tc.source), Binary: "/opt/homebrew/bin/kontext"}) {
 				t.Fatalf("installation=%+v", got)
 			}
 			for path, data := range map[string][]byte{paths.SystemHooks: tc.system, paths.UserHooks: tc.user} {
@@ -64,7 +80,7 @@ func TestInspectInstallationLayers(t *testing.T) {
 	}
 }
 
-func TestInspectInstallationCombinesEventsAcrossLayers(t *testing.T) {
+func TestInspectInstallationRejectsEventsSplitAcrossLayers(t *testing.T) {
 	dir := t.TempDir()
 	paths := InstallationPaths{SystemHooks: filepath.Join(dir, "system"), UserHooks: filepath.Join(dir, "user")}
 	system := Template("/opt/homebrew/bin/kontext")
@@ -77,7 +93,7 @@ func TestInspectInstallationCombinesEventsAcrossLayers(t *testing.T) {
 		}
 	}
 	got, err := InspectInstallation(paths)
-	if err != nil || len(got.Paths) != 2 {
+	if !errors.Is(err, ErrIncompleteInstallation) || len(got.Layers) != 0 {
 		t.Fatalf("installation=%+v, err=%v", got, err)
 	}
 }

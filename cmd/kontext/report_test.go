@@ -24,7 +24,12 @@ func TestReportJSONFixtureProfile(t *testing.T) {
 	if err := json.Unmarshal(data, &authority); err != nil {
 		t.Fatal(err)
 	}
-	agents := []agentinventory.Agent{{ID: "claude_code", ConfigPath: "~/.claude", Wired: agentinventory.WiredYes}}
+	// Recent host hook sessions take precedence even when Cowork boots its VM.
+	sandboxed := false
+	agents := []agentinventory.Agent{
+		{ID: "claude_code", ConfigPath: "~/.claude", Wired: agentinventory.WiredYes},
+		{ID: "claude_cowork", ConfigPath: "~/Library/Application Support/Claude/vm_bundles/claudevm.bundle", Wired: agentinventory.WiredYes, Sandboxed: &sandboxed},
+	}
 	report := managedstream.Report{Agents: &agents, AgentsReportedAt: "2026-09-16T12:00:00Z", Authority: &authority}
 	if err := managedstream.SaveState(statePath, managedstream.State{LastReport: report}); err != nil {
 		t.Fatal(err)
