@@ -22,6 +22,7 @@ create table if not exists tool_usage_sources (
 create table if not exists tool_usage_records (
  revision integer primary key autoincrement, session_id text not null,
  message_id text not null, agent text not null, payload text not null,
+ -- Match the cloud request identity. Agent is updatable metadata, not a key.
  exported integer not null default 0, unique(session_id, message_id)
 );
 create index if not exists tool_usage_pending on tool_usage_records(exported, revision);
@@ -171,8 +172,10 @@ func (s *Store) SaveToolUsage(ctx context.Context, agent string, record modelusa
 		return err
 	}
 	// REPLACE allocates a fresh monotonically increasing revision only when
-	// counters/associations change. A concurrent upload acknowledges its exact
-	// revision, so it cannot clear a newer pending snapshot.
+	// counters, associations, or agent metadata change. The agent comparison
+	// detects a metadata correction; it does not identify a separate request.
+	// A concurrent upload acknowledges its exact revision, so it cannot clear
+	// a newer pending snapshot.
 	_, err = s.db.ExecContext(ctx, `insert or replace into tool_usage_records(session_id,message_id,agent,payload)
  select ?,?,?,? where not exists(select 1 from tool_usage_records where session_id=? and message_id=? and agent=? and payload=?)`,
 		record.SessionID, record.MessageID, agent, string(data), record.SessionID, record.MessageID, agent, string(data))

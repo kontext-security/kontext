@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/modelusage"
 )
 
 func TestToolUsageReconcilesRestartAndAcknowledgesExactRevision(t *testing.T) {
@@ -157,5 +159,85 @@ func TestCodexToolUsageReconciliation(t *testing.T) {
 	rows, err = store.PendingToolUsage(ctx, 50)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("reuploaded: %+v %v", rows, err)
+	}
+}
+
+func TestToolUsageKeepsProviderSessionsSeparate(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	// Even identical raw session/message IDs belong to distinct sessions after
+	// adapter normalization. Exercise both parsers rather than inventing IDs.
+	claude, err := modelusage.ReadClaudeTranscript(strings.NewReader(`{"type":"assistant","sessionId":"s","timestamp":"2026-09-16T13:36:44Z","message":{"id":"m","model":"claude-fable-5-1","content":[{"type":"tool_use","id":"t","name":"Bash"}],"usage":{"output_tokens":10}}}` + "\n"))
+	if err != nil || len(claude) != 1 {
+		t.Fatalf("claude records: %+v %v", claude, err)
+	}
+	codex, err := modelusage.ReadCodexTranscript(strings.NewReader(`{"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}
+{"type":"turn_context","payload":{"model":"gpt-6-astra"}}
+{"type":"response_item","payload":{"type":"function_call","call_id":"t","name":"exec_command"}}
+{"timestamp":"2026-09-16T13:36:44Z","type":"token_usage_record","payload":{"thread_id":"s","response_id":"m","usage":{"input_tokens":20,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":30}}}
+`))
+	if err != nil || len(codex) != 1 {
+		t.Fatalf("codex records: %+v %v", codex, err)
+	}
+	if err := store.SaveToolUsage(ctx, "claude", claude[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveToolUsage(ctx, "codex", codex[0]); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.PendingToolUsage(ctx, 50)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("one provider replaced another: %+v %v", rows, err)
+	}
+	if rows[0].Agent != "claude" || rows[0].SessionID != "s" || *rows[0].Tokens.Output != 10 ||
+		rows[1].Agent != "codex" || rows[1].SessionID != "codex-s" || *rows[1].Tokens.Output != 30 {
+		t.Fatalf("provider identity or usage changed: %+v", rows)
+	}
+}
+
+func TestToolUsageAgentCorrectionDoesNotDuplicateRequest(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	record := modelusage.Record{SessionID: "s", MessageID: "m", ToolUseIDs: []string{"t"}}
+	if err := store.SaveToolUsage(ctx, "claude", record); err != nil {
+		t.Fatal(err)
+	}
+	old, err := store.PendingToolUsage(ctx, 50)
+	if err != nil || len(old) != 1 {
+		t.Fatalf("initial request: %+v %v", old, err)
+	}
+	// A corrected agent label must replace the snapshot under the same cloud
+	// identity. An upload of the previous label may still be in flight.
+	if err := store.SaveToolUsage(ctx, "cowork", record); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeToolUsage(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.PendingToolUsage(ctx, 50)
+	if err != nil || len(updated) != 1 || updated[0].Agent != "cowork" || updated[0].Revision <= old[0].Revision {
+		t.Fatalf("agent correction must remain pending: %+v %v", updated, err)
+	}
+	if err := store.SaveToolUsage(ctx, "cowork", record); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeToolUsage(ctx, updated); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.PendingToolUsage(ctx, 50)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("unchanged correction created a new revision: %+v %v", pending, err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `select count(*) from tool_usage_records`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("agent correction duplicated the request: %d %v", count, err)
 	}
 }
