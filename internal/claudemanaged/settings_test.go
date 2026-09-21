@@ -2,9 +2,69 @@ package claudemanaged
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/agenthooks"
 )
+
+func TestValidateEquivalentCommandQuoting(t *testing.T) {
+	t.Parallel()
+	binary := "/Users/test/Library/Application Support/KontextManagement/runtime/bin/kontext"
+	for _, format := range []string{"%s 'hook' '%s'", "%s \"hook\" \"%s\"", "%s\t hook   %s"} {
+		t.Run(format, func(t *testing.T) {
+			settings := Template(binary)
+			for _, event := range SupportedEvents {
+				settings.Hooks[event.Name.String()][0].Hooks[0].Command = fmt.Sprintf(format, agenthooks.ShellQuote(binary), event.Alias)
+			}
+			data, err := json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Validate(data, binary); err != nil {
+				t.Fatal(err)
+			}
+			if got, ok := ManagedObserveHookBinary(data); !ok || got != binary {
+				t.Fatalf("ManagedObserveHookBinary = %q, %v", got, ok)
+			}
+		})
+	}
+}
+
+func TestValidateCommandStillRequiresExactLiteralArguments(t *testing.T) {
+	t.Parallel()
+	binary := "/tmp/$BUILD/kontext"
+	for _, command := range []string{
+		`'/other/kontext' hook pre-tool-use`,
+		`'/tmp/$BUILD/kontext' hook post-tool-use`,
+		`'/tmp/$BUILD/kontext' hook pre-tool-use --mode observe`,
+		`'/tmp/$BUILD/kontext' hook pre-tool-use; echo ok`,
+		`'/tmp/$BUILD/kontext' hook pre-tool-use >/tmp/output`,
+		"'/tmp/$BUILD/kontext'\nhook pre-tool-use",
+		`"/tmp/$BUILD/kontext" hook pre-tool-use`,
+		`'/tmp/$BUILD/kontext' 'hook pre-tool-use`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			settings := Template(binary)
+			settings.Hooks["PreToolUse"][0].Hooks[0].Command = command
+			data, err := json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Validate(data, binary); err == nil {
+				t.Fatal("invalid command passed validation")
+			}
+		})
+	}
+	data, err := TemplateJSON(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(data, binary); err != nil {
+		t.Fatalf("quoted literal dollar sign: %v", err)
+	}
+}
 
 func TestRecognizeLegacyDropInForUsageHookUpgrade(t *testing.T) {
 	settings := Template("")

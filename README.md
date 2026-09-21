@@ -337,6 +337,12 @@ kontext doctor
 
 It exits non-zero when a configured installation is unhealthy.
 
+Claude hook validation accepts equivalent shell quoting while still requiring
+the expected executable, arguments, and event settings. Codex hook diagnostics
+check both system and user files: an absent or empty file is valid when the other
+contains a complete installation. Malformed or incomplete nonempty files and
+conflicting installations still report an unhealthy setup.
+
 When a self-serve daemon is stale:
 
 ```bash

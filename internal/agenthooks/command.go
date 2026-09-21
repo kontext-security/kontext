@@ -16,6 +16,17 @@ type CommandPredicate func(handler CommandHandler) bool
 // detection. It supports quotes and backslash escapes, and reports false for
 // unterminated quotes or trailing escapes.
 func SplitCommand(command string) ([]string, bool) {
+	return splitCommand(command, false)
+}
+
+// SplitLiteralCommand accepts a single command made of literal shell words.
+// Health checks may ignore quoting differences, but must not treat expansions,
+// redirections, or multiple commands as equivalent to a direct hook invocation.
+func SplitLiteralCommand(command string) ([]string, bool) {
+	return splitCommand(command, true)
+}
+
+func splitCommand(command string, literalOnly bool) ([]string, bool) {
 	var fields []string
 	var builder strings.Builder
 	var quote rune
@@ -26,6 +37,9 @@ func SplitCommand(command string) ([]string, bool) {
 		char := runes[i]
 		switch {
 		case quote != 0:
+			if literalOnly && quote == '"' && (char == '$' || char == '`') {
+				return nil, false
+			}
 			if char == quote {
 				quote = 0
 				continue
@@ -51,12 +65,18 @@ func SplitCommand(command string) ([]string, bool) {
 			quote = char
 			inField = true
 		case char == ' ' || char == '\t' || char == '\n' || char == '\r':
+			if literalOnly && (char == '\n' || char == '\r') {
+				return nil, false
+			}
 			if inField {
 				fields = append(fields, builder.String())
 				builder.Reset()
 				inField = false
 			}
 		default:
+			if literalOnly && strings.ContainsRune("$`;|&<>()*?[]{}~#", char) {
+				return nil, false
+			}
 			builder.WriteRune(char)
 			inField = true
 		}
