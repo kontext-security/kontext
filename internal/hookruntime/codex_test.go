@@ -333,3 +333,12 @@ func TestDecodeCodexEventPreservesStepSafetyContext(t *testing.T) {
 		t.Fatalf("AvailableToolSchemas = %#v", event.AvailableToolSchemas)
 	}
 }
+
+func TestDecodeCodexTranscriptPath(t *testing.T) {
+	for _, eventName := range []string{"PostToolUse", "Stop"} {
+		event, err := DecodeCodexEvent([]byte(`{"session_id":"s","hook_event_name":"`+eventName+`","transcript_path":"/tmp/rollout.jsonl"}`), "codex")
+		if err != nil || event.TranscriptPath != "/tmp/rollout.jsonl" || event.SessionID != "codex-s" {
+			t.Fatalf("metadata lost: %+v %v", event, err)
+		}
+	}
+}

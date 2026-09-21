@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -126,6 +127,9 @@ func (r guardHookRuntime) EvaluateHook(ctx context.Context, event hook.Event) (h
 }
 
 func (r guardHookRuntime) IngestEvent(ctx context.Context, event hook.Event) (hook.Result, error) {
+	if err := r.store.TrackToolTranscript(ctx, event); err != nil {
+		log.Printf("tool usage source registration: %v", err)
+	}
 	decision, err := r.decideAndRecord(ctx, riskEventFromHookEvent(event))
 	if err != nil {
 		return hook.Result{}, err

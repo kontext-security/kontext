@@ -7,6 +7,28 @@ import (
 	"github.com/kontext-security/kontext/internal/hook"
 )
 
+func TestTranscriptPathSurvivesLocalProtocolRoundTrip(t *testing.T) {
+	for _, path := range []string{"", "/tmp/usage probe/session.jsonl"} {
+		original := hook.Event{SessionID: "s", Agent: "claude", HookName: hook.HookSubagentStop, TranscriptPath: path, AgentTranscriptPath: path}
+		req, err := EvaluateRequestFromEvent(original)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var received EvaluateRequest
+		if err := json.Unmarshal(wire, &received); err != nil {
+			t.Fatal(err)
+		}
+		event, err := EventFromEvaluateRequest("", "", &received)
+		if err != nil || event.TranscriptPath != path || event.AgentTranscriptPath != path || event.HookName != hook.HookSubagentStop {
+			t.Fatalf("round trip: path=%q, err=%v", event.TranscriptPath, err)
+		}
+	}
+}
+
 func TestEvaluateRequestFromEventPreservesHookFields(t *testing.T) {
 	t.Parallel()
 

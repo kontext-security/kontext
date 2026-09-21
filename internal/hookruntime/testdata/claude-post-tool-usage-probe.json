@@ -1,0 +1,26 @@
+{
+  "session_id": "session_probe",
+  "transcript_path": "/tmp/usage-probe/transcript.jsonl",
+  "cwd": "/tmp/usage-probe",
+  "scratchpad_dir": "/tmp/usage-probe/scratchpad",
+  "prompt_id": "prompt_probe",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "printf kontext-usage-probe",
+    "description": "Print a probe string"
+  },
+  "tool_response": {
+    "stdout": "kontext-usage-probe",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "tool_3",
+  "duration_ms": 617
+}
