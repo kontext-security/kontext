@@ -113,3 +113,36 @@ func TestCodexLegacyUsageFailsClosed(t *testing.T) {
 		t.Fatal("legacy cumulative-only format silently accepted")
 	}
 }
+
+func TestCodexPartialToolSnapshotsPreserveResultConsumption(t *testing.T) {
+	for _, callType := range []string{"function_call", "custom_tool_call"} {
+		t.Run(callType, func(t *testing.T) {
+			raw := strings.ReplaceAll(`{"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}
+{"type":"turn_context","payload":{"model":"gpt-6-astra"}}
+{"type":"response_item","payload":{"type":"CALL_TYPE","call_id":"a","name":"navigate","namespace":"mcp__browser","toolset_name":"old-toolset","server_name":"browser"}}
+{"type":"response_item","payload":{"type":"CALL_TYPE","call_id":"a","name":"","namespace":"","toolset_name":"browser"}}
+{"type":"response_item","payload":{"type":"CALL_TYPE","call_id":"a"}}
+{"timestamp":"2026-09-17T10:00:00Z","type":"token_usage_record","payload":{"thread_id":"s","response_id":"r1","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2}}}
+{"type":"response_item","payload":{"type":"CALL_TYPE_output","call_id":"a"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant"}}
+{"timestamp":"2026-09-17T10:00:01Z","type":"token_usage_record","payload":{"thread_id":"s","response_id":"r2","usage":{"input_tokens":20,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":3}}}
+`, "CALL_TYPE", callType)
+			rows, err := ReadCodexTranscript(strings.NewReader(raw))
+			if err != nil || len(rows) != 2 {
+				t.Fatalf("partial snapshot lost a tool-related request: %+v %v", rows, err)
+			}
+			if len(rows[0].ToolUseIDs) != 1 || len(rows[1].ConsumedToolUseIDs) != 1 || rows[1].ConsumedToolUseIDs[0] != "a" {
+				t.Fatalf("tool calls must be deduplicated and linked to result consumption: %+v", rows)
+			}
+			want := Tool{ID: "a", Name: "navigate", Type: callType, Namespace: "mcp__browser", ToolsetName: "browser", ServerName: "browser"}
+			for _, row := range rows {
+				if len(row.Tools) != 1 || row.Tools[0] != want {
+					t.Fatalf("partial snapshot erased identity or lost enrichment: %+v", row.Tools)
+				}
+			}
+			if rows[1].RequestID != "r2" || *rows[1].Tokens.InputUncached != 20 || *rows[1].Tokens.Output != 3 {
+				t.Fatalf("result-consuming request has incorrect identity or usage: %+v", rows[1])
+			}
+		})
+	}
+}

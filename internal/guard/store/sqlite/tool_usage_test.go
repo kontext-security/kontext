@@ -134,7 +134,7 @@ func TestCodexToolUsageReconciliation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.ExecContext(ctx, `update tool_usage_sources set fingerprint=?`, fmt.Sprintf("%d:%d", stat.Size(), stat.ModTime().UnixNano())); err != nil {
+	if _, err := store.db.ExecContext(ctx, `update tool_usage_sources set fingerprint=?`, fmt.Sprintf("tool-metadata-v2:%d:%d", stat.Size(), stat.ModTime().UnixNano())); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.ReconcileToolUsage(ctx); err != nil {

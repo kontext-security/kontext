@@ -129,8 +129,8 @@ func ReadCodexTranscript(reader io.Reader) ([]Record, error) {
 					if !slices.Contains(current.ToolUseIDs, p.CallID) {
 						current.ToolUseIDs = append(current.ToolUseIDs, p.CallID)
 					}
-					tools[p.CallID] = Tool{ID: p.CallID, Name: p.Name, Type: p.Type,
-						Namespace: p.Namespace, ToolsetName: p.ToolsetName, ServerName: p.ServerName}
+					tools[p.CallID] = mergeToolMetadata(tools[p.CallID], Tool{ID: p.CallID, Name: p.Name, Type: p.Type,
+						Namespace: p.Namespace, ToolsetName: p.ToolsetName, ServerName: p.ServerName})
 				}
 			}
 		case "token_usage_record":

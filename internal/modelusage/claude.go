@@ -51,6 +51,24 @@ type Tool struct {
 	ServerName  string `json:"server_name,omitempty"`
 }
 
+// Streamed snapshots can enrich metadata while omitting previously reported
+// fields. Retain those fields so later results still link to their tool call.
+func mergeToolMetadata(tool, snapshot Tool) Tool {
+	for _, field := range []struct {
+		dst *string
+		src string
+	}{
+		{&tool.ID, snapshot.ID}, {&tool.Name, snapshot.Name}, {&tool.Type, snapshot.Type},
+		{&tool.Namespace, snapshot.Namespace}, {&tool.ToolsetName, snapshot.ToolsetName},
+		{&tool.ServerName, snapshot.ServerName},
+	} {
+		if field.src != "" {
+			*field.dst = field.src
+		}
+	}
+	return tool
+}
+
 func (r Record) ToolRelated() bool {
 	return len(r.ToolUseIDs) > 0 || len(r.ConsumedToolUseIDs) > 0
 }
@@ -207,23 +225,7 @@ func ReadClaudeTranscript(reader io.Reader) ([]Record, error) {
 					record.ToolUseIDs = append(record.ToolUseIDs, block.ID)
 				}
 				key := [2]string{row.SessionID, block.ID}
-				// Streamed snapshots can add metadata; missing later fields must
-				// not erase an earlier name or toolset identity.
-				tool := tools[key]
-				tool.ID = block.ID
-				for _, field := range []struct {
-					dst *string
-					src string
-				}{
-					{&tool.Name, block.Name}, {&tool.Type, block.Type},
-					{&tool.Namespace, block.Namespace}, {&tool.ToolsetName, block.ToolsetName},
-					{&tool.ServerName, block.ServerName},
-				} {
-					if field.src != "" {
-						*field.dst = field.src
-					}
-				}
-				tools[key] = tool
+				tools[key] = mergeToolMetadata(tools[key], block)
 			}
 		}
 	}

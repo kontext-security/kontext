@@ -133,7 +133,7 @@ func (s *Store) reconcileToolTranscript(ctx context.Context, session, path, agen
 	}
 	// Re-read existing active sources once when the metadata adapter changes.
 	// Stable request IDs replace the old snapshots rather than adding usage.
-	fingerprint := fmt.Sprintf("tool-metadata-v2:%d:%d", stat.Size(), stat.ModTime().UnixNano())
+	fingerprint := fmt.Sprintf("tool-metadata-v3:%d:%d", stat.Size(), stat.ModTime().UnixNano())
 	if fingerprint == previous {
 		return previous, nil
 	}
