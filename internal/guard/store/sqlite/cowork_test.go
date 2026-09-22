@@ -5,14 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
-func TestHasCoworkSessionsSince(t *testing.T) {
+func TestHasCoworkSession(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "guard.db")
-	since := time.Now().UTC().Add(-30 * 24 * time.Hour)
-	if _, err := HasCoworkSessionsSince(ctx, path, since); err == nil {
+	if _, err := HasCoworkSession(ctx, path, "fixture"); err == nil {
 		t.Fatal("missing store must be unknown")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -23,23 +21,26 @@ func TestHasCoworkSessionsSince(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	if _, err := store.EnsureObservedSession(ctx, "other-agent", "claude", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnsureObservedSession(ctx, "other-cowork", "cowork", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnsureObservedSession(ctx, "fixture", "cowork", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
 	for _, tt := range []struct {
-		name, agent string
-		at          time.Time
-		want        bool
+		name, id string
+		want     bool
 	}{
-		{"other agent", "claude", time.Now(), false},
-		{"expired cowork", "cowork", since.Add(-time.Second), false},
-		{"recent cowork", "cowork", since.Add(time.Second), true},
+		{"other agent", "other-agent", false},
+		{"other Cowork session", "other-cowork", true},
+		{"exact Cowork session", "fixture", true},
+		{"missing session", "missing", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := store.EnsureObservedSession(ctx, tt.name, tt.agent, "/tmp"); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := store.db.ExecContext(ctx, "update agent_sessions set updated_at = ? where id = ?", tt.at.UTC().Format(time.RFC3339Nano), NormalizeSessionID(tt.name)); err != nil {
-				t.Fatal(err)
-			}
-			got, err := HasCoworkSessionsSince(ctx, path, since)
+			got, err := HasCoworkSession(ctx, path, tt.id)
 			if err != nil || got != tt.want {
 				t.Fatalf("got %t, %v; want %t", got, err, tt.want)
 			}
@@ -47,7 +48,7 @@ func TestHasCoworkSessionsSince(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := HasCoworkSessionsSince(canceled, path, since); err == nil {
+	if _, err := HasCoworkSession(canceled, path, "fixture"); err == nil {
 		t.Fatal("canceled query must be unknown")
 	}
 }

@@ -167,7 +167,7 @@ func TestDoctorReadsInventoryWithoutScanning(t *testing.T) {
 	}
 }
 
-func TestCoworkInventoryUsesLocalHookSessions(t *testing.T) {
+func TestCoworkInventoryUsesLatestSessionPlacement(t *testing.T) {
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -179,13 +179,25 @@ func TestCoworkInventoryUsesLocalHookSessions(t *testing.T) {
 		}
 	}
 	t.Setenv("OPENCLAW_HOME", "")
-	logPath := filepath.Join(home, "Library/Logs/Claude/cowork_vm_swift.log")
-	if err := os.MkdirAll(filepath.Dir(logPath), 0700); err != nil {
+	sidecarDir := filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions/account-fixture/org-fixture")
+	if err := os.MkdirAll(sidecarDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(logPath, []byte("[VM] "+time.Now().Format("2006-01-02 15:04:05")+" [info] vm_boot completed\n"), 0600); err != nil {
-		t.Fatal(err)
+	writeSidecar := func(name string, createdAt int64, hostLoopMode bool) {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{
+			"createdAt": createdAt, "lastActivityAt": createdAt,
+			"hostLoopMode": hostLoopMode, "cliSessionId": "host-hook",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sidecarDir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
+	createdAt := time.Now().UnixMilli()
+	writeSidecar("local_vm.json", createdAt, false)
 	dbPath := filepath.Join(home, "guard.db")
 	store, err := sqlite.OpenStore(dbPath)
 	if err != nil {
@@ -207,12 +219,14 @@ func TestCoworkInventoryUsesLocalHookSessions(t *testing.T) {
 	}
 	inv, _ := holder.Fact()
 	if len(inv.Agents) != 1 || inv.Agents[0].Sandboxed == nil || !*inv.Agents[0].Sandboxed {
-		t.Fatalf("boot without sessions: %+v", inv)
+		t.Fatalf("VM sidecar: %+v", inv)
 	}
-	// isCoworkHookContext emits "cowork"; the store canonicalizes it.
+	// isCoworkHookContext emits "cowork"; the store canonicalizes it while the
+	// sidecar keeps the same session ID.
 	if _, err := store.EnsureObservedSession(ctx, "host-hook", "cowork", "/tmp"); err != nil {
 		t.Fatal(err)
 	}
+	writeSidecar("local_host.json", createdAt+1, true)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		inv, _ := holder.Fact()
@@ -221,7 +235,7 @@ func TestCoworkInventoryUsesLocalHookSessions(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("recent host hook session did not override the VM boot")
+	t.Fatal("newer host sidecar did not override the VM sidecar")
 }
 
 func TestAgentWiringCodexLayers(t *testing.T) {

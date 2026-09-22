@@ -185,6 +185,11 @@ func TestCatalogAndWireContract(t *testing.T) {
 	if strings.Join(got, ",") != ids {
 		t.Fatalf("catalog ids=%v", got)
 	}
+	for _, descriptor := range Catalog {
+		if descriptor.ID == "claude_cowork" && !reflect.DeepEqual(descriptor.ConfigDirs, []string{coworkHostSessions, coworkVMBundle}) {
+			t.Fatalf("Cowork install evidence=%v", descriptor.ConfigDirs)
+		}
+	}
 	activity := "2026-09-09T08:12:00Z"
 	data, err := json.Marshal(Inventory{Agents: []Agent{{"claude_code", "~/.claude", WiredYes, &activity, nil}, {"cursor", "~/.cursor", WiredUnsupported, nil, nil}}, ReportedAt: "2026-09-09T08:20:00Z"})
 	if err != nil {

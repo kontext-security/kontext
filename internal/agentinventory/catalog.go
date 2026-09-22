@@ -1,4 +1,4 @@
-// Package agentinventory discovers known agents from metadata and a bounded Cowork VM log tail.
+// Package agentinventory discovers known agents from local metadata.
 package agentinventory
 
 import "encoding/json"
@@ -51,7 +51,7 @@ type Descriptor struct {
 // Catalog has the same ids and order as DISCOVERED_AGENT_IDS in the API.
 var Catalog = []Descriptor{
 	{"claude_code", "Claude Code", []string{".claude"}, "CLAUDE_CONFIG_DIR", "<config>/projects"},
-	{"claude_cowork", "Claude Cowork", []string{coworkHostSessions, coworkVMBundle, coworkVMLog, coworkVMSessions}, "", "<config>"},
+	{"claude_cowork", "Claude Cowork", []string{coworkHostSessions, coworkVMBundle}, "", "<config>"},
 	{"codex", "Codex", []string{".codex"}, "CODEX_HOME", "<config>/sessions"},
 	{"gemini_cli", "Gemini CLI", []string{".gemini"}, "GEMINI_CLI_HOME", "<config>/tmp"},
 	{"cursor", "Cursor", []string{".cursor"}, "", "<config>/projects"},

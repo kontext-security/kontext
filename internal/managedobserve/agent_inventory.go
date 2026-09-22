@@ -90,8 +90,8 @@ func (h *agentInventoryHolder) run(ctx context.Context, opts DaemonOptions, dbPa
 		scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		inv := agentinventory.Scan(scanCtx, home, os.Getenv, started, agentinventory.ScanOptions{
 			Wired: AgentWiring(),
-			HasCoworkSessionsSince: func(since time.Time) (bool, error) {
-				return sqlite.HasCoworkSessionsSince(scanCtx, dbPath, since)
+			HasCoworkSession: func(id string) (bool, error) {
+				return sqlite.HasCoworkSession(scanCtx, dbPath, id)
 			},
 		})
 		cancel()

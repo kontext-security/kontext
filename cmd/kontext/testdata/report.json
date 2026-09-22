@@ -8,7 +8,7 @@
     },
     {
       "id": "claude_cowork",
-      "config_path": "~/Library/Application Support/Claude/vm_bundles/claudevm.bundle",
+      "config_path": "~/Library/Application Support/Claude/local-agent-mode-sessions",
       "wired": "yes",
       "last_activity_at": null,
       "sandboxed": false
