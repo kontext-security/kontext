@@ -321,7 +321,7 @@ func readGuarded(ctx context.Context, path, mode string) (result fileResult) {
 			result.err = os.ErrPermission
 			return
 		}
-		const tailBytes = 64 * 1024
+		const tailBytes = 8 * 1024 * 1024
 		_, result.err = file.Seek(max(0, actual.Size()-tailBytes), io.SeekStart)
 		if result.err == nil {
 			result.data, result.err = io.ReadAll(io.LimitReader(file, tailBytes))
@@ -368,10 +368,10 @@ func parseJSON[T any](data []byte) (T, error) {
 	return value, err
 }
 
-// CoworkVMLogTail reads only the last 64 KB of the fixed Cowork VM log, through
+// CoworkWebLogTail reads only the last 8 MiB of Claude's fixed web log through
 // the same deadline, no-symlink and dataless guard as configuration reads.
-func CoworkVMLogTail(ctx context.Context, home string) ([]byte, error) {
-	path := filepath.Join(home, "Library/Logs/Claude/cowork_vm_swift.log")
+func CoworkWebLogTail(ctx context.Context, home string) ([]byte, error) {
+	path := filepath.Join(home, "Library/Logs/Claude/claude.ai-web.log")
 	g := guard{ctx: ctx, home: home, roots: []string{path}, report: &Report{}}
 	result := g.access(path, "tail")
 	return result.data, result.err

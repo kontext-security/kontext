@@ -11,12 +11,12 @@ import (
 )
 
 type ScanOptions struct {
-	Wired                  map[string]func() Wired
-	HasCoworkSessionsSince func(time.Time) (bool, error)
+	Wired            map[string]func() Wired
+	HasCoworkSession func(string) (bool, error)
 }
 
-// Scan reads activity metadata and the guarded Cowork VM log tail. The daemon
-// injects hook and session facts, keeping discovery independent of its store.
+// Scan reads activity metadata and Cowork session evidence. The daemon injects
+// hook and session facts, keeping discovery independent of its store.
 func Scan(ctx context.Context, home string, env func(string) string, now time.Time, opts ScanOptions) Inventory {
 	inv := Inventory{Agents: []Agent{}, ReportedAt: now.UTC().Format(time.RFC3339)}
 	for _, descriptor := range Catalog {
@@ -30,7 +30,7 @@ func Scan(ctx context.Context, home string, env func(string) string, now time.Ti
 			if err != nil {
 				continue
 			}
-			if info.IsDir() || (descriptor.ID == "claude_cowork" && info.Mode().IsRegular() && candidate == filepath.Join(home, coworkVMLog)) {
+			if info.IsDir() {
 				config = candidate
 				break
 			}
@@ -52,7 +52,7 @@ func Scan(ctx context.Context, home string, env func(string) string, now time.Ti
 		}
 		agent := Agent{ID: descriptor.ID, ConfigPath: path, Wired: WiredUnsupported}
 		if descriptor.ID == "claude_cowork" {
-			agent.Sandboxed = coworkSandbox(ctx, home, now, opts.HasCoworkSessionsSince)
+			agent.Sandboxed = coworkSandbox(ctx, home, now, opts.HasCoworkSession)
 		}
 		if descriptor.ID == "claude_code" || descriptor.ID == "claude_cowork" || descriptor.ID == "codex" {
 			agent.Wired = WiredError
