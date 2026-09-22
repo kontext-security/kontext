@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.9.0](https://github.com/kontext-security/kontext/compare/v1.8.1...v1.9.0) (2026-09-22)
+
+
+### Features
+
+* **authority:** read no-prompt settings for Cursor, Windsurf, Gemini CLI, Cline, OpenCode ([#525](https://github.com/kontext-security/kontext/issues/525)) ([a8be693](https://github.com/kontext-security/kontext/commit/a8be693df96901580eaaba642666a3308f06ed15))
+* **authority:** read the remaining catalog agents ([#527](https://github.com/kontext-security/kontext/issues/527)) ([7bcbea4](https://github.com/kontext-security/kontext/commit/7bcbea4124d8b415d4c8402f5b2bb85c289f6b1e))
+* **cost:** capture tool-related model usage ([#517](https://github.com/kontext-security/kontext/issues/517)) ([0527e24](https://github.com/kontext-security/kontext/commit/0527e246fa63cf915d9855b3f9e6532923102ca3))
+
+
+### Bug Fixes
+
+* **hooks:** validate equivalent commands and installed Codex layers ([#528](https://github.com/kontext-security/kontext/issues/528)) ([969ba5f](https://github.com/kontext-security/kontext/commit/969ba5ffb860483c31ba168f512a33945de8b819))
+* **inventory:** decide where Cowork runs from the latest session on the Mac ([#529](https://github.com/kontext-security/kontext/issues/529)) ([d8b74d8](https://github.com/kontext-security/kontext/commit/d8b74d896d24dfe41691f5eeea49166ec795e516))
+* **telemetry:** report the running CLI version independently ([#514](https://github.com/kontext-security/kontext/issues/514)) ([885e31f](https://github.com/kontext-security/kontext/commit/885e31f6ad0597873901c137a352bb9fedcfeef6))
+
 ## [1.8.1](https://github.com/kontext-security/kontext/compare/v1.8.0...v1.8.1) (2026-09-19)
 
 
