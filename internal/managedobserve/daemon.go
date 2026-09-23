@@ -87,7 +87,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		<-ctx.Done()
 		return nil
 	}
-	if err := requireManagedHooksForLegacyCowork(loadedConfig.Config); err != nil {
+	if err := requireManagedHooksForLegacyCowork(loadedConfig.Config, loadedConfig.Scope); err != nil {
 		return err
 	}
 	loadedConfig = migrateSelfServeModeToRemote(loadedConfig, opts.Diagnostic)
@@ -346,6 +346,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		stopStream()
 		background.Wait()
 	}()
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		runSelfServeHookMigration(policyCtx, loadedConfig, binaryVersion, opts.Diagnostic)
+	}()
 
 	startUpdater := opts.HomebrewUpdater
 	if startUpdater == nil {
@@ -434,7 +439,7 @@ func guardrailLLMEnabled(snapshot endpointconfig.Snapshot) bool {
 	return riskclassifier.ResolveLLMEnabled(snapshot.GuardrailLLMDirective)
 }
 
-func requireManagedHooksForLegacyCowork(cfg managedconfig.Config) error {
+func requireManagedHooksForLegacyCowork(cfg managedconfig.Config, scope managedconfig.Scope) error {
 	if !cfg.LegacyCoworkEnabled {
 		return nil
 	}
@@ -449,6 +454,16 @@ func requireManagedHooksForLegacyCowork(cfg managedconfig.Config) error {
 		}
 		if state.hasHooks {
 			foundHooks = true
+		}
+		// Older self-serve installs may still carry cowork_enabled and the
+		// original five hooks. Keep those working while the async migration
+		// requests approval for the two new completion observers. Health still
+		// requires the complete current hook set.
+		if scope == managedconfig.ScopeUser && path == managedSettingsDropInPath && !state.hasHooks {
+			data, err := os.ReadFile(path)
+			if err == nil && claudemanaged.IsManagedSettingsDropIn(data) {
+				foundHooks = true
+			}
 		}
 	}
 	if foundHooks {

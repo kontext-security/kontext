@@ -55,6 +55,36 @@ unrelated settings alone. Removing the ownership comment relinquishes ownership.
 Self-serve setup retains its existing messages, backups, and uninstall behavior,
 including leaving its Codex feature setting enabled.
 
+## Self-serve upgrades
+
+The existing Homebrew daemon checks its Claude drop-in once on the first
+successful startup of each CLI version. The receipt is shared by all profiles
+at `~/Library/Application Support/Kontext/hook-migration.json`. Normal restarts
+read that receipt and skip hook inspection; no periodic migration check runs.
+
+If the existing Kontext-owned hooks need updating (for example, the older
+five-event configuration lacks Stop and SubagentStop), the daemon requests
+administrator approval through macOS and refreshes only the Claude drop-in.
+Unchanged hooks need no approval. Both automatic and manual Homebrew upgrades
+are covered by the existing daemon restart mechanism. No management app or
+additional user command is required for an approved migration.
+
+The approval runs after the hook socket starts serving, so waiting, cancellation
+or failure does not interrupt existing hooks or exports. An attempt is saved
+before the dialog opens; cancellation, timeout or failure leaves the receipt
+pending and does not prompt again for that version. If no console session is
+available, approval is deferred until a subsequent daemon startup with the
+user logged in. Existing hook health checks continue reporting missing hooks.
+An explicit `kontext hooks install --scope user --binary <stable-kontext-path>`
+can retry a declined or failed migration without waiting for another release.
+
+Automatic migration never creates a missing drop-in or replaces foreign,
+malformed or symlinked settings. The elevated command rechecks the approved
+file digest, the running binary and the absence of organization-managed
+configuration before writing. System/MDM, environment-scoped and development
+installations do not use this flow. Already-running Claude sessions may still
+need restarting to load updated hooks.
+
 ## Codex system configuration
 
 Codex reads `/etc/codex/config.toml` as its Unix system configuration layer.
