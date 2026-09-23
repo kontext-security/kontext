@@ -578,7 +578,7 @@ func TestLegacyCoworkAcceptsRootManagedSettings(t *testing.T) {
 		managedSettingsFilePath = previousRoot
 	})
 
-	if err := requireManagedHooksForLegacyCowork(managedconfig.Config{LegacyCoworkEnabled: true}); err != nil {
+	if err := requireManagedHooksForLegacyCowork(managedconfig.Config{LegacyCoworkEnabled: true}, managedconfig.ScopeSystem); err != nil {
 		t.Fatalf("requireManagedHooksForLegacyCowork() error = %v", err)
 	}
 }
@@ -609,7 +609,7 @@ func TestLegacyCoworkRejectsDisabledManagedSettingsSource(t *testing.T) {
 		managedSettingsFilePath = previousRoot
 	})
 
-	err = requireManagedHooksForLegacyCowork(managedconfig.Config{LegacyCoworkEnabled: true})
+	err = requireManagedHooksForLegacyCowork(managedconfig.Config{LegacyCoworkEnabled: true}, managedconfig.ScopeSystem)
 	if err == nil || !strings.Contains(err.Error(), "disableAllHooks") {
 		t.Fatalf("requireManagedHooksForLegacyCowork() error = %v, want disableAllHooks failure", err)
 	}

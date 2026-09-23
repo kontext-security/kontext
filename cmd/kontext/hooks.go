@@ -8,11 +8,13 @@ import (
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/hookinstall"
+	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/spf13/cobra"
 )
 
 func hooksCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "hooks", Short: "Install or remove the shared Kontext agent hook set"}
+	cmd.AddCommand(refreshClaudeHooksCmd())
 	for _, action := range []string{"install", "remove"} {
 		var scope, binary string
 		var dryRun bool
@@ -62,5 +64,41 @@ func hooksCmd() *cobra.Command {
 		}
 		cmd.AddCommand(sub)
 	}
+	return cmd
+}
+
+// This is the narrow elevated entry point used by the self-serve daemon. It
+// never resolves root's home or installs Codex hooks into the wrong account.
+func refreshClaudeHooksCmd() *cobra.Command {
+	var binary, digest string
+	cmd := &cobra.Command{
+		Use: "refresh-claude", Hidden: true, Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if runtime.GOOS != "darwin" || os.Geteuid() != 0 {
+				return fmt.Errorf("Claude hook migration requires administrator privileges on macOS")
+			}
+			// MDM may have enrolled the machine while the approval dialog was open.
+			for _, path := range []string{managedconfig.DefaultPath, claudemanaged.ManagedSettingsPath} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					return fmt.Errorf("cannot migrate self-serve hooks while managed settings exist or are unreadable at %s", path)
+				}
+			}
+			exe, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			running, err := os.Stat(exe)
+			if err != nil {
+				return err
+			}
+			target, err := os.Stat(binary)
+			if err != nil || !os.SameFile(running, target) {
+				return fmt.Errorf("Kontext binary changed while awaiting approval; retry with the current version")
+			}
+			return hookinstall.RefreshClaude(claudemanaged.ManagedSettingsDropInPath, binary, digest)
+		},
+	}
+	cmd.Flags().StringVar(&binary, "binary", "", "Stable path to the running Kontext executable")
+	cmd.Flags().StringVar(&digest, "expected-sha256", "", "Digest of the approved existing hook file")
 	return cmd
 }
