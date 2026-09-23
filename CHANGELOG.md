@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.1](https://github.com/kontext-security/kontext/compare/v1.9.0...v1.9.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **hooks:** migrate self-serve Claude hooks after upgrades ([#530](https://github.com/kontext-security/kontext/issues/530)) ([77294bb](https://github.com/kontext-security/kontext/commit/77294bbb2fae595b2b3bdaeab9da860edc0103d0))
+
 ## [1.9.0](https://github.com/kontext-security/kontext/compare/v1.8.1...v1.9.0) (2026-09-22)
 
 
