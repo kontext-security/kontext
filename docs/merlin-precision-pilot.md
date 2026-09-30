@@ -40,6 +40,10 @@ There is no alias augmentation at inference and no current-tool-only schema
 selection. No assistant reasoning is read.
 
 Nonempty JSON schema strings and supported text sections are normalized.
+The endpoint also recognizes `name` + `input_schema` definitions without a
+description, including tool lists and function wrappers. This extends the frozen
+research normalizer's definition recognition; endpoint regression tests cover
+binding consistency, case collisions and preservation of argument/schema content.
 Python-literal containers are unsupported in the endpoint and return unavailable.
 Missing schemas/requests remain missing. The 96/144/128/128 request/history/action/
 schema token budgets remain fixed. Requests, actions and schemas must fit whole;
@@ -49,8 +53,15 @@ and known file tools remain outside the pilot. Unavailable is never a safe label
 Daemon entrypoints defer Merlin inference with decision recording. They snapshot
 the request/history at the call, settle policy, then answer the hook without
 waiting for model inference. Background completion cannot revise authorization.
-The recorder drains before the store/model close. The existing 250 ms inference
-budget (maximum 500 ms) includes model-slot admission; cancellation is checked
+The recorder has four workers and a queue of 256 waiting records. Submission never
+waits for queue space. At saturation it drops the newest entire deferred record,
+including its decision row and annotations, and workers report cumulative dropped
+counts to the daemon log as they make progress (also reported on successful drain).
+These are missing audit records, not safe predictions; inspect overload diagnostics
+when interpreting trial results. There is no synchronous or unbounded fallback.
+Shutdown closes admission and drains accepted records before the store/model close.
+The existing 250 ms inference budget (maximum 500 ms) includes model-slot
+admission; cancellation is checked
 between model layers. Startup is bounded to 30 seconds and loads once per process.
 
 ## Opt in and roll back
@@ -99,7 +110,10 @@ PyTorch checkpoint. Tests compare field text, all 512 token IDs/masks, logits,
 calibrated probabilities and decisions. Boundary examples are selected by known
 score to test parity; they are not an accuracy sample. Separate tests pin the 532
 Hugging Face tokenizer vectors, cancellation, concurrent inference and returning
-a socket response while the fake model remains blocked.
+a socket response while the fake model remains blocked. Queue saturation and
+concurrent submission/shutdown tests verify bounded admission, loss reporting,
+and draining accepted records exactly once. The original 52 Python references
+remain unchanged; separate endpoint tests cover `input_schema`-only definitions.
 
 ```sh
 CGO_ENABLED=0 go test ./internal/guard/stepsafety ./internal/guard/app/server

@@ -105,11 +105,14 @@ Merlin admission and inference run in deferred recording after policy settles.
 The hook response does not wait for model inference. Request/history are captured
 at the call, and results cannot revise authorization. A per-evaluation deadline
 bounds model-slot admission and work; Go checks cancellation between layers.
-The recorder drains before store/model shutdown. No library is loaded or unloaded.
+The recorder has four workers and 256 waiting slots. When full, it drops the
+newest deferred record (decision row and annotations) without delaying the hook;
+workers log cumulative loss counts as they make progress and on successful drain.
+Accepted records drain before store/model shutdown. No library is loaded or unloaded.
 
 `GET /healthz` includes step-safety status, version, device (`go-cpu`), and a
 redacted error code. An unavailable model does not make the main daemon unhealthy.
-Each enabled pre-tool call records a local `step_safety_verdicts` row containing
+Each recorded enabled pre-tool call has a local `step_safety_verdicts` row containing
 correlation IDs, capped/redacted tool name, probability when present, model
 version, latency, error category, context-presence flags, `history_omitted`, and
 `enforced=false`. Exclusions and failures have `shadow_decision=unavailable` and

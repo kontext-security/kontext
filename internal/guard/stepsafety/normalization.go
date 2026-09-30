@@ -177,8 +177,9 @@ func schemaDefinitions(value any) []map[string]any {
 		}
 		_, named := v["name"].(string)
 		_, parameters := v["parameters"]
+		_, inputSchema := v["input_schema"]
 		_, description := v["description"]
-		if named && (parameters || description || len(v) == 1) {
+		if named && (parameters || inputSchema || description || len(v) == 1) {
 			return []map[string]any{v}
 		}
 	}
