@@ -1,0 +1,24 @@
+{
+  "candidate": "merlin-joint-ce-20260924-primary",
+  "weights_sha256": "429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1",
+  "threshold": 0.9089979801627239,
+  "calibrator": {
+    "coefficient": 0.9976812431377959,
+    "intercept": 0.5990786345281421
+  },
+  "source_hashes": {
+    "src/toolsafe_lab/merlin_normalization.py": "eb6163969e306363a711f359a6b6db4457c71a8b680f56e85fdac738895aa4b5",
+    "src/toolsafe_lab/merlin_balanced_data.py": "da44f4b23a5b9007526479e493d102c926dff7471a062a854321c6b0b7a55e3a",
+    "src/toolsafe_lab/merlin_balanced_training.py": "c325b5591e7013175d40bf2288f9a2819a0d4fa46d8662c26fef1482197c3252",
+    "src/toolsafe_lab/react_parser.py": "5bea39a7bee9db2cb97d75e54112d46c016895a61e0a1bb982ca74ce349c41df",
+    "src/toolsafe_lab/standalone_encoder.py": "ca8db9401025c8489a142d9447140a857fd77df84e5246fde92c995ccbe173ff"
+  },
+  "generator_sha256": "1d05770280a084a482b4d61800cd37b952e51fb94886c3cae4bff3f622c170d4",
+  "purpose": "Numerical parity only; includes authored cases selected by proximity to the frozen cutoff. Not an accuracy sample.",
+  "experiment_id": "exp-20260924-merlin-joint-training",
+  "selected_epoch": 2,
+  "default_enabled": false,
+  "fixture_sha256": "63535206c6051aca0e3342fe9903d163d4c1245f906cc649e9f658fb61090c17",
+  "runtime": "native Go FP32; embedded weights/tokenizer",
+  "limits": "Research candidate, not production validated. No native retraining or quantization. See docs/merlin-precision-pilot.md."
+}

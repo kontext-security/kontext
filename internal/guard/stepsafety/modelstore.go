@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const legacyModelVersion = "toolsafe-deberta-v3-xsmall-onnx-scoped-v2"
+
 type artifactSpec struct {
 	Name   string `json:"name"`
 	Size   int64  `json:"size_bytes"`
@@ -123,7 +125,7 @@ type evaluationProvenance struct {
 
 func DefaultModelDir(dbPath string) string {
 	root := filepath.Join(filepath.Dir(dbPath), "judge-models")
-	return filepath.Join(root, "toolsafe", ModelVersion)
+	return filepath.Join(root, "toolsafe", legacyModelVersion)
 }
 
 func ValidateModelDir(dir string) error {
@@ -187,7 +189,7 @@ func InstallModel(sourceDir, destinationDir string) (string, error) {
 		EvaluationScope:     "Original held-out TS-Bench checkpoint evaluation; not an estimate for scoped-v2 production coverage",
 
 		SchemaVersion:        3,
-		ModelVersion:         ModelVersion,
+		ModelVersion:         legacyModelVersion,
 		SourceProject:        "kontext-security/toolsafe-lab",
 		SourceRevision:       sourceRevision,
 		SourceArtifactPath:   sourceArtifactPath,
@@ -213,7 +215,7 @@ func InstallModel(sourceDir, destinationDir string) (string, error) {
 			JSONEncoding: "UTF-8, sorted keys, compact separators",
 		},
 		Evaluation: evaluationProvenance{
-			Threshold:         Threshold,
+			Threshold:         0.5,
 			Accuracy:          0.9118629908103593,
 			Precision:         0.9266195885784464,
 			Recall:            0.8845252051582649,
@@ -234,9 +236,9 @@ func InstallModel(sourceDir, destinationDir string) (string, error) {
 			"action":  128,
 			"schema":  128,
 		},
-		CalibrationScale: calibrationScale,
-		CalibrationBias:  calibrationBias,
-		InitialThreshold: Threshold,
+		CalibrationScale: 1.427213430140093,
+		CalibrationBias:  2.953687013257505,
+		InitialThreshold: 0.5,
 		ImportedAt:       time.Now().UTC(),
 		Artifacts:        append([]artifactSpec(nil), requiredArtifacts...),
 	}

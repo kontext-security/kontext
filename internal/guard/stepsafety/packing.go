@@ -29,15 +29,10 @@ func packInput(ctx context.Context, tokenizer tokenEncoder, input Input) (packed
 	if err := validateInputBounds(input); err != nil {
 		return result, err
 	}
-	arguments, err := compactSortedJSON(input.ToolArguments)
+	fields, err := candidateFields(input)
 	if err != nil {
 		return result, err
 	}
-	schema, err := schemaText(input.AvailableToolSchemas)
-	if err != nil {
-		return result, err
-	}
-	fields := [4]string{input.UserRequest, input.InteractionHistory, strings.TrimSpace("[TOOL_NAME]\n" + input.ToolName + "\n[ARGUMENTS]\n" + arguments), schema}
 	var selected [4][]int64
 	for _, index := range []int{2, 0, 3} {
 		tokens, err := tokenizer.encode(ctx, fields[index])

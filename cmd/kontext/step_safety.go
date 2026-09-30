@@ -29,7 +29,8 @@ func stepSafetyInstallCmd() *cobra.Command {
 	var sourceDir, dbPath, destinationDir, runtimeArchive string
 	cmd := &cobra.Command{
 		Use:           "install",
-		Short:         "Import verified step-safety artifacts into the Kontext model cache",
+		Short:         "Install historical ONNX artifacts (unused by embedded Merlin)",
+		Hidden:        true,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -48,7 +49,7 @@ func stepSafetyInstallCmd() *cobra.Command {
 				return fmt.Errorf("install ONNX Runtime: %w", err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Step-safety model and ONNX Runtime ready: %s\n", installed)
-			fmt.Fprintf(cmd.OutOrStdout(), "Model version: %s\n", stepsafety.ModelVersion)
+			fmt.Fprintln(cmd.OutOrStdout(), "Historical ONNX artifacts only; embedded Merlin is unchanged.")
 			return nil
 		},
 	}
@@ -70,7 +71,6 @@ type stepSafetyBenchmarkResult struct {
 }
 
 func stepSafetyBenchmarkCmd() *cobra.Command {
-	var dbPath, modelDir string
 	var iterations int
 	var asJSON bool
 	cmd := &cobra.Command{
@@ -83,12 +83,8 @@ func stepSafetyBenchmarkCmd() *cobra.Command {
 			if iterations < 1 || iterations > 10000 {
 				return errors.New("--iterations must be between 1 and 10000")
 			}
-			if modelDir == "" {
-				modelDir = stepsafety.DefaultModelDir(dbPath)
-			}
 			evaluator := stepsafety.New(cmd.Context(), stepsafety.Config{
 				Enabled:        true,
-				ModelDir:       modelDir,
 				Timeout:        5 * time.Second,
 				StartupTimeout: 2 * time.Minute,
 				MaxConcurrency: 1,
@@ -142,8 +138,6 @@ func stepSafetyBenchmarkCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&dbPath, "db", managedobserve.DefaultDBPath(), "local ledger database path used to resolve the model cache")
-	cmd.Flags().StringVar(&modelDir, "model-dir", "", "override the database-adjacent model directory")
 	cmd.Flags().IntVar(&iterations, "iterations", 50, "number of measured single-call inferences")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable benchmark results")
 	return cmd

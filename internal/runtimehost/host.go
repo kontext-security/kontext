@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
@@ -27,13 +25,6 @@ import (
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 	"github.com/kontext-security/kontext/internal/runtimecore"
 )
-
-// maxConcurrentDeferredRecords caps how many deferred decision-record jobs run
-// at once. Classifier inference is the expensive stage — the store write
-// behind it is serialized by SQLite's single connection anyway — and one local
-// model serves every job, so a small bound keeps a hook burst from queueing a
-// stampede of concurrent inferences.
-const maxConcurrentDeferredRecords = 4
 
 type Options struct {
 	AgentName             string
@@ -153,34 +144,13 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	if opts.SkipInitialSession {
 		serverSessionID = ""
 	}
-	var recordWG sync.WaitGroup
-	var recordFailures atomic.Int64
+	var recorder *server.DeferredRecorder
 	var deferRecord func(job func(context.Context) error)
-	if opts.AsyncDecisionRecording {
-		diag := opts.Diagnostic
-		// Bounds jobs, not goroutines: a burst of hooks parks its cheap
-		// goroutines here instead of stampeding the classifier's local model
-		// with concurrent inference. Acquired inside the goroutine so the
-		// hook response path never waits for a slot.
-		slots := make(chan struct{}, maxConcurrentDeferredRecords)
-		deferRecord = func(job func(context.Context) error) {
-			recordWG.Add(1)
-			// Detached from the request context on purpose: the hook client
-			// disconnects the moment it has its answer, and the write must
-			// finish anyway. Close bounds the drain via recordWG.
-			go func() {
-				defer recordWG.Done()
-				slots <- struct{}{}
-				defer func() { <-slots }()
-				if err := job(context.WithoutCancel(ctx)); err != nil {
-					// The hook response is long gone, so this line and its
-					// running total are the only trace the record was lost.
-					// Printf is debug-gated; a lost audit record must reach
-					// the daemon log unconditionally.
-					diagnostic.LogAlways(diag, "deferred decision record: %v (%d failed since start)\n", err, recordFailures.Add(1))
-				}
-			}()
-		}
+	// Merlin must never put inference on the hook response path, including
+	// hosts whose caller did not explicitly request asynchronous recording.
+	if opts.AsyncDecisionRecording || stepSafety != nil {
+		recorder = server.NewDeferredRecorder(opts.Diagnostic)
+		deferRecord = recorder.Submit
 	}
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(dbPath, server.Options{
 		Judge:            localJudge,
@@ -230,20 +200,8 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		closeJudge:            closeJudge,
 		closeStepSafety:       closeStepSafety,
 	}
-	if opts.AsyncDecisionRecording {
-		host.drainRecords = func(drainCtx context.Context) error {
-			done := make(chan struct{})
-			go func() {
-				recordWG.Wait()
-				close(done)
-			}()
-			select {
-			case <-done:
-				return nil
-			case <-drainCtx.Done():
-				return fmt.Errorf("drain deferred decision records: %w", drainCtx.Err())
-			}
-		}
+	if recorder != nil {
+		host.drainRecords = recorder.Drain
 	}
 
 	serviceSessionID := sessionID

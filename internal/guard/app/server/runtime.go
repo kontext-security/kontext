@@ -155,9 +155,9 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	if err != nil {
 		return risk.RiskDecision{}, err
 	}
-	// This synchronous shadow call is the last model stage before a successful
-	// PreToolUse response can release the tool. It never mutates decision.
-	r.annotateStepSafety(ctx, event, &decision)
+	// Capture history before releasing the tool. Inference may run later, after
+	// subsequent prompts, results, or SessionEnd have changed the context cache.
+	stepInput := r.stepSafetyInput(event)
 	// Annotate here, between the final decision and the write. Here is the only
 	// place that sees Cedar's actual answer, and the only place every path —
 	// observe, enforce, managed — passes through, so one call site covers them
@@ -183,6 +183,7 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 			if sessionErr == nil && deferredEvent.Agent == "" {
 				deferredEvent.Agent = session.Agent
 			}
+			r.annotateStepSafety(recordCtx, stepInput, &deferredDecision)
 			r.annotate(recordCtx, deferredEvent, &deferredDecision)
 			record, err := r.store.SaveDecision(recordCtx, deferredEvent, deferredDecision)
 			if err != nil {
@@ -194,6 +195,7 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		})
 		return decision, nil
 	}
+	r.annotateStepSafety(ctx, stepInput, &decision)
 	r.annotate(ctx, event, &decision)
 	record, err := r.store.SaveDecision(ctx, event, decision)
 	if err != nil {
@@ -205,9 +207,9 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	return decision, nil
 }
 
-func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.HookEvent, decision *risk.RiskDecision) {
+func (r guardHookRuntime) stepSafetyInput(event risk.HookEvent) *stepsafety.Input {
 	if r.stepSafety == nil || event.HookEventName != hook.HookPreToolUse.String() {
-		return
+		return nil
 	}
 	snapshot := r.stepContext.SnapshotWithCoverage(event.SessionID)
 	request := snapshot.UserRequest
@@ -215,7 +217,7 @@ func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.Hoo
 		request = event.UserRequest
 		snapshot.RequestTooLarge = false
 	}
-	result := r.stepSafety.Evaluate(ctx, stepsafety.Input{
+	return &stepsafety.Input{
 		UserRequest:          request,
 		InteractionHistory:   snapshot.InteractionHistory,
 		HistoryOmitted:       snapshot.HistoryOmitted,
@@ -223,7 +225,14 @@ func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.Hoo
 		ToolName:             event.ToolName,
 		ToolArguments:        event.ToolInput,
 		AvailableToolSchemas: event.AvailableToolSchemas,
-	})
+	}
+}
+
+func (r guardHookRuntime) annotateStepSafety(ctx context.Context, input *stepsafety.Input, decision *risk.RiskDecision) {
+	if input == nil {
+		return
+	}
+	result := r.stepSafety.Evaluate(ctx, *input)
 	decision.StepSafety = &risk.StepSafetyAnnotation{
 		UnsafeProbability:  result.UnsafeProbability,
 		ShadowDecision:     result.ShadowDecision,
@@ -238,7 +247,7 @@ func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.Hoo
 		ToolSchemasPresent: result.ToolSchemasPresent,
 	}
 	if result.ShadowDecision == stepsafety.DecisionUnsafe {
-		decision.StepSafety.ReviewContext = merlinReviewContext(request, snapshot.InteractionHistory)
+		decision.StepSafety.ReviewContext = merlinReviewContext(input.UserRequest, input.InteractionHistory)
 	}
 }
 
