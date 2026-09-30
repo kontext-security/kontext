@@ -67,6 +67,7 @@ func TestModifiedReportsDirtyTree(t *testing.T) {
 func TestDescribe(t *testing.T) {
 	for name, test := range map[string]struct {
 		settings map[string]string
+		builtBy  string
 		want     string
 	}{
 		"stamped": {
@@ -83,13 +84,57 @@ func TestDescribe(t *testing.T) {
 			settings: map[string]string{},
 			want:     "0.14.1",
 		},
+		"unstamped Homebrew": {
+			builtBy: "Homebrew",
+			want:    "0.14.1 (built by Homebrew)",
+		},
+		"stamped Homebrew": {
+			settings: map[string]string{"vcs.revision": "cac15fd669a7e4b"},
+			builtBy:  "Homebrew",
+			want:     "0.14.1 (cac15fd6, built by Homebrew)",
+		},
+		"modified Homebrew": {
+			settings: map[string]string{"vcs.revision": "cac15fd669a7e4b", "vcs.modified": "true"},
+			builtBy:  "Homebrew",
+			want:     "0.14.1 (cac15fd6+modified, built by Homebrew)",
+		},
+		"tap distributor": {
+			builtBy: " kontext ",
+			want:    "0.14.1 (built by kontext)",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			previous := builtBy
+			t.Cleanup(func() { builtBy = previous })
+			builtBy = test.builtBy
 			stubBuildInfo(t, test.settings, true)
 			if got := Describe("0.14.1"); got != test.want {
 				t.Fatalf("Describe() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestBuiltBy(t *testing.T) {
+	previous := builtBy
+	t.Cleanup(func() { builtBy = previous })
+	for _, test := range []struct {
+		value    string
+		want     string
+		homebrew bool
+	}{
+		{value: "", want: ""},
+		{value: "  Homebrew\n", want: "Homebrew", homebrew: true},
+		{value: "kontext", want: "kontext"},
+		{value: "homebrew", want: "homebrew"},
+	} {
+		builtBy = test.value
+		if got := BuiltBy(); got != test.want {
+			t.Fatalf("BuiltBy() = %q, want %q", got, test.want)
+		}
+		if got := HomebrewBuild(); got != test.homebrew {
+			t.Fatalf("HomebrewBuild() = %v for %q, want %v", got, test.value, test.homebrew)
+		}
 	}
 }
 

@@ -15,8 +15,8 @@ import (
 )
 
 // llamaServerInstallHint is the only supported way to get the runtime today:
-// the Homebrew formula depends on llama.cpp, and nothing in this CLI ships or
-// downloads a native inference binary.
+// llama.cpp is installed separately with brew install llama.cpp. The
+// homebrew-core formula does not depend on it because the local risk model is opt-in.
 const llamaServerInstallHint = "brew install llama.cpp"
 
 // errLlamaServerMissing is returned before anything is written, so asking for

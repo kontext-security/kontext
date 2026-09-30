@@ -3,9 +3,11 @@ package managedobserve
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -17,6 +19,57 @@ import (
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedstream"
 )
+
+func TestDoctorHomebrewOutdated(t *testing.T) {
+	for _, name := range []string{"outdated", "up to date", "brew error", "brew missing", "not Homebrew"} {
+		t.Run(name, func(t *testing.T) {
+			env := newDoctorTestEnv(t)
+			env.writeDaemonStatus(t, os.Getpid(), "1.2.3")
+			stubHomebrewBuild(t)
+			if name == "not Homebrew" {
+				homebrewBuild = func() bool { return false }
+			}
+			if name == "brew missing" {
+				statPath = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+			}
+			calls := 0
+			runCommand = func(_ context.Context, _ string, args ...string) (string, error) {
+				calls++
+				if !reflect.DeepEqual(args, []string{"outdated", "--formula", "--json=v2", "kontext"}) {
+					t.Fatalf("doctor must not update or upgrade: %v", args)
+				}
+				if name == "brew error" {
+					return "", errors.New("brew failed")
+				}
+				if name == "up to date" {
+					return `{"formulae":[],"casks":[]}`, nil
+				}
+				return `{"formulae":[{"name":"kontext","installed_versions":["1.2.3"],"current_version":"1.2.4"}],"casks":[]}`, nil
+			}
+			var out bytes.Buffer
+			status, report := printStatus(&out, "1.2.3", env.options())
+			warning := "kontext 1.2.3 is outdated; 1.2.4 is available. Run: brew upgrade kontext"
+			wantWarning := name == "outdated"
+			if got := strings.Contains(out.String(), "WARNING: "+warning); got != wantWarning {
+				t.Fatalf("warning = %v, want %v:\n%s", got, wantWarning, out.String())
+			}
+			if got := strings.Contains(strings.Join(report.Warnings, "\n"), warning); got != wantWarning {
+				t.Fatalf("report warnings = %v", report.Warnings)
+			}
+			if name == "brew error" || name == "brew missing" {
+				if !strings.Contains(out.String(), "Homebrew update: unknown") {
+					t.Fatalf("missing soft result:\n%s", out.String())
+				}
+				if !status.Healthy {
+					t.Fatalf("brew failure made doctor unhealthy:\n%s", out.String())
+				}
+			}
+			if name == "not Homebrew" && (calls != 0 || strings.Contains(out.String(), "Homebrew update:") || strings.Contains(out.String(), warning)) {
+				t.Fatalf("non-Homebrew build checked Homebrew: calls %d, output %s", calls, out.String())
+			}
+		})
+	}
+}
 
 func TestPrintStatusReportsInstallationLoadError(t *testing.T) {
 	dir := t.TempDir()

@@ -191,6 +191,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		return err
 	}
 
+	if warning := localRiskModelWarning(os.Getenv("KONTEXT_JUDGE_MANAGED"), os.Getenv("KONTEXT_JUDGE_SERVER_BIN")); warning != "" {
+		logAlways(opts.Diagnostic, "%s\n", warning)
+	}
+
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          managedconfig.Agent,
 		DBPath:             dbPath,
