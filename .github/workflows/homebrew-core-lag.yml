@@ -1,0 +1,57 @@
+name: Homebrew Core Lag
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  lag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check homebrew-core release lag
+        run: |
+          set -euo pipefail
+          release="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName,publishedAt)"
+          tag="$(jq -r .tagName <<< "$release")"
+          version="${tag#v}"
+          published_at="$(jq -r .publishedAt <<< "$release")"
+
+          if status="$(curl -fsS -o "$RUNNER_TEMP/kontext-core.json" -w '%{http_code}' \
+            https://formulae.brew.sh/api/formula/kontext.json)"; then
+            core_version="$(jq -r .versions.stable "$RUNNER_TEMP/kontext-core.json")"
+          else
+            if [[ "$status" == 404 ]]; then
+              echo "kontext is not in homebrew-core yet; skipping lag check."
+              exit 0
+            fi
+            exit 1
+          fi
+
+          if [[ "$version" == "$core_version" ]] || \
+            (( $(date +%s) - $(date -d "$published_at" +%s) < 86400 )); then
+            exit 0
+          fi
+
+          title="homebrew-core is behind: v$version"
+          issues="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title \"$title\"" --json title)"
+          if jq -e --arg title "$title" 'any(.[]; .title == $title)' <<< "$issues" > /dev/null; then
+            exit 0
+          fi
+
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --assignee michiosw \
+            --body "Release: v$version, published $published_at.
+          Core version: $core_version.
+
+          Bump PRs: https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+kontext
+          Check the bump PR's CI and fix or ping it."
