@@ -39,7 +39,7 @@ func TestDeferredStepSafetyUsesPreToolContextAfterHookReturns(t *testing.T) {
 	var jobs []func(context.Context) error
 	server, err := NewServerWithOptions(store, Options{
 		StepSafety:  evaluator,
-		DeferRecord: func(job func(context.Context) error) { jobs = append(jobs, job) },
+		DeferRecord: func(job func(context.Context) error) error { jobs = append(jobs, job); return nil },
 	})
 	if err != nil {
 		t.Fatal(err)

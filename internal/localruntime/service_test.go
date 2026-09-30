@@ -3,9 +3,11 @@ package localruntime
 import (
 	"context"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -420,6 +422,7 @@ type stubRuntime struct {
 	ingestCalls    atomic.Int32
 	observeCalls   atomic.Int32
 	startedIngest  atomic.Bool
+	afterResponse  func()
 }
 
 func (s *stubRuntime) ObserveAsyncEvent(event hook.Event) {
@@ -429,9 +432,87 @@ func (s *stubRuntime) ObserveAsyncEvent(event hook.Event) {
 	}
 }
 
-func (s *stubRuntime) EvaluateHook(_ context.Context, _ hook.Event) (hook.Result, error) {
+func (s *stubRuntime) EvaluateHook(ctx context.Context, _ hook.Event) (hook.Result, error) {
 	s.evaluateCalls.Add(1)
+	if s.afterResponse != nil {
+		runtimecore.AfterResponse(ctx, s.afterResponse)
+	}
 	return s.evaluateResult, s.evaluateErr
+}
+
+func TestServiceBoundsPostResponseWorkBeforeAdmittingAnotherHook(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	var completed atomic.Int32
+	runtime := &stubRuntime{
+		evaluateResult: hook.Result{Decision: hook.DecisionAllow},
+		afterResponse:  func() { <-release; completed.Add(1) },
+	}
+	service := newTestService(t, runtime, false)
+	t.Cleanup(unblock) // Release before the service cleanup waits for handlers.
+	client := NewClient(service.SocketPath())
+	client.Timeout = time.Second
+	for range runtimecore.MaxPendingHookRequests {
+		if _, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The next connection may enter the kernel backlog, but cannot be decoded
+	// or assigned a settled decision while every post-response slot is occupied.
+	extra := make(chan error, 1)
+	go func() {
+		_, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse})
+		extra <- err
+	}()
+	select {
+	case err := <-extra:
+		t.Fatalf("unexpected admission past the limit: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := runtime.evaluateCalls.Load(); got != runtimecore.MaxPendingHookRequests {
+		t.Fatalf("evaluated %d requests", got)
+	}
+	unblock()
+	if err := <-extra; err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := completed.Load(); got != runtimecore.MaxPendingHookRequests+1 {
+		t.Fatalf("completed %d post-response jobs", got)
+	}
+}
+
+func TestServiceRecordsSettledDecisionWhenResponseWriteFails(t *testing.T) {
+	recorded := make(chan struct{})
+	runtime := &stubRuntime{
+		evaluateResult: hook.Result{Decision: hook.DecisionAllow, EventID: "act_disconnected"},
+		afterResponse:  func() { close(recorded) },
+	}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(Options{SocketPath: "unused", Core: core})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+	done := make(chan struct{})
+	go func() { defer close(done); service.handleConn(context.Background(), server) }()
+	if err := WriteMessage(client, EvaluateRequest{HookEvent: "PreToolUse", ToolName: "Bash"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.Close() // The response cannot be delivered; its audit work still runs.
+	select {
+	case <-recorded:
+	case <-time.After(time.Second):
+		t.Fatal("response failure discarded settled recording work")
+	}
+	<-done
 }
 
 func (s *stubRuntime) IngestEvent(ctx context.Context, event hook.Event) (hook.Result, error) {

@@ -22,8 +22,9 @@ func TestDeferRecordAnswersWithoutPersisting(t *testing.T) {
 
 	var jobs []func(context.Context) error
 	server, err := NewServerWithPolicyAndOptions(store, nil, Options{
-		DeferRecord: func(job func(context.Context) error) {
+		DeferRecord: func(job func(context.Context) error) error {
 			jobs = append(jobs, job)
+			return nil
 		},
 	})
 	if err != nil {
@@ -101,8 +102,9 @@ func TestDeferRecordSkipsNonBlockingHooks(t *testing.T) {
 
 	var jobs []func(context.Context) error
 	server, err := NewServerWithPolicyAndOptions(store, nil, Options{
-		DeferRecord: func(job func(context.Context) error) {
+		DeferRecord: func(job func(context.Context) error) error {
 			jobs = append(jobs, job)
+			return nil
 		},
 	})
 	if err != nil {
@@ -145,8 +147,9 @@ func TestDeferredRecordDoesNotReopenClosedSession(t *testing.T) {
 
 	var jobs []func(context.Context) error
 	server, err := NewServerWithPolicyAndOptions(store, nil, Options{
-		DeferRecord: func(job func(context.Context) error) {
+		DeferRecord: func(job func(context.Context) error) error {
 			jobs = append(jobs, job)
+			return nil
 		},
 	})
 	if err != nil {
@@ -218,8 +221,9 @@ func TestDeferRecordNormalizesEmptySessionID(t *testing.T) {
 
 	var jobs []func(context.Context) error
 	server, err := NewServerWithPolicyAndOptions(store, nil, Options{
-		DeferRecord: func(job func(context.Context) error) {
+		DeferRecord: func(job func(context.Context) error) error {
 			jobs = append(jobs, job)
+			return nil
 		},
 	})
 	if err != nil {

@@ -27,15 +27,17 @@ type guardHookRuntime struct {
 	stepContext      *stepsafety.ContextStore
 	// deferRecord, when non-nil, runs every store write for decision-gating
 	// hooks — session upsert, annotation, decision row — off the hook
-	// response path. The decision itself (Cedar) is always computed before
+	// response path. Transports defer submission until after writing the
+	// response, so a full audit queue cannot hold that response. The decision
+	// itself (Cedar) is always computed before
 	// the response. Non-blocking hooks keep their synchronous writes: they
 	// are already ingested behind an immediate response. The executor owns
 	// lifetime (context, draining on shutdown) and reporting the job's
 	// error. Nil keeps the historical synchronous behavior.
-	deferRecord func(job func(context.Context) error)
+	deferRecord func(job func(context.Context) error) error
 }
 
-func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier, stepSafety *stepsafety.Evaluator, deferRecord func(job func(context.Context) error)) guardHookRuntime {
+func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier, stepSafety *stepsafety.Evaluator, deferRecord func(job func(context.Context) error) error) guardHookRuntime {
 	runtime := guardHookRuntime{
 		store:            store,
 		policy:           policy,
@@ -173,7 +175,7 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		// enforce.
 		decision.EventID = sqlite.NewActionID()
 		deferredEvent, deferredDecision := event, decision
-		r.deferRecord(func(recordCtx context.Context) error {
+		recordJob := func(recordCtx context.Context) error {
 			// The session upsert EnsureSessionForEvent skipped lands first,
 			// mirroring the synchronous order: it carries the mode stamp
 			// SaveDecision's own upsert lacks. Backfill, not Ensure: this
@@ -192,7 +194,18 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 			r.recordAnnotation(recordCtx, record.ID, deferredEvent, deferredDecision)
 			r.recordStepSafety(recordCtx, record.ID, deferredEvent, deferredDecision)
 			return sessionErr
-		})
+		}
+		if !runtimecore.AfterResponse(ctx, func() {
+			if err := r.deferRecord(recordJob); err != nil {
+				log.Printf("deferred decision submission for %s: %v", deferredDecision.EventID, err)
+			}
+		}) {
+			// Direct callers have no response boundary; they must wait for
+			// bounded queue admission and receive any submission failure.
+			if err := r.deferRecord(recordJob); err != nil {
+				return risk.RiskDecision{}, err
+			}
+		}
 		return decision, nil
 	}
 	r.annotateStepSafety(ctx, stepInput, &decision)

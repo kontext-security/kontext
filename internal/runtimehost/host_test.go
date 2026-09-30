@@ -2,6 +2,7 @@ package runtimehost
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/risk"
@@ -16,6 +18,35 @@ import (
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
 )
+
+func TestCloseKeepsResourcesAliveWhenRecordDrainTimesOut(t *testing.T) {
+	var drainCalls, closed int
+	host := &Host{
+		drainRecords: func(ctx context.Context) error {
+			drainCalls++
+			if drainCalls == 1 {
+				return context.DeadlineExceeded
+			}
+			return nil
+		},
+		closeStore:      func() error { closed++; return nil },
+		closeStepSafety: func() error { closed++; return nil },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := host.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close error=%v", err)
+	}
+	if closed != 0 || host.drainRecords == nil {
+		t.Fatal("timed-out drain closed pending work's resources")
+	}
+	if err := host.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if closed != 2 || drainCalls != 2 {
+		t.Fatalf("closed=%d drains=%d", closed, drainCalls)
+	}
+}
 
 func TestStartWorksOutsideRepoCWD(t *testing.T) {
 	t.Chdir(t.TempDir())

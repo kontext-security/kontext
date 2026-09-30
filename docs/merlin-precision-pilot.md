@@ -53,13 +53,21 @@ and known file tools remain outside the pilot. Unavailable is never a safe label
 Daemon entrypoints defer Merlin inference with decision recording. They snapshot
 the request/history at the call, settle policy, then answer the hook without
 waiting for model inference. Background completion cannot revise authorization.
-The recorder has four workers and a queue of 256 waiting records. Submission never
-waits for queue space. At saturation it drops the newest entire deferred record,
-including its decision row and annotations, and workers report cumulative dropped
-counts to the daemon log as they make progress (also reported on successful drain).
-These are missing audit records, not safe predictions; inspect overload diagnostics
-when interpreting trial results. There is no synchronous or unbounded fallback.
-Shutdown closes admission and drains accepted records before the store/model close.
+The recorder has four workers and a queue of 256 waiting records. Transports send
+the settled response before submitting its recording job. When the queue is full,
+that request's post-response handler waits for space; it does not discard the
+decision or spawn another goroutine. Each transport admits at most 64 active hook
+requests, holding admission through recording submission (and telemetry ingestion).
+This bounds work retained outside the queue as well. Sustained overload delays
+admission of new socket requests; HTTP rejects excess requests with 503 before
+evaluating policy or assigning an event ID. Direct library callers without a
+transport response boundary wait for queue admission themselves.
+
+Shutdown stops new transport requests, waits for post-response submissions, then
+closes recorder admission and drains its accepted records before closing the store
+and model. A timed-out host shutdown leaves pending work's resources alive for a
+later close attempt. These protections apply to managed recording even with
+Merlin disabled. Ordinary persistence failures remain reported in the daemon log.
 The existing 250 ms inference budget (maximum 500 ms) includes model-slot
 admission; cancellation is checked
 between model layers. Startup is bounded to 30 seconds and loads once per process.
@@ -111,8 +119,10 @@ calibrated probabilities and decisions. Boundary examples are selected by known
 score to test parity; they are not an accuracy sample. Separate tests pin the 532
 Hugging Face tokenizer vectors, cancellation, concurrent inference and returning
 a socket response while the fake model remains blocked. Queue saturation and
-concurrent submission/shutdown tests verify bounded admission, loss reporting,
-and draining accepted records exactly once. The original 52 Python references
+concurrent submission/shutdown tests verify bounded admission and draining
+accepted records exactly once. Saturated socket and HTTP tests preserve every
+returned allow/deny event ID with Merlin enabled and disabled; disconnected
+clients still trigger post-response recording. The original 52 Python references
 remain unchanged; separate endpoint tests cover `input_schema`-only definitions.
 
 ```sh

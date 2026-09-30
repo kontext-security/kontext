@@ -145,7 +145,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		serverSessionID = ""
 	}
 	var recorder *server.DeferredRecorder
-	var deferRecord func(job func(context.Context) error)
+	var deferRecord func(job func(context.Context) error) error
 	// Merlin must never put inference on the hook response path, including
 	// hosts whose caller did not explicitly request asynchronous recording.
 	if opts.AsyncDecisionRecording || stepSafety != nil {
@@ -313,7 +313,9 @@ func (h *Host) Close(ctx context.Context) error {
 	}
 	if h.runtimeService != nil {
 		if err := h.runtimeService.Shutdown(ctx); err != nil {
-			errs = append(errs, err)
+			// Admitted handlers may still be submitting audit work after their
+			// responses. Preserve the recorder/store and allow Close to retry.
+			return err
 		}
 		h.runtimeService = nil
 	}
@@ -321,7 +323,7 @@ func (h *Host) Close(ctx context.Context) error {
 	// them; runtimeService is already down, so no new work can arrive.
 	if h.drainRecords != nil {
 		if err := h.drainRecords(ctx); err != nil {
-			errs = append(errs, err)
+			return err
 		}
 		h.drainRecords = nil
 	}

@@ -14,9 +14,8 @@ import (
 	"github.com/kontext-security/kontext/internal/diagnostic"
 )
 
-func TestDeferredRecorderBoundsBacklogWithoutWaiting(t *testing.T) {
-	var log bytes.Buffer
-	r := NewDeferredRecorder(diagnostic.New(&log, true))
+func TestDeferredRecorderBoundsBacklogWithoutDropping(t *testing.T) {
+	r := NewDeferredRecorder(diagnostic.New(io.Discard, true))
 	started := make(chan struct{}, deferredRecordWorkers)
 	release := make(chan struct{})
 	var releaseOnce sync.Once
@@ -26,12 +25,14 @@ func TestDeferredRecorderBoundsBacklogWithoutWaiting(t *testing.T) {
 	})
 	var completed atomic.Int64
 	for range deferredRecordWorkers {
-		r.Submit(func(context.Context) error {
+		if err := r.Submit(func(context.Context) error {
 			started <- struct{}{}
 			<-release
 			completed.Add(1)
 			return nil
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for range deferredRecordWorkers {
 		select {
@@ -40,33 +41,46 @@ func TestDeferredRecorderBoundsBacklogWithoutWaiting(t *testing.T) {
 			t.Fatal("workers did not start")
 		}
 	}
-	const overflow = 10000
-	submitted := make(chan struct{})
-	go func() {
-		defer close(submitted)
-		for range deferredRecordQueueSize + overflow {
-			r.Submit(func(context.Context) error { completed.Add(1); return nil })
+	for range deferredRecordQueueSize {
+		if err := r.Submit(func(context.Context) error { completed.Add(1); return nil }); err != nil {
+			t.Fatal(err)
 		}
+	}
+	const overflow = 10000
+	submitted := make(chan error, 1)
+	go func() {
+		for range overflow {
+			if err := r.Submit(func(context.Context) error { completed.Add(1); return nil }); err != nil {
+				submitted <- err
+				return
+			}
+		}
+		submitted <- nil
 	}()
 	select {
-	case <-submitted:
-	case <-time.After(time.Second):
-		t.Fatal("submission waited for a stalled worker")
+	case err := <-submitted:
+		t.Fatalf("full queue must retain/backpressure the submitter: %v", err)
+	case <-time.After(50 * time.Millisecond):
 	}
-	if len(r.jobs) != deferredRecordQueueSize || r.dropped.Load() != overflow || completed.Load() != 0 {
-		t.Fatalf("queued=%d dropped=%d completed=%d", len(r.jobs), r.dropped.Load(), completed.Load())
+	if len(r.jobs) != deferredRecordQueueSize || completed.Load() != 0 {
+		t.Fatalf("queued=%d completed=%d", len(r.jobs), completed.Load())
 	}
 	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-submitted:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("submissions did not resume")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := r.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := completed.Load(); got != deferredRecordWorkers+deferredRecordQueueSize {
-		t.Fatalf("completed %d jobs; rejected work must never run", got)
-	}
-	if !strings.Contains(log.String(), "10000 total since start") || !strings.Contains(log.String(), "decision rows and annotations were not saved") {
-		t.Fatalf("missing overload diagnostic: %s", log.String())
+	if got := completed.Load(); got != deferredRecordWorkers+deferredRecordQueueSize+overflow {
+		t.Fatalf("completed %d jobs; no settled audit work may be discarded", got)
 	}
 }
 
@@ -94,21 +108,24 @@ func TestDeferredRecorderDrainTimeoutAndRetry(t *testing.T) {
 			t.Fatalf("drain should time out while retaining accepted work: %v", err)
 		}
 	}
-	r.Submit(func(context.Context) error { completed.Add(100); return nil })
+	if err := r.Submit(func(context.Context) error { completed.Add(100); return nil }); !errors.Is(err, errRecorderClosed) {
+		t.Fatalf("late submission must explicitly fail: %v", err)
+	}
 	releaseOnce.Do(func() { close(release) })
 	for range 2 {
 		if err := r.Drain(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if completed.Load() != 1 || r.dropped.Load() != 1 || r.failures.Load() != 0 {
-		t.Fatalf("completed=%d dropped=%d failed=%d", completed.Load(), r.dropped.Load(), r.failures.Load())
+	if completed.Load() != 1 || r.failures.Load() != 0 {
+		t.Fatalf("completed=%d failed=%d", completed.Load(), r.failures.Load())
 	}
 }
 
 func TestDeferredRecorderConcurrentSubmitAndDrain(t *testing.T) {
 	r := NewDeferredRecorder(diagnostic.New(io.Discard, true))
 	const producers, perProducer = 8, 1000
+	var rejected atomic.Int64
 	var completed atomic.Int64
 	release := make(chan struct{})
 	r.Submit(func(context.Context) error {
@@ -125,7 +142,12 @@ func TestDeferredRecorderConcurrentSubmitAndDrain(t *testing.T) {
 			defer group.Done()
 			<-start
 			for range perProducer {
-				r.Submit(func(context.Context) error { completed.Add(1); return nil })
+				if err := r.Submit(func(context.Context) error { completed.Add(1); return nil }); err != nil {
+					if !errors.Is(err, errRecorderClosed) {
+						t.Errorf("unexpected submission error: %v", err)
+					}
+					rejected.Add(1)
+				}
 			}
 		}()
 	}
@@ -146,7 +168,7 @@ func TestDeferredRecorderConcurrentSubmitAndDrain(t *testing.T) {
 	if err := r.Drain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := completed.Load() + r.dropped.Load(); got != producers*perProducer+1 {
+	if got := completed.Load() + rejected.Load(); got != producers*perProducer+1 {
 		t.Fatalf("accounted for %d jobs, want %d", got, producers*perProducer+1)
 	}
 }

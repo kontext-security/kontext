@@ -162,7 +162,7 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	stepSafety := stepsafety.New(ctx, stepSafetyConfig)
 	defer stepSafety.Close()
 	var recorder *server.DeferredRecorder
-	var deferRecord func(func(context.Context) error)
+	var deferRecord func(func(context.Context) error) error
 	if stepSafety != nil {
 		recorder = server.NewDeferredRecorder(diagnostic.New(out, diagnostic.EnabledFromEnv()))
 		deferRecord = recorder.Submit

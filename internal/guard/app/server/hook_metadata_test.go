@@ -135,7 +135,7 @@ func TestDeferredRecordingPreservesProviderPermissionMode(t *testing.T) {
 	defer store.Close()
 	var jobs []func(context.Context) error
 	server, err := NewServerWithPolicyAndOptions(store, nil, Options{
-		DeferRecord: func(job func(context.Context) error) { jobs = append(jobs, job) },
+		DeferRecord: func(job func(context.Context) error) error { jobs = append(jobs, job); return nil },
 	})
 	if err != nil {
 		t.Fatal(err)
