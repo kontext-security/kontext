@@ -161,6 +161,12 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	}
 	stepSafety := stepsafety.New(ctx, stepSafetyConfig)
 	defer stepSafety.Close()
+	var recorder *server.DeferredRecorder
+	var deferRecord func(func(context.Context) error) error
+	if stepSafety != nil {
+		recorder = server.NewDeferredRecorder(diagnostic.New(out, diagnostic.EnabledFromEnv()))
+		deferRecord = recorder.Submit
+	}
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(*dbPath, server.Options{
 		Judge: localJudge,
 		RiskClassifier: &server.RiskClassifierOptions{
@@ -168,12 +174,16 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 			GuardrailBaseURL: judgeRuntime.BaseURL,
 			GuardrailModel:   judgeRuntime.Model,
 		},
-		StepSafety: stepSafety,
+		StepSafety:  stepSafety,
+		DeferRecord: deferRecord,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() {
+		if recorder != nil {
+			_ = recorder.Drain(context.Background())
+		}
 		_ = closeStore()
 	}()
 	if err := ensureGuardSocketDir(*socketPath); err != nil {

@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	ModelVersion = "toolsafe-deberta-v3-xsmall-onnx-scoped-v2"
-	Threshold    = 0.5
+	ModelVersion = "merlin-joint-ce-20260924-primary"
+	Threshold    = 0.9089979801627239
 
-	calibrationScale = 1.427213430140093
-	calibrationBias  = 2.953687013257505
+	calibrationScale = 0.9976812431377959
+	calibrationBias  = 0.5990786345281421
 
 	defaultTimeout        = 250 * time.Millisecond
 	maxConfiguredTimeout  = 500 * time.Millisecond
@@ -95,7 +95,9 @@ type Health struct {
 }
 
 type Config struct {
-	Enabled        bool
+	Enabled bool
+	// ModelDir is retained for compatibility with historical development callers.
+	// Production inference always uses the embedded checkpoint.
 	ModelDir       string
 	Timeout        time.Duration
 	StartupTimeout time.Duration
@@ -104,7 +106,7 @@ type Config struct {
 }
 
 // Backend is the narrow boundary between safety policy plumbing and local
-// inference. Production uses one local ONNX session; tests use deterministic fakes.
+// inference. Production uses the embedded Go model; tests can use deterministic fakes.
 type Backend interface {
 	Infer(context.Context, Input) (InferenceResult, error)
 	Health(context.Context) (Health, error)
@@ -139,7 +141,7 @@ type Evaluator struct {
 	unavailable  string
 }
 
-func ConfigFromEnv(dbPath string) (Config, error) {
+func ConfigFromEnv(_ string) (Config, error) {
 	enabled, err := envBool("KONTEXT_STEP_SAFETY_SHADOW", false)
 	if err != nil {
 		return Config{}, err
@@ -165,11 +167,9 @@ func ConfigFromEnv(dbPath string) (Config, error) {
 	if concurrency != 1 {
 		return Config{}, errors.New("KONTEXT_STEP_SAFETY_MAX_CONCURRENCY must be 1 for the singleton pilot session")
 	}
-	// One session processes one request at a time. The admission bound prevents
-	// bursts from building an unbounded queue behind the singleton model.
+	// One evaluation runs at a time. Admission stays within the same deadline.
 	return Config{
 		Enabled:        enabled,
-		ModelDir:       envString("KONTEXT_STEP_SAFETY_MODEL_DIR", DefaultModelDir(dbPath)),
 		Timeout:        timeout,
 		StartupTimeout: startupTimeout,
 		MaxConcurrency: concurrency,
@@ -177,15 +177,14 @@ func ConfigFromEnv(dbPath string) (Config, error) {
 	}, nil
 }
 
-// New loads a single ONNX session when the feature is enabled. Missing artifacts or
-// runtime dependencies produce an unavailable evaluator rather than failing
-// daemon startup; each call will record the redacted failure code and fail open.
+// New loads the embedded native Go checkpoint when enabled. Initialization
+// failures produce an unavailable evaluator rather than failing daemon startup.
 func New(ctx context.Context, cfg Config) *Evaluator {
 	if !cfg.Enabled {
 		return nil
 	}
 	cfg = normalizeConfig(cfg)
-	backend, err := newONNXBackend(ctx, cfg)
+	backend, err := newNativeBackend(ctx, cfg)
 	if err != nil {
 		return &Evaluator{
 			timeout:      cfg.Timeout,

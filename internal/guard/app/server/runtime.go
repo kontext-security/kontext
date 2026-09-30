@@ -27,15 +27,17 @@ type guardHookRuntime struct {
 	stepContext      *stepsafety.ContextStore
 	// deferRecord, when non-nil, runs every store write for decision-gating
 	// hooks — session upsert, annotation, decision row — off the hook
-	// response path. The decision itself (Cedar) is always computed before
+	// response path. Transports defer submission until after writing the
+	// response, so a full audit queue cannot hold that response. The decision
+	// itself (Cedar) is always computed before
 	// the response. Non-blocking hooks keep their synchronous writes: they
 	// are already ingested behind an immediate response. The executor owns
 	// lifetime (context, draining on shutdown) and reporting the job's
 	// error. Nil keeps the historical synchronous behavior.
-	deferRecord func(job func(context.Context) error)
+	deferRecord func(job func(context.Context) error) error
 }
 
-func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier, stepSafety *stepsafety.Evaluator, deferRecord func(job func(context.Context) error)) guardHookRuntime {
+func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSessionID, mode string, classifier *riskclassifier.Classifier, stepSafety *stepsafety.Evaluator, deferRecord func(job func(context.Context) error) error) guardHookRuntime {
 	runtime := guardHookRuntime{
 		store:            store,
 		policy:           policy,
@@ -155,9 +157,9 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	if err != nil {
 		return risk.RiskDecision{}, err
 	}
-	// This synchronous shadow call is the last model stage before a successful
-	// PreToolUse response can release the tool. It never mutates decision.
-	r.annotateStepSafety(ctx, event, &decision)
+	// Capture history before releasing the tool. Inference may run later, after
+	// subsequent prompts, results, or SessionEnd have changed the context cache.
+	stepInput := r.stepSafetyInput(event)
 	// Annotate here, between the final decision and the write. Here is the only
 	// place that sees Cedar's actual answer, and the only place every path —
 	// observe, enforce, managed — passes through, so one call site covers them
@@ -173,7 +175,7 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		// enforce.
 		decision.EventID = sqlite.NewActionID()
 		deferredEvent, deferredDecision := event, decision
-		r.deferRecord(func(recordCtx context.Context) error {
+		recordJob := func(recordCtx context.Context) error {
 			// The session upsert EnsureSessionForEvent skipped lands first,
 			// mirroring the synchronous order: it carries the mode stamp
 			// SaveDecision's own upsert lacks. Backfill, not Ensure: this
@@ -183,6 +185,7 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 			if sessionErr == nil && deferredEvent.Agent == "" {
 				deferredEvent.Agent = session.Agent
 			}
+			r.annotateStepSafety(recordCtx, stepInput, &deferredDecision)
 			r.annotate(recordCtx, deferredEvent, &deferredDecision)
 			record, err := r.store.SaveDecision(recordCtx, deferredEvent, deferredDecision)
 			if err != nil {
@@ -191,9 +194,21 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 			r.recordAnnotation(recordCtx, record.ID, deferredEvent, deferredDecision)
 			r.recordStepSafety(recordCtx, record.ID, deferredEvent, deferredDecision)
 			return sessionErr
-		})
+		}
+		if !runtimecore.AfterResponse(ctx, func() {
+			if err := r.deferRecord(recordJob); err != nil {
+				log.Printf("deferred decision submission for %s: %v", deferredDecision.EventID, err)
+			}
+		}) {
+			// Direct callers have no response boundary; they must wait for
+			// bounded queue admission and receive any submission failure.
+			if err := r.deferRecord(recordJob); err != nil {
+				return risk.RiskDecision{}, err
+			}
+		}
 		return decision, nil
 	}
+	r.annotateStepSafety(ctx, stepInput, &decision)
 	r.annotate(ctx, event, &decision)
 	record, err := r.store.SaveDecision(ctx, event, decision)
 	if err != nil {
@@ -205,9 +220,9 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 	return decision, nil
 }
 
-func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.HookEvent, decision *risk.RiskDecision) {
+func (r guardHookRuntime) stepSafetyInput(event risk.HookEvent) *stepsafety.Input {
 	if r.stepSafety == nil || event.HookEventName != hook.HookPreToolUse.String() {
-		return
+		return nil
 	}
 	snapshot := r.stepContext.SnapshotWithCoverage(event.SessionID)
 	request := snapshot.UserRequest
@@ -215,7 +230,7 @@ func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.Hoo
 		request = event.UserRequest
 		snapshot.RequestTooLarge = false
 	}
-	result := r.stepSafety.Evaluate(ctx, stepsafety.Input{
+	return &stepsafety.Input{
 		UserRequest:          request,
 		InteractionHistory:   snapshot.InteractionHistory,
 		HistoryOmitted:       snapshot.HistoryOmitted,
@@ -223,7 +238,14 @@ func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.Hoo
 		ToolName:             event.ToolName,
 		ToolArguments:        event.ToolInput,
 		AvailableToolSchemas: event.AvailableToolSchemas,
-	})
+	}
+}
+
+func (r guardHookRuntime) annotateStepSafety(ctx context.Context, input *stepsafety.Input, decision *risk.RiskDecision) {
+	if input == nil {
+		return
+	}
+	result := r.stepSafety.Evaluate(ctx, *input)
 	decision.StepSafety = &risk.StepSafetyAnnotation{
 		UnsafeProbability:  result.UnsafeProbability,
 		ShadowDecision:     result.ShadowDecision,
@@ -238,7 +260,7 @@ func (r guardHookRuntime) annotateStepSafety(ctx context.Context, event risk.Hoo
 		ToolSchemasPresent: result.ToolSchemasPresent,
 	}
 	if result.ShadowDecision == stepsafety.DecisionUnsafe {
-		decision.StepSafety.ReviewContext = merlinReviewContext(request, snapshot.InteractionHistory)
+		decision.StepSafety.ReviewContext = merlinReviewContext(input.UserRequest, input.InteractionHistory)
 	}
 }
 

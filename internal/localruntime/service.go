@@ -17,18 +17,20 @@ import (
 const hookConnDeadline = 10 * time.Second
 
 type Service struct {
-	socketPath  string
-	listener    net.Listener
-	core        *runtimecore.Core
-	sessionID   string
-	agentName   string
-	asyncIngest bool
-	transform   func(hook.Event, hook.Result) hook.Result
-	onFailure   func(hook.Event, error) hook.Result
-	diagnostic  diagnostic.Logger
-	cancel      context.CancelFunc
-	serveDone   chan struct{}
-	wg          sync.WaitGroup
+	socketPath    string
+	listener      net.Listener
+	core          *runtimecore.Core
+	sessionID     string
+	agentName     string
+	asyncIngest   bool
+	transform     func(hook.Event, hook.Result) hook.Result
+	onFailure     func(hook.Event, error) hook.Result
+	diagnostic    diagnostic.Logger
+	cancel        context.CancelFunc
+	serveDone     chan struct{}
+	wg            sync.WaitGroup
+	stopAdmission chan struct{}
+	stopOnce      sync.Once
 }
 
 type Options struct {
@@ -75,6 +77,8 @@ func (s *Service) Start(ctx context.Context) error {
 
 	ctx, s.cancel = context.WithCancel(ctx)
 	s.serveDone = make(chan struct{})
+	s.stopAdmission = make(chan struct{})
+	s.stopOnce = sync.Once{}
 	go s.acceptLoop(ctx, ln, s.serveDone)
 	return nil
 }
@@ -88,6 +92,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	var shutdownErr error
+	if s.stopAdmission != nil {
+		s.stopOnce.Do(func() { close(s.stopAdmission) })
+	}
 	if s.listener != nil {
 		if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			shutdownErr = errors.Join(shutdownErr, err)
@@ -129,9 +136,20 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 func (s *Service) acceptLoop(ctx context.Context, listener net.Listener, done chan<- struct{}) {
 	defer close(done)
+	// Hold admission through post-response recording/ingestion. Otherwise a
+	// full recorder merely moves an unbounded backlog into connection goroutines.
+	slots := make(chan struct{}, runtimecore.MaxPendingHookRequests)
 	for {
+		select {
+		case slots <- struct{}{}:
+		case <-s.stopAdmission:
+			return
+		case <-ctx.Done():
+			return
+		}
 		conn, err := listener.Accept()
 		if err != nil {
+			<-slots
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
@@ -146,6 +164,7 @@ func (s *Service) acceptLoop(ctx context.Context, listener net.Listener, done ch
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			defer func() { <-slots }()
 			s.handleConn(ctx, conn)
 		}()
 	}
@@ -164,22 +183,24 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
+	ctx, finish := runtimecore.WithResponseWork(ctx)
+	// A failed response write still owes the settled decision its audit record.
+	defer finish()
 	result := s.process(ctx, &req)
 	if err := WriteMessage(conn, result); err != nil {
 		s.diagnostic.Printf("local runtime write: %v\n", err)
-		return
 	}
+	_ = conn.Close()
+	finish()
 
 	if s.asyncIngest && shouldAsyncIngest(&req) {
-		s.wg.Add(1)
 		// Detach from the accept-loop context: shutdown cancels it, and a
 		// pending telemetry write must drain rather than abort — Shutdown
 		// already bounds the drain with its own context via wg.Wait.
 		ingestCtx := context.WithoutCancel(ctx)
-		go func() {
-			defer s.wg.Done()
-			s.ingestEvent(ingestCtx, &req)
-		}()
+		// The response is already sent. Keep this work in the bounded request
+		// handler instead of spawning another unbounded ingestion goroutine.
+		s.ingestEvent(ingestCtx, &req)
 	}
 }
 

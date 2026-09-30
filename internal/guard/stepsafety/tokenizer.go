@@ -27,6 +27,10 @@ func loadTokenizer(path string) (*tokenizer, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseTokenizer(data)
+}
+
+func parseTokenizer(data []byte) (*tokenizer, error) {
 	var config map[string]json.RawMessage
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
@@ -35,7 +39,7 @@ func loadTokenizer(path string) (*tokenizer, error) {
 	// These changes are in memory only; the original artifact stays pinned.
 	config["pre_tokenizer"] = json.RawMessage(`{"type":"Metaspace","replacement":"▁","prepend_scheme":"always","split":true}`)
 	config["normalizer"] = json.RawMessage(`null`)
-	data, err = json.Marshal(config)
+	data, err := json.Marshal(config)
 	if err != nil {
 		return nil, err
 	}

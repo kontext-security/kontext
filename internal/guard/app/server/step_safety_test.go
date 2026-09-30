@@ -27,6 +27,148 @@ type capturingStepSafetyBackend struct {
 	inputs []stepsafety.Input
 }
 
+func TestDeferredStepSafetyUsesPreToolContextAfterHookReturns(t *testing.T) {
+	store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	backend := &capturingStepSafetyBackend{}
+	evaluator := stepsafety.NewWithBackend(backend, time.Second, 1, stepsafety.ModelVersion)
+	defer evaluator.Close()
+	var jobs []func(context.Context) error
+	server, err := NewServerWithOptions(store, Options{
+		StepSafety:  evaluator,
+		DeferRecord: func(job func(context.Context) error) error { jobs = append(jobs, job); return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := server.RuntimeCore()
+	for _, event := range []hook.Event{
+		{SessionID: "snapshot", HookName: hook.HookUserPromptSubmit, ToolInput: map[string]any{"prompt": "Original request"}},
+		{SessionID: "snapshot", HookName: hook.HookPostToolUse, ToolName: "get_config", ToolResponse: map[string]any{"value": "prior history"}},
+	} {
+		var err error
+		if event.HookName.CanBlock() {
+			_, err = core.EvaluateHook(context.Background(), event)
+		} else {
+			_, err = core.IngestEvent(context.Background(), event)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result, err := core.EvaluateHook(ctx, hook.Event{
+		SessionID: "snapshot", HookName: hook.HookPreToolUse, ToolName: "update_config",
+		ToolInput: map[string]any{"value": "new value"},
+	})
+	cancel() // A disconnected hook must not cancel its background assessment.
+	if err != nil || result.Decision != hook.DecisionAllow || result.EventID == "" {
+		t.Fatalf("hook result=%+v, err=%v", result, err)
+	}
+	if len(backend.inputs) != 0 {
+		t.Fatal("Merlin ran before the deferred job, on the hook response path")
+	}
+	for _, event := range []hook.Event{
+		{SessionID: "snapshot", HookName: hook.HookUserPromptSubmit, ToolInput: map[string]any{"prompt": "Later request"}},
+		{SessionID: "snapshot", HookName: hook.HookPostToolUse, ToolName: "later_tool"},
+		{SessionID: "snapshot", HookName: hook.HookSessionEnd},
+	} {
+		var err error
+		if event.HookName.CanBlock() {
+			_, err = core.EvaluateHook(context.Background(), event)
+		} else {
+			_, err = core.IngestEvent(context.Background(), event)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, job := range jobs {
+		if err := job(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := backend.lastInput()
+	if input.UserRequest != "Original request" || !strings.Contains(input.InteractionHistory, "prior history") || strings.Contains(input.InteractionHistory, "later_tool") {
+		t.Fatalf("deferred assessment used context from after the action: %+v", input)
+	}
+	record, err := store.StepSafetyVerdictForAction(context.Background(), result.EventID)
+	if err != nil || record.ShadowDecision != stepsafety.DecisionUnsafe || record.Enforced {
+		t.Fatalf("background verdict=%+v, err=%v", record, err)
+	}
+	if record.ReviewContext == nil || record.ReviewContext.UserRequest != "Original request" {
+		t.Fatalf("review context lost its action-time snapshot: %+v", record.ReviewContext)
+	}
+}
+
+type blockedStepSafetyBackend struct {
+	capturingStepSafetyBackend
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockedStepSafetyBackend) Infer(ctx context.Context, input stepsafety.Input) (stepsafety.InferenceResult, error) {
+	close(b.started)
+	<-b.release
+	return b.capturingStepSafetyBackend.Infer(ctx, input)
+}
+
+func TestDeferredStepSafetyDoesNotHoldSocketResponse(t *testing.T) {
+	store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	backend := &blockedStepSafetyBackend{started: make(chan struct{}), release: make(chan struct{})}
+	evaluator := stepsafety.NewWithBackend(backend, 5*time.Second, 1, stepsafety.ModelVersion)
+	defer evaluator.Close()
+	recorder := NewDeferredRecorder(diagnostic.New(io.Discard, false))
+	defer recorder.Drain(context.Background())
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(backend.release) })
+	server, err := NewServerWithOptions(store, Options{StepSafety: evaluator, DeferRecord: recorder.Submit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp("/tmp", "merlin-async-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	service, err := localruntime.NewService(localruntime.Options{SocketPath: filepath.Join(dir, "guard.sock"), Core: server.RuntimeCore(), AgentName: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer service.Stop()
+	client := localruntime.NewClient(service.SocketPath())
+	client.Timeout = time.Second
+	result, err := client.Process(context.Background(), hook.Event{
+		SessionID: "nonblocking", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "pwd"},
+	})
+	if err != nil || result.Decision != hook.DecisionAllow {
+		t.Fatalf("hook waited on blocked inference: result=%+v, err=%v", result, err)
+	}
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("background inference did not start")
+	}
+	releaseOnce.Do(func() { close(backend.release) })
+	if err := recorder.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.StepSafetyVerdictForAction(context.Background(), result.EventID)
+	if err != nil || record.ShadowDecision != stepsafety.DecisionUnsafe || record.Enforced {
+		t.Fatalf("background verdict=%+v, err=%v", record, err)
+	}
+}
+
 func TestStepSafetyAsyncHistoryIsObservedOnceBeforeNextSocketHook(t *testing.T) {
 	store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
 	if err != nil {

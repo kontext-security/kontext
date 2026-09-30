@@ -1,0 +1,57 @@
+//go:build arm64 && !purego
+
+#include "textflag.h"
+
+// C[4,8] = A[4,k] * B[k,8]. All dimensions checked by the Go caller.
+// B is a contiguous packed panel; C rows have strideC elements.
+TEXT ·nativeMatmul4x8(SB), NOSPLIT, $0-40
+	MOVD a+0(FP), R0
+	MOVD packedB+8(FP), R1
+	MOVD c+16(FP), R2
+	MOVD k+24(FP), R3
+	MOVD strideC+32(FP), R4
+	LSL $2, R3, R5
+	LSL $2, R4, R4
+	ADD R5, R0, R6
+	ADD R5, R6, R7
+	ADD R5, R7, R8
+	VEOR V16.B16, V16.B16, V16.B16
+	VEOR V17.B16, V17.B16, V17.B16
+	VEOR V18.B16, V18.B16, V18.B16
+	VEOR V19.B16, V19.B16, V19.B16
+	VEOR V20.B16, V20.B16, V20.B16
+	VEOR V21.B16, V21.B16, V21.B16
+	VEOR V22.B16, V22.B16, V22.B16
+	VEOR V23.B16, V23.B16, V23.B16
+loop:
+	FMOVS (R0), F0
+	FMOVS (R6), F1
+	FMOVS (R7), F2
+	FMOVS (R8), F3
+	VDUP V0.S[0], V0.S4
+	VDUP V1.S[0], V1.S4
+	VDUP V2.S[0], V2.S4
+	VDUP V3.S[0], V3.S4
+	VLD1.P 32(R1), [V4.S4, V5.S4]
+	VFMLA V4.S4, V0.S4, V16.S4
+	VFMLA V5.S4, V0.S4, V17.S4
+	VFMLA V4.S4, V1.S4, V18.S4
+	VFMLA V5.S4, V1.S4, V19.S4
+	VFMLA V4.S4, V2.S4, V20.S4
+	VFMLA V5.S4, V2.S4, V21.S4
+	VFMLA V4.S4, V3.S4, V22.S4
+	VFMLA V5.S4, V3.S4, V23.S4
+	ADD $4, R0, R0
+	ADD $4, R6, R6
+	ADD $4, R7, R7
+	ADD $4, R8, R8
+	SUBS $1, R3, R3
+	BNE loop
+	VST1 [V16.S4, V17.S4], (R2)
+	ADD R4, R2, R2
+	VST1 [V18.S4, V19.S4], (R2)
+	ADD R4, R2, R2
+	VST1 [V20.S4, V21.S4], (R2)
+	ADD R4, R2, R2
+	VST1 [V22.S4, V23.S4], (R2)
+	RET

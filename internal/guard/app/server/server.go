@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ type Server struct {
 	classifier       *riskclassifier.Classifier
 	llmGate          *riskclassifier.LLMGate
 	stepSafety       *stepsafety.Evaluator
+	hookSlots        chan struct{}
 }
 
 type ProcessResponse struct {
@@ -65,7 +67,9 @@ type Options struct {
 	// behind an immediate response. The executor owns the context the job
 	// runs under, draining before the store closes, and surfacing the job's
 	// error. Nil keeps every write synchronous with the response, as before.
-	DeferRecord func(job func(context.Context) error)
+	// Transports submit after sending the response and bound pending handlers.
+	// Direct callers wait for admission; a closed recorder must return an error.
+	DeferRecord func(job func(context.Context) error) error
 }
 
 // RiskClassifierOptions configure the risk classifier. The binary SVM is
@@ -157,6 +161,7 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		classifier:       classifier,
 		llmGate:          riskClassifierGate(opts.RiskClassifier),
 		stepSafety:       opts.StepSafety,
+		hookSlots:        make(chan struct{}, runtimecore.MaxPendingHookRequests),
 	}
 	server.routes()
 	return server, nil
@@ -244,6 +249,9 @@ func (s *Server) ListenAndServe(addr string) error {
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	// Listen failure must not let the caller close the recorder/store while
+	// existing HTTP handlers still owe post-response recording submissions.
+	defer func() { _ = httpServer.Shutdown(context.Background()) }()
 	return httpServer.ListenAndServe()
 }
 
@@ -305,22 +313,43 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHook(w http.ResponseWriter, r *http.Request, process func(context.Context, risk.HookEvent) (risk.RiskDecision, error)) {
+	// Reject overload before decoding/evaluating a new request. Already-settled
+	// decisions retain their handler until the audit queue accepts their record.
+	select {
+	case s.hookSlots <- struct{}{}:
+		defer func() { <-s.hookSlots }()
+	default:
+		writeError(w, http.StatusServiceUnavailable, "hook recorder busy; retry later")
+		return
+	}
 	var event risk.HookEvent
 	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid hook event")
 		return
 	}
-	decision, err := process(r.Context(), event)
+	ctx, finish := runtimecore.WithResponseWork(r.Context())
+	defer finish()
+	decision, err := process(ctx, event)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, ProcessResponse{
+	payload, _ := json.Marshal(ProcessResponse{
 		Decision:   decision.Decision,
 		Reason:     decision.Reason,
 		ReasonCode: decision.ReasonCode,
 		EventID:    decision.EventID,
 	})
+	// Content-Length lets clients finish reading even while this handler waits
+	// for recording capacity after flushing the complete authorization response.
+	w.Header().Set("Content-Type", jsonContentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+	// An HTTP/1 client must not reuse this connection for its next hook while
+	// the handler is still completing post-response work for the previous one.
+	w.Header().Set("Connection", "close")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
+	_ = http.NewResponseController(w).Flush()
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {

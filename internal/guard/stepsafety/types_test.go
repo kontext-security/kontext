@@ -41,12 +41,12 @@ func TestCalibratedProbabilityAndUnsafeThreshold(t *testing.T) {
 	if result.UnsafeProbability == nil {
 		t.Fatal("unsafe probability missing")
 	}
-	want := 1 / (1 + math.Exp(-(1.427213430140093*1.0 + 2.953687013257505)))
+	want := 1 / (1 + math.Exp(-(0.9976812431377959*1.0 + 0.5990786345281421)))
 	if math.Abs(*result.UnsafeProbability-want) > 1e-15 {
 		t.Fatalf("unsafe probability = %.17f, want %.17f", *result.UnsafeProbability, want)
 	}
-	if result.ShadowDecision != DecisionUnsafe || result.Threshold != 0.5 {
-		t.Fatalf("result = %+v, want unsafe at threshold 0.5", result)
+	if result.ShadowDecision != DecisionSafe || result.Threshold != Threshold {
+		t.Fatalf("result = %+v, want safe below the precision threshold", result)
 	}
 	if result.ModelVersion != "test-model" || result.Enforced {
 		t.Fatalf("result = %+v, want versioned shadow-only output", result)
@@ -118,12 +118,31 @@ func TestEvaluatorBoundsConcurrency(t *testing.T) {
 }
 
 func TestConfigDisabledByDefault(t *testing.T) {
+	t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "")
 	cfg, err := ConfigFromEnv("/tmp/guard.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Enabled {
 		t.Fatal("step safety enabled without feature flag")
+	}
+	if New(context.Background(), cfg) != nil {
+		t.Fatal("disabled configuration initialized an evaluator")
+	}
+}
+
+func TestCandidateThresholdBoundary(t *testing.T) {
+	boundary := (math.Log(Threshold/(1-Threshold)) - calibrationBias) / calibrationScale
+	for _, tc := range []struct {
+		delta    float64
+		decision string
+	}{{-1e-6, DecisionSafe}, {1e-6, DecisionUnsafe}} {
+		backend := &fakeBackend{logits: [2]float64{0, boundary + tc.delta}}
+		e := NewWithBackend(backend, time.Second, 1, ModelVersion)
+		got := e.Evaluate(context.Background(), Input{ToolName: "clock.sleep"})
+		if got.ShadowDecision != tc.decision || got.Enforced {
+			t.Fatalf("boundary decision: %+v", got)
+		}
 	}
 }
 

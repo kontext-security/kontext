@@ -16,7 +16,7 @@ func TestTrackedProvenanceMatchesServingContract(t *testing.T) {
 	if err := json.Unmarshal(data, &provenance); err != nil {
 		t.Fatal(err)
 	}
-	if provenance.ModelVersion != ModelVersion || provenance.MaxLength != 512 || provenance.RuntimeFormat == "" || provenance.InputPolicy == "" || provenance.EvaluationScope == "" || provenance.SourceWeightsSHA256 != "075d68f8bb4c1b4b98e2d2b2c0d5b013056b202172b080b34e7364b698844c86" {
+	if provenance.ModelVersion != legacyModelVersion || provenance.MaxLength != 512 || provenance.RuntimeFormat == "" || provenance.InputPolicy == "" || provenance.EvaluationScope == "" || provenance.SourceWeightsSHA256 != "075d68f8bb4c1b4b98e2d2b2c0d5b013056b202172b080b34e7364b698844c86" {
 		t.Fatalf("provenance = %+v", provenance)
 	}
 	if provenance.SchemaVersion != 3 || provenance.SourceRevision != sourceRevision ||
@@ -34,14 +34,14 @@ func TestTrackedProvenanceMatchesServingContract(t *testing.T) {
 		provenance.FieldBudgets["action"] != 128 || provenance.FieldBudgets["schema"] != 128 {
 		t.Fatalf("field budgets = %+v", provenance.FieldBudgets)
 	}
-	if provenance.CalibrationScale != calibrationScale || provenance.CalibrationBias != calibrationBias || provenance.InitialThreshold != Threshold {
+	if provenance.CalibrationScale != 1.427213430140093 || provenance.CalibrationBias != 2.953687013257505 || provenance.InitialThreshold != 0.5 {
 		t.Fatalf("calibration provenance = %+v", provenance)
 	}
 	if !reflect.DeepEqual(provenance.HistorySerialization.EventFields, []string{"tool", "arguments", "observation"}) ||
 		provenance.HistorySerialization.EmptyHistory != "[]" || provenance.HistorySerialization.Observations != "strings" {
 		t.Fatalf("history provenance = %+v", provenance.HistorySerialization)
 	}
-	if provenance.Evaluation.Threshold != Threshold || provenance.Evaluation.WorstSourceRecall != 0.5085227272727273 {
+	if provenance.Evaluation.Threshold != 0.5 || provenance.Evaluation.WorstSourceRecall != 0.5085227272727273 {
 		t.Fatalf("evaluation provenance = %+v", provenance.Evaluation)
 	}
 	if !reflect.DeepEqual(provenance.Artifacts, requiredArtifacts) {
