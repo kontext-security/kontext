@@ -27,6 +27,19 @@ const shortRevisionLength = 8
 // VCS stamp from inside `go test` (the test binary has no stamp of its own).
 var read = debug.ReadBuildInfo
 
+// builtBy is set at link time by distributors that manage their own updates.
+var builtBy string
+
+// BuiltBy identifies the distributor, including non-core formula test builds.
+func BuiltBy() string {
+	return strings.TrimSpace(builtBy)
+}
+
+// HomebrewBuild is limited to core: other distributors retain self-updates.
+func HomebrewBuild() bool {
+	return BuiltBy() == "Homebrew"
+}
+
 // Revision is the full VCS revision this binary was built from, or "" when the
 // binary carries no VCS stamp. Builds produced by `go build` outside a
 // repository, or with -buildvcs=false, legitimately have none.
@@ -76,13 +89,24 @@ func DescribeRevision(revision string, modified bool) string {
 
 // Describe renders version together with the source it was built from, for
 // `kontext --version` and any other human-facing identity. The revision is
-// additive: a binary with no stamp reports exactly what it did before.
+// additive: a binary with no stamp or distributor reports exactly what it did
+// before.
 //
 //	0.14.1 (cac15fd6)
 //	0.14.1 (cac15fd6+modified)
 //	0.14.1
+//	0.14.1 (built by Homebrew)
+//	0.14.1 (cac15fd6, built by Homebrew)
+//	0.14.1 (cac15fd6+modified, built by Homebrew)
+//	0.14.1 (built by kontext)
 func Describe(version string) string {
 	revision := DescribeRevision(Revision(), Modified())
+	if by := BuiltBy(); by != "" {
+		if revision != "" {
+			revision += ", "
+		}
+		revision += "built by " + by
+	}
 	if revision == "" {
 		return version
 	}

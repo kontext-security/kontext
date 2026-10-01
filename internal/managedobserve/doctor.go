@@ -153,6 +153,17 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	}
 
 	fmt.Fprintln(out, "Managed observe:")
+	if homebrewBuild() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if brewPath, ok := currentExecutableBrewPath(); !ok {
+			fmt.Fprintln(out, "  Homebrew update: unknown (brew not found)")
+		} else if warning, err := homebrewOutdatedWarning(ctx, brewPath); err != nil {
+			fmt.Fprintf(out, "  Homebrew update: unknown (%v)\n", err)
+		} else if warning != "" {
+			warn("%s", warning)
+		}
+	}
 
 	// Resolve the active profile FIRST. Path resolution falls back to the legacy
 	// paths when the pointer is unreadable, which fails closed but reports as
@@ -202,6 +213,11 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	report.AllowHTTPLoopback = loaded.Config.AllowHTTPLoopback
 
 	fmt.Fprintf(out, "  config: %s (%s)\n", loaded.Path, describeScope(loaded.Scope))
+	if warning, err := doctorLocalRiskModelWarning(loaded.Scope); err != nil {
+		fmt.Fprintf(out, "  local risk model: unknown (%v)\n", err)
+	} else if warning != "" {
+		warn("%s", warning)
+	}
 	// Plaintext transport is a posture worth stating outright, even though it is
 	// bounded to loopback and deliberately opted into — a profile left over from
 	// a local-dev session should be obvious, not something to infer from the URL.

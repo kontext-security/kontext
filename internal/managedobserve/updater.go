@@ -2,6 +2,7 @@ package managedobserve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/buildinfo"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 )
@@ -33,12 +35,16 @@ var (
 	evalSymlinksPath               = filepath.EvalSymlinks
 	statPath                       = os.Stat
 	runCommand       commandRunner = runCommandOutput
+	homebrewBuild                  = buildinfo.HomebrewBuild
 )
 
 func startHomebrewUpdater(ctx context.Context, loadedConfig managedconfig.LoadedConfig, log diagnostic.Logger) <-chan struct{} {
 	upgraded := make(chan struct{}, 1)
 	cfg, ok := homebrewUpdaterConfig(ctx, loadedConfig, log)
 	if !ok {
+		if homebrewBuild() && cfg.brewPath != "" {
+			go runHomebrewOutdatedChecker(ctx, cfg, log)
+		}
 		close(upgraded)
 		return upgraded
 	}
@@ -66,14 +72,66 @@ func homebrewUpdaterConfig(ctx context.Context, loadedConfig managedconfig.Loade
 		logHomebrewUpdater(log, "daemon updater eligibility: brew not found\n")
 		return homebrewUpdaterConfigValue{}, false
 	}
+	cfg := homebrewUpdaterConfigValue{brewPath: brewPath, interval: daemonUpdateInterval()}
+	if homebrewBuild() {
+		logHomebrewUpdater(log, "daemon updater: auto-update is disabled because kontext was installed from homebrew-core; run: brew upgrade kontext\n")
+		// Keep the eligible path for read-only notices, but never enable upgrades.
+		return cfg, false
+	}
 	if _, err := brewInstalledVersion(ctx, brewPath); err != nil {
 		logHomebrewUpdater(log, "daemon updater eligibility: brew list failed: %v\n", err)
 		return homebrewUpdaterConfigValue{}, false
 	}
-	return homebrewUpdaterConfigValue{
-		brewPath: brewPath,
-		interval: daemonUpdateInterval(),
-	}, true
+	return cfg, true
+}
+
+func runHomebrewOutdatedChecker(ctx context.Context, cfg homebrewUpdaterConfigValue, log diagnostic.Logger) {
+	ticker := time.NewTicker(cfg.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := runBrewWithTimeout(ctx, brewUpdateTimeout, cfg.brewPath, "update-if-needed"); err != nil {
+				logHomebrewUpdater(log, "daemon updater: brew update-if-needed: %v\n", err)
+				continue
+			}
+			warning, err := homebrewOutdatedWarning(ctx, cfg.brewPath)
+			if err != nil {
+				logHomebrewUpdater(log, "daemon updater: %v\n", err)
+			} else if warning != "" {
+				logHomebrewUpdater(log, "%s\n", warning)
+			}
+		}
+	}
+}
+
+func homebrewOutdatedWarning(ctx context.Context, brewPath string) (string, error) {
+	output, err := runBrewWithTimeout(ctx, brewListTimeout, brewPath, "outdated", "--formula", "--json=v2", "kontext")
+	if err != nil {
+		return "", fmt.Errorf("brew outdated: %w", err)
+	}
+	var outdated struct {
+		Formulae []struct {
+			Name              string   `json:"name"`
+			InstalledVersions []string `json:"installed_versions"`
+			CurrentVersion    string   `json:"current_version"`
+		} `json:"formulae"`
+	}
+	if err := json.Unmarshal([]byte(output), &outdated); err != nil {
+		return "", fmt.Errorf("parse brew outdated: %w", err)
+	}
+	for _, formula := range outdated.Formulae {
+		if formula.Name == "kontext" {
+			if len(formula.InstalledVersions) == 0 || formula.CurrentVersion == "" {
+				return "", fmt.Errorf("unexpected brew outdated output %q", strings.TrimSpace(output))
+			}
+			return fmt.Sprintf("kontext %s is outdated; %s is available. Run: brew upgrade kontext",
+				strings.Join(formula.InstalledVersions, ", "), formula.CurrentVersion), nil
+		}
+	}
+	return "", nil
 }
 
 func runHomebrewUpdater(ctx context.Context, cfg homebrewUpdaterConfigValue, log diagnostic.Logger, upgraded chan<- struct{}) {
