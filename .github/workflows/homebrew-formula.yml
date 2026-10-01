@@ -1,0 +1,55 @@
+name: Homebrew Formula
+
+on:
+  pull_request:
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "pkg/**"
+      - "go.mod"
+      - "go.sum"
+      - "packaging/homebrew/**"
+      - ".github/workflows/homebrew-formula.yml"
+  push:
+    branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "pkg/**"
+      - "go.mod"
+      - "go.sum"
+      - "packaging/homebrew/**"
+      - ".github/workflows/homebrew-formula.yml"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  formula:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build, test, and audit formula
+        run: |
+          set -euo pipefail
+          # The runner image's brew can predate deny_network_access! and def fetch.
+          brew update --quiet
+          archive="$RUNNER_TEMP/kontext-0.0.0.tar.gz"   # version is inferred from the file name
+          git archive --format=tar.gz --prefix=kontext-0.0.0/ -o "$archive" HEAD
+          sha="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
+          # kontext/ci has tap.user=kontext, so --version prints built by kontext
+          # and the formula's built by #{tap.user} assertion still holds.
+          brew tap-new --no-git kontext/ci
+          formula="$(brew --repo kontext/ci)/Formula/kontext.rb"
+          sed -e "s|^  url .*|  url \"file://$archive\"|" \
+              -e "s|^  sha256 .*|  sha256 \"$sha\"|" \
+              packaging/homebrew/kontext.rb > "$formula"
+          brew install --build-from-source kontext/ci/kontext
+          brew test kontext/ci/kontext
+          brew audit --strict kontext/ci/kontext
