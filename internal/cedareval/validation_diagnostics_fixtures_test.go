@@ -42,22 +42,39 @@ const (
 var toolResourcePattern = regexp.MustCompile(`Kontext::Tool::"([^"]*)"`)
 
 // expectedWarningCodes mirrors the management plane's unsupported_tool_id
-// emission: resolveTool only ever names shell, unknown, or a catalogued
-// github-mcp tool, so any other literal is a policy that can never match. The
-// warning never rejects the policy, so an accepted fixture may carry it.
+// emission (isReportedCedarToolId): resolveTool sends shell for every shell
+// alias, github-mcp/* for GitHub MCP tools, and any other tool's own name, so
+// only an empty id, a shell alias other than shell, a raw GitHub MCP name or an
+// uncatalogued github-mcp id can never match. The warning never rejects the
+// policy, so an accepted fixture may carry it.
 func expectedWarningCodes(policyText string) []string {
 	seen := map[string]bool{}
 	codes := []string{}
 	for _, match := range toolResourcePattern.FindAllStringSubmatch(policyText, -1) {
 		id := match[1]
-		if id == cedareval.ToolShellV2 || id == cedareval.ToolUnknownV2 ||
-			toolcatalog.Known(id) || seen[id] {
+		if reportedToolID(id) || seen[id] {
 			continue
 		}
 		seen[id] = true
 		codes = append(codes, unsupportedToolIDCode)
 	}
 	return codes
+}
+
+func reportedToolID(id string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(id))
+	switch normalized {
+	case "":
+		return false
+	case "bash", "shell", "shell_command", "unified_exec", "exec_command", "local_shell":
+		return id == cedareval.ToolShellV2
+	}
+	if rest, ok := strings.CutPrefix(id, "mcp__"); ok {
+		if server, _, found := strings.Cut(rest, "__"); found && strings.Contains(strings.ToLower(server), "github") {
+			return false
+		}
+	}
+	return !strings.HasPrefix(id, toolcatalog.GitHubToolPrefix) || toolcatalog.Known(id)
 }
 
 func TestPortableValidationDiagnosticsFixtures(t *testing.T) {

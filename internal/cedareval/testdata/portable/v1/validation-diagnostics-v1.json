@@ -31,13 +31,41 @@
       "name": "permit-exact-tool",
       "description": "Resource scope may name one exact runtime tool.",
       "policyText": "@id(\"permit-read\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Read\");",
-      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
+      "expected": { "valid": true, "diagnosticCodes": [] }
     },
     {
       "version": 1,
       "name": "unsupported-tool-id",
       "description": "A tool id no endpoint reports warns once per distinct id.",
-      "policyText": "@id(\"never-matches\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Write\");",
+      "policyText": "@id(\"never-matches\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Bash\");",
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
+    },
+    {
+      "version": 1,
+      "name": "plain-agent-tool",
+      "description": "A plain agent tool name passes through unchanged; no warning.",
+      "policyText": "@id(\"write-tool\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"Write\");",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "non-github-mcp-tool",
+      "description": "A non-GitHub MCP tool name passes through unchanged; no warning.",
+      "policyText": "@id(\"slack-tool\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"mcp__slack__post_message\");",
+      "expected": { "valid": true, "diagnosticCodes": [] }
+    },
+    {
+      "version": 1,
+      "name": "raw-github-mcp-tool",
+      "description": "A GitHub MCP tool is reported under github-mcp/, not its agent name; it warns.",
+      "policyText": "@id(\"raw-github-tool\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"mcp__github__create_issue\");",
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
+    },
+    {
+      "version": 1,
+      "name": "exec-command-shell-alias",
+      "description": "The exec_command shell alias is reported as shell, not its agent name; it warns.",
+      "policyText": "@id(\"exec-command-tool\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"exec_command\");",
       "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
     },
     {
