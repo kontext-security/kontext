@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 )
 
@@ -275,7 +276,7 @@ func TestDoctorNamesStaleClaudeEventsAndScopeRepair(t *testing.T) {
 			if scope == System {
 				prefix = "sudo "
 			}
-			want := "Claude Code hooks: out of date (missing Stop, SubagentStop). Run `" + prefix + opts.Binary + " hooks install --scope " + string(scope) + " --binary " + opts.Binary + "`.\n"
+			want := "Claude Code hooks: out of date (missing Stop, SubagentStop). Run `" + prefix + agenthooks.ShellQuote(opts.Binary) + " hooks install --scope " + string(scope) + " --binary " + agenthooks.ShellQuote(opts.Binary) + "`.\n"
 			if out.String() != want {
 				t.Fatalf("doctor = %q, want %q", out.String(), want)
 			}

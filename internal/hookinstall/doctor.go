@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 )
@@ -73,7 +74,7 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 						if scope == System {
 							prefix = "sudo "
 						}
-						fmt.Fprintf(out, "%s hooks: out of date (missing %s). Run `%s%s hooks install --scope %s --binary %s`.\n", def.Name, strings.Join(missing, ", "), prefix, binary, scope, binary)
+						fmt.Fprintf(out, "%s hooks: out of date (missing %s). Run `%s%s hooks install --scope %s --binary %s`.\n", def.Name, strings.Join(missing, ", "), prefix, agenthooks.ShellQuote(binary), scope, agenthooks.ShellQuote(binary))
 						continue
 					}
 				}
