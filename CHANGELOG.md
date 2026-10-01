@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/kontext-security/kontext/compare/v1.10.0...v1.10.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **doctor:** name stale Claude hooks and the command that repairs them ([#537](https://github.com/kontext-security/kontext/issues/537)) ([f3b23de](https://github.com/kontext-security/kontext/commit/f3b23de57debde1a5dcdff21117ae4dc0cba589e))
+
 ## [1.10.0](https://github.com/kontext-security/kontext/compare/v1.9.1...v1.10.0) (2026-10-01)
 
 
