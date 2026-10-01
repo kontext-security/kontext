@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.10.0](https://github.com/kontext-security/kontext/compare/v1.9.1...v1.10.0) (2026-10-01)
+
+
+### Features
+
+* **managedobserve:** prepare kontext for homebrew-core builds ([#534](https://github.com/kontext-security/kontext/issues/534)) ([f4da574](https://github.com/kontext-security/kontext/commit/f4da57427945c55a1cb314968c740c264decda74))
+* **merlin:** embed opt-in precision candidate ([#533](https://github.com/kontext-security/kontext/issues/533)) ([8a0096c](https://github.com/kontext-security/kontext/commit/8a0096c658167f29b1ee4927e812ff316e9d84c8))
+* **packaging:** add homebrew-core formula, CI build and lag alarm ([#536](https://github.com/kontext-security/kontext/issues/536)) ([d9d7e29](https://github.com/kontext-security/kontext/commit/d9d7e297a9c53c7d9eb2df941805c8c46dfc98a0))
+
 ## [1.9.1](https://github.com/kontext-security/kontext/compare/v1.9.0...v1.9.1) (2026-09-23)
 
 
