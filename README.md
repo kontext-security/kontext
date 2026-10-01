@@ -345,6 +345,12 @@ check both system and user files: an absent or empty file is valid when the othe
 contains a complete installation. Malformed or incomplete nonempty files and
 conflicting installations still report an unhealthy setup.
 
+When an owned Claude drop-in is missing only events required by the current
+version, doctor names the missing events and the scope-specific `hooks install`
+command. Self-serve repairs prompt for sudo only to update Claude's system file;
+organization repairs require `sudo` with `--scope system`. `doctor --fix` does
+not reinstall hooks.
+
 When a self-serve daemon is stale:
 
 ```bash
