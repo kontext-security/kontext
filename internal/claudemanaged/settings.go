@@ -193,6 +193,45 @@ func IsManagedSettingsDropIn(data []byte) bool {
 	return true
 }
 
+// MissingRequiredEvents returns missing event names and the configured binary
+// only when an owned drop-in's remaining hooks pass validation. Other failures
+// and current configurations return nil and an empty binary.
+func MissingRequiredEvents(data []byte) ([]string, string) {
+	if !IsManagedSettingsDropIn(data) {
+		return nil, ""
+	}
+	var settings Settings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil, ""
+	}
+	var missing []string
+	binary := ""
+	for _, event := range SupportedEvents {
+		groups := settings.Hooks[event.Name.String()]
+		if len(groups) == 0 {
+			missing = append(missing, event.Name.String())
+			continue
+		}
+		if binary == "" {
+			if len(groups[0].Hooks) == 0 {
+				return nil, ""
+			}
+			fields, ok := agenthooks.SplitLiteralCommand(groups[0].Hooks[0].Command)
+			if !ok || len(fields) != 3 {
+				return nil, ""
+			}
+			binary = fields[0]
+		}
+		if validateEvent(groups, event, binary) != nil {
+			return nil, ""
+		}
+	}
+	if len(missing) == 0 {
+		return nil, ""
+	}
+	return missing, binary
+}
+
 func HasManagedObserveHooks(data []byte) bool {
 	var settings Settings
 	if err := json.Unmarshal(data, &settings); err != nil {

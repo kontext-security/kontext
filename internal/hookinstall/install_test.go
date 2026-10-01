@@ -2,11 +2,13 @@ package hookinstall
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 )
 
@@ -229,7 +231,7 @@ func TestDoctorEveryAgentAndScope(t *testing.T) {
 						}
 					}
 					var out bytes.Buffer
-					healthy := diagnose(&out, defs, func(id string) bool { return id == agent && state != "absent" }, filepath.Join(t.TempDir(), "config.toml"), "")
+					healthy := diagnose(&out, opts.Scope, defs, func(id string) bool { return id == agent && state != "absent" }, filepath.Join(t.TempDir(), "config.toml"), "")
 					want := state == "valid" || state == "absent"
 					if healthy != want {
 						t.Fatalf("healthy=%v want=%v: %s", healthy, want, &out)
@@ -251,11 +253,101 @@ func TestDoctorUserOverrideDisablesSystemHooks(t *testing.T) {
 	user := filepath.Join(t.TempDir(), "config.toml")
 	write(t, user, "[features]\nhooks = false\n", 0600)
 	var out bytes.Buffer
-	if diagnose(&out, defs, func(string) bool { return true }, user, "") {
+	if diagnose(&out, opts.Scope, defs, func(string) bool { return true }, user, "") {
 		t.Fatal("ignored user override")
 	}
 	if !strings.Contains(out.String(), "disabled by user override") {
 		t.Fatal(&out)
+	}
+}
+
+func TestDoctorNamesStaleClaudeEventsAndScopeRepair(t *testing.T) {
+	for _, scope := range []Scope{User, System} {
+		t.Run(string(scope), func(t *testing.T) {
+			opts, defs := fixture(t, scope)
+			path := defs[0].Files[0].Path
+			old := strings.ReplaceAll(read(t, "testdata/claude-1.7.0.json"), "/usr/local/bin/kontext", opts.Binary)
+			write(t, path, old, 0644)
+			var out bytes.Buffer
+			if diagnose(&out, scope, defs[:1], func(string) bool { return true }, "", "") {
+				t.Fatal("stale hooks reported healthy")
+			}
+			prefix := ""
+			if scope == System {
+				prefix = "sudo "
+			}
+			want := "Claude Code hooks: out of date (missing Stop, SubagentStop). Run `" + prefix + agenthooks.ShellQuote(opts.Binary) + " hooks install --scope " + string(scope) + " --binary " + agenthooks.ShellQuote(opts.Binary) + "`.\n"
+			if out.String() != want {
+				t.Fatalf("doctor = %q, want %q", out.String(), want)
+			}
+			if read(t, path) != old {
+				t.Fatal("doctor modified the hooks")
+			}
+			// Exercise the actual install path used by the recommended command.
+			if err := runDefinitions(opts, defs, false); err != nil {
+				t.Fatal(err)
+			}
+			out.Reset()
+			if !diagnose(&out, scope, defs[:1], func(string) bool { return true }, "", "") {
+				t.Fatalf("installed hooks remain unhealthy: %s", &out)
+			}
+		})
+	}
+}
+
+func TestDoctorKeepsOtherClaudeValidationErrorsRaw(t *testing.T) {
+	for _, problem := range []string{"malformed", "disabled", "foreign policy", "invalid async", "invalid timeout", "different binaries", "missing binary", "symlink"} {
+		t.Run(problem, func(t *testing.T) {
+			opts, defs := fixture(t, User)
+			path := defs[0].Files[0].Path
+			old := strings.ReplaceAll(read(t, "testdata/claude-1.7.0.json"), "/usr/local/bin/kontext", opts.Binary)
+			var settings map[string]any
+			if err := json.Unmarshal([]byte(old), &settings); err != nil {
+				t.Fatal(err)
+			}
+			switch problem {
+			case "disabled":
+				settings["disableAllHooks"] = true
+			case "foreign policy":
+				settings["allowManagedHooksOnly"] = true
+			case "invalid async":
+				old = strings.Replace(old, `"async": true`, `"async": false`, 1)
+			case "invalid timeout":
+				old = strings.Replace(old, `"timeout": 20`, `"timeout": 5`, 1)
+			case "different binaries":
+				old = strings.Replace(old, opts.Binary, "/other/kontext", 1)
+			case "malformed":
+				old = "{"
+			case "missing binary":
+				if err := os.Remove(opts.Binary); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if problem == "disabled" || problem == "foreign policy" {
+				raw, err := json.Marshal(settings)
+				if err != nil {
+					t.Fatal(err)
+				}
+				old = string(raw)
+			}
+			write(t, path, old, 0644)
+			if problem == "symlink" {
+				if err := os.Rename(path, path+".target"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(path+".target", path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out bytes.Buffer
+			if diagnose(&out, User, defs[:1], func(string) bool { return true }, "", "") {
+				t.Fatal("invalid hooks reported healthy")
+			}
+			want := "Claude Code hooks: incomplete or disabled (" + path + ")\n"
+			if out.String() != want {
+				t.Fatalf("doctor = %q, want raw error %q", out.String(), want)
+			}
+		})
 	}
 }
 
@@ -383,7 +475,7 @@ func TestDoctorRejectsBrokenOtherCodexLayer(t *testing.T) {
 	other := filepath.Join(t.TempDir(), "hooks.json")
 	write(t, other, "{", 0600)
 	var out bytes.Buffer
-	if diagnose(&out, defs, func(string) bool { return true }, "", other) {
+	if diagnose(&out, opts.Scope, defs, func(string) bool { return true }, "", other) {
 		t.Fatal("ignored malformed user hooks")
 	}
 }
@@ -509,7 +601,7 @@ func TestDoctorCodexLayers(t *testing.T) {
 					write(t, other, "{", 0600)
 				}
 				var out bytes.Buffer
-				healthy := diagnose(&out, defs, func(id string) bool { return id == "codex" }, filepath.Join(home, ".codex", "config.toml"), other)
+				healthy := diagnose(&out, opts.Scope, defs, func(id string) bool { return id == "codex" }, filepath.Join(home, ".codex", "config.toml"), other)
 				wantHealthy := state == "only owned" || state == "same binary" || state == "only other" || state == "empty owned"
 				if healthy != wantHealthy {
 					t.Fatalf("healthy=%v, want %v: %s", healthy, wantHealthy, &out)

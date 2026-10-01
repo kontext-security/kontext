@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "'/usr/local/bin/kontext' hook 'session-start'", "timeout": 20, "async": true}]}],
+    "PreToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "'/usr/local/bin/kontext' hook 'pre-tool-use'", "timeout": 20}]}],
+    "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "'/usr/local/bin/kontext' hook 'post-tool-use'", "timeout": 20}]}],
+    "PostToolUseFailure": [{"matcher": "", "hooks": [{"type": "command", "command": "'/usr/local/bin/kontext' hook 'post-tool-use-failure'", "timeout": 20}]}],
+    "SessionEnd": [{"matcher": "", "hooks": [{"type": "command", "command": "'/usr/local/bin/kontext' hook 'session-end'", "timeout": 20, "async": true}]}]
+  }
+}
