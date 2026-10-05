@@ -50,6 +50,12 @@ jobs:
       - name: Guard local E2E
         run: make guard-e2e
 
+      - name: Guard local E2E with Merlin deadline exhausted
+        env:
+          KONTEXT_STEP_SAFETY_TIMEOUT: 1ns
+          KONTEXT_E2E_EXPECT_MERLIN_TIMEOUT: "1"
+        run: make guard-e2e
+
       - name: Check vulnerabilities
         run: |
           go build -o ./bin/kontext ./cmd/kontext
