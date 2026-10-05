@@ -1,4 +1,4 @@
-# Matched replay: authorized local staging trial
+# Matched replay: local evidence and default-on advisory beta
 
 On 2026-10-05 Hasan accepted lower AgentDojo recall in exchange for fewer benign
 flags and requested replacing his running local Merlin with `matched_replay` at
@@ -15,9 +15,9 @@ point gates passed. The original research freezes and findings are unchanged.
 
 The same native Go graph embeds the unchanged FP32 checkpoint and tokenizer.
 Input normalization, field budgets, unsupported-input behavior, asynchronous
-recording, inference deadline and policy handling remain unchanged. Merlin is
-still disabled by default; this user's existing opt-in remains advisory and
-uses the staging profile. No tool call is blocked by a Merlin classification.
+recording, inference deadline and policy handling remain unchanged. The initial
+local trial used an explicit opt-in and the staging profile. The default-on
+decision below retains advisory behavior: Merlin cannot change authorization.
 
 Training retains the previous data and adds 188 real likely-benign staging
 calls, with authored paired calls placed in real histories. At 0.5, independent
@@ -30,7 +30,36 @@ admission coverage must be kept separate from these direct classifier metrics.
 
 The retained synthetic probes remain diagnostics, not evidence of real attacks.
 They expose limitations, including missed directory deletion controls. This
-local trial does not authorize a broader release or enforce-mode deployment.
+local trial did not authorize a broader release or enforce-mode deployment.
+
+## Default-on decision
+
+Later on October 5, Hasan requested enabling the candidate by default despite
+the remaining false positives. This PR therefore enables embedded Merlin as an
+advisory beta in both standalone Guard and managed runtime startup. It does not
+change the checkpoint, calibration, threshold, strict input handling or existing
+hosted review flow, and does not merge, deploy or restart a running service.
+This rollout decision does not turn the research gates into passes or establish
+production precision. The live false positives and coverage gaps below remain.
+
+An unset or empty `KONTEXT_STEP_SAFETY_SHADOW` now enables assessment. Set it to
+`0` or `false` in the actual daemon service environment and restart to opt out;
+existing explicit opt-outs continue to work. For standalone Guard:
+
+```sh
+KONTEXT_STEP_SAFETY_SHADOW=0 kontext guard start
+```
+
+Model startup adds memory use and bounded initialization time. Hook responses
+do not wait for inference; the existing bounded recording queues can still
+backpressure new requests under sustained overload. Missing scores remain
+unavailable, never safe. Managed flags continue into the existing cloud review
+flow, so default-on can increase review volume.
+
+Deploy the separate [cloud reviewer fix](https://github.com/kontext-security/kontext-cloud/pull/1116)
+before a broad release to reduce unsupported risk speculation, then check new
+benign flags, assessment coverage and resource use. The reviewer fix does not
+correct Merlin's own false positives. Keep a documented opt-out during rollout.
 
 ## October 5 follow-up: retain strict input handling
 

@@ -8,9 +8,9 @@
   },
   "experiment_id": "exp-20261005-merlin-matched-hard-negatives",
   "selected_epoch": 2,
-  "default_enabled": false,
+  "default_enabled": true,
   "selection_freeze_sha256": "8360e49290bb455744a9efa461278ba08aec9f41a793ba5d9c4bfa5f0520a92b",
-  "generator_sha256": "465e3175ae0db49277cafe10c50d6f4342c77e7cb292a3922fae516370053b6f",
+  "generator_sha256": "6320bd036dce681e44b111d57a761274095c9fe2d2445b9b021c9ba0950975a5",
   "historical_fixture_sha256": "63535206c6051aca0e3342fe9903d163d4c1245f906cc649e9f658fb61090c17",
   "purpose": "Numerical parity only; quality evidence is real staging replay and AgentDojo. User-authorized local trial, not a passed original operating-point gate.",
   "cases": [

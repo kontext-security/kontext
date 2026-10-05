@@ -29,7 +29,7 @@ go run ./cmd/kontext guard start --skip-hook-install \
   --socket "$SOCKET_PATH" >"$LOG_PATH" 2>&1 &
 DAEMON_PID=$!
 
-for _ in $(seq 1 80); do
+for _ in $(seq 1 180); do
   if curl -fsS "${BASE_URL}/healthz" >/dev/null 2>&1; then
     break
   fi
@@ -44,9 +44,9 @@ done
 curl -fsS "${BASE_URL}/healthz" >/dev/null
 echo "==> daemon healthy"
 
-STEP_SAFETY_E2E=0
+STEP_SAFETY_E2E=1
 case "${KONTEXT_STEP_SAFETY_SHADOW:-}" in
-  1|true|TRUE|yes|YES|on|ON) STEP_SAFETY_E2E=1 ;;
+  0|false|False|FALSE|f|F) STEP_SAFETY_E2E=0 ;;
 esac
 if [[ "$STEP_SAFETY_E2E" == "1" ]]; then
   curl -fsS "${BASE_URL}/healthz" | node -e '
@@ -57,13 +57,44 @@ process.stdin.on("end", () => {
   if (health.status !== "ready") {
     throw new Error(`expected real step-safety model to be ready, got ${JSON.stringify(health)}`);
   }
-  if (health.model_version !== "toolsafe-deberta-v3-xsmall-onnx-scoped-v2") {
+  const candidate = require(process.cwd() + "/internal/guard/stepsafety/model/native/candidate.json");
+  if (health.model_version !== candidate.candidate) {
     throw new Error(`unexpected step-safety model ${JSON.stringify(health)}`);
   }
 });
 '
   echo "ok step safety: real model ready"
+else
+  curl -fsS "${BASE_URL}/healthz" | node -e '
+let raw = "";
+process.stdin.on("data", chunk => raw += chunk);
+process.stdin.on("end", () => {
+  if (JSON.parse(raw).step_safety?.status !== "disabled") {
+    throw new Error(`opt-out did not disable Merlin: ${raw}`);
+  }
+});
+'
+  echo "ok step safety: explicit opt-out disabled the model"
 fi
+
+wait_for_step_safety() {
+  local session_id="$1"
+  local expected_count="$2"
+  for _ in $(seq 1 80); do
+    if curl -fsS "${BASE_URL}/api/sessions/${session_id}/step-safety" | EXPECTED_COUNT="$expected_count" node -e '
+let raw = "";
+process.stdin.on("data", chunk => raw += chunk);
+process.stdin.on("end", () => {
+  if (JSON.parse(raw).length !== Number(process.env.EXPECTED_COUNT)) process.exit(1);
+});
+'; then
+      return
+    fi
+    sleep 0.25
+  done
+  echo "timed out waiting for deferred Merlin records" >&2
+  return 1
+}
 
 assert_hook() {
   local name="$1"
@@ -188,7 +219,9 @@ process.stdin.on("end", () => {
 '
 
 if [[ "$STEP_SAFETY_E2E" == "1" ]]; then
+  wait_for_step_safety "$SESSION_ID" 3
   curl -fsS "${BASE_URL}/api/sessions/${SESSION_ID}/step-safety" | node -e '
+const candidate = require(process.cwd() + "/internal/guard/stepsafety/model/native/candidate.json");
 let raw = "";
 process.stdin.on("data", (chunk) => raw += chunk);
 process.stdin.on("end", () => {
@@ -204,7 +237,7 @@ process.stdin.on("end", () => {
     } else if (typeof verdict.unsafe_probability !== "number" || verdict.error_code) {
       throw new Error(`eligible tool did not receive a real score: ${JSON.stringify(verdict)}`);
     }
-    if (verdict.enforced !== false || verdict.model_version !== "toolsafe-deberta-v3-xsmall-onnx-scoped-v2") {
+    if (verdict.enforced !== false || verdict.model_version !== candidate.candidate) {
       throw new Error(`step-safety shadow contract changed: ${JSON.stringify(verdict)}`);
     }
   }
@@ -227,22 +260,23 @@ process.stdout.write(JSON.stringify({session_id: "e2e-step-history", hook_event_
     "observed; no local analysis wired" \
     "would allow"
 
+  wait_for_step_safety "e2e-step-history" 1
   curl -fsS "${BASE_URL}/api/sessions/e2e-step-history/step-safety" | node -e '
-const fs = require("node:fs");
-const reference = JSON.parse(fs.readFileSync("internal/guard/stepsafety/testdata/context_history_golden.json", "utf8")).cases.find(c => c.generated_words === 600);
-const margin = reference.logits[1] - reference.logits[0];
-const expected = 1 / (1 + Math.exp(-(1.427213430140093 * margin + 2.953687013257505)));
 let raw = "";
 process.stdin.on("data", chunk => raw += chunk);
 process.stdin.on("end", () => {
   const verdicts = JSON.parse(raw);
   const verdict = verdicts[0];
-  if (verdicts.length !== 1 || !verdict.history_present || !verdict.history_omitted || verdict.enforced || verdict.error_code || typeof verdict.unsafe_probability !== "number" || Math.abs(verdict.unsafe_probability - expected) > 2e-5) {
+  if (verdicts.length !== 1 || !verdict.history_present || !verdict.history_omitted || verdict.enforced || verdict.error_code || typeof verdict.unsafe_probability !== "number" || verdict.unsafe_probability < 0 || verdict.unsafe_probability > 1) {
     throw new Error(`large history did not reach training-aligned shadow inference: ${JSON.stringify(verdicts)}`);
   }
 });
 '
-  echo "ok step safety: large history matches training reference through hook and SQLite"
+  echo "ok step safety: large history reaches advisory inference through hook and SQLite"
+  # Exact checkpoint/token/probability parity is pinned by TestCandidateMatchesPython.
+else
+  wait_for_step_safety "$SESSION_ID" 0
+  echo "ok step safety: opt-out produced no model annotations"
 fi
 
 go run ./cmd/kontext guard status --daemon-url "$BASE_URL" | grep -q "0 critical"

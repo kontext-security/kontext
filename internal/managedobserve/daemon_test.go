@@ -805,8 +805,6 @@ func startTestDaemon(t *testing.T) (string, string, func()) {
 			EndpointConfigHTTPClient:      server.Client(),
 		})
 	}()
-	waitForSocket(t, socketPath, errCh)
-	waitForDaemonStatus(t, dbPath, errCh)
 	stopped := false
 	stop := func() {
 		if stopped {
@@ -824,12 +822,16 @@ func startTestDaemon(t *testing.T) (string, string, func()) {
 		}
 	}
 	t.Cleanup(stop)
+	waitForSocket(t, socketPath, errCh)
+	waitForDaemonStatus(t, dbPath, errCh)
 	return socketPath, dbPath, stop
 }
 
 func waitForSocket(t *testing.T, socketPath string, errCh <-chan error) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	// Default-on Merlin can use its 30-second initialization budget before
+	// opening the socket, particularly in a cold race-instrumented process.
+	deadline := time.Now().Add(40 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-errCh:

@@ -120,7 +120,7 @@ def main():
         offset += len(scores)
     assert offset == len(private) == 71
     metadata = dict(candidate=MODEL, weights_sha256=WEIGHTS, threshold=0.5, calibrator=CALIBRATOR,
-                    experiment_id=freeze["experiment"], selected_epoch=2, default_enabled=False,
+                    experiment_id=freeze["experiment"], selected_epoch=2, default_enabled=True,
                     selection_freeze_sha256=sha(run / "selection_freeze.json"),
                     generator_sha256=sha(Path(__file__)), historical_fixture_sha256=sha(historical),
                     purpose="Numerical parity only; quality evidence is real staging replay and AgentDojo. User-authorized local trial, not a passed original operating-point gate.")

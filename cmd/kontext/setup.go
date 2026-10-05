@@ -22,9 +22,9 @@ Setup asks for the install token created in the Kontext dashboard, stores it
 in your login keychain, installs hooks for supported local agents, and starts
 a background agent that streams agent activity to your workspace.
 
-The local risk model is optional and off by default. Everything works without
-it: the classifier scores every command with its embedded model and records why
-the second opinion is absent. Pass --with-local-llm to opt in — setup then
+Merlin provides local advisory assessment by default. It does not block tool calls.
+The separate local guardrail LLM is optional and off by default.
+Pass --with-local-llm to opt in — setup then
 checks llama-server is installed, downloads the weights (~680 MB) while you
 watch, and tells the background agent to run it.
 
@@ -62,7 +62,7 @@ itself stays — it is managed by Homebrew).`,
 	cmd.Flags().StringVar(&cloudURL, "cloud-url", setup.CloudURL(), "Kontext cloud URL")
 	cmd.Flags().BoolVar(&tokenStdin, "token-stdin", false, "read the install token from stdin, so it never appears in the process list")
 	cmd.Flags().BoolVar(&uninstall, "uninstall", false, "remove the self-serve managed install from this Mac")
-	cmd.Flags().BoolVar(&withLocalLLM, "with-local-llm", false, "also run the local risk model (requires llama-server on PATH; downloads ~680 MB of weights)")
+	cmd.Flags().BoolVar(&withLocalLLM, "with-local-llm", false, "also run the local guardrail LLM (requires llama-server on PATH; downloads ~680 MB of weights)")
 	cmd.Flags().BoolVar(&allowHTTPLoopback, "allow-http-loopback", false, "accept a plaintext http cloud URL pointing at localhost (local development)")
 	_ = cmd.Flags().MarkHidden("cloud-url")
 	_ = cmd.Flags().MarkHidden("allow-http-loopback")

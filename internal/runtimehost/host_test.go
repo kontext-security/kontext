@@ -14,6 +14,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
@@ -45,6 +46,56 @@ func TestCloseKeepsResourcesAliveWhenRecordDrainTimesOut(t *testing.T) {
 	}
 	if closed != 2 || drainCalls != 2 {
 		t.Fatalf("closed=%d drains=%d", closed, drainCalls)
+	}
+}
+
+func TestStartMerlinDefaultAndOptOut(t *testing.T) {
+	for _, tc := range []struct {
+		name, flag string
+		enabled    bool
+	}{{"default", "", true}, {"opt-out", "0", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", tc.flag)
+			ctx := context.Background()
+			dbPath := filepath.Join(t.TempDir(), "guard.db")
+			host, err := Start(ctx, Options{AgentName: "claude", CWD: t.TempDir(), DBPath: dbPath})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = host.Close(ctx) })
+			if (host.drainRecords != nil) != tc.enabled {
+				t.Fatal("Merlin must select deferred recording even without AsyncDecisionRecording")
+			}
+			client := localruntime.NewClient(host.SocketPath)
+			result, err := client.Process(ctx, hook.Event{
+				Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Read",
+				ToolInput: map[string]any{"file_path": "README.md"},
+			})
+			if err != nil || result.Decision != hook.DecisionAllow {
+				t.Fatalf("result=%+v error=%v, want unchanged allow", result, err)
+			}
+			if err := host.Close(ctx); err != nil {
+				t.Fatal(err)
+			}
+			store, err := sqlite.OpenStore(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			verdicts, err := store.StepSafetyVerdictsForSession(ctx, host.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.enabled {
+				if len(verdicts) != 0 {
+					t.Fatal("opt-out still recorded Merlin annotations")
+				}
+				return
+			}
+			if len(verdicts) != 1 || verdicts[0].ModelVersion != stepsafety.ModelVersion || verdicts[0].Enforced || verdicts[0].ErrorCode != stepsafety.ErrorExcludedTool {
+				t.Fatalf("default-on annotation missing or changed: %+v", verdicts)
+			}
+		})
 	}
 }
 

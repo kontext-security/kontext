@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -117,17 +118,48 @@ func TestEvaluatorBoundsConcurrency(t *testing.T) {
 	<-firstDone
 }
 
-func TestConfigDisabledByDefault(t *testing.T) {
-	t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "")
-	cfg, err := ConfigFromEnv("/tmp/guard.db")
-	if err != nil {
-		t.Fatal(err)
+func TestConfigDefaultAndExplicitOptOut(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		enabled     bool
+	}{
+		{"unset", "", true}, {"empty", "", true}, {"whitespace", "  ", true},
+		{"enabled", "1", true}, {"true", "true", true},
+		{"disabled", "0", false}, {"false", "false", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", tc.value)
+			if tc.name == "unset" {
+				if err := os.Unsetenv("KONTEXT_STEP_SAFETY_SHADOW"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, key := range []string{"KONTEXT_STEP_SAFETY_TIMEOUT", "KONTEXT_STEP_SAFETY_STARTUP_TIMEOUT", "KONTEXT_STEP_SAFETY_MAX_CONCURRENCY"} {
+				t.Setenv(key, "")
+				if !tc.enabled {
+					// Opt-out must not parse or initialize unused model settings.
+					t.Setenv(key, "invalid")
+				}
+			}
+			cfg, err := ConfigFromEnv("/tmp/guard.db")
+			if err != nil || cfg.Enabled != tc.enabled {
+				t.Fatalf("config=%+v error=%v, want enabled=%v", cfg, err, tc.enabled)
+			}
+			if !tc.enabled {
+				if New(context.Background(), cfg) != nil {
+					t.Fatal("opt-out initialized an evaluator")
+				}
+			} else if cfg.Timeout != defaultTimeout || cfg.MaxConcurrency != 1 || cfg.ModelVersion != ModelVersion {
+				t.Fatalf("default advisory configuration changed: %+v", cfg)
+			}
+		})
 	}
-	if cfg.Enabled {
-		t.Fatal("step safety enabled without feature flag")
-	}
-	if New(context.Background(), cfg) != nil {
-		t.Fatal("disabled configuration initialized an evaluator")
+}
+
+func TestConfigRejectsInvalidEnableFlag(t *testing.T) {
+	t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "not-a-boolean")
+	if _, err := ConfigFromEnv("/tmp/guard.db"); err == nil {
+		t.Fatal("invalid enable flag accepted")
 	}
 }
 

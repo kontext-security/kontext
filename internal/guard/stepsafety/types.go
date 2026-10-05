@@ -142,7 +142,8 @@ type Evaluator struct {
 }
 
 func ConfigFromEnv(_ string) (Config, error) {
-	enabled, err := envBool("KONTEXT_STEP_SAFETY_SHADOW", false)
+	// Advisory assessment is enabled unless the daemon explicitly opts out.
+	enabled, err := envBool("KONTEXT_STEP_SAFETY_SHADOW", true)
 	if err != nil {
 		return Config{}, err
 	}
