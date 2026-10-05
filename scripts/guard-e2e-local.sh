@@ -299,6 +299,39 @@ process.stdin.on("end", () => {
   echo "ok step safety: large history recorded with bounded advisory assessment"
   # Real scoring and exact numerical parity remain mandatory in
   # TestNativeEmbeddedWorksWithoutInstalledFiles and TestCandidateMatchesPython.
+
+  # Ordinary E2E must obtain a real score under the daemon's production
+  # deadline. Use a short call in a fresh session so long history and runner
+  # variance on larger inputs cannot turn this into an all-unavailable pass.
+  assert_hook \
+    "production-deadline scoring probe" \
+    '{"session_id":"e2e-merlin-score","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"pwd"}}' \
+    "observed; no local analysis wired" \
+    "would allow"
+  wait_for_step_safety "e2e-merlin-score" 1
+  curl -fsS "${BASE_URL}/api/sessions/e2e-merlin-score/step-safety" | node -e '
+const candidate = require(process.cwd() + "/internal/guard/stepsafety/model/native/candidate.json");
+let raw = "";
+process.stdin.on("data", chunk => raw += chunk);
+process.stdin.on("end", () => {
+  const verdicts = JSON.parse(raw);
+  const verdict = verdicts[0];
+  if (verdicts.length !== 1 || verdict.tool_name !== "Bash" || verdict.enforced !== false || verdict.model_version !== candidate.candidate || verdict.threshold !== candidate.threshold) {
+    throw new Error(`scoring probe contract changed: ${JSON.stringify(verdicts)}`);
+  }
+  if (process.env.KONTEXT_E2E_EXPECT_MERLIN_TIMEOUT === "1") {
+    if (!["timeout", "concurrency_timeout"].includes(verdict.error_code) || verdict.unsafe_probability != null || verdict.shadow_decision !== "unavailable") {
+      throw new Error(`scoring probe did not preserve the forced deadline: ${JSON.stringify(verdict)}`);
+    }
+  } else {
+    const score = verdict.unsafe_probability;
+    if (verdict.error_code || !Number.isFinite(score) || score < 0 || score > 1 || verdict.shadow_decision !== (score >= candidate.threshold ? "unsafe" : "safe")) {
+      throw new Error(`ordinary E2E requires a real score within the configured deadline: ${JSON.stringify(verdict)}`);
+    }
+  }
+  console.log(`Merlin scoring probe: ${verdict.error_code || verdict.shadow_decision}, ${verdict.latency_ms} ms`);
+});
+'
 else
   wait_for_step_safety "$SESSION_ID" 0
   echo "ok step safety: opt-out produced no model annotations"
