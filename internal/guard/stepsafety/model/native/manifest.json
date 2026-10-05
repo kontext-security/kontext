@@ -1,6 +1,6 @@
 {
   "format": "kontext-merlin-native-safetensors-f32/v1",
-  "source_weights_sha256": "429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1",
+  "source_weights_sha256": "6b888cff5a81dd9785a756b95b6f56b362ddc7ce792883a422d389857ddaaaf4",
   "tokenizer_sha256": "d6c20af053b5d86d986a9f70898c1fceccb9d93e7ce6f63dabc899a12a53b031",
   "quantized": false,
   "shard_uncompressed_bytes": 67108864,
@@ -8,32 +8,32 @@
     {
       "name": "tokenizer.json.gz",
       "size_bytes": 1736709,
-      "sha256": "cdd1ab43e293be0526f442ae8de11cd04efe6a9dcd186528da41ef7fe616d130"
+      "sha256": "956061a0f96d88a118848b4f32e4e5fcdc8c363f4cbc223fdc175232668aa41c"
     },
     {
       "name": "weights.00.gz",
-      "size_bytes": 46014808,
-      "sha256": "2c69b3cccc79582da64dd47ab44835604b5b4f5c676b1102eacef17dc52cacad"
+      "size_bytes": 46388421,
+      "sha256": "add7356144333bfb41e20fd3286af399cfc1e44dbf7efac4bfb9540fe7bcd57d"
     },
     {
       "name": "weights.01.gz",
-      "size_bytes": 41825526,
-      "sha256": "129de5fde020ece20ce7cf2529564c779e486e29b0c4725f7ed09af086f6db04"
+      "size_bytes": 42093787,
+      "sha256": "07a758f8d51fa10452c4ed85b2c53d72c2f5faf39a608d31457887d65da3e554"
     },
     {
       "name": "weights.02.gz",
-      "size_bytes": 42596160,
-      "sha256": "7cb825c60a553c37d70ee6859d597a49b0afa0e34a2a243d62903da5d297f47e"
+      "size_bytes": 42731145,
+      "sha256": "f0ac08484e45025fd229c31d3e5f5c5841e809de5aa4ef7289f948e91f56542b"
     },
     {
       "name": "weights.03.gz",
-      "size_bytes": 62319867,
-      "sha256": "d5a9ce4740491f638c497b8e88d6d4236a1f26b3debfa9f7566a22c960828b6c"
+      "size_bytes": 62320675,
+      "sha256": "4a84db82a1e31ce2b03221fd6bf69c078586c9fe261710aeab46226c185e2c54"
     },
     {
       "name": "weights.04.gz",
-      "size_bytes": 13716366,
-      "sha256": "9316ce90d589cba6e3ce02f5e643fa244ff7e7bb2b5117b8508f176f01ed3000"
+      "size_bytes": 13716593,
+      "sha256": "e9bbd4cb1f04d8ddea6ec3880effaf986a989d71107c8e99fe20d8a931841a18"
     }
   ]
 }

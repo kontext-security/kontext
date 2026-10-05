@@ -41,7 +41,7 @@ func TestCalibratedProbabilityAndUnsafeThreshold(t *testing.T) {
 	if result.UnsafeProbability == nil {
 		t.Fatal("unsafe probability missing")
 	}
-	want := 1 / (1 + math.Exp(-(0.9976812431377959*1.0 + 0.5990786345281421)))
+	want := 1 / (1 + math.Exp(-(1.3003148180546902*1.0 - 5.527577655786232)))
 	if math.Abs(*result.UnsafeProbability-want) > 1e-15 {
 		t.Fatalf("unsafe probability = %.17f, want %.17f", *result.UnsafeProbability, want)
 	}

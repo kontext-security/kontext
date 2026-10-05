@@ -231,7 +231,9 @@ func (b *capturingStepSafetyBackend) Infer(_ context.Context, input stepsafety.I
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.inputs = append(b.inputs, input)
-	return stepsafety.InferenceResult{Logits: [2]float64{-1, 1}, HistoryOmitted: input.HistoryOmitted}, nil
+	// Keep this deliberately unsafe after the matched-replay calibration so
+	// these transport tests exercise asynchronous review-context persistence.
+	return stepsafety.InferenceResult{Logits: [2]float64{-4, 4}, HistoryOmitted: input.HistoryOmitted}, nil
 }
 
 func (b *capturingStepSafetyBackend) Health(context.Context) (stepsafety.Health, error) {

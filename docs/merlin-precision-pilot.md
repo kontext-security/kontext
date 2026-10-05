@@ -1,5 +1,11 @@
 # Merlin precision candidate: opt-in local trial
 
+**Candidate update, 2026-10-05:** this checkout now packages
+`merlin-matched-replay-20261005-local` at threshold `0.5` for Hasan's explicitly
+authorized staging trial. See [the current trial record](merlin-matched-replay-trial.md).
+The September candidate description below is retained as historical evidence;
+its checkpoint, calibration and threshold no longer identify this checkout.
+
 Merlin is **off by default**. This change packages the retained September 24
 `joint_ce` research candidate for an explicit local trial. It does not enable
 Merlin for existing installations or change Cedar authorization.

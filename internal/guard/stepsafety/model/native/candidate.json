@@ -1,24 +1,17 @@
 {
-  "candidate": "merlin-joint-ce-20260924-primary",
-  "weights_sha256": "429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1",
-  "threshold": 0.9089979801627239,
+  "candidate": "merlin-matched-replay-20261005-local",
+  "weights_sha256": "6b888cff5a81dd9785a756b95b6f56b362ddc7ce792883a422d389857ddaaaf4",
+  "threshold": 0.5,
   "calibrator": {
-    "coefficient": 0.9976812431377959,
-    "intercept": 0.5990786345281421
+    "coefficient": 1.3003148180546902,
+    "intercept": -5.527577655786232
   },
-  "source_hashes": {
-    "src/toolsafe_lab/merlin_normalization.py": "eb6163969e306363a711f359a6b6db4457c71a8b680f56e85fdac738895aa4b5",
-    "src/toolsafe_lab/merlin_balanced_data.py": "da44f4b23a5b9007526479e493d102c926dff7471a062a854321c6b0b7a55e3a",
-    "src/toolsafe_lab/merlin_balanced_training.py": "c325b5591e7013175d40bf2288f9a2819a0d4fa46d8662c26fef1482197c3252",
-    "src/toolsafe_lab/react_parser.py": "5bea39a7bee9db2cb97d75e54112d46c016895a61e0a1bb982ca74ce349c41df",
-    "src/toolsafe_lab/standalone_encoder.py": "ca8db9401025c8489a142d9447140a857fd77df84e5246fde92c995ccbe173ff"
-  },
-  "generator_sha256": "1d05770280a084a482b4d61800cd37b952e51fb94886c3cae4bff3f622c170d4",
-  "purpose": "Numerical parity only; includes authored cases selected by proximity to the frozen cutoff. Not an accuracy sample.",
-  "experiment_id": "exp-20260924-merlin-joint-training",
+  "experiment_id": "exp-20261005-merlin-matched-hard-negatives",
   "selected_epoch": 2,
   "default_enabled": false,
-  "fixture_sha256": "63535206c6051aca0e3342fe9903d163d4c1245f906cc649e9f658fb61090c17",
-  "runtime": "native Go FP32; embedded weights/tokenizer",
-  "limits": "Research candidate, not production validated. No native retraining or quantization. See docs/merlin-precision-pilot.md."
+  "selection_freeze_sha256": "8360e49290bb455744a9efa461278ba08aec9f41a793ba5d9c4bfa5f0520a92b",
+  "generator_sha256": "465e3175ae0db49277cafe10c50d6f4342c77e7cb292a3922fae516370053b6f",
+  "historical_fixture_sha256": "63535206c6051aca0e3342fe9903d163d4c1245f906cc649e9f658fb61090c17",
+  "purpose": "Numerical parity only; quality evidence is real staging replay and AgentDojo. User-authorized local trial, not a passed original operating-point gate.",
+  "fixture_sha256": "d2ee71f8afc0235430d6303a80fda3055972d1c92de335f356dfe575a387cd76"
 }
