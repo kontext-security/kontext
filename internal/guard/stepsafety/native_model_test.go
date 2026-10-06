@@ -100,7 +100,7 @@ func TestNativeLinearAgainstScalar(t *testing.T) {
 }
 
 func TestNativeEmbeddedWorksWithoutInstalledFiles(t *testing.T) {
-	t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "1")
+	t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "")
 	t.Setenv("KONTEXT_STEP_SAFETY_MODEL_DIR", "/nonexistent/merlin")
 	root := t.TempDir()
 	cfg, err := ConfigFromEnv(root + "/guard.db")

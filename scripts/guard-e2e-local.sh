@@ -29,7 +29,7 @@ go run ./cmd/kontext guard start --skip-hook-install \
   --socket "$SOCKET_PATH" >"$LOG_PATH" 2>&1 &
 DAEMON_PID=$!
 
-for _ in $(seq 1 80); do
+for _ in $(seq 1 180); do
   if curl -fsS "${BASE_URL}/healthz" >/dev/null 2>&1; then
     break
   fi
@@ -44,9 +44,9 @@ done
 curl -fsS "${BASE_URL}/healthz" >/dev/null
 echo "==> daemon healthy"
 
-STEP_SAFETY_E2E=0
+STEP_SAFETY_E2E=1
 case "${KONTEXT_STEP_SAFETY_SHADOW:-}" in
-  1|true|TRUE|yes|YES|on|ON) STEP_SAFETY_E2E=1 ;;
+  0|false|False|FALSE|f|F) STEP_SAFETY_E2E=0 ;;
 esac
 if [[ "$STEP_SAFETY_E2E" == "1" ]]; then
   curl -fsS "${BASE_URL}/healthz" | node -e '
@@ -57,13 +57,44 @@ process.stdin.on("end", () => {
   if (health.status !== "ready") {
     throw new Error(`expected real step-safety model to be ready, got ${JSON.stringify(health)}`);
   }
-  if (health.model_version !== "toolsafe-deberta-v3-xsmall-onnx-scoped-v2") {
+  const candidate = require(process.cwd() + "/internal/guard/stepsafety/model/native/candidate.json");
+  if (health.model_version !== candidate.candidate) {
     throw new Error(`unexpected step-safety model ${JSON.stringify(health)}`);
   }
 });
 '
   echo "ok step safety: real model ready"
+else
+  curl -fsS "${BASE_URL}/healthz" | node -e '
+let raw = "";
+process.stdin.on("data", chunk => raw += chunk);
+process.stdin.on("end", () => {
+  if (JSON.parse(raw).step_safety?.status !== "disabled") {
+    throw new Error(`opt-out did not disable Merlin: ${raw}`);
+  }
+});
+'
+  echo "ok step safety: explicit opt-out disabled the model"
 fi
+
+wait_for_step_safety() {
+  local session_id="$1"
+  local expected_count="$2"
+  for _ in $(seq 1 80); do
+    if curl -fsS "${BASE_URL}/api/sessions/${session_id}/step-safety" | EXPECTED_COUNT="$expected_count" node -e '
+let raw = "";
+process.stdin.on("data", chunk => raw += chunk);
+process.stdin.on("end", () => {
+  if (JSON.parse(raw).length !== Number(process.env.EXPECTED_COUNT)) process.exit(1);
+});
+'; then
+      return
+    fi
+    sleep 0.25
+  done
+  echo "timed out waiting for deferred Merlin records" >&2
+  return 1
+}
 
 assert_hook() {
   local name="$1"
@@ -188,7 +219,9 @@ process.stdin.on("end", () => {
 '
 
 if [[ "$STEP_SAFETY_E2E" == "1" ]]; then
+  wait_for_step_safety "$SESSION_ID" 3
   curl -fsS "${BASE_URL}/api/sessions/${SESSION_ID}/step-safety" | node -e '
+const candidate = require(process.cwd() + "/internal/guard/stepsafety/model/native/candidate.json");
 let raw = "";
 process.stdin.on("data", (chunk) => raw += chunk);
 process.stdin.on("end", () => {
@@ -198,19 +231,29 @@ process.stdin.on("end", () => {
   }
   for (const verdict of verdicts) {
     if (verdict.tool_name === "Read") {
-      if (verdict.unsafe_probability != null || verdict.error_code !== "excluded_tool") {
+      if (verdict.unsafe_probability != null || verdict.error_code !== "excluded_tool" || verdict.shadow_decision !== "unavailable") {
         throw new Error(`file tool was not excluded: ${JSON.stringify(verdict)}`);
       }
-    } else if (typeof verdict.unsafe_probability !== "number" || verdict.error_code) {
-      throw new Error(`eligible tool did not receive a real score: ${JSON.stringify(verdict)}`);
+    } else if (["timeout", "concurrency_timeout"].includes(verdict.error_code)) {
+      // The production deadline also applies on slower shared CI runners.
+      // A missed deadline must stay unavailable, never a synthetic safe score.
+      if (verdict.unsafe_probability != null || verdict.shadow_decision !== "unavailable") {
+        throw new Error(`deadline failure was scored: ${JSON.stringify(verdict)}`);
+      }
+    } else {
+      const score = verdict.unsafe_probability;
+      if (process.env.KONTEXT_E2E_EXPECT_MERLIN_TIMEOUT === "1" || !Number.isFinite(score) || score < 0 || score > 1 || verdict.error_code || verdict.shadow_decision !== (score >= candidate.threshold ? "unsafe" : "safe")) {
+        throw new Error(`unexpected eligible-tool result: ${JSON.stringify(verdict)}`);
+      }
     }
-    if (verdict.enforced !== false || verdict.model_version !== "toolsafe-deberta-v3-xsmall-onnx-scoped-v2") {
+    if (verdict.enforced !== false || verdict.model_version !== candidate.candidate || verdict.threshold !== candidate.threshold) {
       throw new Error(`step-safety shadow contract changed: ${JSON.stringify(verdict)}`);
     }
+    console.log(`Merlin ${verdict.tool_name}: ${verdict.error_code || verdict.shadow_decision}`);
   }
 });
 '
-  echo "ok step safety: shell scored, file tools excluded, policy unchanged"
+  echo "ok step safety: bounded shell assessment, file tools excluded, policy unchanged"
 
   assert_telemetry_hook \
     "shadow history request" \
@@ -227,22 +270,71 @@ process.stdout.write(JSON.stringify({session_id: "e2e-step-history", hook_event_
     "observed; no local analysis wired" \
     "would allow"
 
+  wait_for_step_safety "e2e-step-history" 1
   curl -fsS "${BASE_URL}/api/sessions/e2e-step-history/step-safety" | node -e '
-const fs = require("node:fs");
-const reference = JSON.parse(fs.readFileSync("internal/guard/stepsafety/testdata/context_history_golden.json", "utf8")).cases.find(c => c.generated_words === 600);
-const margin = reference.logits[1] - reference.logits[0];
-const expected = 1 / (1 + Math.exp(-(1.427213430140093 * margin + 2.953687013257505)));
+const candidate = require(process.cwd() + "/internal/guard/stepsafety/model/native/candidate.json");
 let raw = "";
 process.stdin.on("data", chunk => raw += chunk);
 process.stdin.on("end", () => {
   const verdicts = JSON.parse(raw);
   const verdict = verdicts[0];
-  if (verdicts.length !== 1 || !verdict.history_present || !verdict.history_omitted || verdict.enforced || verdict.error_code || typeof verdict.unsafe_probability !== "number" || Math.abs(verdict.unsafe_probability - expected) > 2e-5) {
-    throw new Error(`large history did not reach training-aligned shadow inference: ${JSON.stringify(verdicts)}`);
+  if (verdicts.length !== 1 || !verdict.history_present || verdict.enforced !== false || verdict.model_version !== candidate.candidate || verdict.threshold !== candidate.threshold) {
+    throw new Error(`large-history advisory contract changed: ${JSON.stringify(verdicts)}`);
   }
+  if (["timeout", "concurrency_timeout"].includes(verdict.error_code)) {
+    // Inference may expire before reporting token truncation. The captured
+    // history must still be present; its result must not become a safe score.
+    if (verdict.unsafe_probability != null || verdict.shadow_decision !== "unavailable") {
+      throw new Error(`history deadline failure was scored: ${JSON.stringify(verdict)}`);
+    }
+  } else {
+    const score = verdict.unsafe_probability;
+    if (process.env.KONTEXT_E2E_EXPECT_MERLIN_TIMEOUT === "1" || !verdict.history_omitted || !Number.isFinite(score) || score < 0 || score > 1 || verdict.error_code || verdict.shadow_decision !== (score >= candidate.threshold ? "unsafe" : "safe")) {
+      throw new Error(`unexpected large-history result: ${JSON.stringify(verdict)}`);
+    }
+  }
+  console.log(`Merlin history: ${verdict.error_code || verdict.shadow_decision}`);
 });
 '
-  echo "ok step safety: large history matches training reference through hook and SQLite"
+  echo "ok step safety: large history recorded with bounded advisory assessment"
+  # Real scoring and exact numerical parity remain mandatory in
+  # TestNativeEmbeddedWorksWithoutInstalledFiles and TestCandidateMatchesPython.
+
+  # Ordinary E2E must obtain a real score under the daemon's production
+  # deadline. Use a short call in a fresh session so long history and runner
+  # variance on larger inputs cannot turn this into an all-unavailable pass.
+  assert_hook \
+    "production-deadline scoring probe" \
+    '{"session_id":"e2e-merlin-score","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"pwd"}}' \
+    "observed; no local analysis wired" \
+    "would allow"
+  wait_for_step_safety "e2e-merlin-score" 1
+  curl -fsS "${BASE_URL}/api/sessions/e2e-merlin-score/step-safety" | node -e '
+const candidate = require(process.cwd() + "/internal/guard/stepsafety/model/native/candidate.json");
+let raw = "";
+process.stdin.on("data", chunk => raw += chunk);
+process.stdin.on("end", () => {
+  const verdicts = JSON.parse(raw);
+  const verdict = verdicts[0];
+  if (verdicts.length !== 1 || verdict.tool_name !== "Bash" || verdict.enforced !== false || verdict.model_version !== candidate.candidate || verdict.threshold !== candidate.threshold) {
+    throw new Error(`scoring probe contract changed: ${JSON.stringify(verdicts)}`);
+  }
+  if (process.env.KONTEXT_E2E_EXPECT_MERLIN_TIMEOUT === "1") {
+    if (!["timeout", "concurrency_timeout"].includes(verdict.error_code) || verdict.unsafe_probability != null || verdict.shadow_decision !== "unavailable") {
+      throw new Error(`scoring probe did not preserve the forced deadline: ${JSON.stringify(verdict)}`);
+    }
+  } else {
+    const score = verdict.unsafe_probability;
+    if (verdict.error_code || !Number.isFinite(score) || score < 0 || score > 1 || verdict.shadow_decision !== (score >= candidate.threshold ? "unsafe" : "safe")) {
+      throw new Error(`ordinary E2E requires a real score within the configured deadline: ${JSON.stringify(verdict)}`);
+    }
+  }
+  console.log(`Merlin scoring probe: ${verdict.error_code || verdict.shadow_decision}, ${verdict.latency_ms} ms`);
+});
+'
+else
+  wait_for_step_safety "$SESSION_ID" 0
+  echo "ok step safety: opt-out produced no model annotations"
 fi
 
 go run ./cmd/kontext guard status --daemon-url "$BASE_URL" | grep -q "0 critical"

@@ -15,7 +15,7 @@ import (
 
 // The native backend consumes the original float32 checkpoint, without
 // quantization, conversion through ONNX, or any change to its learned weights.
-const nativeWeightsSHA256 = "429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1"
+const nativeWeightsSHA256 = "6b888cff5a81dd9785a756b95b6f56b362ddc7ce792883a422d389857ddaaaf4"
 const nativeWeightsBytes = 283201512
 
 type nativeTensor struct {

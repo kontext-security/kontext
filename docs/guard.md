@@ -1,11 +1,12 @@
 # Kontext Guard
 
-The optional no-Thought DeBERTa step-level safety pilot is documented in
-[Local step-safety shadow pilot](step-safety-shadow.md). It runs locally at
+The default-on Merlin advisory beta is documented in
+[Local step-safety assessment](step-safety-shadow.md). It runs locally at
 `PreToolUse` through an embedded native Go model in background recording,
 excludes file tools and oversized actions, records redacted shadow evidence,
-and cannot enforce. It remains off by default; see the
-[precision candidate trial](merlin-precision-pilot.md) for opt-in and rollback.
+and cannot enforce. Set `KONTEXT_STEP_SAFETY_SHADOW=0` in the daemon environment
+to opt out; see the [current candidate record](merlin-matched-replay-trial.md)
+for evidence, limitations and rollout guidance.
 
 Guard is the local safety runtime inside `kontext`. It watches tool calls locally, redacts captured data, and stores decisions in local SQLite.
 

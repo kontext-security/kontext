@@ -13,7 +13,7 @@ from pathlib import Path
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-WEIGHTS_SHA256 = "429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1"
+WEIGHTS_SHA256 = "6b888cff5a81dd9785a756b95b6f56b362ddc7ce792883a422d389857ddaaaf4"
 TOKENIZER_SHA256 = "d6c20af053b5d86d986a9f70898c1fceccb9d93e7ce6f63dabc899a12a53b031"
 SHARD_BYTES = 64 * 1024 * 1024
 

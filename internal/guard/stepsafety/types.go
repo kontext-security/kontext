@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	ModelVersion = "merlin-joint-ce-20260924-primary"
-	Threshold    = 0.9089979801627239
+	ModelVersion = "merlin-matched-replay-20261005-local"
+	Threshold    = 0.5
 
-	calibrationScale = 0.9976812431377959
-	calibrationBias  = 0.5990786345281421
+	calibrationScale = 1.3003148180546902
+	calibrationBias  = -5.527577655786232
 
 	defaultTimeout        = 250 * time.Millisecond
 	maxConfiguredTimeout  = 500 * time.Millisecond
@@ -142,7 +142,8 @@ type Evaluator struct {
 }
 
 func ConfigFromEnv(_ string) (Config, error) {
-	enabled, err := envBool("KONTEXT_STEP_SAFETY_SHADOW", false)
+	// Advisory assessment is enabled unless the daemon explicitly opts out.
+	enabled, err := envBool("KONTEXT_STEP_SAFETY_SHADOW", true)
 	if err != nil {
 		return Config{}, err
 	}

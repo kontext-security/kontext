@@ -1,4 +1,16 @@
-# Merlin precision candidate: opt-in local trial
+# Historical Merlin precision candidate: September opt-in trial
+
+**Candidate update, 2026-10-05:** this checkout now packages
+`merlin-matched-replay-20261005-local` at threshold `0.5` for Hasan's explicitly
+authorized staging trial. The current PR also enables it by default as an
+advisory beta, with `KONTEXT_STEP_SAFETY_SHADOW=0` as the opt-out. See
+[the current candidate record](merlin-matched-replay-trial.md) for operation.
+The September candidate description below is retained as historical evidence;
+its checkpoint, calibration and threshold no longer identify this checkout.
+The historical opt-in/rollback instructions below apply only to that September
+build: unsetting the flag does **not** disable Merlin in the current build.
+
+## Historical September behavior
 
 Merlin is **off by default**. This change packages the retained September 24
 `joint_ce` research candidate for an explicit local trial. It does not enable
