@@ -13,6 +13,13 @@ on:
   schedule:
     - cron: "23 6 * * 1"
   workflow_dispatch:
+  # A change to the catalogs or the refresh runs it as a dry run: the report
+  # lands in the job summary and nothing is pushed.
+  pull_request:
+    paths:
+      - internal/toolcatalog/providers/**
+      - scripts/toolcatalog-refresh/**
+      - .github/workflows/tool-catalog-refresh.yml
 
 permissions:
   contents: write
@@ -43,9 +50,17 @@ jobs:
           HUBSPOT_MCP_CLIENT_ID: ${{ secrets.HUBSPOT_MCP_CLIENT_ID }}
           HUBSPOT_MCP_CLIENT_SECRET: ${{ secrets.HUBSPOT_MCP_CLIENT_SECRET }}
           HUBSPOT_MCP_REFRESH_TOKEN: ${{ secrets.HUBSPOT_MCP_REFRESH_TOKEN }}
-        run: go run ./scripts/toolcatalog-refresh -write -report "$RUNNER_TEMP/report.md"
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            go run ./scripts/toolcatalog-refresh -report "$RUNNER_TEMP/report.md"
+            cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            go run ./scripts/toolcatalog-refresh -write -report "$RUNNER_TEMP/report.md"
+          fi
 
       - name: Open pull request
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           if git diff --quiet -- internal/toolcatalog/providers; then

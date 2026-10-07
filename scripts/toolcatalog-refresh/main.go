@@ -480,6 +480,7 @@ func (r *refresher) refreshLive(c *catalog, label, endpoint, authorization strin
 		r.note("- %s: check failed: %v", label, err)
 		return
 	}
+	r.noteNotServed(c, label, tools)
 	r.merge(c, label, tools, func(name string) bool {
 		if c.Provider == "hubspot" {
 			return !strings.HasPrefix(name, "hubspot-")
@@ -487,6 +488,39 @@ func (r *refresher) refreshLive(c *catalog, label, endpoint, authorization strin
 		// v1 names and community tools are not on the hosted v2 list.
 		return false
 	})
+}
+
+// noteNotServed reports, per product, how many hosted tools the catalog lists
+// that this server did not offer. They stay catalogued: v1 names, and
+// products the account's plan or site does not have, are still served to
+// other customers.
+func (r *refresher) noteNotServed(c *catalog, label string, live []upstreamTool) {
+	served := map[string]bool{}
+	for _, t := range live {
+		served[t.name] = true
+	}
+	missing := map[string]int{}
+	total := 0
+	for _, t := range c.Tools {
+		if strings.HasPrefix(t.Name, "jira_") || strings.HasPrefix(t.Name, "confluence_") || strings.HasPrefix(t.Name, "hubspot-") || served[t.Name] {
+			continue
+		}
+		missing[t.Product]++
+		total++
+	}
+	if total == 0 {
+		return
+	}
+	products := make([]string, 0, len(missing))
+	for product := range missing {
+		products = append(products, product)
+	}
+	sort.Strings(products)
+	parts := make([]string, len(products))
+	for i, product := range products {
+		parts[i] = fmt.Sprintf("%s %d", product, missing[product])
+	}
+	r.note("- %s: served %d tools; %d catalogued tools not offered to this account (kept): %s", label, len(live), total, strings.Join(parts, ", "))
 }
 
 func (r *refresher) listTools(endpoint, authorization string) ([]upstreamTool, error) {
