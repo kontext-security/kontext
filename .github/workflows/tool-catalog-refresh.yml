@@ -1,0 +1,68 @@
+name: Tool Catalog Refresh
+
+# Checks the Jira/Atlassian and HubSpot MCP catalogs against upstream every
+# week and opens a pull request when a source adds tools. New tools land with
+# the tier their annotations suggest (write when unknown); the PR body lists
+# each one for review. Set ATLASSIAN_MCP_AUTHORIZATION and HUBSPOT_MCP_TOKEN
+# secrets to also check the hosted servers' live tool lists.
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  BRANCH: automation/tool-catalog-refresh
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Refresh catalogs
+        env:
+          ATLASSIAN_MCP_AUTHORIZATION: ${{ secrets.ATLASSIAN_MCP_AUTHORIZATION }}
+          HUBSPOT_MCP_TOKEN: ${{ secrets.HUBSPOT_MCP_TOKEN }}
+        run: go run ./scripts/toolcatalog-refresh -write -report "$RUNNER_TEMP/report.md"
+
+      - name: Open pull request
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- internal/toolcatalog/providers; then
+            echo "No catalog changes."
+            exit 0
+          fi
+          # The digest test pins the combined catalog; recompute it so the
+          # PR builds, and leave the tier review to the reviewer.
+          digest="$(go test ./internal/toolcatalog -run TestCatalogDigestIsStable 2>&1 | sed -n 's/.*Digest() = "\([0-9a-f]\{64\}\)".*/\1/p' | head -1)"
+          if [[ -n "$digest" ]]; then
+            old="$(sed -n 's/.*const want = "\([0-9a-f]\{64\}\)".*/\1/p' internal/toolcatalog/github_test.go)"
+            grep -rl "$old" internal | xargs sed -i "s/$old/$digest/g"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add internal
+          git commit -m "chore(toolcatalog): refresh provider MCP catalogs"
+          git push --force origin "$BRANCH"
+          if [[ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]]; then
+            gh pr create --draft --head "$BRANCH" --title "chore(toolcatalog): refresh provider MCP catalogs" \
+              --body-file "$RUNNER_TEMP/report.md"
+          else
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/report.md"
+          fi

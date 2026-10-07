@@ -1,0 +1,320 @@
+{
+  "provider": "hubspot",
+  "toolIdPrefix": "hubspot-mcp/",
+  "version": "2026-10-07",
+  "serverNameHints": [
+    "hubspot"
+  ],
+  "sources": [
+    "HubSpot remote MCP server (https://mcp.hubspot.com), tool reference at https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-hubspot-mcp-server read 2026-10-07",
+    "@hubspot/mcp-server@0.4.0 (npm), tool definitions and readOnlyHint annotations in dist/tools"
+  ],
+  "dispatchers": [],
+  "tools": [
+    {
+      "name": "discover_hubspot_schema",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "get_aeo_metrics",
+      "product": "marketing",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "get_campaign_attribution_reports",
+      "product": "marketing",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "get_content_analytics_report",
+      "product": "content",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "get_conversation_channel_metadata",
+      "product": "conversations",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "get_crm_objects",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "get_marketing_email_analytics",
+      "product": "marketing",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "get_organization_details",
+      "product": "crm",
+      "access": "read"
+    },
+    {
+      "name": "get_properties",
+      "product": "crm",
+      "access": "read"
+    },
+    {
+      "name": "get_user_details",
+      "product": "crm",
+      "access": "read"
+    },
+    {
+      "name": "hubspot-batch-create-associations",
+      "product": "crm",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-batch-create-objects",
+      "product": "crm",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-batch-read-objects",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-batch-update-objects",
+      "product": "crm",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-create-engagement",
+      "product": "crm",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-create-property",
+      "product": "crm",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-generate-feedback-link",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-get-association-definitions",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-get-engagement",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-get-link",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-get-property",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-get-schemas",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-get-user-details",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-get-workflow",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-list-associations",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-list-objects",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-list-properties",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-list-workflows",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-search-objects",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-update-engagement",
+      "product": "crm",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "hubspot-update-property",
+      "product": "crm",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "manage_aeo_prompts",
+      "product": "marketing",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "manage_aeo_recommendations",
+      "product": "marketing",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "manage_blog_post",
+      "product": "content",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "manage_campaign_objects",
+      "product": "marketing",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "manage_crm_objects",
+      "product": "crm",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "manage_custom_pipelines",
+      "product": "crm",
+      "access": "admin"
+    },
+    {
+      "name": "manage_custom_properties",
+      "product": "crm",
+      "access": "admin"
+    },
+    {
+      "name": "manage_landing_page",
+      "product": "content",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "manage_marketing_email",
+      "product": "marketing",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "manage_onboarding",
+      "product": "platform",
+      "access": "write"
+    },
+    {
+      "name": "manage_segment",
+      "product": "crm",
+      "access": "write"
+    },
+    {
+      "name": "manage_website_page",
+      "product": "content",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "query_crm_data",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "read_campaign_data",
+      "product": "marketing",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "render_asset",
+      "product": "content",
+      "access": "read"
+    },
+    {
+      "name": "search_conversations",
+      "product": "conversations",
+      "access": "read"
+    },
+    {
+      "name": "search_crm_objects",
+      "product": "crm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "search_intent_signals",
+      "product": "marketing",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "search_owners",
+      "product": "crm",
+      "access": "read"
+    },
+    {
+      "name": "search_properties",
+      "product": "crm",
+      "access": "read"
+    },
+    {
+      "name": "submit_feedback",
+      "product": "platform",
+      "access": "write"
+    },
+    {
+      "name": "tool_guidance",
+      "product": "platform",
+      "access": "read"
+    }
+  ]
+}

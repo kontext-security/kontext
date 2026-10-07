@@ -1,0 +1,2203 @@
+{
+  "provider": "atlassian",
+  "toolIdPrefix": "atlassian-mcp/",
+  "version": "2026-10-07",
+  "serverNameHints": [
+    "atlassian",
+    "jira",
+    "confluence",
+    "rovo"
+  ],
+  "sources": [
+    "Atlassian Rovo MCP server v2 (https://mcp.atlassian.com/v2/mcp?tools=all), tool reference at https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/ read 2026-10-07",
+    "sooperset/mcp-atlassian@0a5d2427144d72f5aade07d4fabd385421cec401 (community server, tools namespaced jira_ and confluence_, read/write tags in src/mcp_atlassian/servers)",
+    "Atlassian Rovo MCP server v1 tool names that v1 connections may still expose (https://support.atlassian.com/atlassian-rovo-mcp-server/docs/supported-tools/)"
+  ],
+  "dispatchers": [
+    {
+      "name": "execute",
+      "operationField": "name"
+    },
+    {
+      "name": "executeRead",
+      "operationField": "name"
+    },
+    {
+      "name": "executeWrite",
+      "operationField": "name"
+    },
+    {
+      "name": "executeDestructive",
+      "operationField": "name"
+    }
+  ],
+  "tools": [
+    {
+      "name": "addBitbucketRepoPullRequestComment",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "addCommentToJiraIssue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "addConfluenceContentPermissions",
+      "product": "confluence",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "addConfluenceReaction",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "addConnectionsToGoals",
+      "product": "goals",
+      "access": "write"
+    },
+    {
+      "name": "addConnectionsToProjects",
+      "product": "projects",
+      "access": "write"
+    },
+    {
+      "name": "addLabelsToConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "addOrEditJiraIssueComment",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "addOrEditJiraIssueWorklog",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "addTeamworkGraphContext",
+      "product": "platform",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "addWorklogToJiraIssue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "approveBitbucketRepoPullRequest",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "archiveConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "atlassianUserInfo",
+      "product": "platform",
+      "access": "read"
+    },
+    {
+      "name": "bitbucketDeployment",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "bitbucketEnvironment",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "bitbucketPipeline",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "bitbucketPullRequest",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "bitbucketRepoContent",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "bitbucketRepository",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "bitbucketUser",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "bitbucketWorkspace",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "completeConfluenceTask",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_add_comment",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_add_inline_comment",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_add_label",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_check_content_permissions",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_copy_page",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_create_page",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_create_page_from_template",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_delete_attachment",
+      "product": "confluence",
+      "access": "delete",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_delete_page",
+      "product": "confluence",
+      "access": "delete",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_download_attachment",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_download_content_attachments",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_attachments",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_comments",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_inline_comments",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_labels",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_page",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_page_children",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_page_diff",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_page_history",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_page_images",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_page_restrictions",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_page_template",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_page_views",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_space_page_tree",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_get_space_permissions",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_list_page_templates",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_move_page",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_reply_to_comment",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_search",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_search_user",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_set_page_restrictions",
+      "product": "confluence",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_update_page",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_update_page_section",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_upload_attachment",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "confluence_upload_attachments",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "convertConfluenceContentMode",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "convertJiraIssueHierarchy",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "copyConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createBitbucketRepoBranch",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createBitbucketRepoCommit",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createBitbucketRepoPullRequest",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createBitbucketRepoPullRequestTask",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createCapacityPlanNonProjectWork",
+      "product": "capacity",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createCompassComponent",
+      "product": "compass",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createCompassComponentRelationship",
+      "product": "compass",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createCompassCustomFieldDefinition",
+      "product": "compass",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createConfluenceAttachment",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createConfluenceComment",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createConfluenceFooterComment",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createConfluenceInfographicForPage",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createConfluenceInlineComment",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createConfluenceMauiApp",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createConfluencePage",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createConfluenceSpace",
+      "product": "confluence",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "createFocusArea",
+      "product": "focus",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createFocusAreaStatusUpdate",
+      "product": "focus",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createGoal",
+      "product": "goals",
+      "access": "write"
+    },
+    {
+      "name": "createGoalUpdate",
+      "product": "goals",
+      "access": "write"
+    },
+    {
+      "name": "createJiraBoard",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createJiraIssue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createJiraIssueLink",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createJiraIssueRemoteIssueLink",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createJiraProject",
+      "product": "jira",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "createLoomFolder",
+      "product": "loom",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createLoomVideoComment",
+      "product": "loom",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createLoomVideoReaction",
+      "product": "loom",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createLoomVideoUpload",
+      "product": "loom",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createProject",
+      "product": "projects",
+      "access": "write"
+    },
+    {
+      "name": "createProjectUpdate",
+      "product": "projects",
+      "access": "write"
+    },
+    {
+      "name": "createTalentSkill",
+      "product": "talent",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "createTeam",
+      "product": "teams",
+      "access": "write"
+    },
+    {
+      "name": "deleteJiraComment",
+      "product": "jira",
+      "access": "delete",
+      "distinctive": true
+    },
+    {
+      "name": "deleteJiraIssue",
+      "product": "jira",
+      "access": "delete",
+      "distinctive": true
+    },
+    {
+      "name": "deleteJiraIssueAttachment",
+      "product": "jira",
+      "access": "delete",
+      "distinctive": true
+    },
+    {
+      "name": "diffCodeSymbols",
+      "product": "code",
+      "access": "read"
+    },
+    {
+      "name": "diffConfluenceContentVersions",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "disableConfluencePublicLink",
+      "product": "confluence",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "discover",
+      "product": "platform",
+      "access": "read"
+    },
+    {
+      "name": "downloadConfluenceAttachment",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "downloadJiraIssueAttachment",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "editConfluenceInfographicForPage",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "editConfluenceMauiApp",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "editJiraEntityProperty",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "editJiraIssue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "enableConfluencePublicLink",
+      "product": "confluence",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "exportConfluenceContent",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "fetch",
+      "product": "platform",
+      "access": "read"
+    },
+    {
+      "name": "fetchAtlassian",
+      "product": "platform",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getAccessibleAtlassianResources",
+      "product": "platform",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoBranch",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoCommit",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoCommitReport",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoCommitReportAnnotations",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoDefaultReviewers",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoDeployment",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoEnvironment",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoFileContent",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoPipeline",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoPipelineStep",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoPipelineStepLog",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoPullRequest",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepoPullRequestDiff",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketRepository",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getBitbucketWorkspace",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getCapacityPlanAllocations",
+      "product": "capacity",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getCodeFile",
+      "product": "code",
+      "access": "read"
+    },
+    {
+      "name": "getCodeSymbol",
+      "product": "code",
+      "access": "read"
+    },
+    {
+      "name": "getCompassComponent",
+      "product": "compass",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getCompassComponentActivityEvents",
+      "product": "compass",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getCompassComponentLabels",
+      "product": "compass",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getCompassComponentTypes",
+      "product": "compass",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getCompassComponents",
+      "product": "compass",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getCompassComponentsOwnedByMyTeams",
+      "product": "compass",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getCompassCustomFieldDefinitions",
+      "product": "compass",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceAttachment",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceComment",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceCommentChildren",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceContent",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceContentPermissions",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceContentRestrictionState",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceContentVersion",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceMauiApp",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluencePage",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluencePageDescendants",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluencePageFooterComments",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluencePageInlineComments",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluencePersonalSpace",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluencePublicLinkStatus",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceReactions",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceSpace",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceSpaceInstructions",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceSpaces",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceTask",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceTemplate",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getContentFormatGuide",
+      "product": "platform",
+      "access": "read"
+    },
+    {
+      "name": "getFocusArea",
+      "product": "focus",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getFocusAreaTypes",
+      "product": "focus",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getGoal",
+      "product": "goals",
+      "access": "read"
+    },
+    {
+      "name": "getGoalTypes",
+      "product": "goals",
+      "access": "read"
+    },
+    {
+      "name": "getGoalUpdate",
+      "product": "goals",
+      "access": "read"
+    },
+    {
+      "name": "getIssueLinkTypes",
+      "product": "jira",
+      "access": "read"
+    },
+    {
+      "name": "getJiraBoardConfig",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraBoardIssueData",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraBoardSprintData",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraCurrentUser",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraEntityProperty",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraIssue",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraIssueRemoteIssueLinks",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraIssueTypeMetaWithFields",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraProjectIssueTypesMetadata",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraProjectVersionRelatedWork",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraProjectVersions",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraScreen",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraUser",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraWorkflowEditorLink",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJiraWorkflows",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJsmOpsAlerts",
+      "product": "jsm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJsmOpsScheduleInfo",
+      "product": "jsm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getJsmOpsTeamInfo",
+      "product": "jsm",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getLoomMeetingActionItems",
+      "product": "loom",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getLoomVideo",
+      "product": "loom",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getLoomVideoComments",
+      "product": "loom",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getLoomVideoDownloadUrl",
+      "product": "loom",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getPagesInConfluenceSpace",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getProject",
+      "product": "projects",
+      "access": "read"
+    },
+    {
+      "name": "getProjectUpdate",
+      "product": "projects",
+      "access": "read"
+    },
+    {
+      "name": "getTalentFields",
+      "product": "talent",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getTalentGroupMetrics",
+      "product": "talent",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getTalentPosition",
+      "product": "talent",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getTalentPositionsByEntity",
+      "product": "talent",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getTalentUser",
+      "product": "talent",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getTeam",
+      "product": "teams",
+      "access": "read"
+    },
+    {
+      "name": "getTeamworkGraphContext",
+      "product": "platform",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getTeamworkGraphObject",
+      "product": "platform",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getTransitionsForJiraIssue",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getVisibleJiraProjects",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_add_comment",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_add_issues_to_sprint",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_add_watcher",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_add_worklog",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_assign_issue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_batch_create_issues",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_batch_create_versions",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_batch_get_changelogs",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_create_customer_request",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_create_issue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_create_issue_link",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_create_remote_issue_link",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_create_sprint",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_create_version",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_delete_issue",
+      "product": "jira",
+      "access": "delete",
+      "distinctive": true
+    },
+    {
+      "name": "jira_download_attachments",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_edit_comment",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_agile_boards",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_all_projects",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_board_issues",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_create_fields",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_cross_project_dependencies",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_field_options",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_issue",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_issue_dates",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_issue_development_info",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_issue_images",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_issue_proforma_forms",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_issue_sla",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_issue_watchers",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_issues_development_info",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_link_types",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_proforma_form_details",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_project_components",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_project_epic_hierarchy",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_project_fields",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_project_issue_types",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_project_issues",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_project_versions",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_queue_issues",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_request_type_fields",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_request_types",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_service_desk_for_project",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_service_desk_queues",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_sprint_issues",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_sprints_from_board",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_transitions",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_user_profile",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_get_worklog",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_link_to_epic",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_move_issue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_move_issues_to_backlog",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_remove_issue_link",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_remove_watcher",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_search",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_search_assignable_users",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_search_fields",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_search_projects",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "jira_transition_issue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_update_issue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_update_proforma_form_answers",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_update_sprint",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "jira_update_version",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "linkToFocusArea",
+      "product": "focus",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepoCommitReports",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepoDeployments",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepoEnvironments",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepoPipelineSteps",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepoPipelines",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepoPullRequestComments",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepoPullRequestTasks",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepoPullRequests",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepositories",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketWorkspaces",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listCapacityPlanNonProjectWork",
+      "product": "capacity",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listCodeDirectory",
+      "product": "code",
+      "access": "read"
+    },
+    {
+      "name": "listConfluenceAttachments",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listConfluenceComments",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listConfluenceContent",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listConfluenceContentVersions",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listConfluenceSpaces",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listConfluenceTasks",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listConfluenceTemplates",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraBoardSprints",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraBoards",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraDashboards",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraFilters",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraIssueAssignableUsers",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraIssueChangelogs",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraIssueComments",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraIssueLinkTypes",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraIssueRemoteIssueLinks",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraIssueTransitions",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraIssueWorklogs",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraProjectComponents",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraProjectIssueTypesMetadata",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraProjects",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listJiraStatuses",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listLoomFolders",
+      "product": "loom",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listLoomVideos",
+      "product": "loom",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listLoomVideosSharedWithMe",
+      "product": "loom",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "lookupJiraAccountId",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "manageJiraProjectVersion",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "manageJiraProjectVersionRelatedWork",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "manageJiraSprint",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "mergeBitbucketRepoPullRequest",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "moveConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "moveLoomVideoToFolder",
+      "product": "loom",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "publishLoomVideo",
+      "product": "loom",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "recoverLoomVideo",
+      "product": "loom",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "removeConfluenceContentPermissions",
+      "product": "confluence",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "reopenBitbucketRepoPullRequestComment",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "reopenConfluenceTask",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "replaceConfluenceContentPermissions",
+      "product": "confluence",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "requestChangesOnBitbucketRepoPullRequest",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "resolveBitbucketRepoPullRequestComment",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "resolveConfluenceContentMacros",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "restoreConfluenceContentVersion",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "runBitbucketRepoPipeline",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "scanCodeRepo",
+      "product": "code",
+      "access": "read"
+    },
+    {
+      "name": "search",
+      "product": "platform",
+      "access": "read"
+    },
+    {
+      "name": "searchAtlassian",
+      "product": "platform",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "searchCode",
+      "product": "code",
+      "access": "read"
+    },
+    {
+      "name": "searchConfluence",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "searchConfluenceUsingCql",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "searchFocusAreas",
+      "product": "focus",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "searchGoals",
+      "product": "goals",
+      "access": "read"
+    },
+    {
+      "name": "searchJiraIssuesUsingJql",
+      "product": "jira",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "searchProjects",
+      "product": "projects",
+      "access": "read"
+    },
+    {
+      "name": "searchTalentPositions",
+      "product": "talent",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "searchTeams",
+      "product": "teams",
+      "access": "read"
+    },
+    {
+      "name": "setBitbucketRepoPullRequestTaskState",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "setConfluenceContentRestrictionState",
+      "product": "confluence",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "setConfluenceContentStatus",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "setConfluenceSpaceInstructions",
+      "product": "confluence",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "shareLoomVideo",
+      "product": "loom",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "starConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "starConfluenceSpace",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "transitionJiraIssue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "unarchiveConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "unstarConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "unstarConfluenceSpace",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "unwatchConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "unwatchConfluenceLabel",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "unwatchConfluenceSpace",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateBitbucketRepoPullRequest",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateCapacityPlanAllocations",
+      "product": "capacity",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateCapacityPlanNonProjectWork",
+      "product": "capacity",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateConfluenceComment",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateConfluenceCommentResolution",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateConfluencePage",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateFocusArea",
+      "product": "focus",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateJiraProject",
+      "product": "jira",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "updateJiraScreen",
+      "product": "jira",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "updateJsmOpsAlert",
+      "product": "jsm",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateLoomVideoPermissions",
+      "product": "loom",
+      "access": "admin",
+      "distinctive": true
+    },
+    {
+      "name": "updateLoomVideoTitle",
+      "product": "loom",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateTalentPositionFocusAreaMappings",
+      "product": "talent",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateTalentWorkerSkillMappings",
+      "product": "talent",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateTeam",
+      "product": "teams",
+      "access": "write"
+    },
+    {
+      "name": "uploadAttachmentToJiraIssue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "watchConfluenceContent",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "watchConfluenceLabel",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "watchConfluenceSpace",
+      "product": "confluence",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "watchJiraIssue",
+      "product": "jira",
+      "access": "write",
+      "distinctive": true
+    }
+  ]
+}

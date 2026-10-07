@@ -29,7 +29,7 @@ const remoteEnforceTestSchema = `namespace Kontext {
   };
 }`
 
-const remoteEnforceTestCatalogDigest = "cf87ee7a167f1f07bdc41450467708f832c9d8c4aaf20651a5d0df070d3de436"
+const remoteEnforceTestCatalogDigest = "2447a046de2e8c4b2415df25f63217cedaf3b977939cad3dd783bd4b10c9fb5e"
 
 // remoteEnforceTestDeployment mirrors the daemon-side deployment shape so the
 // cache write below goes through the exact production persistence path.

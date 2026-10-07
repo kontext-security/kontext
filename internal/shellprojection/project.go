@@ -181,6 +181,12 @@ func classify(words []string, complete bool, depth int) []cedareval.ShellProject
 		return single(classifyGH(args, complete))
 	case "curl":
 		return single(classifyCurl(args, complete))
+	case "acli":
+		return single(acliCLI.classify(args, complete))
+	case "jira":
+		return single(jiraCLI.classify(args, complete))
+	case "hs":
+		return single(hsCLI.classify(args, complete))
 	case "bash", "sh", "zsh", "dash", "ksh":
 		return classifyShell(program, args, complete, depth)
 	case "eval":
@@ -868,6 +874,12 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		return projection("curl", nil, []string{"dynamic-or-invalid-url"}, false)
 	}
 	host := strings.ToLower(parsed.Hostname())
+	switch {
+	case isAtlassianHost(host):
+		return classifyAtlassianCurl(host, parsed, method, complete)
+	case isHubSpotHost(host):
+		return classifyHubSpotCurl(host, parsed, method, complete)
+	}
 	if host != "api.github.com" && host != "uploads.github.com" {
 		return projection("curl", nil, nil, complete)
 	}
