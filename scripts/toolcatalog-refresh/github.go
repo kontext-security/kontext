@@ -217,7 +217,10 @@ func readToolsnaps(dir, commit string) (map[string]githubUpstreamTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	tools := map[string]githubUpstreamTool{}
+	// A tool can have several snapshots (input variants); each one counts, so
+	// a change to any of them is a change to the tool.
+	definitions := map[string][]string{}
+	hints := map[string]string{}
 	for _, snapPath := range paths {
 		content, err := os.ReadFile(snapPath)
 		if err != nil {
@@ -240,13 +243,25 @@ func readToolsnaps(dir, commit string) (map[string]githubUpstreamTool, error) {
 		if err != nil {
 			return nil, err
 		}
-		tools[name] = githubUpstreamTool{Name: name, Hint: hintAccess(string(annotations)), Definition: fingerprint(canonical)}
+		definitions[name] = append(definitions[name], string(canonical))
+		if hint := hintAccess(string(annotations)); hintRank[hint] > hintRank[hints[name]] {
+			hints[name] = hint
+		}
+	}
+	tools := map[string]githubUpstreamTool{}
+	for name, variants := range definitions {
+		sort.Strings(variants)
+		tools[name] = githubUpstreamTool{Name: name, Hint: hints[name], Definition: fingerprint([]byte(strings.Join(variants, "\n")))}
 	}
 	if len(tools) == 0 {
 		return nil, fmt.Errorf("no tool snapshots at %s", commit[:12])
 	}
 	return tools, nil
 }
+
+// hintRank orders upstream hints from loosest to strictest; a tool takes
+// the strictest hint any of its variants carries.
+var hintRank = map[string]int{"": 0, "read": 1, "write": 2, "delete": 3}
 
 func writeGitHubUpstream(upstreamPath string, upstream *githubUpstream) error {
 	content, err := json.MarshalIndent(upstream, "", "  ")

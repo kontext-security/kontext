@@ -245,7 +245,7 @@
       "name": "get_job_logs",
       "catalogued": false,
       "hint": "read",
-      "definition": "50c8370c91dc9cb7fcbcfd0ed1206214ac982187aae5182a283dfe06c2874e16"
+      "definition": "68e6e1971bdcbc71d829cfc4d676d50f6e8a849a98ee505bda69b5629770644f"
     },
     {
       "name": "get_label",
@@ -358,8 +358,8 @@
     {
       "name": "list_branches",
       "catalogued": true,
-      "hint": "",
-      "definition": "71919198254d3f6a7615b49f2f7182a8bc217b1168b1bfb5bf75f3b4c3d8009b"
+      "hint": "read",
+      "definition": "a0d1ca99c3ea966af63470d83dc453858cb40f0ec3338f7d8029c9e9070caff0"
     },
     {
       "name": "list_code_scanning_alerts",
@@ -418,8 +418,8 @@
     {
       "name": "list_issues",
       "catalogued": true,
-      "hint": "",
-      "definition": "37c0cde8b5669dcd723345f95ec0ebec9cacde2136316b65aa58db52d98ef432"
+      "hint": "read",
+      "definition": "0e32b23cc38314971b5141005c17d0475a5be0cd42c1f581d9d854b788d14a39"
     },
     {
       "name": "list_label",
@@ -442,8 +442,8 @@
     {
       "name": "list_pull_requests",
       "catalogued": true,
-      "hint": "",
-      "definition": "9583dab0737c05ef609cf75eb559d115a296d9bb3342ad20ca84dd9819e73787"
+      "hint": "read",
+      "definition": "4f978bce7f5554cc75e02656c9297461c7f486c23801e72f092d1fe8612e9faf"
     },
     {
       "name": "list_releases",
@@ -478,8 +478,8 @@
     {
       "name": "list_tags",
       "catalogued": true,
-      "hint": "",
-      "definition": "b288073090d2989d7e7c56d413a29a9059fc409e8a0ed184a416cffb7724b5e3"
+      "hint": "read",
+      "definition": "9124bb5cb8e468aa6ec5a3fe3e5a87831db4dcde0cfd72996ca7c047123369bd"
     },
     {
       "name": "manage_notification_subscription",
@@ -533,7 +533,7 @@
       "name": "pull_request_review_write",
       "catalogued": false,
       "hint": "write",
-      "definition": "185f4338b9435e12202ca1a0f8163628ade7ca038d76e6391800cc63976b8fda"
+      "definition": "26a82cd766b7e851d53810974071173dc36bf12c919c072d5c70a5df2baef205"
     },
     {
       "name": "push_files",
@@ -593,13 +593,13 @@
       "name": "resolve_review_thread",
       "catalogued": false,
       "hint": "write",
-      "definition": "2f9dbccfbcebfc40f28290c6886e08a0fb0a1af0cf832c71b5b56151819299fc"
+      "definition": "54ac786314f284140655b5b4b5f5a6570f49933fd97dd852911e58d8a03f7865"
     },
     {
       "name": "search_code",
       "catalogued": true,
-      "hint": "",
-      "definition": "5358faf29290548ba63a52b008b08da91d1b17bff2df27481a75a286e3fa583c"
+      "hint": "read",
+      "definition": "e99058f340d3300fd6aec88b4ed9268842b67ea3e40863443a5fe1b011086d3a"
     },
     {
       "name": "search_commits",
@@ -610,8 +610,8 @@
     {
       "name": "search_issues",
       "catalogued": true,
-      "hint": "",
-      "definition": "4138cb270ea86322200aec87060144d0f90d44f3f22c34481f890d94c2bbd29b"
+      "hint": "read",
+      "definition": "ef57f6057be56000928545d21c225ebf413a1365a95b9917f684309bb829cbf1"
     },
     {
       "name": "search_orgs",
@@ -622,8 +622,8 @@
     {
       "name": "search_pull_requests",
       "catalogued": true,
-      "hint": "",
-      "definition": "73392f6ed40fdcac2d68794646460a90cee66204e615cb684b80abbac4885d21"
+      "hint": "read",
+      "definition": "e88b7af62a12c43285118ad43869e54e57d71be886f9e0a88eb6cba0d90a6962"
     },
     {
       "name": "search_repositories",
