@@ -218,13 +218,13 @@
     {
       "name": "manage_aeo_prompts",
       "product": "marketing",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "manage_aeo_recommendations",
       "product": "marketing",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
@@ -236,13 +236,13 @@
     {
       "name": "manage_campaign_objects",
       "product": "marketing",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "manage_crm_objects",
       "product": "crm",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
@@ -260,19 +260,19 @@
     {
       "name": "manage_landing_page",
       "product": "content",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "manage_marketing_email",
       "product": "marketing",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "manage_onboarding",
       "product": "platform",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {

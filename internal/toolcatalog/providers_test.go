@@ -55,7 +55,7 @@ func TestProviderKnownAndAccess(t *testing.T) {
 		"atlassian-mcp/deleteJiraIssue":   AccessDelete,
 		"atlassian-mcp/updateJiraProject": AccessAdmin,
 		"atlassian-mcp/getJiraIssue":      AccessRead,
-		"hubspot-mcp/manage_crm_objects":  AccessWrite,
+		"hubspot-mcp/manage_crm_objects":  AccessDelete, // annotated destructive upstream
 		"hubspot-mcp/unrecognized":        "",
 	} {
 		if !Known(id) {

@@ -70,6 +70,11 @@
       "access": "write"
     },
     {
+      "name": "addGraphContext",
+      "product": "platform",
+      "access": "write"
+    },
+    {
       "name": "addLabelsToConfluenceContent",
       "product": "confluence",
       "access": "write",
@@ -816,6 +821,12 @@
       "distinctive": true
     },
     {
+      "name": "getBitbucketRepoPullRequestMergeability",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
       "name": "getBitbucketRepository",
       "product": "bitbucket",
       "access": "read",
@@ -886,6 +897,12 @@
       "distinctive": true
     },
     {
+      "name": "getConfluenceApproval",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
       "name": "getConfluenceAttachment",
       "product": "confluence",
       "access": "read",
@@ -910,6 +927,24 @@
       "distinctive": true
     },
     {
+      "name": "getConfluenceContentAnalytics",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceContentAncestors",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceContentDescendants",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
       "name": "getConfluenceContentPermissions",
       "product": "confluence",
       "access": "read",
@@ -917,6 +952,12 @@
     },
     {
       "name": "getConfluenceContentRestrictionState",
+      "product": "confluence",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "getConfluenceContentStatus",
       "product": "confluence",
       "access": "read",
       "distinctive": true
@@ -1035,6 +1076,16 @@
     {
       "name": "getGoalUpdate",
       "product": "goals",
+      "access": "read"
+    },
+    {
+      "name": "getGraphContext",
+      "product": "platform",
+      "access": "read"
+    },
+    {
+      "name": "getGraphObject",
+      "product": "platform",
       "access": "read"
     },
     {
@@ -1173,6 +1224,11 @@
       "product": "loom",
       "access": "read",
       "distinctive": true
+    },
+    {
+      "name": "getMyWork",
+      "product": "platform",
+      "access": "read"
     },
     {
       "name": "getPagesInConfluenceSpace",
@@ -1697,7 +1753,19 @@
       "distinctive": true
     },
     {
+      "name": "listBitbucketRepoCommitPullRequests",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
       "name": "listBitbucketRepoCommitReports",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketRepoCommits",
       "product": "bitbucket",
       "access": "read",
       "distinctive": true
@@ -1746,6 +1814,12 @@
     },
     {
       "name": "listBitbucketRepositories",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listBitbucketWorkspacePullRequests",
       "product": "bitbucket",
       "access": "read",
       "distinctive": true
@@ -1918,15 +1992,33 @@
       "distinctive": true
     },
     {
+      "name": "listMyBitbucketPullRequests",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "listMyBitbucketReviewRequests",
+      "product": "bitbucket",
+      "access": "read",
+      "distinctive": true
+    },
+    {
       "name": "lookupJiraAccountId",
       "product": "jira",
       "access": "read",
       "distinctive": true
     },
     {
+      "name": "manageConfluenceApproval",
+      "product": "confluence",
+      "access": "delete",
+      "distinctive": true
+    },
+    {
       "name": "manageJiraProjectVersion",
       "product": "jira",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
@@ -1938,13 +2030,13 @@
     {
       "name": "manageJiraSprint",
       "product": "jira",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "mergeBitbucketRepoPullRequest",
       "product": "bitbucket",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
@@ -1986,7 +2078,7 @@
     {
       "name": "reopenConfluenceTask",
       "product": "confluence",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
@@ -2148,35 +2240,41 @@
     {
       "name": "unstarConfluenceContent",
       "product": "confluence",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "unstarConfluenceSpace",
       "product": "confluence",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "unwatchConfluenceContent",
       "product": "confluence",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "unwatchConfluenceLabel",
       "product": "confluence",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "unwatchConfluenceSpace",
       "product": "confluence",
-      "access": "write",
+      "access": "delete",
       "distinctive": true
     },
     {
       "name": "updateBitbucketRepoPullRequest",
+      "product": "bitbucket",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "updateBitbucketRepoPullRequestComment",
       "product": "bitbucket",
       "access": "write",
       "distinctive": true
