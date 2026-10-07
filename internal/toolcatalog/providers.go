@@ -178,9 +178,16 @@ type ProviderClassification struct {
 	Access   string
 }
 
-// Classify returns the catalog entry behind a provider tool id. Unrecognized
+// Classify returns the catalog entry behind a GitHub or provider tool id. Unrecognized
 // and non-provider ids have none.
 func Classify(toolID string) (ProviderClassification, bool) {
+	if name, ok := strings.CutPrefix(toolID, GitHubToolPrefix); ok {
+		tool, ok := githubTools[name]
+		if !ok {
+			return ProviderClassification{}, false
+		}
+		return ProviderClassification{Provider: GitHubProvider, Product: tool.Product, Access: tool.Access}, true
+	}
 	for i := range providers {
 		name, ok := strings.CutPrefix(toolID, providers[i].catalog.ToolIDPrefix)
 		if !ok {
