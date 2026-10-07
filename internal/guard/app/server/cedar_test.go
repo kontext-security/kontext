@@ -42,7 +42,7 @@ const cedarTestSchema = `namespace Kontext {
   };
 }`
 
-const cedarTestToolCatalogDigest = "bb0c7bb67734ea88591668b4b34d1435731f945ef35de8cc23202ea31c6e34bf"
+const cedarTestToolCatalogDigest = "2093074119493c068c5344f77759bab69772788aec9c7488f9409df057516863"
 
 func cedarHookEvent(tool string, input map[string]any) risk.HookEvent {
 	return risk.HookEvent{SessionID: "session-1", Agent: "claude", HookEventName: "PreToolUse", ToolName: tool, ToolInput: input}
@@ -991,9 +991,7 @@ when {
   (resource == Kontext::Tool::"shell" && (!(context has shell) || (context has shell && (!(context.shell has facts) || (context.shell has facts && context.shell.facts.contains("jira/write=true")))))) ||
   (context has tool && context.tool.provider == "atlassian" && ["jira", "jsm"].contains(context.tool.product) && ["write", "delete", "admin"].contains(context.tool.access))
 };
-@id("block-unrecognized-hubspot-operations") forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"hubspot-mcp/unrecognized");
-@id("protect-releases-and-workflows") forbid(principal, action == Kontext::Action::"ToolUse", resource)
-when { context has tool && context.tool.provider == "github" && ["actions", "releases"].contains(context.tool.product) && ["write", "delete", "admin"].contains(context.tool.access) };`
+@id("block-unrecognized-hubspot-operations") forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"hubspot-mcp/unrecognized");`
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, policy)
 	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
 
@@ -1013,9 +1011,6 @@ when { context has tool && context.tool.provider == "github" && ["actions", "rel
 		{"shell read", "Bash", map[string]any{"command": "curl https://acme.atlassian.net/rest/api/3/issue/ENG-1"}, risk.DecisionAllow},
 		{"new hubspot tool", "mcp__hubspot__delete_everything", map[string]any{}, risk.DecisionDeny},
 		{"catalogued hubspot tool", "mcp__hubspot__search_crm_objects", map[string]any{}, risk.DecisionAllow},
-		{"github workflow trigger by tier", "mcp__github__actions_run_trigger", map[string]any{"method": "run_workflow", "owner": "o", "repo": "r"}, risk.DecisionDeny},
-		{"github workflow read", "mcp__github__actions_list", map[string]any{"method": "list_workflows", "owner": "o", "repo": "r"}, risk.DecisionAllow},
-		{"github issue write is another product", "mcp__github__update_issue_state", map[string]any{"owner": "o", "repo": "r", "issue_number": 1, "state": "closed"}, risk.DecisionAllow},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -21,7 +21,7 @@ const (
 	mcpSeparator           = "__"
 	GitHubToolPrefix       = "github-mcp/"
 	GitHubUnrecognizedTool = GitHubToolPrefix + "unrecognized"
-	GitHubMCPSourceCommit  = "55edd58d5e1127fe7ea3c036bc14dca66f7e41c4"
+	GitHubMCPSourceCommit  = "febc3293a4feb70e62399f39a26b082f78b9b176"
 	githubMCPSource        = "github/github-mcp-server@" + GitHubMCPSourceCommit
 )
 
@@ -34,45 +34,16 @@ type githubCatalog struct {
 }
 
 type githubTool struct {
-	Name string `json:"name"`
-	// Product and Access classify the tool like a provider catalog entry,
-	// so the GitHub presets forbid by tier.
-	Product    string            `json:"product"`
-	Access     string            `json:"access"`
+	Name       string            `json:"name"`
+	ReadOnly   bool              `json:"readOnly"`
 	Required   []string          `json:"required"`
 	Properties map[string]string `json:"properties"`
-	// Definition fingerprints the upstream definition for the refresh.
-	Definition string `json:"definition,omitempty"`
 }
 
 var githubTools = loadGitHubTools()
 
-// GitHubProvider is the provider name GitHub MCP tools carry in context.tool.
-const GitHubProvider = "github"
-
-// githubDigestMaterial covers the pinned commit, which fixes every input
-// schema, and each tool's product and tier, which reviewers may edit.
-func githubDigestMaterial() string {
-	var material strings.Builder
-	material.WriteString("github-mcp:" + GitHubMCPSourceCommit)
-	for _, name := range sortedGitHubToolNames() {
-		tool := githubTools[name]
-		material.WriteString("\n" + tool.Name + "\t" + tool.Product + "\t" + tool.Access)
-	}
-	return material.String()
-}
-
-func sortedGitHubToolNames() []string {
-	names := make([]string, 0, len(githubTools))
-	for name := range githubTools {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 func Digest() string {
-	github := sha256.Sum256([]byte(githubDigestMaterial()))
+	github := sha256.Sum256([]byte("github-mcp:" + GitHubMCPSourceCommit))
 	toolIDs := []string{cedareval.ToolShellV2, cedareval.ToolUnknownV2}
 	sort.Strings(toolIDs)
 	base, _ := json.Marshal(toolIDs)
@@ -173,14 +144,6 @@ func loadGitHubTools() map[string]githubTool {
 	}
 	tools := make(map[string]githubTool, len(catalog.Tools))
 	for _, tool := range catalog.Tools {
-		switch tool.Access {
-		case AccessRead, AccessWrite, AccessDelete, AccessAdmin:
-		default:
-			panic("embedded GitHub MCP catalog: " + tool.Name + " has a bad tier")
-		}
-		if tool.Product == "" {
-			panic("embedded GitHub MCP catalog: " + tool.Name + " has no product")
-		}
 		tools[tool.Name] = tool
 	}
 	return tools
@@ -236,10 +199,11 @@ func validType(kind string, value any) bool {
 
 // githubOperations is the crosswalk from catalogued GitHub MCP write tools
 // to the github/operation vocabulary the shell projection emits for git, gh
-// and curl. Presets match MCP calls by tier and product (context.tool), and
-// by resource id where a tier is too coarse (merging a pull request); this
-// table keeps the two surfaces named consistently for trace display and
-// template authors.
+// and curl. Cedar matches MCP calls by resource id, so the presets list the
+// tool ids directly; this table keeps the two surfaces named consistently
+// for trace display and template authors. The pinned catalog has no
+// ref-deleting, release, workflow or settings tool, so merge is the only
+// row until it is re-pinned.
 var githubOperations = map[string][]string{
 	GitHubToolPrefix + "merge_pull_request": {"merge-pull-request"},
 }

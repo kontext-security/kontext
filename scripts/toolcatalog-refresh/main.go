@@ -26,8 +26,10 @@
 // HUBSPOT_MCP_CLIENT_ID, HUBSPOT_MCP_CLIENT_SECRET and HUBSPOT_MCP_REFRESH_TOKEN;
 // HUBSPOT_MCP_TOKEN (a current access token) also works for a one-off run.
 //
-// GitHub's MCP server follows the same rules (see github.go); its catalog is
-// re-pinned to upstream HEAD whenever a tool changes.
+// GitHub's MCP server is tracked too (see github.go): every upstream tool's
+// definition is recorded in internal/toolcatalog/github-upstream.json, and a
+// new, removed or changed tool opens the review PR. The GitHub catalog itself
+// stays pinned, because its presets name tool ids.
 package main
 
 import (
@@ -100,9 +102,8 @@ type refresher struct {
 	changed bool
 	// githubChanged is set when the GitHub upstream record needs updating;
 	// it never touches the provider catalogs or their versions.
-	githubChanged bool
-	githubCatalog *githubCatalog
-	githubHead    string
+	githubChanged  bool
+	githubUpstream *githubUpstream
 }
 
 var (
@@ -176,9 +177,8 @@ func (r *refresher) run(dir string, write bool) error {
 	default:
 		r.note("- HubSpot remote MCP: skipped (HUBSPOT_MCP_REFRESH_TOKEN with its client id and secret, or HUBSPOT_MCP_TOKEN, not set)")
 	}
-	githubCatalogPath := filepath.Join(filepath.Dir(dir), "github-mcp.json")
-	githubSourcePath := filepath.Join(filepath.Dir(dir), "github.go")
-	if err := r.refreshGitHub(githubCatalogPath, githubSourcePath); err != nil {
+	githubUpstreamPath := filepath.Join(filepath.Dir(dir), "github-upstream.json")
+	if err := r.refreshGitHub(githubUpstreamPath, filepath.Join(filepath.Dir(dir), "github-mcp.json"), filepath.Join(filepath.Dir(dir), "github.go")); err != nil {
 		r.note("- github/github-mcp-server: check failed: %v", err)
 	}
 
@@ -190,11 +190,11 @@ func (r *refresher) run(dir string, write bool) error {
 		r.note("\nRun with -write to apply.")
 		return nil
 	}
-	if r.githubChanged && r.githubCatalog != nil {
-		if err := writeGitHubCatalog(githubCatalogPath, githubSourcePath, r.githubCatalog, r.githubHead); err != nil {
+	if r.githubChanged && r.githubUpstream != nil {
+		if err := writeGitHubUpstream(githubUpstreamPath, r.githubUpstream); err != nil {
 			return err
 		}
-		r.note("\nGitHub catalog re-pinned to %s. Review every added tier above, then sync kontext-cloud.", r.githubHead[:12])
+		r.note("\nGitHub upstream record updated. The GitHub catalog stays pinned: re-pin it, and add new writes to the GitHub presets, in a reviewed change.")
 	}
 	if !r.changed {
 		return nil

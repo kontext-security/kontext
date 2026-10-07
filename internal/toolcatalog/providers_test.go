@@ -98,24 +98,3 @@ func TestProviderCatalogsAreLoaded(t *testing.T) {
 		t.Fatalf("provider catalogs = %v", got)
 	}
 }
-
-func TestClassifyGitHubTools(t *testing.T) {
-	tests := []struct {
-		toolID string
-		want   ProviderClassification
-		ok     bool
-	}{
-		{"github-mcp/get_me", ProviderClassification{Provider: "github", Product: "users", Access: AccessRead}, true},
-		{"github-mcp/update_issue_state", ProviderClassification{Provider: "github", Product: "issues", Access: AccessWrite}, true},
-		{"github-mcp/merge_pull_request", ProviderClassification{Provider: "github", Product: "pull_requests", Access: AccessWrite}, true},
-		{"github-mcp/actions_run_trigger", ProviderClassification{Provider: "github", Product: "actions", Access: AccessDelete}, true},
-		{"github-mcp/delete_repository", ProviderClassification{Provider: "github", Product: "repository", Access: AccessAdmin}, true},
-		{"github-mcp/unrecognized", ProviderClassification{}, false},
-	}
-	for _, test := range tests {
-		got, ok := Classify(test.toolID)
-		if ok != test.ok || got != test.want {
-			t.Errorf("Classify(%q) = %+v, %v; want %+v, %v", test.toolID, got, ok, test.want, test.ok)
-		}
-	}
-}
