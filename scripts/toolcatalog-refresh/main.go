@@ -50,6 +50,7 @@ type catalog struct {
 type dispatcher struct {
 	Name           string `json:"name"`
 	OperationField string `json:"operationField"`
+	Distinctive    bool   `json:"distinctive,omitempty"`
 }
 
 type tool struct {
@@ -73,7 +74,7 @@ type refresher struct {
 
 var (
 	atlassianDistinctive = regexp.MustCompile(`^jira_|^confluence_|Jira|Jsm|Confluence|Bitbucket|bitbucket|Compass|Loom|Atlassian|TeamworkGraph|CapacityPlan|Talent|FocusArea`)
-	hubspotDistinctive   = regexp.MustCompile(`hubspot|crm|campaign|aeo|marketing_email|landing_page|website_page|blog_post|intent_signals|conversation_channel|content_analytics`)
+	hubspotDistinctive   = regexp.MustCompile(`^manage_|hubspot|crm|campaign|aeo|marketing_email|landing_page|website_page|blog_post|intent_signals|conversation_channel|content_analytics`)
 	atlassianProducts    = []struct {
 		pattern *regexp.Regexp
 		product string

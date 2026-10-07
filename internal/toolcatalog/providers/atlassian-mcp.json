@@ -20,15 +20,18 @@
     },
     {
       "name": "executeRead",
-      "operationField": "name"
+      "operationField": "name",
+      "distinctive": true
     },
     {
       "name": "executeWrite",
-      "operationField": "name"
+      "operationField": "name",
+      "distinctive": true
     },
     {
       "name": "executeDestructive",
-      "operationField": "name"
+      "operationField": "name",
+      "distinctive": true
     }
   ],
   "tools": [

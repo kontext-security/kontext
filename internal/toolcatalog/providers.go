@@ -46,6 +46,12 @@ type ProviderCatalog struct {
 type ProviderDispatcher struct {
 	Name           string `json:"name"`
 	OperationField string `json:"operationField"`
+	// Distinctive dispatchers (executeWrite) are the provider's under any
+	// server name, so an operation the catalog does not list is
+	// unrecognized there too, not passed through. A generic name (execute)
+	// is the provider's only on a hinted server or with a catalogued
+	// operation.
+	Distinctive bool `json:"distinctive,omitempty"`
 }
 
 type ProviderTool struct {
@@ -112,7 +118,7 @@ func resolveProvider(server, tool string, input map[string]any) (string, bool) {
 			if catalogued, known := p.tools[operation]; known {
 				return p.catalog.ToolIDPrefix + catalogued.Name, true
 			}
-			if hinted {
+			if hinted || dispatcher.Distinctive {
 				return p.catalog.ToolIDPrefix + UnrecognizedToolName, true
 			}
 			continue

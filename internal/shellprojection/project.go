@@ -187,6 +187,8 @@ func classify(words []string, complete bool, depth int) []cedareval.ShellProject
 		return single(jiraCLI.classify(args, complete))
 	case "hs":
 		return single(hsCLI.classify(args, complete))
+	case "forge":
+		return single(forgeCLI.classify(args, complete))
 	case "bash", "sh", "zsh", "dash", "ksh":
 		return classifyShell(program, args, complete, depth)
 	case "eval":
@@ -879,6 +881,8 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		return classifyAtlassianCurl(host, parsed, method, complete)
 	case isHubSpotHost(host):
 		return classifyHubSpotCurl(host, parsed, method, complete)
+	case isJiraServerPath(parsed.Path):
+		return classifyAtlassianCurl(host, parsed, method, complete)
 	}
 	if host != "api.github.com" && host != "uploads.github.com" {
 		return projection("curl", nil, nil, complete)

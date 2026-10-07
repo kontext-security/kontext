@@ -49,6 +49,15 @@ func isAtlassianHost(host string) bool {
 	return strings.HasSuffix(host, ".atlassian.net") || host == "api.atlassian.com" || strings.HasSuffix(host, ".jira.com")
 }
 
+// jiraServerPath matches the REST prefixes only Jira Server and Data Center
+// serve, so a self-hosted Jira on its own domain is classified too.
+// Bitbucket Server's /rest/api/1.0 and /rest/api/latest are left out.
+var jiraServerPath = regexp.MustCompile(`^(?:/[^/]+)?/rest/(?:api/2|agile/1\.0|servicedeskapi)/`)
+
+func isJiraServerPath(path string) bool {
+	return jiraServerPath.MatchString(path)
+}
+
 func isHubSpotHost(host string) bool {
 	return host == "hubapi.com" || strings.HasSuffix(host, ".hubapi.com") || host == "api.hubspot.com"
 }
@@ -90,6 +99,16 @@ func classifyAtlassianCurl(host string, parsed *url.URL, method string, complete
 	} else if host == "api.atlassian.com" {
 		// Other gateway APIs (admin, graphql, teams) are not catalogued.
 		return projection("curl", []string{"curl/host=" + host, "http/method=" + method, FactAtlassianRouteUnrecognized}, nil, false)
+	}
+	if strings.HasPrefix(path, "/gateway/") {
+		// GraphQL and other gateway APIs carry their operation in the body.
+		return projection("curl", []string{"curl/host=" + host, "http/method=" + method, FactAtlassianRouteUnrecognized}, nil, false)
+	}
+	if !isAtlassianHost(host) {
+		// Self-hosted Jira under a context path: classify from /rest/.
+		if index := strings.Index(path, "/rest/"); index > 0 {
+			path = path[index:]
+		}
 	}
 	if strings.HasPrefix(path, "/wiki/") || path == "/wiki" {
 		product = productConfluence
@@ -207,6 +226,8 @@ type verbCLI struct {
 	adminNouns map[string]bool
 	catalogued string
 	unknown    string
+	// allAdmin marks every remote write as administration.
+	allAdmin bool
 }
 
 func words(values ...string) map[string]bool {
@@ -231,6 +252,22 @@ var acliCLI = verbCLI{
 	adminNouns: words("admin", "project", "field", "user", "space"),
 	catalogued: FactAtlassianRouteCatalogued,
 	unknown:    FactAtlassianRouteUnrecognized,
+}
+
+// forgeCLI is Atlassian's app platform CLI. Deploying or installing an app
+// changes what runs inside the Jira site, so every remote write is
+// administration.
+var forgeCLI = verbCLI{
+	program:    "forge",
+	product:    productJira,
+	nouns:      words("environments", "variables", "webtrigger", "providers", "storage", "containers", "settings"),
+	reads:      words("list", "logs", "whoami", "login", "logout", "lint", "create", "build", "tunnel", "eligibility", "help", "--help", "-h", "--version", "version", "feedback", "autocomplete", "get"),
+	writes:     words("deploy", "install", "set", "unset", "register", "configure", "upgrade", "rollback", "migrate"),
+	deletes:    words("uninstall", "delete"),
+	adminNouns: words("environments", "variables", "webtrigger", "providers", "storage", "containers"),
+	catalogued: FactAtlassianRouteCatalogued,
+	unknown:    FactAtlassianRouteUnrecognized,
+	allAdmin:   true,
 }
 
 // jiraCLI covers the community `jira` binaries (ankitpokhrel/jira-cli,
@@ -281,7 +318,7 @@ func (cli verbCLI) classify(args []string, complete bool) cedareval.ShellProject
 		break
 	}
 	facts := []string{cli.program + "/command=" + strings.Join(append(nounsSeen, verb), "/")}
-	admin := false
+	admin := cli.allAdmin
 	for _, noun := range nounsSeen {
 		admin = admin || cli.adminNouns[noun]
 	}

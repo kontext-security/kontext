@@ -35,6 +35,15 @@ func TestJiraShellCorpus(t *testing.T) {
 		{name: "body from file is unrecognized", command: "curl -X POST -d @issue.json https://acme.atlassian.net/rest/api/3/issue", programs: []string{"curl"}, facts: []string{atlUnknown, jiraWrite, incomplete}, complete: false},
 		{name: "confluence page update", command: `curl -X PUT -d '{}' https://acme.atlassian.net/wiki/api/v2/pages/1`, programs: []string{"curl"}, facts: []string{confWrite}, absentFacts: []string{jiraWrite}, complete: true},
 		{name: "confluence restriction is admin", command: `curl -X PUT -d '{}' https://acme.atlassian.net/wiki/rest/api/content/1/restriction`, programs: []string{"curl"}, facts: []string{confWrite, confAdmin}, complete: true},
+		{name: "self-hosted data center", command: `curl -X PUT -d '{}' https://jira.acme.internal/rest/api/2/issue/ENG-1`, programs: []string{"curl"}, facts: []string{atlCatalogued, jiraWrite}, complete: true},
+		{name: "self-hosted context path delete", command: "curl -X DELETE https://tools.acme.com/jira/rest/api/2/issue/ENG-1", programs: []string{"curl"}, facts: []string{jiraDelete}, complete: true},
+		{name: "bitbucket server is not jira", command: `curl -X POST -d '{}' https://git.acme.com/rest/api/1.0/projects`, programs: []string{"curl"}, absentFacts: []string{jiraWrite, atlCatalogued}, complete: true},
+		{name: "graphql gateway is unrecognized", command: `curl -X POST -d '{"query":"{me{user{name}}}"}' https://acme.atlassian.net/gateway/api/graphql`, programs: []string{"curl"}, facts: []string{atlUnknown, incomplete}, complete: false},
+		// Forge app platform.
+		{name: "forge deploy is admin", command: "forge deploy -e production", programs: []string{"forge"}, facts: []string{jiraWrite, jiraAdmin}, complete: true},
+		{name: "forge uninstall", command: "forge uninstall --site acme.atlassian.net", programs: []string{"forge"}, facts: []string{jiraDelete, jiraAdmin}, complete: true},
+		{name: "forge logs", command: "forge logs -e production", programs: []string{"forge"}, absentFacts: []string{jiraWrite}, complete: true},
+		{name: "forge variables set", command: "forge variables set KEY value", programs: []string{"forge"}, facts: []string{jiraAdmin}, complete: true},
 		// Atlassian CLI.
 		{name: "acli view", command: "acli jira workitem view ENG-1", programs: []string{"acli"}, facts: []string{atlCatalogued, "acli/command=jira/workitem/view"}, absentFacts: []string{jiraWrite}, complete: true},
 		{name: "acli search", command: `acli jira workitem search --jql "project = ENG"`, programs: []string{"acli"}, absentFacts: []string{jiraWrite}, complete: true},

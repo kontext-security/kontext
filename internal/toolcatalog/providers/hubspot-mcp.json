@@ -227,12 +227,14 @@
     {
       "name": "manage_custom_pipelines",
       "product": "crm",
-      "access": "admin"
+      "access": "admin",
+      "distinctive": true
     },
     {
       "name": "manage_custom_properties",
       "product": "crm",
-      "access": "admin"
+      "access": "admin",
+      "distinctive": true
     },
     {
       "name": "manage_landing_page",
@@ -249,12 +251,14 @@
     {
       "name": "manage_onboarding",
       "product": "platform",
-      "access": "write"
+      "access": "write",
+      "distinctive": true
     },
     {
       "name": "manage_segment",
       "product": "crm",
-      "access": "write"
+      "access": "write",
+      "distinctive": true
     },
     {
       "name": "manage_website_page",
