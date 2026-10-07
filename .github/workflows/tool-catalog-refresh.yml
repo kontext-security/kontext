@@ -5,8 +5,9 @@ name: Tool Catalog Refresh
 # definition, or annotates a tool as stricter than its tier. New tools land as
 # write (delete when annotated destructive); annotations never loosen a tier.
 # The PR body lists every change for review. Without the
-# ATLASSIAN_MCP_AUTHORIZATION and HUBSPOT_MCP_TOKEN secrets the hosted servers
-# are skipped and reported as such; the other sources still refresh.
+# ATLASSIAN_MCP_AUTHORIZATION secret, or the HUBSPOT_MCP_CLIENT_ID,
+# HUBSPOT_MCP_CLIENT_SECRET and HUBSPOT_MCP_REFRESH_TOKEN secrets, the hosted
+# servers are skipped and reported as such; the other sources still refresh.
 
 on:
   schedule:
@@ -39,7 +40,9 @@ jobs:
       - name: Refresh catalogs
         env:
           ATLASSIAN_MCP_AUTHORIZATION: ${{ secrets.ATLASSIAN_MCP_AUTHORIZATION }}
-          HUBSPOT_MCP_TOKEN: ${{ secrets.HUBSPOT_MCP_TOKEN }}
+          HUBSPOT_MCP_CLIENT_ID: ${{ secrets.HUBSPOT_MCP_CLIENT_ID }}
+          HUBSPOT_MCP_CLIENT_SECRET: ${{ secrets.HUBSPOT_MCP_CLIENT_SECRET }}
+          HUBSPOT_MCP_REFRESH_TOKEN: ${{ secrets.HUBSPOT_MCP_REFRESH_TOKEN }}
         run: go run ./scripts/toolcatalog-refresh -write -report "$RUNNER_TEMP/report.md"
 
       - name: Open pull request

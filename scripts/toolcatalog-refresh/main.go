@@ -21,7 +21,10 @@
 // Sources: the @hubspot/mcp-server npm package, sooperset/mcp-atlassian on
 // GitHub, and, when credentials are set, a live tools/list against the
 // hosted Atlassian (ATLASSIAN_MCP_AUTHORIZATION, the full Authorization header
-// value) and HubSpot (HUBSPOT_MCP_TOKEN) servers. The pinned GitHub MCP
+// value) and HubSpot servers. HubSpot only accepts OAuth access tokens, which
+// expire within hours, so a scheduled run mints one from an MCP connector's
+// HUBSPOT_MCP_CLIENT_ID, HUBSPOT_MCP_CLIENT_SECRET and HUBSPOT_MCP_REFRESH_TOKEN;
+// HUBSPOT_MCP_TOKEN (a current access token) also works for a one-off run. The pinned GitHub MCP
 // commit is compared with upstream HEAD and reported only; re-pinning it
 // changes input schemas and stays a manual change.
 package main
@@ -39,6 +42,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -158,10 +162,13 @@ func (r *refresher) run(dir string, write bool) error {
 	} else {
 		r.note("- Atlassian Rovo MCP: skipped (ATLASSIAN_MCP_AUTHORIZATION not set)")
 	}
-	if token := os.Getenv("HUBSPOT_MCP_TOKEN"); token != "" {
+	switch token, err := r.hubSpotAccessToken(); {
+	case err != nil:
+		r.note("- HubSpot remote MCP: check failed: %v", err)
+	case token != "":
 		r.refreshLive(hubspot, "HubSpot remote MCP", "https://mcp.hubspot.com/", "Bearer "+token)
-	} else {
-		r.note("- HubSpot remote MCP: skipped (HUBSPOT_MCP_TOKEN not set)")
+	default:
+		r.note("- HubSpot remote MCP: skipped (HUBSPOT_MCP_REFRESH_TOKEN with its client id and secret, or HUBSPOT_MCP_TOKEN, not set)")
 	}
 	r.reportGitHubDrift()
 
@@ -431,6 +438,38 @@ func (r *refresher) refreshSooperset(c *catalog) error {
 		return strings.HasPrefix(name, "jira_") || strings.HasPrefix(name, "confluence_")
 	})
 	return nil
+}
+
+// hubSpotAccessToken returns a HubSpot MCP access token: minted from the
+// connector's refresh token when one is configured, else HUBSPOT_MCP_TOKEN,
+// else empty (the check is skipped).
+func (r *refresher) hubSpotAccessToken() (string, error) {
+	refresh := os.Getenv("HUBSPOT_MCP_REFRESH_TOKEN")
+	if refresh == "" {
+		return os.Getenv("HUBSPOT_MCP_TOKEN"), nil
+	}
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {os.Getenv("HUBSPOT_MCP_CLIENT_ID")},
+		"client_secret": {os.Getenv("HUBSPOT_MCP_CLIENT_SECRET")},
+		"refresh_token": {refresh},
+	}
+	response, err := r.client.PostForm("https://api.hubapi.com/oauth/v1/token", form)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	var body struct {
+		AccessToken string `json:"access_token"`
+		Message     string `json:"message"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&body); err != nil {
+		return "", fmt.Errorf("token refresh: HTTP %d", response.StatusCode)
+	}
+	if response.StatusCode != http.StatusOK || body.AccessToken == "" {
+		return "", fmt.Errorf("token refresh: HTTP %d %s", response.StatusCode, body.Message)
+	}
+	return body.AccessToken, nil
 }
 
 // refreshLive lists a hosted server's tools over MCP streamable HTTP. A
