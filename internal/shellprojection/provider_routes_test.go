@@ -51,6 +51,8 @@ func TestJiraShellCorpus(t *testing.T) {
 		{name: "confluence cloud search over POST is a read", command: `curl -X POST -d '{}' https://acme.atlassian.net/wiki/rest/api/content/search`, programs: []string{"curl"}, absentFacts: []string{confWrite}, complete: true},
 		{name: "confluence write ending in convert is a write", command: `curl -X POST -d '{}' https://acme.atlassian.net/wiki/api/v2/pages/1/convert`, programs: []string{"curl"}, facts: []string{confWrite}, complete: true},
 		{name: "bitbucket server latest projects is not jira", command: `curl -X POST -d '{}' https://git.acme.com/rest/api/latest/projects/ENG/repos`, programs: []string{"curl"}, absentFacts: []string{jiraWrite, atlCatalogued}, complete: true},
+		{name: "bulk delete over POST is a delete", command: `curl -X POST -d '{"selectedIssueIdsOrKeys":["ENG-1"]}' https://acme.atlassian.net/rest/api/3/bulk/issues/delete`, programs: []string{"curl"}, facts: []string{atlCatalogued, jiraWrite, jiraDelete}, complete: true},
+		{name: "every url is judged", command: "curl -X DELETE https://example.com https://acme.atlassian.net/rest/api/3/issue/ENG-1", programs: []string{"curl"}, facts: []string{atlUnknown, jiraDelete, incomplete}, complete: false},
 		{name: "graphql gateway is unrecognized", command: `curl -X POST -d '{"query":"{me{user{name}}}"}' https://acme.atlassian.net/gateway/api/graphql`, programs: []string{"curl"}, facts: []string{atlUnknown, incomplete}, complete: false},
 		// Forge app platform.
 		{name: "forge deploy is admin", command: "forge deploy -e production", programs: []string{"forge"}, facts: []string{jiraWrite, jiraAdmin}, complete: true},
@@ -75,6 +77,10 @@ func TestJiraShellCorpus(t *testing.T) {
 		{name: "go-jira top-level verb", command: "jira transition Done ENG-1", programs: []string{"jira"}, facts: []string{jiraWrite}, complete: true},
 		{name: "upper-case program name", command: "ACLI jira workitem delete --key ENG-1", programs: []string{"acli"}, facts: []string{jiraDelete}, complete: true},
 		{name: "forge through npx", command: "npx @forge/cli deploy -e production", programs: []string{"forge"}, facts: []string{jiraAdmin}, complete: true},
+		{name: "acli link delete is a delete", command: "acli jira workitem link delete --id 10001 --yes", programs: []string{"acli"}, facts: []string{atlCatalogued, jiraDelete, "acli/command=jira/workitem/link/delete"}, complete: true},
+		{name: "acli link as a verb", command: "acli jira workitem link ENG-1 ENG-2", programs: []string{"acli"}, facts: []string{jiraWrite}, absentFacts: []string{jiraDelete}, complete: true},
+		{name: "forge environments create is admin", command: "forge environments create -e review --non-interactive", programs: []string{"forge"}, facts: []string{atlCatalogued, jiraWrite, jiraAdmin}, complete: true},
+		{name: "forge create scaffolds locally", command: "forge create my-app", programs: []string{"forge"}, absentFacts: []string{jiraWrite}, complete: true},
 		{name: "jira dynamic argument", command: "jira issue $ACTION ENG-1", programs: []string{"jira"}, facts: []string{atlUnknown, jiraWrite, incomplete}, complete: false},
 	})
 }
@@ -97,6 +103,9 @@ func TestHubSpotShellCorpus(t *testing.T) {
 		{name: "hs through npx -p", command: "npx -p @hubspot/cli hs project deploy", programs: []string{"hs"}, facts: []string{hsWrite}, complete: true},
 		{name: "unknown launcher option is unrecognized", command: "npx --registry https://r.example @hubspot/cli project deploy", programs: []string{"hs"}, facts: []string{hsUnknown, hsWrite, incomplete}, complete: false},
 		{name: "trailing dot hubspot host", command: "curl -X DELETE https://api.hubapi.com./crm/v3/objects/contacts/1", programs: []string{"curl"}, facts: []string{hsCatalogued, hsDelete}, complete: true},
+		{name: "hs account named like a verb", command: "hs --account list project deploy --build 3", programs: []string{"hs"}, facts: []string{hsCatalogued, hsWrite}, complete: true},
+		{name: "hs unknown option before the command", command: "hs --frobnicate list project deploy", programs: []string{"hs"}, facts: []string{hsUnknown, incomplete}, complete: false},
+		{name: "every url is judged for hubspot", command: "curl -X DELETE https://example.com https://api.hubapi.com/crm/v3/objects/contacts/1", programs: []string{"curl"}, facts: []string{hsUnknown, hsDelete, incomplete}, complete: false},
 		{name: "upload from file", command: "curl -X POST --data-binary @contacts.json https://api.hubapi.com/crm/v3/objects/contacts/batch/create", programs: []string{"curl"}, facts: []string{hsUnknown, hsWrite, incomplete}, complete: false},
 		{name: "hs list", command: "hs project list-builds", programs: []string{"hs"}, facts: []string{hsCatalogued}, absentFacts: []string{hsWrite}, complete: true},
 		{name: "hs deploy", command: "hs project deploy --build 3", programs: []string{"hs"}, facts: []string{hsWrite}, absentFacts: []string{hsAdmin}, complete: true},

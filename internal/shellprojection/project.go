@@ -866,7 +866,7 @@ var ghAPINeutralValuePrefixes = []string{"--jq=", "--template=", "--cache=", "--
 func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	method := "GET"
 	explicitMethod := false
-	urlText := ""
+	var urls []string
 	bodies := make([]string, 0, 2)
 	// A body read from a file is unknown content. Most routes treat it as an
 	// incomplete parse; a provider's read-over-POST route (Jira search) stays
@@ -898,11 +898,9 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				continue
 			}
 			i++
-			complete = complete && urlText == ""
-			urlText = args[i]
+			urls = append(urls, args[i])
 		case strings.HasPrefix(arg, "--url="):
-			complete = complete && urlText == ""
-			urlText = strings.TrimPrefix(arg, "--url=")
+			urls = append(urls, strings.TrimPrefix(arg, "--url="))
 		case isCurlDataFlag(arg):
 			if i+1 >= len(args) {
 				complete = false
@@ -954,13 +952,30 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		case strings.HasPrefix(arg, "-"):
 			// Unknown curl flags can change request behavior.
 			complete = false
-		case urlText == "":
-			urlText = arg
 		default:
-			// curl requests every URL it is given; only the first is judged.
-			complete = false
+			urls = append(urls, arg)
 		}
 	}
+	if len(urls) <= 1 {
+		urlText := ""
+		if len(urls) == 1 {
+			urlText = urls[0]
+		}
+		return classifyCurlURL(urlText, method, bodies, complete, bodyFile)
+	}
+	// curl requests every URL it is given with the same method and body.
+	// Each is judged, and the whole is never a catalogued route.
+	var facts, features []string
+	for _, urlText := range urls {
+		each := classifyCurlURL(urlText, method, bodies, false, bodyFile)
+		facts = append(facts, each.Facts...)
+		features = append(features, each.Features...)
+	}
+	return projection("curl", facts, features, false)
+}
+
+// classifyCurlURL classifies one request of a curl command.
+func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile bool) cedareval.ShellProjectionV2 {
 	parsed, err := url.Parse(urlText)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return projection("curl", nil, []string{"dynamic-or-invalid-url"}, false)

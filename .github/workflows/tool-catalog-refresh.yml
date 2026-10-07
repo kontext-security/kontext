@@ -114,7 +114,9 @@ jobs:
           fi
           # The digest test pins the combined catalog; recompute it so the
           # PR builds, and leave the tier review to the reviewer.
-          digest="$(go test ./internal/toolcatalog -run TestCatalogDigestIsStable 2>&1 | sed -n 's/.*Digest() = "\([0-9a-f]\{64\}\)".*/\1/p' | head -1)"
+          # The pin test fails exactly when the digest changed; that failure
+          # is the expected path, so it must not abort the step.
+          digest="$( (go test ./internal/toolcatalog -run TestCatalogDigestIsStable 2>&1 || true) | sed -n 's/.*Digest() = "\([0-9a-f]\{64\}\)".*/\1/p' | head -1)"
           if [[ -n "$digest" ]]; then
             old="$(sed -n 's/.*const want = "\([0-9a-f]\{64\}\)".*/\1/p' internal/toolcatalog/github_test.go)"
             grep -rl "$old" internal | xargs sed -i "s/$old/$digest/g"

@@ -152,7 +152,7 @@ func classifyAtlassianCurl(host string, parsed *url.URL, method string, complete
 					admin = admin || confluenceAdminSegments[segment]
 				}
 			}
-			facts = append(facts, tierFacts(product, true, method == "DELETE", admin)...)
+			facts = append(facts, tierFacts(product, true, method == "DELETE" || hasDeleteSegment(path), admin)...)
 		}
 	}
 	return projection("curl", facts, nil, complete)
@@ -220,6 +220,28 @@ func classifyHubSpotCurl(host string, parsed *url.URL, method string, complete, 
 	return projection("curl", facts, nil, complete)
 }
 
+// hasDeleteSegment reports a delete carried over POST, such as Jira's bulk
+// delete (POST /rest/api/3/bulk/issues/delete).
+func hasDeleteSegment(path string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		switch strings.ToLower(segment) {
+		case "delete", "purge", "bulkdelete":
+			return true
+		}
+	}
+	return false
+}
+
+// nextPositional returns the first argument that is not an option.
+func nextPositional(args []string) string {
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			return arg
+		}
+	}
+	return ""
+}
+
 func hasDotSegment(path string) bool {
 	for _, segment := range strings.Split(path, "/") {
 		if segment == "." || segment == ".." {
@@ -256,6 +278,14 @@ type verbCLI struct {
 	unknown    string
 	// allAdmin marks every remote write as administration.
 	allAdmin bool
+	// globalValueFlags take a value and may come before the command
+	// (`hs --account prod project deploy`). Any other option before the
+	// command could be hiding its value as the verb, so it leaves the
+	// command unrecognized.
+	globalValueFlags map[string]bool
+	// topLevelReads are reads only as the program's own verb (`forge
+	// create` scaffolds locally; `forge environments create` does not).
+	topLevelReads map[string]bool
 }
 
 func words(values ...string) map[string]bool {
@@ -286,16 +316,17 @@ var acliCLI = verbCLI{
 // changes what runs inside the Jira site, so every remote write is
 // administration.
 var forgeCLI = verbCLI{
-	program:    "forge",
-	product:    productJira,
-	nouns:      words("environments", "variables", "webtrigger", "providers", "storage", "containers", "settings"),
-	reads:      words("list", "logs", "whoami", "login", "logout", "lint", "create", "build", "tunnel", "eligibility", "help", "--help", "-h", "--version", "version", "feedback", "autocomplete", "get"),
-	writes:     words("deploy", "install", "set", "unset", "register", "configure", "upgrade", "rollback", "migrate"),
-	deletes:    words("uninstall", "delete"),
-	adminNouns: words("environments", "variables", "webtrigger", "providers", "storage", "containers"),
-	catalogued: FactAtlassianRouteCatalogued,
-	unknown:    FactAtlassianRouteUnrecognized,
-	allAdmin:   true,
+	program:       "forge",
+	product:       productJira,
+	nouns:         words("environments", "variables", "webtrigger", "providers", "storage", "containers", "settings"),
+	reads:         words("list", "logs", "whoami", "login", "logout", "eligibility", "help", "--help", "-h", "--version", "version", "feedback", "autocomplete", "get"),
+	topLevelReads: words("lint", "create", "build", "tunnel"),
+	writes:        words("deploy", "install", "set", "unset", "register", "configure", "upgrade", "rollback", "migrate"),
+	deletes:       words("uninstall", "delete"),
+	adminNouns:    words("environments", "variables", "webtrigger", "providers", "storage", "containers"),
+	catalogued:    FactAtlassianRouteCatalogued,
+	unknown:       FactAtlassianRouteUnrecognized,
+	allAdmin:      true,
 }
 
 // jiraCLI covers the community `jira` binaries (ankitpokhrel/jira-cli,
@@ -314,23 +345,36 @@ var jiraCLI = verbCLI{
 // hsCLI is the HubSpot developer CLI (`hs project deploy`). Local scaffolding
 // and config commands (init, auth, lint) do not reach HubSpot and stay reads.
 var hsCLI = verbCLI{
-	program:    "hs",
-	product:    productHubSpot,
-	nouns:      words("accounts", "account", "project", "sandbox", "sandboxes", "secret", "secrets", "custom-object", "custom-objects", "schema", "hubdb", "filemanager", "function", "functions", "cms", "theme", "module", "app", "test-account", "config"),
-	reads:      words("list", "ls", "info", "fetch", "fetch-all", "logs", "open", "help", "--help", "-h", "--version", "init", "auth", "use", "lint", "doctor", "completion", "list-builds", "validate", "get", "set", "migrate-config", "preview", "install-deps"),
-	writes:     words("create", "upload", "watch", "deploy", "dev", "add", "update", "sync", "mv", "clear", "feedback", "cleanup", "rename", "migrate", "clone-app", "publish"),
-	deletes:    words("delete", "remove", "clean"),
-	adminNouns: words("secret", "secrets", "custom-object", "custom-objects", "schema", "sandbox", "sandboxes", "app", "test-account", "accounts", "account"),
-	catalogued: FactHubSpotRouteCatalogued,
-	unknown:    FactHubSpotRouteUnrecognized,
+	program:          "hs",
+	product:          productHubSpot,
+	nouns:            words("accounts", "account", "project", "sandbox", "sandboxes", "secret", "secrets", "custom-object", "custom-objects", "schema", "hubdb", "filemanager", "function", "functions", "cms", "theme", "module", "app", "test-account", "config"),
+	reads:            words("list", "ls", "info", "fetch", "fetch-all", "logs", "open", "help", "--help", "-h", "--version", "init", "auth", "use", "lint", "doctor", "completion", "list-builds", "validate", "get", "set", "migrate-config", "preview", "install-deps"),
+	writes:           words("create", "upload", "watch", "deploy", "dev", "add", "update", "sync", "mv", "clear", "feedback", "cleanup", "rename", "migrate", "clone-app", "publish"),
+	deletes:          words("delete", "remove", "clean"),
+	adminNouns:       words("secret", "secrets", "custom-object", "custom-objects", "schema", "sandbox", "sandboxes", "app", "test-account", "accounts", "account"),
+	catalogued:       FactHubSpotRouteCatalogued,
+	unknown:          FactHubSpotRouteUnrecognized,
+	globalValueFlags: words("--account", "-a", "--config", "-c"),
 }
 
 func (cli verbCLI) classify(args []string, complete bool) cedareval.ShellProjectionV2 {
 	product := cli.product
 	var nounsSeen []string
 	verb := ""
-	for _, arg := range args {
+	isVerb := func(word string) bool {
+		return cli.reads[word] || cli.writes[word] || cli.deletes[word] || cli.topLevelReads[word]
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if strings.HasPrefix(arg, "-") && !cli.reads[arg] {
+			switch {
+			case strings.Contains(arg, "="):
+			case cli.globalValueFlags[arg]:
+				i++
+			default:
+				// Its value, if it takes one, could be read as the verb.
+				complete = false
+			}
 			continue
 		}
 		if p, ok := cli.products[arg]; ok && len(nounsSeen) == 0 {
@@ -338,13 +382,17 @@ func (cli verbCLI) classify(args []string, complete bool) cedareval.ShellProject
 			nounsSeen = append(nounsSeen, arg)
 			continue
 		}
-		if cli.nouns[arg] && verb == "" && !(len(nounsSeen) > 0 && (cli.reads[arg] || cli.writes[arg] || cli.deletes[arg])) {
+		// A word that is both a noun and a verb (`link`) is a noun when a
+		// verb follows it: `acli jira workitem link delete`.
+		if cli.nouns[arg] && (len(nounsSeen) == 0 || !isVerb(arg) || isVerb(nextPositional(args[i+1:]))) {
 			nounsSeen = append(nounsSeen, arg)
 			continue
 		}
 		verb = arg
 		break
 	}
+	// A local verb under a remote noun changes the remote.
+	localVerbUnderNoun := len(nounsSeen) > 0 && cli.topLevelReads[verb] && !cli.reads[verb]
 	facts := []string{cli.program + "/command=" + strings.Join(append(nounsSeen, verb), "/")}
 	admin := cli.allAdmin
 	for _, noun := range nounsSeen {
@@ -354,7 +402,10 @@ func (cli verbCLI) classify(args []string, complete bool) cedareval.ShellProject
 	case verb == "" && len(nounsSeen) == 0:
 		// Bare program or flags only (help, version): no remote effect.
 		facts = append(facts, cli.catalogued)
-	case cli.reads[verb]:
+	case localVerbUnderNoun:
+		facts = append(facts, cli.catalogued)
+		facts = append(facts, tierFacts(product, true, false, admin)...)
+	case cli.reads[verb] || cli.topLevelReads[verb]:
 		facts = append(facts, cli.catalogued)
 	case cli.deletes[verb]:
 		facts = append(facts, cli.catalogued)
