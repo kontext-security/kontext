@@ -1,10 +1,11 @@
 name: Tool Catalog Refresh
 
-# Checks the Jira/Atlassian and HubSpot MCP catalogs against upstream every
-# week and opens a pull request when a source adds a tool, changes a tool's
-# definition, or annotates a tool as stricter than its tier. New tools land as
-# write (delete when annotated destructive); annotations never loosen a tier.
-# The PR body lists every change for review. Without the
+# Checks the Jira/Atlassian, HubSpot and GitHub MCP servers against upstream
+# every week and opens a pull request when a source adds a tool, changes a
+# tool's definition, or annotates a tool as stricter than its tier. GitHub
+# changes update github-upstream.json only; its catalog stays pinned. New
+# Jira and HubSpot tools land as write (delete when annotated destructive);
+# annotations never loosen a tier. The PR body lists every change for review. Without the
 # ATLASSIAN_MCP_AUTHORIZATION secret, or the HUBSPOT_MCP_CLIENT_ID,
 # HUBSPOT_MCP_CLIENT_SECRET and HUBSPOT_MCP_REFRESH_TOKEN secrets, the hosted
 # servers are skipped and reported as such; the other sources still refresh.
@@ -18,6 +19,7 @@ on:
   pull_request:
     paths:
       - internal/toolcatalog/providers/**
+      - internal/toolcatalog/github-upstream.json
       - scripts/toolcatalog-refresh/**
       - .github/workflows/tool-catalog-refresh.yml
 
@@ -108,7 +110,7 @@ jobs:
           PR: ${{ steps.branch.outputs.pr }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- internal/toolcatalog/providers; then
+          if git diff --quiet -- internal/toolcatalog/providers internal/toolcatalog/github-upstream.json; then
             echo "No catalog changes."
             exit 0
           fi
