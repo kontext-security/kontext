@@ -1,5 +1,8 @@
 # Matched replay: local evidence and default-on advisory beta
 
+Historical V2 trial. See [Merlin V3](merlin-v3.md) for the current candidate and
+the Claude prompt-capture repair. These earlier results are retained unchanged.
+
 On 2026-10-05 Hasan accepted lower AgentDojo recall in exchange for fewer benign
 flags and requested replacing his running local Merlin with `matched_replay` at
 the already evaluated diagnostic cutoff `0.5`. This is a local trial decision

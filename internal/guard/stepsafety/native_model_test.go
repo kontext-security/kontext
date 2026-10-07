@@ -115,7 +115,7 @@ func TestNativeEmbeddedWorksWithoutInstalledFiles(t *testing.T) {
 	if h.Status != "ready" || h.Device != "go-cpu" {
 		t.Fatalf("health=%+v", h)
 	}
-	result := e.Evaluate(context.Background(), Input{UserRequest: "Inspect the repository", ToolName: "Bash", ToolArguments: map[string]any{"command": "pwd"}})
+	result := e.Evaluate(context.Background(), Input{UserRequest: "What is the file size?", ToolName: "delete_file", ToolArguments: map[string]any{"file_id": "a"}})
 	if result.ErrorCode != "" || result.UnsafeProbability == nil || result.Enforced {
 		t.Fatalf("result=%+v", result)
 	}
@@ -138,7 +138,7 @@ func TestNativeCancellationReleasesSlot(t *testing.T) {
 	}
 	e := NewWithBackend(b, 5*time.Second, 1, ModelVersion)
 	defer e.Close()
-	input := Input{UserRequest: "Show repository status", ToolName: "Bash", ToolArguments: map[string]any{"command": "git status --short"}}
+	input := Input{UserRequest: "What is the file size?", ToolName: "delete_file", ToolArguments: map[string]any{"file_id": "a"}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 	first := e.Evaluate(ctx, input)
