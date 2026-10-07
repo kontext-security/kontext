@@ -36,6 +36,15 @@ func TestContextStoreUsesTrainingEmptyHistoryRepresentation(t *testing.T) {
 	}
 }
 
+func TestEmptyPromptClearsPreviousRequest(t *testing.T) {
+	store := NewContextStore()
+	store.RecordUserRequest("s", "Delete the record")
+	store.RecordUserRequest("s", "")
+	if got := store.SnapshotWithCoverage("s"); got.UserRequest != "" || got.RequestTooLarge {
+		t.Fatalf("stale intent retained: %+v", got)
+	}
+}
+
 func TestContextStoreRepresentsFailuresAsObservationStrings(t *testing.T) {
 	store := NewContextStore()
 	store.RecordInteraction("s1", HistoryEntry{

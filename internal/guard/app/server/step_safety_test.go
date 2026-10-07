@@ -19,12 +19,74 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/hookruntime"
 	"github.com/kontext-security/kontext/internal/localruntime"
 )
 
 type capturingStepSafetyBackend struct {
 	mu     sync.Mutex
 	inputs []stepsafety.Input
+}
+
+func TestAgentPromptAdaptersReachMerlinAndStaySessionLocal(t *testing.T) {
+	store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	backend := &capturingStepSafetyBackend{}
+	evaluator := stepsafety.NewWithBackend(backend, time.Second, 1, stepsafety.ModelVersion)
+	defer evaluator.Close()
+	server, err := NewServerWithOptions(store, Options{StepSafety: evaluator})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := func(agent, name, prompt string) hook.Event {
+		t.Helper()
+		raw, err := json.Marshal(map[string]any{"session_id": "same-id", "hook_event_name": name, "prompt": prompt, "tool_name": "WebSearch", "tool_input": map[string]any{"query": "public release notes"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var event hook.Event
+		if agent == "codex" {
+			event, err = hookruntime.DecodeCodexEvent(raw, agent)
+		} else {
+			event, err = hookruntime.DecodeClaudeEvent(raw, agent)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return event
+	}
+	invoke := func(event hook.Event) {
+		t.Helper()
+		if _, err := server.RuntimeCore().EvaluateHook(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invoke(decode("codex", "UserPromptSubmit", "Codex request"))
+	invoke(decode("claude_code", "UserPromptSubmit", "Claude request"))
+	for _, row := range []struct{ agent, request string }{{"codex", "Codex request"}, {"claude_code", "Claude request"}} {
+		invoke(decode(row.agent, "PreToolUse", ""))
+		if got := backend.lastInput().UserRequest; got != row.request {
+			t.Fatalf("%s request = %q", row.agent, got)
+		}
+	}
+	for _, request := range []string{"New Claude request", ""} {
+		invoke(decode("claude_code", "UserPromptSubmit", request))
+		invoke(decode("claude_code", "PreToolUse", ""))
+		if got := backend.lastInput().UserRequest; got != request {
+			t.Fatalf("updated request = %q, want %q", got, request)
+		}
+	}
+	invoke(decode("claude_code", "UserPromptSubmit", "Last request"))
+	if err := server.RuntimeCore().CloseSession(context.Background(), "same-id"); err != nil {
+		t.Fatal(err)
+	}
+	invoke(decode("claude_code", "PreToolUse", ""))
+	if got := backend.lastInput().UserRequest; got != "" {
+		t.Fatalf("closed session leaked %q", got)
+	}
 }
 
 func TestDeferredStepSafetyUsesPreToolContextAfterHookReturns(t *testing.T) {

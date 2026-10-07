@@ -68,6 +68,7 @@ func TestValidateCommandStillRequiresExactLiteralArguments(t *testing.T) {
 
 func TestRecognizeLegacyDropInForUsageHookUpgrade(t *testing.T) {
 	settings := Template("")
+	delete(settings.Hooks, "UserPromptSubmit")
 	delete(settings.Hooks, "Stop")
 	delete(settings.Hooks, "SubagentStop")
 	data, err := json.Marshal(settings)
@@ -87,6 +88,26 @@ func TestRecognizeLegacyDropInForUsageHookUpgrade(t *testing.T) {
 	}
 	if IsManagedSettingsDropIn(foreign) {
 		t.Fatal("legacy settings with a foreign event must not be overwritten")
+	}
+}
+
+func TestPromptHookIsRequiredAndLegacyDropInRemainsUpgradeable(t *testing.T) {
+	settings := Template(testBinary)
+	groups := settings.Hooks["UserPromptSubmit"]
+	if len(groups) != 1 || len(groups[0].Hooks) != 1 || groups[0].Hooks[0].Async != nil {
+		t.Fatalf("prompt must be captured before tools run: %+v", groups)
+	}
+	delete(settings.Hooks, "UserPromptSubmit")
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsManagedSettingsDropIn(data) || HasManagedObserveHooks(data) || Validate(data, testBinary) == nil {
+		t.Fatal("legacy configuration must be recognized as ours but incomplete")
+	}
+	missing, binary := MissingRequiredEvents(data)
+	if len(missing) != 1 || missing[0] != "UserPromptSubmit" || binary != testBinary {
+		t.Fatalf("upgrade diagnosis = %v / %s", missing, binary)
 	}
 }
 
