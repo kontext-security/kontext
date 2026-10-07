@@ -248,8 +248,14 @@ func cloneFloat64(value *float64) *float64 {
 	return &cloned
 }
 
+// maxCedarRequestShellProjections mirrors the hosted ledger's bound on
+// evidence.cedar_request.shell (DECISION_FACT_MAX_SHELL_PROJECTIONS).
+const maxCedarRequestShellProjections = 64
+
 func factCedarRequest(cedar CedarInput) *CedarRequest {
-	if cedar.ToolID == "" {
+	// Over the bound the request is omitted, never truncated: replay must not
+	// evaluate part of a command. The decision itself is still recorded.
+	if cedar.ToolID == "" || len(cedar.Shell) > maxCedarRequestShellProjections {
 		return nil
 	}
 	shell := make([]cedareval.ShellProjectionV2, 0, len(cedar.Shell))
