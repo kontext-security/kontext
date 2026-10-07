@@ -13,30 +13,34 @@ on:
   schedule:
     - cron: "23 6 * * 1"
   workflow_dispatch:
-  # A change to the catalogs or the refresh runs it as a dry run: the report
-  # lands in the job summary and nothing is pushed.
+  # A change to the catalogs or the refresh runs it as a dry run without
+  # secrets: the report lands in the job summary and nothing is pushed.
   pull_request:
     paths:
       - internal/toolcatalog/providers/**
       - scripts/toolcatalog-refresh/**
       - .github/workflows/tool-catalog-refresh.yml
 
+# Read-only by default; only the scheduled refresh may push.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   BRANCH: automation/tool-catalog-refresh
 
 jobs:
-  refresh:
+  # Pull requests run their own code, so the dry run gets no secrets and no
+  # write token. The hosted servers are skipped and reported as such.
+  dry-run:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -44,23 +48,64 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Dry run
+        run: |
+          set -euo pipefail
+          go run ./scripts/toolcatalog-refresh -report "$RUNNER_TEMP/report.md"
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+  refresh:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    # Two refreshes never race on the branch.
+    concurrency:
+      group: tool-catalog-refresh
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Continue the open refresh PR
+        id: branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          pr="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')"
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          if [[ -n "$pr" ]]; then
+            # Build on the open PR so a reviewer's tier edits are kept.
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+            git merge --no-edit "origin/${{ github.event.repository.default_branch }}"
+          else
+            git checkout -B "$BRANCH"
+          fi
+
       - name: Refresh catalogs
         env:
           ATLASSIAN_MCP_AUTHORIZATION: ${{ secrets.ATLASSIAN_MCP_AUTHORIZATION }}
           HUBSPOT_MCP_CLIENT_ID: ${{ secrets.HUBSPOT_MCP_CLIENT_ID }}
           HUBSPOT_MCP_CLIENT_SECRET: ${{ secrets.HUBSPOT_MCP_CLIENT_SECRET }}
           HUBSPOT_MCP_REFRESH_TOKEN: ${{ secrets.HUBSPOT_MCP_REFRESH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            go run ./scripts/toolcatalog-refresh -report "$RUNNER_TEMP/report.md"
-            cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
-          else
-            go run ./scripts/toolcatalog-refresh -write -report "$RUNNER_TEMP/report.md"
-          fi
+        run: go run ./scripts/toolcatalog-refresh -write -report "$RUNNER_TEMP/report.md"
 
-      - name: Open pull request
-        if: github.event_name != 'pull_request'
+      - name: Open or update pull request
+        env:
+          PR: ${{ steps.branch.outputs.pr }}
         run: |
           set -euo pipefail
           if git diff --quiet -- internal/toolcatalog/providers; then
@@ -74,15 +119,17 @@ jobs:
             old="$(sed -n 's/.*const want = "\([0-9a-f]\{64\}\)".*/\1/p' internal/toolcatalog/github_test.go)"
             grep -rl "$old" internal | xargs sed -i "s/$old/$digest/g"
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$BRANCH"
+          # A PR opened with GITHUB_TOKEN does not trigger CI, so run the
+          # catalog's own checks here before pushing.
+          go test ./internal/toolcatalog/... ./internal/cedarpolicy/... ./internal/guard/app/server/... ./internal/managedobserve/...
           git add internal
           git commit -m "chore(toolcatalog): refresh provider MCP catalogs"
-          git push --force origin "$BRANCH"
-          if [[ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]]; then
+          if [[ -n "$PR" ]]; then
+            git push origin "$BRANCH"
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/report.md"
+          else
+            # No open PR: any branch left over from a closed one is stale.
+            git push --force-with-lease origin "$BRANCH"
             gh pr create --draft --head "$BRANCH" --title "chore(toolcatalog): refresh provider MCP catalogs" \
               --body-file "$RUNNER_TEMP/report.md"
-          else
-            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/report.md"
           fi

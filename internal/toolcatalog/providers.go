@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -91,12 +92,15 @@ func Providers() []ProviderCatalog {
 // its copy, notices any drift between the two. Tools are already sorted.
 func providerDigest(catalog ProviderCatalog) string {
 	var material strings.Builder
-	material.WriteString(catalog.ToolIDPrefix + "\x00" + catalog.Version + "\x00")
+	// Every field that changes a decision is covered: how a call resolves
+	// (hints, distinctive flags, dispatchers) and what it is (product, tier).
+	material.WriteString(catalog.Provider + "\x00" + catalog.ToolIDPrefix + "\x00" + catalog.Version + "\x00")
+	material.WriteString("hints\t" + strings.Join(catalog.ServerNameHints, ",") + "\n")
 	for _, dispatcher := range catalog.Dispatchers {
-		material.WriteString("dispatch\t" + dispatcher.Name + "\t" + dispatcher.OperationField + "\n")
+		material.WriteString("dispatch\t" + dispatcher.Name + "\t" + dispatcher.OperationField + "\t" + strconv.FormatBool(dispatcher.Distinctive) + "\n")
 	}
 	for _, tool := range catalog.Tools {
-		material.WriteString(tool.Name + "\t" + tool.Access + "\n")
+		material.WriteString(tool.Name + "\t" + tool.Product + "\t" + tool.Access + "\t" + strconv.FormatBool(tool.Distinctive) + "\n")
 	}
 	sum := sha256.Sum256([]byte(material.String()))
 	return hex.EncodeToString(sum[:])
@@ -119,7 +123,9 @@ func resolveProvider(server, tool string, input map[string]any) (string, bool) {
 		}
 		if dispatcher, ok := p.dispatchers[tool]; ok {
 			operation, _ := input[dispatcher.OperationField].(string)
-			if catalogued, known := p.tools[operation]; known {
+			// A generic dispatcher name (`execute`) on another server only
+			// counts when the operation itself is distinctive.
+			if catalogued, known := p.tools[operation]; known && (hinted || dispatcher.Distinctive || catalogued.Distinctive) {
 				return p.catalog.ToolIDPrefix + catalogued.Name, true
 			}
 			if hinted || dispatcher.Distinctive {

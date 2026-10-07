@@ -172,7 +172,11 @@ func classify(words []string, complete bool, depth int) []cedareval.ShellProject
 	if len(words) == 0 || words[0] == "" {
 		return single(projection("dynamic", nil, []string{"dynamic-program"}, false))
 	}
-	program := filepath.Base(words[0])
+	if launched, launchedComplete, ok := unwrapPackageLauncher(words, complete); ok {
+		words, complete = launched, launchedComplete
+	}
+	// Case-insensitive file systems (macOS, Windows) run ACLI as acli.
+	program := strings.TrimSuffix(strings.ToLower(filepath.Base(words[0])), ".exe")
 	args := words[1:]
 	switch program {
 	case "git":
@@ -196,6 +200,77 @@ func classify(words []string, complete bool, depth int) []cedareval.ShellProject
 	default:
 		return single(projection(program, nil, nil, complete))
 	}
+}
+
+// launchedCLIs maps the npm packages and binaries a package launcher can run
+// to the provider CLI they are.
+var launchedCLIs = map[string]string{
+	"@hubspot/cli": "hs",
+	"hs":           "hs",
+	"@forge/cli":   "forge",
+	"forge":        "forge",
+}
+
+// unwrapPackageLauncher sees through npx, bunx, pnpm dlx, yarn dlx and npm
+// exec when they run a provider CLI, so `npx @hubspot/cli project deploy` is
+// judged as `hs project deploy`. Launcher options it does not know leave the
+// command incomplete. ok is false when the words do not launch a provider CLI.
+func unwrapPackageLauncher(words []string, complete bool) ([]string, bool, bool) {
+	program := strings.ToLower(filepath.Base(words[0]))
+	rest := words[1:]
+	switch program {
+	case "npx", "bunx", "pnpx":
+	case "pnpm", "yarn", "bun", "npm":
+		if len(rest) == 0 {
+			return nil, false, false
+		}
+		sub := rest[0]
+		if !(sub == "dlx" && (program == "pnpm" || program == "yarn") || sub == "x" && program == "bun" || (sub == "exec" || sub == "x") && program == "npm") {
+			return nil, false, false
+		}
+		rest = rest[1:]
+	default:
+		return nil, false, false
+	}
+	for i := 0; i < len(rest); i++ {
+		arg := rest[i]
+		switch {
+		case arg == "--":
+			if i+1 < len(rest) {
+				if cli, ok := launchedCLIs[packageName(rest[i+1])]; ok {
+					return append([]string{cli}, rest[i+2:]...), complete, true
+				}
+			}
+			return nil, false, false
+		case arg == "-p" || arg == "--package":
+			// The package is installed; the command named after it runs.
+			i++
+		case strings.HasPrefix(arg, "--package="):
+		case arg == "-y" || arg == "--yes" || arg == "-q" || arg == "--quiet" || arg == "--silent":
+		case strings.HasPrefix(arg, "-"):
+			complete = false
+		default:
+			if cli, ok := launchedCLIs[packageName(arg)]; ok {
+				return append([]string{cli}, rest[i+1:]...), complete, true
+			}
+			if complete {
+				return nil, false, false
+			}
+			// After an unknown option this may be its value; keep looking
+			// for the package.
+		}
+	}
+	return nil, false, false
+}
+
+// packageName drops a version from an npm package spec: @hubspot/cli@7 is
+// @hubspot/cli.
+func packageName(spec string) string {
+	spec = strings.ToLower(spec)
+	if at := strings.LastIndex(spec, "@"); at > 0 {
+		return spec[:at]
+	}
+	return spec
 }
 
 func single(projection cedareval.ShellProjectionV2) []cedareval.ShellProjectionV2 {
@@ -823,8 +898,10 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				continue
 			}
 			i++
+			complete = complete && urlText == ""
 			urlText = args[i]
 		case strings.HasPrefix(arg, "--url="):
+			complete = complete && urlText == ""
 			urlText = strings.TrimPrefix(arg, "--url=")
 		case isCurlDataFlag(arg):
 			if i+1 >= len(args) {
@@ -867,19 +944,28 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				continue
 			}
 			i++
+			if (arg == "-H" || arg == "--header") && isMethodOverrideHeader(args[i]) {
+				// The server would act on the header's method, not the one we see.
+				complete = false
+			}
+		case strings.HasPrefix(arg, "--header=") && isMethodOverrideHeader(strings.TrimPrefix(arg, "--header=")):
+			complete = false
 		case safeFlags[arg]:
 		case strings.HasPrefix(arg, "-"):
 			// Unknown curl flags can change request behavior.
 			complete = false
 		case urlText == "":
 			urlText = arg
+		default:
+			// curl requests every URL it is given; only the first is judged.
+			complete = false
 		}
 	}
 	parsed, err := url.Parse(urlText)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return projection("curl", nil, []string{"dynamic-or-invalid-url"}, false)
 	}
-	host := strings.ToLower(parsed.Hostname())
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 	switch {
 	case isAtlassianHost(host):
 		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)
@@ -1059,3 +1145,14 @@ var ghReadCommands = map[string]bool{
 
 // ghNestedCommands take their verb as a third word (`repo deploy-key add`).
 var ghNestedCommands = map[string]bool{"repo/autolink": true, "repo/deploy-key": true}
+
+// isMethodOverrideHeader reports whether a curl header asks the server to
+// treat the request as a different HTTP method.
+func isMethodOverrideHeader(header string) bool {
+	name, _, _ := strings.Cut(header, ":")
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "x-http-method-override", "x-http-method", "x-method-override":
+		return true
+	}
+	return false
+}

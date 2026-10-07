@@ -30,6 +30,7 @@ func TestResolveProviderMCP(t *testing.T) {
 		{"execute missing operation", "mcp__rovo__execute", map[string]any{}, "atlassian-mcp/unrecognized", true},
 		{"distinctive dispatcher, unknown operation, any server", "mcp__3f2a9c__executeWrite", map[string]any{"name": "bulkEditJiraIssues"}, "atlassian-mcp/unrecognized", true},
 		{"generic dispatcher, unknown operation, other server", "mcp__corp__execute", map[string]any{"name": "bulkEditJiraIssues"}, "", false},
+		{"generic dispatcher, generic operation, other server", "mcp__runner__execute", map[string]any{"name": "fetch"}, "", false},
 		{"hubspot manage tool under plugin server", "mcp__3f2a9c__manage_custom_properties", nil, "hubspot-mcp/manage_custom_properties", true},
 		{"unrelated execute tool", "mcp__postgres__execute", map[string]any{"sql": "select 1"}, "", false},
 		{"hubspot local", "mcp__hubspot__hubspot-batch-update-objects", nil, "hubspot-mcp/hubspot-batch-update-objects", true},

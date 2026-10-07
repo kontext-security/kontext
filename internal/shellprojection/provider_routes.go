@@ -50,12 +50,18 @@ func isAtlassianHost(host string) bool {
 }
 
 // jiraServerPath matches the REST prefixes only Jira Server and Data Center
-// serve, so a self-hosted Jira on its own domain is classified too.
-// Bitbucket Server's /rest/api/1.0 and /rest/api/latest are left out.
-var jiraServerPath = regexp.MustCompile(`^(?:/[^/]+)?/rest/(?:api/2|agile/1\.0|servicedeskapi)/`)
+// serve, so a self-hosted Jira on its own domain, under any context path, is
+// classified too. /rest/api/latest is shared with Bitbucket Server, so only
+// Jira's own resources count there; Bitbucket's /rest/api/1.0 and
+// /rest/api/latest/projects are left out.
+var jiraServerPath = regexp.MustCompile(`^(?:/[^/]+)*?/rest/(?:api/2|agile/1\.0|servicedeskapi|api/latest/(?:issue|issueLink|issueLinkType|search|project|projectCategory|filter|field|user|myself|version|component|worklog|comment|jql|serverInfo|priority|status|resolution|issuetype|workflow|workflowscheme|group|role|permissions|permissionscheme|screens|attachment))(?:/|$)`)
+
+// confluenceServerPath matches Confluence Server and Data Center's
+// unversioned REST API (/rest/api/content, /rest/api/space).
+var confluenceServerPath = regexp.MustCompile(`^(?:/[^/]+)*?/rest/api/(?:content|contentbody|space|search|longtask|audit)(?:/|$)`)
 
 func isJiraServerPath(path string) bool {
-	return jiraServerPath.MatchString(path)
+	return jiraServerPath.MatchString(path) || confluenceServerPath.MatchString(path)
 }
 
 func isHubSpotHost(host string) bool {
@@ -82,7 +88,7 @@ var (
 		"space": true, "spaces": true, "restriction": true, "permissions": true, "permission": true,
 		"settings": true, "group": true, "user": true, "admin-key": true, "classification-levels": true,
 	}
-	confluenceReadPost = regexp.MustCompile(`/(?:search|cql|convert|contentbody/convert/[^/]+)/?$`)
+	confluenceReadPost = regexp.MustCompile(`^/rest/api/(?:search|content/search|contentbody/convert/[^/]+)/?$`)
 	cloudIDPrefix      = regexp.MustCompile(`^/ex/(jira|confluence)/[^/]+`)
 )
 
@@ -106,10 +112,19 @@ func classifyAtlassianCurl(host string, parsed *url.URL, method string, complete
 		return projection("curl", []string{"curl/host=" + host, "http/method=" + method, FactAtlassianRouteUnrecognized}, nil, false)
 	}
 	if !isAtlassianHost(host) {
-		// Self-hosted Jira under a context path: classify from /rest/.
+		// Self-hosted Jira or Confluence under a context path: classify
+		// from /rest/.
 		if index := strings.Index(path, "/rest/"); index > 0 {
 			path = path[index:]
 		}
+		if !jiraServerPath.MatchString(path) && confluenceServerPath.MatchString(path) {
+			product = productConfluence
+		}
+	}
+	if strings.ContainsRune(path, ';') || hasDotSegment(path) {
+		// Servlet path parameters and dot segments can make the server route
+		// somewhere other than the path we read.
+		complete = false
 	}
 	if strings.HasPrefix(path, "/wiki/") || path == "/wiki" {
 		product = productConfluence
@@ -188,7 +203,7 @@ var (
 func classifyHubSpotCurl(host string, parsed *url.URL, method string, complete, bodyFile bool) cedareval.ShellProjectionV2 {
 	path := strings.TrimSuffix(parsed.Path, "/")
 	read := method == "POST" && (strings.HasSuffix(path, "/search") || strings.HasSuffix(path, "/batch/read"))
-	complete = complete && (!bodyFile || read)
+	complete = complete && (!bodyFile || read) && !strings.ContainsRune(path, ';') && !hasDotSegment(path)
 	facts := []string{"curl/host=" + host, "http/method=" + method, "http/path=" + parsed.EscapedPath()}
 	if complete {
 		facts = append(facts, FactHubSpotRouteCatalogued)
@@ -203,6 +218,15 @@ func classifyHubSpotCurl(host string, parsed *url.URL, method string, complete, 
 		}
 	}
 	return projection("curl", facts, nil, complete)
+}
+
+func hasDotSegment(path string) bool {
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func hasSuffix(value string, suffixes ...string) bool {
