@@ -373,6 +373,9 @@ func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent
 		ToolInput:  event.ToolInput,
 	}
 	if toolID != cedareval.ToolShellV2 {
+		if class, ok := toolcatalog.Classify(toolID); ok {
+			base.Tool = &cedareval.ToolClassificationV2{Provider: class.Provider, Product: class.Product, Access: class.Access}
+		}
 		return []cedareval.ToolUseInputV2{base}
 	}
 	inputs := make([]cedareval.ToolUseInputV2, len(projections))

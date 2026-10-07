@@ -174,211 +174,246 @@
       "name": "confluence_add_comment",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "8d66a3ccc3eaf777784b58298b3c9565b98f8aedd5c3b5dcf1072b1b693402ae"
     },
     {
       "name": "confluence_add_inline_comment",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b3a786132a273dd0b89b8dd4c47076dc5bcd6f913db15563a8a7722f1e7836c1"
     },
     {
       "name": "confluence_add_label",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ab19ab7a4fca852ca60dafe236c1ab9b1cff46b15dfddc3966c01f6af68f44e5"
     },
     {
       "name": "confluence_check_content_permissions",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "0287df3e1306ce6d58b441be2f41da9ca8a455ee4172889e4ddfe54235d0dfef"
     },
     {
       "name": "confluence_copy_page",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ed0ab3fa56c3c4852dde8e9416d05447d17f9b203ae9aa6b1f29332deacade0e"
     },
     {
       "name": "confluence_create_page",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "0bdeb4b9fbdf8d5ef4f9263734b32b73a8e41587bac3fdb1f116ff578ee13708"
     },
     {
       "name": "confluence_create_page_from_template",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "345bb8cca9d5b50a6e711409838bc76f536c2ba91e66dbb32d429b35109941f1"
     },
     {
       "name": "confluence_delete_attachment",
       "product": "confluence",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "12b7f0755cec3850fe02be3746e87326dd7430c7a7d808f05d7a740301efca88"
     },
     {
       "name": "confluence_delete_page",
       "product": "confluence",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "969a1f8b01c2919b18bef8772a06ac43108c0bfb796b47b85037dbfaa53532fd"
     },
     {
       "name": "confluence_download_attachment",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "0954584d3cc4bdc35fdfa2ce6a48a0f063b366813d0449885371189eb1623446"
     },
     {
       "name": "confluence_download_content_attachments",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "2a5d9091579114b9478e9a5cb7f604a3808abe68f90ae50c78fc98b5e6aa8d9c"
     },
     {
       "name": "confluence_get_attachments",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b09fe8776ca71db1f0e30a5eb2113e9fbc14a7931148b9408e932b01292644a4"
     },
     {
       "name": "confluence_get_comments",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "938be84e7b22d6c0f58c64978aa8577ac4eebd5fb7098b35b6e6869f370b2105"
     },
     {
       "name": "confluence_get_inline_comments",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "f96ba38e653f5a83a82ff3e78ec588e1604a9b1e43d936d9f55e130e3a985d38"
     },
     {
       "name": "confluence_get_labels",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "5b2b3f2e3088a179ef7f25e79f2f396bf121859f5c0929e67799d8cd2fb7e0b7"
     },
     {
       "name": "confluence_get_page",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "f9e6fdb5e521ce650b52b509dfe0f87b4c7d75728dc9007d56438fac2f4a6f71"
     },
     {
       "name": "confluence_get_page_children",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "5809499d2958b47bc03ea7915de43280f2d53890144aae30f0b87865bbae02ad"
     },
     {
       "name": "confluence_get_page_diff",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "40b5ea9647c8d6a25b7f95e0944e81e994a39556b7c8dba77513de93cb85056d"
     },
     {
       "name": "confluence_get_page_history",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "21281603734c22c4450b77114bd3678326c75f0bb4855cdc7b843e2d3c5b5496"
     },
     {
       "name": "confluence_get_page_images",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "81c05f0761e86376fecd11e350f8dc2321630badb3e8f90a469b0108dfa70e99"
     },
     {
       "name": "confluence_get_page_restrictions",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ed986d25464608c53185f756322ec025c2e6432079588c899cc7a8c690bef04a"
     },
     {
       "name": "confluence_get_page_template",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "0df1f1620d394320cf39ca1ff8f781dffc82146fd318a667c537173dd40e15ca"
     },
     {
       "name": "confluence_get_page_views",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b8ac968fd70037bc05e8ffbbbefd5a4190042447765652c0914574a61402cafa"
     },
     {
       "name": "confluence_get_space_page_tree",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "1f72ed9d154c6544bfec19acef346f54c1be1ece6f79817865ee62ba3d66f982"
     },
     {
       "name": "confluence_get_space_permissions",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "9393573652169eeea9bbb2620383750a1d5f2407f2d5691db0c52727cf0b437a"
     },
     {
       "name": "confluence_list_page_templates",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "120e9ef5b225cb6b9dbcfe83b92b96d72ef08a195569496327743636e64e4ef6"
     },
     {
       "name": "confluence_move_page",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "cea7358802cb04934ed4c08c1606c218cc2eec6762b1298c9bc644b55e83fc40"
     },
     {
       "name": "confluence_reply_to_comment",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "4b572bf24a30412975c4e86205c397fce5fde2016fb1c54195160a73a4833899"
     },
     {
       "name": "confluence_search",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "0c59ecdbecad8acb41e4175a0b5a9be90b8ed7d5fa123f7e6c78672978ce7619"
     },
     {
       "name": "confluence_search_user",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "776d3885bf9458324a1f3efb4c8ccad652fb4db1a3188da092e7dcfc2a5077a9"
     },
     {
       "name": "confluence_set_page_restrictions",
       "product": "confluence",
       "access": "admin",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b90fc481e383a47066fca163d4d9ddd877d94c3a8a666c4e91ae68f16bc125b9"
     },
     {
       "name": "confluence_update_page",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ba53344f87e3723c5e16a83b6f1e1886a3ebfdcc4d9d6cb6ac4f4796a40d83c3"
     },
     {
       "name": "confluence_update_page_section",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "cb7db93b0abecbecb6bfb55e38654e6850627dbb3b9774e2dae90c896bcac16c"
     },
     {
       "name": "confluence_upload_attachment",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "3792310f46851edde946a821d2cf7a0fbe2c3eb17dd0382f8026b5f35cd807c1"
     },
     {
       "name": "confluence_upload_attachments",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "859f44d573a482eaafc3be049e2f5750cf434bf275f0193b5505350806cd9f39"
     },
     {
       "name": "convertConfluenceContentMode",
@@ -1218,379 +1253,442 @@
       "name": "jira_add_comment",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "914b17affb0387f44c792d93a3b8d1ddf90dc0d667935c2f1dcf0a6a2e671215"
     },
     {
       "name": "jira_add_issues_to_sprint",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "c5fe2d101d3dfefe28f10366863dc265b751fa1ddeb69f2fa6b3a1170ac11877"
     },
     {
       "name": "jira_add_watcher",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "803fb8d57d70aaa3b1e2fade29b83983851cefcaca656adcd770e4aa71b266de"
     },
     {
       "name": "jira_add_worklog",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "766a9f1cf6bdb01e076d8dbd87d63e55217cfd614b7790b2d2c2f63b45926103"
     },
     {
       "name": "jira_assign_issue",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "51848e2c7c5778755093a72e8191985f3a087368229dd7d6627344c7e7676f42"
     },
     {
       "name": "jira_batch_create_issues",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "bcd3d95b8baa3233acac7f256ce3dee77ca7e6a8a0a67b4fc7b2a539425dd456"
     },
     {
       "name": "jira_batch_create_versions",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "5e1b5c8511a4b082bf1fd105d3680c3c4a6419c151150aad0c66cbeffb10ba02"
     },
     {
       "name": "jira_batch_get_changelogs",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "7cbb32f42bc941a1d91f8da4c67cd9789ecb6a06970cfd9e5f45c8ba90f2e1b5"
     },
     {
       "name": "jira_create_customer_request",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "da2db69ea6da9d535cc45593e3fb6d54aad943df5e4b946a08ba7b378d73e9f0"
     },
     {
       "name": "jira_create_issue",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "acb49cd8e76b39a5bc91f7ae2859b0ecb4d3fe954a0a18cb612f39a73fe60792"
     },
     {
       "name": "jira_create_issue_link",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "303d95dc8079e6abe15cffd17e6aae7779af4d22bc5aafd9addeff8fd88c1474"
     },
     {
       "name": "jira_create_remote_issue_link",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "f356f042c85f7adddf03986a9b8003d6e164a29913386fa783aaa2ca0399d992"
     },
     {
       "name": "jira_create_sprint",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "c81993b7b5141bf5473d9499c7dfacfcd8628694b321607c820fb00429bc14ff"
     },
     {
       "name": "jira_create_version",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b30a3afd80d6b2766aa40bb64fb51eae8179e13691568ddba2eb56ce6a933636"
     },
     {
       "name": "jira_delete_issue",
       "product": "jira",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "e111d644753654a1f06598cb2d0ba11a2e349430ace74fee617309790751077c"
     },
     {
       "name": "jira_download_attachments",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "e15ab97dce290d44e41940bf2eeda283d3883708ce1b6ea0a1c24b0686484361"
     },
     {
       "name": "jira_edit_comment",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "e6c9276c623813e337074f4f4097467b1dc66dc6a2f55edb1389311909362d96"
     },
     {
       "name": "jira_get_agile_boards",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "a43a9735b258cce73dc240e1d569161147f228afbad2b3f90c89c320019fd725"
     },
     {
       "name": "jira_get_all_projects",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "de61dc1eb1b8eae4bfe98e43a4f2c780cc63f0bfc14c8d0ffdc8a8575b3b8663"
     },
     {
       "name": "jira_get_board_issues",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b843af4a9ab9380d0802a54816a6db9f32e61769b0fe74b8ca869e255a53a49e"
     },
     {
       "name": "jira_get_create_fields",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "d6494e5c3bfc20058935eb4626fa3498a427dd8eae681fca0ddee18097a2bf72"
     },
     {
       "name": "jira_get_cross_project_dependencies",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "03288c0b7b6e43a9dca8f45fc2b53846afbfab2b07f11c3d2b20c4dd16b241ed"
     },
     {
       "name": "jira_get_field_options",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "e09af2ca2ec6daa440cb8e1fc1551839583a8b92896731a1528cdbf101ce9190"
     },
     {
       "name": "jira_get_issue",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "a0a63fa7c8df16bb967564d142229b85deb65e126f52ecc7dc186541c99ace73"
     },
     {
       "name": "jira_get_issue_dates",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "3a64cd7b8a37e7fcd3592cdcd955fe6dbf7705aed21651a84b583a40c5e188da"
     },
     {
       "name": "jira_get_issue_development_info",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "edef3567b32dac806f380c9844c6c16bc3aef48ea4109cc5920cda4cf9b81df7"
     },
     {
       "name": "jira_get_issue_images",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "a27497bbda8276b7d8ae45c5443ca466ac3f4dd4ce159f12b2ae5d060dd619e9"
     },
     {
       "name": "jira_get_issue_proforma_forms",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "d9e57ce7bf4d489ffb45b511578298ebdb8dbfc1dae5ce8784b091234dd87dad"
     },
     {
       "name": "jira_get_issue_sla",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "d4f5924d308cc98e37249b5bd1821f7b942b4698e72ccb4a92af856cfdf74978"
     },
     {
       "name": "jira_get_issue_watchers",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "18562ef8197b9967878305130926e431fb875b90a005feb9482738f2e0b01c34"
     },
     {
       "name": "jira_get_issues_development_info",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "3dc75786144ea5d813463fbcf1ac8fcf635d371a1fee4091f59f23e326cc5c7d"
     },
     {
       "name": "jira_get_link_types",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "f84c7688b0d29e555a41a3a495bb4422a8d7ca38418b9af4899b0212090bab4c"
     },
     {
       "name": "jira_get_proforma_form_details",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "7d323bbd5ca75b4d20d591668fb5ccbde76b07f419fbfcf05776e258771e9786"
     },
     {
       "name": "jira_get_project_components",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "559a12f5e410e7b935a6c9350efa65bffa6c5763947036cf683e40256571e7ec"
     },
     {
       "name": "jira_get_project_epic_hierarchy",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "65ce51059987791e676e6baa89cb5f8067b5534ba9cf5b8ac81b9cba92b17f67"
     },
     {
       "name": "jira_get_project_fields",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ae2839d133c6f8961a9cda649fde173ec8f60938105d1e14e6e1506163ae5945"
     },
     {
       "name": "jira_get_project_issue_types",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "bcb33357f06ea43c3c4aa316c98afb01806c43be25ef7ec0751c028e01eb34af"
     },
     {
       "name": "jira_get_project_issues",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b2a092b87742a0ddf161d162cea0abb686fe1bcb5177bbb5af44530d8948fbae"
     },
     {
       "name": "jira_get_project_versions",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "750ebc2df8f00a13eca9107f999ed434bf605813012477e32b593372410d99f0"
     },
     {
       "name": "jira_get_queue_issues",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "224c00ec0799a178b2ab821a32bbc2e8c3790ce77c7cc6bad90eeb32d9d116ec"
     },
     {
       "name": "jira_get_request_type_fields",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "0949e9069b588b29310921ef47be5216a527a6e02fc3b405c80356b61c84752c"
     },
     {
       "name": "jira_get_request_types",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "a6f8369de7ef4ba25a863a338ccebd148752f23a3b7344ef2dd370f47f69bd7b"
     },
     {
       "name": "jira_get_service_desk_for_project",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "c74d502271fc60309d3c41eb9f71dfe272580ac018e6719716dff4787413cb0e"
     },
     {
       "name": "jira_get_service_desk_queues",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "232ccd1c81795209b882c9adfaf60ae2be944e80e807a9075ecb324746f1bfed"
     },
     {
       "name": "jira_get_sprint_issues",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "9e3eb67282d399fa943013e00e11171ca99d118c598b0c53c7855f5cfec2d5ea"
     },
     {
       "name": "jira_get_sprints_from_board",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "866d5442caeb19832d46085d24690780599dcb6f7cbb58a4a4c1e2730b5632db"
     },
     {
       "name": "jira_get_transitions",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "f32f560ed59e4ba186a48892cf5341160dd7609d5a08beec236b8f92b106e2a9"
     },
     {
       "name": "jira_get_user_profile",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "23a57a33e96f065a49a7810ad7fd5660634494b40d96c9028a2bc15b82c0fd32"
     },
     {
       "name": "jira_get_worklog",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "c2f6685c65b769f84d9f13eb4a16f1b19c52e682dd7a05ec0e77b268479c9385"
     },
     {
       "name": "jira_link_to_epic",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "0835b7576abb212fc9958f9a2127833485b1ff8a3d02f13fd2741dd2e2dbb664"
     },
     {
       "name": "jira_move_issue",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "67d3263dabb1a5b6da0a9d0252c82dbbfec30a0d89e3a8c82b13236c5126337f"
     },
     {
       "name": "jira_move_issues_to_backlog",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "c89cde0adaa7db5dddc01ab7340abd61fbc89c1364e118f7201b993a4939b603"
     },
     {
       "name": "jira_remove_issue_link",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "7fc04b331e93b43768ff5e0e5fb270fc27e85c7b02279633f2d52b71695266a6"
     },
     {
       "name": "jira_remove_watcher",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "316252fe46a5a0f19bdf5f059927df4f0a87e18ea47d37ffba5fad0643088bc1"
     },
     {
       "name": "jira_search",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "a7579a881f5ca85f12b637a770b105dd2f89d0a05c0e60c00b6531eb7b7dfaa3"
     },
     {
       "name": "jira_search_assignable_users",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ea0ac92e52ea85e4850eb6685d4ad6144e91931178448ed27679e3727dd75843"
     },
     {
       "name": "jira_search_fields",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b07c8d94a0ce3340a6d55824728856e10c4d6cff2c307c8af0eb5c2f3923e0c0"
     },
     {
       "name": "jira_search_projects",
       "product": "jira",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "7eff5881b18c6850e98fec866c6962b599c872da3bb06f09ce6ea5e2bbf94120"
     },
     {
       "name": "jira_transition_issue",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "cd8945d7babefcb0f831285d7ed69d573e1e274ddc9439bbd7b32386615845cb"
     },
     {
       "name": "jira_update_issue",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b82291abb1f8b52800c5f4e08c65b3d001bf3df080aaf025f080d1a4c29610b4"
     },
     {
       "name": "jira_update_proforma_form_answers",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "3db35a37942e131abe2b9ecbcf93c37cf5506e3ac3cf5553730a204a1b72c804"
     },
     {
       "name": "jira_update_sprint",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b57ba0d9814766aafe8a9c35614c45ba31a8d7b0c457b9ab8f503da7eb732412"
     },
     {
       "name": "jira_update_version",
       "product": "jira",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "0d0016189427b476b6f58b4897a249fc187a1be7c9ac29f94a2952055559b60e"
     },
     {
       "name": "linkToFocusArea",

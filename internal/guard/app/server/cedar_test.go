@@ -989,7 +989,7 @@ func TestCedarProviderPresetsCoverMCPAndShell(t *testing.T) {
 @id("jira-read-only") forbid(principal, action == Kontext::Action::"ToolUse", resource)
 when {
   (resource == Kontext::Tool::"shell" && (!(context has shell) || (context has shell && (!(context.shell has facts) || (context.shell has facts && context.shell.facts.contains("jira/write=true")))))) ||
-  [Kontext::Tool::"atlassian-mcp/createJiraIssue", Kontext::Tool::"atlassian-mcp/deleteJiraIssue"].contains(resource)
+  (context has tool && context.tool.provider == "atlassian" && ["jira", "jsm"].contains(context.tool.product) && ["write", "delete", "admin"].contains(context.tool.access))
 };
 @id("block-unrecognized-hubspot-operations") forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"hubspot-mcp/unrecognized");`
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, policy)
@@ -1005,6 +1005,8 @@ when {
 		{"connector read", "mcp__claude_ai_Atlassian__getJiraIssue", map[string]any{"cloudId": "c"}, risk.DecisionAllow},
 		{"delete through execute", "mcp__atlassian__executeDestructive", map[string]any{"name": "deleteJiraIssue", "inputs": map[string]any{}}, risk.DecisionDeny},
 		{"read through execute", "mcp__atlassian__executeRead", map[string]any{"name": "listJiraProjects"}, risk.DecisionAllow},
+		{"admin by tier", "mcp__atlassian__createJiraProject", map[string]any{}, risk.DecisionDeny},
+		{"other product write", "mcp__atlassian__createConfluencePage", map[string]any{}, risk.DecisionAllow},
 		{"shell write", "Bash", map[string]any{"command": "acli jira workitem create --summary hi"}, risk.DecisionDeny},
 		{"shell read", "Bash", map[string]any{"command": "curl https://acme.atlassian.net/rest/api/3/issue/ENG-1"}, risk.DecisionAllow},
 		{"new hubspot tool", "mcp__hubspot__delete_everything", map[string]any{}, risk.DecisionDeny},

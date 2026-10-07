@@ -22,6 +22,7 @@ func TestJiraShellCorpus(t *testing.T) {
 		// REST API on a Cloud site.
 		{name: "get issue", command: "curl -sS -u me:token https://acme.atlassian.net/rest/api/3/issue/ENG-1", programs: []string{"curl"}, facts: []string{atlCatalogued}, absentFacts: []string{jiraWrite}, complete: true},
 		{name: "jql search over POST is a read", command: `curl -X POST --json '{"jql":"project=ENG"}' https://acme.atlassian.net/rest/api/3/search/jql`, programs: []string{"curl"}, facts: []string{atlCatalogued}, absentFacts: []string{jiraWrite}, complete: true},
+		{name: "jql search with a body from a file is still a read", command: `curl -X POST -d @query.json https://acme.atlassian.net/rest/api/3/search/jql`, programs: []string{"curl"}, facts: []string{atlCatalogued}, absentFacts: []string{jiraWrite, atlUnknown}, complete: true},
 		{name: "create issue", command: `curl -d '{"fields":{}}' https://acme.atlassian.net/rest/api/3/issue`, programs: []string{"curl"}, facts: []string{atlCatalogued, jiraWrite}, absentFacts: []string{jiraDelete, jiraAdmin}, complete: true},
 		{name: "transition", command: `curl -X POST -d '{}' https://acme.atlassian.net/rest/api/2/issue/ENG-1/transitions`, programs: []string{"curl"}, facts: []string{jiraWrite}, complete: true},
 		{name: "delete issue", command: "curl -X DELETE https://acme.atlassian.net/rest/api/3/issue/ENG-1", programs: []string{"curl"}, facts: []string{jiraWrite, jiraDelete}, absentFacts: []string{jiraAdmin}, complete: true},
@@ -68,6 +69,7 @@ func TestHubSpotShellCorpus(t *testing.T) {
 	runCorpus(t, []corpusCase{
 		{name: "get contact", command: "curl -H 'Authorization: Bearer x' https://api.hubapi.com/crm/v3/objects/contacts/1", programs: []string{"curl"}, facts: []string{hsCatalogued}, absentFacts: []string{hsWrite}, complete: true},
 		{name: "search is a read", command: `curl -X POST --json '{}' https://api.hubapi.com/crm/v3/objects/contacts/search`, programs: []string{"curl"}, absentFacts: []string{hsWrite}, complete: true},
+		{name: "search with a body from a file is still a read", command: `curl -X POST --data-binary @filter.json https://api.hubapi.com/crm/v3/objects/deals/search`, programs: []string{"curl"}, absentFacts: []string{hsWrite, hsUnknown}, complete: true},
 		{name: "batch read is a read", command: `curl -d '{}' https://api.hubapi.com/crm/v3/objects/deals/batch/read`, programs: []string{"curl"}, absentFacts: []string{hsWrite}, complete: true},
 		{name: "update contact", command: `curl -X PATCH -d '{}' https://api.hubapi.com/crm/v3/objects/contacts/1`, programs: []string{"curl"}, facts: []string{hsCatalogued, hsWrite}, absentFacts: []string{hsDelete, hsAdmin}, complete: true},
 		{name: "archive is a delete", command: `curl -d '{}' https://api.hubapi.com/crm/v3/objects/contacts/batch/archive`, programs: []string{"curl"}, facts: []string{hsWrite, hsDelete}, complete: true},

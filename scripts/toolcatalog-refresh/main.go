@@ -2,12 +2,21 @@
 // internal/toolcatalog/providers against their upstream sources and, with
 // -write, adds what changed.
 //
-// A tool that appears upstream is added with the tier its MCP annotations
-// suggest, and with write when there are none, so a new tool is never
-// silently treated as a read. Tools that disappear upstream are kept (older
-// servers and v1 connections still expose them) and only reported. Every
-// change is listed in the report so a reviewer can correct a tier before the
-// refresh PR merges; the copy in kontext-cloud is then synced from this one.
+// A tool that appears upstream is added as a write, or as a delete when its
+// MCP annotations say destructive, so a new tool is never silently treated as
+// a read. Annotations come from the provider and are untrusted: they can only
+// make a tier stricter, never looser. A read-only hint on a new tool is
+// reported for a reviewer to confirm, and a destructive or non-read-only hint
+// on a catalogued tool raises its tier.
+//
+// Each tool also carries a fingerprint of its full upstream definition
+// (description, input schema, annotations), so a tool that changes behaviour
+// without a rename is flagged for re-review even though its name is known.
+//
+// Tools that disappear upstream are kept (older servers and v1 connections
+// still expose them) and only reported. Every change is listed in the report
+// so a reviewer can correct a tier before the refresh PR merges; the copy in
+// kontext-cloud is then synced from this one.
 //
 // Sources: the @hubspot/mcp-server npm package, sooperset/mcp-atlassian on
 // GitHub, and, when credentials are set, a live tools/list against the
@@ -22,6 +31,8 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -58,12 +69,24 @@ type tool struct {
 	Product     string `json:"product"`
 	Access      string `json:"access"`
 	Distinctive bool   `json:"distinctive,omitempty"`
+	Definition  string `json:"definition,omitempty"`
 }
 
 // upstreamTool is one tool as a source reports it.
 type upstreamTool struct {
-	name   string
-	access string // read, write or delete, from annotations or tags
+	name string
+	// hint is the tier the source's own annotations or tags claim: read,
+	// write or delete, or empty when it says nothing.
+	hint string
+	// definition fingerprints everything the source says about the tool.
+	definition string
+}
+
+var accessRank = map[string]int{"read": 0, "write": 1, "delete": 2}
+
+func fingerprint(definition []byte) string {
+	sum := sha256.Sum256(definition)
+	return hex.EncodeToString(sum[:])
 }
 
 type refresher struct {
@@ -169,36 +192,60 @@ func (r *refresher) note(format string, args ...any) {
 	r.report = append(r.report, fmt.Sprintf(format, args...))
 }
 
-// merge adds upstream tools the catalog does not list and reports those it
-// lists that upstream no longer has (filtered to the prefix the source owns).
+// merge adds upstream tools the catalog does not list, tightens tiers the
+// source's hints say are too loose, records definition changes, and reports
+// tools upstream no longer has (filtered to the prefix the source owns).
 func (r *refresher) merge(c *catalog, source string, upstream []upstreamTool, owns func(string) bool) {
-	known := map[string]bool{}
-	for _, t := range c.Tools {
-		known[t.Name] = true
+	index := map[string]int{}
+	for i, t := range c.Tools {
+		index[t.Name] = i
 	}
+	dispatchers := map[string]bool{}
 	for _, d := range c.Dispatchers {
-		known[d.Name] = true
+		dispatchers[d.Name] = true
 	}
 	seen := map[string]bool{}
-	var added []string
+	var added, confirmRead, tightened, redefined []string
+	baselined := 0
 	for _, u := range upstream {
 		seen[u.name] = true
-		if known[u.name] {
+		if dispatchers[u.name] {
 			continue
 		}
-		access := u.access
-		if access == "" {
-			access = "write"
+		i, known := index[u.name]
+		if !known {
+			access := "write"
+			if u.hint == "delete" {
+				access = "delete"
+			}
+			entry := tool{Name: u.name, Product: productFor(c.Provider, u.name), Access: access, Definition: u.definition}
+			if c.Provider == "atlassian" {
+				entry.Distinctive = atlassianDistinctive.MatchString(u.name)
+			} else {
+				entry.Distinctive = hubspotDistinctive.MatchString(u.name)
+			}
+			c.Tools = append(c.Tools, entry)
+			index[u.name] = len(c.Tools) - 1
+			added = append(added, fmt.Sprintf("`%s` (%s, %s)", u.name, entry.Product, access))
+			if u.hint == "read" {
+				confirmRead = append(confirmRead, "`"+u.name+"`")
+			}
+			continue
 		}
-		entry := tool{Name: u.name, Product: productFor(c.Provider, u.name), Access: access}
-		if c.Provider == "atlassian" {
-			entry.Distinctive = atlassianDistinctive.MatchString(u.name)
-		} else {
-			entry.Distinctive = hubspotDistinctive.MatchString(u.name)
+		current := &c.Tools[i]
+		if rank, ok := accessRank[current.Access]; ok && u.hint != "" && accessRank[u.hint] > rank {
+			tightened = append(tightened, fmt.Sprintf("`%s` (%s to %s)", u.name, current.Access, u.hint))
+			current.Access = u.hint
 		}
-		c.Tools = append(c.Tools, entry)
-		known[u.name] = true
-		added = append(added, fmt.Sprintf("`%s` (%s, %s)", u.name, entry.Product, access))
+		switch {
+		case u.definition == "" || current.Definition == u.definition:
+		case current.Definition == "":
+			baselined++
+			current.Definition = u.definition
+		default:
+			redefined = append(redefined, fmt.Sprintf("`%s` (%s)", u.name, current.Access))
+			current.Definition = u.definition
+		}
 	}
 	var gone []string
 	for _, t := range c.Tools {
@@ -206,13 +253,27 @@ func (r *refresher) merge(c *catalog, source string, upstream []upstreamTool, ow
 			gone = append(gone, "`"+t.Name+"`")
 		}
 	}
-	if len(added) == 0 && len(gone) == 0 {
+	if len(added)+len(tightened)+len(redefined)+baselined+len(gone) == 0 {
 		r.note("- %s: %d tools, no change", source, len(upstream))
 		return
 	}
-	if len(added) > 0 {
+	if len(added)+len(tightened)+len(redefined)+baselined > 0 {
 		r.changed = true
-		r.note("- %s: **added %d** — review the tier of each: %s", source, len(added), strings.Join(added, ", "))
+	}
+	if len(added) > 0 {
+		r.note("- %s: **added %d**, review the tier of each: %s", source, len(added), strings.Join(added, ", "))
+	}
+	if len(confirmRead) > 0 {
+		r.note("- %s: annotated read-only but added as write until a reviewer confirms: %s", source, strings.Join(confirmRead, ", "))
+	}
+	if len(tightened) > 0 {
+		r.note("- %s: **tier raised** by the provider's own annotations: %s", source, strings.Join(tightened, ", "))
+	}
+	if len(redefined) > 0 {
+		r.note("- %s: **definition changed**, re-check that each tier still fits: %s", source, strings.Join(redefined, ", "))
+	}
+	if baselined > 0 {
+		r.note("- %s: recorded definition fingerprints for %d tools", source, baselined)
 	}
 	if len(gone) > 0 {
 		r.note("- %s: no longer listed upstream (kept): %s", source, strings.Join(gone, ", "))
@@ -302,7 +363,7 @@ func npmTools(tarball []byte) ([]upstreamTool, error) {
 		if match == nil {
 			continue
 		}
-		tools = append(tools, upstreamTool{name: string(match[1]), access: hintAccess(string(source))})
+		tools = append(tools, upstreamTool{name: string(match[1]), hint: hintAccess(string(source)), definition: fingerprint(source)})
 	}
 	if len(tools) == 0 {
 		return nil, errors.New("no tool definitions found in the package")
@@ -310,22 +371,26 @@ func npmTools(tarball []byte) ([]upstreamTool, error) {
 	return tools, nil
 }
 
-// hintAccess reads MCP tool annotations in source text or JSON.
+// hintAccess reads explicit MCP tool annotations in source text or JSON.
+// Only values the provider spelled out count; the spec's defaults
+// (destructive unless marked otherwise) would flag every tool.
 func hintAccess(text string) string {
 	compact := strings.ReplaceAll(strings.ReplaceAll(text, " ", ""), "\"", "")
 	switch {
-	case strings.Contains(compact, "destructiveHint:true"):
-		return "delete"
 	case strings.Contains(compact, "readOnlyHint:true"):
 		return "read"
-	default:
+	case strings.Contains(compact, "destructiveHint:true"):
+		return "delete"
+	case strings.Contains(compact, "readOnlyHint:false"):
 		return "write"
+	default:
+		return ""
 	}
 }
 
 var (
 	soopersetPinned = regexp.MustCompile(`sooperset/mcp-atlassian@([0-9a-f]{40})`)
-	soopersetTool   = regexp.MustCompile(`(?s)@\w+\.tool\((.*?)\)\s*(?:@[^\n]*\n\s*)*async def (\w+)`)
+	soopersetTool   = regexp.MustCompile(`(?s)@\w+\.tool\((.*?)\)\s*(?:@[^\n]*\n\s*)*async def (\w+)\((.*?)\)\s*->[^:]*:\s*(?:"""(.*?)""")?`)
 	soopersetTags   = regexp.MustCompile(`tags=\{([^}]*)\}`)
 )
 
@@ -341,14 +406,16 @@ func (r *refresher) refreshSooperset(c *catalog) error {
 			return err
 		}
 		for _, match := range soopersetTool.FindAllStringSubmatch(string(source), -1) {
-			access := "write"
+			// The server tags every tool read or write, so an untagged
+			// read is an explicit write claim.
+			hint := "write"
 			if tags := soopersetTags.FindStringSubmatch(match[1]); tags != nil && strings.Contains(tags[1], `"read"`) {
-				access = "read"
+				hint = "read"
 			}
 			if strings.Contains(match[2], "delete") {
-				access = "delete"
+				hint = "delete"
 			}
-			upstream = append(upstream, upstreamTool{name: product + "_" + match[2], access: access})
+			upstream = append(upstream, upstreamTool{name: product + "_" + match[2], hint: hint, definition: fingerprint([]byte(match[0]))})
 		}
 	}
 	if len(upstream) == 0 {
@@ -443,17 +510,24 @@ func (r *refresher) listTools(endpoint, authorization string) ([]upstreamTool, e
 			return nil, err
 		}
 		var result struct {
-			Tools []struct {
-				Name        string          `json:"name"`
-				Annotations json.RawMessage `json:"annotations"`
-			} `json:"tools"`
-			NextCursor string `json:"nextCursor"`
+			Tools      []map[string]json.RawMessage `json:"tools"`
+			NextCursor string                       `json:"nextCursor"`
 		}
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return nil, err
 		}
 		for _, t := range result.Tools {
-			tools = append(tools, upstreamTool{name: t.Name, access: hintAccess(string(t.Annotations))})
+			var name string
+			if json.Unmarshal(t["name"], &name) != nil || name == "" {
+				continue
+			}
+			// _meta is transport metadata, not part of what the tool does.
+			delete(t, "_meta")
+			definition, err := canonicalJSON(t)
+			if err != nil {
+				return nil, err
+			}
+			tools = append(tools, upstreamTool{name: name, hint: hintAccess(string(t["annotations"])), definition: fingerprint(definition)})
 		}
 		if result.NextCursor == "" {
 			return tools, nil
@@ -461,6 +535,22 @@ func (r *refresher) listTools(endpoint, authorization string) ([]upstreamTool, e
 		cursor = result.NextCursor
 	}
 	return nil, errors.New("tools/list did not finish paginating")
+}
+
+// canonicalJSON re-encodes a value with sorted object keys at every depth,
+// so a server reordering its schema does not read as a definition change.
+func canonicalJSON(value any) ([]byte, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var generic any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&generic); err != nil {
+		return nil, err
+	}
+	return json.Marshal(generic)
 }
 
 // rpcResult reads a JSON-RPC result from a JSON or an SSE response body.

@@ -793,6 +793,10 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	explicitMethod := false
 	urlText := ""
 	bodies := make([]string, 0, 2)
+	// A body read from a file is unknown content. Most routes treat it as an
+	// incomplete parse; a provider's read-over-POST route (Jira search) stays
+	// a read whatever its body says.
+	bodyFile := false
 	valueOptions := map[string]bool{"-H": true, "--header": true, "-A": true, "--user-agent": true, "-u": true, "--user": true, "-o": true, "--output": true, "--connect-timeout": true, "--max-time": true, "--retry": true}
 	safeFlags := map[string]bool{"-s": true, "-S": true, "-sS": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
 	for i := 0; i < len(args); i++ {
@@ -830,7 +834,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			i++
 			bodies = append(bodies, args[i])
 			if strings.HasPrefix(args[i], "@") {
-				complete = false
+				bodyFile = true
 			}
 			if !explicitMethod {
 				method = "POST"
@@ -839,7 +843,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			body := curlDataValue(arg)
 			bodies = append(bodies, body)
 			if strings.HasPrefix(body, "@") {
-				complete = false
+				bodyFile = true
 			}
 			if !explicitMethod {
 				method = "POST"
@@ -878,12 +882,13 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	host := strings.ToLower(parsed.Hostname())
 	switch {
 	case isAtlassianHost(host):
-		return classifyAtlassianCurl(host, parsed, method, complete)
+		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)
 	case isHubSpotHost(host):
-		return classifyHubSpotCurl(host, parsed, method, complete)
+		return classifyHubSpotCurl(host, parsed, method, complete, bodyFile)
 	case isJiraServerPath(parsed.Path):
-		return classifyAtlassianCurl(host, parsed, method, complete)
+		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)
 	}
+	complete = complete && !bodyFile
 	if host != "api.github.com" && host != "uploads.github.com" {
 		return projection("curl", nil, nil, complete)
 	}

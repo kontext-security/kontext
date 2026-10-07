@@ -1,10 +1,12 @@
 name: Tool Catalog Refresh
 
 # Checks the Jira/Atlassian and HubSpot MCP catalogs against upstream every
-# week and opens a pull request when a source adds tools. New tools land with
-# the tier their annotations suggest (write when unknown); the PR body lists
-# each one for review. Set ATLASSIAN_MCP_AUTHORIZATION and HUBSPOT_MCP_TOKEN
-# secrets to also check the hosted servers' live tool lists.
+# week and opens a pull request when a source adds a tool, changes a tool's
+# definition, or annotates a tool as stricter than its tier. New tools land as
+# write (delete when annotated destructive); annotations never loosen a tier.
+# The PR body lists every change for review. Without the
+# ATLASSIAN_MCP_AUTHORIZATION and HUBSPOT_MCP_TOKEN secrets the hosted servers
+# are skipped and reported as such; the other sources still refresh.
 
 on:
   schedule:

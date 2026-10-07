@@ -62,6 +62,10 @@ type ProviderTool struct {
 	// resolve under any server name. Generic names (search, getTeam) resolve
 	// only on a server whose name carries one of ServerNameHints.
 	Distinctive bool `json:"distinctive,omitempty"`
+	// Definition fingerprints the tool's full upstream definition, so the
+	// refresh notices a tool that changes behaviour under the same name. It
+	// does not change a decision and is left out of the digest.
+	Definition string `json:"definition,omitempty"`
 }
 
 type providerIndex struct {
@@ -158,6 +162,31 @@ func ProviderToolAccess(toolID string) string {
 		}
 	}
 	return ""
+}
+
+// ProviderClassification is a catalogued provider tool's tier, which the
+// daemon passes to Cedar so presets can forbid by tier.
+type ProviderClassification struct {
+	Provider string
+	Product  string
+	Access   string
+}
+
+// Classify returns the catalog entry behind a provider tool id. Unrecognized
+// and non-provider ids have none.
+func Classify(toolID string) (ProviderClassification, bool) {
+	for i := range providers {
+		name, ok := strings.CutPrefix(toolID, providers[i].catalog.ToolIDPrefix)
+		if !ok {
+			continue
+		}
+		tool, ok := providers[i].tools[name]
+		if !ok {
+			return ProviderClassification{}, false
+		}
+		return ProviderClassification{Provider: providers[i].catalog.Provider, Product: tool.Product, Access: tool.Access}, true
+	}
+	return ProviderClassification{}, false
 }
 
 func loadProviderCatalogs() []providerIndex {

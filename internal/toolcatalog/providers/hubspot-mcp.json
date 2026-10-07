@@ -72,127 +72,148 @@
       "name": "hubspot-batch-create-associations",
       "product": "crm",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b47f63f99eed616ecf389c39c23c3288337ad58bce98849e442fed58f0d514de"
     },
     {
       "name": "hubspot-batch-create-objects",
       "product": "crm",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "22c765d29dc58eb59b77bc44a4e2b7734c5cba2755aeafb1f32938bf89d24311"
     },
     {
       "name": "hubspot-batch-read-objects",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "0741dc962a4ba04dd46e8aac312d2666a2b9c864807636e6f515d40424cae092"
     },
     {
       "name": "hubspot-batch-update-objects",
       "product": "crm",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ace0b4aebf5d0a3a9fc33069a4b0765260a4a4b9403b574c91c407a011c06535"
     },
     {
       "name": "hubspot-create-engagement",
       "product": "crm",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "6121f98f17fa6a364eff90bbfb981b90c2fcd1ac226914c4171aaf1fcc417f16"
     },
     {
       "name": "hubspot-create-property",
       "product": "crm",
       "access": "admin",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "199d8721a645fe9c50f6d6cf1782e2ab6a2eec9f7f5d10ec86d9df7d57709ae1"
     },
     {
       "name": "hubspot-generate-feedback-link",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "8f9c3c025ea8f78d75daf6c956d6ae62be7866d99967669aa86bd2fccefd9909"
     },
     {
       "name": "hubspot-get-association-definitions",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "cba6965c633afc781c502299f68d2a7b263138de97fe4fabaef2222691e86d48"
     },
     {
       "name": "hubspot-get-engagement",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "afe8045e91a63a4f447ef96f6ebbaf71083341a6407186ae09982a4e940beae7"
     },
     {
       "name": "hubspot-get-link",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "a85efe413b6ec72e5b6ed3ec82d3f8d5f0eff04479ba3c5a4537afd022458ad0"
     },
     {
       "name": "hubspot-get-property",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "5a9bd04902985ac4eb31a566d7361afbf8aa9188438934e5d6db23c969d08d90"
     },
     {
       "name": "hubspot-get-schemas",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "08996839d66fe3b6f4d229838a66e0a83591f2b4e002aa836c88cf05fa838507"
     },
     {
       "name": "hubspot-get-user-details",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "f3f61cc8d15ecfe63213f77a423bd35f5eaea671f737565a1a34ad2a5350684d"
     },
     {
       "name": "hubspot-get-workflow",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ff6858b2e4ce04c0ad92f981c943126181a5dd94fb5e369b13203b322bf50b97"
     },
     {
       "name": "hubspot-list-associations",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "2cdb882a9deea72c83b8faa72cf4fcd4593675762e6d7af35bd63f31bd4266ea"
     },
     {
       "name": "hubspot-list-objects",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "43c484c187f00324fcf7bb64083449b5b8775073872143b69ad87febeb3a1420"
     },
     {
       "name": "hubspot-list-properties",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "91d43327033ddde715f0a8561e296b4c1cbfbb5bde2148a072463b4340192385"
     },
     {
       "name": "hubspot-list-workflows",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "fa8220c4094dc14a6e542f18554fb25c37d0948d0bc4bcc1b2bc82c0166a57de"
     },
     {
       "name": "hubspot-search-objects",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "f0ff9a5344351a33640a4d2600e79aae6ab13aa23e11aca72981edefe4a7671b"
     },
     {
       "name": "hubspot-update-engagement",
       "product": "crm",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "25ec284793bc45c54160648f235e3270fbaf154978006f5db8ade6713e11b4d1"
     },
     {
       "name": "hubspot-update-property",
       "product": "crm",
       "access": "admin",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ff61fa81dd723526c53a6d29b515a25019e5f66acb44ec8d25b424b817a21d18"
     },
     {
       "name": "manage_aeo_prompts",

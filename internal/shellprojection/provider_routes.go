@@ -88,9 +88,10 @@ var (
 
 // classifyAtlassianCurl classifies a literal request to an Atlassian Cloud
 // site (`<site>.atlassian.net`) or the OAuth gateway (`api.atlassian.com/ex/
-// jira|confluence/<cloudId>`). An incomplete parse, such as a body read from
-// a file, is unrecognized.
-func classifyAtlassianCurl(host string, parsed *url.URL, method string, complete bool) cedareval.ShellProjectionV2 {
+// jira|confluence/<cloudId>`). An incomplete parse is unrecognized, and so is
+// a body read from a file, except on a read-over-POST route such as JQL
+// search, whose body cannot turn it into a write.
+func classifyAtlassianCurl(host string, parsed *url.URL, method string, complete, bodyFile bool) cedareval.ShellProjectionV2 {
 	path := parsed.Path
 	product := productJira
 	if match := cloudIDPrefix.FindStringSubmatch(path); match != nil {
@@ -114,6 +115,9 @@ func classifyAtlassianCurl(host string, parsed *url.URL, method string, complete
 		product = productConfluence
 		path = strings.TrimPrefix(path, "/wiki")
 	}
+	read := method == "POST" && (product == productJira && jiraReadPost.MatchString(path) ||
+		product == productConfluence && confluenceReadPost.MatchString(path))
+	complete = complete && (!bodyFile || read)
 	facts := []string{"curl/host=" + host, "http/method=" + method, "http/path=" + parsed.EscapedPath()}
 	if complete {
 		facts = append(facts, FactAtlassianRouteCatalogued)
@@ -121,8 +125,6 @@ func classifyAtlassianCurl(host string, parsed *url.URL, method string, complete
 		facts = append(facts, FactAtlassianRouteUnrecognized)
 	}
 	if isWriteMethod(method) {
-		read := method == "POST" && (product == productJira && jiraReadPost.MatchString(path) ||
-			product == productConfluence && confluenceReadPost.MatchString(path))
 		if !read {
 			admin := false
 			if product == productJira {
@@ -181,9 +183,12 @@ var (
 
 // classifyHubSpotCurl classifies a literal request to the HubSpot API. Search
 // and batch-read endpoints are POST reads; archive and GDPR-delete endpoints
-// are deletes whatever their method.
-func classifyHubSpotCurl(host string, parsed *url.URL, method string, complete bool) cedareval.ShellProjectionV2 {
+// are deletes whatever their method. A body read from a file is unrecognized
+// except on those read routes.
+func classifyHubSpotCurl(host string, parsed *url.URL, method string, complete, bodyFile bool) cedareval.ShellProjectionV2 {
 	path := strings.TrimSuffix(parsed.Path, "/")
+	read := method == "POST" && (strings.HasSuffix(path, "/search") || strings.HasSuffix(path, "/batch/read"))
+	complete = complete && (!bodyFile || read)
 	facts := []string{"curl/host=" + host, "http/method=" + method, "http/path=" + parsed.EscapedPath()}
 	if complete {
 		facts = append(facts, FactHubSpotRouteCatalogued)
@@ -191,7 +196,6 @@ func classifyHubSpotCurl(host string, parsed *url.URL, method string, complete b
 		facts = append(facts, FactHubSpotRouteUnrecognized)
 	}
 	if isWriteMethod(method) {
-		read := method == "POST" && (strings.HasSuffix(path, "/search") || strings.HasSuffix(path, "/batch/read"))
 		if !read {
 			del := method == "DELETE" || hasSuffix(path, hubspotDeleteSuffixes...)
 			admin := hasPrefix(path, hubspotAdminPrefixes...) || hubspotAssociationLabels.MatchString(path)
