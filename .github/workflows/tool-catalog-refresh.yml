@@ -130,7 +130,14 @@ jobs:
           git commit -m "chore(toolcatalog): refresh provider MCP catalogs"
           if [[ -n "$PR" ]]; then
             git push origin "$BRANCH"
-            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/report.md"
+            # Each run reports only what it changed, so keep every earlier
+            # run's notes: a tier still waiting for review stays listed.
+            {
+              gh pr view "$BRANCH" --json body --jq .body
+              printf '\n\n---\n\n_Run of %s:_\n\n' "$(date -u +%F)"
+              cat "$RUNNER_TEMP/report.md"
+            } > "$RUNNER_TEMP/body.md"
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
           else
             # No open PR: any branch left over from a closed one is stale.
             git push --force-with-lease origin "$BRANCH"

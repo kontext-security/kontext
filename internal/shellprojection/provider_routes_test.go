@@ -53,6 +53,7 @@ func TestJiraShellCorpus(t *testing.T) {
 		{name: "bitbucket server latest projects is not jira", command: `curl -X POST -d '{}' https://git.acme.com/rest/api/latest/projects/ENG/repos`, programs: []string{"curl"}, absentFacts: []string{jiraWrite, atlCatalogued}, complete: true},
 		{name: "bulk delete over POST is a delete", command: `curl -X POST -d '{"selectedIssueIdsOrKeys":["ENG-1"]}' https://acme.atlassian.net/rest/api/3/bulk/issues/delete`, programs: []string{"curl"}, facts: []string{atlCatalogued, jiraWrite, jiraDelete}, complete: true},
 		{name: "every url is judged", command: "curl -X DELETE https://example.com https://acme.atlassian.net/rest/api/3/issue/ENG-1", programs: []string{"curl"}, facts: []string{atlUnknown, jiraDelete, incomplete}, complete: false},
+		{name: "plain http to self-hosted jira", command: "curl -X DELETE http://jira.acme.internal/rest/api/2/issue/ENG-1", programs: []string{"curl"}, facts: []string{atlUnknown, jiraDelete, incomplete}, complete: false},
 		{name: "graphql gateway is unrecognized", command: `curl -X POST -d '{"query":"{me{user{name}}}"}' https://acme.atlassian.net/gateway/api/graphql`, programs: []string{"curl"}, facts: []string{atlUnknown, incomplete}, complete: false},
 		// Forge app platform.
 		{name: "forge deploy is admin", command: "forge deploy -e production", programs: []string{"forge"}, facts: []string{jiraWrite, jiraAdmin}, complete: true},
@@ -106,6 +107,9 @@ func TestHubSpotShellCorpus(t *testing.T) {
 		{name: "hs account named like a verb", command: "hs --account list project deploy --build 3", programs: []string{"hs"}, facts: []string{hsCatalogued, hsWrite}, complete: true},
 		{name: "hs unknown option before the command", command: "hs --frobnicate list project deploy", programs: []string{"hs"}, facts: []string{hsUnknown, incomplete}, complete: false},
 		{name: "every url is judged for hubspot", command: "curl -X DELETE https://example.com https://api.hubapi.com/crm/v3/objects/contacts/1", programs: []string{"curl"}, facts: []string{hsUnknown, hsDelete, incomplete}, complete: false},
+		{name: "hs through npx --call", command: "npx --package @hubspot/cli --call 'hs project deploy'", programs: []string{"hs"}, facts: []string{hsUnknown, hsWrite, incomplete}, complete: false},
+		{name: "unreadable launcher command keeps the provider", command: "npx --package @hubspot/cli --call \"$CMD\"", programs: []string{"hs"}, facts: []string{hsUnknown, incomplete}, complete: false},
+		{name: "plain http to hubspot", command: "curl -X DELETE http://api.hubapi.com/crm/v3/objects/contacts/1", programs: []string{"curl"}, facts: []string{hsUnknown, hsDelete, incomplete}, complete: false},
 		{name: "upload from file", command: "curl -X POST --data-binary @contacts.json https://api.hubapi.com/crm/v3/objects/contacts/batch/create", programs: []string{"curl"}, facts: []string{hsUnknown, hsWrite, incomplete}, complete: false},
 		{name: "hs list", command: "hs project list-builds", programs: []string{"hs"}, facts: []string{hsCatalogued}, absentFacts: []string{hsWrite}, complete: true},
 		{name: "hs deploy", command: "hs project deploy --build 3", programs: []string{"hs"}, facts: []string{hsWrite}, absentFacts: []string{hsAdmin}, complete: true},

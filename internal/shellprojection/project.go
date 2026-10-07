@@ -232,6 +232,9 @@ func unwrapPackageLauncher(words []string, complete bool) ([]string, bool, bool)
 	default:
 		return nil, false, false
 	}
+	// A provider package named with --package, even when the command that
+	// runs cannot be read, still makes this that provider's CLI.
+	packaged := ""
 	for i := 0; i < len(rest); i++ {
 		arg := rest[i]
 		switch {
@@ -241,11 +244,35 @@ func unwrapPackageLauncher(words []string, complete bool) ([]string, bool, bool)
 					return append([]string{cli}, rest[i+2:]...), complete, true
 				}
 			}
-			return nil, false, false
+			return launchedPackage(packaged)
 		case arg == "-p" || arg == "--package":
 			// The package is installed; the command named after it runs.
+			if i+1 < len(rest) {
+				packaged = strictestPackage(packaged, rest[i+1])
+			}
 			i++
 		case strings.HasPrefix(arg, "--package="):
+			packaged = strictestPackage(packaged, strings.TrimPrefix(arg, "--package="))
+		case arg == "-c" || arg == "--call":
+			// npx --call 'hs project deploy': the command is one quoted
+			// argument. Its words are judged, but never as a complete parse.
+			if i+1 < len(rest) {
+				words := strings.Fields(rest[i+1])
+				if len(words) > 0 {
+					if cli, ok := launchedCLIs[packageName(words[0])]; ok {
+						return append([]string{cli}, words[1:]...), false, true
+					}
+				}
+			}
+			return launchedPackage(packaged)
+		case strings.HasPrefix(arg, "--call="):
+			words := strings.Fields(strings.TrimPrefix(arg, "--call="))
+			if len(words) > 0 {
+				if cli, ok := launchedCLIs[packageName(words[0])]; ok {
+					return append([]string{cli}, words[1:]...), false, true
+				}
+			}
+			return launchedPackage(packaged)
 		case arg == "-y" || arg == "--yes" || arg == "-q" || arg == "--quiet" || arg == "--silent":
 		case strings.HasPrefix(arg, "-"):
 			complete = false
@@ -254,11 +281,31 @@ func unwrapPackageLauncher(words []string, complete bool) ([]string, bool, bool)
 				return append([]string{cli}, rest[i+1:]...), complete, true
 			}
 			if complete {
-				return nil, false, false
+				return launchedPackage(packaged)
 			}
 			// After an unknown option this may be its value; keep looking
 			// for the package.
 		}
+	}
+	return launchedPackage(packaged)
+}
+
+// strictestPackage keeps the first provider package a launcher installs.
+func strictestPackage(current, spec string) string {
+	if current != "" {
+		return current
+	}
+	if _, ok := launchedCLIs[packageName(spec)]; ok {
+		return packageName(spec)
+	}
+	return ""
+}
+
+// launchedPackage is the fallback when a launcher's command cannot be read:
+// a provider package it installs makes it that provider's CLI, unrecognized.
+func launchedPackage(packaged string) ([]string, bool, bool) {
+	if cli, ok := launchedCLIs[packaged]; ok {
+		return []string{cli}, false, true
 	}
 	return nil, false, false
 }
@@ -977,6 +1024,15 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 // classifyCurlURL classifies one request of a curl command.
 func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile bool) cedareval.ShellProjectionV2 {
 	parsed, err := url.Parse(urlText)
+	if err == nil && parsed.Scheme == "http" && parsed.Host != "" {
+		// Plain HTTP to a provider is still that provider's request; it is
+		// judged like HTTPS but never as a catalogued route.
+		host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+		if isAtlassianHost(host) || isHubSpotHost(host) || isJiraServerPath(parsed.Path) {
+			parsed.Scheme = "https"
+			complete = false
+		}
+	}
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return projection("curl", nil, []string{"dynamic-or-invalid-url"}, false)
 	}
