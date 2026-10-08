@@ -133,6 +133,10 @@ func TestUnnamedGitHubToolsReportUnrecognizedWithTheirTier(t *testing.T) {
 		{"mcp__github__delete_repository", map[string]any{"owner": "o", "repo": "r"}, GitHubUnrecognizedTool, ProviderClassification{Provider: "github", Product: "repository", Access: AccessAdmin}},
 		{"mcp__corp__actions_list", map[string]any{"method": "list_workflows", "owner": "o", "repo": "r"}, GitHubUnrecognizedTool, ProviderClassification{Provider: "github", Product: "actions", Access: AccessRead}},
 		{"mcp__github__get_me", map[string]any{}, "github-mcp/get_me", ProviderClassification{Provider: "github", Product: "users", Access: AccessRead}},
+		// Input that drifted from the pinned schema stays unrecognized for
+		// id-based policies but keeps the tool's tier for the tier presets.
+		{"mcp__github__create_branch", map[string]any{"owner": "o", "repo": "r", "branch": "b", "note": "x"}, GitHubUnrecognizedTool, ProviderClassification{Provider: "github", Product: "code", Access: AccessWrite}},
+		{"mcp__github__delete_file", map[string]any{"owner": "o", "repo": "r"}, GitHubUnrecognizedTool, ProviderClassification{Provider: "github", Product: "code", Access: AccessDelete}},
 	}
 	for _, test := range tests {
 		id, ok := Resolve(test.toolName, test.input)
