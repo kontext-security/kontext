@@ -33,11 +33,13 @@ type CedarInput struct {
 	ContextDiagnostics     []cedareval.ContextDiagnostic
 	EngineErrorCount       int
 	Mapping                cedareval.DecisionMapping
-	// ToolID and Shell are the request the policy evaluated (catalog tool
-	// id plus shell projections). The cloud replays saved versions over
-	// them; empty ToolID means the daemon predates the field.
+	// ToolID, Shell and Tool are the request the policy evaluated (catalog
+	// tool id, shell projections, and the tier sent as context.tool). The
+	// cloud replays saved versions over them; empty ToolID means the daemon
+	// predates the field.
 	ToolID string
 	Shell  []cedareval.ShellProjectionV2
+	Tool   *cedareval.ToolClassificationV2
 }
 
 // DisabledInput describes why no Cedar deployment answered: an explicit kill
@@ -248,8 +250,14 @@ func cloneFloat64(value *float64) *float64 {
 	return &cloned
 }
 
+// maxCedarRequestShellProjections mirrors the hosted ledger's bound on
+// evidence.cedar_request.shell (DECISION_FACT_MAX_SHELL_PROJECTIONS).
+const maxCedarRequestShellProjections = 64
+
 func factCedarRequest(cedar CedarInput) *CedarRequest {
-	if cedar.ToolID == "" {
+	// Over the bound the request is omitted, never truncated: replay must not
+	// evaluate part of a command. The decision itself is still recorded.
+	if cedar.ToolID == "" || len(cedar.Shell) > maxCedarRequestShellProjections {
 		return nil
 	}
 	shell := make([]cedareval.ShellProjectionV2, 0, len(cedar.Shell))
@@ -257,7 +265,12 @@ func factCedarRequest(cedar CedarInput) *CedarRequest {
 		projection.Facts = uploadableFacts(projection.Facts)
 		shell = append(shell, projection)
 	}
-	return &CedarRequest{ToolID: cedar.ToolID, Shell: shell}
+	var tool *cedareval.ToolClassificationV2
+	if cedar.Tool != nil {
+		copied := *cedar.Tool
+		tool = &copied
+	}
+	return &CedarRequest{ToolID: cedar.ToolID, Shell: shell, Tool: tool}
 }
 
 // uploadableFacts keeps the projection replayable without shipping what a

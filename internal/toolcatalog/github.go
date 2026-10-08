@@ -21,7 +21,7 @@ const (
 	mcpSeparator           = "__"
 	GitHubToolPrefix       = "github-mcp/"
 	GitHubUnrecognizedTool = GitHubToolPrefix + "unrecognized"
-	GitHubMCPSourceCommit  = "febc3293a4feb70e62399f39a26b082f78b9b176"
+	GitHubMCPSourceCommit  = "55edd58d5e1127fe7ea3c036bc14dca66f7e41c4"
 	githubMCPSource        = "github/github-mcp-server@" + GitHubMCPSourceCommit
 )
 
@@ -34,42 +34,84 @@ type githubCatalog struct {
 }
 
 type githubTool struct {
-	Name       string            `json:"name"`
-	ReadOnly   bool              `json:"readOnly"`
+	Name string `json:"name"`
+	// Product and Access classify the tool like a provider catalog entry,
+	// so the GitHub presets forbid by tier.
+	Product string `json:"product"`
+	Access  string `json:"access"`
+	// Named tools report as github-mcp/<name>. The rest report as
+	// github-mcp/unrecognized with their tier: policies saved before GitHub
+	// was tiered block GitHub writes by name plus that fallback, so a tool
+	// they never named must keep reaching the fallback. New tools stay
+	// unnamed; tier presets judge them by context.tool.
+	Named      bool              `json:"named,omitempty"`
 	Required   []string          `json:"required"`
 	Properties map[string]string `json:"properties"`
+	// Definition fingerprints the upstream definition for the refresh.
+	Definition string `json:"definition,omitempty"`
 }
 
 var githubTools = loadGitHubTools()
 
+// GitHubProvider is the provider name GitHub MCP tools carry in context.tool.
+const GitHubProvider = "github"
+
+// githubDigestMaterial covers the pinned commit, which fixes every input
+// schema, and each tool's product and tier, which reviewers may edit.
+func githubDigestMaterial() string {
+	var material strings.Builder
+	material.WriteString("github-mcp:" + GitHubMCPSourceCommit)
+	for _, name := range sortedGitHubToolNames() {
+		tool := githubTools[name]
+		material.WriteString("\n" + tool.Name + "\t" + tool.Product + "\t" + tool.Access)
+		if tool.Named {
+			material.WriteString("\tnamed")
+		}
+	}
+	return material.String()
+}
+
+func sortedGitHubToolNames() []string {
+	names := make([]string, 0, len(githubTools))
+	for name := range githubTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func Digest() string {
-	github := sha256.Sum256([]byte("github-mcp:" + GitHubMCPSourceCommit))
+	github := sha256.Sum256([]byte(githubDigestMaterial()))
 	toolIDs := []string{cedareval.ToolShellV2, cedareval.ToolUnknownV2}
 	sort.Strings(toolIDs)
 	base, _ := json.Marshal(toolIDs)
-	combined := sha256.Sum256([]byte(
-		"kontext:cedar-tool-catalog:v1\x00" + string(base) + "\x00" + hex.EncodeToString(github[:]),
-	))
+	material := "kontext:cedar-tool-catalog:v1\x00" + string(base) + "\x00" + hex.EncodeToString(github[:])
+	for _, provider := range Providers() {
+		material += "\x00" + providerDigest(provider)
+	}
+	combined := sha256.Sum256([]byte(material))
 	return hex.EncodeToString(combined[:])
 }
 
-// Known reports whether toolID is one the daemon can produce for a GitHub
-// MCP call: a catalogued tool under the github-mcp/ prefix, or the
-// unrecognized fallback. A policy naming any other github-mcp/ id never
-// matches.
+// Known reports whether toolID is one the daemon can produce for a
+// catalogued MCP call: a catalogued tool under the github-mcp/ or a provider
+// prefix, or that prefix's unrecognized fallback. A policy naming any other
+// id under those prefixes never matches.
 func Known(toolID string) bool {
-	if toolID == GitHubUnrecognizedTool {
+	if toolID == GitHubUnrecognizedTool || knownProviderTool(toolID) {
 		return true
 	}
 	name, ok := strings.CutPrefix(toolID, GitHubToolPrefix)
 	if !ok {
 		return false
 	}
-	_, ok = githubTools[name]
-	return ok
+	tool, ok := githubTools[name]
+	return ok && tool.Named
 }
 
-// Resolve maps an MCP tool call to the pinned GitHub catalog. The server
+// Resolve maps an MCP tool call to a catalogued tool id. Provider catalogs
+// (Atlassian, HubSpot) are consulted first for servers not named for GitHub;
+// see resolveProvider. Otherwise the call is matched to the pinned GitHub catalog. The server
 // name is whatever the operator registered it as, so a catalogued tool name
 // is recognised under any mcp__<server>__ prefix and held to its pinned
 // input schema: input that no longer matches (a missing required field, a
@@ -85,6 +127,11 @@ func Resolve(toolName string, input map[string]any) (string, bool) {
 		return "", false
 	}
 	githubServer := strings.Contains(strings.ToLower(server), "github")
+	if !githubServer {
+		if toolID, ok := resolveProvider(server, tool, input); ok {
+			return toolID, true
+		}
+	}
 	catalogued, known := githubTools[tool]
 	if !known {
 		if githubServer {
@@ -93,6 +140,9 @@ func Resolve(toolName string, input map[string]any) (string, bool) {
 		return "", false
 	}
 	if validInput(catalogued, input) {
+		if !catalogued.Named {
+			return GitHubUnrecognizedTool, true
+		}
 		return GitHubToolPrefix + catalogued.Name, true
 	}
 	if !githubServer && hasForeignField(catalogued, input) {
@@ -135,6 +185,14 @@ func loadGitHubTools() map[string]githubTool {
 	}
 	tools := make(map[string]githubTool, len(catalog.Tools))
 	for _, tool := range catalog.Tools {
+		switch tool.Access {
+		case AccessRead, AccessWrite, AccessDelete, AccessAdmin:
+		default:
+			panic("embedded GitHub MCP catalog: " + tool.Name + " has a bad tier")
+		}
+		if tool.Product == "" {
+			panic("embedded GitHub MCP catalog: " + tool.Name + " has no product")
+		}
 		tools[tool.Name] = tool
 	}
 	return tools
@@ -190,11 +248,10 @@ func validType(kind string, value any) bool {
 
 // githubOperations is the crosswalk from catalogued GitHub MCP write tools
 // to the github/operation vocabulary the shell projection emits for git, gh
-// and curl. Cedar matches MCP calls by resource id, so the presets list the
-// tool ids directly; this table keeps the two surfaces named consistently
-// for trace display and template authors. The pinned catalog has no
-// ref-deleting, release, workflow or settings tool, so merge is the only
-// row until it is re-pinned.
+// and curl. Presets match MCP calls by tier and product (context.tool), and
+// by resource id where a tier is too coarse (merging a pull request); this
+// table keeps the two surfaces named consistently for trace display and
+// template authors.
 var githubOperations = map[string][]string{
 	GitHubToolPrefix + "merge_pull_request": {"merge-pull-request"},
 }

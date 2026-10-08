@@ -275,6 +275,50 @@ func TestBuildCarriesCedarRequest(t *testing.T) {
 	if shell[0].Facts[1] != "http/path=repos/o/r/issues?access_token=secret" {
 		t.Fatalf("input projection mutated")
 	}
+	if built.Evidence.CedarRequest.Tool != nil {
+		t.Fatalf("expected no tool on a shell request, got %+v", built.Evidence.CedarRequest.Tool)
+	}
+	encoded, err := json.Marshal(built.Evidence.CedarRequest)
+	if err != nil {
+		t.Fatalf("marshal cedar_request: %v", err)
+	}
+	if strings.Contains(string(encoded), `"tool"`) {
+		t.Fatalf("expected tool omitted from %s", encoded)
+	}
+	// An MCP call carries the tier it was evaluated with.
+	tier := &cedareval.ToolClassificationV2{Provider: "github", Product: "repos", Access: "admin"}
+	mcpInput := input
+	mcpCedar := *input.Cedar
+	mcpCedar.ToolID, mcpCedar.Shell, mcpCedar.Tool = "github-mcp/unrecognized", nil, tier
+	mcpInput.Cedar = &mcpCedar
+	built, err = ledgerfact.Build(mcpInput)
+	if err != nil {
+		t.Fatalf("build mcp: %v", err)
+	}
+	if got := built.Evidence.CedarRequest; got == nil || got.Tool == nil || *got.Tool != *tier || got.Tool == tier {
+		t.Fatalf("cedar_request tool = %+v, want a copy of %+v", got, tier)
+	}
+	encoded, err = json.Marshal(built.Evidence.CedarRequest)
+	if err != nil {
+		t.Fatalf("marshal mcp cedar_request: %v", err)
+	}
+	if want := `"tool":{"provider":"github","product":"repos","access":"admin"}`; !strings.Contains(string(encoded), want) {
+		t.Fatalf("cedar_request = %s, want %s", encoded, want)
+	}
+	// Over the hosted bound the request is omitted, never truncated: replay
+	// must not evaluate part of a command, and the ledger rejects the row.
+	input.Cedar.Shell = make([]cedareval.ShellProjectionV2, 65)
+	for i := range input.Cedar.Shell {
+		input.Cedar.Shell[i] = shell[0]
+	}
+	built, err = ledgerfact.Build(input)
+	if err != nil {
+		t.Fatalf("build with oversized shell: %v", err)
+	}
+	if built.Evidence.CedarRequest != nil {
+		t.Fatalf("expected cedar_request omitted over the projection bound")
+	}
+	input.Cedar.Shell = shell
 	input.Cedar.ToolID = ""
 	built, err = ledgerfact.Build(input)
 	if err != nil {

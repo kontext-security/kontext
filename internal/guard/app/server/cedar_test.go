@@ -42,7 +42,7 @@ const cedarTestSchema = `namespace Kontext {
   };
 }`
 
-const cedarTestToolCatalogDigest = "cf87ee7a167f1f07bdc41450467708f832c9d8c4aaf20651a5d0df070d3de436"
+const cedarTestToolCatalogDigest = "fb881a38b1e020f73c25ca60918816c00adb90baa768c27a5c4284e3c8831bbf"
 
 func cedarHookEvent(tool string, input map[string]any) risk.HookEvent {
 	return risk.HookEvent{SessionID: "session-1", Agent: "claude", HookEventName: "PreToolUse", ToolName: tool, ToolInput: input}
@@ -724,6 +724,22 @@ func TestCedarEvidenceCarriesToolIDAndShellFacts(t *testing.T) {
 	if mcp.Cedar.ToolID != "github-mcp/get_me" || mcp.Cedar.Shell != nil {
 		t.Fatalf("Cedar evidence = %#v, want resolved GitHub tool id without shell", mcp.Cedar)
 	}
+	if mcp.Cedar.Tool == nil || mcp.Cedar.Tool.Provider != "github" || mcp.Cedar.Tool.Access != "read" {
+		t.Fatalf("Cedar evidence tool = %#v, want the GitHub read tier", mcp.Cedar.Tool)
+	}
+	if shell.Cedar.Tool != nil {
+		t.Fatalf("shell evidence tool = %#v, want none", shell.Cedar.Tool)
+	}
+
+	// An unnamed GitHub tool reports as unrecognized but keeps its tier on
+	// record, so replay can judge it the way the daemon did.
+	unnamed, err := provider.DecideHook(context.Background(), cedarHookEvent("mcp__gh__delete_repository", map[string]any{"owner": "o", "repo": "r"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unnamed.Cedar.ToolID != "github-mcp/unrecognized" || unnamed.Cedar.Tool == nil || unnamed.Cedar.Tool.Access != "admin" {
+		t.Fatalf("Cedar evidence = %#v, want unrecognized id with the admin tier", unnamed.Cedar)
+	}
 
 	other, err := provider.DecideHook(context.Background(), cedarHookEvent("Read", map[string]any{}))
 	if err != nil {
@@ -970,6 +986,53 @@ func TestCedarGitHubMCPUsesPinnedToolIDs(t *testing.T) {
 		{"renamed server schema drift", "mcp__gh-enterprise__push_files", map[string]any{"owner": "o", "repo": "r", "branch": "main", "files": []any{}}, risk.DecisionDeny},
 		{"default server schema drift", "mcp__github__push_files", map[string]any{"owner": "o", "repo": "r", "branch": "main", "files": []any{}}, risk.DecisionDeny},
 		{"unrelated server same-named tool", "mcp__linear__create_issue", map[string]any{"teamId": "T1", "title": "bug"}, risk.DecisionAllow},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decision, err := provider.DecideHook(context.Background(), cedarHookEvent(test.tool, test.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != test.want {
+				t.Fatalf("decision = %#v, want %q", decision, test.want)
+			}
+		})
+	}
+}
+
+func TestCedarProviderPresetsCoverMCPAndShell(t *testing.T) {
+	policy := `@id("allow") permit(principal, action == Kontext::Action::"ToolUse", resource);
+@id("jira-read-only") forbid(principal, action == Kontext::Action::"ToolUse", resource)
+when {
+  (resource == Kontext::Tool::"shell" && (!(context has shell) || (context has shell && (!(context.shell has facts) || (context.shell has facts && context.shell.facts.contains("jira/write=true")))))) ||
+  (context has tool && context.tool.provider == "atlassian" && ["jira", "jsm"].contains(context.tool.product) && ["write", "delete", "admin"].contains(context.tool.access))
+};
+@id("block-unrecognized-hubspot-operations") forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"hubspot-mcp/unrecognized");
+@id("protect-releases-and-workflows") forbid(principal, action == Kontext::Action::"ToolUse", resource)
+when { context has tool && context.tool.provider == "github" && ["actions", "releases"].contains(context.tool.product) && ["write", "delete", "admin"].contains(context.tool.access) };`
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, policy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+
+	tests := []struct {
+		name  string
+		tool  string
+		input map[string]any
+		want  risk.Decision
+	}{
+		{"connector write", "mcp__claude_ai_Atlassian__createJiraIssue", map[string]any{"cloudId": "c"}, risk.DecisionDeny},
+		{"connector read", "mcp__claude_ai_Atlassian__getJiraIssue", map[string]any{"cloudId": "c"}, risk.DecisionAllow},
+		{"delete through execute", "mcp__atlassian__executeDestructive", map[string]any{"name": "deleteJiraIssue", "inputs": map[string]any{}}, risk.DecisionDeny},
+		{"read through execute", "mcp__atlassian__executeRead", map[string]any{"name": "listJiraProjects"}, risk.DecisionAllow},
+		{"admin by tier", "mcp__atlassian__createJiraProject", map[string]any{}, risk.DecisionDeny},
+		{"other product write", "mcp__atlassian__createConfluencePage", map[string]any{}, risk.DecisionAllow},
+		{"shell write", "Bash", map[string]any{"command": "acli jira workitem create --summary hi"}, risk.DecisionDeny},
+		{"shell read", "Bash", map[string]any{"command": "curl https://acme.atlassian.net/rest/api/3/issue/ENG-1"}, risk.DecisionAllow},
+		{"new hubspot tool", "mcp__hubspot__delete_everything", map[string]any{}, risk.DecisionDeny},
+		{"catalogued hubspot tool", "mcp__hubspot__search_crm_objects", map[string]any{}, risk.DecisionAllow},
+		{"github workflow trigger by tier", "mcp__github__actions_run_trigger", map[string]any{"method": "run_workflow", "owner": "o", "repo": "r"}, risk.DecisionDeny},
+		{"github workflow trigger with drifted input keeps its tier", "mcp__github__actions_run_trigger", map[string]any{"method": "run_workflow", "owner": "o", "repo": "r", "note": "x"}, risk.DecisionDeny},
+		{"github workflow read", "mcp__github__actions_list", map[string]any{"method": "list_workflows", "owner": "o", "repo": "r"}, risk.DecisionAllow},
+		{"github issue write is another product", "mcp__github__update_issue_state", map[string]any{"owner": "o", "repo": "r", "issue_number": 1, "state": "closed"}, risk.DecisionAllow},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

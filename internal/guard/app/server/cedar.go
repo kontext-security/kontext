@@ -136,6 +136,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	toolID, projections := resolveTool(event, namesUnknownTool(snapshot))
 	evidence.ToolID = toolID
 	evidence.Shell = projections
+	evidence.Tool = toolClassification(toolID, event)
 
 	metadata := snapshot.Deployment
 	if metadata == nil {
@@ -354,6 +355,19 @@ func namesUnknownTool(snapshot cedarpolicy.Snapshot) bool {
 	return deployment != nil && strings.Contains(deployment.PolicySet.Source, unknownToolLiteral)
 }
 
+// toolClassification is the catalog tier an MCP call is evaluated with as
+// context.tool, or nil for shell, unrecognized and non-provider calls.
+func toolClassification(toolID string, event risk.HookEvent) *cedareval.ToolClassificationV2 {
+	if toolID == cedareval.ToolShellV2 {
+		return nil
+	}
+	class, ok := toolcatalog.ClassifyCall(toolID, event.ToolName, event.ToolInput)
+	if !ok {
+		return nil
+	}
+	return &cedareval.ToolClassificationV2{Provider: class.Provider, Product: class.Product, Access: class.Access}
+}
+
 func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent, toolID string, projections []cedareval.ShellProjectionV2) []cedareval.ToolUseInputV2 {
 	agentID := ""
 	switch event.Agent {
@@ -373,6 +387,7 @@ func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent
 		ToolInput:  event.ToolInput,
 	}
 	if toolID != cedareval.ToolShellV2 {
+		base.Tool = toolClassification(toolID, event)
 		return []cedareval.ToolUseInputV2{base}
 	}
 	inputs := make([]cedareval.ToolUseInputV2, len(projections))
