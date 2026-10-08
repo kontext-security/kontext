@@ -60,20 +60,40 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Pushes and the PR go through the catalog GitHub App's token, not
+    # GITHUB_TOKEN: a PR opened with GITHUB_TOKEN starts no pull_request
+    # workflows, so its required checks would never report.
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     # Two refreshes never race on the branch.
     concurrency:
       group: tool-catalog-refresh
       cancel-in-progress: false
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Check the catalog App credentials
+        env:
+          CLIENT_ID: ${{ vars.CATALOG_APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.CATALOG_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$CLIENT_ID" || -z "$PRIVATE_KEY" ]]; then
+            echo "::error::Set the repository variable CATALOG_APP_CLIENT_ID and the secret CATALOG_APP_PRIVATE_KEY for the catalog GitHub App; the refresh opens its PR with that App so CI runs on it."
+            exit 1
+          fi
+
+      - name: Mint the catalog App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.CATALOG_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CATALOG_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -83,10 +103,14 @@ jobs:
 
       - name: Continue the open refresh PR
         id: branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          bot="${APP_SLUG}[bot]"
+          git config user.name "$bot"
+          git config user.email "$(gh api "/users/$bot" --jq .id)+$bot@users.noreply.github.com"
           pr="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')"
           echo "pr=$pr" >> "$GITHUB_OUTPUT"
           if [[ -n "$pr" ]]; then
@@ -107,6 +131,7 @@ jobs:
 
       - name: Open or update pull request
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR: ${{ steps.branch.outputs.pr }}
         run: |
           set -euo pipefail
@@ -123,8 +148,8 @@ jobs:
             old="$(sed -n 's/.*const want = "\([0-9a-f]\{64\}\)".*/\1/p' internal/toolcatalog/github_test.go)"
             grep -rl "$old" internal | xargs sed -i "s/$old/$digest/g"
           fi
-          # A PR opened with GITHUB_TOKEN does not trigger CI, so run the
-          # catalog's own checks here before pushing.
+          # Run the catalog's own checks before pushing, so a refresh that
+          # breaks them never opens a PR.
           go test ./internal/toolcatalog/... ./internal/cedarpolicy/... ./internal/guard/app/server/... ./internal/managedobserve/...
           git add internal
           git commit -m "chore(toolcatalog): refresh provider MCP catalogs"
