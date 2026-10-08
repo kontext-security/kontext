@@ -144,11 +144,14 @@ type Evidence struct {
 	CedarRequest *CedarRequest `json:"cedar_request,omitempty"`
 }
 
-// CedarRequest is the replayable request: the catalog tool id and the shell
-// projections a command was evaluated as.
+// CedarRequest is the replayable request: the catalog tool id, the shell
+// projections a command was evaluated as, and the catalog tier an MCP call
+// was sent with as context.tool. Tool is omitted for shell and unclassified
+// calls, so replay can judge github-mcp/unrecognized calls by their tier.
 type CedarRequest struct {
-	ToolID string                        `json:"tool_id"`
-	Shell  []cedareval.ShellProjectionV2 `json:"shell"`
+	ToolID string                          `json:"tool_id"`
+	Shell  []cedareval.ShellProjectionV2   `json:"shell"`
+	Tool   *cedareval.ToolClassificationV2 `json:"tool,omitempty"`
 }
 
 // DecisionFact is the one request.decided record for an attempted tool call.
