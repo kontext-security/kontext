@@ -42,3 +42,18 @@ func TestMergeVariantsHoldsAToolToEveryVariant(t *testing.T) {
 		t.Errorf("single variant hint = %q, want empty", single.hint)
 	}
 }
+
+func TestMarkRemovedReportsEachRemovalOnce(t *testing.T) {
+	tools := []githubTool{{Name: "get_me"}, {Name: "old_tool"}}
+	upstream := map[string]githubSnapshot{"get_me": {}}
+
+	if got := markRemoved(tools, upstream); len(got) != 1 || got[0] != "`old_tool`" {
+		t.Fatalf("first run removed = %v, want [`old_tool`]", got)
+	}
+	if !tools[1].Removed || tools[0].Removed {
+		t.Fatalf("Removed flags = %v, %v; want false, true", tools[0].Removed, tools[1].Removed)
+	}
+	if got := markRemoved(tools, upstream); len(got) != 0 {
+		t.Fatalf("second run removed = %v, want none", got)
+	}
+}

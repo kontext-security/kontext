@@ -32,10 +32,13 @@ type githubCatalog struct {
 }
 
 type githubTool struct {
-	Name       string            `json:"name"`
-	Product    string            `json:"product"`
-	Access     string            `json:"access"`
-	Named      bool              `json:"named,omitempty"`
+	Name    string `json:"name"`
+	Product string `json:"product"`
+	Access  string `json:"access"`
+	Named   bool   `json:"named,omitempty"`
+	// Removed marks a tool GitHub no longer serves. It stays catalogued for
+	// older servers; recording the removal is what puts it up for review.
+	Removed    bool              `json:"removed,omitempty"`
 	Required   []string          `json:"required"`
 	Properties map[string]string `json:"properties"`
 	Definition string            `json:"definition,omitempty"`
@@ -150,6 +153,10 @@ func (r *refresher) refreshGitHub(catalogPath, sourcePath string) error {
 			continue
 		}
 		item := &catalog.Tools[i]
+		if item.Removed {
+			item.Removed = false
+			r.githubChanged = true
+		}
 		if item.Definition != snap.definition {
 			changed = append(changed, fmt.Sprintf("`%s` (%s)", name, item.Access))
 			item.Required, item.Properties, item.Definition = snap.required, snap.properties, snap.definition
@@ -161,10 +168,8 @@ func (r *refresher) refreshGitHub(catalogPath, sourcePath string) error {
 			r.githubChanged = true
 		}
 	}
-	for _, item := range catalog.Tools {
-		if _, ok := upstream[item.Name]; !ok {
-			removed = append(removed, "`"+item.Name+"`")
-		}
+	if removed = markRemoved(catalog.Tools, upstream); len(removed) > 0 {
+		r.githubChanged = true
 	}
 
 	r.note("- github/github-mcp-server: pinned %s, upstream HEAD %s; %d upstream tools, %d catalogued", pinned[:12], head[:12], len(upstream), len(catalog.Tools))
@@ -192,6 +197,19 @@ func (r *refresher) refreshGitHub(catalogPath, sourcePath string) error {
 		r.githubHead = head
 	}
 	return nil
+}
+
+// markRemoved flags catalogued tools upstream no longer serves and returns
+// the ones newly gone, so a removal opens a review once rather than weekly.
+func markRemoved(tools []githubTool, upstream map[string]githubSnapshot) []string {
+	var removed []string
+	for i := range tools {
+		if _, ok := upstream[tools[i].Name]; !ok && !tools[i].Removed {
+			tools[i].Removed = true
+			removed = append(removed, "`"+tools[i].Name+"`")
+		}
+	}
+	return removed
 }
 
 func pinnedGitHubCommit(sourcePath string) (string, error) {
