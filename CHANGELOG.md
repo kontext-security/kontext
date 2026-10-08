@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.11.0](https://github.com/kontext-security/kontext/compare/v1.10.0...v1.11.0) (2026-10-08)
+
+
+### Features
+
+* **ledger:** record the tool tier in the decision fact's cedar_request ([#549](https://github.com/kontext-security/kontext/issues/549)) ([bbc04d3](https://github.com/kontext-security/kontext/commit/bbc04d3b2530c9a83cf1459a7af88425aa67a348))
+* **merlin:** add V3 precision model and Claude prompt repair ([#551](https://github.com/kontext-security/kontext/issues/551)) ([1951ac3](https://github.com/kontext-security/kontext/commit/1951ac38c93c661470432f72c23c367b80c49aef))
+* **merlin:** enable new matched-replay model by default ([#541](https://github.com/kontext-security/kontext/issues/541)) ([05b187f](https://github.com/kontext-security/kontext/commit/05b187f390862b6e242dde285fabf3404b9ebac9))
+* **policy:** tier Jira, HubSpot and GitHub MCP tools and classify their shell routes ([#542](https://github.com/kontext-security/kontext/issues/542)) ([0e800eb](https://github.com/kontext-security/kontext/commit/0e800eba001291e36127fc5b692b56435039c19e))
+* **toolcatalog:** tier every GitHub MCP tool like the provider catalogs ([#544](https://github.com/kontext-security/kontext/issues/544)) ([bb5b861](https://github.com/kontext-security/kontext/commit/bb5b8610b35f3437d8efe8ce9aa1b89c5e85d77d))
+
+
+### Bug Fixes
+
+* **doctor:** name stale Claude hooks and the command that repairs them ([#537](https://github.com/kontext-security/kontext/issues/537)) ([f3b23de](https://github.com/kontext-security/kontext/commit/f3b23de57debde1a5dcdff21117ae4dc0cba589e))
+* **ledgerfact:** omit cedar_request over the hosted shell projection bound ([#543](https://github.com/kontext-security/kontext/issues/543)) ([49deae8](https://github.com/kontext-security/kontext/commit/49deae8507a8c1197f1867f6badf8990ae8524b0))
+* **toolcatalog:** keep the tier of a GitHub call whose input drifted ([#550](https://github.com/kontext-security/kontext/issues/550)) ([62076fd](https://github.com/kontext-security/kontext/commit/62076fd01e9d96b9dcc92d7e65925fc5632878f0))
+
 ## [1.10.0](https://github.com/kontext-security/kontext/compare/v1.9.1...v1.10.0) (2026-10-01)
 
 
