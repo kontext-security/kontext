@@ -1,7 +1,7 @@
 {
   "provider": "hubspot",
   "toolIdPrefix": "hubspot-mcp/",
-  "version": "2026-10-07",
+  "version": "2026-10-08",
   "serverNameHints": [
     "hubspot"
   ],
@@ -15,58 +15,68 @@
       "name": "discover_hubspot_schema",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "ac185fb4423359861b0b1fea782380ea0d641c9dd7b675a5e9de4651dc11f959"
     },
     {
       "name": "get_aeo_metrics",
       "product": "marketing",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "2ddf6a7738415bc11acc3d3ec3c126e31e2e2d6cf308a97fe5caba82cbf05cb6"
     },
     {
       "name": "get_campaign_attribution_reports",
       "product": "marketing",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b5efe366695a9a711de4c732b557d6c7b823e4aa28534a12621558fd2a496cd7"
     },
     {
       "name": "get_content_analytics_report",
       "product": "content",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "f6acfbf5e601e0557c303c16243c4a2dbec2fc4242b53b073ac0a66d1c5e79ec"
     },
     {
       "name": "get_conversation_channel_metadata",
       "product": "conversations",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "6e92ade94ea1071d613d3e60a1a246764297b8aca6b689e448cabbf6e30cc685"
     },
     {
       "name": "get_crm_objects",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "54b56d302484355c2104fd55e78f7454650fdc02920c9cb7ccf5dd687a101ebc"
     },
     {
       "name": "get_marketing_email_analytics",
       "product": "marketing",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "f21daf7aea8931e4936b8785479fd26a1ff9db05bd659286cec07355d534faae"
     },
     {
       "name": "get_organization_details",
       "product": "crm",
-      "access": "read"
+      "access": "read",
+      "definition": "175d7ddf3f28f73bc389648c65ad3aa239638b22528c2181dc03d10ad0c707cc"
     },
     {
       "name": "get_properties",
       "product": "crm",
-      "access": "read"
+      "access": "read",
+      "definition": "033525a9a795fdd8661d61ff3c85fe24606a502263fb69c8d2fcfb6d77b5ed7f"
     },
     {
       "name": "get_user_details",
       "product": "crm",
-      "access": "read"
+      "access": "read",
+      "definition": "3cb70452c9c4de3735920ddeb9eed8b7d096a510c4358e3dd2addd2733b18dff"
     },
     {
       "name": "hubspot-batch-create-associations",
@@ -219,13 +229,15 @@
       "name": "manage_aeo_prompts",
       "product": "marketing",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b969ff62600c33ff0123f119a591447f8216f53a5cc72f69f0361999a6fb8add"
     },
     {
       "name": "manage_aeo_recommendations",
       "product": "marketing",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "765aa8b449da2439c68a626004b92d2e4bb84b3a9d542a1d8eb8a2d5736260d7"
     },
     {
       "name": "manage_blog_post",
@@ -237,49 +249,57 @@
       "name": "manage_campaign_objects",
       "product": "marketing",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "4dd6a3e9cefbc3a2c4b8b8a312f1c94750c54f31427bc159dfecea4ea71bdf5b"
     },
     {
       "name": "manage_crm_objects",
       "product": "crm",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "605d984318c7ea140a1cc6a5f40d555cfaf0b1a2688400eb392a65b7e12e985f"
     },
     {
       "name": "manage_custom_pipelines",
       "product": "crm",
       "access": "admin",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "1134b311a97208fad015446dbb1c56000558778efc2f2989ea073577ce175c06"
     },
     {
       "name": "manage_custom_properties",
       "product": "crm",
       "access": "admin",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "09d30b023f1e3bc1c8bd4b51436069c660a692389e69e748de3d1916cebd9c10"
     },
     {
       "name": "manage_landing_page",
       "product": "content",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "5fa173ee956e3490813acefa75d5a420e53b8811d77c9c6055ae92a7219144e1"
     },
     {
       "name": "manage_marketing_email",
       "product": "marketing",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b695f867b710838d9de7fcff8b7b72b8dd662f1933b5e60707720b2ad793fb15"
     },
     {
       "name": "manage_onboarding",
       "product": "platform",
       "access": "delete",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "028906dbef2ea1e8568c8f56f720c38425e7b504acc0fc26febb8959ef10e48b"
     },
     {
       "name": "manage_segment",
       "product": "crm",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "5ea77704cc5b0e2301a5b1c24d01cf21f7d382889f9c25bdefe6ee87249c2d03"
     },
     {
       "name": "manage_website_page",
@@ -291,13 +311,15 @@
       "name": "query_crm_data",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "e6928ef29420f764d1068734673d1550ff2615aa70e946abdd8236cfa438e209"
     },
     {
       "name": "read_campaign_data",
       "product": "marketing",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "beeb5007e6c26df0e7fa6e735e508ec1f97e5133126e6f821900fdce2c0f5934"
     },
     {
       "name": "render_asset",
@@ -307,39 +329,46 @@
     {
       "name": "search_conversations",
       "product": "conversations",
-      "access": "read"
+      "access": "read",
+      "definition": "c8f7b9113ff822172e109462c6d69de7f1b106ab7429e91d777ac92ae087b1f3"
     },
     {
       "name": "search_crm_objects",
       "product": "crm",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "6c0e7bb1513dde136424b57fe699d62f47a249281891f941244fa6621d792dde"
     },
     {
       "name": "search_intent_signals",
       "product": "marketing",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "94ffb875b8eaf028058e81b4d0b8535e3e0bfc2f5292afaf57d1c858eaccd94e"
     },
     {
       "name": "search_owners",
       "product": "crm",
-      "access": "read"
+      "access": "read",
+      "definition": "532b49df0a6f3211f4b5719a24405357a8f90b761a4236b90d17cf8d8b6b033c"
     },
     {
       "name": "search_properties",
       "product": "crm",
-      "access": "read"
+      "access": "read",
+      "definition": "54e5182997a48ec6da451709f091919bd1c87bbdc58228251ca35d7fc3643aa2"
     },
     {
       "name": "submit_feedback",
       "product": "platform",
-      "access": "write"
+      "access": "write",
+      "definition": "2f9c7e0240da164e44da0b80cbea3a5650aaa71c9ce5d24d319be13e82e1fe47"
     },
     {
       "name": "tool_guidance",
       "product": "platform",
-      "access": "read"
+      "access": "read",
+      "definition": "2f9ae0c9bb594b770c2507c5e1eb773f03a3c423942bd6c57325784c70ce5828"
     }
   ]
 }
