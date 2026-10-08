@@ -178,10 +178,13 @@ type ProviderClassification struct {
 	Access   string
 }
 
-// ClassifyCall classifies the call behind toolID, the id Resolve gave it. An
-// unnamed GitHub tool reports as github-mcp/unrecognized but still carries
-// its catalogued tier, so tier presets judge it.
-func ClassifyCall(toolID, toolName string, input map[string]any) (ProviderClassification, bool) {
+// ClassifyCall classifies the call behind toolID, the id Resolve gave it. A
+// catalogued GitHub tool that reports as github-mcp/unrecognized, because it
+// is unnamed or its input drifted from the pinned schema, still carries its
+// catalogued tier, so tier presets judge it: a write with one extra field is
+// still a write to github-read-only. Only a tool the catalog does not list
+// carries none.
+func ClassifyCall(toolID, toolName string, _ map[string]any) (ProviderClassification, bool) {
 	if toolID != GitHubUnrecognizedTool {
 		return Classify(toolID)
 	}
@@ -190,7 +193,7 @@ func ClassifyCall(toolID, toolName string, input map[string]any) (ProviderClassi
 		return ProviderClassification{}, false
 	}
 	catalogued, ok := githubTools[tool]
-	if !ok || !validInput(catalogued, input) {
+	if !ok {
 		return ProviderClassification{}, false
 	}
 	return ProviderClassification{Provider: GitHubProvider, Product: catalogued.Product, Access: catalogued.Access}, true

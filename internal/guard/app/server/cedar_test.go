@@ -1030,6 +1030,7 @@ when { context has tool && context.tool.provider == "github" && ["actions", "rel
 		{"new hubspot tool", "mcp__hubspot__delete_everything", map[string]any{}, risk.DecisionDeny},
 		{"catalogued hubspot tool", "mcp__hubspot__search_crm_objects", map[string]any{}, risk.DecisionAllow},
 		{"github workflow trigger by tier", "mcp__github__actions_run_trigger", map[string]any{"method": "run_workflow", "owner": "o", "repo": "r"}, risk.DecisionDeny},
+		{"github workflow trigger with drifted input keeps its tier", "mcp__github__actions_run_trigger", map[string]any{"method": "run_workflow", "owner": "o", "repo": "r", "note": "x"}, risk.DecisionDeny},
 		{"github workflow read", "mcp__github__actions_list", map[string]any{"method": "list_workflows", "owner": "o", "repo": "r"}, risk.DecisionAllow},
 		{"github issue write is another product", "mcp__github__update_issue_state", map[string]any{"owner": "o", "repo": "r", "issue_number": 1, "state": "closed"}, risk.DecisionAllow},
 	}
