@@ -275,6 +275,20 @@ func TestBuildCarriesCedarRequest(t *testing.T) {
 	if shell[0].Facts[1] != "http/path=repos/o/r/issues?access_token=secret" {
 		t.Fatalf("input projection mutated")
 	}
+	// Over the hosted bound the request is omitted, never truncated: replay
+	// must not evaluate part of a command, and the ledger rejects the row.
+	input.Cedar.Shell = make([]cedareval.ShellProjectionV2, 65)
+	for i := range input.Cedar.Shell {
+		input.Cedar.Shell[i] = shell[0]
+	}
+	built, err = ledgerfact.Build(input)
+	if err != nil {
+		t.Fatalf("build with oversized shell: %v", err)
+	}
+	if built.Evidence.CedarRequest != nil {
+		t.Fatalf("expected cedar_request omitted over the projection bound")
+	}
+	input.Cedar.Shell = shell
 	input.Cedar.ToolID = ""
 	built, err = ledgerfact.Build(input)
 	if err != nil {
