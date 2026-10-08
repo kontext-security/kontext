@@ -178,9 +178,34 @@ type ProviderClassification struct {
 	Access   string
 }
 
-// Classify returns the catalog entry behind a provider tool id. Unrecognized
+// ClassifyCall classifies the call behind toolID, the id Resolve gave it. An
+// unnamed GitHub tool reports as github-mcp/unrecognized but still carries
+// its catalogued tier, so tier presets judge it.
+func ClassifyCall(toolID, toolName string, input map[string]any) (ProviderClassification, bool) {
+	if toolID != GitHubUnrecognizedTool {
+		return Classify(toolID)
+	}
+	_, tool, ok := splitMCPToolName(toolName)
+	if !ok {
+		return ProviderClassification{}, false
+	}
+	catalogued, ok := githubTools[tool]
+	if !ok || !validInput(catalogued, input) {
+		return ProviderClassification{}, false
+	}
+	return ProviderClassification{Provider: GitHubProvider, Product: catalogued.Product, Access: catalogued.Access}, true
+}
+
+// Classify returns the catalog entry behind a GitHub or provider tool id. Unrecognized
 // and non-provider ids have none.
 func Classify(toolID string) (ProviderClassification, bool) {
+	if name, ok := strings.CutPrefix(toolID, GitHubToolPrefix); ok {
+		tool, ok := githubTools[name]
+		if !ok {
+			return ProviderClassification{}, false
+		}
+		return ProviderClassification{Provider: GitHubProvider, Product: tool.Product, Access: tool.Access}, true
+	}
 	for i := range providers {
 		name, ok := strings.CutPrefix(toolID, providers[i].catalog.ToolIDPrefix)
 		if !ok {
