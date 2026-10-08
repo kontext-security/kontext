@@ -724,6 +724,22 @@ func TestCedarEvidenceCarriesToolIDAndShellFacts(t *testing.T) {
 	if mcp.Cedar.ToolID != "github-mcp/get_me" || mcp.Cedar.Shell != nil {
 		t.Fatalf("Cedar evidence = %#v, want resolved GitHub tool id without shell", mcp.Cedar)
 	}
+	if mcp.Cedar.Tool == nil || mcp.Cedar.Tool.Provider != "github" || mcp.Cedar.Tool.Access != "read" {
+		t.Fatalf("Cedar evidence tool = %#v, want the GitHub read tier", mcp.Cedar.Tool)
+	}
+	if shell.Cedar.Tool != nil {
+		t.Fatalf("shell evidence tool = %#v, want none", shell.Cedar.Tool)
+	}
+
+	// An unnamed GitHub tool reports as unrecognized but keeps its tier on
+	// record, so replay can judge it the way the daemon did.
+	unnamed, err := provider.DecideHook(context.Background(), cedarHookEvent("mcp__gh__delete_repository", map[string]any{"owner": "o", "repo": "r"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unnamed.Cedar.ToolID != "github-mcp/unrecognized" || unnamed.Cedar.Tool == nil || unnamed.Cedar.Tool.Access != "admin" {
+		t.Fatalf("Cedar evidence = %#v, want unrecognized id with the admin tier", unnamed.Cedar)
+	}
 
 	other, err := provider.DecideHook(context.Background(), cedarHookEvent("Read", map[string]any{}))
 	if err != nil {
