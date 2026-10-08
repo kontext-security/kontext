@@ -2,13 +2,17 @@ name: Dependency Review
 
 on:
   pull_request:
+  # Required on main, so it must report in the merge queue too. The pull
+  # request already reviewed the dependency diff; the queue run skips it,
+  # which counts as passing.
+  merge_group:
 
 permissions:
   contents: read
 
 jobs:
   dependency-review:
-    if: ${{ github.event.repository.private == false }}
+    if: ${{ github.event.repository.private == false && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

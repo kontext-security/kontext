@@ -1,0 +1,791 @@
+{
+  "source": "github/github-mcp-server",
+  "tools": [
+    {
+      "name": "actions_get",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "6650c12e2048668a7bf493745f038d872ed8ee4a8cd187a1e3569422b956a9d7"
+    },
+    {
+      "name": "actions_list",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "cb25d4b850261a9203a179a932da56c99b7ffa83693e03bd3548b9198dd2da2f"
+    },
+    {
+      "name": "actions_run_trigger",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "c1d726ef32f8ab14c309cf52350e60e69d731b45566378aa67e825cc99cb84f7"
+    },
+    {
+      "name": "add_comment_to_pending_review",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "82f288b38d7932592eda02dd31d0becca308c3512fab99ec87bdffde895e6c98"
+    },
+    {
+      "name": "add_issue_comment",
+      "catalogued": true,
+      "hint": "write",
+      "definition": "8ab0fb7ce3d6634c76bdb24198259390f85af5fcd2ee9c1ca11c95bdda6cd873"
+    },
+    {
+      "name": "add_issue_comment_reaction",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "b06c67a5bb465618ceeccfce935f877c0bc629b3612755feea4ef2bbc648f6d9"
+    },
+    {
+      "name": "add_issue_reaction",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "6c91f2d78a9a7b6a63e8238d2838578accb4a2182bc6e38a1362782cb1643f67"
+    },
+    {
+      "name": "add_pull_request_review_comment",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "872252902186feffe95a943b7f612fcc4443f3847a53a1e35f4a2ca8069c773f"
+    },
+    {
+      "name": "add_pull_request_review_comment_reaction",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "508105acd4321cbc4ba02e0c95a5dce31cdf4d917b8215b9fc1e051711a16fd8"
+    },
+    {
+      "name": "add_reply_to_pull_request_comment",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "c3d8c0d8f95b47889d7bebd927848e59ab5075961c43b8884f64599b6af771b1"
+    },
+    {
+      "name": "add_sub_issue",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "fec60bb75d328bf4c47735e958e7ceeb097e54b92dcd8fb991cf85c8a12c80ee"
+    },
+    {
+      "name": "assign_copilot_to_issue",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "52f6c7f4a84d9350930800b5c4cfd29208338088a7e2fea0cba50f8dc0962b8a"
+    },
+    {
+      "name": "assign_copilot_to_issue_with_intent",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "de9d1f8b54c93df7cd04141ea5b6a84831cb6b465ffb7f846e1cb1571fdd1a1e"
+    },
+    {
+      "name": "create_branch",
+      "catalogued": true,
+      "hint": "write",
+      "definition": "7062ae8ed7b58817d2677b799ac3fa97ec39fce6c2956d0f795b24cd11e14280"
+    },
+    {
+      "name": "create_gist",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "d4134dcff86551137bc7a4041b93bc7f2561d7a55f8e65d43a2da88295d2e5f5"
+    },
+    {
+      "name": "create_issue",
+      "catalogued": true,
+      "hint": "write",
+      "definition": "4ed34ef3fe5fecd5cedce535ceb24b71291a5f6b2b0beec59d6d0edf67cea923"
+    },
+    {
+      "name": "create_or_update_file",
+      "catalogued": true,
+      "hint": "write",
+      "definition": "dcf81b2c80f0e809ef0ac3f84fb564aadb1e80862e6a531ddbe666a7dce0797f"
+    },
+    {
+      "name": "create_pull_request",
+      "catalogued": true,
+      "hint": "write",
+      "definition": "fa868a359ff0074c01ad41feeb84b0511eb0f3e02b22799b0db41f0a3b7cc532"
+    },
+    {
+      "name": "create_pull_request_review",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "1c3bb1e2bfd68d7343f16ec65e51bc931e1909b110db3e1ebdbb554bb82038d8"
+    },
+    {
+      "name": "create_repository",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "c87cf7fae1900d38f1f226b95122aa96ebfd8d32d010fa72dd970d80a2ed9265"
+    },
+    {
+      "name": "create_repository_ruleset",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "5fe22c9f81eeb08ea02e1ca28510b9c2b2db9cacd73493d1285e44f197eb9fdc"
+    },
+    {
+      "name": "custom_properties_read",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "f3a377ef8e39da967e9302f95df86f10154d5c6b5b8dc7b9449f8e4524e1bc7d"
+    },
+    {
+      "name": "custom_properties_write",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "847644fe066aeefc265c1491d8d0bcc98234f1f1203b3c0965183c3e9a55d7f4"
+    },
+    {
+      "name": "delete_file",
+      "catalogued": true,
+      "hint": "delete",
+      "definition": "97c0be95c1ce258ea7e4debead4d9b56e3318148b3adf2fedd477054fc5d5191"
+    },
+    {
+      "name": "delete_pending_pull_request_review",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "d17b745ab681230b65fc3d10b20f2e44c035d9ec38f431c93505d030907014e2"
+    },
+    {
+      "name": "delete_repository",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "64ce31d02d4d20e7250b373b5e924dc65edc2771eb860148b8793d285cc34716"
+    },
+    {
+      "name": "discussion_comment_write",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "a5cfc009569ce75c7e39e0fbe892e2b00f6a42a9628317bcc949241aaa0b6f3e"
+    },
+    {
+      "name": "dismiss_notification",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "8bda621b87df7bd4dbb4f8cec56d6f2c65c67cca340c8757fac76e0c0f02ba11"
+    },
+    {
+      "name": "find_duplicate",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "09013d13a1fff68c3860f2b681676388b4a2b5d749576b1ddc53141fe8ca79b7"
+    },
+    {
+      "name": "fork_repository",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "8ddd12420e14abd1de5ee47117a3062a0accc28252736242f7136fc257a042ac"
+    },
+    {
+      "name": "get_code_quality_finding",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "b98ed28d6254fffb8e1bd6ff2174403f175a0baaeeff8ffb75008753432ff68a"
+    },
+    {
+      "name": "get_code_scanning_alert",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "ab56302ecfa3e34240aeee7e9dd00d52acb16a73a272826651c9e7175eb30ba6"
+    },
+    {
+      "name": "get_commit",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "d92aee47ba2724e11d04fcaa479ef7182814e6504694c0ad74d64f5503cfbdd2"
+    },
+    {
+      "name": "get_dependabot_alert",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "75d2dbda39948f04e17885f3bde54e86d17c7bad60521f90c4fd8a2ed5e14fc1"
+    },
+    {
+      "name": "get_discussion",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "b876eeb454ef439da7fbff94556b868400852ca44ec0fc503c2c0ff2976ecd94"
+    },
+    {
+      "name": "get_discussion_comments",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "463361cdeefdb06142a96e8c2802c842b7a2043b58d83743363201c200f9d6bc"
+    },
+    {
+      "name": "get_file_blame",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "1c2398c3e6ea7c65cc2e1f3b0a30b072ce2c2858d3bc178bdb611b0eea75ce27"
+    },
+    {
+      "name": "get_file_contents",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "050a66ed56fecb49f9d5c2d2564e44f0a97a09ab5fa92e990050ccc528fc417b"
+    },
+    {
+      "name": "get_gist",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "a35772a1486f4cc76f146bc723ac8f33dba62b56cc0f047fa342d7e04812fc99"
+    },
+    {
+      "name": "get_global_security_advisory",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "86e4364e901b7a6a586c5a254210072f4ef0ccad77fa7c0f1430924f71dba1d6"
+    },
+    {
+      "name": "get_job_logs",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "68e6e1971bdcbc71d829cfc4d676d50f6e8a849a98ee505bda69b5629770644f"
+    },
+    {
+      "name": "get_label",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "9ef1ec17c3a83e65220ba8408cd91c57dc4b5c29f15ba4c57ec2c153081368f1"
+    },
+    {
+      "name": "get_latest_release",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "4c3bdc3a888b8ded21ce6a9d7e7f4d02c4a92498c2eee2df1d85f9dcd88cf651"
+    },
+    {
+      "name": "get_me",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "5bc73c0db19517da03c54d21a5cc41a5e21577a4411acfb92abd47e1ebe34f15"
+    },
+    {
+      "name": "get_notification_details",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "813ec53123b63197d32df52a9f29cc2f1aeeebefb1599d3780244d597d793c81"
+    },
+    {
+      "name": "get_release_by_tag",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "75ddbceb8e3c04cad0bdb99434b15e45bf32c682a53602e706056da2e21f8e86"
+    },
+    {
+      "name": "get_repository_tree",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "c059ebef77bab93c1e581a537eddc4a40b29532fd79811ac7d8a4017e12fa219"
+    },
+    {
+      "name": "get_secret_scanning_alert",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "8c21a2fde7815044604a62e5f0eed27677f1d0d3928ade80f7ab9e01da8ade93"
+    },
+    {
+      "name": "get_tag",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "7d84e7d0ab309e3f302b7cf8376d7d4839c28137f0a54d05424faf31650eb298"
+    },
+    {
+      "name": "get_team_members",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "61b14cc3cc0a28bf583b6978f3affa7d322f6cf62e431c5008e792b8880385c0"
+    },
+    {
+      "name": "get_teams",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "dc0f4192128f8736cb0ff02e63c7d16f6b645ae84c03527fd68e14ec9dfe9f54"
+    },
+    {
+      "name": "hide_issue_comment",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "724c3ebba726212e2a80f4452733b6e4d95f678c7307ef0dbf68ae107ece5f80"
+    },
+    {
+      "name": "hide_pull_request_review",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "fb5b11d06ec32088ae28e9ef78199c887ba9a88506bc8434f2547014f638a723"
+    },
+    {
+      "name": "hide_pull_request_review_comment",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "86bee06ff1b6836fbbc42620b72feb5d91f732a329261dc3c670f4d5de9c9446"
+    },
+    {
+      "name": "issue_dependency_read",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "a58b82dd0c3224ad43c1bb8c4517f589831698993aef0322d0d64c9f14ee2ac5"
+    },
+    {
+      "name": "issue_dependency_write",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "2017c69c8b61ffe416ac0d85507b0165a5f6449a8aaaa126d678cd1331325d24"
+    },
+    {
+      "name": "issue_read",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "2c57b3d16efce5d059edf852ba1514e118598a25978ebd7914271433700d5918"
+    },
+    {
+      "name": "issue_write",
+      "catalogued": true,
+      "hint": "write",
+      "definition": "73f1198e4e7bf619cf06580e71d6f2e457806d84a8358737c59a3c35e61dfe08"
+    },
+    {
+      "name": "label_write",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "90c78cdc99a6a2208f7343917a861ec05e849d74616d9b55d83f4017bb29f35f"
+    },
+    {
+      "name": "list_branches",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "a0d1ca99c3ea966af63470d83dc453858cb40f0ec3338f7d8029c9e9070caff0"
+    },
+    {
+      "name": "list_code_scanning_alerts",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "1cc7e6a2fe8c111858adc8e5072104f421195e2c6e4b42d44e1ad21b216b23f9"
+    },
+    {
+      "name": "list_commits",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "153656e7d53f9e81d1e4255e029482df11b1681f2d263217b10cb0d3ae45fe4c"
+    },
+    {
+      "name": "list_dependabot_alerts",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "566fbb3d3d27992d6a46942651885dc2cce7563382f690a5a0ccd1581ea4d844"
+    },
+    {
+      "name": "list_discussion_categories",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "f3f60f6459100d6998ed9816255cb1c22bdaa0f603c2f8900405e36a5b0b070f"
+    },
+    {
+      "name": "list_discussions",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "476086d131873fa8826b1a4cdfef513b1104eaa5da4230d4a72ced5ccf94649c"
+    },
+    {
+      "name": "list_gists",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "5e67906ff8bc0822739ea24748375831dede9b71b02032a0b7ea0e1ee726b3e0"
+    },
+    {
+      "name": "list_global_security_advisories",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "4b688e36fee6b85da06cd78be7b4845e2c18a5e934737eaf7e7f162f1ca63f5f"
+    },
+    {
+      "name": "list_issue_fields",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "1f564a6ac19126fcfd10ef3bd6361d2ea2adce18b9433f480aa67108bd4b718e"
+    },
+    {
+      "name": "list_issue_types",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "d2d6e8932a05eff4670fb255c260d088d67e611fd108774934046bf1ebadba8f"
+    },
+    {
+      "name": "list_issues",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "0e32b23cc38314971b5141005c17d0475a5be0cd42c1f581d9d854b788d14a39"
+    },
+    {
+      "name": "list_label",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "828b2d7e782cfc40dfdae0e71059190ffeac2709f7ca91741ac4794a123ce009"
+    },
+    {
+      "name": "list_notifications",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "ba4eded4c7cd68fb406a59fb86d533ff7630f929252c22b342a728d79e01496f"
+    },
+    {
+      "name": "list_org_repository_security_advisories",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "0d2bfd9ce0b8d8c907052859190465f011de5fe5a5c4f0f9e5b0f50172dd6c4e"
+    },
+    {
+      "name": "list_pull_requests",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "4f978bce7f5554cc75e02656c9297461c7f486c23801e72f092d1fe8612e9faf"
+    },
+    {
+      "name": "list_releases",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "548005292a187da0213829a7e6f32bf1f54cb6c7abdcd93e443edbf5605c9632"
+    },
+    {
+      "name": "list_repository_collaborators",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "3a6dc6827d9c5393844e196ce25745552d69a7b0d5ab86fb9306888c762a190a"
+    },
+    {
+      "name": "list_repository_security_advisories",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "e326ebf6a207e7471b634de596c31f668810dc58d07c6ca95db1dd993190611b"
+    },
+    {
+      "name": "list_secret_scanning_alerts",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "1b98e327ef8e1fdeca7a4426bcb22665b8ba1e3b72134c568d3949e1ebfd2241"
+    },
+    {
+      "name": "list_starred_repositories",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "bea927e9599ed39579f87154626da9d87a1909d6245e7feb721e67c3e5c531c5"
+    },
+    {
+      "name": "list_tags",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "9124bb5cb8e468aa6ec5a3fe3e5a87831db4dcde0cfd72996ca7c047123369bd"
+    },
+    {
+      "name": "manage_notification_subscription",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "aea31b385584fdb03733ab48b4e8a0de1d932f699a751f39fc38ae6e84470ad9"
+    },
+    {
+      "name": "manage_repository_notification_subscription",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "f3b46417c110f2914b8ecedb2a009768f0e518a7381259adfd2664bf552d46bf"
+    },
+    {
+      "name": "mark_all_notifications_read",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "8a07d8d4e9bbc4be6da5542d5a4800b28f7f683c05633ea38dde263e467ec6a9"
+    },
+    {
+      "name": "merge_pull_request",
+      "catalogued": true,
+      "hint": "write",
+      "definition": "60a5fabda8ea689ef7109b3008734a3781d2d329eb347026554194e6c85489f1"
+    },
+    {
+      "name": "projects_get",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "e281475bc04dc1ceaf6403d488781197c41ad3f0b2e0a2d14a189b95b79d55dc"
+    },
+    {
+      "name": "projects_list",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "0390145984e7256218d6ff5d08cd8c786b1e1312251a687eb6f248941939d2b7"
+    },
+    {
+      "name": "projects_write",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "6c0edf8b134c6b62744bd67756c6c9b103a5236828f32aa499715217050eb135"
+    },
+    {
+      "name": "pull_request_read",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "8a8adc25f35fcb1b05c075b6cd507c98a66fe962a9c1c432a6b73c113b5eda1d"
+    },
+    {
+      "name": "pull_request_review_write",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "26a82cd766b7e851d53810974071173dc36bf12c919c072d5c70a5df2baef205"
+    },
+    {
+      "name": "push_files",
+      "catalogued": true,
+      "hint": "write",
+      "definition": "041adad7dd5f8da7df8ab3b9a23f7805e6a11426f70142108c7df3024efc4d35"
+    },
+    {
+      "name": "remove_issue_comment_reaction",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "ed8bd5ca3dbc576554e557af30f0d37f6698089cdd46e6abaa331ddfc9511074"
+    },
+    {
+      "name": "remove_issue_reaction",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "68c42f9dc4ad92a67d53ae61277d78f548eaed0f5ba55e4f33e775bb090b23f5"
+    },
+    {
+      "name": "remove_pull_request_review_comment_reaction",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "4e8b877e88114229cb78f77db5246149d817af87034bc28be848de999ec6f4aa"
+    },
+    {
+      "name": "remove_sub_issue",
+      "catalogued": false,
+      "hint": "delete",
+      "definition": "036ff5749d0b71054e72c61e6db3a0312a4b689a2e3aa330195ead8d6c2df97b"
+    },
+    {
+      "name": "repository_ruleset_read",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "7bff44e04849529af123e3dd578d309801ede294e4a62b80ba27cab10caf6768"
+    },
+    {
+      "name": "reprioritize_sub_issue",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "c8383685998a576105ef6b08d31f5a043994684a69aaad3e198aef883a509182"
+    },
+    {
+      "name": "request_copilot_review",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "883cf6c9c3dd91492119eddad54c7a104539e879908b2e54bc8e5d7eaa51f137"
+    },
+    {
+      "name": "request_pull_request_reviewers",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "fdce7ead601f1c812d17f4d21b11873188f00f1736fc233104dc439fe8e14159"
+    },
+    {
+      "name": "resolve_review_thread",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "54ac786314f284140655b5b4b5f5a6570f49933fd97dd852911e58d8a03f7865"
+    },
+    {
+      "name": "search_code",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "e99058f340d3300fd6aec88b4ed9268842b67ea3e40863443a5fe1b011086d3a"
+    },
+    {
+      "name": "search_commits",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "bf676372a33c968d8fb8f7bfb47ccda0041acb005e02dff2c39e6dd6284b1927"
+    },
+    {
+      "name": "search_issues",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "ef57f6057be56000928545d21c225ebf413a1365a95b9917f684309bb829cbf1"
+    },
+    {
+      "name": "search_orgs",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "e9e755eaa8543bd9927363043da813cf439eae222497e8308920f51552e390bf"
+    },
+    {
+      "name": "search_pull_requests",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "e88b7af62a12c43285118ad43869e54e57d71be886f9e0a88eb6cba0d90a6962"
+    },
+    {
+      "name": "search_repositories",
+      "catalogued": true,
+      "hint": "read",
+      "definition": "8da43170f5a25c495d9b3f48247eafea0838f5a96ab5bee7e7b31b2b663d1de4"
+    },
+    {
+      "name": "search_users",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "46e1392584d92dcc5b4c626042d0722fd841cda11ee28c64e6cbec51926cb937"
+    },
+    {
+      "name": "set_issue_fields",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "d49196c09f3aac034c836fa7f3a4e815998035d1dbc61573cb66daf6baaebe47"
+    },
+    {
+      "name": "star_repository",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "519029a3941e31e6a7003928c37897c7371ad7056e9ef6c3664cb84913492534"
+    },
+    {
+      "name": "sub_issue_write",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "d6855aa6ab9095cf8bcab7582f9a9f6366cd8fbe0400bd47a41329e288f3cd20"
+    },
+    {
+      "name": "submit_pending_pull_request_review",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "dcc0403a6e2b6d198aeae5a428333eef61a4f444f84159a10059ac3b7567260f"
+    },
+    {
+      "name": "ui_get",
+      "catalogued": false,
+      "hint": "read",
+      "definition": "492524dc90e7e6ea30931bf6d8e4331ace41f088cd6481a25c2b42f49f468ea8"
+    },
+    {
+      "name": "unhide_issue_comment",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "543ae691f18e94db48b484df2b66de24aa370f8877f93be9c75e70d164258acf"
+    },
+    {
+      "name": "unhide_pull_request_review",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "93aeef941944ac812541f8743f96909d181291627ab30ddfa8d2170b289b883c"
+    },
+    {
+      "name": "unhide_pull_request_review_comment",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "ba74fd34d6eb5db8d07a8e8aa99eba7cc24e7edab074ff24b9ec85c9c645781f"
+    },
+    {
+      "name": "unresolve_review_thread",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "7f387b29beba0388190052150901444fd87b58899f4684190d7947956574b370"
+    },
+    {
+      "name": "unstar_repository",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "603e7206e55e5c1ef46ed34828e51d6c60524b9b19fc8d78e50f7777503eefa0"
+    },
+    {
+      "name": "update_gist",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "62c0196b9d96890d7a53d914f6cbbb86f9030d9d25fabd701240ef0347c205be"
+    },
+    {
+      "name": "update_issue_assignees",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "4c5d12eaa1c5253d6e192a657da7834faaf03f204325d883d5d3fc2481451d0f"
+    },
+    {
+      "name": "update_issue_body",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "fd63247c39a77ed07a2bf7d16123b3344a87da9656717ca954e8b88583449a39"
+    },
+    {
+      "name": "update_issue_comment",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "296acafcb2d61866a018a21a7eb260b1e0d2ee3dc388ec360134b4c8ed44bc46"
+    },
+    {
+      "name": "update_issue_labels",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "2634f1327911e3ab5aa604369d639a91516599f92e21ce5aa6fba0908690bb76"
+    },
+    {
+      "name": "update_issue_milestone",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "9b4d615f445ce74c0f931b69475202ed002615405ab71e590be92ce6bd2fcaec"
+    },
+    {
+      "name": "update_issue_state",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "f52ef1fee31924e156039c5c6aaf59d2df9719d4ac0a61ca08c8e45468147261"
+    },
+    {
+      "name": "update_issue_title",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "c38f8c73d282bf3933c1c2473388d89fc6393d09c6e760f6b078adfe382023a3"
+    },
+    {
+      "name": "update_issue_type",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "5146f798ddf32788a7fcb4da650e64fb3cb209f728eab7fc941d3530771b1f6c"
+    },
+    {
+      "name": "update_pull_request",
+      "catalogued": true,
+      "hint": "write",
+      "definition": "9978ad988898ec0da42bbbaaa19c12f088f40971c35da69cd51e202f9ac9fa25"
+    },
+    {
+      "name": "update_pull_request_body",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "a12e7f8e8b8efe6db7c5662c9d4a5da0154d801a34bd4bcfa3d5c2321658e65f"
+    },
+    {
+      "name": "update_pull_request_branch",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "95f9e6a8fd35a82a817c540c74376ea62f7229772570d6998f7f65f51134c99c"
+    },
+    {
+      "name": "update_pull_request_draft_state",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "fc500e3ed6459b09ece58dc68b33804407be5f6d9ab461378e7e69cfaa09f6de"
+    },
+    {
+      "name": "update_pull_request_state",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "b5e789e8b2ed52e8a5767035cde9c8168c02660e9e1819f890469437c75f1ee8"
+    },
+    {
+      "name": "update_pull_request_title",
+      "catalogued": false,
+      "hint": "write",
+      "definition": "1ab461a5f2f7d1b714c3df0fa11f1222b0f338410de6cbc457f4a977b7014593"
+    }
+  ]
+}

@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue runs the required checks on its combined branch.
+  merge_group:
 
 permissions:
   contents: read

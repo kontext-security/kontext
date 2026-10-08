@@ -51,7 +51,7 @@ func TestResolveGitHubMCP(t *testing.T) {
 }
 
 func TestCatalogDigestIsStable(t *testing.T) {
-	const want = "cf87ee7a167f1f07bdc41450467708f832c9d8c4aaf20651a5d0df070d3de436"
+	const want = "2093074119493c068c5344f77759bab69772788aec9c7488f9409df057516863"
 	if got := Digest(); got != want {
 		t.Fatalf("Digest() = %q, want %q", got, want)
 	}

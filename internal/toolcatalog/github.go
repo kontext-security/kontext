@@ -47,18 +47,20 @@ func Digest() string {
 	toolIDs := []string{cedareval.ToolShellV2, cedareval.ToolUnknownV2}
 	sort.Strings(toolIDs)
 	base, _ := json.Marshal(toolIDs)
-	combined := sha256.Sum256([]byte(
-		"kontext:cedar-tool-catalog:v1\x00" + string(base) + "\x00" + hex.EncodeToString(github[:]),
-	))
+	material := "kontext:cedar-tool-catalog:v1\x00" + string(base) + "\x00" + hex.EncodeToString(github[:])
+	for _, provider := range Providers() {
+		material += "\x00" + providerDigest(provider)
+	}
+	combined := sha256.Sum256([]byte(material))
 	return hex.EncodeToString(combined[:])
 }
 
-// Known reports whether toolID is one the daemon can produce for a GitHub
-// MCP call: a catalogued tool under the github-mcp/ prefix, or the
-// unrecognized fallback. A policy naming any other github-mcp/ id never
-// matches.
+// Known reports whether toolID is one the daemon can produce for a
+// catalogued MCP call: a catalogued tool under the github-mcp/ or a provider
+// prefix, or that prefix's unrecognized fallback. A policy naming any other
+// id under those prefixes never matches.
 func Known(toolID string) bool {
-	if toolID == GitHubUnrecognizedTool {
+	if toolID == GitHubUnrecognizedTool || knownProviderTool(toolID) {
 		return true
 	}
 	name, ok := strings.CutPrefix(toolID, GitHubToolPrefix)
@@ -69,7 +71,9 @@ func Known(toolID string) bool {
 	return ok
 }
 
-// Resolve maps an MCP tool call to the pinned GitHub catalog. The server
+// Resolve maps an MCP tool call to a catalogued tool id. Provider catalogs
+// (Atlassian, HubSpot) are consulted first for servers not named for GitHub;
+// see resolveProvider. Otherwise the call is matched to the pinned GitHub catalog. The server
 // name is whatever the operator registered it as, so a catalogued tool name
 // is recognised under any mcp__<server>__ prefix and held to its pinned
 // input schema: input that no longer matches (a missing required field, a
@@ -85,6 +89,11 @@ func Resolve(toolName string, input map[string]any) (string, bool) {
 		return "", false
 	}
 	githubServer := strings.Contains(strings.ToLower(server), "github")
+	if !githubServer {
+		if toolID, ok := resolveProvider(server, tool, input); ok {
+			return toolID, true
+		}
+	}
 	catalogued, known := githubTools[tool]
 	if !known {
 		if githubServer {

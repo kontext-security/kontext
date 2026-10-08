@@ -27,14 +27,25 @@ type ShellProjectionV2 struct {
 	ParseComplete bool     `json:"parseComplete"`
 }
 
+// ToolClassificationV2 is what a provider catalog knows about an MCP tool:
+// who provides it, which product it belongs to and its access tier. Presets
+// forbid by tier through it, so a tool the endpoint catalogues before the
+// cloud does is still judged by its tier, not let through as an unlisted id.
+type ToolClassificationV2 struct {
+	Provider string `json:"provider"`
+	Product  string `json:"product"`
+	Access   string `json:"access"`
+}
+
 type ToolUseInputV2 struct {
-	Version    int                `json:"version"`
-	EndpointID string             `json:"endpointId"`
-	AgentID    string             `json:"agentId"`
-	SessionID  string             `json:"sessionId"`
-	ToolID     string             `json:"toolId"`
-	ToolInput  map[string]any     `json:"toolInput"`
-	Shell      *ShellProjectionV2 `json:"shell,omitempty"`
+	Version    int                   `json:"version"`
+	EndpointID string                `json:"endpointId"`
+	AgentID    string                `json:"agentId"`
+	SessionID  string                `json:"sessionId"`
+	ToolID     string                `json:"toolId"`
+	ToolInput  map[string]any        `json:"toolInput"`
+	Shell      *ShellProjectionV2    `json:"shell,omitempty"`
+	Tool       *ToolClassificationV2 `json:"tool,omitempty"`
 }
 
 func BuildRequestV2(input ToolUseInputV2) (cedar.Request, cedar.EntityMap, error) {
@@ -63,6 +74,13 @@ func BuildRequestV2(input ToolUseInputV2) (cedar.Request, cedar.EntityMap, error
 	}
 	if input.Shell != nil {
 		context[cedar.String("shell")] = shellRecord(*input.Shell)
+	}
+	if input.Tool != nil {
+		context[cedar.String("tool")] = cedar.NewRecord(cedar.RecordMap{
+			cedar.String("provider"): cedar.String(input.Tool.Provider),
+			cedar.String("product"):  cedar.String(input.Tool.Product),
+			cedar.String("access"):   cedar.String(input.Tool.Access),
+		})
 	}
 
 	principal := cedar.NewEntityUID(
@@ -143,6 +161,19 @@ func validateInputV2(input ToolUseInputV2) error {
 	}
 	if (input.ToolID == ToolShellV2) != (input.Shell != nil) {
 		return fmt.Errorf("cedareval: shell projection must be present only for the shell tool")
+	}
+	if input.Tool != nil {
+		if input.Shell != nil {
+			return fmt.Errorf("cedareval: tool classification is not allowed for the shell tool")
+		}
+		if !validText(input.Tool.Provider, 256) || !validText(input.Tool.Product, 256) {
+			return fmt.Errorf("cedareval: invalid tool classification")
+		}
+		switch input.Tool.Access {
+		case "read", "write", "delete", "admin":
+		default:
+			return fmt.Errorf("cedareval: invalid tool access %q", input.Tool.Access)
+		}
 	}
 	if input.Shell == nil {
 		return nil

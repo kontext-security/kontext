@@ -13,7 +13,7 @@ import (
 	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
-const authorizationV2Digest = "12df68a1e41757dbee2f367105e9618a0743d589aa6ac5cf1e961547533c6d8f"
+const authorizationV2Digest = "f1fb97c0a803d30f6614cb8d046bcdfabff7f08b3c125c39f6f5f3fa8017fe70"
 
 type authorizationFixtureV2 struct {
 	Version  int                      `json:"version"`
@@ -102,7 +102,11 @@ permit(principal, action == Kontext::Action::"ToolUse", resource);
 
 @id("force")
 forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"shell")
-when { context.shell.facts.contains("git/force=true") };`)
+when { context.shell.facts.contains("git/force=true") };
+
+@id("provider-writes")
+forbid(principal, action == Kontext::Action::"ToolUse", resource)
+when { context has tool && context.tool.access != "read" };`)
 			if err != nil {
 				t.Fatal(err)
 			}
