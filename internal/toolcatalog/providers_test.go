@@ -98,3 +98,56 @@ func TestProviderCatalogsAreLoaded(t *testing.T) {
 		t.Fatalf("provider catalogs = %v", got)
 	}
 }
+
+func TestClassifyGitHubTools(t *testing.T) {
+	tests := []struct {
+		toolID string
+		want   ProviderClassification
+		ok     bool
+	}{
+		{"github-mcp/get_me", ProviderClassification{Provider: "github", Product: "users", Access: AccessRead}, true},
+		{"github-mcp/update_issue_state", ProviderClassification{Provider: "github", Product: "issues", Access: AccessWrite}, true},
+		{"github-mcp/merge_pull_request", ProviderClassification{Provider: "github", Product: "pull_requests", Access: AccessWrite}, true},
+		{"github-mcp/actions_run_trigger", ProviderClassification{Provider: "github", Product: "actions", Access: AccessDelete}, true},
+		{"github-mcp/delete_repository", ProviderClassification{Provider: "github", Product: "repository", Access: AccessAdmin}, true},
+		{"github-mcp/unrecognized", ProviderClassification{}, false},
+	}
+	for _, test := range tests {
+		got, ok := Classify(test.toolID)
+		if ok != test.ok || got != test.want {
+			t.Errorf("Classify(%q) = %+v, %v; want %+v, %v", test.toolID, got, ok, test.want, test.ok)
+		}
+	}
+}
+
+// Policies saved before GitHub was tiered forbid GitHub writes by name plus
+// github-mcp/unrecognized. A tool they never named keeps reaching that
+// fallback, and still carries its tier for the tier presets.
+func TestUnnamedGitHubToolsReportUnrecognizedWithTheirTier(t *testing.T) {
+	tests := []struct {
+		toolName string
+		input    map[string]any
+		wantID   string
+		want     ProviderClassification
+	}{
+		{"mcp__github__delete_repository", map[string]any{"owner": "o", "repo": "r"}, GitHubUnrecognizedTool, ProviderClassification{Provider: "github", Product: "repository", Access: AccessAdmin}},
+		{"mcp__corp__actions_list", map[string]any{"method": "list_workflows", "owner": "o", "repo": "r"}, GitHubUnrecognizedTool, ProviderClassification{Provider: "github", Product: "actions", Access: AccessRead}},
+		{"mcp__github__get_me", map[string]any{}, "github-mcp/get_me", ProviderClassification{Provider: "github", Product: "users", Access: AccessRead}},
+	}
+	for _, test := range tests {
+		id, ok := Resolve(test.toolName, test.input)
+		if !ok || id != test.wantID {
+			t.Errorf("Resolve(%q) = %q, %v; want %q", test.toolName, id, ok, test.wantID)
+		}
+		got, ok := ClassifyCall(id, test.toolName, test.input)
+		if !ok || got != test.want {
+			t.Errorf("ClassifyCall(%q) = %+v, %v; want %+v", test.toolName, got, ok, test.want)
+		}
+	}
+	if _, ok := ClassifyCall(GitHubUnrecognizedTool, "mcp__github__brand_new_tool", map[string]any{}); ok {
+		t.Error("an uncatalogued GitHub tool must carry no tier")
+	}
+	if Known("github-mcp/delete_repository") {
+		t.Error("the daemon never reports an unnamed GitHub tool by name")
+	}
+}

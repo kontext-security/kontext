@@ -5,58 +5,98 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 )
 
-// The GitHub MCP catalog (internal/toolcatalog/github-mcp.json) is pinned to
-// one upstream commit and resolves calls by input schema, and the GitHub
-// presets name tool ids. A tool the catalog adds therefore leaves the
-// unrecognized guard without joining any preset, so the refresh never adds
-// GitHub tools itself. It tracks every upstream tool's definition in
-// github-upstream.json, and a new, removed or changed tool updates that file
-// and opens the review PR; re-pinning the catalog and the presets stays a
-// reviewed change.
+// The GitHub MCP catalog (internal/toolcatalog/github-mcp.json) follows the
+// same rules as the provider catalogs: every upstream tool is catalogued with
+// a product and an access tier, a new tool lands as write (delete when its
+// annotations say destructive, admin for repository settings), annotations
+// only ever tighten a tier, and a changed definition is flagged for review.
+// GitHub resolves calls by input schema, so each tool also carries its pinned
+// required fields and property types, and the catalog is re-pinned to
+// upstream HEAD whenever a tool changes.
 
 const (
 	githubMCPRepository = "https://github.com/github/github-mcp-server"
+	githubMCPSourceName = "github/github-mcp-server"
 	githubToolsnaps     = "pkg/github/__toolsnaps__"
 )
 
-type githubUpstream struct {
-	Source string               `json:"source"`
-	Tools  []githubUpstreamTool `json:"tools"`
+type githubCatalog struct {
+	Source string       `json:"source"`
+	Tools  []githubTool `json:"tools"`
 }
 
-type githubUpstreamTool struct {
-	Name string `json:"name"`
-	// Catalogued tools resolve to github-mcp/<name>; the rest resolve to
-	// github-mcp/unrecognized, which the guard blocks.
-	Catalogued bool `json:"catalogued"`
-	// Hint is the tier upstream annotations claim: read, write, delete or "".
-	Hint       string `json:"hint"`
-	Definition string `json:"definition"`
+type githubTool struct {
+	Name    string `json:"name"`
+	Product string `json:"product"`
+	Access  string `json:"access"`
+	Named   bool   `json:"named,omitempty"`
+	// Removed marks a tool GitHub no longer serves. It stays catalogued for
+	// older servers; recording the removal is what puts it up for review.
+	Removed    bool              `json:"removed,omitempty"`
+	Required   []string          `json:"required"`
+	Properties map[string]string `json:"properties"`
+	Definition string            `json:"definition,omitempty"`
 }
 
-func (r *refresher) refreshGitHub(upstreamPath, catalogPath, sourcePath string) error {
+// githubSnapshot is one upstream tool as its __toolsnaps__ describe it.
+type githubSnapshot struct {
+	required   []string
+	properties map[string]string
+	hint       string
+	definition string
+}
+
+var (
+	githubPinPattern = regexp.MustCompile(`GitHubMCPSourceCommit\s*=\s*"([0-9a-f]{40})"`)
+	githubAdminTool  = regexp.MustCompile(`ruleset|custom_properties_write|delete_repository|collaborator_write|webhook|deploy_key|secret_write|branch_protection|repository_settings`)
+	githubProducts   = []struct {
+		pattern *regexp.Regexp
+		product string
+	}{
+		{regexp.MustCompile(`^actions_|job_logs|workflow`), "actions"},
+		{regexp.MustCompile(`release|_tag$|_tags$`), "releases"},
+		{regexp.MustCompile(`code_scanning|dependabot|secret_scanning|security_advisor|code_quality`), "security"},
+		{regexp.MustCompile(`discussion`), "discussions"},
+		{regexp.MustCompile(`notification`), "notifications"},
+		{regexp.MustCompile(`^projects_`), "projects"},
+		{regexp.MustCompile(`gist`), "gists"},
+		{regexp.MustCompile(`pull_request|review`), "pull_requests"},
+		{regexp.MustCompile(`issue|label|find_duplicate`), "issues"},
+		{regexp.MustCompile(`^(create|delete|fork)_repository|repository_collaborators|ruleset|custom_properties|collaborator|star`), "repository"},
+		{regexp.MustCompile(`^get_me$|team|search_users|search_orgs`), "users"},
+		{regexp.MustCompile(`^ui_`), "other"},
+	}
+)
+
+// githubProduct names the part of GitHub a tool acts on, so presets can
+// slice by it (releases and workflows, repository settings).
+func githubProduct(name string) string {
+	for _, candidate := range githubProducts {
+		if candidate.pattern.MatchString(name) {
+			return candidate.product
+		}
+	}
+	return "code"
+}
+
+func (r *refresher) refreshGitHub(catalogPath, sourcePath string) error {
 	pinned, err := pinnedGitHubCommit(sourcePath)
 	if err != nil {
 		return err
 	}
-	catalogued, err := githubCatalogNames(catalogPath)
+	content, err := os.ReadFile(catalogPath)
 	if err != nil {
 		return err
 	}
-	var recorded githubUpstream
-	if content, err := os.ReadFile(upstreamPath); err == nil {
-		if err := json.Unmarshal(content, &recorded); err != nil {
-			return fmt.Errorf("%s: %w", upstreamPath, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return err
+	var catalog githubCatalog
+	if err := json.Unmarshal(content, &catalog); err != nil {
+		return fmt.Errorf("%s: %w", catalogPath, err)
 	}
 
 	checkout, err := os.MkdirTemp("", "github-mcp-server-")
@@ -68,91 +108,108 @@ func (r *refresher) refreshGitHub(upstreamPath, catalogPath, sourcePath string) 
 	if err != nil {
 		return err
 	}
-	current, err := readToolsnaps(checkout, head)
-	if err != nil {
-		return err
-	}
-	atPin, err := readToolsnaps(checkout, pinned)
+	upstream, err := readToolsnaps(checkout)
 	if err != nil {
 		return err
 	}
 
-	previous := map[string]githubUpstreamTool{}
-	for _, item := range recorded.Tools {
-		previous[item.Name] = item
+	// A catalog without tiers is being tiered for the first time; upstream
+	// read-only annotations were reviewed by hand for that one run.
+	seeding := true
+	for _, item := range catalog.Tools {
+		seeding = seeding && item.Access == ""
 	}
-	next := githubUpstream{Source: "github/github-mcp-server"}
-	var added, changed, tightened, removed, stalePin []string
-	for _, name := range sortedKeys(current) {
-		item := current[name]
-		item.Catalogued = catalogued[name]
-		next.Tools = append(next.Tools, item)
-		before, known := previous[name]
-		switch {
-		case !known && len(recorded.Tools) > 0:
-			added = append(added, fmt.Sprintf("`%s` (%s)", name, githubToolState(item)))
-		case known && before.Definition != item.Definition:
-			changed = append(changed, fmt.Sprintf("`%s` (%s)", name, githubToolState(item)))
+	index := map[string]int{}
+	for i, item := range catalog.Tools {
+		index[item.Name] = i
+	}
+	var added, unconfirmed, changed, tightened, removed []string
+	for _, name := range sortedKeys(upstream) {
+		snap := upstream[name]
+		i, known := index[name]
+		if !known || seeding {
+			access := "write"
+			switch {
+			case snap.hint == "delete", snap.hint == "read" && seeding:
+				access = snap.hint
+			case snap.hint == "read":
+				unconfirmed = append(unconfirmed, "`"+name+"`")
+			}
+			if githubAdminTool.MatchString(name) && access != "read" {
+				access = "admin"
+			}
+			item := githubTool{Name: name, Product: githubProduct(name), Access: access, Required: snap.required, Properties: snap.properties, Definition: snap.definition}
+			if known {
+				item.Named = catalog.Tools[i].Named
+				catalog.Tools[i] = item
+			} else {
+				catalog.Tools = append(catalog.Tools, item)
+				index[name] = len(catalog.Tools) - 1
+				if !seeding {
+					added = append(added, fmt.Sprintf("`%s` (%s)", name, access))
+				}
+			}
+			r.githubChanged = true
+			continue
 		}
-		if known && accessRank[item.Hint] > accessRank[before.Hint] {
-			tightened = append(tightened, fmt.Sprintf("`%s` %s → %s", name, orNone(before.Hint), item.Hint))
+		item := &catalog.Tools[i]
+		if item.Removed {
+			item.Removed = false
+			r.githubChanged = true
 		}
-		if pin, ok := atPin[name]; item.Catalogued && ok && pin.Definition != item.Definition {
-			stalePin = append(stalePin, "`"+name+"`")
+		if item.Definition != snap.definition {
+			changed = append(changed, fmt.Sprintf("`%s` (%s)", name, item.Access))
+			item.Required, item.Properties, item.Definition = snap.required, snap.properties, snap.definition
+			r.githubChanged = true
+		}
+		if accessRank[snap.hint] > accessRank[item.Access] && item.Access != "admin" {
+			tightened = append(tightened, fmt.Sprintf("`%s` %s → %s", name, item.Access, snap.hint))
+			item.Access = snap.hint
+			r.githubChanged = true
 		}
 	}
-	for _, name := range sortedKeys(previous) {
-		if _, ok := current[name]; !ok {
-			removed = append(removed, "`"+name+"`")
-		}
-	}
-	missing := 0
-	for _, item := range next.Tools {
-		if !item.Catalogued {
-			missing++
-		}
-	}
-
-	r.note("- github/github-mcp-server: pinned %s, upstream HEAD %s; %d upstream tools, %d catalogued. The other %d resolve to github-mcp/unrecognized and are blocked by the guard.",
-		pinned[:12], head[:12], len(next.Tools), len(next.Tools)-missing, missing)
-	if len(recorded.Tools) == 0 {
-		r.note("  - first run: recorded every upstream definition as the baseline")
+	if removed = markRemoved(catalog.Tools, upstream); len(removed) > 0 {
 		r.githubChanged = true
+	}
+
+	r.note("- github/github-mcp-server: pinned %s, upstream HEAD %s; %d upstream tools, %d catalogued", pinned[:12], head[:12], len(upstream), len(catalog.Tools))
+	if seeding {
+		r.note("  - tiered every tool for the first time (upstream read-only annotations trusted for this run only)")
 	}
 	for _, line := range []struct {
 		label string
 		items []string
 	}{
-		{"new upstream tools (not catalogued; re-pin to add them, and add writes to the GitHub presets)", added},
-		{"definitions changed since the last review", changed},
-		{"annotations now claim a stricter tier", tightened},
-		{"removed upstream (kept in the catalog for older servers)", removed},
-		{"catalogued tools whose definition differs from the pinned commit", stalePin},
+		{"added", added},
+		{"upstream says read-only; added as write until a reviewer confirms", unconfirmed},
+		{"definition changed; re-check the tier", changed},
+		{"tier raised by upstream annotations", tightened},
+		{"no longer upstream (kept for older servers)", removed},
 	} {
 		if len(line.items) > 0 {
 			r.note("  - %s: %s", line.label, strings.Join(line.items, ", "))
 		}
 	}
-	if len(added)+len(changed)+len(tightened)+len(removed) > 0 {
-		r.githubChanged = true
+	if r.githubChanged {
+		sort.Slice(catalog.Tools, func(i, j int) bool { return catalog.Tools[i].Name < catalog.Tools[j].Name })
+		catalog.Source = githubMCPSourceName + "@" + head
+		r.githubCatalog = &catalog
+		r.githubHead = head
 	}
-	r.githubUpstream = &next
 	return nil
 }
 
-func githubToolState(item githubUpstreamTool) string {
-	state := "upstream hint " + orNone(item.Hint)
-	if item.Catalogued {
-		return "catalogued, " + state
+// markRemoved flags catalogued tools upstream no longer serves and returns
+// the ones newly gone, so a removal opens a review once rather than weekly.
+func markRemoved(tools []githubTool, upstream map[string]githubSnapshot) []string {
+	var removed []string
+	for i := range tools {
+		if _, ok := upstream[tools[i].Name]; !ok && !tools[i].Removed {
+			tools[i].Removed = true
+			removed = append(removed, "`"+tools[i].Name+"`")
+		}
 	}
-	return "uncatalogued, " + state
-}
-
-func orNone(hint string) string {
-	if hint == "" {
-		return "none"
-	}
-	return hint
+	return removed
 }
 
 func pinnedGitHubCommit(sourcePath string) (string, error) {
@@ -160,43 +217,45 @@ func pinnedGitHubCommit(sourcePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	match := regexp.MustCompile(`GitHubMCPSourceCommit\s*=\s*"([0-9a-f]{40})"`).FindSubmatch(source)
+	match := githubPinPattern.FindSubmatch(source)
 	if match == nil {
 		return "", fmt.Errorf("%s: GitHubMCPSourceCommit not found", sourcePath)
 	}
 	return string(match[1]), nil
 }
 
-func githubCatalogNames(catalogPath string) (map[string]bool, error) {
-	content, err := os.ReadFile(catalogPath)
+// writeGitHubCatalog writes the re-pinned catalog and moves the pinned
+// commit in the CLI source with it.
+func writeGitHubCatalog(catalogPath, sourcePath string, catalog *githubCatalog, head string) error {
+	content, err := json.MarshalIndent(catalog, "", "  ")
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var catalog struct {
-		Tools []struct {
-			Name string `json:"name"`
-		} `json:"tools"`
+	if err := os.WriteFile(catalogPath, append(content, '\n'), 0o644); err != nil {
+		return err
 	}
-	if err := json.Unmarshal(content, &catalog); err != nil {
-		return nil, fmt.Errorf("%s: %w", catalogPath, err)
+	pinned, err := pinnedGitHubCommit(sourcePath)
+	if err != nil {
+		return err
 	}
-	names := map[string]bool{}
-	for _, item := range catalog.Tools {
-		names[item.Name] = true
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
 	}
-	return names, nil
+	return os.WriteFile(sourcePath, []byte(strings.Replace(string(source), pinned, head, 1)), 0o644)
 }
 
-// sparseClone fetches only the tool snapshots: a blobless clone limited to
-// the __toolsnaps__ directory. It returns upstream HEAD.
+// sparseClone checks out only the tool snapshots at upstream HEAD: a
+// blobless clone limited to the __toolsnaps__ directory.
 func sparseClone(dir string) (string, error) {
 	steps := [][]string{
 		{"clone", "--quiet", "--filter=blob:none", "--no-checkout", githubMCPRepository, dir},
 		{"-C", dir, "sparse-checkout", "set", "--no-cone", githubToolsnaps},
+		{"-C", dir, "checkout", "--quiet", "HEAD"},
 	}
 	for _, args := range steps {
 		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(string(output)))
+			return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 		}
 	}
 	output, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
@@ -206,69 +265,121 @@ func sparseClone(dir string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// readToolsnaps checks out the snapshots at commit and fingerprints each
-// tool's definition: description, input schema and annotations. UI metadata
-// (_meta) is left out; it does not change what a call does.
-func readToolsnaps(dir, commit string) (map[string]githubUpstreamTool, error) {
-	if output, err := exec.Command("git", "-C", dir, "checkout", "--quiet", commit).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("git checkout %s: %v: %s", commit[:12], err, strings.TrimSpace(string(output)))
-	}
+type githubVariant struct {
+	required   []string
+	properties map[string]string
+	hint       string
+	canonical  string
+}
+
+// readToolsnaps reads every tool's input schema and annotations. Output
+// snapshots (no input schema) are skipped. A tool with several input
+// variants is held to all of them: fields any variant takes, fields every
+// variant requires, and the strictest annotation, where a variant without
+// annotations counts as a write. UI metadata (_meta) is not part of the
+// fingerprint; it does not change what a call does.
+func readToolsnaps(dir string) (map[string]githubSnapshot, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, githubToolsnaps, "*.snap"))
 	if err != nil {
 		return nil, err
 	}
-	// A tool can have several snapshots (input variants); each one counts, so
-	// a change to any of them is a change to the tool.
-	definitions := map[string][]string{}
-	hints := map[string]string{}
+	sort.Strings(paths)
+	variants := map[string][]githubVariant{}
 	for _, snapPath := range paths {
-		content, err := os.ReadFile(snapPath)
+		name, each, ok, err := readToolsnap(snapPath)
 		if err != nil {
 			return nil, err
 		}
-		var snap map[string]any
-		if err := json.Unmarshal(content, &snap); err != nil {
-			return nil, fmt.Errorf("%s: %w", path.Base(snapPath), err)
-		}
-		delete(snap, "_meta")
-		name, _ := snap["name"].(string)
-		if name == "" {
-			continue
-		}
-		canonical, err := json.Marshal(snap)
-		if err != nil {
-			return nil, err
-		}
-		annotations, err := json.Marshal(snap["annotations"])
-		if err != nil {
-			return nil, err
-		}
-		definitions[name] = append(definitions[name], string(canonical))
-		if hint := hintAccess(string(annotations)); hintRank[hint] > hintRank[hints[name]] {
-			hints[name] = hint
+		if ok {
+			variants[name] = append(variants[name], each)
 		}
 	}
-	tools := map[string]githubUpstreamTool{}
-	for name, variants := range definitions {
-		sort.Strings(variants)
-		tools[name] = githubUpstreamTool{Name: name, Hint: hints[name], Definition: fingerprint([]byte(strings.Join(variants, "\n")))}
+	tools := map[string]githubSnapshot{}
+	for name, all := range variants {
+		tools[name] = mergeVariants(all)
 	}
 	if len(tools) == 0 {
-		return nil, fmt.Errorf("no tool snapshots at %s", commit[:12])
+		return nil, fmt.Errorf("no tool snapshots in %s", githubToolsnaps)
 	}
 	return tools, nil
 }
 
-// hintRank orders upstream hints from loosest to strictest; a tool takes
-// the strictest hint any of its variants carries.
-var hintRank = map[string]int{"": 0, "read": 1, "write": 2, "delete": 3}
-
-func writeGitHubUpstream(upstreamPath string, upstream *githubUpstream) error {
-	content, err := json.MarshalIndent(upstream, "", "  ")
+func readToolsnap(snapPath string) (string, githubVariant, bool, error) {
+	content, err := os.ReadFile(snapPath)
 	if err != nil {
-		return err
+		return "", githubVariant{}, false, err
 	}
-	return os.WriteFile(upstreamPath, append(content, '\n'), 0o644)
+	var snap map[string]any
+	if err := json.Unmarshal(content, &snap); err != nil {
+		return "", githubVariant{}, false, fmt.Errorf("%s: %w", filepath.Base(snapPath), err)
+	}
+	name, _ := snap["name"].(string)
+	schema, _ := snap["inputSchema"].(map[string]any)
+	if name == "" || schema == nil {
+		return "", githubVariant{}, false, nil
+	}
+	delete(snap, "_meta")
+	canonical, err := json.Marshal(snap)
+	if err != nil {
+		return "", githubVariant{}, false, err
+	}
+	annotations, err := json.Marshal(snap["annotations"])
+	if err != nil {
+		return "", githubVariant{}, false, err
+	}
+	each := githubVariant{properties: map[string]string{}, hint: hintAccess(string(annotations)), canonical: string(canonical)}
+	if fields, ok := schema["properties"].(map[string]any); ok {
+		for field, definition := range fields {
+			kind := "any"
+			if definition, ok := definition.(map[string]any); ok {
+				if value, ok := definition["type"].(string); ok {
+					kind = value
+				}
+			}
+			each.properties[field] = kind
+		}
+	}
+	if fields, ok := schema["required"].([]any); ok {
+		for _, field := range fields {
+			if field, ok := field.(string); ok {
+				each.required = append(each.required, field)
+			}
+		}
+	}
+	return name, each, true, nil
+}
+
+func mergeVariants(all []githubVariant) githubSnapshot {
+	merged := githubSnapshot{properties: map[string]string{}, required: []string{}}
+	canonical := make([]string, 0, len(all))
+	requiredCount := map[string]int{}
+	for i, each := range all {
+		canonical = append(canonical, each.canonical)
+		for field, kind := range each.properties {
+			if existing, ok := merged.properties[field]; ok && existing != kind {
+				kind = "any"
+			}
+			merged.properties[field] = kind
+		}
+		for _, field := range each.required {
+			requiredCount[field]++
+		}
+		hint := each.hint
+		if hint == "" && len(all) > 1 {
+			hint = "write"
+		}
+		if i == 0 || accessRank[hint] > accessRank[merged.hint] {
+			merged.hint = hint
+		}
+	}
+	for field, count := range requiredCount {
+		if count == len(all) {
+			merged.required = append(merged.required, field)
+		}
+	}
+	sort.Strings(merged.required)
+	merged.definition = fingerprint([]byte(strings.Join(canonical, "\n")))
+	return merged
 }
 
 func sortedKeys[V any](values map[string]V) []string {
