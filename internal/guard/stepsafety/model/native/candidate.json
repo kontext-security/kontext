@@ -1,17 +1,140 @@
 {
-  "candidate": "merlin-matched-replay-20261005-local",
-  "weights_sha256": "6b888cff5a81dd9785a756b95b6f56b362ddc7ce792883a422d389857ddaaaf4",
+  "candidate": "merlin-v3-precision-20261007",
+  "weights_sha256": "429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1",
   "threshold": 0.5,
   "calibrator": {
-    "coefficient": 1.3003148180546902,
-    "intercept": -5.527577655786232
+    "coefficient": 1.0,
+    "intercept": 0.0
   },
-  "experiment_id": "exp-20261005-merlin-matched-hard-negatives",
-  "selected_epoch": 2,
+  "agreement": {
+    "sparse_model_sha256": "cddc99dd145eeb4e29ebfb35bc874408c2737b4f340917919024dc7e9113c229",
+    "encoder_calibrator": {
+      "coefficient": 0.4128351080107227,
+      "intercept": -1.3945806128701024
+    },
+    "sparse_calibrator": {
+      "coefficient": 1.2411713915407203,
+      "intercept": 0.12969558567752842
+    },
+    "operating_point": {
+      "threshold": 0.5,
+      "encoder_threshold": 0.5455402148631912,
+      "sparse_threshold": 0.2,
+      "rank": [
+        0.900131845841785,
+        0.9841269841269841,
+        295,
+        0.5455402148631912,
+        0.2
+      ],
+      "validation": {
+        "selection": {
+          "local_staging": {
+            "n": 163,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "tn": 163,
+            "precision": null,
+            "recall": null,
+            "fpr": 0.0
+          },
+          "ASB-Traj": {
+            "n": 88,
+            "tp": 32,
+            "fp": 0,
+            "fn": 2,
+            "tn": 54,
+            "precision": 1.0,
+            "recall": 0.9411764705882353,
+            "fpr": 0.0
+          },
+          "AgentAlign-Traj": {
+            "n": 111,
+            "tp": 62,
+            "fp": 1,
+            "fn": 6,
+            "tn": 42,
+            "precision": 0.9841269841269841,
+            "recall": 0.9117647058823529,
+            "fpr": 0.023255813953488372
+          },
+          "authored": {
+            "n": 78,
+            "tp": 0,
+            "fp": 0,
+            "fn": 36,
+            "tn": 42,
+            "precision": null,
+            "recall": 0.0,
+            "fpr": 0.0
+          },
+          "benchmark": {
+            "n": 199,
+            "tp": 94,
+            "fp": 1,
+            "fn": 8,
+            "tn": 96,
+            "precision": 0.9894736842105263,
+            "recall": 0.9215686274509803,
+            "fpr": 0.010309278350515464
+          }
+        },
+        "calibration": {
+          "local_staging": {
+            "n": 132,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "tn": 132,
+            "precision": null,
+            "recall": null,
+            "fpr": 0.0
+          },
+          "ASB-Traj": {
+            "n": 56,
+            "tp": 23,
+            "fp": 0,
+            "fn": 2,
+            "tn": 31,
+            "precision": 1.0,
+            "recall": 0.92,
+            "fpr": 0.0
+          },
+          "AgentAlign-Traj": {
+            "n": 121,
+            "tp": 48,
+            "fp": 0,
+            "fn": 10,
+            "tn": 63,
+            "precision": 1.0,
+            "recall": 0.8275862068965517,
+            "fpr": 0.0
+          },
+          "authored": {
+            "n": 82,
+            "tp": 0,
+            "fp": 0,
+            "fn": 40,
+            "tn": 42,
+            "precision": null,
+            "recall": 0.0,
+            "fpr": 0.0
+          },
+          "benchmark": {
+            "n": 177,
+            "tp": 71,
+            "fp": 0,
+            "fn": 12,
+            "tn": 94,
+            "precision": 1.0,
+            "recall": 0.8554216867469879,
+            "fpr": 0.0
+          }
+        }
+      }
+    }
+  },
   "default_enabled": true,
-  "selection_freeze_sha256": "8360e49290bb455744a9efa461278ba08aec9f41a793ba5d9c4bfa5f0520a92b",
-  "generator_sha256": "6320bd036dce681e44b111d57a761274095c9fe2d2445b9b021c9ba0950975a5",
-  "historical_fixture_sha256": "63535206c6051aca0e3342fe9903d163d4c1245f906cc649e9f658fb61090c17",
-  "purpose": "Numerical parity only; quality evidence is real staging replay and AgentDojo. User-authorized local trial, not a passed original operating-point gate.",
-  "fixture_sha256": "cd552c56b616913d7a43f575ef72aa3fa4423479a07b6da0eb38d5e627e0f210"
+  "score_semantics": "Threshold-relative agreement score; not a calibrated risk probability"
 }

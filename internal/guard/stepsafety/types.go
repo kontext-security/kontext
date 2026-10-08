@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	ModelVersion = "merlin-matched-replay-20261005-local"
+	ModelVersion = "merlin-v3-precision-20261007"
 	Threshold    = 0.5
 
-	calibrationScale = 1.3003148180546902
-	calibrationBias  = -5.527577655786232
+	calibrationScale = 1.0
+	calibrationBias  = 0.0
 
 	defaultTimeout        = 250 * time.Millisecond
 	maxConfiguredTimeout  = 500 * time.Millisecond
@@ -70,7 +70,8 @@ type Input struct {
 }
 
 // Evaluation is returned for every enabled PreToolUse call. UnsafeProbability
-// is absent on failure; ShadowDecision then becomes unavailable and the real
+// retains its wire name for compatibility; V3 supplies an agreement score, not
+// a calibrated risk probability. It is absent on abstention or failure; ShadowDecision then becomes unavailable and the real
 // tool authorization remains untouched (fail open for this pilot).
 type Evaluation struct {
 	UnsafeProbability  *float64 `json:"unsafe_probability,omitempty"`

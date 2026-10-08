@@ -145,7 +145,7 @@ func isManagedHookFields(fields []string) bool {
 	return false
 }
 
-// MergeManagedHooks installs/refreshes the five managed-observe hooks in the
+// MergeManagedHooks installs/refreshes the managed-observe hooks in the
 // settings map: for each supported event it removes any existing Kontext
 // managed handlers (stale binary paths included) and appends the canonical
 // group from Template. Everything else in the map is untouched. Idempotent:

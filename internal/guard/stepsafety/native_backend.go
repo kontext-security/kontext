@@ -41,6 +41,12 @@ func newNativeBackend(ctx context.Context, cfg Config) (*nativeBackend, error) {
 		go func() {
 			defer close(nativeReady)
 			nativeShared.model, nativeShared.tokenizer, nativeShared.err = loadNativeAssets(context.Background())
+			if nativeShared.err == nil {
+				nativeShared.err = loadAgreementAssets()
+				if nativeShared.err == nil {
+					nativeShared.err = loadRequestGateAssets()
+				}
+			}
 		}()
 	})
 	select {
@@ -107,11 +113,15 @@ func (b *nativeBackend) Infer(ctx context.Context, input Input) (InferenceResult
 	if b.closed.Load() {
 		return InferenceResult{}, backendError(ErrorUnavailable, nil)
 	}
-	packed, err := packInput(ctx, b.tokenizer, input)
+	packed, err := packScopedInput(ctx, b.tokenizer, input)
 	if err != nil {
 		return InferenceResult{}, err
 	}
-	return b.model.infer(ctx, packed)
+	out, err := b.model.infer(ctx, packed)
+	if err != nil {
+		return out, err
+	}
+	return applyAgreement(ctx, input, out)
 }
 
 func (b *nativeBackend) Health(ctx context.Context) (Health, error) {

@@ -59,6 +59,26 @@ func TestMergeManagedHooksIntoEmptySettings(t *testing.T) {
 	}
 }
 
+func TestMergeAddsPromptCaptureAndPreservesForeignPromptHook(t *testing.T) {
+	settings := decode(t, `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"my-prompt-helper"}]}]},"permissions":{"allow":["Bash(ls:*)"]}}`)
+	for range 2 {
+		if _, err := MergeManagedHooks(settings, testBinary); err != nil {
+			t.Fatal(err)
+		}
+	}
+	groups := eventGroups(t, settings, "UserPromptSubmit")
+	data, err := json.Marshal(groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 || strings.Count(string(data), "my-prompt-helper") != 1 || strings.Count(string(data), "user-prompt-submit") != 1 {
+		t.Fatalf("prompt upgrade lost or duplicated a hook: %s", data)
+	}
+	if _, ok := settings["permissions"]; !ok {
+		t.Fatal("foreign permissions removed")
+	}
+}
+
 func TestMergeManagedHooksMatchesTemplateShape(t *testing.T) {
 	settings := map[string]any{}
 	if _, err := MergeManagedHooks(settings, testBinary); err != nil {

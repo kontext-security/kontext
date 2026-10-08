@@ -234,6 +234,10 @@ process.stdin.on("end", () => {
       if (verdict.unsafe_probability != null || verdict.error_code !== "excluded_tool" || verdict.shadow_decision !== "unavailable") {
         throw new Error(`file tool was not excluded: ${JSON.stringify(verdict)}`);
       }
+    } else if (verdict.error_code === "unsupported_effect") {
+      if (verdict.unsafe_probability != null || verdict.shadow_decision !== "unavailable") {
+        throw new Error(`unsupported operation received a score: ${JSON.stringify(verdict)}`);
+      }
     } else if (["timeout", "concurrency_timeout"].includes(verdict.error_code)) {
       // The production deadline also applies on slower shared CI runners.
       // A missed deadline must stay unavailable, never a synthetic safe score.
@@ -253,11 +257,11 @@ process.stdin.on("end", () => {
   }
 });
 '
-  echo "ok step safety: bounded shell assessment, file tools excluded, policy unchanged"
+  echo "ok step safety: shell operations abstain, file tools excluded, policy unchanged"
 
   assert_telemetry_hook \
     "shadow history request" \
-    '{"session_id":"e2e-step-history","hook_event_name":"UserPromptSubmit","prompt":"Summarize the search results."}'
+    '{"session_id":"e2e-step-history","hook_event_name":"UserPromptSubmit","prompt":"What is the file size?"}'
 
   HISTORY_PAYLOAD="$(node -e '
 const content = "prefix " + Array.from({length: 600}, (_, i) => `event-token-${String(i).padStart(3, "0")}`).join(" ") + " suffix";
@@ -266,7 +270,7 @@ process.stdout.write(JSON.stringify({session_id: "e2e-step-history", hook_event_
   assert_telemetry_hook "large supported history" "$HISTORY_PAYLOAD"
   assert_hook \
     "shadow after large history" \
-    '{"session_id":"e2e-step-history","hook_event_name":"PreToolUse","tool_name":"summarize","tool_input":{"topic":"public docs"}}' \
+    '{"session_id":"e2e-step-history","hook_event_name":"PreToolUse","tool_name":"delete_file","tool_input":{"file_id":"example"}}' \
     "observed; no local analysis wired" \
     "would allow"
 
@@ -303,9 +307,12 @@ process.stdin.on("end", () => {
   # Ordinary E2E must obtain a real score under the daemon's production
   # deadline. Use a short call in a fresh session so long history and runner
   # variance on larger inputs cannot turn this into an all-unavailable pass.
+  assert_telemetry_hook \
+    "scoring probe prompt capture" \
+    '{"session_id":"e2e-merlin-score","hook_event_name":"UserPromptSubmit","prompt":"What is the file size?"}'
   assert_hook \
     "production-deadline scoring probe" \
-    '{"session_id":"e2e-merlin-score","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"pwd"}}' \
+    '{"session_id":"e2e-merlin-score","hook_event_name":"PreToolUse","tool_name":"delete_file","tool_input":{"file_id":"example"}}' \
     "observed; no local analysis wired" \
     "would allow"
   wait_for_step_safety "e2e-merlin-score" 1
@@ -316,7 +323,7 @@ process.stdin.on("data", chunk => raw += chunk);
 process.stdin.on("end", () => {
   const verdicts = JSON.parse(raw);
   const verdict = verdicts[0];
-  if (verdicts.length !== 1 || verdict.tool_name !== "Bash" || verdict.enforced !== false || verdict.model_version !== candidate.candidate || verdict.threshold !== candidate.threshold) {
+  if (verdicts.length !== 1 || verdict.tool_name !== "delete_file" || !verdict.user_request_present || verdict.enforced !== false || verdict.model_version !== candidate.candidate || verdict.threshold !== candidate.threshold) {
     throw new Error(`scoring probe contract changed: ${JSON.stringify(verdicts)}`);
   }
   if (process.env.KONTEXT_E2E_EXPECT_MERLIN_TIMEOUT === "1") {

@@ -1,63 +1,52 @@
 # Local step-safety assessment: Merlin advisory beta
 
-The default-on step-safety model supplies an additional advisory signal alongside
-Kestrel. Kestrel keeps its existing Bash/shell classifier. Step-safety can score
-short non-file tool actions using the user request and recent tool history.
-Neither model replaces deterministic/Cedar authorization. `enforced` is always
-`false`, and a timeout, exclusion, oversized input, or inference failure leaves
-the settled authorization decision unchanged.
+The default-on Merlin V3 model supplies a narrow advisory signal alongside
+Kestrel, which retains its existing Bash/shell classifier. Merlin looks for
+potentially consequential operations during informational tasks. Neither model
+replaces deterministic/Cedar authorization. `enforced` is always `false`.
 
 ## Coverage
 
-The retained checkpoint is DeBERTa-v3-xsmall, continued from the benchmark model
-with mixed benchmark, authored and reviewed benign examples. See the
-[matched-replay trial](merlin-matched-replay-trial.md) for its training composition and remaining false positives. It is not trained to understand every tool a
-coding agent can call. The training inventory has no current-action tools named
-`Read`, `Write`, `Edit`, `MultiEdit`, or `apply_patch`; nine generic
-`file_operation` examples do not establish coverage for code edits or diffs.
+The [V3 precision candidate](merlin-v3.md) requires an explicit structured
+operation: deletion, credential change, money transfer, outgoing message or
+access sharing, with populated effect arguments. A learned informational-intent
+filter, conservative authorization checks, a contextual DeBERTa model and a
+learned action filter must agree before it flags a call.
 
-The pilot excludes `Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `apply_patch`,
-and known file-content aliases such as `read_file`, `write_file`, and `edit_file`.
-Namespace leaves are recognized (`functions.apply_patch`,
-`mcp__filesystem__read_file`). These calls are skipped before arguments are
-serialized, and their results are excluded from model history. Tool names such
-as `read_email` and `write_message` remain eligible. Unknown aliases cannot be
-identified semantically; extend the explicit list when adding an adapter.
-
-The useful hypothesis is that request/action mismatch or suspicious tool use
-may be detectable when the evidence fits in the model's input. This does not
-establish sensitive-path policy, arbitrary patch analysis, detection of every
-prompt injection, or protection against threats that require omitted context.
-A compact representation that includes path, scope, or a diff summary would
-need matching training/evaluation examples before becoming a model input.
-The hook contract currently supplies raw arguments/results, not a general
-trusted summary. The pilot does not invent one.
+Ordinary lookups, Bash, browser/code wrappers and unknown effects abstain. Known
+file-content tools such as Read, Write, Edit and apply_patch remain excluded.
+Missing request context, explicit/ambiguous mutation requests and unsupported
+inputs also abstain. An unavailable result means **not assessed**, not safe.
+This deliberate coverage reduction prioritizes precision over recall. The score
+is threshold-relative agreement, not a calibrated probability of actual risk.
 
 ## Embedded runtime
 
-The current [matched-replay candidate](merlin-matched-replay-trial.md) runs in
-native Go with embedded float32 weights and tokenizer. Endpoints need no Python,
-ONNX Runtime, downloads or installed model directory. The hidden historical
-ONNX installer does not replace this candidate. See the trial document for exact
-checkpoint/calibration pins, limitations and reproduction commands.
+Native Go runs the embedded float32 contextual checkpoint, tokenizer and two
+small sparse classifiers. Endpoints need no Python, ONNX Runtime, downloads or
+installed model directory. The hidden historical ONNX installer does not replace
+this candidate. Serving provenance is in `model/native/PROVENANCE.json`; the
+older `model/PROVENANCE.json` describes only that historical installer.
 
 ## Input limits
 
 The four training fields, markers, separators, and 512-token padding stay the
-same. Supported history uses the training head/tail rule after file-tool
-exclusions; oversized requests, actions, and schemas remain unscored:
+same. The complete request passes the intent/authorization gates before the
+contextual model receives its bounded view. Actions are never truncated:
 
 | Field | Content budget | When it does not fit |
 | --- | ---: | --- |
-| User request | 96 tokens | Skip: `request_too_large` |
+| User request | 96 tokens | Retain the first 96 after checking the complete request |
 | Recent interaction history | 144 tokens | Retain the first 72 and last 72 tokens after excluding file tools |
 | Current tool name + complete arguments | 128 tokens | Skip: `action_too_large` |
-| Available tool schemas, when supplied | 128 tokens | Skip: `schema_too_large` |
+| Available tool schemas, when supplied | 128 tokens | Retain the first 64 and last 64 |
 
-A long Bash command is therefore never scored from just its beginning and end.
+Bash is outside V3 scope. An eligible typed operation is never scored from only
+its beginning and end.
 The 128-token action allowance includes the tool name, JSON structure, and
 `[TOOL_NAME]` / `[ARGUMENTS]` labels. Missing requests or schemas remain absent;
-Kontext does not infer them from transcripts or assistant reasoning. Rare Unicode
+Kontext does not infer them from transcripts or assistant reasoning. Missing
+requests cause supported operations to abstain. Rare Unicode
 combining sequences that Go NFC would modify differently from Hugging Face are
 skipped as `unsupported_text`.
 
@@ -82,10 +71,22 @@ is size-checked before serialization. The memory-only history cache holds at
 most 256 sessions, 24 events per session, and 64 KiB of history per session.
 Individual events may use that same 64 KiB bound, so supported results above
 the former 4 KiB limit reach token truncation. Events beyond the byte bound
-are rejected before evicting useful history. Overlong user requests are marked
-unscorable, not silently cut.
+are rejected before evicting useful history. Requests exceeding the byte bound
+remain unscorable; token-level request cropping is the explicit V3 policy above.
 `PostToolUse` history is captured before asynchronous ingestion acknowledges the
 hook, so the next action sees the preceding retained interaction.
+
+## Prompt capture
+
+Both Claude Code and Codex must register UserPromptSubmit. The hook captures the
+latest prompt before tools run; Merlin inference still runs after the tool-hook
+response. Empty new prompts clear stale intent, session closure clears context,
+and Codex and Claude session IDs remain isolated. Upgrades recognize older
+Kontext-owned five- and seven-event Claude configurations as incomplete so setup
+can add the missing hook. Foreign settings and prompt handlers are preserved.
+A binary upgrade alone does not rewrite already installed hook settings: refresh
+them through the normal setup/management flow before evaluating coverage. The
+context cache is memory-only, so a daemon restart needs a new prompt event.
 
 ## Enable and operate
 
@@ -122,10 +123,13 @@ for retry. No library is loaded or unloaded.
 `GET /healthz` includes step-safety status, version, device (`go-cpu`), and a
 redacted error code. An unavailable model does not make the main daemon unhealthy.
 Each recorded enabled pre-tool call has a local `step_safety_verdicts` row containing
-correlation IDs, capped/redacted tool name, probability when present, model
+correlation IDs, capped/redacted tool name, agreement score in the legacy
+`unsafe_probability` field when present, model
 version, latency, error category, context-presence flags, `history_omitted`, and
 `enforced=false`. Exclusions and failures have `shadow_decision=unavailable` and
-no probability. They must not be counted as safe predictions.
+no score. They must not be counted as safe predictions. V3 additionally reports
+`unsupported_effect`, `missing_request`, `compound_or_mutation_request` and
+`request_not_informational` as explicit abstention reasons.
 
 Unsafe predictions also retain a separately bounded, redacted review context:
 up to 2,000 bytes of the user request and 6,000 bytes of supported tool history.

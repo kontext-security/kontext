@@ -42,11 +42,11 @@ func TestCalibratedProbabilityAndUnsafeThreshold(t *testing.T) {
 	if result.UnsafeProbability == nil {
 		t.Fatal("unsafe probability missing")
 	}
-	want := 1 / (1 + math.Exp(-(1.3003148180546902*1.0 - 5.527577655786232)))
+	want := 1 / (1 + math.Exp(-(calibrationScale*1.0 + calibrationBias)))
 	if math.Abs(*result.UnsafeProbability-want) > 1e-15 {
 		t.Fatalf("unsafe probability = %.17f, want %.17f", *result.UnsafeProbability, want)
 	}
-	if result.ShadowDecision != DecisionSafe || result.Threshold != Threshold {
+	if (result.ShadowDecision == DecisionUnsafe) != (want >= Threshold) || result.Threshold != Threshold {
 		t.Fatalf("result = %+v, want safe below the precision threshold", result)
 	}
 	if result.ModelVersion != "test-model" || result.Enforced {

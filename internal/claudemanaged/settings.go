@@ -32,6 +32,9 @@ var SupportedEvents = []Event{
 	{Name: hook.HookPreToolUse, Alias: "pre-tool-use"},
 	{Name: hook.HookPostToolUse, Alias: "post-tool-use"},
 	{Name: hook.HookPostToolUseFailed, Alias: "post-tool-use-failure"},
+	// Keep prompt capture ordered before the turn's tool calls. Merlin itself
+	// still runs asynchronously after the PreToolUse response.
+	{Name: hook.HookUserPromptSubmit, Alias: "user-prompt-submit"},
 	{Name: hook.HookSessionEnd, Alias: "session-end", Async: true},
 	{Name: hook.HookStop, Alias: "stop", Async: true},
 	{Name: hook.HookSubagentStop, Alias: "subagent-stop", Async: true},
@@ -165,7 +168,7 @@ func IsManagedSettingsDropIn(data []byte) bool {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return false
 	}
-	if len(settings.Hooks) > len(SupportedEvents) || len(settings.Hooks) < len(SupportedEvents)-2 {
+	if len(settings.Hooks) > len(SupportedEvents) || len(settings.Hooks) < len(SupportedEvents)-3 {
 		return false
 	}
 	for name := range settings.Hooks {
@@ -179,8 +182,9 @@ func IsManagedSettingsDropIn(data []byte) bool {
 	}
 	for _, event := range SupportedEvents {
 		groups := settings.Hooks[event.Name.String()]
-		// Recognize our older five-event drop-in so setup can upgrade it.
-		if (event.Name == hook.HookStop || event.Name == hook.HookSubagentStop) && len(groups) == 0 {
+		// Recognize both the original five-event drop-in and the later usage
+		// hooks, so setup can add prompt capture without replacing foreign hooks.
+		if (event.Name == hook.HookStop || event.Name == hook.HookSubagentStop || event.Name == hook.HookUserPromptSubmit) && len(groups) == 0 {
 			continue
 		}
 		if len(groups) != 1 || groups[0].Matcher != "" || len(groups[0].Hooks) != 1 {

@@ -54,7 +54,7 @@ func TestCandidateMatchesPython(t *testing.T) {
 				if err != nil || fields != c.Fields {
 					t.Fatalf("normalized fields differ: %v\ngot %q\nwant %q", err, fields, c.Fields)
 				}
-				p, err = packInput(context.Background(), tok, *c.Input)
+				p, err = packScopedInput(context.Background(), tok, *c.Input)
 				if err != nil || !slices.Equal(p.IDs, c.IDs) || !slices.Equal(p.Mask, c.Mask) {
 					t.Fatalf("packed tokens differ: %v", err)
 				}
@@ -64,6 +64,12 @@ func TestCandidateMatchesPython(t *testing.T) {
 				}
 			}
 			got, err := m.infer(context.Background(), p)
+			if err == nil {
+				if c.Input == nil {
+					t.Fatal("agreement parity requires structured input")
+				}
+				got, err = applyAgreement(context.Background(), *c.Input, got)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

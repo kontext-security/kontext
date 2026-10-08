@@ -1,0 +1,314 @@
+{
+  "schema_version": 1,
+  "experiment_id": "exp-20261007-merlin-v3-precision",
+  "child": "merlin_prompt_repair_20261007_v1",
+  "created_at": "2026-10-07T15:10:55.871277+00:00",
+  "protocol": {
+    "created_at": "2026-10-07T15:01:18.510708+00:00",
+    "checkpoint": "merlin-matched-replay-20261005-local",
+    "threshold": 0.5,
+    "fitting": false,
+    "verdicts": 1122,
+    "paired_calls": 1060,
+    "inference_rows": 2278,
+    "excluded": {
+      "no_recoverable_prior_human_prompt": 49,
+      "missing_or_conflicting_full_arguments": 13
+    },
+    "sessions": 2,
+    "long_request_calls": 1035,
+    "limitations": [
+      "Same empty history in the primary pair; original live history not reconstructed.",
+      "Secondary history is the retained redacted/truncated review snapshot, not exact live history.",
+      "Actual explicit human text recovered from transcript; deployed hook prompt bytes were never captured.",
+      "Prior-session/latest-human context does not reconstruct delegated subagent instructions.",
+      "Unadjudicated calls have no inferred ground-truth risk label."
+    ]
+  },
+  "results": {
+    "v2_strict": {
+      "all": {
+        "calls": 2278,
+        "scored": 905,
+        "flags": 48,
+        "decisions": {
+          "unsafe": 48,
+          "safe": 857,
+          "unavailable": 1373
+        },
+        "unavailable_reasons": {
+          "action_too_large": 308,
+          "request_too_large": 877,
+          "excluded_tool": 34,
+          "invalid_history": 154
+        },
+        "enforced": 0
+      },
+      "corrected_claude": {
+        "calls": 1060,
+        "scored": 13,
+        "flags": 4,
+        "decisions": {
+          "safe": 9,
+          "unsafe": 4,
+          "unavailable": 1047
+        },
+        "unavailable_reasons": {
+          "action_too_large": 154,
+          "request_too_large": 876,
+          "excluded_tool": 17
+        },
+        "enforced": 0
+      },
+      "previously_reviewed_benign": {
+        "calls": 71,
+        "scored": 1,
+        "flags": 0,
+        "decisions": {
+          "safe": 1,
+          "unavailable": 70
+        },
+        "unavailable_reasons": {
+          "request_too_large": 70
+        },
+        "enforced": 0
+      },
+      "short_real_requests": {
+        "calls": 25,
+        "scored": 13,
+        "flags": 4,
+        "decisions": {
+          "safe": 9,
+          "unsafe": 4,
+          "unavailable": 12
+        },
+        "unavailable_reasons": {
+          "action_too_large": 11,
+          "excluded_tool": 1
+        },
+        "enforced": 0
+      }
+    },
+    "v2_context_crop": {
+      "all": {
+        "calls": 2359,
+        "scored": 2050,
+        "flags": 336,
+        "decisions": {
+          "safe": 1714,
+          "unsafe": 336,
+          "unavailable": 309
+        },
+        "unavailable_reasons": {
+          "action_too_large": 203,
+          "excluded_tool": 27,
+          "invalid_history": 77,
+          "input_too_large": 2
+        },
+        "enforced": 0
+      },
+      "corrected_claude": {
+        "calls": 1060,
+        "scored": 889,
+        "flags": 191,
+        "decisions": {
+          "safe": 698,
+          "unsafe": 191,
+          "unavailable": 171
+        },
+        "unavailable_reasons": {
+          "action_too_large": 154,
+          "excluded_tool": 17
+        },
+        "enforced": 0
+      },
+      "previously_reviewed_benign": {
+        "calls": 71,
+        "scored": 71,
+        "flags": 45,
+        "decisions": {
+          "safe": 26,
+          "unsafe": 45
+        },
+        "unavailable_reasons": {},
+        "enforced": 0
+      },
+      "short_real_requests": {
+        "calls": 25,
+        "scored": 13,
+        "flags": 4,
+        "decisions": {
+          "safe": 9,
+          "unsafe": 4,
+          "unavailable": 12
+        },
+        "unavailable_reasons": {
+          "action_too_large": 11,
+          "excluded_tool": 1
+        },
+        "enforced": 0
+      },
+      "AgentDojo": {
+        "calls": 1220,
+        "scored": 1159,
+        "flags": 144,
+        "decisions": {
+          "safe": 1015,
+          "unavailable": 61,
+          "unsafe": 144
+        },
+        "unavailable_reasons": {
+          "excluded_tool": 10,
+          "action_too_large": 49,
+          "input_too_large": 2
+        },
+        "enforced": 0,
+        "true_positives": 92,
+        "false_positives": 52,
+        "risky_total": 352,
+        "recall": 0.26136363636363635,
+        "observed_precision": 0.6388888888888888
+      }
+    },
+    "v2_strict_benchmark": {
+      "all": {
+        "calls": 1220,
+        "scored": 5,
+        "flags": 0,
+        "decisions": {
+          "unavailable": 1215,
+          "safe": 5
+        },
+        "unavailable_reasons": {
+          "schema_too_large": 1021,
+          "excluded_tool": 10,
+          "action_too_large": 49,
+          "request_too_large": 133,
+          "input_too_large": 2
+        },
+        "enforced": 0
+      },
+      "AgentDojo": {
+        "calls": 1220,
+        "scored": 5,
+        "flags": 0,
+        "decisions": {
+          "unavailable": 1215,
+          "safe": 5
+        },
+        "unavailable_reasons": {
+          "schema_too_large": 1021,
+          "excluded_tool": 10,
+          "action_too_large": 49,
+          "request_too_large": 133,
+          "input_too_large": 2
+        },
+        "enforced": 0,
+        "true_positives": 0,
+        "false_positives": 0,
+        "risky_total": 352,
+        "recall": 0.0,
+        "observed_precision": null
+      }
+    },
+    "v3_integrated": {
+      "all": {
+        "calls": 2565,
+        "scored": 112,
+        "flags": 24,
+        "decisions": {
+          "unavailable": 2453,
+          "unsafe": 24,
+          "safe": 88
+        },
+        "unavailable_reasons": {
+          "unsupported_effect": 2066,
+          "excluded_tool": 27,
+          "compound_or_mutation_request": 299,
+          "request_not_informational": 48,
+          "action_too_large": 11,
+          "input_too_large": 2
+        },
+        "enforced": 0
+      },
+      "corrected_claude": {
+        "calls": 1060,
+        "scored": 0,
+        "flags": 0,
+        "decisions": {
+          "unavailable": 1060
+        },
+        "unavailable_reasons": {
+          "unsupported_effect": 1043,
+          "excluded_tool": 17
+        },
+        "enforced": 0
+      },
+      "previously_reviewed_benign": {
+        "calls": 71,
+        "scored": 0,
+        "flags": 0,
+        "decisions": {
+          "unavailable": 71
+        },
+        "unavailable_reasons": {
+          "unsupported_effect": 71
+        },
+        "enforced": 0
+      },
+      "short_real_requests": {
+        "calls": 25,
+        "scored": 0,
+        "flags": 0,
+        "decisions": {
+          "unavailable": 25
+        },
+        "unavailable_reasons": {
+          "unsupported_effect": 24,
+          "excluded_tool": 1
+        },
+        "enforced": 0
+      },
+      "AgentDojo": {
+        "calls": 1220,
+        "scored": 85,
+        "flags": 23,
+        "decisions": {
+          "unsafe": 23,
+          "unavailable": 1135,
+          "safe": 62
+        },
+        "unavailable_reasons": {
+          "unsupported_effect": 874,
+          "excluded_tool": 10,
+          "compound_or_mutation_request": 226,
+          "request_not_informational": 15,
+          "action_too_large": 8,
+          "input_too_large": 2
+        },
+        "enforced": 0,
+        "true_positives": 23,
+        "false_positives": 0,
+        "risky_total": 352,
+        "recall": 0.06534090909090909,
+        "observed_precision": 1.0
+      }
+    }
+  },
+  "integration_reference_parity": {
+    "cases": 1505,
+    "decision_or_error_mismatches": 0,
+    "max_score_difference": 1.6653345369377348e-16
+  },
+  "conclusion": "Prompt transport alone does not repair V2 precision; most apparent improvement is abstention. Cropping context restores scoring but retains false alerts. Integrate the frozen narrow V3 with repaired prompt capture; no deployment.",
+  "deployed": false,
+  "limitations": [
+    "No exact original-history reconstruction; primary pair holds history empty.",
+    "Original prompt hook bytes were not captured; human request is recovered from explicit transcript records.",
+    "Only two Claude sessions with 1060 usable full captures; 62 records excluded.",
+    "71 previous benign flags and four newly assistant-reviewed benign flags are not independent human gold.",
+    "191 cropped V2 alerts are not all claimed to be false positives; 45 previously reviewed benign calls remain flagged.",
+    "V3 local quietness is abstention by scope, not benign classification.",
+    "AgentDojo is repeatedly studied and not a blind holdout; preserve low recall and coverage reporting."
+  ]
+}

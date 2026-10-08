@@ -47,7 +47,7 @@ func NewContextStore() *ContextStore {
 }
 
 func (s *ContextStore) RecordUserRequest(sessionID, request string) {
-	if s == nil || sessionID == "" || request == "" {
+	if s == nil || sessionID == "" {
 		return
 	}
 	s.mu.Lock()
