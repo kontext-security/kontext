@@ -755,7 +755,7 @@ func classifyGH(args []string, complete bool) cedareval.ShellProjectionV2 {
 			rest = rest[1:]
 		}
 	}
-	if ghWriteCommands[key] && !ghAsksForHelp(rest) {
+	if ghWriteCommands[key] && !(complete && ghAsksForHelp(rest)) {
 		facts := []string{"gh/command=" + key, "github/route=catalogued", "github/write=true"}
 		facts = append(facts, operationFacts(ghOperations(key, rest))...)
 		return projection("gh", facts, nil, complete)
@@ -774,9 +774,16 @@ func classifyGH(args []string, complete bool) cedareval.ShellProjectionV2 {
 // A word right after an option word may be that option's value
 // (`gh release create v1 --notes --help`); when such a word is --help,
 // --help=… or --, which way gh reads it is unclear and the answer is no.
+// The shell may still expand a word (`--{help,help}=false`), so any word
+// outside plain characters makes the answer no too.
+var plainGHWord = regexp.MustCompile(`^[A-Za-z0-9_./:=,@%+-]*$`)
+
 func ghAsksForHelp(args []string) bool {
 	help := false
 	for i, arg := range args {
+		if !plainGHWord.MatchString(arg) {
+			return false
+		}
 		helpWord := arg == "--" || arg == "--help" || strings.HasPrefix(arg, "--help=")
 		if helpWord && i > 0 {
 			previous := args[i-1]
