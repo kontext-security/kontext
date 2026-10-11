@@ -770,24 +770,25 @@ func classifyGH(args []string, complete bool) cedareval.ShellProjectionV2 {
 // which makes gh print the command's usage and exit without running it. The
 // last setting wins, so a later --help=false turns it back off. Only --help
 // counts: some commands give -h another meaning (`gh repo create -h URL`),
-// and a short cluster with a value that could reach -h makes the answer no.
-// A --help right after another option word may be that option's value
-// (`gh release create v1 --notes --help`), so it does not count either.
+// so a short cluster with a value that could reach -h makes the answer no.
+// A word right after an option word may be that option's value
+// (`gh release create v1 --notes --help`); when such a word is --help,
+// --help=… or --, which way gh reads it is unclear and the answer is no.
 func ghAsksForHelp(args []string) bool {
 	help := false
 	for i, arg := range args {
+		helpWord := arg == "--" || arg == "--help" || strings.HasPrefix(arg, "--help=")
+		if helpWord && i > 0 {
+			previous := args[i-1]
+			if strings.HasPrefix(previous, "-") && previous != "--" && !strings.Contains(previous, "=") {
+				return false
+			}
+		}
 		switch {
 		case arg == "--":
 			return help
 		case arg == "--help":
-			if i == 0 {
-				help = true
-				continue
-			}
-			previous := args[i-1]
-			if !strings.HasPrefix(previous, "-") || strings.Contains(previous, "=") {
-				help = true
-			}
+			help = true
 		case strings.HasPrefix(arg, "--help="):
 			value, err := strconv.ParseBool(strings.TrimPrefix(arg, "--help="))
 			help = err == nil && value
