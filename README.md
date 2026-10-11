@@ -15,7 +15,7 @@
 <p>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-152822?labelColor=0d1714"></a>
   <a href="https://github.com/kontext-security/kontext/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/kontext-security/kontext?color=152822&labelColor=0d1714"></a>
-  <img alt="Built with Go" src="https://img.shields.io/badge/Go-1.25-152822?labelColor=0d1714">
+  <img alt="Built with Go" src="https://img.shields.io/badge/Go-1.26-152822?labelColor=0d1714">
 </p>
 
 </div>
