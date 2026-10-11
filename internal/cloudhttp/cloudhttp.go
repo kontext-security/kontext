@@ -15,12 +15,14 @@ import (
 
 const (
 	// PingAfter is how long a connection may go without receiving any frame
-	// before the transport pings it. It is kept at the request timeout so a
-	// hung request is followed by a ping before the next refresh is due.
-	PingAfter = 10 * time.Second
+	// before the transport pings it.
+	PingAfter = 15 * time.Second
 	// PingTimeout is how long the transport waits for the ping's reply before
-	// it closes the connection and the next request dials a fresh one.
-	PingTimeout = 5 * time.Second
+	// it closes the connection and the next request dials a fresh one. The
+	// wait includes writing the ping, which can queue behind a ledger upload
+	// on a slow link, so it stays generous: a dead connection is still gone
+	// within 30s, well inside the one-minute policy refresh interval.
+	PingTimeout = 15 * time.Second
 )
 
 var sharedTransport = NewTransport(PingAfter, PingTimeout)

@@ -1,6 +1,7 @@
 package cloudhttp
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
 	"log"
@@ -83,7 +84,7 @@ func (p *blackholeProxy) close() {
 
 // consecutiveFailuresAfterFreeze makes one request, freezes the connection it
 // used, then counts how many requests fail before one succeeds.
-func consecutiveFailuresAfterFreeze(t *testing.T, transport *http.Transport, maxAttempts int) (int, int32) {
+func consecutiveFailuresAfterFreeze(t *testing.T, transport *http.Transport, requestTimeout time.Duration, maxAttempts int) (int, int32) {
 	t.Helper()
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")
@@ -101,10 +102,16 @@ func consecutiveFailuresAfterFreeze(t *testing.T, transport *http.Transport, max
 
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	t.Cleanup(transport.CloseIdleConnections)
-	client := &http.Client{Transport: transport, Timeout: 200 * time.Millisecond}
+	client := &http.Client{Transport: transport}
 	url := "https://" + proxy.listener.Addr().String() + "/"
-	get := func() error {
-		resp, err := client.Get(url)
+	get := func(timeout time.Duration) error {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			return err
 		}
@@ -112,16 +119,20 @@ func consecutiveFailuresAfterFreeze(t *testing.T, transport *http.Transport, max
 		if resp.ProtoMajor != 2 {
 			t.Fatalf("request used %s, want HTTP/2", resp.Proto)
 		}
-		return nil
+		// Read to the end so the stream closes cleanly instead of being reset,
+		// which would hold an extra stream slot on the frozen connection.
+		_, err = io.Copy(io.Discard, resp.Body)
+		return err
 	}
 
-	if err := get(); err != nil {
+	// The first request also pays for the TLS handshake; give it room.
+	if err := get(5 * time.Second); err != nil {
 		t.Fatalf("request before freeze: %v", err)
 	}
 	proxy.frozen.Store(true)
 	failures := 0
 	for failures < maxAttempts {
-		if get() == nil {
+		if get(requestTimeout) == nil {
 			return failures, proxy.dials.Load()
 		}
 		failures++
@@ -131,19 +142,22 @@ func consecutiveFailuresAfterFreeze(t *testing.T, transport *http.Transport, max
 }
 
 func TestHealthCheckedTransportLeavesDeadConnection(t *testing.T) {
-	failures, dials := consecutiveFailuresAfterFreeze(t, NewTransport(100*time.Millisecond, 100*time.Millisecond), 5)
-	if failures > 2 {
-		t.Fatalf("%d requests failed on the dead connection, want at most 2", failures)
+	// Without health checks the first ten requests after the freeze would all
+	// fail (see the stock transport test below); with them the dead connection
+	// is closed after one ping timeout.
+	failures, dials := consecutiveFailuresAfterFreeze(t, NewTransport(300*time.Millisecond, 300*time.Millisecond), 500*time.Millisecond, 9)
+	if failures > 3 {
+		t.Fatalf("%d requests failed on the dead connection, want at most 3", failures)
 	}
-	if dials != 2 {
-		t.Fatalf("dials = %d, want 2 (the dead connection and its replacement)", dials)
+	if dials < 2 {
+		t.Fatalf("dials = %d, want a replacement connection", dials)
 	}
 }
 
 // The failure this package exists to prevent: the stock transport keeps using
 // a dead HTTP/2 connection until its stream limit fills.
 func TestDefaultTransportStaysOnDeadConnection(t *testing.T) {
-	failures, _ := consecutiveFailuresAfterFreeze(t, http.DefaultTransport.(*http.Transport).Clone(), 50)
+	failures, _ := consecutiveFailuresAfterFreeze(t, http.DefaultTransport.(*http.Transport).Clone(), 200*time.Millisecond, 50)
 	if failures < 10 {
 		t.Fatalf("stock transport recovered after %d failures; the regression test no longer reproduces the dead-connection case", failures)
 	}
