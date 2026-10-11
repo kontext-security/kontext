@@ -754,15 +754,39 @@ func classifyGH(args []string, complete bool) cedareval.ShellProjectionV2 {
 			rest = rest[1:]
 		}
 	}
-	if ghWriteCommands[key] {
+	if ghWriteCommands[key] && !ghAsksForHelp(rest) {
 		facts := []string{"gh/command=" + key, "github/route=catalogued", "github/write=true"}
 		facts = append(facts, operationFacts(ghOperations(key, rest))...)
 		return projection("gh", facts, nil, complete)
 	}
-	if ghReadCommands[key] || ghReadCommands[args[0]] {
+	if ghWriteCommands[key] || ghReadCommands[key] || ghReadCommands[args[0]] {
 		return projection("gh", []string{"gh/command=" + key, "github/route=catalogued"}, nil, complete)
 	}
 	return projection("gh", []string{"gh/command=" + key, FactRouteUnrecognized}, nil, false)
+}
+
+// ghAsksForHelp reports a literal --help flag, which makes gh print the
+// command's usage and exit without running it. Only --help counts: some
+// commands give -h another meaning (`gh repo create -h URL`). A --help right
+// after another option word may be that option's value
+// (`gh release create v1 --notes --help`), so it does not count either.
+func ghAsksForHelp(args []string) bool {
+	for i, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg != "--help" {
+			continue
+		}
+		if i == 0 {
+			return true
+		}
+		previous := args[i-1]
+		if !strings.HasPrefix(previous, "-") || strings.Contains(previous, "=") {
+			return true
+		}
+	}
+	return false
 }
 
 func stripGHGlobals(args []string) ([]string, bool) {
