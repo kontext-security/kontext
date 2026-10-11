@@ -208,3 +208,14 @@ func marshalDeployment(deployment *Deployment) string {
 	data, _ := json.Marshal(deployment)
 	return string(data)
 }
+
+func TestNewClientDefaultsToHealthCheckedTransport(t *testing.T) {
+	client, err := NewClient("https://api.example.test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := client.http.Transport.(*http.Transport)
+	if !ok || transport.HTTP2 == nil || transport.HTTP2.SendPingTimeout <= 0 || transport.HTTP2.PingTimeout <= 0 {
+		t.Fatal("default policy client must health-check its HTTP/2 connections; a dead connection otherwise stalls every refresh")
+	}
+}

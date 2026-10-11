@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/cloudhttp"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 )
 
@@ -40,7 +41,7 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 		return nil, errors.New("cedar policy: base URL must use HTTPS or loopback HTTP")
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
+		httpClient = cloudhttp.NewClient(10 * time.Second)
 	}
 	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: httpClient}, nil
 }

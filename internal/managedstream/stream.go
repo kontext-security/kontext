@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/cloudhttp"
+
 	"github.com/google/uuid"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
@@ -576,7 +578,7 @@ func post(ctx context.Context, opts Options, body []byte) error {
 
 	client := opts.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: DefaultTimeoutFromEnv()}
+		client = cloudhttp.NewClient(DefaultTimeoutFromEnv())
 	}
 	resp, err := client.Do(req)
 	if err != nil {

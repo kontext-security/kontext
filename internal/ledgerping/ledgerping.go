@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/cloudhttp"
 )
 
 const Path = "/api/v1/authorization-ledger/ping"
@@ -49,7 +51,7 @@ type Response struct {
 // default, matching what setup has always used.
 func Ping(ctx context.Context, client *http.Client, cloudURL, token, installationID string) (Response, error) {
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = cloudhttp.NewClient(10 * time.Second)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cloudURL, "/")+Path, nil)
 	if err != nil {

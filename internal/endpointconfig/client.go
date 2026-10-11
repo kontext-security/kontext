@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/cloudhttp"
 )
 
 var installationIDPattern = regexp.MustCompile(`^ins_[A-Za-z0-9_-]{32}$`)
@@ -35,7 +37,7 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 		return nil, errors.New("endpoint configuration: base URL must use HTTPS or loopback HTTP")
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
+		httpClient = cloudhttp.NewClient(10 * time.Second)
 	}
 	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: httpClient}, nil
 }
