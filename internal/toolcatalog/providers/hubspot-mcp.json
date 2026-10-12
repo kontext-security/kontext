@@ -1,7 +1,7 @@
 {
   "provider": "hubspot",
   "toolIdPrefix": "hubspot-mcp/",
-  "version": "2026-10-08",
+  "version": "2026-10-12",
   "serverNameHints": [
     "hubspot"
   ],
@@ -23,7 +23,7 @@
       "product": "marketing",
       "access": "read",
       "distinctive": true,
-      "definition": "2ddf6a7738415bc11acc3d3ec3c126e31e2e2d6cf308a97fe5caba82cbf05cb6"
+      "definition": "a3259331e751fdab670b8ca02a1f345064426a7b6bc54be66ec49bdb1266bcf5"
     },
     {
       "name": "get_campaign_attribution_reports",
@@ -230,7 +230,7 @@
       "product": "marketing",
       "access": "delete",
       "distinctive": true,
-      "definition": "b969ff62600c33ff0123f119a591447f8216f53a5cc72f69f0361999a6fb8add"
+      "definition": "7ebc50a18e9471223cdfd7926ebab64888ab68fad2e45392d222bfdfc74381c1"
     },
     {
       "name": "manage_aeo_recommendations",
@@ -264,14 +264,14 @@
       "product": "crm",
       "access": "admin",
       "distinctive": true,
-      "definition": "1134b311a97208fad015446dbb1c56000558778efc2f2989ea073577ce175c06"
+      "definition": "ff71e949a944c6cc6429f0e3d62d8e4b6f102e40cd52aba01ca535e0c5709cfe"
     },
     {
       "name": "manage_custom_properties",
       "product": "crm",
       "access": "admin",
       "distinctive": true,
-      "definition": "09d30b023f1e3bc1c8bd4b51436069c660a692389e69e748de3d1916cebd9c10"
+      "definition": "f2fd161ee6399ae30320692d01209d72d9f1d86cc82084a9c3594d16c310c809"
     },
     {
       "name": "manage_landing_page",
@@ -299,7 +299,7 @@
       "product": "crm",
       "access": "write",
       "distinctive": true,
-      "definition": "5ea77704cc5b0e2301a5b1c24d01cf21f7d382889f9c25bdefe6ee87249c2d03"
+      "definition": "2ac33ec12b83fc386016fb5f1090a3cee65f7b88e0ae3606ab8433f673bc0950"
     },
     {
       "name": "manage_website_page",
