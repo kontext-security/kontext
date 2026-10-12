@@ -185,6 +185,8 @@ func TestReleaseAndWorkflowOperations(t *testing.T) {
 		{name: "help inside another command", command: "true && gh workflow run --help", programs: []string{"true", "gh"}, facts: []string{write, op(OperationRunWorkflow)}, complete: true},
 		{name: "help in a nested script", command: "bash -c 'gh workflow run --help'", programs: []string{"gh"}, facts: []string{write, op(OperationRunWorkflow)}, complete: true},
 		{name: "help behind env", command: "env --split-string='bash -c x' gh release create --help", programs: []string{"gh"}, facts: []string{write, op(OperationCreateRelease)}, complete: true},
+		{name: "help with an assignment prefix", command: "GH_X=1 gh release create --help v1", programs: []string{"gh"}, facts: []string{write, op(OperationCreateRelease)}, complete: true},
+		{name: "help after alias assignments", command: "POSIXLY_CORRECT=1\nBASH_ALIASES[gh]='gh -dn'\ngh release create --help v1", programs: []string{"gh"}, facts: []string{write, op(OperationCreateRelease)}, complete: true},
 		{name: "workflow list", command: "gh workflow list", programs: []string{"gh"}, absentFacts: []string{op(OperationRunWorkflow), write}, complete: true},
 		{name: "workflow enable", command: "gh workflow enable ci.yml", programs: []string{"gh"}, facts: []string{op(OperationEnableWorkflow)}, complete: true},
 		{name: "workflow disable", command: "gh workflow disable ci.yml", programs: []string{"gh"}, facts: []string{op(OperationDisableWorkflow)}, complete: true},

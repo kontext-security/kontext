@@ -84,9 +84,9 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	sort.SliceStable(calls, func(i, j int) bool { return calls[i].Pos().Offset() < calls[j].Pos().Offset() })
 
 	// A help call counts as a read only when it is the whole command:
-	// another call could define an alias that changes what gh receives
+	// anything else could define an alias that changes what gh receives
 	// (`alias gh='gh -dn'`), however it is spelled.
-	helpAllowed := w.depth == 0 && len(calls) == 1
+	helpAllowed := w.depth == 0 && len(calls) == 1 && singlePlainCall(file)
 	projections := make([]cedareval.ShellProjectionV2, 0, len(calls))
 	for _, call := range calls {
 		words, complete := literalWords(call.Args)
@@ -98,6 +98,17 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 		projections = append(projections, projection("unknown", nil, []string{"empty-command"}, false))
 	}
 	return projections
+}
+
+// singlePlainCall reports a script that is one simple command with no
+// variable assignments (`BASH_ALIASES[gh]=…` defines an alias too).
+func singlePlainCall(file *syntax.File) bool {
+	if len(file.Stmts) != 1 {
+		return false
+	}
+	stmt := file.Stmts[0]
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	return ok && len(call.Assigns) == 0 && !stmt.Negated && !stmt.Background && !stmt.Coprocess
 }
 
 func parseFailure(reason string) cedareval.ShellProjectionV2 {
