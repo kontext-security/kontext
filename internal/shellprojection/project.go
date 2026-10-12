@@ -42,37 +42,13 @@ var shortFlagCluster = regexp.MustCompile(`^-[A-Za-z0-9]{2,}$`)
 // carrying the shell/parse-error feature so policy decides what to do with
 // it, instead of a projection error denying every hook under enforce.
 func Project(command string) []cedareval.ShellProjectionV2 {
-	aliases := mayDefineAliases.MatchString(command)
-	projections := project(command, walk{aliases: aliases})
-	if aliases {
-		return projections
-	}
-	// Quoting can hide a word from the raw text (`a\lias`), so look again at
-	// the programs the parsed calls name, nested scripts included.
-	for _, each := range projections {
-		if aliasPrograms[each.Program] {
-			return project(command, walk{aliases: true})
-		}
-	}
-	return projections
-}
-
-// aliasPrograms can define or enable aliases, or run code the projection
-// does not see (a sourced file, a program whose name is not literal).
-var aliasPrograms = map[string]bool{
-	"alias": true, "shopt": true, "setopt": true, "source": true, ".": true,
-	"dynamic": true, "unknown": true,
+	return project(command, walk{})
 }
 
 // walk carries what a nested script inherits from the command around it.
 type walk struct {
 	depth int
-	// aliases: the command may define or enable shell aliases, so a word
-	// may not reach the program as written (`alias gh='gh -dn'`).
-	aliases bool
 }
-
-var mayDefineAliases = regexp.MustCompile(`\b(alias|shopt|setopt|expand_aliases|BASH_ENV)\b`)
 
 func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	if len(command) > maxCommandBytes {
@@ -107,10 +83,14 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	}
 	sort.SliceStable(calls, func(i, j int) bool { return calls[i].Pos().Offset() < calls[j].Pos().Offset() })
 
+	// A help call counts as a read only when it is the whole command:
+	// another call could define an alias that changes what gh receives
+	// (`alias gh='gh -dn'`), however it is spelled.
+	helpAllowed := w.depth == 0 && len(calls) == 1
 	projections := make([]cedareval.ShellProjectionV2, 0, len(calls))
 	for _, call := range calls {
 		words, complete := literalWords(call.Args)
-		projections = append(projections, classify(words, complete, w)...)
+		projections = append(projections, classify(words, complete, w, helpAllowed)...)
 	}
 	if len(projections) == 0 {
 		projections = append(projections, projection("unknown", nil, []string{"empty-command"}, false))
@@ -194,7 +174,7 @@ func unescape(value string, quoted bool) string {
 	return out.String()
 }
 
-func classify(words []string, complete bool, w walk) []cedareval.ShellProjectionV2 {
+func classify(words []string, complete bool, w walk, helpAllowed bool) []cedareval.ShellProjectionV2 {
 	words, complete, wrapper, ok := unwrap(words, complete)
 	if !ok {
 		return single(projection(wrapper, nil, []string{"unrecognized-wrapper-arguments"}, false))
@@ -212,7 +192,7 @@ func classify(words []string, complete bool, w walk) []cedareval.ShellProjection
 	case "git":
 		return single(classifyGit(args, complete))
 	case "gh":
-		return single(classifyGH(args, complete, w.aliases))
+		return single(classifyGH(args, complete, helpAllowed))
 	case "curl":
 		return single(classifyCurl(args, complete))
 	case "acli":
@@ -601,7 +581,7 @@ func nestedScript(program, script string, w walk) []cedareval.ShellProjectionV2 
 	if w.depth >= maxScriptDepth {
 		return single(projection(program, nil, []string{"script-depth-exceeded"}, false))
 	}
-	inner := project(script, walk{depth: w.depth + 1, aliases: w.aliases})
+	inner := project(script, walk{depth: w.depth + 1})
 	for i := range inner {
 		inner[i].Features = sortedUnique(append(inner[i].Features, "nested-script"))
 	}
@@ -763,7 +743,7 @@ func stripGitGlobals(args []string) ([]string, gitGlobals) {
 	return nil, status
 }
 
-func classifyGH(args []string, complete, aliases bool) cedareval.ShellProjectionV2 {
+func classifyGH(args []string, complete, helpAllowed bool) cedareval.ShellProjectionV2 {
 	plain := plainGHWords(args)
 	args, globalsComplete := stripGHGlobals(args)
 	complete = complete && globalsComplete
@@ -785,7 +765,7 @@ func classifyGH(args []string, complete, aliases bool) cedareval.ShellProjection
 			rest = rest[1:]
 		}
 	}
-	if ghWriteCommands[key] && !(complete && plain && !aliases && ghAsksForHelp(rest)) {
+	if ghWriteCommands[key] && !(helpAllowed && complete && plain && ghAsksForHelp(rest)) {
 		facts := []string{"gh/command=" + key, "github/route=catalogued", "github/write=true"}
 		facts = append(facts, operationFacts(ghOperations(key, rest))...)
 		return projection("gh", facts, nil, complete)
