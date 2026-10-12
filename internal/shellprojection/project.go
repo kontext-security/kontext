@@ -90,7 +90,9 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	projections := make([]cedareval.ShellProjectionV2, 0, len(calls))
 	for _, call := range calls {
 		words, complete := literalWords(call.Args)
-		projections = append(projections, classify(words, complete, w, helpAllowed)...)
+		// No wrapper either: env, sudo and launchers can rewrite argv.
+		direct := len(words) > 0 && words[0] == "gh"
+		projections = append(projections, classify(words, complete, w, helpAllowed && direct)...)
 	}
 	if len(projections) == 0 {
 		projections = append(projections, projection("unknown", nil, []string{"empty-command"}, false))

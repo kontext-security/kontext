@@ -184,6 +184,7 @@ func TestReleaseAndWorkflowOperations(t *testing.T) {
 		{name: "help with builtin alias", command: "builtin 'sh'opt -s 'expand_'aliases; builtin 'al'ias gh='gh -dn'\ngh release create --help v1", programs: []string{"builtin", "builtin", "gh"}, facts: []string{write, op(OperationCreateRelease)}, complete: true},
 		{name: "help inside another command", command: "true && gh workflow run --help", programs: []string{"true", "gh"}, facts: []string{write, op(OperationRunWorkflow)}, complete: true},
 		{name: "help in a nested script", command: "bash -c 'gh workflow run --help'", programs: []string{"gh"}, facts: []string{write, op(OperationRunWorkflow)}, complete: true},
+		{name: "help behind env", command: "env --split-string='bash -c x' gh release create --help", programs: []string{"gh"}, facts: []string{write, op(OperationCreateRelease)}, complete: true},
 		{name: "workflow list", command: "gh workflow list", programs: []string{"gh"}, absentFacts: []string{op(OperationRunWorkflow), write}, complete: true},
 		{name: "workflow enable", command: "gh workflow enable ci.yml", programs: []string{"gh"}, facts: []string{op(OperationEnableWorkflow)}, complete: true},
 		{name: "workflow disable", command: "gh workflow disable ci.yml", programs: []string{"gh"}, facts: []string{op(OperationDisableWorkflow)}, complete: true},
