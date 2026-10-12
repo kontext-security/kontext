@@ -1,7 +1,7 @@
 {
   "provider": "atlassian",
   "toolIdPrefix": "atlassian-mcp/",
-  "version": "2026-10-08",
+  "version": "2026-10-12",
   "serverNameHints": [
     "atlassian",
     "jira",
@@ -445,7 +445,7 @@
       "product": "jira",
       "access": "write",
       "distinctive": true,
-      "definition": "9aa8c56fc49622d3314e15e651da0cdaecf97797e2cbaa9cfa495ab76e0a43d9"
+      "definition": "ba8bf71df3ab4b9d18a9ac5499fe2f64269e6585d40d9366a97bd79d03a63ee8"
     },
     {
       "name": "copyConfluenceContent",
@@ -473,7 +473,7 @@
       "product": "bitbucket",
       "access": "write",
       "distinctive": true,
-      "definition": "bad9808a11b61f3ed1ce19ab9bc7ec197ee4878875955474a1ed43a6b85b53b0"
+      "definition": "656789ab6dc9705a05c91d067755fdb4315c3127435c08b7daec18aa68bc434f"
     },
     {
       "name": "createBitbucketRepoPullRequestTask",
@@ -537,7 +537,8 @@
       "name": "createConfluenceInfographicForPage",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "21f759d9ff32d4f8d00d3437c76c4a9f2c115d705371750d5c2eea9e4bf0ddcf"
     },
     {
       "name": "createConfluenceInlineComment",
@@ -549,7 +550,8 @@
       "name": "createConfluenceMauiApp",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "5dc49e9b9b997d2cecec05e77d96dd90cb652cc54489028e129d0a446b01ac4a"
     },
     {
       "name": "createConfluencePage",
@@ -703,7 +705,7 @@
       "product": "confluence",
       "access": "read",
       "distinctive": true,
-      "definition": "5f395074928885fa95065a7cd9a04a2ad3f2390217375f4c41034f31885d4345"
+      "definition": "18d29fdff0e27582f54a78e5c1d39027298b31fbe5e69b9d012b6b635f3efa55"
     },
     {
       "name": "disableConfluencePublicLink",
@@ -735,13 +737,15 @@
       "name": "editConfluenceInfographicForPage",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "9ed4546ab7c079a966ed1cd444db4e5f6377a5285622d8abd7bebf95053114ec"
     },
     {
       "name": "editConfluenceMauiApp",
       "product": "confluence",
       "access": "write",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "79a909dd90e202b799c942a2aa1f1d40b1477454e3a185be9671c9bb80075a76"
     },
     {
       "name": "editJiraEntityProperty",
@@ -864,7 +868,7 @@
       "product": "bitbucket",
       "access": "read",
       "distinctive": true,
-      "definition": "07657321f6e52165bd24d88988e18b9fac7c44e4d533e7c09fc63582a1ec3d28"
+      "definition": "c7cc135ed6f718542301f222ebe19af246b9139efb1ffcff6caa458b8f499699"
     },
     {
       "name": "getBitbucketRepoPullRequest",
@@ -964,7 +968,7 @@
       "product": "confluence",
       "access": "read",
       "distinctive": true,
-      "definition": "01a1ea38693d7e20243151248beb98e48d5167be8aba6b00804bbee955b9e7c5"
+      "definition": "42fe497eb7e03c77d1f3560467de63c2438fb9750e8efb6a1c923596714ec856"
     },
     {
       "name": "getConfluenceAttachment",
@@ -1012,7 +1016,7 @@
       "product": "confluence",
       "access": "read",
       "distinctive": true,
-      "definition": "591698473b5a00d1f75b30ad2388689a9d04dfaa38e29e39b40294d64bc4ed23"
+      "definition": "7da68070607d3ea52c052dd2bdc6809adc711ef825c1d40a76ca052ce94b9542"
     },
     {
       "name": "getConfluenceContentPermissions",
@@ -1046,7 +1050,8 @@
       "name": "getConfluenceMauiApp",
       "product": "confluence",
       "access": "read",
-      "distinctive": true
+      "distinctive": true,
+      "definition": "b1d273a89d0508b561c5809157f90efdb1e2612c681b42caa58dd47040e92859"
     },
     {
       "name": "getConfluencePage",
@@ -1902,7 +1907,7 @@
       "product": "bitbucket",
       "access": "read",
       "distinctive": true,
-      "definition": "441702d78c08007a0568da8217b4fca59e07d4a09237b8a9c7019fcba116eb91"
+      "definition": "dfb11ec466454960744ae136f3ba39f2723213349555e5c1c322a21264858ea5"
     },
     {
       "name": "listBitbucketRepoPipelines",
@@ -1944,7 +1949,7 @@
       "product": "bitbucket",
       "access": "read",
       "distinctive": true,
-      "definition": "f23d6a03a5ae600cf7929d94c1a423c0c5e3c5b39dc412b105a62d10e9b51770"
+      "definition": "8aefbb9dfffebbd2b38180cd26624f29266084b81ec245c7ae3b28761f19f9fb"
     },
     {
       "name": "listBitbucketWorkspaces",
