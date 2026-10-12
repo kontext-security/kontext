@@ -177,6 +177,8 @@ func TestReleaseAndWorkflowOperations(t *testing.T) {
 		{name: "help with quoted note", command: "gh release create v1 --notes 'a b' --help", programs: []string{"gh"}, facts: []string{write, op(OperationCreateRelease)}, complete: true},
 		{name: "help after separator and value", command: "gh -R acme/api workflow run ci.yml --ref=main -- workflow run --help", programs: []string{"gh"}, facts: []string{write, op(OperationRunWorkflow)}, complete: true},
 		{name: "brace expansion in a global flag", command: "gh -R {acme/api,-dn} release create --notes --help v1", programs: []string{"gh"}, facts: []string{write, op(OperationCreateRelease)}, complete: true},
+		{name: "help with an alias defined", command: "shopt -s expand_aliases; alias gh='gh -dn'; gh release create --help v1", programs: []string{"shopt", "alias", "gh"}, facts: []string{write, op(OperationCreateRelease)}, complete: true},
+		{name: "help with an alias in eval", command: "eval 'alias gh=\"gh -dn\"'; gh release create --help v1", programs: []string{"alias", "gh"}, facts: []string{write, op(OperationCreateRelease)}, complete: true},
 		{name: "workflow list", command: "gh workflow list", programs: []string{"gh"}, absentFacts: []string{op(OperationRunWorkflow), write}, complete: true},
 		{name: "workflow enable", command: "gh workflow enable ci.yml", programs: []string{"gh"}, facts: []string{op(OperationEnableWorkflow)}, complete: true},
 		{name: "workflow disable", command: "gh workflow disable ci.yml", programs: []string{"gh"}, facts: []string{op(OperationDisableWorkflow)}, complete: true},
