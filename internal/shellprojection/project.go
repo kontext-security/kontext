@@ -42,7 +42,26 @@ var shortFlagCluster = regexp.MustCompile(`^-[A-Za-z0-9]{2,}$`)
 // carrying the shell/parse-error feature so policy decides what to do with
 // it, instead of a projection error denying every hook under enforce.
 func Project(command string) []cedareval.ShellProjectionV2 {
-	return project(command, walk{aliases: mayDefineAliases.MatchString(command)})
+	aliases := mayDefineAliases.MatchString(command)
+	projections := project(command, walk{aliases: aliases})
+	if aliases {
+		return projections
+	}
+	// Quoting can hide a word from the raw text (`a\lias`), so look again at
+	// the programs the parsed calls name, nested scripts included.
+	for _, each := range projections {
+		if aliasPrograms[each.Program] {
+			return project(command, walk{aliases: true})
+		}
+	}
+	return projections
+}
+
+// aliasPrograms can define or enable aliases, or run code the projection
+// does not see (a sourced file, a program whose name is not literal).
+var aliasPrograms = map[string]bool{
+	"alias": true, "shopt": true, "setopt": true, "source": true, ".": true,
+	"dynamic": true, "unknown": true,
 }
 
 // walk carries what a nested script inherits from the command around it.
@@ -53,7 +72,7 @@ type walk struct {
 	aliases bool
 }
 
-var mayDefineAliases = regexp.MustCompile(`\b(alias|shopt|setopt)\b`)
+var mayDefineAliases = regexp.MustCompile(`\b(alias|shopt|setopt|expand_aliases|BASH_ENV)\b`)
 
 func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	if len(command) > maxCommandBytes {
