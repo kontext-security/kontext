@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
@@ -41,10 +42,15 @@ var shortFlagCluster = regexp.MustCompile(`^-[A-Za-z0-9]{2,}$`)
 // carrying the shell/parse-error feature so policy decides what to do with
 // it, instead of a projection error denying every hook under enforce.
 func Project(command string) []cedareval.ShellProjectionV2 {
-	return project(command, 0)
+	return project(command, walk{})
 }
 
-func project(command string, depth int) []cedareval.ShellProjectionV2 {
+// walk carries what a nested script inherits from the command around it.
+type walk struct {
+	depth int
+}
+
+func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	if len(command) > maxCommandBytes {
 		return []cedareval.ShellProjectionV2{parseFailure("command-too-large")}
 	}
@@ -77,15 +83,32 @@ func project(command string, depth int) []cedareval.ShellProjectionV2 {
 	}
 	sort.SliceStable(calls, func(i, j int) bool { return calls[i].Pos().Offset() < calls[j].Pos().Offset() })
 
+	// A help call counts as a read only when it is the whole command:
+	// anything else could define an alias that changes what gh receives
+	// (`alias gh='gh -dn'`), however it is spelled.
+	helpAllowed := w.depth == 0 && len(calls) == 1 && singlePlainCall(file)
 	projections := make([]cedareval.ShellProjectionV2, 0, len(calls))
 	for _, call := range calls {
 		words, complete := literalWords(call.Args)
-		projections = append(projections, classify(words, complete, depth)...)
+		// No wrapper either: env, sudo and launchers can rewrite argv.
+		direct := len(words) > 0 && words[0] == "gh"
+		projections = append(projections, classify(words, complete, w, helpAllowed && direct)...)
 	}
 	if len(projections) == 0 {
 		projections = append(projections, projection("unknown", nil, []string{"empty-command"}, false))
 	}
 	return projections
+}
+
+// singlePlainCall reports a script that is one simple command with no
+// variable assignments (`BASH_ALIASES[gh]=…` defines an alias too).
+func singlePlainCall(file *syntax.File) bool {
+	if len(file.Stmts) != 1 {
+		return false
+	}
+	stmt := file.Stmts[0]
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	return ok && len(call.Assigns) == 0 && !stmt.Negated && !stmt.Background && !stmt.Coprocess
 }
 
 func parseFailure(reason string) cedareval.ShellProjectionV2 {
@@ -164,7 +187,7 @@ func unescape(value string, quoted bool) string {
 	return out.String()
 }
 
-func classify(words []string, complete bool, depth int) []cedareval.ShellProjectionV2 {
+func classify(words []string, complete bool, w walk, helpAllowed bool) []cedareval.ShellProjectionV2 {
 	words, complete, wrapper, ok := unwrap(words, complete)
 	if !ok {
 		return single(projection(wrapper, nil, []string{"unrecognized-wrapper-arguments"}, false))
@@ -182,7 +205,7 @@ func classify(words []string, complete bool, depth int) []cedareval.ShellProject
 	case "git":
 		return single(classifyGit(args, complete))
 	case "gh":
-		return single(classifyGH(args, complete))
+		return single(classifyGH(args, complete, helpAllowed))
 	case "curl":
 		return single(classifyCurl(args, complete))
 	case "acli":
@@ -194,9 +217,9 @@ func classify(words []string, complete bool, depth int) []cedareval.ShellProject
 	case "forge":
 		return single(forgeCLI.classify(args, complete))
 	case "bash", "sh", "zsh", "dash", "ksh":
-		return classifyShell(program, args, complete, depth)
+		return classifyShell(program, args, complete, w)
 	case "eval":
-		return classifyEval(args, complete, depth)
+		return classifyEval(args, complete, w)
 	default:
 		return single(projection(program, nil, nil, complete))
 	}
@@ -520,7 +543,7 @@ func unwrapXargs(words []string) ([]string, bool) {
 // classified like a top-level one. A script that is not a literal cannot be
 // seen through; it stays incomplete without a GitHub route fact because the
 // program inside is unknown.
-func classifyShell(program string, args []string, complete bool, depth int) []cedareval.ShellProjectionV2 {
+func classifyShell(program string, args []string, complete bool, w walk) []cedareval.ShellProjectionV2 {
 	commandFlag := false
 	i := 0
 	for ; i < len(args); i++ {
@@ -549,29 +572,29 @@ func classifyShell(program string, args []string, complete bool, depth int) []ce
 	if i >= len(args) {
 		return single(projection(program, nil, []string{"missing-script"}, false))
 	}
-	return nestedScript(program, args[i], depth)
+	return nestedScript(program, args[i], w)
 }
 
 // classifyEval joins eval's arguments the way the shell does and classifies
 // the resulting script.
-func classifyEval(args []string, complete bool, depth int) []cedareval.ShellProjectionV2 {
+func classifyEval(args []string, complete bool, w walk) []cedareval.ShellProjectionV2 {
 	if len(args) == 0 {
 		return single(projection("eval", nil, []string{"empty-command"}, complete))
 	}
 	if !complete {
 		return single(projection("eval", nil, []string{"dynamic-script"}, false))
 	}
-	return nestedScript("eval", strings.Join(args, " "), depth)
+	return nestedScript("eval", strings.Join(args, " "), w)
 }
 
-func nestedScript(program, script string, depth int) []cedareval.ShellProjectionV2 {
+func nestedScript(program, script string, w walk) []cedareval.ShellProjectionV2 {
 	if script == "" {
 		return single(projection(program, nil, []string{"dynamic-script"}, false))
 	}
-	if depth >= maxScriptDepth {
+	if w.depth >= maxScriptDepth {
 		return single(projection(program, nil, []string{"script-depth-exceeded"}, false))
 	}
-	inner := project(script, depth+1)
+	inner := project(script, walk{depth: w.depth + 1})
 	for i := range inner {
 		inner[i].Features = sortedUnique(append(inner[i].Features, "nested-script"))
 	}
@@ -733,7 +756,8 @@ func stripGitGlobals(args []string) ([]string, gitGlobals) {
 	return nil, status
 }
 
-func classifyGH(args []string, complete bool) cedareval.ShellProjectionV2 {
+func classifyGH(args []string, complete, helpAllowed bool) cedareval.ShellProjectionV2 {
+	plain := plainGHWords(args)
 	args, globalsComplete := stripGHGlobals(args)
 	complete = complete && globalsComplete
 	if len(args) == 0 || args[0] == "" {
@@ -754,15 +778,62 @@ func classifyGH(args []string, complete bool) cedareval.ShellProjectionV2 {
 			rest = rest[1:]
 		}
 	}
-	if ghWriteCommands[key] {
+	if ghWriteCommands[key] && !(helpAllowed && complete && plain && ghAsksForHelp(rest)) {
 		facts := []string{"gh/command=" + key, "github/route=catalogued", "github/write=true"}
 		facts = append(facts, operationFacts(ghOperations(key, rest))...)
 		return projection("gh", facts, nil, complete)
 	}
-	if ghReadCommands[key] || ghReadCommands[args[0]] {
+	if ghWriteCommands[key] || ghReadCommands[key] || ghReadCommands[args[0]] {
 		return projection("gh", []string{"gh/command=" + key, "github/route=catalogued"}, nil, complete)
 	}
 	return projection("gh", []string{"gh/command=" + key, FactRouteUnrecognized}, nil, false)
+}
+
+// ghAsksForHelp reports a --help flag still on at the end of the command,
+// which makes gh print the command's usage and exit without running it. The
+// last setting wins, so a later --help=false turns it back off. Only --help
+// counts: some commands give -h another meaning (`gh repo create -h URL`),
+// so a short cluster with a value that could reach -h makes the answer no.
+// A word right after an option word may be that option's value
+// (`gh release create v1 --notes --help`); when such a word is --help,
+// --help=… or --, which way gh reads it is unclear and the answer is no.
+var plainGHWord = regexp.MustCompile(`^[A-Za-z0-9_./:=,@%+-]*$`)
+
+// plainGHWords reports that no word, global flags included, uses characters
+// the shell may still expand (`--{help,help}=false`, `-R{acme/api,-dn}`), so
+// the help check sees the words gh will.
+func plainGHWords(args []string) bool {
+	for _, arg := range args {
+		if !plainGHWord.MatchString(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+func ghAsksForHelp(args []string) bool {
+	help := false
+	for i, arg := range args {
+		helpWord := arg == "--" || arg == "--help" || strings.HasPrefix(arg, "--help=")
+		if helpWord && i > 0 {
+			previous := args[i-1]
+			if strings.HasPrefix(previous, "-") && previous != "--" && !strings.Contains(previous, "=") {
+				return false
+			}
+		}
+		switch {
+		case arg == "--":
+			return help
+		case arg == "--help":
+			help = true
+		case strings.HasPrefix(arg, "--help="):
+			value, err := strconv.ParseBool(strings.TrimPrefix(arg, "--help="))
+			help = err == nil && value
+		case !strings.HasPrefix(arg, "--") && strings.HasPrefix(arg, "-") && strings.Contains(arg, "h") && strings.Contains(arg, "="):
+			return false
+		}
+	}
+	return help
 }
 
 func stripGHGlobals(args []string) ([]string, bool) {
