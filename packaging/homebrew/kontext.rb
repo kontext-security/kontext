@@ -23,14 +23,6 @@ class Kontext < Formula
     system "go", "build", *std_go_args(ldflags:), "./cmd/kontext"
   end
 
-  def caveats
-    <<~EOS
-      Optional: the local risk model needs llama.cpp:
-        brew install llama.cpp
-        kontext setup --with-local-llm
-    EOS
-  end
-
   test do
     assert_match "#{version} (built by #{tap.user})", shell_output("#{bin}/kontext --version")
 
