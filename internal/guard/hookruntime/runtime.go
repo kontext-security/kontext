@@ -32,32 +32,19 @@ type Processor interface {
 }
 
 func Run(ctx context.Context, adapter Adapter, processor Processor, mode Mode, stdin io.Reader, stdout, stderr io.Writer) error {
+	// Input Kontext cannot read and a daemon that cannot answer both fail
+	// open in every mode, leaving the call to the agent's permission flow.
 	event, err := adapter.Decode(stdin)
 	if err != nil {
 		fmt.Fprintf(stderr, "kontext: malformed hook input: %v\n", err)
 		malformed := hook.Event{HookName: adapter.MalformedHookName()}
-		return adapter.Encode(stdout, malformed, effectiveResult(malformed, hook.Result{
-			Decision: hook.DecisionDeny,
-			Reason:   "malformed hook input",
-			Mode:     string(mode),
-		}, mode))
+		return adapter.Encode(stdout, malformed, effectiveResult(malformed, hook.FailOpen("malformed hook input"), mode))
 	}
 
 	result, err := processor.Process(ctx, event)
 	if err != nil {
-		if event.HookName.CanBlock() && mode == ModeEnforce {
-			return adapter.Encode(stdout, event, hook.Result{
-				Decision: hook.DecisionDeny,
-				Reason:   "Kontext daemon unavailable",
-				Mode:     string(mode),
-			})
-		}
-		fmt.Fprintf(stderr, "kontext: async hook ingestion failed: %v\n", err)
-		return adapter.Encode(stdout, event, effectiveResult(event, hook.Result{
-			Decision: hook.DecisionAllow,
-			Reason:   "telemetry allowed",
-			Mode:     string(mode),
-		}, mode))
+		fmt.Fprintf(stderr, "kontext: hook evaluation failed: %v\n", err)
+		return adapter.Encode(stdout, event, effectiveResult(event, hook.FailOpen("Kontext daemon unavailable"), mode))
 	}
 
 	return adapter.Encode(stdout, event, effectiveResult(event, normalizeResult(result), mode))

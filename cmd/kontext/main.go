@@ -367,8 +367,10 @@ func hookCmd() *cobra.Command {
 			}
 			a, ok := agent.Get(agentName)
 			if !ok {
+				// Exit 2 would block the agent's action. A misconfigured hook
+				// must not, so report it and exit with no decision.
 				fmt.Fprintf(os.Stderr, "unknown agent: %s\n", agentName)
-				os.Exit(2)
+				os.Exit(0)
 			}
 
 			explicitSocket := cmd.Flags().Changed("socket")
@@ -611,17 +613,14 @@ func evaluateViaSidecarForMode(socketPath string, event hook.Event, mode string)
 	return localruntime.ResultFromEvaluateResult(result), nil
 }
 
+// sidecarFailureResult fails open in every mode: a sidecar that cannot answer
+// leaves the call to the agent's own permission flow instead of blocking it.
 func sidecarFailureResult(event hook.Event, reason, mode string) hook.Result {
-	if !event.HookName.CanBlock() {
-		return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
+	result := hook.FailOpen(reason)
+	if event.HookName.CanBlock() {
+		result.Mode = normalizedHookMode(mode)
 	}
-	if hookMode := normalizedHookMode(mode); hookMode != "" {
-		if hookMode != "enforce" {
-			return hook.Result{Decision: hook.DecisionAllow, Reason: reason, Mode: hookMode}
-		}
-		return hook.Result{Decision: hook.DecisionDeny, Reason: reason, Mode: "enforce"}
-	}
-	return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
+	return result
 }
 
 func normalizedHookMode(value string) string {

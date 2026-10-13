@@ -178,20 +178,20 @@ func TestEvaluateViaSidecarFailsOpenOnMarshalError(t *testing.T) {
 	}
 }
 
-func TestSidecarFailureSafetyByMode(t *testing.T) {
+func TestSidecarFailureFailsOpenInEveryMode(t *testing.T) {
 	tests := []struct {
 		name, mode string
 		event      hook.Event
-		want       hook.Decision
 	}{
-		{"enforce blocks pre tool", "enforce", hook.Event{HookName: hook.HookPreToolUse}, hook.DecisionDeny},
-		{"observe allows pre tool", "observe", hook.Event{HookName: hook.HookPreToolUse}, hook.DecisionAllow},
-		{"post tool allows", "enforce", hook.Event{HookName: hook.HookPostToolUse}, hook.DecisionAllow},
+		{"enforce pre tool", "enforce", hook.Event{HookName: hook.HookPreToolUse}},
+		{"observe pre tool", "observe", hook.Event{HookName: hook.HookPreToolUse}},
+		{"unset pre tool", "", hook.Event{HookName: hook.HookPreToolUse}},
+		{"enforce post tool", "enforce", hook.Event{HookName: hook.HookPostToolUse}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := evaluateHookWithSidecarForMode("", tt.event, tt.mode)
-			if err != nil || result.Decision != tt.want || result.Reason != "sidecar socket missing" {
+			if err != nil || result.Decision != hook.DecisionAllow || !result.FailedOpen || result.Reason != "sidecar socket missing" {
 				t.Fatalf("result = %+v, err = %v", result, err)
 			}
 		})

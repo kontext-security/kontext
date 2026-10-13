@@ -10,39 +10,37 @@ import (
 	"github.com/kontext-security/kontext/internal/hook"
 )
 
-func TestRunObserveModeAllowsUnavailableBlockingHook(t *testing.T) {
+func TestRunFailsOpenWhenProcessorFails(t *testing.T) {
 	t.Parallel()
 
-	adapter := &stubAdapter{
-		event: hook.Event{HookName: hook.HookPreToolUse},
-	}
-	err := Run(context.Background(), adapter, stubProcessor{err: errors.New("offline")}, ModeObserve, bytes.NewReader(nil), io.Discard, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if adapter.result.Decision != hook.DecisionAllow {
-		t.Fatalf("decision = %s, want allow", adapter.result.Decision)
-	}
-	if adapter.result.Reason != "Kontext observe mode: would allow; telemetry allowed" {
-		t.Fatalf("reason = %q", adapter.result.Reason)
+	for _, mode := range []Mode{ModeObserve, ModeEnforce, ModeRemote} {
+		mode := mode
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			adapter := &stubAdapter{
+				event: hook.Event{HookName: hook.HookPreToolUse},
+			}
+			err := Run(context.Background(), adapter, stubProcessor{err: errors.New("offline")}, mode, bytes.NewReader(nil), io.Discard, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if adapter.result.Decision != hook.DecisionAllow || !adapter.result.FailedOpen {
+				t.Fatalf("result = %+v, want fail-open allow", adapter.result)
+			}
+		})
 	}
 }
 
-func TestRunEnforceModeDeniesUnavailableBlockingHook(t *testing.T) {
+func TestRunFailsOpenOnMalformedInputInEnforce(t *testing.T) {
 	t.Parallel()
 
-	adapter := &stubAdapter{
-		event: hook.Event{HookName: hook.HookPreToolUse},
-	}
-	err := Run(context.Background(), adapter, stubProcessor{err: errors.New("offline")}, ModeEnforce, bytes.NewReader(nil), io.Discard, io.Discard)
+	adapter := &stubAdapter{decodeErr: errors.New("not json")}
+	err := Run(context.Background(), adapter, stubProcessor{}, ModeEnforce, bytes.NewReader(nil), io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adapter.result.Decision != hook.DecisionDeny {
-		t.Fatalf("decision = %s, want deny", adapter.result.Decision)
-	}
-	if adapter.result.Reason != "Kontext daemon unavailable" {
-		t.Fatalf("reason = %q", adapter.result.Reason)
+	if adapter.result.Decision != hook.DecisionAllow || !adapter.result.FailedOpen {
+		t.Fatalf("result = %+v, want fail-open allow", adapter.result)
 	}
 }
 
