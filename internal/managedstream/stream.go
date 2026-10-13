@@ -298,7 +298,7 @@ func flushLedger(ctx context.Context, opts Options) error {
 		if err != nil {
 			if errors.Is(err, sqlite.ErrLedgerReceiptRangeTooLarge) {
 				if limit == 1 {
-					return advancePastMinimumBatch(statePath, batch, state, "receipt range too large", err)
+					return advancePastMinimumBatch(ctx, store, statePath, batch, state, "receipt range too large", err)
 				}
 				nextLimit := reducedBatchLimit(limit)
 				opts.Diagnostic.Printf(
@@ -365,7 +365,7 @@ func flushLedger(ctx context.Context, opts Options) error {
 		}
 		if reason := payloadLimitViolation(payload, len(body)); reason != "" {
 			if limit == 1 {
-				return advancePastMinimumBatch(statePath, batch, state, reason, nil)
+				return advancePastMinimumBatch(ctx, store, statePath, batch, state, reason, nil)
 			}
 			nextLimit := reducedBatchLimit(limit)
 			opts.Diagnostic.Printf(
@@ -653,12 +653,24 @@ func payloadLimitViolation(payload Payload, bodyBytes int) string {
 	}
 }
 
-func advancePastMinimumBatch(statePath string, batch sqlite.LedgerBatch, state State, reason string, cause error) error {
+func advancePastMinimumBatch(ctx context.Context, store *sqlite.Store, statePath string, batch sqlite.LedgerBatch, state State, reason string, cause error) error {
 	if batch.Cursor == nil {
 		if cause != nil {
 			return cause
 		}
 		return fmt.Errorf("managed stream minimum batch rejected: %s", reason)
+	}
+	// Record the skip before advancing past it, so retention never treats a
+	// row the hosted ledger did not accept as exported. A crash in between
+	// re-fetches the batch and records it again.
+	var actionIDs []string
+	for _, action := range batch.Actions {
+		if id, _ := action["id"].(string); id != "" {
+			actionIDs = append(actionIDs, id)
+		}
+	}
+	if err := store.RecordLedgerExportSkips(ctx, actionIDs, reason); err != nil {
+		return err
 	}
 	if err := saveCursor(statePath, batch, state); err != nil {
 		return err

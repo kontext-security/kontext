@@ -398,6 +398,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			if err := cleanupStaleSessions(ctx, dbPath, idleTimeout); err != nil {
 				opts.Diagnostic.Printf("managed observe cleanup: %v\n", err)
 			}
+			if err := pruneExportedLedger(ctx, opts, dbPath); err != nil {
+				opts.Diagnostic.Printf("managed observe ledger prune: %v\n", err)
+			}
 		}
 	}
 }
@@ -752,6 +755,48 @@ func cleanupStaleSessions(ctx context.Context, dbPath string, idleTimeout time.D
 	}
 	defer store.Close()
 	return store.CloseStaleDaemonObservedSessions(ctx, time.Now().UTC().Add(-idleTimeout))
+}
+
+const (
+	// ledgerRetention keeps recent history local even after the hosted ledger
+	// accepted it; only older rows are pruned.
+	ledgerRetention = 30 * 24 * time.Hour
+	// ledgerPruneBatch bounds each cleanup tick's delete transaction, so a
+	// large backlog drains over hours instead of holding the write lock.
+	ledgerPruneBatch = 1000
+)
+
+// pruneExportedLedger deletes old ledger rows the hosted ledger has accepted.
+// Without it guard.db only grows. Nothing is pruned until the managed stream
+// has persisted an export cursor.
+func pruneExportedLedger(ctx context.Context, opts DaemonOptions, dbPath string) error {
+	statePath := opts.StreamStatePath
+	if statePath == "" {
+		statePath = managedstream.DefaultStatePathForDB(dbPath)
+	}
+	state, err := managedstream.LoadState(statePath)
+	if err != nil || state.UpdatedAfter == nil {
+		return err
+	}
+	store, err := sqlite.OpenStore(dbPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	pruned, err := store.PruneExportedLedger(ctx, sqlite.LedgerPruneOptions{
+		ActionsExportedBefore: *state.UpdatedAfter,
+		RiskTypeCreatedAfter:  state.RiskTypeCreatedAfter,
+		RiskTypeAnnotationID:  state.RiskTypeAnnotationID,
+		MerlinCreatedAfter:    state.MerlinCreatedAfter,
+		MerlinAnnotationID:    state.MerlinAnnotationID,
+		OlderThan:             time.Now().UTC().Add(-ledgerRetention),
+		MaxRowBytes:           managedstream.MaxPayloadBytes / 2,
+		Limit:                 ledgerPruneBatch,
+	})
+	if pruned > 0 {
+		opts.Diagnostic.Printf("managed observe pruned %d exported ledger actions\n", pruned)
+	}
+	return err
 }
 
 func cleanupInterval(idleTimeout time.Duration) time.Duration {

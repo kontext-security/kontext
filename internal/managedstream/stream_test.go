@@ -916,6 +916,16 @@ func TestFlushAdvancesCursorPastOversizedMinimumBatch(t *testing.T) {
 	if state.UpdatedAfter == nil || state.ActionID == "" {
 		t.Fatalf("state = %+v, want cursor advanced", state)
 	}
+	// Retention must never mistake the skipped row for an exported one.
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var skipped int
+	if err := db.QueryRow(`select count(*) from ledger_export_skips where action_id = ?`, state.ActionID).Scan(&skipped); err != nil || skipped != 1 {
+		t.Fatalf("skipped action %s recorded %d times, err %v", state.ActionID, skipped, err)
+	}
 }
 
 func TestFlushAdvancesCursorPastMinimumBatchWithWideReceiptRange(t *testing.T) {
