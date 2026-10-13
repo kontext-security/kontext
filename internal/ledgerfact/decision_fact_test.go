@@ -185,16 +185,27 @@ func TestValidateRejectsContractViolations(t *testing.T) {
 	}
 }
 
-func TestValidateAcceptsErrorAllowsAndHistoricalDenies(t *testing.T) {
+// Evaluation errors (contract v2), unready enforcement and unresolved
+// principals (v3) allow in enforce; earlier contracts recorded denies.
+func TestValidateAcceptsUndecidedAllowsAndHistoricalDenies(t *testing.T) {
 	fixtures, _ := loadFixtures(t)
+	checked := map[cedareval.EvaluationState]bool{}
+	t.Cleanup(func() {
+		for _, state := range []cedareval.EvaluationState{cedareval.EvaluationStateFailed, cedareval.EvaluationStateNotEvaluated, cedareval.EvaluationStatePrincipalUnresolved} {
+			if !checked[state] {
+				t.Errorf("no enforce fixture with evaluation state %s", state)
+			}
+		}
+	})
 	for _, fixture := range fixtures {
 		var fact ledgerfact.DecisionFact
 		if err := json.Unmarshal(fixture.Fact, &fact); err != nil {
 			t.Fatal(err)
 		}
-		if fact.AppliedMode != cedareval.RolloutModeEnforce || fact.EvaluationState != cedareval.EvaluationStateFailed {
+		if fact.AppliedMode != cedareval.RolloutModeEnforce || fact.EvaluationState == cedareval.EvaluationStateEvaluated {
 			continue
 		}
+		checked[fact.EvaluationState] = true
 		for _, action := range []cedareval.EffectiveExecutionAction{cedareval.EffectiveExecutionActionAllow, cedareval.EffectiveExecutionActionDeny} {
 			t.Run(fixture.Name+"/"+string(action), func(t *testing.T) {
 				fact.ExecutionAction = action

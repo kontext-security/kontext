@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-const DecisionContractVersion = 2
+const DecisionContractVersion = 3
 
 type EvaluationState string
 
@@ -145,6 +145,11 @@ func mapObserveDecision(
 	return decision
 }
 
+// mapEnforceDecision applies only a completed verdict. Unready enforcement,
+// an unresolved principal, and an evaluation error allow execution and keep
+// their reason as evidence (decision contract v3): a failure Kontext cannot
+// decide must not block, just as the hook fails open when the daemon cannot
+// answer.
 func mapEnforceDecision(
 	input DecisionMappingInput,
 	principal *EvaluationPrincipal,
@@ -153,7 +158,7 @@ func mapEnforceDecision(
 		return DecisionMapping{
 			EvaluationState:          EvaluationStateNotEvaluated,
 			EvaluationPrincipal:      principal,
-			EffectiveExecutionAction: EffectiveExecutionActionDeny,
+			EffectiveExecutionAction: EffectiveExecutionActionAllow,
 			EvaluationReasonCode:     ReasonEnforcementNotReady,
 			EffectiveReasonCode:      ReasonEnforcementNotReady,
 			DeterminingPolicyIDs:     []string{},
@@ -161,16 +166,10 @@ func mapEnforceDecision(
 	}
 
 	if input.Evaluation.State != EvaluationStateEvaluated {
-		action := EffectiveExecutionActionDeny
-		if input.Evaluation.State == EvaluationStateFailed {
-			// An evaluation error is not a policy deny. Preserve the failure
-			// evidence while allowing execution under decision contract v2.
-			action = EffectiveExecutionActionAllow
-		}
 		return DecisionMapping{
 			EvaluationState:          input.Evaluation.State,
 			EvaluationPrincipal:      principal,
-			EffectiveExecutionAction: action,
+			EffectiveExecutionAction: EffectiveExecutionActionAllow,
 			EvaluationReasonCode:     input.Evaluation.Reason,
 			EffectiveReasonCode:      input.Evaluation.Reason,
 			DeterminingPolicyIDs:     []string{},

@@ -329,27 +329,56 @@ func TestBuildCarriesCedarRequest(t *testing.T) {
 	}
 }
 
-func TestBuildRejectsContractViolations(t *testing.T) {
-	input := ledgerfact.BuildInput{
-		ToolCallID:      "toolu_invalid",
-		DecidedAt:       time.Date(2026, 7, 28, 12, 0, 0, 1, time.UTC),
-		ToolName:        "Bash",
-		ExecutionAction: cedareval.EffectiveExecutionActionAllow,
-		Cedar: &ledgerfact.CedarInput{
-			// Missing enforcement readiness still cannot authorize a tool call.
-			AppliedMode:       cedareval.RolloutModeEnforce,
-			ConfiguredMode:    cedareval.RolloutModeEnforce,
-			DistributionState: "success",
-			Mapping: cedareval.DecisionMapping{
-				EvaluationState:          cedareval.EvaluationStateNotEvaluated,
-				EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
-				EvaluationReasonCode:     cedareval.ReasonEnforcementNotReady,
-				EffectiveReasonCode:      cedareval.ReasonEnforcementNotReady,
+// TestBuildAcceptsUndecidedEnforceAllows pipes decision contract v3 mapper
+// output for unready enforcement and an unresolved principal into Build: both
+// allow in enforce and must still build, without inventing a Cedar verdict.
+func TestBuildAcceptsUndecidedEnforceAllows(t *testing.T) {
+	tests := []struct {
+		name              string
+		input             cedareval.DecisionMappingInput
+		distributionState string
+		reason            cedareval.ReasonCode
+	}{
+		{
+			name: "enforcement not ready",
+			input: cedareval.DecisionMappingInput{
+				RolloutMode: cedareval.RolloutModeEnforce,
+				Evaluation:  cedareval.EvaluationOutcome{State: cedareval.EvaluationStateNotEvaluated, Reason: cedareval.ReasonEnforcementNotReady},
 			},
+			distributionState: "success",
+			reason:            cedareval.ReasonEnforcementNotReady,
+		},
+		{
+			name: "principal unresolved",
+			input: cedareval.DecisionMappingInput{
+				RolloutMode: cedareval.RolloutModeEnforce, EnforcementReady: true,
+				Evaluation: cedareval.EvaluationOutcome{State: cedareval.EvaluationStatePrincipalUnresolved, Reason: cedareval.ReasonPrincipalUnresolved},
+			},
+			distributionState: "principal_unavailable",
+			reason:            cedareval.ReasonPrincipalUnresolved,
 		},
 	}
-	if _, err := ledgerfact.Build(input); err == nil {
-		t.Fatal("expected build to reject an allow without enforcement readiness")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mapping, err := cedareval.MapDecision(tt.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fact, err := ledgerfact.Build(ledgerfact.BuildInput{
+				ToolCallID: "toolu_undecided_allow", ToolName: "Bash", DecidedAt: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC),
+				ExecutionAction: mapping.EffectiveExecutionAction,
+				Cedar: &ledgerfact.CedarInput{
+					AppliedMode: cedareval.RolloutModeEnforce, ConfiguredMode: cedareval.RolloutModeEnforce,
+					DistributionState: tt.distributionState, Mapping: mapping,
+				},
+			})
+			if err != nil {
+				t.Fatalf("Build rejected undecided allow: %v", err)
+			}
+			if fact.ExecutionAction != cedareval.EffectiveExecutionActionAllow || fact.ReasonCode != tt.reason || fact.CedarAction != nil || len(fact.DeterminingPolicyIDs) != 0 {
+				t.Fatalf("failure evidence lost or replaced with a verdict: %#v", fact)
+			}
+		})
 	}
 }
 
