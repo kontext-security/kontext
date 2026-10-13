@@ -404,3 +404,80 @@ func TestToolUsageReadLimitDoesNotStarveChangedSources(t *testing.T) {
 		t.Fatalf("changed source starved: %v", left)
 	}
 }
+
+func TestToolUsageFailedReadWaitsForChange(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	path := filepath.Join(dir, "session.jsonl")
+	// A tool-related message without a timestamp fails the whole read.
+	bad := `{"type":"assistant","sessionId":"s","message":{"id":"m","model":"claude-fable-5-1","content":[{"type":"tool_use","id":"t","name":"Bash"}],"usage":{"output_tokens":10}}}` + "\n"
+	if err := os.WriteFile(path, []byte(bad), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TrackToolTranscript(ctx, hook.Event{SessionID: "s", Agent: "claude", HookName: hook.HookPostToolUse, TranscriptPath: path}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := totalChanges(t, store)
+	for i := 0; i < 3; i++ {
+		if err := store.ReconcileToolUsage(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if after := totalChanges(t, store); after != before {
+		t.Fatalf("unchanged failing transcript rewrote %d rows", after-before)
+	}
+	good := `{"type":"assistant","sessionId":"s","timestamp":"2026-09-16T13:36:44Z","message":{"id":"m","model":"claude-fable-5-1","content":[{"type":"tool_use","id":"t","name":"Bash"}],"usage":{"output_tokens":10}}}` + "\n"
+	if err := os.WriteFile(path, []byte(good), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the change visible even on filesystems with coarse mtimes.
+	future := time.Now().Add(time.Minute)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var fingerprint, message string
+	if err := store.db.QueryRowContext(ctx, `select fingerprint, error from tool_usage_sources`).Scan(&fingerprint, &message); err != nil || fingerprint == "" || message != "" {
+		t.Fatalf("fixed transcript not re-read: fingerprint %q error %q err %v", fingerprint, message, err)
+	}
+}
+
+func TestToolUsageRetireKeepsFreshRegistration(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	path := filepath.Join(dir, "session.jsonl")
+	stale := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := store.db.ExecContext(ctx, `insert into tool_usage_sources(session_id, transcript_path, agent, last_seen) values('s', ?, 'claude', ?)`, path, stale); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := store.toolUsageSources(ctx, time.Now().UTC())
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("sources %+v %v", sources, err)
+	}
+	// A hook re-registers the source between the snapshot and the delete.
+	if err := store.TrackToolTranscript(ctx, hook.Event{SessionID: "s", Agent: "claude", HookName: hook.HookStop, TranscriptPath: path}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.applyToolUsageUpdates(ctx, []toolUsageUpdate{{source: sources[0], retire: true}}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `select count(*) from tool_usage_sources`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("fresh registration deleted: %d %v", count, err)
+	}
+}

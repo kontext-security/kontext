@@ -76,10 +76,11 @@ func (s *Store) TrackToolTranscript(ctx context.Context, event hook.Event) error
 }
 
 const (
-	// toolUsageScanLimit bounds the cheap stat pass over registered sources.
-	toolUsageScanLimit = 2000
 	// toolUsageReadLimit bounds how many changed transcripts one pass parses.
 	toolUsageReadLimit = 100
+	// toolUsageRetryInterval is how often a transcript whose last read failed
+	// is retried while the file itself stays unchanged.
+	toolUsageRetryInterval = time.Hour
 	// missingTranscriptGrace is how long a source may point at a missing file
 	// before it is dropped. A live session re-registers on its next hook.
 	missingTranscriptGrace = time.Hour
@@ -103,9 +104,10 @@ type toolUsageUpdate struct {
 
 // ReconcileToolUsage retries delayed/incomplete transcript writes and resumes
 // after daemon restart using registered sources. Completed sources are
-// revisited for seven days. Every pass stats the most recently seen sources,
-// but only parses transcripts whose size or mtime changed, oldest read first
-// and bounded per pass. Unchanged sources cost no database write: this runs
+// revisited for seven days. Every pass stats each eligible source, but only
+// parses transcripts whose size or mtime changed, oldest read first and
+// bounded per pass; a transcript whose last read failed waits for a change
+// or the retry interval. Unchanged sources cost no database write: this runs
 // every flush interval, and rewriting each source's row per pass dominated
 // the daemon's WAL traffic.
 func (s *Store) ReconcileToolUsage(ctx context.Context) error {
@@ -116,7 +118,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 	}
 	var updates, pending []toolUsageUpdate
 	for _, src := range sources {
-		fingerprint, statErr := transcriptFingerprint(src.path)
+		fingerprint, modTime, statErr := transcriptFingerprint(src.path)
 		switch {
 		case errors.Is(statErr, fs.ErrNotExist) && missingSince(src.lastSeen, now) > missingTranscriptGrace:
 			updates = append(updates, toolUsageUpdate{source: src, retire: true})
@@ -125,7 +127,9 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 				updates = append(updates, toolUsageUpdate{source: src, fingerprint: src.fingerprint, message: statErr.Error()})
 			}
 		case fingerprint != src.fingerprint:
-			pending = append(pending, toolUsageUpdate{source: src})
+			if src.message == "" || retryDue(src.checkedAt, modTime, now) {
+				pending = append(pending, toolUsageUpdate{source: src})
+			}
 		case src.message != "":
 			// The transcript is readable again and was already imported.
 			updates = append(updates, toolUsageUpdate{source: src, fingerprint: src.fingerprint})
@@ -152,7 +156,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 
 func (s *Store) toolUsageSources(ctx context.Context, now time.Time) ([]toolUsageSource, error) {
 	rows, err := s.db.QueryContext(ctx, `select session_id, transcript_path, agent, last_seen, checked_at, fingerprint, error from tool_usage_sources
- where last_seen >= ? or fingerprint = '' order by last_seen desc limit ?`, now.Add(-7*24*time.Hour).Format(time.RFC3339Nano), toolUsageScanLimit)
+ where last_seen >= ? or fingerprint = ''`, now.Add(-7*24*time.Hour).Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
 	}
@@ -178,12 +182,23 @@ func missingSince(lastSeen string, now time.Time) time.Duration {
 	return now.Sub(seen)
 }
 
-func transcriptFingerprint(path string) (string, error) {
+// retryDue reports whether a source whose last read failed should be read
+// again: its file changed since that attempt, or the retry interval passed.
+func retryDue(checkedAt string, modTime, now time.Time) bool {
+	checked, err := time.Parse(time.RFC3339Nano, checkedAt)
+	if err != nil {
+		return true
+	}
+	return modTime.After(checked) || now.Sub(checked) >= toolUsageRetryInterval
+}
+
+func transcriptFingerprint(path string) (string, time.Time, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
-	return fingerprintTranscript(info)
+	fingerprint, err := fingerprintTranscript(info)
+	return fingerprint, info.ModTime(), err
 }
 
 // Re-read existing active sources once when the metadata adapter changes.
@@ -249,7 +264,9 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 	for _, update := range updates {
 		src := update.source
 		if update.retire {
-			if _, err := tx.ExecContext(ctx, `delete from tool_usage_sources where session_id=? and transcript_path=?`, src.session, src.path); err != nil {
+			// A hook may have re-registered the source since the snapshot;
+			// matching last_seen keeps that fresh registration.
+			if _, err := tx.ExecContext(ctx, `delete from tool_usage_sources where session_id=? and transcript_path=? and last_seen=?`, src.session, src.path, src.lastSeen); err != nil {
 				return err
 			}
 			continue
