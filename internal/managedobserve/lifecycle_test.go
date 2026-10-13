@@ -3,6 +3,7 @@ package managedobserve
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -18,7 +19,7 @@ import (
 	"github.com/kontext-security/kontext/internal/localruntime"
 )
 
-func TestLifecycleMissingSocketKickstartsAndFailsOpenObserve(t *testing.T) {
+func TestLifecycleMissingSocketKickstartsAndFailsOpen(t *testing.T) {
 	kickstarts := 0
 	lifecycle := Lifecycle{
 		SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
@@ -37,9 +38,7 @@ func TestLifecycleMissingSocketKickstartsAndFailsOpenObserve(t *testing.T) {
 	if kickstarts != 1 {
 		t.Fatalf("kickstarts = %d, want 1", kickstarts)
 	}
-	if result.Decision != hook.DecisionAllow || result.Mode != string(guardhookruntime.ModeObserve) {
-		t.Fatalf("result = %+v, want observe allow", result)
-	}
+	assertFailedOpen(t, result)
 }
 
 func TestLifecyclePollsAfterKickstartWithinDeadline(t *testing.T) {
@@ -121,9 +120,7 @@ func TestLifecycleKickstartFailureIsDiagnosedAndFailsOpen(t *testing.T) {
 		ToolName: "Bash",
 	})
 
-	if result.Decision != hook.DecisionAllow || result.Mode != string(guardhookruntime.ModeObserve) {
-		t.Fatalf("result = %+v, want observe allow", result)
-	}
+	assertFailedOpen(t, result)
 	if !strings.Contains(output.String(), "managed observe kickstart: launchd refused") {
 		t.Fatalf("diagnostic output = %q, want kickstart failure", output.String())
 	}
@@ -301,21 +298,36 @@ func TestLifecycleReservesShadowBudgetAfterAuthoritativePolicy(t *testing.T) {
 	}
 }
 
-func TestLifecycleEnforceFailsClosedWhenDaemonUnavailable(t *testing.T) {
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-enforce-down-%d.sock", time.Now().UnixNano()))
-	lifecycle := Lifecycle{
-		SocketPath: socketPath,
-		Label:      DefaultLaunchdLabel,
-		Mode:       "enforce",
-		Kickstart:  func(context.Context, string) error { return nil },
-	}
-	result := lifecycle.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse})
-	if result.Decision != hook.DecisionDeny {
-		t.Fatalf("result = %+v, want enforce fail-closed deny when daemon unavailable", result)
+func TestLifecycleFailsOpenWhenDaemonUnavailable(t *testing.T) {
+	t.Parallel()
+
+	hooks := []hook.HookName{hook.HookPreToolUse, hook.HookUserPromptSubmit, hook.HookPostToolUse}
+	for _, mode := range []string{"", "observe", "enforce", "remote"} {
+		for _, name := range hooks {
+			mode, name := mode, name
+			t.Run(mode+"/"+string(name), func(t *testing.T) {
+				t.Parallel()
+				lifecycle := Lifecycle{
+					SocketPath: filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-down-%d.sock", time.Now().UnixNano())),
+					Label:      DefaultLaunchdLabel,
+					Mode:       mode,
+					Kickstart:  func(context.Context, string) error { return nil },
+				}
+				result := lifecycle.Process(context.Background(), hook.Event{HookName: name})
+				assertFailedOpen(t, result)
+			})
+		}
 	}
 }
 
-func TestLifecycleEnforceFailsClosedWhenDaemonDropsRPC(t *testing.T) {
+func assertFailedOpen(t *testing.T, result hook.Result) {
+	t.Helper()
+	if result.Decision != hook.DecisionAllow || !result.FailedOpen {
+		t.Fatalf("result = %+v, want fail-open allow", result)
+	}
+}
+
+func TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC(t *testing.T) {
 	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-enforce-rpc-%d.sock", time.Now().UnixNano()))
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	listener, err := net.Listen("unix", socketPath)
@@ -346,13 +358,69 @@ func TestLifecycleEnforceFailsClosedWhenDaemonDropsRPC(t *testing.T) {
 		},
 	}
 	result := lifecycle.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse})
-	if result.Decision != hook.DecisionDeny {
-		t.Fatalf("result = %+v, want enforce fail-closed deny after RPC failure", result)
-	}
+	assertFailedOpen(t, result)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("server did not receive RPC")
+	}
+}
+
+// TestLifecycleEnforceFailsOpenWhenDaemonHangs pins the 2026-10-13 outage: a
+// daemon starved under memory pressure kept its socket open but answered
+// nothing, and every tool call was denied. A live daemon that misses the
+// decision budget must fail open within that budget.
+func TestLifecycleEnforceFailsOpenWhenDaemonHangs(t *testing.T) {
+	for name, reply := range map[string]func(net.Conn){
+		"never replies": func(net.Conn) {},
+		"partial frame": func(connection net.Conn) {
+			_ = binary.Write(connection, binary.BigEndian, uint32(64))
+			_, _ = connection.Write([]byte(`{"decision":`))
+		},
+	} {
+		reply := reply
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-hung-%d.sock", time.Now().UnixNano()))
+			t.Cleanup(func() { _ = os.Remove(socketPath) })
+			listener, err := net.Listen("unix", socketPath)
+			if err != nil {
+				t.Fatalf("Listen() error = %v", err)
+			}
+			release := make(chan struct{})
+			t.Cleanup(func() { close(release); _ = listener.Close() })
+			go func() {
+				for {
+					connection, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					go func() {
+						defer connection.Close()
+						var req localruntime.EvaluateRequest
+						_ = localruntime.ReadMessage(connection, &req)
+						reply(connection)
+						<-release
+					}()
+				}
+			}()
+
+			lifecycle := Lifecycle{
+				SocketPath: socketPath,
+				Label:      DefaultLaunchdLabel,
+				Mode:       "enforce",
+				Kickstart: func(context.Context, string) error {
+					t.Error("kickstart should not be called for a live daemon")
+					return nil
+				},
+			}
+			start := time.Now()
+			result := lifecycle.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Bash"})
+			assertFailedOpen(t, result)
+			if elapsed := time.Since(start); elapsed > preToolUseWait+time.Second {
+				t.Fatalf("Process() took %s, want it bounded by the %s decision budget", elapsed, preToolUseWait)
+			}
+		})
 	}
 }
 
@@ -367,56 +435,14 @@ func TestLifecycleEnforceRejectsNonAuthoritativeDaemonResult(t *testing.T) {
 	}{
 		{name: "missing decision", result: hook.Result{Mode: "enforce"}},
 		{name: "missing mode", result: hook.Result{Decision: hook.DecisionAllow}},
-		{name: "stale observe daemon", result: hook.Result{Decision: hook.DecisionAllow, Mode: "observe"}},
+		{name: "stale observe daemon", result: hook.Result{Decision: hook.DecisionDeny, Mode: "observe"}},
 	}
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			result := lifecycle.finalize(event, test.result)
-			if result.Decision != hook.DecisionDeny || result.Mode != "enforce" {
-				t.Fatalf("finalize() = %+v, want enforce fail-closed deny", result)
-			}
+			assertFailedOpen(t, lifecycle.finalize(event, test.result))
 		})
-	}
-}
-
-func TestLifecycleEnforceUnavailableNonBlockingHookDoesNotDeny(t *testing.T) {
-	t.Parallel()
-
-	lifecycle := Lifecycle{Mode: "enforce"}
-	result := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookPostToolUse})
-	if result.Decision != hook.DecisionAllow || result.Mode != "enforce" {
-		t.Fatalf("daemonUnavailable() = %+v, want enforce allow for non-blocking hook", result)
-	}
-}
-
-func TestLifecycleEnforceUnavailablePromptSubmitFailsOpen(t *testing.T) {
-	t.Parallel()
-
-	// A slow or dead daemon must not block the person's prompt: the tool
-	// calls that follow are still gated by PreToolUse.
-	lifecycle := Lifecycle{Mode: "enforce"}
-	result := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookUserPromptSubmit})
-	if result.Decision != hook.DecisionAllow || result.Mode != "enforce" {
-		t.Fatalf("daemonUnavailable() = %+v, want enforce allow for prompt submit", result)
-	}
-	if result.Reason != "Kontext enforce: managed policy daemon unavailable" {
-		t.Fatalf("reason = %q, want the unavailable reason kept for diagnostics", result.Reason)
-	}
-}
-
-func TestLifecycleRemoteUnavailablePromptSubmitFailsOpenWhileEnforcing(t *testing.T) {
-	t.Parallel()
-
-	lifecycle := Lifecycle{Mode: "remote", RemoteEnforce: func() bool { return true }}
-	result := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookUserPromptSubmit})
-	if result.Decision != hook.DecisionAllow {
-		t.Fatalf("daemonUnavailable() = %+v, want allow for prompt submit", result)
-	}
-	tool := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookPreToolUse})
-	if tool.Decision != hook.DecisionDeny {
-		t.Fatalf("daemonUnavailable() = %+v, want deny for pre-tool-use", tool)
 	}
 }
 
@@ -523,39 +549,6 @@ func TestLifecycleRemoteNormalizesEnforceStampOnNonBlockingHook(t *testing.T) {
 	result := lifecycle.finalize(hook.Event{HookName: hook.HookPostToolUse}, hook.Result{Decision: hook.DecisionDeny, Mode: "enforce"})
 	if result.Decision != hook.DecisionAllow || result.Mode != "enforce" {
 		t.Fatalf("finalize() = %+v, want allow for non-blocking hook", result)
-	}
-}
-
-func TestLifecycleRemoteUnavailableFailsClosedWhileEnforcing(t *testing.T) {
-	t.Parallel()
-
-	lifecycle := Lifecycle{Mode: "remote", RemoteEnforce: func() bool { return true }}
-	result := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookPreToolUse})
-	if result.Decision != hook.DecisionDeny || result.Mode != "enforce" {
-		t.Fatalf("daemonUnavailable() = %+v, want fail-closed deny while distribution claims enforce", result)
-	}
-
-	nonBlocking := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookPostToolUse})
-	if nonBlocking.Decision != hook.DecisionAllow {
-		t.Fatalf("daemonUnavailable(non-blocking) = %+v, want allow", nonBlocking)
-	}
-}
-
-func TestLifecycleRemoteUnavailableFailsOpenWithoutEnforceClaim(t *testing.T) {
-	t.Parallel()
-
-	for name, lifecycle := range map[string]Lifecycle{
-		"no enforce claim": {Mode: "remote", RemoteEnforce: func() bool { return false }},
-		"no probe":         {Mode: "remote"},
-	} {
-		lifecycle := lifecycle
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			result := lifecycle.daemonUnavailable(hook.Event{HookName: hook.HookPreToolUse})
-			if result.Decision != hook.DecisionAllow || result.Mode != string(guardhookruntime.ModeObserve) {
-				t.Fatalf("daemonUnavailable() = %+v, want observe fail-open", result)
-			}
-		})
 	}
 }
 

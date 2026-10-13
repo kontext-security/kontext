@@ -105,7 +105,7 @@ func TestRunPreservesDenyDecision(t *testing.T) {
 	}
 }
 
-func TestRunReturnsErrorWhenEncodingFails(t *testing.T) {
+func TestRunFailsOpenWhenEncodingFails(t *testing.T) {
 	t.Parallel()
 
 	stdout := &bytes.Buffer{}
@@ -115,8 +115,8 @@ func TestRunReturnsErrorWhenEncodingFails(t *testing.T) {
 		return hook.Result{Decision: hook.DecisionAllow, Reason: "ok"}, nil
 	})
 
-	if code != 2 {
-		t.Fatalf("run() exit code = %d, want 2", code)
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0 (exit 2 would block the agent)", code)
 	}
 	if !strings.Contains(stderr.String(), "failed to encode hook output") {
 		t.Fatalf("stderr = %q, want encode failure", stderr.String())
@@ -126,7 +126,7 @@ func TestRunReturnsErrorWhenEncodingFails(t *testing.T) {
 	}
 }
 
-func TestRunReturnsErrorWhenWriteFails(t *testing.T) {
+func TestRunFailsOpenWhenWriteFails(t *testing.T) {
 	t.Parallel()
 
 	stderr := &bytes.Buffer{}
@@ -135,11 +135,33 @@ func TestRunReturnsErrorWhenWriteFails(t *testing.T) {
 		return hook.Result{Decision: hook.DecisionAllow, Reason: "ok"}, nil
 	})
 
-	if code != 2 {
-		t.Fatalf("run() exit code = %d, want 2", code)
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0 (exit 2 would block the agent)", code)
 	}
 	if !strings.Contains(stderr.String(), "failed to write hook output") {
 		t.Fatalf("stderr = %q, want write failure", stderr.String())
+	}
+}
+
+func TestRunFailsOpenWhenEvaluationPanics(t *testing.T) {
+	t.Parallel()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	// An unrecovered Go panic exits 2, which the agents read as a block.
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{}, func(hook.Event) (hook.Result, error) {
+		panic("boom")
+	})
+
+	if code != 0 {
+		t.Fatalf("run() exit code = %d, want 0 (exit 2 would block the agent)", code)
+	}
+	if !strings.Contains(stderr.String(), "hook failed: boom") {
+		t.Fatalf("stderr = %q, want panic reported", stderr.String())
+	}
+	if got := stdout.String(); got != "" {
+		t.Fatalf("stdout = %q, want empty", got)
 	}
 }
 
@@ -154,8 +176,8 @@ func TestRunWithExpectedEventRejectsMismatch(t *testing.T) {
 		return hook.Result{}, nil
 	})
 
-	if code != 2 {
-		t.Fatalf("runWithExpectedEvent() exit code = %d, want 2", code)
+	if code != 0 {
+		t.Fatalf("runWithExpectedEvent() exit code = %d, want 0 (exit 2 would block the agent)", code)
 	}
 	if !strings.Contains(stderr.String(), "does not match stdin event") {
 		t.Fatalf("stderr = %q, want mismatch error", stderr.String())

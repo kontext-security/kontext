@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext/internal/hook"
@@ -26,8 +25,8 @@ const (
 	// policy path. The local shadow model has a separately bounded allowance
 	// (250 ms by default, 500 ms maximum) plus IPC scheduling headroom. Agent
 	// hook configurations allow 20 seconds, so this prevents a shadow timeout
-	// from being misclassified as an unavailable enforcing daemon and denying
-	// an otherwise authorized call.
+	// from being misclassified as an unavailable daemon and skipping the
+	// policy check for an otherwise decidable call.
 	preToolUseWait = time.Second
 	asyncHookWait  = 120 * time.Millisecond
 	probeTimeout   = 60 * time.Millisecond
@@ -38,7 +37,8 @@ const (
 // so this only spends time while the daemon is genuinely away (brew upgrade,
 // launchd reload, the plist self-heal), never on a slow one: the decision
 // itself still gets its own budget from the moment the socket accepts. The
-// agents give the hook 20 s, so waiting a few of them beats a false deny.
+// agents give the hook 20 s, so waiting a few of them beats letting the call
+// through unchecked.
 var daemonRestartWait = 3 * time.Second
 
 var launchdMu sync.Mutex
@@ -53,23 +53,17 @@ type Lifecycle struct {
 	// is authoritative and passes through unchanged; in observe the hook can
 	// never block. In remote the daemon's per-decision posture stamp decides:
 	// decisions the daemon marked enforce (the fetched policy deployment says
-	// enforce) pass through, everything else gets observe semantics.
+	// enforce) pass through, everything else gets observe semantics. Whatever
+	// the mode, a daemon that cannot decide fails open.
 	Mode string
-	// RemoteEnforce reports whether the cached policy distribution currently
-	// claims enforcement. It is consulted only in remote mode when the daemon
-	// is unreachable, to pick between failing open (observe posture) and
-	// failing closed (enforce posture) — an unreachable daemon must not
-	// downgrade an enforcing endpoint to observe.
-	RemoteEnforce func() bool
 }
 
 func NewLifecycle() Lifecycle {
 	return Lifecycle{
-		SocketPath:    DefaultSocketPath(),
-		Label:         DefaultLabel(),
-		Kickstart:     KickstartLaunchd,
-		Mode:          loadManagedMode(),
-		RemoteEnforce: remoteEnforceFromCache,
+		SocketPath: DefaultSocketPath(),
+		Label:      DefaultLabel(),
+		Kickstart:  KickstartLaunchd,
+		Mode:       loadManagedMode(),
 	}
 }
 
@@ -88,24 +82,6 @@ func loadManagedMode() string {
 	default:
 		return managedconfig.Mode
 	}
-}
-
-// remoteEnforceFromCache reads the daemon's on-disk policy cache directly —
-// the daemon is unreachable when this is consulted. A missing or unreadable
-// cache reports no enforcement claim: with no trustworthy record of the
-// organization's intent, a self-serve endpoint fails open rather than
-// hard-blocking the agent.
-//
-// The cache location derives from DefaultDBPath(), the same env-overridable
-// default (KONTEXT_MANAGED_OBSERVE_DB) the daemon derives its cache path
-// from, mirroring how SocketPath resolution already keeps the two processes
-// aligned. The programmatic DaemonOptions path overrides are test seams; a
-// deployment that relocates the daemon state must export the env var to hook
-// processes too, or outage fallback will not see the enforcement claim.
-func remoteEnforceFromCache() bool {
-	return cedarpolicy.PersistedDeploymentClaimsEnforce(
-		cedarpolicy.DefaultCachePathForDB(DefaultDBPath()),
-	)
 }
 
 func (l Lifecycle) enforcing() bool {
@@ -150,7 +126,7 @@ func (l Lifecycle) processWithKickstart(ctx context.Context, event hook.Event, b
 
 	for attempt := 0; ; attempt++ {
 		if !l.reach(restartCtx) {
-			return l.daemonUnavailable(event)
+			return daemonUnavailable()
 		}
 		callCtx, cancelCall := context.WithTimeout(ctx, budget)
 		result, err := l.call(callCtx, event)
@@ -165,7 +141,7 @@ func (l Lifecycle) processWithKickstart(ctx context.Context, event hook.Event, b
 		if attempt == 0 && connectionLost(err) {
 			continue
 		}
-		return l.daemonUnavailable(event)
+		return daemonUnavailable()
 	}
 }
 
@@ -194,26 +170,27 @@ func (l Lifecycle) processIfAvailable(ctx context.Context, event hook.Event, bud
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	if !l.probe(ctx) {
-		return l.daemonUnavailable(event)
+		return daemonUnavailable()
 	}
 	result, err := l.call(ctx, event)
 	if err != nil {
-		return l.daemonUnavailable(event)
+		return daemonUnavailable()
 	}
 	return l.finalize(event, result)
 }
 
 // finalize applies the client-side posture to a daemon result. Enforce accepts
 // only an explicit enforce-mode allow or deny; a stale daemon or malformed RPC
-// result is not authoritative. Non-blocking hooks are always normalized to
-// allow. In observe the hook can never block, so the decision is forced to
-// allow with a "would" note. Remote passes through only decisions the daemon
-// stamped enforce — the daemon stamps those exactly when the fetched policy
-// deployment claims enforcement — and treats everything else as observe.
+// result is not authoritative and fails open. Non-blocking hooks are always
+// normalized to allow. In observe the hook can never block, so the decision
+// is forced to allow with a "would" note. Remote passes through only decisions
+// the daemon stamped enforce — the daemon stamps those exactly when the
+// fetched policy deployment claims enforcement — and treats everything else
+// as observe.
 func (l Lifecycle) finalize(event hook.Event, result hook.Result) hook.Result {
 	if l.enforcing() {
 		if !guardhookruntime.AuthoritativeEnforce(result) {
-			return l.daemonUnavailable(event)
+			return daemonUnavailable()
 		}
 		if !event.HookName.CanBlock() {
 			result.Decision = hook.DecisionAllow
@@ -226,46 +203,13 @@ func (l Lifecycle) finalize(event hook.Event, result hook.Result) hook.Result {
 	return guardhookruntime.ObserveResult(event, result)
 }
 
-// failsClosedWhenUnavailable names the one hook that must deny without an
-// authoritative decision: PreToolUse gates a tool call, which is what policy
-// judges. A user prompt is not a tool call. Denying it because the daemon was
-// slow blocks the person, not the agent, and protects nothing, since every
-// tool call that follows is still gated. So prompt submits fail open.
-func failsClosedWhenUnavailable(name hook.HookName) bool {
-	return name == hook.HookPreToolUse
-}
-
-// daemonUnavailable is the fail path when the managed daemon cannot be reached.
-// Observe fails open (it never blocks). Enforce fails closed for PreToolUse:
-// enforcement requires an authoritative decision and an unreachable daemon
-// cannot provide one. Prompt submits and lifecycle hooks remain informational.
-// Remote fails closed only while the cached policy distribution claims
-// enforcement; otherwise it fails open like observe, so a fresh self-serve
-// install without an enforcing deployment never hard-blocks the agent.
-func (l Lifecycle) daemonUnavailable(event hook.Event) hook.Result {
-	if l.remote() && l.RemoteEnforce != nil && l.RemoteEnforce() {
-		decision := hook.DecisionAllow
-		if failsClosedWhenUnavailable(event.HookName) {
-			decision = hook.DecisionDeny
-		}
-		return hook.Result{
-			Decision: decision,
-			Mode:     managedconfig.ModeEnforce,
-			Reason:   "Kontext enforce: managed policy daemon unavailable",
-		}
-	}
-	if l.enforcing() {
-		decision := hook.DecisionAllow
-		if failsClosedWhenUnavailable(event.HookName) {
-			decision = hook.DecisionDeny
-		}
-		return hook.Result{
-			Decision: decision,
-			Mode:     managedconfig.ModeEnforce,
-			Reason:   "Kontext enforce: managed policy daemon unavailable",
-		}
-	}
-	return guardhookruntime.ObserveResult(event, hook.Result{Decision: hook.DecisionAllow, Reason: "managed observe daemon unavailable"})
+// daemonUnavailable is the result whenever the managed daemon cannot decide:
+// it is unreachable, restarting, too slow, or answered with something it
+// cannot stand behind. Every mode and every hook fails open. Kontext steps
+// aside and the agent's own permission flow applies, so an unhealthy daemon
+// never blocks the person.
+func daemonUnavailable() hook.Result {
+	return hook.FailOpen("managed policy daemon unavailable")
 }
 
 func (l Lifecycle) probe(ctx context.Context) bool {

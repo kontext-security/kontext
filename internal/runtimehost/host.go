@@ -45,9 +45,9 @@ type Options struct {
 	// session upsert, annotation, decision row — in the background,
 	// mirroring what AsyncIngest already does for non-blocking hooks.
 	// Without it, a cold or contended guard.db routinely outlives the hook
-	// client's budget, which reads as a dead daemon: fail-open in observe,
-	// fail-closed (every tool call denied) in enforce. Close drains pending
-	// writes before the store closes.
+	// client's budget, which reads as a dead daemon, and the call fails open
+	// without a policy check. Close drains pending writes before the store
+	// closes.
 	AsyncDecisionRecording bool
 }
 

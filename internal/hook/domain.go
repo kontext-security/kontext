@@ -115,7 +115,17 @@ type Result struct {
 	Mode         string
 	Epoch        string
 	UpdatedInput map[string]any
-	metadata     any
+	// FailedOpen marks an allow that Kontext could not decide: the policy
+	// daemon was unreachable, late, or unintelligible. Agent encoders emit no
+	// permission decision for it, so the agent's own permission flow applies
+	// and a broken Kontext neither blocks nor approves the call.
+	FailedOpen bool
+	metadata   any
+}
+
+// FailOpen is the result for a hook Kontext could not decide.
+func FailOpen(reason string) Result {
+	return Result{Decision: DecisionAllow, Reason: reason, FailedOpen: true}
 }
 
 func WithMetadata(result Result, metadata any) Result {

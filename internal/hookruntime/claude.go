@@ -173,7 +173,9 @@ func decodeUseNumber(data []byte, dst any) error {
 }
 
 func EncodeClaudeResult(hookEventName string, result hook.Result) ([]byte, error) {
-	if hook.HookName(hookEventName) != hook.HookPreToolUse {
+	// A fail-open result carries no permission decision. An explicit allow
+	// would skip Claude Code's own permission prompt.
+	if hook.HookName(hookEventName) != hook.HookPreToolUse || result.FailedOpen {
 		return json.Marshal(claudeHookOutput{SuppressOutput: true})
 	}
 

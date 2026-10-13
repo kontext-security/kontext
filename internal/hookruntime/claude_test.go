@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hook"
 )
 
 func TestDecodeClaudeEventLiveUsageProbe(t *testing.T) {
@@ -141,5 +143,19 @@ func TestDecodeClaudeEventPreservesStepSafetyContext(t *testing.T) {
 	schemas, ok := event.AvailableToolSchemas.([]any)
 	if !ok || len(schemas) != 1 {
 		t.Fatalf("AvailableToolSchemas = %#v", event.AvailableToolSchemas)
+	}
+}
+
+func TestEncodeClaudeFailOpenOmitsPermissionDecision(t *testing.T) {
+	t.Parallel()
+
+	// "allow" would skip Claude Code's own permission prompt; a call Kontext
+	// could not decide goes through the normal permission flow instead.
+	out, err := EncodeClaudeResult("PreToolUse", hook.FailOpen("managed policy daemon unavailable"))
+	if err != nil {
+		t.Fatalf("EncodeClaudeResult() error = %v", err)
+	}
+	if got := string(out); got != `{"suppressOutput":true}` {
+		t.Fatalf("EncodeClaudeResult() = %s, want no permission decision", got)
 	}
 }

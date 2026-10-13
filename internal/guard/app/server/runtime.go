@@ -170,9 +170,8 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		// Hand the agent its answer now and run annotation + persistence in
 		// the background: classifier inference and a write into a large,
 		// possibly cold guard.db both routinely outlive the hook client's
-		// budget, and a hook that times out here is treated as a dead daemon
-		// — fail-open in observe, fail-closed (every tool call denied) in
-		// enforce.
+		// budget, and a hook that times out here is treated as a dead daemon:
+		// the call fails open without a policy check.
 		decision.EventID = sqlite.NewActionID()
 		deferredEvent, deferredDecision := event, decision
 		recordJob := func(recordCtx context.Context) error {
