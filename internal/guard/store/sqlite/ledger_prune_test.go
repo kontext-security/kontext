@@ -22,15 +22,20 @@ func TestPruneExportedLedgerDeletesOnlyAcceptedOldRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, id := range []string{"act_old_1", "act_old_2", "act_skipped", "act_big", "act_risk_pending", "act_risk_done", "act_merlin_pending"} {
+	for i, id := range []string{"act_interleaved", "act_old_1", "act_skipped", "act_big", "act_risk_pending", "act_risk_done", "act_merlin_pending"} {
 		insertLedgerTestAction(t, tx, id, base.Add(time.Duration(i)*time.Second))
 		insertLedgerTestReceipt(t, tx, "rcpt_"+id, id, base.Add(time.Duration(i)*time.Second))
 	}
 	// Exported long ago but after the persisted cursor.
 	insertLedgerTestAction(t, tx, "act_unexported", base.Add(20*24*time.Hour))
 	insertLedgerTestAction(t, tx, "act_recent", now.Add(-24*time.Hour))
+	// Receipts of other actions sit inside this action's receipt range, so an
+	// older client may have skipped its minimum batch as too wide.
+	insertLedgerTestReceipt(t, tx, "rcpt_act_interleaved_2", "act_interleaved", base.Add(time.Minute))
 	// The newest receipt is the chain head and belongs to a prunable action.
-	insertLedgerTestReceipt(t, tx, "rcpt_head", "act_old_1", base.Add(time.Minute))
+	insertLedgerTestAction(t, tx, "act_old_2", base.Add(10*time.Second))
+	insertLedgerTestReceipt(t, tx, "rcpt_act_old_2", "act_old_2", base.Add(2*time.Minute))
+	insertLedgerTestReceipt(t, tx, "rcpt_head", "act_old_2", base.Add(3*time.Minute))
 	if _, err := tx.ExecContext(ctx, `update authorization_actions set tool_output_captured_json = ? where id = 'act_big'`, strings.Repeat("x", 2048)); err != nil {
 		t.Fatal(err)
 	}
@@ -68,19 +73,19 @@ values('ssv_pending', 'act_merlin_pending', 'session-1', 'Bash', 'allow', 0.5, '
 	if err != nil || pruned != 3 {
 		t.Fatalf("pruned %d, err %v; want act_old_1, act_old_2, act_risk_done", pruned, err)
 	}
-	actions, err := store.queryStrings(ctx, `select id from authorization_actions order by id`)
+	actions, err := queryStrings(ctx, store.db, `select id from authorization_actions order by id`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"act_big", "act_merlin_pending", "act_recent", "act_risk_pending", "act_skipped", "act_unexported"}
+	want := []string{"act_big", "act_interleaved", "act_merlin_pending", "act_recent", "act_risk_pending", "act_skipped", "act_unexported"}
 	if !slices.Equal(actions, want) {
 		t.Fatalf("remaining actions = %v, want %v", actions, want)
 	}
-	receipts, err := store.queryStrings(ctx, `select id from authorization_receipts order by id`)
+	receipts, err := queryStrings(ctx, store.db, `select id from authorization_receipts order by id`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = []string{"rcpt_act_big", "rcpt_act_merlin_pending", "rcpt_act_risk_pending", "rcpt_act_skipped", "rcpt_head"}
+	want = []string{"rcpt_act_big", "rcpt_act_interleaved", "rcpt_act_interleaved_2", "rcpt_act_merlin_pending", "rcpt_act_risk_pending", "rcpt_act_skipped", "rcpt_head"}
 	if !slices.Equal(receipts, want) {
 		t.Fatalf("remaining receipts = %v, want %v", receipts, want)
 	}
@@ -103,8 +108,8 @@ values('ssv_pending', 'act_merlin_pending', 'session-1', 'Bash', 'allow', 0.5, '
 	if pruned, err := store.PruneExportedLedger(ctx, opts); err != nil || pruned != 3 {
 		t.Fatalf("second prune %d, err %v; want both annotated actions and act_unexported", pruned, err)
 	}
-	actions, err = store.queryStrings(ctx, `select id from authorization_actions order by id`)
-	if err != nil || !slices.Equal(actions, []string{"act_big", "act_recent", "act_skipped"}) {
+	actions, err = queryStrings(ctx, store.db, `select id from authorization_actions order by id`)
+	if err != nil || !slices.Equal(actions, []string{"act_big", "act_interleaved", "act_recent", "act_skipped"}) {
 		t.Fatalf("remaining actions = %v, err %v", actions, err)
 	}
 }
@@ -135,7 +140,7 @@ func TestPruneExportedLedgerRequiresCursorAndHonorsLimit(t *testing.T) {
 	if pruned, err := store.PruneExportedLedger(ctx, opts); err != nil || pruned != 2 {
 		t.Fatalf("pruned %d, err %v; want the limit", pruned, err)
 	}
-	actions, err := store.queryStrings(ctx, `select id from authorization_actions`)
+	actions, err := queryStrings(ctx, store.db, `select id from authorization_actions`)
 	if err != nil || !slices.Equal(actions, []string{"act_3"}) {
 		t.Fatalf("oldest rows must go first: %v %v", actions, err)
 	}

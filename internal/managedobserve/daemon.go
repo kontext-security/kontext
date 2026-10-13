@@ -790,7 +790,7 @@ func pruneExportedLedger(ctx context.Context, opts DaemonOptions, dbPath string)
 		MerlinCreatedAfter:    state.MerlinCreatedAfter,
 		MerlinAnnotationID:    state.MerlinAnnotationID,
 		OlderThan:             time.Now().UTC().Add(-ledgerRetention),
-		MaxRowBytes:           managedstream.MaxPayloadBytes / 2,
+		MaxRowBytes:           managedstream.MaxPayloadBytes / 4,
 		Limit:                 ledgerPruneBatch,
 	})
 	if pruned > 0 {

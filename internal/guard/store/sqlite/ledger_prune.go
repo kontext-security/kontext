@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -43,18 +44,26 @@ type LedgerPruneOptions struct {
 	MerlinAnnotationID    string
 	// OlderThan keeps recent history local regardless of export state.
 	OlderThan time.Time
-	// MaxRowBytes keeps any action whose stored payload is large enough that
-	// an older client may have skipped it as an oversized minimum batch
-	// before skips were recorded.
+	// MaxRowBytes bounds the stored size of an action, its receipts and its
+	// session. Callers set it far enough below the hosted body limit that
+	// the action's minimum batch could never have been skipped as oversized.
 	MaxRowBytes int
 	Limit       int
 }
 
 // PruneExportedLedger deletes up to opts.Limit of the oldest actions, and
-// their receipts, that the hosted ledger has accepted. It never deletes an
-// action with an annotation still waiting for upload (the annotation export
-// needs the action row), a recorded skip, or the newest receipt, which the
-// next receipt chains from. Freed pages are reused; the file is not shrunk.
+// their receipts, that the hosted ledger has accepted. An action counts as
+// accepted only when it is behind the export cursor and its minimum batch
+// could not have been skipped instead: it is not a recorded skip, it is
+// small (MaxRowBytes), and its receipts are contiguous, so its batch never
+// carried another action's receipts or hit the receipt limit. Clients before
+// skips were recorded leave no other trace, so anything else is kept.
+//
+// It never deletes an action with an annotation still waiting for upload
+// (the annotation export needs the action row), or the newest receipt, which
+// the next receipt chains from. Selection and deletes run in one IMMEDIATE
+// transaction, so no annotation can be written in between. Freed pages are
+// reused; the file is not shrunk.
 func (s *Store) PruneExportedLedger(ctx context.Context, opts LedgerPruneOptions) (int, error) {
 	if opts.Limit <= 0 || opts.MaxRowBytes <= 0 || opts.ActionsExportedBefore.IsZero() || opts.OlderThan.IsZero() {
 		return 0, nil
@@ -66,11 +75,10 @@ func (s *Store) PruneExportedLedger(ctx context.Context, opts LedgerPruneOptions
 	query := `select a.id from authorization_actions a
 where a.updated_at_cursor_key < ?
   and not exists (select 1 from ledger_export_skips skip where skip.action_id = a.id)
-  and coalesce(length(a.tool_input_captured_json), 0) + coalesce(length(a.tool_output_captured_json), 0)
-    + coalesce(length(a.decision_fact_json), 0) + coalesce(length(a.context_json), 0)
-    + coalesce(length(a.risk_event_json), 0) + coalesce(length(a.parameters_redacted_json), 0)
-    + coalesce(length(a.identity_context_json), 0)
-    + (select coalesce(sum(length(r.receipt_payload_json)), 0) from authorization_receipts r where r.action_id = a.id) <= ?`
+  and (select count(*) = coalesce(max(r.rowid) - min(r.rowid) + 1, 0) from authorization_receipts r where r.action_id = a.id)
+  and ` + storedBytes(authorizationActionsSelect, "a") + `
+    + (select coalesce(sum(` + storedBytes(authorizationReceiptsSelect, "r") + `), 0) from authorization_receipts r where r.action_id = a.id)
+    + (select coalesce(sum(` + storedBytes(agentSessionsSelect, "session") + `), 0) from agent_sessions session where session.id = a.session_id) <= ?`
 	args := []any{ledgerTimestampCursorKeyFromTime(before), opts.MaxRowBytes}
 	// Mirror the export queries: an annotation they would still return has
 	// not been uploaded yet.
@@ -97,37 +105,65 @@ where a.updated_at_cursor_key < ?
 	}
 	query += "\norder by a.updated_at_cursor_key, a.id\nlimit ?"
 	args = append(args, opts.Limit)
-	ids, err := s.queryStrings(ctx, query, args...)
-	if err != nil || len(ids) == 0 {
-		return 0, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
+
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer conn.Close()
+	// IMMEDIATE takes the write lock before reading, so the eligibility seen
+	// here still holds when the rows are deleted.
+	if _, err := conn.ExecContext(ctx, "begin immediate"); err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), "rollback")
+		}
+	}()
+	ids, err := queryStrings(ctx, conn, query, args...)
+	if err != nil {
+		return 0, err
+	}
 	for _, chunk := range stringChunks(ids) {
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")
 		args := make([]any, 0, len(chunk))
 		for _, id := range chunk {
 			args = append(args, id)
 		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`delete from authorization_receipts where action_id in (%s)
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`delete from authorization_receipts where action_id in (%s)
   and rowid < (select max(rowid) from authorization_receipts)`, placeholders), args...); err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`delete from authorization_actions where id in (%s)`, placeholders), args...); err != nil {
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`delete from authorization_actions where id in (%s)`, placeholders), args...); err != nil {
 			return 0, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if _, err := conn.ExecContext(ctx, "commit"); err != nil {
 		return 0, err
 	}
+	committed = true
 	return len(ids), nil
 }
 
-func (s *Store) queryStrings(ctx context.Context, query string, args ...any) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
+// storedBytes sums the stored length of every column an export select reads,
+// so the size guard cannot drift from what an upload carries.
+func storedBytes(selectSQL, alias string) string {
+	columns := selectSQL[strings.Index(selectSQL, "select")+len("select") : strings.Index(selectSQL, "\nfrom ")]
+	var terms []string
+	for _, column := range strings.Split(columns, ",") {
+		terms = append(terms, fmt.Sprintf("coalesce(length(%s.%s), 0)", alias, strings.TrimSpace(column)))
+	}
+	return strings.Join(terms, " + ")
+}
+
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func queryStrings(ctx context.Context, db querier, query string, args ...any) ([]string, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
