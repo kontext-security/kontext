@@ -419,23 +419,19 @@ func (fact DecisionFact) validateAuthority(invalid func(string, ...any)) {
 		invalid("only an enforce deployment can deny execution")
 	}
 	if fact.AppliedMode == cedareval.RolloutModeEnforce {
-		if fact.EvaluationState == cedareval.EvaluationStateFailed {
-			// Accept error-allow records from decision contract v2 and historical
-			// error-deny records from v1. Neither claims a Cedar verdict.
+		if fact.EvaluationState != cedareval.EvaluationStateEvaluated {
+			// No completed verdict, so nothing to apply. Accept the allows that
+			// decision contract v3 records for unready enforcement and unresolved
+			// principals (v2 for evaluation errors) and the historical denies
+			// earlier contracts recorded. Neither claims a Cedar verdict.
 			return
 		}
-		if fact.EvaluationState != cedareval.EvaluationStateEvaluated {
-			if fact.ExecutionAction != cedareval.EffectiveExecutionActionDeny {
-				invalid("enforce denies when policy is not ready or the principal is unresolved")
-			}
-		} else {
-			expected := cedareval.EffectiveExecutionActionDeny
-			if fact.CedarAction != nil && *fact.CedarAction == cedareval.DerivedCedarActionAllow {
-				expected = cedareval.EffectiveExecutionActionAllow
-			}
-			if fact.ExecutionAction != expected {
-				invalid("enforce applies the Cedar verdict (ask fails closed to deny)")
-			}
+		expected := cedareval.EffectiveExecutionActionDeny
+		if fact.CedarAction != nil && *fact.CedarAction == cedareval.DerivedCedarActionAllow {
+			expected = cedareval.EffectiveExecutionActionAllow
+		}
+		if fact.ExecutionAction != expected {
+			invalid("enforce applies the Cedar verdict (ask fails closed to deny)")
 		}
 	}
 }
