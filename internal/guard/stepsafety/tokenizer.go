@@ -116,5 +116,29 @@ func normalizeText(text string) string {
 			out.WriteString(whitespace)
 		}
 	}
-	return strings.TrimRightFunc(norm.NFC.String(out.String()), unicode.IsSpace)
+	return strings.TrimRightFunc(nfcUnicode9(out.String()), unicode.IsSpace)
+}
+
+// nfcUnicode9 matches HF NFC, whose tables are Unicode 9.0. HF treats every
+// later character as an unassigned starter that never reorders or composes,
+// while x/text's newer tables move or merge the ones in postUnicode9NFC. NFC
+// cannot act across such a starter, so normalizing the text between them and
+// copying them unchanged reproduces HF.
+func nfcUnicode9(text string) string {
+	var out strings.Builder
+	for {
+		i := strings.IndexFunc(text, func(r rune) bool { return unicode.Is(postUnicode9NFC, r) })
+		if i < 0 {
+			break
+		}
+		_, size := utf8.DecodeRuneInString(text[i:])
+		out.WriteString(norm.NFC.String(text[:i]))
+		out.WriteString(text[i : i+size])
+		text = text[i+size:]
+	}
+	if out.Len() == 0 {
+		return norm.NFC.String(text)
+	}
+	out.WriteString(norm.NFC.String(text))
+	return out.String()
 }
