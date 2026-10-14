@@ -1,0 +1,213 @@
+name: Homebrew Install
+
+# Installs kontext the way customers do, on the oldest macOS runner GitHub
+# keeps (macos-14 retires 2026-11-02) and on Intel, where Homebrew has the
+# fewest bottles. Pull requests test the formula and cask this commit renders;
+# the schedule runs the exact published command.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/render-homebrew-*.sh"
+      - ".github/workflows/homebrew-install.yml"
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-install-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+  GH_TOKEN: ${{ github.token }}
+  # Sourced by bash steps through BASH_ENV.
+  BASH_ENV: ${{ github.workspace }}/.homebrew-install-helpers.sh
+
+jobs:
+  rendered:
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Write shell helpers
+        run: |
+          cat > "$BASH_ENV" <<'HELPERS'
+          # Move Xcode and the Command Line Tools away, like a Mac that never
+          # installed them. On Intel, Homebrew itself refuses every install,
+          # bottles and casks alike, without the Command Line Tools because it
+          # needs codesign (Homebrew/brew#23418), so keep those there.
+          hide_developer_tools() {
+            local paths=(/Applications/Xcode*.app)
+            if [[ "$(uname -m)" == "arm64" ]]; then
+              paths+=(/Library/Developer/CommandLineTools)
+            fi
+            sudo mkdir -p /private/var/hidden-dev-tools
+            for path in "${paths[@]}"; do
+              if [[ -e "$path" ]]; then sudo mv "$path" /private/var/hidden-dev-tools/; fi
+            done
+          }
+          # Whether the tap publishes the cask. Only an explicit 404 means "not
+          # yet"; any other API failure must fail the job rather than skip
+          # the check.
+          cask_published() {
+            local status
+            status="$(gh api -i repos/kontext-security/homebrew-tap/contents/Casks/kontext.rb 2>/dev/null | head -1 | awk '{print $2}')"
+            case "$status" in
+              200) return 0 ;;
+              404) return 1 ;;
+              *) echo "::error::cannot tell whether the cask is published (HTTP ${status:-none})"; exit 1 ;;
+            esac
+          }
+          # Apple's check for standalone binaries; spctl is meant for apps.
+          require_notarized() {
+            if ! codesign -vvvv -R="notarized" --check-notarization "$1"; then
+              echo "::error::$1 is not notarized"
+              return 1
+            fi
+          }
+          HELPERS
+
+      - name: Render formula and cask for the latest release
+        run: |
+          set -euo pipefail
+          tag="$(gh release view --repo kontext-security/kontext --json tagName --jq .tagName)"
+          version="${tag#v}"
+          gh release download "$tag" --repo kontext-security/kontext -p checksums.txt -D "$RUNNER_TEMP"
+          brew tap-new --no-git kontext/ci
+          tap="$(brew --repo kontext/ci)"
+          mkdir -p "$tap/Casks"
+          # Renamed so the formula and the cask can be installed side by side.
+          ./scripts/render-homebrew-formula.sh "$version" "$RUNNER_TEMP/checksums.txt" \
+            | sed -e 's/^class Kontext < Formula/class KontextFormula < Formula/' \
+                  -e '/conflicts_with/d' \
+                  -e 's#bin.install "kontext"#bin.install "kontext" => "kontext-formula"#' \
+                  -e 's#bin/"kontext"#bin/"kontext-formula"#' > "$tap/Formula/kontext-formula.rb"
+          ./scripts/render-homebrew-cask.sh "$version" "$RUNNER_TEMP/checksums.txt" \
+            | sed -e 's/^cask "kontext" do/cask "kontext-cask" do/' \
+                  -e 's/^  binary "kontext"$/  binary "kontext", target: "kontext-cask"/' > "$tap/Casks/kontext-cask.rb"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Formula has no dependencies and installs
+        run: |
+          set -euo pipefail
+          deps="$(brew deps --formula kontext/ci/kontext-formula)"
+          if [[ -n "$deps" ]]; then
+            echo "::error::formula pulls dependencies: $deps"
+            exit 1
+          fi
+          brew install kontext/ci/kontext-formula 2>&1 | tee "$RUNNER_TEMP/formula.log"
+          kontext-formula --version | grep -F "$VERSION"
+
+      - name: Cask installs without developer tools
+        run: |
+          set -euo pipefail
+          hide_developer_tools
+          brew install --cask kontext/ci/kontext-cask 2>&1 | tee "$RUNNER_TEMP/cask.log"
+          binary="$(readlink -f "$(brew --prefix)/bin/kontext-cask")"
+          # The release workflow publishes the cask only for notarized
+          # releases, so a published cask means this release must verify.
+          if cask_published; then
+            require_notarized "$binary"
+            kontext-cask --version | grep -F "$VERSION"
+          elif codesign -vvvv -R="notarized" --check-notarization "$binary"; then
+            kontext-cask --version | grep -F "$VERSION"
+          else
+            echo "::warning::$VERSION is not notarized and no cask is published yet; installed but not run"
+          fi
+
+      - name: Upload install logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: homebrew-install-${{ matrix.runner }}
+          path: ${{ runner.temp }}/*.log
+
+  published:
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Write shell helpers
+        run: |
+          cat > "$BASH_ENV" <<'HELPERS'
+          # Move Xcode and the Command Line Tools away, like a Mac that never
+          # installed them. On Intel, Homebrew itself refuses every install,
+          # bottles and casks alike, without the Command Line Tools because it
+          # needs codesign (Homebrew/brew#23418), so keep those there.
+          hide_developer_tools() {
+            local paths=(/Applications/Xcode*.app)
+            if [[ "$(uname -m)" == "arm64" ]]; then
+              paths+=(/Library/Developer/CommandLineTools)
+            fi
+            sudo mkdir -p /private/var/hidden-dev-tools
+            for path in "${paths[@]}"; do
+              if [[ -e "$path" ]]; then sudo mv "$path" /private/var/hidden-dev-tools/; fi
+            done
+          }
+          # Whether the tap publishes the cask. Only an explicit 404 means "not
+          # yet"; any other API failure must fail the job rather than skip
+          # the check.
+          cask_published() {
+            local status
+            status="$(gh api -i repos/kontext-security/homebrew-tap/contents/Casks/kontext.rb 2>/dev/null | head -1 | awk '{print $2}')"
+            case "$status" in
+              200) return 0 ;;
+              404) return 1 ;;
+              *) echo "::error::cannot tell whether the cask is published (HTTP ${status:-none})"; exit 1 ;;
+            esac
+          }
+          # Apple's check for standalone binaries; spctl is meant for apps.
+          require_notarized() {
+            if ! codesign -vvvv -R="notarized" --check-notarization "$1"; then
+              echo "::error::$1 is not notarized"
+              return 1
+            fi
+          }
+          HELPERS
+
+      - name: Install with the command from the dashboard
+        run: |
+          set -euo pipefail
+          brew install kontext-security/tap/kontext 2>&1 | tee "$RUNNER_TEMP/published.log"
+          kontext --version
+          brew uninstall kontext
+
+      - name: Install the published cask without developer tools
+        run: |
+          set -euo pipefail
+          if ! cask_published; then
+            echo "No cask published yet"
+            exit 0
+          fi
+          hide_developer_tools
+          brew install --cask kontext-security/tap/kontext 2>&1 | tee -a "$RUNNER_TEMP/published.log"
+          require_notarized "$(readlink -f "$(brew --prefix)/bin/kontext")"
+          kontext --version
+
+      - name: Upload install log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: homebrew-published-${{ matrix.runner }}
+          path: ${{ runner.temp }}/published.log
