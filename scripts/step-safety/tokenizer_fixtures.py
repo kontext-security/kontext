@@ -47,6 +47,14 @@ def main():
         for key in ["user_request", "normalized_history", "tool_name"]:
             if key in case:
                 texts.append(case[key])
+    # HF matches every vocab piece, including the literal "<0xNN>" byte pieces,
+    # and sums path scores in float64; repeated runs then tie-break on that
+    # rounding. A float32, byte-piece-skipping encoder diverged on all of these.
+    texts += [
+        "<0x41>", "<0x0A>", "x <0x20> y", "a<0x41>b", "<0x00><0xFF>", "2026<0x41>",
+        "a" * 17, "a" * 20, "x " + "a" * 17 + " y", "1" * 12, "1" * 16, "1" * 20,
+        "0" * 64, "ha" * 12, "e" * 33, "k" * 40,
+    ]
     data = {
         "tokenizer_sha256": tokenizer_hash,
         "reference": "transformers 5.14.1 / tokenizers 0.22.2; scripts/step-safety/tokenizer_fixtures.py",
