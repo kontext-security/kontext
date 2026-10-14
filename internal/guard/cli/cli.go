@@ -7,26 +7,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/app/server"
-	"github.com/kontext-security/kontext/internal/guard/judge"
-	"github.com/kontext-security/kontext/internal/guard/judgeruntime"
-	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/localruntime"
-	"github.com/kontext-security/kontext/internal/startupui"
 )
 
 const (
@@ -53,8 +47,6 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return runHooks(args[1:], stdout)
 	case "traces":
 		return runTraces(ctx, args[1:], stdout)
-	case "judge":
-		return runJudge(ctx, args[1:], stdout)
 	case "smoke-test":
 		return runSmokeTest(ctx, args[1:], stdout)
 	case "help", "-h", "--help":
@@ -76,44 +68,15 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  hooks install claude-code     Install Claude Code hooks")
 	fmt.Fprintln(out, "  hooks uninstall claude-code   Remove Claude Code hooks")
 	fmt.Fprintln(out, "  traces inspect                Inspect local trace summary")
-	fmt.Fprintln(out, "  judge eval                    Evaluate local judge fixtures")
 }
 
 func runDaemon(ctx context.Context, args []string, out io.Writer) error {
-	defaultJudgeTimeout, err := envDuration("KONTEXT_JUDGE_TIMEOUT", judge.DefaultTimeout)
-	if err != nil {
-		return err
-	}
-	defaultJudgeManaged, err := envBool("KONTEXT_JUDGE_MANAGED", false)
-	if err != nil {
-		return err
-	}
-	defaultJudgePort, err := envInt("KONTEXT_JUDGE_PORT", judge.DefaultLlamaServerPort)
-	if err != nil {
-		return err
-	}
-	defaultJudgeStartupTimeout, err := envDuration("KONTEXT_JUDGE_STARTUP_TIMEOUT", judge.DefaultLlamaServerStartupTimeout)
-	if err != nil {
-		return err
-	}
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	addr := fs.String("addr", envString("KONTEXT_ADDR", server.DefaultAddr), "listen address")
 	dbPath := fs.String("db", envString("KONTEXT_DB", defaultDBPath()), "SQLite database path")
 	skipHookInstall := fs.Bool("skip-hook-install", false, "skip Claude Code hook install")
 	socketPath := fs.String("socket", defaultGuardSocketPath(), "Unix socket path for local hook runtime")
-	judgeURL := fs.String("judge-url", envString("KONTEXT_JUDGE_URL", ""), "OpenAI-compatible local judge base URL, for example http://127.0.0.1:8080")
-	judgeModel := fs.String("judge-model", envString("KONTEXT_JUDGE_MODEL", ""), "local judge model name; with --judge-managed this may be a local GGUF path")
-	judgeTimeout := fs.Duration("judge-timeout", defaultJudgeTimeout, "local judge timeout")
-	judgeManaged := fs.Bool("judge-managed", defaultJudgeManaged, "start and health-check a managed llama-server child process")
-	judgeServerBin := fs.String("judge-server-bin", envString("KONTEXT_JUDGE_SERVER_BIN", judge.DefaultLlamaServerBinary), "llama-server binary path")
-	judgeModelPath := fs.String("judge-model-path", envString("KONTEXT_JUDGE_MODEL_PATH", ""), "local GGUF model path for managed llama-server")
-	judgeHFRepo := fs.String("judge-hf-repo", envString("KONTEXT_JUDGE_HF_REPO", ""), "Hugging Face GGUF repo to cache for managed llama-server")
-	judgeHFFile := fs.String("judge-hf-file", envString("KONTEXT_JUDGE_HF_FILE", ""), "Hugging Face GGUF filename to cache for managed llama-server")
-	judgeHFRevision := fs.String("judge-hf-revision", envString("KONTEXT_JUDGE_HF_REVISION", ""), "Hugging Face revision, branch, or tag to cache for managed llama-server")
-	judgeCacheDir := fs.String("judge-cache-dir", envString("KONTEXT_JUDGE_CACHE_DIR", ""), "directory for cached GGUF judge models")
-	judgePort := fs.Int("judge-port", defaultJudgePort, "managed llama-server port")
-	judgeStartupTimeout := fs.Duration("judge-startup-timeout", defaultJudgeStartupTimeout, "managed llama-server startup timeout")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -124,36 +87,6 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 		if err := installClaudeHooks(out, *socketPath); err != nil {
 			return err
 		}
-	}
-	ui := startupui.New(out)
-	judgeRuntime, err := judgeruntime.ConfigureRuntime(ctx, judgeruntime.Config{
-		URL:              *judgeURL,
-		Model:            *judgeModel,
-		Timeout:          *judgeTimeout,
-		Managed:          *judgeManaged,
-		ServerBin:        *judgeServerBin,
-		ModelPath:        *judgeModelPath,
-		HFRepo:           *judgeHFRepo,
-		HFFile:           *judgeHFFile,
-		HFRevision:       *judgeHFRevision,
-		CacheDir:         judgeruntime.ResolvedCacheDir(*judgeCacheDir, *dbPath),
-		Port:             *judgePort,
-		StartupTimeout:   *judgeStartupTimeout,
-		DownloadProgress: ui.HandleDownloadProgress,
-	})
-	if err != nil {
-		return err
-	}
-	localJudge := judgeRuntime.Judge
-	if judgeRuntime.Close != nil {
-		defer judgeRuntime.Close()
-	}
-	classifierMode, err := riskclassifier.ParseMode(os.Getenv("KONTEXT_RISK_CLASSIFIER_MODE"))
-	if err != nil {
-		return err
-	}
-	if err := ui.Err(); err != nil {
-		return fmt.Errorf("write startup output: %w", err)
 	}
 	stepSafetyConfig, err := stepsafety.ConfigFromEnv(*dbPath)
 	if err != nil {
@@ -168,14 +101,9 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 		deferRecord = recorder.Submit
 	}
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(*dbPath, server.Options{
-		Judge: localJudge,
-		RiskClassifier: &server.RiskClassifierOptions{
-			Mode:             classifierMode,
-			GuardrailBaseURL: judgeRuntime.BaseURL,
-			GuardrailModel:   judgeRuntime.Model,
-		},
-		StepSafety:  stepSafety,
-		DeferRecord: deferRecord,
+		RiskClassifier: &server.RiskClassifierOptions{},
+		StepSafety:     stepSafety,
+		DeferRecord:    deferRecord,
 	})
 	if err != nil {
 		return err
@@ -206,12 +134,7 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	fmt.Fprintf(out, "Kontext Guard local daemon listening on http://%s\n", *addr)
 	fmt.Fprintf(out, "Hook runtime: unix://%s\n", *socketPath)
 	fmt.Fprintln(out, "Mode: observe (Claude Code runs normally; decisions are recorded as would allow / would deny).")
-	fmt.Fprintln(out, localJudgeStatusLine(localJudge))
 	return localServer.ListenAndServe(*addr)
-}
-
-func localJudgeStatusLine(localJudge judge.Judge) string {
-	return "Local judge: " + startupui.LocalJudgeSummary(localJudge != nil, judge.IsUnavailable(localJudge))
 }
 
 func verifyClaudeCode() error {
@@ -656,143 +579,11 @@ func runTraces(ctx context.Context, args []string, out io.Writer) error {
 	}
 }
 
-func runJudge(ctx context.Context, args []string, out io.Writer) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: kontext guard judge eval")
-	}
-	switch args[0] {
-	case "eval":
-		return runJudgeEval(ctx, args[1:], out)
-	default:
-		return fmt.Errorf("usage: kontext guard judge eval")
-	}
-}
-
-func runJudgeEval(ctx context.Context, args []string, out io.Writer) error {
-	defaultJudgeTimeout, err := envDuration("KONTEXT_JUDGE_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return err
-	}
-	fs := flag.NewFlagSet("judge eval", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	judgeURL := fs.String("judge-url", envString("KONTEXT_JUDGE_URL", ""), "OpenAI-compatible local judge base URL")
-	judgeModel := fs.String("judge-model", envString("KONTEXT_JUDGE_MODEL", ""), "local judge model name")
-	judgeTimeout := fs.Duration("judge-timeout", defaultJudgeTimeout, "local judge timeout")
-	fixturesPath := fs.String("fixtures", "internal/guard/judge/testdata/launch-v0.jsonl", "judge evaluation JSONL fixtures")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*judgeURL) == "" || strings.TrimSpace(*judgeModel) == "" {
-		return fmt.Errorf("--judge-url and --judge-model are required")
-	}
-	if err := validateLocalJudgeURL(*judgeURL); err != nil {
-		return err
-	}
-	localJudge, err := judge.NewOpenAICompatibleJudge(judge.HTTPOptions{
-		BaseURL: *judgeURL,
-		Model:   *judgeModel,
-		Timeout: *judgeTimeout,
-	})
-	if err != nil {
-		return err
-	}
-	fixtures, err := readJudgeEvalFixtures(*fixturesPath)
-	if err != nil {
-		return err
-	}
-	total := 0
-	passed := 0
-	for _, fixture := range fixtures {
-		if !fixture.JudgeExpected.ShouldCallJudge {
-			continue
-		}
-		total++
-		result, err := localJudge.Decide(ctx, judge.InputFromFixture(fixture))
-		if err != nil {
-			fmt.Fprintf(out, "FAIL %s: judge error: %v\n", fixture.ID, err)
-			continue
-		}
-		if failures := judge.CompareFixtureOutput(result.Output, fixture.JudgeExpected); len(failures) > 0 {
-			fmt.Fprintf(out, "FAIL %s: %s reason=%q\n", fixture.ID, strings.Join(failures, "; "), result.Output.Reason)
-			continue
-		}
-		passed++
-		fmt.Fprintf(out, "PASS %s: %s %s\n", fixture.ID, result.Output.Decision, result.Output.RiskLevel)
-	}
-	fmt.Fprintf(out, "summary passed=%d failed=%d total=%d\n", passed, total-passed, total)
-	if passed != total {
-		return fmt.Errorf("judge eval failed %d of %d fixtures", total-passed, total)
-	}
-	return nil
-}
-
-func readJudgeEvalFixtures(path string) ([]judge.Fixture, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	fixtures, err := judge.ReadFixtures(file)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return fixtures, nil
-}
-
 func envString(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
 	return fallback
-}
-
-func envInt(key string, fallback int) (int, error) {
-	if value := os.Getenv(key); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
-			return 0, fmt.Errorf("%s must be an integer: %w", key, err)
-		}
-		return parsed, nil
-	}
-	return fallback, nil
-}
-
-func envBool(key string, fallback bool) (bool, error) {
-	if value := os.Getenv(key); value != "" {
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return false, fmt.Errorf("%s must be a boolean: %w", key, err)
-		}
-		return parsed, nil
-	}
-	return fallback, nil
-}
-
-func envDuration(key string, fallback time.Duration) (time.Duration, error) {
-	if value := os.Getenv(key); value != "" {
-		parsed, err := time.ParseDuration(value)
-		if err != nil {
-			return 0, fmt.Errorf("%s must be a duration: %w", key, err)
-		}
-		return parsed, nil
-	}
-	return fallback, nil
-}
-
-func validateLocalJudgeURL(value string) error {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return fmt.Errorf("parse judge URL: %w", err)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("judge URL must use http or https")
-	}
-	switch strings.ToLower(parsed.Hostname()) {
-	case "localhost", "127.0.0.1", "::1":
-		return nil
-	default:
-		return fmt.Errorf("judge URL must point to localhost")
-	}
 }
 
 func defaultDBPath() string {
@@ -803,16 +594,6 @@ func defaultDBPath() string {
 		return filepath.Join(home, ".kontext", "guard.db")
 	}
 	return "kontext-guard.db"
-}
-
-func defaultJudgeCacheDir(dbPath string) string {
-	if dbPath != "" {
-		return filepath.Join(filepath.Dir(dbPath), "judge-models")
-	}
-	if dir, err := os.UserCacheDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "kontext", "judge")
-	}
-	return filepath.Join(".", "judge-models")
 }
 
 func selfPath() string {

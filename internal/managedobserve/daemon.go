@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +17,6 @@ import (
 	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"github.com/kontext-security/kontext/internal/guard/app/server"
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
-	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/ledgerping"
@@ -186,15 +184,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		return fmt.Errorf("configure endpoint configuration client: %w", err)
 	}
 
-	judgeConfigured, err := judgeConfigFromEnv()
-	if err != nil {
-		return err
-	}
-
-	if warning := localRiskModelWarning(os.Getenv("KONTEXT_JUDGE_MANAGED"), os.Getenv("KONTEXT_JUDGE_SERVER_BIN")); warning != "" {
-		logAlways(opts.Diagnostic, "%s\n", warning)
-	}
-
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          managedconfig.Agent,
 		DBPath:             dbPath,
@@ -204,19 +193,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Mode:               mode,
 		Diagnostic:         opts.Diagnostic,
 		SkipInitialSession: true,
-		// Resolve the local model so the risk classifier's guardrail half can
-		// run here too. Without it the daemon recorded an SVM verdict and an
-		// llm_error on every command, which matters because these are the
-		// sessions that reach the hosted ledger — the LLM verdict would have
-		// been null in exactly the place the data is collected.
-		//
-		// Managed mode is never defaulted on: that would have every managed
-		// endpoint download a model and run a llama-server child unprompted.
-		// The operator opts in with
-		// KONTEXT_JUDGE_MANAGED, or points at an endpoint they already run with
-		// KONTEXT_JUDGE_URL and KONTEXT_JUDGE_MODEL. An incomplete optional
-		// configuration resolves to no judge, so the daemon behaves as before.
-		JudgeConfigFromEnv: judgeConfigured,
 		// Async ingest: non-blocking hooks (PostToolUse, session lifecycle)
 		// are acked immediately and written in the background. Synchronous
 		// writes queue on the store's single SQLite connection, and under a
@@ -246,7 +222,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// at the privacy-safe default until this process receives a confirming 200
 	// or matching 304 from the independent configuration endpoint.
 	host.SetPayloadCaptureConfiguration(captureConfiguration(endpointConfigCache.Current()))
-	host.SetGuardrailLLMEnabled(guardrailLLMEnabled(endpointConfigCache.Current()))
 
 	policyCtx, stopPolicyRefresh := context.WithCancel(ctx)
 	var background sync.WaitGroup
@@ -298,7 +273,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Interval:       opts.EndpointConfigRefreshInterval,
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot))
-			host.SetGuardrailLLMEnabled(guardrailLLMEnabled(snapshot))
 		},
 	}
 	background.Add(1)
@@ -405,22 +379,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 }
 
-func judgeConfigFromEnv() (bool, error) {
-	judgeURL := strings.TrimSpace(os.Getenv("KONTEXT_JUDGE_URL"))
-	judgeModel := strings.TrimSpace(os.Getenv("KONTEXT_JUDGE_MODEL"))
-	judgeManaged := strings.TrimSpace(os.Getenv("KONTEXT_JUDGE_MANAGED"))
-	if judgeManaged != "" {
-		managed, err := strconv.ParseBool(judgeManaged)
-		if err != nil {
-			return false, fmt.Errorf("KONTEXT_JUDGE_MANAGED must be a boolean: %w", err)
-		}
-		if managed {
-			return true, nil
-		}
-	}
-	return judgeURL != "" && judgeModel != "", nil
-}
-
 func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.RuntimeConfiguration {
 	return payloadcapture.SafeRuntimeConfiguration(payloadcapture.RuntimeConfiguration{
 		ConfiguredMode: snapshot.Configured.PayloadCaptureMode,
@@ -429,20 +387,6 @@ func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.Runti
 		Confirmed:      snapshot.Confirmed,
 		FallbackReason: snapshot.FallbackReason,
 	})
-}
-
-// guardrailLLMEnabled reads the org's guardrail kill switch off the same
-// endpoint configuration that carries payload capture.
-//
-// It reads GuardrailLLMDirective, which is the last value the org set
-// explicitly, rather than either Config or Configured. Config is the effective
-// configuration and falls back to defaults while unconfirmed, so reading it
-// would re-enable a disabled LLM on every restart before reconfirmation.
-// Configured is closer but still only reflects the current response, so a
-// response that merely omits the field — a rollback to a build without it, say —
-// would clear a deliberate off. A kill switch has to survive both.
-func guardrailLLMEnabled(snapshot endpointconfig.Snapshot) bool {
-	return riskclassifier.ResolveLLMEnabled(snapshot.GuardrailLLMDirective)
 }
 
 func requireManagedHooksForLegacyCowork(cfg managedconfig.Config, scope managedconfig.Scope) error {

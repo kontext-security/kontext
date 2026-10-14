@@ -16,9 +16,6 @@ import (
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/app/server"
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
-	"github.com/kontext-security/kontext/internal/guard/judge"
-	"github.com/kontext-security/kontext/internal/guard/judgeruntime"
-	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
@@ -27,19 +24,17 @@ import (
 )
 
 type Options struct {
-	AgentName             string
-	SessionID             string
-	CWD                   string
-	DBPath                string
-	SocketPath            string
-	JudgeConfigFromEnv    bool
-	JudgeDownloadProgress judge.DownloadProgressHandler
-	CedarPolicies         cedarpolicy.SnapshotProvider
-	CedarEnforcement      server.CedarEnforcementSource
-	Mode                  guardhookruntime.Mode
-	Diagnostic            diagnostic.Logger
-	SkipInitialSession    bool
-	DisableAsyncIngest    bool
+	AgentName          string
+	SessionID          string
+	CWD                string
+	DBPath             string
+	SocketPath         string
+	CedarPolicies      cedarpolicy.SnapshotProvider
+	CedarEnforcement   server.CedarEnforcementSource
+	Mode               guardhookruntime.Mode
+	Diagnostic         diagnostic.Logger
+	SkipInitialSession bool
+	DisableAsyncIngest bool
 	// AsyncDecisionRecording answers decision-gating hooks (PreToolUse) as
 	// soon as the policy verdict is settled and runs every store write —
 	// session upsert, annotation, decision row — in the background,
@@ -52,18 +47,14 @@ type Options struct {
 }
 
 type Host struct {
-	SessionID             string
-	SessionDir            string
-	SocketPath            string
-	DBPath                string
-	LocalJudgeStatus      string
-	LocalJudgeEnabled     bool
-	LocalJudgeUnavailable bool
-	Mode                  guardhookruntime.Mode
+	SessionID  string
+	SessionDir string
+	SocketPath string
+	DBPath     string
+	Mode       guardhookruntime.Mode
 
 	server           *server.Server
 	closeStore       func() error
-	closeJudge       func()
 	closeStepSafety  func() error
 	runtimeService   *localruntime.Service
 	sessionOpened    bool
@@ -100,34 +91,8 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		return nil, fmt.Errorf("create runtime data dir: %w", err)
 	}
 
-	closeJudge := func() {}
-	var localJudge judge.Judge
-	var judgeStatus string
-	var judgeRuntime judgeruntime.Runtime
-	if opts.JudgeConfigFromEnv {
-		judgeConfig, err := judgeruntime.ConfigFromEnv(dbPath)
-		if err != nil {
-			return nil, err
-		}
-		judgeConfig.DownloadProgress = opts.JudgeDownloadProgress
-		judgeRuntime, err = judgeruntime.ConfigureRuntime(ctx, judgeConfig)
-		if err != nil {
-			return nil, err
-		}
-		localJudge = judgeRuntime.Judge
-		judgeStatus = judgeRuntime.Status
-		if judgeRuntime.Close != nil {
-			closeJudge = judgeRuntime.Close
-		}
-	}
-	classifierOpts, err := riskClassifierOptions(judgeRuntime)
-	if err != nil {
-		closeJudge()
-		return nil, err
-	}
 	stepSafetyConfig, err := stepsafety.ConfigFromEnv(dbPath)
 	if err != nil {
-		closeJudge()
 		return nil, err
 	}
 	stepSafety := stepsafety.New(ctx, stepSafetyConfig)
@@ -153,24 +118,21 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		deferRecord = recorder.Submit
 	}
 	localServer, closeStore, err := server.OpenDefaultServerWithOptions(dbPath, server.Options{
-		Judge:            localJudge,
 		CedarPolicies:    opts.CedarPolicies,
 		CedarEnforcement: opts.CedarEnforcement,
 		CurrentSessionID: serverSessionID,
 		Mode:             string(mode),
-		RiskClassifier:   classifierOpts,
+		RiskClassifier:   &server.RiskClassifierOptions{},
 		StepSafety:       stepSafety,
 		DeferRecord:      deferRecord,
 	})
 	if err != nil {
 		_ = closeStepSafety()
-		closeJudge()
 		return nil, err
 	}
 	if err := os.Chmod(dbPath, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
 		_ = closeStore()
 		_ = closeStepSafety()
-		closeJudge()
 		return nil, fmt.Errorf("secure runtime database: %w", err)
 	}
 
@@ -178,7 +140,6 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	if err := createSessionDir(sessionDir); err != nil {
 		_ = closeStore()
 		_ = closeStepSafety()
-		closeJudge()
 		return nil, err
 	}
 	socketPath := strings.TrimSpace(opts.SocketPath)
@@ -187,18 +148,14 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	}
 
 	host := &Host{
-		SessionID:             sessionID,
-		SessionDir:            sessionDir,
-		SocketPath:            socketPath,
-		DBPath:                dbPath,
-		LocalJudgeStatus:      judgeStatus,
-		LocalJudgeEnabled:     localJudge != nil,
-		LocalJudgeUnavailable: judge.IsUnavailable(localJudge),
-		Mode:                  mode,
-		server:                localServer,
-		closeStore:            closeStore,
-		closeJudge:            closeJudge,
-		closeStepSafety:       closeStepSafety,
+		SessionID:       sessionID,
+		SessionDir:      sessionDir,
+		SocketPath:      socketPath,
+		DBPath:          dbPath,
+		Mode:            mode,
+		server:          localServer,
+		closeStore:      closeStore,
+		closeStepSafety: closeStepSafety,
 	}
 	if recorder != nil {
 		host.drainRecords = recorder.Drain
@@ -248,29 +205,6 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	return host, nil
 }
 
-// riskClassifierOptions resolves the classifier's configuration. The SVM always
-// runs; KONTEXT_RISK_CLASSIFIER_MODE decides whether the guardrail LLM runs off
-// the hook path (default), on the decision path, or not at all. The LLM reuses
-// whatever local llama-server the judge configuration brought up.
-func riskClassifierOptions(judgeRuntime judgeruntime.Runtime) (*server.RiskClassifierOptions, error) {
-	mode, err := riskclassifier.ParseMode(os.Getenv("KONTEXT_RISK_CLASSIFIER_MODE"))
-	if err != nil {
-		return nil, err
-	}
-	gate := riskclassifier.NewLLMGate()
-	// An explicitly configured local mode is an override: a developer debugging
-	// their own machine must not be flipped by an org refresh.
-	if raw := strings.TrimSpace(os.Getenv("KONTEXT_RISK_CLASSIFIER_MODE")); raw != "" {
-		gate.PinLocal(mode.UsesLLM())
-	}
-	return &server.RiskClassifierOptions{
-		Mode:             mode,
-		GuardrailBaseURL: judgeRuntime.BaseURL,
-		GuardrailModel:   judgeRuntime.Model,
-		Gate:             gate,
-	}, nil
-}
-
 func clientResultTransform(mode guardhookruntime.Mode) func(hook.Event, hook.Result) hook.Result {
 	switch mode {
 	case guardhookruntime.ModeEnforce:
@@ -295,15 +229,6 @@ func (h *Host) SetPayloadCaptureConfiguration(config payloadcapture.RuntimeConfi
 		return
 	}
 	h.server.SetPayloadCaptureConfiguration(config)
-}
-
-// SetGuardrailLLMEnabled forwards the org's guardrail-LLM kill switch to the
-// classifier. Safe on a nil host (no-op).
-func (h *Host) SetGuardrailLLMEnabled(enabled bool) {
-	if h == nil || h.server == nil {
-		return
-	}
-	h.server.SetGuardrailLLMEnabled(enabled)
 }
 
 func (h *Host) Close(ctx context.Context) error {
@@ -344,10 +269,6 @@ func (h *Host) Close(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 		h.closeStepSafety = nil
-	}
-	if h.closeJudge != nil {
-		h.closeJudge()
-		h.closeJudge = nil
 	}
 	if h.SessionDir != "" {
 		if err := os.RemoveAll(h.SessionDir); err != nil {

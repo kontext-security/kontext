@@ -27,20 +27,8 @@ var sha256HexPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type Config struct {
 	PayloadCaptureMode payloadcapture.Mode `json:"payloadCaptureMode"`
-	// GuardrailLLMEnabled is the org's kill switch for the risk classifier's
-	// guardrail LLM. Optional, and absent means enabled — note this is the
-	// OPPOSITE default to PayloadCaptureMode, deliberately. Capture falls back
-	// to the privacy-safe "record nothing" whenever the configuration is
-	// unconfirmed; this flag exists only to turn the LLM off, so treating
-	// "unconfirmed" as off would let a transient fetch failure silently disable
-	// the classifier's second opinion with nobody noticing. Resolve it through
-	// riskclassifier.ResolveLLMEnabled rather than reading it directly.
-	//
-	// Required under v2 and part of the identity preimage, so a change to it alone
-	// produces a different ETag and is actually observed by a conditional refresh.
-	// It stays a pointer to keep "the server omitted this" distinguishable from
-	// "the server said false": the former is a contract violation Validate
-	// rejects, the latter is a directive to honour.
+	// GuardrailLLMEnabled remains part of the strict, hashed cloud contract.
+	// The CLI no longer runs a guardrail LLM.
 	GuardrailLLMEnabled *bool `json:"guardrailLlmEnabled"`
 }
 

@@ -1143,7 +1143,7 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 		"adapter_decision":          adapterDecisionValue,
 		"reason_code":               reasonCode,
 		"reason":                    reasonText,
-		"risk_level":                strings.ToUpper(riskEvent.JudgeRiskLevel),
+		"risk_level":                "",
 		"risk_score":                nullableFloat(decision.RiskScore),
 		"risk_threshold":            nullableFloat(decision.Threshold),
 		"model_version":             decision.ModelVersion,

@@ -2,7 +2,6 @@ package profile
 
 import (
 	"path/filepath"
-	"strings"
 )
 
 // A profile directory mirrors the legacy root layout entry for entry —
@@ -17,11 +16,7 @@ const (
 	// can say "staging · Acme Corp" instead of making a human recognize a
 	// backend hostname. It is a cache of what the hosted API reported at setup
 	// time, never an input to any decision.
-	WorkspaceFile = "workspace.json"
-	// ModelCacheDirName holds cached guardrail-LLM weights. It is machine-scoped
-	// and lives at the ROOT rather than inside a profile — see SharedDir. Named
-	// here because both the resolver and the migration need to agree on it.
-	ModelCacheDirName  = "judge-models"
+	WorkspaceFile      = "workspace.json"
 	keychainItemPrefix = "kontext-install-token"
 )
 
@@ -30,30 +25,6 @@ const (
 // database with its -wal/-shm siblings, the export cursor, and the policy
 // cache, so it moves as a directory rather than file by file.
 var MigratedEntries = []string{ManagedConfigFile, InstallationFile, ManagedObserveDir}
-
-// SharedDir returns <root>/<name> when insidePath lies within this root's
-// profiles tree, and "" otherwise.
-//
-// It exists for machine-scoped artifacts that must NOT be duplicated per
-// profile. Cached model weights are the motivating case: they are hundreds of
-// megabytes, identical for every workspace, and their location is derived from
-// the ledger database's directory — which profiles made per-profile. Without
-// hoisting, adding a profile would silently re-download them.
-//
-// Returning "" for anything outside the profiles tree keeps `kontext guard`,
-// whose database lives elsewhere, on exactly its existing layout.
-func SharedDir(insidePath, name string) string {
-	root := Root()
-	parent := ProfilesDir()
-	if root == "" || parent == "" || insidePath == "" {
-		return ""
-	}
-	rel, err := filepath.Rel(parent, insidePath)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return ""
-	}
-	return filepath.Join(root, name)
-}
 
 // LegacyPath resolves a root-relative name in the PRE-profile layout, where
 // state sat directly under the root rather than under profiles/<name>/.

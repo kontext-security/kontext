@@ -64,7 +64,8 @@ create index if not exists idx_risk_classifier_verdicts_action
 on risk_classifier_verdicts(action_id);
 `
 
-// classifierVerdictColumns is every column the current code reads and writes.
+// classifierVerdictColumns preserves the existing schema, including unused llm_*
+// columns, so upgrading does not change the database layout.
 // "create table if not exists" is a no-op on a database that already has the
 // table from an earlier build, so a column added after the table shipped would
 // be missing while inserts and selects reference it unconditionally — verdicts
@@ -125,29 +126,19 @@ func (s *Store) SaveClassifierVerdict(ctx context.Context, record riskclassifier
 		svmThreshold = record.SVM.Threshold
 		svmModelVersion = record.SVM.ModelVersion
 	}
-	var llmVerdict, llmRaw, llmModel, llmPromptID, llmDurationMs any
-	llmCached := false
-	if record.LLM != nil {
-		llmVerdict = record.LLM.Verdict
-		llmRaw = record.LLM.Raw
-		llmModel = record.LLM.Model
-		llmPromptID = nullIfEmpty(record.LLM.PromptID)
-		llmDurationMs = record.LLM.DurationMs
-		llmCached = record.LLM.Cached
-	}
 	_, err := s.db.ExecContext(ctx, `
 insert into risk_classifier_verdicts(
   id, action_id, session_id, tool_use_id, agent,
   command_redacted, command_hash, command_truncated, agent_task,
   svm_verdict, svm_score, svm_threshold, svm_model_version,
-  llm_verdict, llm_raw, llm_model, llm_prompt_id, llm_duration_ms, llm_cached, llm_error, risk_type_error,
+  risk_type_error,
   enforced, user_feedback, created_at
-) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		stored.ID, record.ActionID, record.SessionID, nullIfEmpty(record.ToolUseID), nullIfEmpty(record.Agent),
 		record.Command, record.CommandHash, record.CommandTruncated, nullIfEmpty(record.AgentTask),
 		svmVerdict, svmScore, svmThreshold, svmModelVersion,
-		llmVerdict, llmRaw, llmModel, llmPromptID, llmDurationMs, llmCached, nullIfEmpty(record.LLMError), nullIfEmpty(record.RiskTypeError),
+		nullIfEmpty(record.RiskTypeError),
 		record.Enforced, nullIfEmpty(record.UserFeedback), record.CreatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -224,7 +215,7 @@ const classifierVerdictSelect = `
 select id, action_id, session_id, coalesce(tool_use_id, ''), coalesce(agent, ''),
   command_redacted, command_hash, command_truncated, coalesce(agent_task, ''),
   svm_verdict, svm_score, svm_threshold, svm_model_version,
-  llm_verdict, llm_raw, llm_model, coalesce(llm_prompt_id, ''), llm_duration_ms, llm_cached, coalesce(llm_error, ''), coalesce(risk_type_error, ''),
+  coalesce(risk_type_error, ''),
   enforced, coalesce(user_feedback, ''), feedback_at, created_at
 from risk_classifier_verdicts
 `
@@ -233,17 +224,13 @@ func scanClassifierVerdict(scanner interface{ Scan(...any) error }) (ClassifierV
 	var record ClassifierVerdictRecord
 	var svmVerdict, svmModelVersion sql.NullString
 	var svmScore, svmThreshold sql.NullFloat64
-	var llmVerdict, llmRaw, llmModel sql.NullString
-	var llmPromptID string
-	var llmDurationMs sql.NullInt64
-	var llmCached bool
 	var feedbackAt sql.NullString
 	var created string
 	if err := scanner.Scan(
 		&record.ID, &record.ActionID, &record.SessionID, &record.ToolUseID, &record.Agent,
 		&record.Command, &record.CommandHash, &record.CommandTruncated, &record.AgentTask,
 		&svmVerdict, &svmScore, &svmThreshold, &svmModelVersion,
-		&llmVerdict, &llmRaw, &llmModel, &llmPromptID, &llmDurationMs, &llmCached, &record.LLMError, &record.RiskTypeError,
+		&record.RiskTypeError,
 		&record.Enforced, &record.UserFeedback, &feedbackAt, &created,
 	); err != nil {
 		return ClassifierVerdictRecord{}, err
@@ -254,16 +241,6 @@ func scanClassifierVerdict(scanner interface{ Scan(...any) error }) (ClassifierV
 			Score:        svmScore.Float64,
 			Threshold:    svmThreshold.Float64,
 			ModelVersion: svmModelVersion.String,
-		}
-	}
-	if llmVerdict.Valid {
-		record.LLM = &riskclassifier.LLMVerdict{
-			Verdict:    llmVerdict.String,
-			Raw:        llmRaw.String,
-			Model:      llmModel.String,
-			PromptID:   llmPromptID,
-			DurationMs: llmDurationMs.Int64,
-			Cached:     llmCached,
 		}
 	}
 	if feedbackAt.Valid && feedbackAt.String != "" {

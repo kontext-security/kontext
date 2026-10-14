@@ -4,12 +4,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kontext-security/kontext/internal/setup"
-	"github.com/kontext-security/kontext/internal/startupui"
 )
 
 func setupCmd() *cobra.Command {
 	var token, cloudURL string
-	var uninstall, withLocalLLM, tokenStdin bool
+	var uninstall, tokenStdin bool
 	var allowHTTPLoopback bool
 	cmd := &cobra.Command{
 		Use:           "setup",
@@ -23,10 +22,6 @@ in your login keychain, installs hooks for supported local agents, and starts
 a background agent that streams agent activity to your workspace.
 
 Merlin provides local advisory assessment by default. It does not block tool calls.
-The separate local guardrail LLM is optional and off by default.
-Pass --with-local-llm to opt in — setup then
-checks llama-server is installed, downloads the weights (~680 MB) while you
-watch, and tells the background agent to run it.
 
 Re-running setup is safe, and never overwrites an existing workspace. A token
 for the workspace this Mac is already connected to rotates the stored token
@@ -47,10 +42,6 @@ itself stays — it is managed by Homebrew).`,
 				TokenFromStdin:    tokenStdin,
 				Stdout:            cmd.OutOrStdout(),
 				Stderr:            cmd.ErrOrStderr(),
-				WithLocalLLM:      withLocalLLM,
-			}
-			if withLocalLLM {
-				opts.ModelDownloadProgress = startupui.New(cmd.OutOrStdout()).HandleDownloadProgress
 			}
 			if uninstall {
 				return setup.Uninstall(cmd.Context(), opts)
@@ -62,7 +53,6 @@ itself stays — it is managed by Homebrew).`,
 	cmd.Flags().StringVar(&cloudURL, "cloud-url", setup.CloudURL(), "Kontext cloud URL")
 	cmd.Flags().BoolVar(&tokenStdin, "token-stdin", false, "read the install token from stdin, so it never appears in the process list")
 	cmd.Flags().BoolVar(&uninstall, "uninstall", false, "remove the self-serve managed install from this Mac")
-	cmd.Flags().BoolVar(&withLocalLLM, "with-local-llm", false, "also run the local guardrail LLM (requires llama-server on PATH; downloads ~680 MB of weights)")
 	cmd.Flags().BoolVar(&allowHTTPLoopback, "allow-http-loopback", false, "accept a plaintext http cloud URL pointing at localhost (local development)")
 	_ = cmd.Flags().MarkHidden("cloud-url")
 	_ = cmd.Flags().MarkHidden("allow-http-loopback")

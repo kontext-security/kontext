@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -21,7 +20,6 @@ const (
 	storedTaskMaxBytes = 2048
 
 	promptCacheSize = 256
-	llmCacheSize    = 512
 )
 
 // Redactor masks credential material before text is persisted.
@@ -32,8 +30,6 @@ type Redactor func(string) string
 // first and only then attaches this.
 type Verdicts struct {
 	SVM           *SVMVerdict
-	LLM           *LLMVerdict
-	LLMError      string
 	RiskTypes     *RiskTypeVerdict
 	RiskTypeError string
 
@@ -54,55 +50,29 @@ type ClassifierOptions struct {
 	RiskTypes     *RiskTypeSVM // optional; nil leaves the second stage absent
 	RiskTypeError string       // optional load failure retained for eligible rows
 	Redact        Redactor     // required
-	Guardrail     *Guardrail   // optional; nil records the SVM alone
-	// LLMEnabled reports whether the guardrail may run. Consulted per call so
-	// a remote kill switch takes effect without a restart. Nil means enabled.
-	LLMEnabled func() bool
 }
 
-// Classifier scores intercepted bash commands. It runs synchronously in the
-// decision path, so every guardrail call is bounded by a timeout, a circuit
-// breaker, and a readiness probe — an unhealthy or still-loading sidecar must
-// cost a tool call nothing.
-//
-// The binary SVM is embedded and effectively free (~12µs), so it always runs.
-// The native risk-type SVM is gated to its eligible subset. The guardrail is
-// the expensive, failable half and has its own configuration/readiness gates.
+// Classifier scores commands with the embedded binary SVM and risk-type SVM.
 type Classifier struct {
 	svm           *SVM
 	riskTypes     *RiskTypeSVM
 	riskTypeError string
 	redact        Redactor
-	guardrail     *Guardrail
-	llmEnabled    func() bool
 
-	breaker  *breaker
-	prompts  *lruCache[string]
-	llmCache *lruCache[LLMVerdict]
-
-	// llmSkipped counts calls that shed the guardrail (breaker open, not ready,
-	// or remotely disabled), for diagnostics.
-	llmSkipped atomic.Int64
+	prompts *lruCache[string]
 }
 
 func NewClassifier(opts ClassifierOptions) *Classifier {
 	if opts.SVM == nil || opts.Redact == nil {
 		return nil
 	}
-	classifier := &Classifier{
+	return &Classifier{
 		svm:           opts.SVM,
 		riskTypes:     opts.RiskTypes,
 		riskTypeError: opts.RiskTypeError,
 		redact:        opts.Redact,
-		guardrail:     opts.Guardrail,
-		llmEnabled:    opts.LLMEnabled,
 		prompts:       newLRUCache[string](promptCacheSize),
-		llmCache:      newLRUCache[LLMVerdict](llmCacheSize),
 	}
-	if opts.Guardrail != nil {
-		classifier.breaker = newBreaker(opts.Guardrail.readinessProbe())
-	}
-	return classifier
 }
 
 // RecordPrompt remembers a session's latest user prompt, redacted, so
@@ -114,20 +84,11 @@ func (c *Classifier) RecordPrompt(sessionID, prompt string) {
 	c.prompts.set(sessionID, truncateAtRuneBoundary(c.redact(prompt), storedTaskMaxBytes))
 }
 
-// LLMSkipped reports how many commands ran without a guardrail verdict because
-// it was shed or disabled.
-func (c *Classifier) LLMSkipped() int64 {
-	if c == nil {
-		return 0
-	}
-	return c.llmSkipped.Load()
-}
-
 // Classify annotates one command. It runs for every decision outcome; the
 // caller has already decided by the time this is called. toolName is kept at
 // this boundary so the risk-type stage can require an explicit shell tool — a
 // command-shaped field on apply_patch is not shell execution.
-func (c *Classifier) Classify(ctx context.Context, sessionID, toolName, command string) Verdicts {
+func (c *Classifier) Classify(_ context.Context, sessionID, toolName, command string) Verdicts {
 	if c == nil || strings.TrimSpace(command) == "" {
 		return Verdicts{}
 	}
@@ -158,7 +119,6 @@ func (c *Classifier) Classify(ctx context.Context, sessionID, toolName, command 
 		AgentTask:        c.agentTask(sessionID),
 	}
 	c.attachRiskTypes(toolName, command, svmVerdict, &verdicts)
-	c.attachLLM(ctx, command, &verdicts)
 	return verdicts
 }
 
@@ -183,39 +143,6 @@ func (c *Classifier) attachRiskTypes(toolName, command string, svmVerdict SVMVer
 	verdicts.RiskTypes = &verdict
 }
 
-func (c *Classifier) attachLLM(ctx context.Context, command string, verdicts *Verdicts) {
-	switch {
-	case c.guardrail == nil:
-		verdicts.LLMError = "guardrail not configured"
-		return
-	case c.llmEnabled != nil && !c.llmEnabled():
-		c.llmSkipped.Add(1)
-		verdicts.LLMError = "skipped: guardrail disabled by configuration"
-		return
-	}
-
-	key := NormalizeCommand(command)
-	if cached, ok := c.llmCache.get(key); ok {
-		cached.Cached = true
-		verdicts.LLM = &cached
-		return
-	}
-	if !c.breaker.allow(ctx) {
-		c.llmSkipped.Add(1)
-		verdicts.LLMError = ErrLLMUnavailable.Error()
-		return
-	}
-	verdict, err := c.guardrail.Classify(ctx, command)
-	if err != nil {
-		c.breaker.fail()
-		verdicts.LLMError = err.Error()
-		return
-	}
-	c.breaker.succeed()
-	verdicts.LLM = &verdict
-	c.llmCache.set(key, verdict)
-}
-
 // agentTask returns the session's latest prompt, empty when none was observed.
 // Reading counts as use in the LRU, so a session actively issuing commands is
 // not evicted in favour of an idle one.
@@ -237,9 +164,7 @@ func truncateAtRuneBoundary(s string, max int) string {
 	return s[:cut]
 }
 
-// lruCache is a minimal LRU keyed by string. Verbatim command repeats are
-// common — agents rerun the same build or test command constantly — and reusing
-// a verdict avoids an inference the answer cannot differ from.
+// lruCache bounds the retained session prompts.
 type lruCache[V any] struct {
 	mu      sync.Mutex
 	max     int

@@ -100,3 +100,14 @@ func TestOversizedCommandsStayDistinguishable(t *testing.T) {
 		t.Error("two different long commands share a hash")
 	}
 }
+
+func TestTruncateAtRuneBoundary(t *testing.T) {
+	s := strings.Repeat("a", 3999) + "日本"
+	got := truncateAtRuneBoundary(s, 4000)
+	if len(got) != 3999 {
+		t.Fatalf("truncated len = %d, want 3999", len(got))
+	}
+	if !strings.HasSuffix(got, "a") {
+		t.Fatalf("truncation split a rune: %q", got[len(got)-4:])
+	}
+}
