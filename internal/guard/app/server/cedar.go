@@ -491,12 +491,17 @@ func applyCedarDecision(decision *risk.RiskDecision, mapping cedareval.DecisionM
 
 // cedarDecisionReason names the forbid rule (its @id) behind an enforced
 // deny, which is what the agent and the operator see in the hook message.
-// Denies without a rule (enforcement not ready, engine errors, unavailable
-// ask) keep the generic wording.
+// Denies without a rule (default deny, unavailable ask) keep the generic
+// wording. An allow that Cedar did not decide says why it allowed.
 func cedarDecisionReason(mapping cedareval.DecisionMapping) string {
 	if mapping.EffectiveExecutionAction != cedareval.EffectiveExecutionActionDeny {
-		if mapping.EvaluationState == cedareval.EvaluationStateFailed {
+		switch {
+		case mapping.EvaluationState == cedareval.EvaluationStateFailed:
 			return "Policy evaluation failed; allowing tool call"
+		case mapping.EffectiveReasonCode == cedareval.ReasonEnforcementNotReady:
+			return "Policy not ready; allowing tool call"
+		case mapping.EvaluationState == cedareval.EvaluationStatePrincipalUnresolved:
+			return "Principal unresolved; allowing tool call"
 		}
 		return "local Cedar policy decision"
 	}
@@ -505,13 +510,11 @@ func cedarDecisionReason(mapping cedareval.DecisionMapping) string {
 		return "Blocked by rule " + strings.Join(mapping.DeterminingPolicyIDs, ", ")
 	}
 	// A deny with no forbid rule to name: the effective reason code already
-	// tells default-deny, an unavailable approval, a not-ready policy and an
-	// evaluation failure apart, so the message should too.
+	// tells default-deny, an unavailable approval and an evaluation failure
+	// apart, so the message should too.
 	switch mapping.EffectiveReasonCode {
 	case cedareval.ReasonAskUnavailable:
 		return "Approval required but unavailable"
-	case cedareval.ReasonEnforcementNotReady:
-		return "Cedar enforcement is not ready"
 	case cedareval.ReasonDefaultDeny:
 		return "No policy permits this action"
 	case cedareval.ReasonEngineError, cedareval.ReasonRequestConversionFailed,
