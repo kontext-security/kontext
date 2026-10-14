@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -61,9 +62,13 @@ type LedgerPruneOptions struct {
 //
 // It never deletes an action with an annotation still waiting for upload
 // (the annotation export needs the action row), or the newest receipt, which
-// the next receipt chains from. Selection and deletes run in one IMMEDIATE
-// transaction, so no annotation can be written in between. Freed pages are
-// reused; the file is not shrunk.
+// the next receipt chains from. Candidates are found without the write lock,
+// then re-checked and deleted in one IMMEDIATE transaction, so the lock is
+// held for at most opts.Limit lookups and an annotation written meanwhile
+// still keeps its action. Risk-type annotations insert only while their
+// action exists; step-safety verdicts are written for actions being decided
+// now, never for ones old enough to prune. Freed pages are reused; the file
+// is not shrunk.
 func (s *Store) PruneExportedLedger(ctx context.Context, opts LedgerPruneOptions) (int, error) {
 	if opts.Limit <= 0 || opts.MaxRowBytes <= 0 || opts.ActionsExportedBefore.IsZero() || opts.OlderThan.IsZero() {
 		return 0, nil
@@ -72,7 +77,7 @@ func (s *Store) PruneExportedLedger(ctx context.Context, opts LedgerPruneOptions
 	if opts.OlderThan.Before(before) {
 		before = opts.OlderThan
 	}
-	query := `select a.id from authorization_actions a
+	eligible := `select a.id from authorization_actions a
 where a.updated_at_cursor_key < ?
   and not exists (select 1 from ledger_export_skips skip where skip.action_id = a.id)
   and (select count(*) = coalesce(max(r.rowid) - min(r.rowid) + 1, 0) from authorization_receipts r where r.action_id = a.id)
@@ -101,18 +106,23 @@ where a.updated_at_cursor_key < ?
 			condition += " and annotation.created_at > ?"
 			args = append(args, pending.createdAt.UTC().Format(time.RFC3339Nano))
 		}
-		query += condition + ")"
+		eligible += condition + ")"
 	}
-	query += "\norder by a.updated_at_cursor_key, a.id\nlimit ?"
-	args = append(args, opts.Limit)
+	// WAL readers never block writers, so walking past rows kept forever
+	// costs the hook path nothing here.
+	candidates, err := queryStrings(ctx, s.db, eligible+"\norder by a.updated_at_cursor_key, a.id\nlimit ?", append(slices.Clone(args), opts.Limit)...)
+	if err != nil || len(candidates) == 0 {
+		return 0, err
+	}
+	pruneCandidatesFound()
 
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer conn.Close()
-	// IMMEDIATE takes the write lock before reading, so the eligibility seen
-	// here still holds when the rows are deleted.
+	// IMMEDIATE takes the write lock before the re-check, so the eligibility
+	// seen there still holds when the rows are deleted.
 	if _, err := conn.ExecContext(ctx, "begin immediate"); err != nil {
 		return 0, err
 	}
@@ -122,30 +132,44 @@ where a.updated_at_cursor_key < ?
 			_, _ = conn.ExecContext(context.WithoutCancel(ctx), "rollback")
 		}
 	}()
-	ids, err := queryStrings(ctx, conn, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	for _, chunk := range stringChunks(ids) {
+	deleted := 0
+	for _, chunk := range stringChunks(candidates) {
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")
-		args := make([]any, 0, len(chunk))
+		chunkArgs := make([]any, 0, len(chunk))
 		for _, id := range chunk {
-			args = append(args, id)
+			chunkArgs = append(chunkArgs, id)
+		}
+		ids, err := queryStrings(ctx, conn, eligible+fmt.Sprintf("\n  and a.id in (%s)", placeholders), append(slices.Clone(args), chunkArgs...)...)
+		if err != nil {
+			return 0, err
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		placeholders = strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+		idArgs := make([]any, 0, len(ids))
+		for _, id := range ids {
+			idArgs = append(idArgs, id)
 		}
 		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`delete from authorization_receipts where action_id in (%s)
-  and rowid < (select max(rowid) from authorization_receipts)`, placeholders), args...); err != nil {
+  and rowid < (select max(rowid) from authorization_receipts)`, placeholders), idArgs...); err != nil {
 			return 0, err
 		}
-		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`delete from authorization_actions where id in (%s)`, placeholders), args...); err != nil {
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`delete from authorization_actions where id in (%s)`, placeholders), idArgs...); err != nil {
 			return 0, err
 		}
+		deleted += len(ids)
 	}
 	if _, err := conn.ExecContext(ctx, "commit"); err != nil {
 		return 0, err
 	}
 	committed = true
-	return len(ids), nil
+	return deleted, nil
 }
+
+// pruneCandidatesFound lets tests write between finding candidates and
+// re-checking them under the write lock.
+var pruneCandidatesFound = func() {}
 
 // storedBytes sums the stored length of every column an export select reads,
 // so the size guard cannot drift from what an upload carries.

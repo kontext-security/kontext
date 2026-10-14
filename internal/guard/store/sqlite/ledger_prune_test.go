@@ -145,3 +145,49 @@ func TestPruneExportedLedgerRequiresCursorAndHonorsLimit(t *testing.T) {
 		t.Fatalf("oldest rows must go first: %v %v", actions, err)
 	}
 }
+
+func TestPruneExportedLedgerRechecksCandidatesUnderLock(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	base := time.Now().UTC().Add(-60 * 24 * time.Hour)
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"act_annotated_meanwhile", "act_plain"} {
+		insertLedgerTestAction(t, tx, id, base.Add(time.Duration(i)*time.Second))
+		insertLedgerTestReceipt(t, tx, "rcpt_"+id, id, base.Add(time.Duration(i)*time.Second))
+	}
+	insertLedgerTestReceipt(t, tx, "rcpt_head", "act_plain", base.Add(time.Minute))
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// An enrichment run annotates an old action after it was picked as a
+	// candidate; the annotation is not exported yet.
+	t.Cleanup(func() { pruneCandidatesFound = func() {} })
+	pruneCandidatesFound = func() {
+		if _, err := store.db.ExecContext(ctx, `insert into risk_type_annotations(id, action_id, session_id, command_hash, input_kind, schema_version, model_version, annotation_json, created_at)
+values('rta_new', 'act_annotated_meanwhile', 'session-1', 'h', 'shell', 'v1', 'm1', '{}', ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exported := base.Add(time.Hour)
+	pruned, err := store.PruneExportedLedger(ctx, LedgerPruneOptions{
+		ActionsExportedBefore: time.Now(),
+		RiskTypeCreatedAfter:  &exported,
+		OlderThan:             time.Now().Add(-30 * 24 * time.Hour),
+		MaxRowBytes:           1 << 20,
+		Limit:                 10,
+	})
+	if err != nil || pruned != 1 {
+		t.Fatalf("pruned %d, err %v; want only act_plain", pruned, err)
+	}
+	actions, err := queryStrings(ctx, store.db, `select id from authorization_actions`)
+	if err != nil || !slices.Equal(actions, []string{"act_annotated_meanwhile"}) {
+		t.Fatalf("remaining actions = %v, err %v", actions, err)
+	}
+}
