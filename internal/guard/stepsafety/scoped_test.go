@@ -68,7 +68,7 @@ func TestScopedAuthorizationAndBounds(t *testing.T) {
 }
 
 func TestScopedConcurrentInference(t *testing.T) {
-	b, e := newNativeBackend(context.Background(), normalizeConfig(Config{}))
+	b, e := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: nativeTestStartupTimeout}))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -100,7 +100,7 @@ func TestScopedRuntimeProfile(t *testing.T) {
 	if os.Getenv("KONTEXT_MERLIN_BENCHMARK") != "1" {
 		t.Skip("explicit benchmark opt-in")
 	}
-	b, e := newNativeBackend(context.Background(), normalizeConfig(Config{}))
+	b, e := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: nativeTestStartupTimeout}))
 	if e != nil {
 		t.Fatal(e)
 	}

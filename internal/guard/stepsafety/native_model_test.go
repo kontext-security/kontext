@@ -11,12 +11,17 @@ import (
 	"time"
 )
 
+// Budgets for tests that run the embedded model. They do not change the
+// production deadlines.
+const (
+	nativeTestStartupTimeout = 2 * time.Minute * raceSlowdown
+	nativeTestTimeout        = 5 * time.Second * raceSlowdown
+)
+
 func nativeTestModel(t *testing.T) (*nativeModel, *tokenizer) {
 	t.Helper()
 	started := time.Now()
-	// Race instrumentation walks the large checkpoint much more slowly than
-	// release builds. This test budget does not change the production deadline.
-	backend, err := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: 2 * time.Minute}))
+	backend, err := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: nativeTestStartupTimeout}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,8 +112,8 @@ func TestNativeEmbeddedWorksWithoutInstalledFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Timeout = 5 * time.Second
-	cfg.StartupTimeout = 2 * time.Minute
+	cfg.Timeout = nativeTestTimeout
+	cfg.StartupTimeout = nativeTestStartupTimeout
 	e := New(context.Background(), cfg)
 	defer e.Close()
 	h := e.Health(context.Background())
@@ -132,11 +137,11 @@ func TestNativeEmbeddedWorksWithoutInstalledFiles(t *testing.T) {
 }
 
 func TestNativeCancellationReleasesSlot(t *testing.T) {
-	b, err := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: 2 * time.Minute}))
+	b, err := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: nativeTestStartupTimeout}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := NewWithBackend(b, 5*time.Second, 1, ModelVersion)
+	e := NewWithBackend(b, nativeTestTimeout, 1, ModelVersion)
 	defer e.Close()
 	input := Input{UserRequest: "What is the file size?", ToolName: "delete_file", ToolArguments: map[string]any{"file_id": "a"}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
