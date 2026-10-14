@@ -18,6 +18,23 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
+# Sign the macOS binaries with the Developer ID certificate and notarize them,
+# so Gatekeeper accepts them when a Homebrew cask or a browser download
+# quarantines the file. Off until the MACOS_* secrets exist, so releases keep
+# shipping (ad-hoc signed, as before) until then. Runs on Linux via quill.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      sign:
+        certificate: "{{.Env.MACOS_SIGN_P12}}"
+        password: "{{.Env.MACOS_SIGN_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.MACOS_NOTARY_ISSUER_ID}}"
+        key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
+        key: "{{.Env.MACOS_NOTARY_KEY}}"
+        wait: true
+        timeout: 20m
+
 archives:
   - format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
