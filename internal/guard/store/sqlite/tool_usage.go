@@ -229,7 +229,8 @@ func fingerprintTranscript(info fs.FileInfo) (string, error) {
 // readToolTranscript parses a transcript without touching the database, so
 // no write lock is held during file I/O. The returned fingerprint describes
 // the file that was actually read. Every record a full read would return is
-// returned, so unchanged ones keep their revision through saveToolUsage.
+// returned, so unchanged ones keep their revision through
+// saveChangedToolUsage.
 func readToolTranscript(src toolUsageSource, now time.Time) (string, []modelusage.Record, error) {
 	f, err := os.Open(src.path)
 	if err != nil {
@@ -378,11 +379,10 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 			}
 			continue
 		}
-		for _, record := range update.records {
-			if err := saveToolUsage(ctx, tx, src.agent, record); err != nil {
-				return err
-			}
-		}
+		// The source row is written before any record is read. A deferred
+		// transaction that reads first takes the write lock as an upgrade,
+		// which SQLite refuses with SQLITE_BUSY at once instead of waiting
+		// out busy_timeout.
 		if update.read {
 			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=?, error=?, error_fingerprint=? where session_id=? and transcript_path=?`,
 				checkedAt, update.fingerprint, update.message, update.errorFingerprint, src.session, src.path)
@@ -393,13 +393,68 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 		if err != nil {
 			return err
 		}
+		if err := saveChangedToolUsage(ctx, tx, src, update.records); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
+}
+
+// saveChangedToolUsage saves a source's records as saveToolUsage would, but
+// issues no statement for a record already stored with the same agent and
+// payload. A pass returns every record of the transcript, and a no-op upsert
+// per record was most of a pass's CPU. The session's rows are read inside tx
+// after its earlier writes and kept current with this source's own, so a
+// record is compared with what saveToolUsage would see, including one that
+// another transcript of the same session saved earlier in the pass.
+func saveChangedToolUsage(ctx context.Context, tx *sql.Tx, src toolUsageSource, records []modelusage.Record) error {
+	if len(records) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `select message_id, agent, payload from tool_usage_records where session_id=?`, src.session)
+	if err != nil {
+		return err
+	}
+	stored := map[toolUsageKey]toolUsageRow{}
+	for rows.Next() {
+		key, row := toolUsageKey{session: src.session}, toolUsageRow{}
+		if err := rows.Scan(&key.message, &row.agent, &row.payload); err != nil {
+			rows.Close()
+			return err
+		}
+		stored[key] = row
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, record := range records {
+		if !record.ToolRelated() {
+			continue
+		}
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		key, row := toolUsageKey{record.SessionID, record.MessageID}, toolUsageRow{src.agent, string(data)}
+		if stored[key] == row {
+			continue
+		}
+		if err := writeToolUsage(ctx, tx, key, row); err != nil {
+			return err
+		}
+		stored[key] = row
+	}
+	return nil
 }
 
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
+
+// toolUsageKey is a record's identity in tool_usage_records.
+type toolUsageKey struct{ session, message string }
+
+type toolUsageRow struct{ agent, payload string }
 
 func (s *Store) SaveToolUsage(ctx context.Context, agent string, record modelusage.Record) error {
 	return saveToolUsage(ctx, s.db, agent, record)
@@ -413,14 +468,18 @@ func saveToolUsage(ctx context.Context, db execer, agent string, record modelusa
 	if err != nil {
 		return err
 	}
+	return writeToolUsage(ctx, db, toolUsageKey{record.SessionID, record.MessageID}, toolUsageRow{agent, string(data)})
+}
+
+func writeToolUsage(ctx context.Context, db execer, key toolUsageKey, row toolUsageRow) error {
 	// REPLACE allocates a fresh monotonically increasing revision only when
 	// counters, associations, or agent metadata change. The agent comparison
 	// detects a metadata correction; it does not identify a separate request.
 	// A concurrent upload acknowledges its exact revision, so it cannot clear
 	// a newer pending snapshot.
-	_, err = db.ExecContext(ctx, `insert or replace into tool_usage_records(session_id,message_id,agent,payload)
+	_, err := db.ExecContext(ctx, `insert or replace into tool_usage_records(session_id,message_id,agent,payload)
  select ?,?,?,? where not exists(select 1 from tool_usage_records where session_id=? and message_id=? and agent=? and payload=?)`,
-		record.SessionID, record.MessageID, agent, string(data), record.SessionID, record.MessageID, agent, string(data))
+		key.session, key.message, row.agent, row.payload, key.session, key.message, row.agent, row.payload)
 	return err
 }
 
