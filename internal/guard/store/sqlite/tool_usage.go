@@ -22,6 +22,7 @@ create table if not exists tool_usage_sources (
  session_id text not null, transcript_path text not null, agent text not null,
  last_seen text not null, checked_at text not null default '',
  fingerprint text not null default '', error text not null default '',
+ error_fingerprint text not null default '',
  primary key(session_id, transcript_path)
 );
 create table if not exists tool_usage_records (
@@ -89,6 +90,8 @@ const (
 
 type toolUsageSource struct {
 	session, path, agent, lastSeen, checkedAt, fingerprint, message string
+	// errorFingerprint is the file state whose read last failed.
+	errorFingerprint string
 }
 
 // toolUsageUpdate is the outcome of one source in a reconcile pass, applied
@@ -99,7 +102,10 @@ type toolUsageUpdate struct {
 	read        bool
 	fingerprint string
 	message     string
-	records     []modelusage.Record
+	// attempted is the file state seen when the read was scheduled.
+	attempted        string
+	errorFingerprint string
+	records          []modelusage.Record
 }
 
 // ReconcileToolUsage retries delayed/incomplete transcript writes and resumes
@@ -118,7 +124,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 	}
 	var updates, pending []toolUsageUpdate
 	for _, src := range sources {
-		fingerprint, modTime, statErr := transcriptFingerprint(src.path)
+		fingerprint, statErr := transcriptFingerprint(src.path)
 		switch {
 		case errors.Is(statErr, fs.ErrNotExist) && missingSince(src.lastSeen, now) > missingTranscriptGrace:
 			updates = append(updates, toolUsageUpdate{source: src, retire: true})
@@ -127,8 +133,11 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 				updates = append(updates, toolUsageUpdate{source: src, fingerprint: src.fingerprint, message: statErr.Error()})
 			}
 		case fingerprint != src.fingerprint:
-			if src.message == "" || retryDue(src.checkedAt, modTime, now) {
-				pending = append(pending, toolUsageUpdate{source: src})
+			// A failed read waits for the file to change or for the retry
+			// interval. Comparing whole fingerprints, not mtimes, also sees a
+			// size change on filesystems with coarse timestamps.
+			if src.message == "" || fingerprint != src.errorFingerprint || retryDue(src.checkedAt, now) {
+				pending = append(pending, toolUsageUpdate{source: src, attempted: fingerprint})
 			}
 		case src.message != "":
 			// The transcript is readable again and was already imported.
@@ -145,7 +154,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 		update.read = true
 		fingerprint, records, readErr := readToolTranscript(update.source)
 		if readErr != nil {
-			update.fingerprint, update.message = update.source.fingerprint, readErr.Error()
+			update.fingerprint, update.message, update.errorFingerprint = update.source.fingerprint, readErr.Error(), update.attempted
 		} else {
 			update.fingerprint, update.records = fingerprint, records
 		}
@@ -155,7 +164,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 }
 
 func (s *Store) toolUsageSources(ctx context.Context, now time.Time) ([]toolUsageSource, error) {
-	rows, err := s.db.QueryContext(ctx, `select session_id, transcript_path, agent, last_seen, checked_at, fingerprint, error from tool_usage_sources
+	rows, err := s.db.QueryContext(ctx, `select session_id, transcript_path, agent, last_seen, checked_at, fingerprint, error, error_fingerprint from tool_usage_sources
  where last_seen >= ? or fingerprint = ''`, now.Add(-7*24*time.Hour).Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
@@ -164,7 +173,7 @@ func (s *Store) toolUsageSources(ctx context.Context, now time.Time) ([]toolUsag
 	var sources []toolUsageSource
 	for rows.Next() {
 		var src toolUsageSource
-		if err := rows.Scan(&src.session, &src.path, &src.agent, &src.lastSeen, &src.checkedAt, &src.fingerprint, &src.message); err != nil {
+		if err := rows.Scan(&src.session, &src.path, &src.agent, &src.lastSeen, &src.checkedAt, &src.fingerprint, &src.message, &src.errorFingerprint); err != nil {
 			return nil, err
 		}
 		sources = append(sources, src)
@@ -182,23 +191,19 @@ func missingSince(lastSeen string, now time.Time) time.Duration {
 	return now.Sub(seen)
 }
 
-// retryDue reports whether a source whose last read failed should be read
-// again: its file changed since that attempt, or the retry interval passed.
-func retryDue(checkedAt string, modTime, now time.Time) bool {
+// retryDue reports whether an unchanged source whose last read failed is
+// due for another attempt.
+func retryDue(checkedAt string, now time.Time) bool {
 	checked, err := time.Parse(time.RFC3339Nano, checkedAt)
-	if err != nil {
-		return true
-	}
-	return modTime.After(checked) || now.Sub(checked) >= toolUsageRetryInterval
+	return err != nil || now.Sub(checked) >= toolUsageRetryInterval
 }
 
-func transcriptFingerprint(path string) (string, time.Time, error) {
+func transcriptFingerprint(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", err
 	}
-	fingerprint, err := fingerprintTranscript(info)
-	return fingerprint, info.ModTime(), err
+	return fingerprintTranscript(info)
 }
 
 // Re-read existing active sources once when the metadata adapter changes.
@@ -277,10 +282,10 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 			}
 		}
 		if update.read {
-			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=?, error=? where session_id=? and transcript_path=?`,
-				checkedAt, update.fingerprint, update.message, src.session, src.path)
+			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=?, error=?, error_fingerprint=? where session_id=? and transcript_path=?`,
+				checkedAt, update.fingerprint, update.message, update.errorFingerprint, src.session, src.path)
 		} else {
-			_, err = tx.ExecContext(ctx, `update tool_usage_sources set error=? where session_id=? and transcript_path=?`,
+			_, err = tx.ExecContext(ctx, `update tool_usage_sources set error=?, error_fingerprint='' where session_id=? and transcript_path=?`,
 				update.message, src.session, src.path)
 		}
 		if err != nil {

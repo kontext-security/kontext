@@ -434,13 +434,17 @@ func TestToolUsageFailedReadWaitsForChange(t *testing.T) {
 	if after := totalChanges(t, store); after != before {
 		t.Fatalf("unchanged failing transcript rewrote %d rows", after-before)
 	}
+	failed, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	good := `{"type":"assistant","sessionId":"s","timestamp":"2026-09-16T13:36:44Z","message":{"id":"m","model":"claude-fable-5-1","content":[{"type":"tool_use","id":"t","name":"Bash"}],"usage":{"output_tokens":10}}}` + "\n"
 	if err := os.WriteFile(path, []byte(good), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Keep the change visible even on filesystems with coarse mtimes.
-	future := time.Now().Add(time.Minute)
-	if err := os.Chtimes(path, future, future); err != nil {
+	// A filesystem with coarse timestamps can keep the failed attempt's
+	// mtime; the size change alone must trigger the retry.
+	if err := os.Chtimes(path, failed.ModTime(), failed.ModTime()); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.ReconcileToolUsage(ctx); err != nil {
