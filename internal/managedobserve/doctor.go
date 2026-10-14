@@ -156,7 +156,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	if homebrewBuild() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if brewPath, ok := currentExecutableBrewPath(); !ok {
+		if brewPath, _, ok := currentExecutableBrewPath(); !ok {
 			fmt.Fprintln(out, "  Homebrew update: unknown (brew not found)")
 		} else if warning, err := homebrewOutdatedWarning(ctx, brewPath); err != nil {
 			fmt.Fprintf(out, "  Homebrew update: unknown (%v)\n", err)
