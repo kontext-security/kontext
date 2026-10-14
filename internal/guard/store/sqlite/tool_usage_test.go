@@ -3,9 +3,13 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -483,5 +487,249 @@ func TestToolUsageRetireKeepsFreshRegistration(t *testing.T) {
 	var count int
 	if err := store.db.QueryRowContext(ctx, `select count(*) from tool_usage_sources`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("fresh registration deleted: %d %v", count, err)
+	}
+}
+
+// claudeTurns builds a Claude Code transcript in which each message streams
+// as two snapshots and the next message consumes its tool result. Every line
+// ends with values derived from base.
+func claudeTurns(turns, base int) string {
+	var b strings.Builder
+	for i := range turns {
+		ts := fmt.Sprintf("2026-09-16T13:%02d:%02dZ", i/60, i%60)
+		fmt.Fprintf(&b, `{"type":"assistant","sessionId":"s","requestId":"r%d","timestamp":"%s","message":{"id":"m%d","model":"claude-fable-5-1","content":[{"type":"thinking"}],"usage":{"input_tokens":%d,"output_tokens":%d}}}`+"\n", i, ts, i, base+i, base)
+		fmt.Fprintf(&b, `{"type":"assistant","sessionId":"s","requestId":"r%d","message":{"id":"m%d","model":"claude-fable-5-1","content":[{"type":"tool_use","id":"t%d","name":"Bash"}],"usage":{"output_tokens":%d}}}`+"\n", i, i, i, base+2*i)
+		fmt.Fprintf(&b, `{"type":"user","sessionId":"s","message":{"content":[{"type":"tool_result","tool_use_id":"t%d","content":"ok %d"}]}}`+"\n", i, base)
+		if i%4 == 3 {
+			fmt.Fprintf(&b, `{"type":"progress","message":"step %d %d"}`+"\n", i, base)
+		}
+	}
+	return b.String()
+}
+
+func codexTurns(turns, base int) string {
+	b := strings.Builder{}
+	b.WriteString(`{"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}` + "\n")
+	for i := range turns {
+		fmt.Fprintf(&b, `{"type":"turn_context","payload":{"model":"gpt-6-astra","service_tier":"tier-%d"}}`+"\n", base)
+		fmt.Fprintf(&b, `{"type":"response_item","payload":{"type":"function_call","call_id":"c%d","name":"exec_command","namespace":"ns-%d"}}`+"\n", i, base)
+		fmt.Fprintf(&b, `{"timestamp":"2026-09-17T10:%02d:%02dZ","type":"token_usage_record","payload":{"thread_id":"s","response_id":"r%d","usage":{"input_tokens":%d,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":%d}}}`+"\n", i/60, i%60, i, base+i, base)
+		fmt.Fprintf(&b, `{"type":"response_item","payload":{"type":"function_call_output","call_id":"c%d","output":"ok %d"}}`+"\n", i, base)
+		fmt.Fprintf(&b, `{"type":"event_msg","payload":{"type":"token_count","base":%d}}`+"\n", base)
+	}
+	return b.String()
+}
+
+// transcriptCopy is one store reading its own copy of a transcript.
+type transcriptCopy struct {
+	store *Store
+	path  string
+	key   transcriptKey
+}
+
+func (c transcriptCopy) cursor() *modelusage.Transcript {
+	transcriptCursors.mu.Lock()
+	defer transcriptCursors.mu.Unlock()
+	if cursor := transcriptCursors.cursors[c.key]; cursor != nil {
+		return cursor.transcript
+	}
+	return nil
+}
+
+func (c transcriptCopy) tables(t *testing.T) string {
+	t.Helper()
+	var b strings.Builder
+	for _, query := range []string{
+		`select revision, session_id, message_id, agent, payload, exported from tool_usage_records order by revision`,
+		`select session_id, agent, fingerprint, error from tool_usage_sources`,
+	} {
+		rows, err := c.store.db.Query(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		columns, _ := rows.Columns()
+		for rows.Next() {
+			values := make([]any, len(columns))
+			for i := range values {
+				values[i] = new(any)
+			}
+			if err := rows.Scan(values...); err != nil {
+				t.Fatal(err)
+			}
+			for _, value := range values {
+				fmt.Fprintf(&b, "%v|", *value.(*any))
+			}
+			b.WriteString("\n")
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return b.String()
+}
+
+type transcriptChange int
+
+const (
+	appendTranscript  transcriptChange = iota
+	replaceTranscript                  // a new file renamed over the old one
+	rewriteTranscript                  // truncated and refilled in place
+)
+
+// TestToolUsageCursorMatchesFullReads feeds the same transcript changes to a
+// store that keeps its cursor and to one that reads every transcript in full,
+// as before cursors existed. Records, revisions, acknowledgements, and source
+// state must stay identical, while appends resume the cursor and every other
+// change falls back to a full read.
+func TestToolUsageCursorMatchesFullReads(t *testing.T) {
+	type step struct {
+		change  transcriptChange
+		content string
+	}
+	rng := rand.New(rand.NewSource(1))
+	// grow appends to from until it becomes to, cutting lines at random.
+	grow := func(from, to string, steps int) []step {
+		cuts := make([]int, steps)
+		for i := range cuts {
+			cuts[i] = len(from) + rng.Intn(len(to)-len(from)+1)
+		}
+		slices.Sort(cuts)
+		var result []step
+		for _, cut := range append(cuts, len(to)) {
+			result = append(result, step{appendTranscript, to[:cut]})
+		}
+		return result
+	}
+	claude, codex := claudeTurns(40, 100), codexTurns(40, 100)
+	half := claudeTurns(20, 100)
+	badLine := strings.ReplaceAll(strings.SplitAfter(claude, "\n")[0], `"output_tokens":100`, `"output_tokens":-1`)
+	for _, scenario := range []struct {
+		name, agent, session string
+		steps                []step
+	}{
+		{"claude appends", "claude", "s", grow("", claude, 12)},
+		{"codex appends", "codex", "codex-s", grow("", codex, 12)},
+		{"claude replaced, rewritten, and truncated", "claude", "s", slices.Concat(
+			grow("", half, 3),
+			// A new file that differs only before the parsed tail.
+			[]step{{replaceTranscript, strings.Replace(claudeTurns(25, 100), `"input_tokens":100,`, `"input_tokens":199,`, 1)}},
+			[]step{{replaceTranscript, claudeTurns(30, 200)}},
+			grow(claudeTurns(30, 200), claudeTurns(35, 200), 2),
+			[]step{{rewriteTranscript, claudeTurns(40, 300)}},
+			[]step{{rewriteTranscript, claudeTurns(10, 300)}},
+			grow(claudeTurns(10, 300), claudeTurns(20, 300), 2),
+		)},
+		{"claude failing line", "claude", "s", slices.Concat(
+			grow("", half, 3),
+			grow(half, half+badLine+claude, 4),
+		)},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctx := context.Background()
+			var copies [2]transcriptCopy
+			for i := range copies {
+				dir := t.TempDir()
+				store, err := OpenStore(filepath.Join(dir, "guard.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { store.Close() })
+				path := filepath.Join(dir, "session.jsonl")
+				copies[i] = transcriptCopy{store: store, path: path, key: transcriptKey{codex: scenario.agent == "codex", path: path}}
+				t.Cleanup(func() { transcriptCursors.take(copies[i].key) })
+			}
+			incremental, full := copies[0], copies[1]
+			written := ""
+			resumed := 0
+			for n, step := range scenario.steps {
+				// One mtime per step keeps both copies' fingerprints equal.
+				modTime := time.Unix(1_800_000_000+int64(n), 0)
+				for _, c := range copies {
+					var err error
+					switch {
+					case step.change == replaceTranscript:
+						if err = os.WriteFile(c.path+".tmp", []byte(step.content), 0600); err == nil {
+							err = os.Rename(c.path+".tmp", c.path)
+						}
+					case step.change == appendTranscript && strings.HasPrefix(step.content, written):
+						var f *os.File
+						if f, err = os.OpenFile(c.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {
+							_, err = f.WriteString(step.content[len(written):])
+							err = errors.Join(err, f.Close())
+						}
+					default:
+						err = os.WriteFile(c.path, []byte(step.content), 0600)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chtimes(c.path, modTime, modTime); err != nil {
+						t.Fatal(err)
+					}
+					if err := c.store.TrackToolTranscript(ctx, hook.Event{SessionID: scenario.session, Agent: scenario.agent, HookName: hook.HookPostToolUse, TranscriptPath: c.path}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				written = step.content
+				before := incremental.cursor()
+				transcriptCursors.take(full.key)
+				for _, c := range copies {
+					if err := c.store.ReconcileToolUsage(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+				after := incremental.cursor()
+				if want := before != nil && step.change == appendTranscript; (before == after) != want {
+					t.Fatalf("step %d (%v): cursor resumed %v, want %v", n, step.change, before == after, want)
+				}
+				if before == after {
+					resumed++
+				}
+				if offset := after.Offset(); offset != int64(strings.LastIndexByte(step.content, '\n')+1) && !strings.Contains(scenario.name, "failing") {
+					t.Fatalf("step %d: offset %d is not the end of the last complete line", n, offset)
+				}
+				if got, want := incremental.tables(t), full.tables(t); got != want {
+					t.Fatalf("step %d (%v): cursor diverged from full reads:\n got %s\nwant %s", n, step.change, got, want)
+				}
+				// Upload and acknowledge on alternate steps, as an outage would.
+				if n%2 == 0 {
+					var pages [2][]ToolUsageRecord
+					for i, c := range copies {
+						page, err := c.store.PendingToolUsage(ctx, 50)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := c.store.AcknowledgeToolUsage(ctx, page); err != nil {
+							t.Fatal(err)
+						}
+						pages[i] = page
+					}
+					if !reflect.DeepEqual(pages[0], pages[1]) {
+						t.Fatalf("step %d: uploads diverged:\n got %+v\nwant %+v", n, pages[0], pages[1])
+					}
+				}
+			}
+			if resumed == 0 {
+				t.Fatal("no pass resumed a cursor")
+			}
+			var message string
+			if err := incremental.store.db.QueryRow(`select error from tool_usage_sources`).Scan(&message); err != nil {
+				t.Fatal(err)
+			}
+			if failing := strings.Contains(scenario.name, "failing"); failing != strings.Contains(message, "negative token count") {
+				t.Fatalf("source error %q", message)
+			}
+		})
+	}
+}
+
+func TestToolUsageCursorEvictsIdleTranscripts(t *testing.T) {
+	now := time.Now()
+	idle, active := transcriptKey{path: t.TempDir() + "/idle.jsonl"}, transcriptKey{path: t.TempDir() + "/active.jsonl"}
+	transcriptCursors.put(idle, &transcriptCursor{used: now.Add(-transcriptCursorIdle - time.Second)})
+	transcriptCursors.put(active, &transcriptCursor{used: now.Add(-time.Second)})
+	transcriptCursors.evict(now)
+	if transcriptCursors.take(idle) != nil || transcriptCursors.take(active) == nil {
+		t.Fatal("only the idle transcript's parser state should be dropped")
 	}
 }

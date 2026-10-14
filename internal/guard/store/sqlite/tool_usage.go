@@ -1,16 +1,19 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/hook"
@@ -86,6 +89,12 @@ const (
 	// before it is dropped. A live session re-registers on its next hook.
 	missingTranscriptGrace = time.Hour
 	maxTranscriptBytes     = 256 * 1024 * 1024
+	// transcriptCursorIdle is how long a transcript's parser state is kept
+	// without a change. A session idle for longer costs one full read when it
+	// resumes.
+	transcriptCursorIdle = 10 * time.Minute
+	// transcriptTailBytes of the parsed prefix are compared before resuming.
+	transcriptTailBytes = 64
 )
 
 type toolUsageSource struct {
@@ -112,10 +121,11 @@ type toolUsageUpdate struct {
 // after daemon restart using registered sources. Completed sources are
 // revisited for seven days. Every pass stats each eligible source, but only
 // parses transcripts whose size or mtime changed, oldest read first and
-// bounded per pass; a transcript whose last read failed waits for a change
-// or the retry interval. Unchanged sources cost no database write: this runs
-// every flush interval, and rewriting each source's row per pass dominated
-// the daemon's WAL traffic.
+// bounded per pass, and of those only the lines appended since the previous
+// pass; a transcript whose last read failed waits for a change or the retry
+// interval. Unchanged sources cost no database write: this runs every flush
+// interval, and rewriting each source's row per pass dominated the daemon's
+// WAL traffic.
 func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 	now := time.Now().UTC()
 	sources, err := s.toolUsageSources(ctx, now)
@@ -152,7 +162,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 			return err
 		}
 		update.read = true
-		fingerprint, records, readErr := readToolTranscript(update.source)
+		fingerprint, records, readErr := readToolTranscript(update.source, now)
 		if readErr != nil {
 			update.fingerprint, update.message, update.errorFingerprint = update.source.fingerprint, readErr.Error(), update.attempted
 		} else {
@@ -160,6 +170,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 		}
 		updates = append(updates, update)
 	}
+	transcriptCursors.evict(now)
 	return s.applyToolUsageUpdates(ctx, updates, now)
 }
 
@@ -217,8 +228,9 @@ func fingerprintTranscript(info fs.FileInfo) (string, error) {
 
 // readToolTranscript parses a transcript without touching the database, so
 // no write lock is held during file I/O. The returned fingerprint describes
-// the file that was actually read.
-func readToolTranscript(src toolUsageSource) (string, []modelusage.Record, error) {
+// the file that was actually read. Every record a full read would return is
+// returned, so unchanged ones keep their revision through saveToolUsage.
+func readToolTranscript(src toolUsageSource, now time.Time) (string, []modelusage.Record, error) {
 	f, err := os.Open(src.path)
 	if err != nil {
 		return "", nil, err
@@ -232,12 +244,16 @@ func readToolTranscript(src toolUsageSource) (string, []modelusage.Record, error
 	if err != nil {
 		return "", nil, err
 	}
-	var records []modelusage.Record
-	if src.agent == "codex" {
-		records, err = modelusage.ReadCodexTranscript(f)
-	} else {
-		records, err = modelusage.ReadClaudeTranscript(f)
+	key := transcriptKey{codex: src.agent == "codex", path: src.path}
+	cursor := transcriptCursors.take(key)
+	if !cursor.resumes(f, stat) {
+		cursor = &transcriptCursor{transcript: modelusage.NewClaudeTranscript()}
+		if key.codex {
+			cursor.transcript = modelusage.NewCodexTranscript()
+		}
 	}
+	records, err := cursor.read(f, stat, now)
+	transcriptCursors.put(key, cursor)
 	if err != nil {
 		return "", nil, err
 	}
@@ -254,6 +270,92 @@ func readToolTranscript(src toolUsageSource) (string, []modelusage.Record, error
 		kept = append(kept, record)
 	}
 	return fingerprint, kept, nil
+}
+
+// transcriptCursors keeps recently changed transcripts' parser state between
+// passes, so a pass parses only the lines appended since the previous one.
+// Store handles are opened per flush, hence the package scope. The state is
+// kept in memory rather than in tool_usage_sources: it holds every message's
+// usage and tool metadata, hundreds of KB for a long session, and writing it
+// on each pass would bring back the WAL traffic unchanged sources no longer
+// cause. A daemon restart therefore costs one full read per changed source,
+// and so does a metadata adapter upgrade, which ships as a new binary.
+var transcriptCursors = transcriptCursorCache{cursors: map[transcriptKey]*transcriptCursor{}}
+
+type transcriptKey struct {
+	codex bool
+	path  string
+}
+
+// transcriptCursor is a transcript's parser state after its last complete
+// line, with what identifies the bytes it parsed.
+type transcriptCursor struct {
+	transcript *modelusage.Transcript
+	file       fs.FileInfo // identity of the parsed file, for os.SameFile
+	tail       []byte      // the parsed bytes just before the offset
+	used       time.Time
+}
+
+// resumes reports whether f is still the file the cursor parsed, grown only by
+// appends: the same file, no shorter, and with the bytes just before the
+// offset unchanged. A replaced, truncated, or rewritten file is read again
+// from the start. Transcripts are append-only, so earlier bytes are not
+// compared.
+func (c *transcriptCursor) resumes(f *os.File, stat fs.FileInfo) bool {
+	if c == nil || !os.SameFile(c.file, stat) || stat.Size() < c.transcript.Offset() {
+		return false
+	}
+	tail := make([]byte, len(c.tail))
+	_, err := f.ReadAt(tail, c.transcript.Offset()-int64(len(tail)))
+	return err == nil && bytes.Equal(tail, c.tail)
+}
+
+// read parses from the cursor's offset up to the fingerprinted size. A failed
+// read still leaves the parser state at its last complete line.
+func (c *transcriptCursor) read(f *os.File, stat fs.FileInfo, now time.Time) ([]modelusage.Record, error) {
+	offset := c.transcript.Offset()
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	records, err := c.transcript.Read(io.LimitReader(f, stat.Size()-offset))
+	offset = c.transcript.Offset()
+	c.file, c.used = stat, now
+	c.tail = make([]byte, min(offset, transcriptTailBytes))
+	if _, tailErr := f.ReadAt(c.tail, offset-int64(len(c.tail))); tailErr != nil {
+		c.file = nil
+	}
+	return records, err
+}
+
+type transcriptCursorCache struct {
+	mu      sync.Mutex
+	cursors map[transcriptKey]*transcriptCursor
+}
+
+// take hands a cursor to one pass at a time. A concurrent pass over the same
+// transcript starts from a full read instead of sharing parser state.
+func (c *transcriptCursorCache) take(key transcriptKey) *transcriptCursor {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cursor := c.cursors[key]
+	delete(c.cursors, key)
+	return cursor
+}
+
+func (c *transcriptCursorCache) put(key transcriptKey, cursor *transcriptCursor) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cursors[key] = cursor
+}
+
+func (c *transcriptCursorCache) evict(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, cursor := range c.cursors {
+		if now.Sub(cursor.used) > transcriptCursorIdle {
+			delete(c.cursors, key)
+		}
+	}
 }
 
 func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUpdate, now time.Time) error {
