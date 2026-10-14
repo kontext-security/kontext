@@ -1,11 +1,11 @@
 package modelusage
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -46,140 +46,162 @@ func (u codexUsage) tokens() (Tokens, error) {
 // arguments, reasoning text, or tool output are included in returned records.
 // Tool results become input to the next response, not output of their caller.
 func ReadCodexTranscript(reader io.Reader) ([]Record, error) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	scanner.Split(completeLines)
-	var records []Record
-	var session, provider, model, serviceTier string
-	var current *Record
-	var pending []string
-	tools := map[string]Tool{}
-	seen := map[string]bool{}
-	sawLegacy, sawResponse := false, false
-	line := 0
-	for scanner.Scan() {
-		line++
-		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
-			continue
-		}
-		var row struct {
-			Timestamp string `json:"timestamp"`
-			Type      string `json:"type"`
-			Payload   struct {
-				Type          string      `json:"type"`
-				ID            string      `json:"id"`
-				ModelProvider string      `json:"model_provider"`
-				Model         string      `json:"model"`
-				ServiceTier   string      `json:"service_tier"`
-				Role          string      `json:"role"`
-				CallID        string      `json:"call_id"`
-				Name          string      `json:"name"`
-				Namespace     string      `json:"namespace"`
-				ToolsetName   string      `json:"toolset_name"`
-				ServerName    string      `json:"server_name"`
-				ThreadID      string      `json:"thread_id"`
-				ResponseID    string      `json:"response_id"`
-				Usage         *codexUsage `json:"usage"`
-			} `json:"payload"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
-			return nil, fmt.Errorf("codex transcript line %d: %w", line, err)
-		}
-		p := row.Payload
-		switch row.Type {
-		case "session_meta":
-			if session != "" && session != p.ID {
-				return nil, fmt.Errorf("codex transcript has conflicting session IDs")
-			}
-			session, provider = p.ID, p.ModelProvider
-		case "turn_context":
-			model, serviceTier = p.Model, p.ServiceTier
-			if p.ModelProvider != "" {
-				provider = p.ModelProvider
-			}
-		case "compacted":
-			current, pending = nil, nil
-		case "event_msg":
-			switch p.Type {
-			case "token_count":
-				sawLegacy = true
-			case "task_started", "task_complete", "turn_aborted":
-				current, pending = nil, nil
-			}
-		case "response_item":
-			switch p.Type {
-			case "function_call_output", "custom_tool_call_output":
-				if p.CallID != "" && tools[p.CallID].Name != "" && !slices.Contains(pending, p.CallID) {
-					pending = append(pending, p.CallID)
-				}
-			case "message":
-				if p.Role == "user" {
-					pending = nil
-				}
-				if p.Role != "assistant" {
-					continue
-				}
-				fallthrough
-			case "reasoning", "function_call", "custom_tool_call":
-				if current == nil {
-					current = &Record{Model: model, ServiceTier: serviceTier, Timestamp: row.Timestamp, ConsumedToolUseIDs: pending}
-					pending = nil
-				}
-				if (p.Type == "function_call" || p.Type == "custom_tool_call") && p.CallID != "" {
-					if !slices.Contains(current.ToolUseIDs, p.CallID) {
-						current.ToolUseIDs = append(current.ToolUseIDs, p.CallID)
-					}
-					tools[p.CallID] = mergeToolMetadata(tools[p.CallID], Tool{ID: p.CallID, Name: p.Name, Type: p.Type,
-						Namespace: p.Namespace, ToolsetName: p.ToolsetName, ServerName: p.ServerName})
-				}
-			}
-		case "token_usage_record":
-			sawResponse = true
-			// Forks can contain copied parent history. The recorded owning thread,
-			// rather than a filename or current hook, determines which usage belongs here.
-			if provider != "openai" || session == "" || p.ThreadID != session {
-				current, pending = nil, nil
-				continue
-			}
-			if p.ResponseID == "" || p.Usage == nil {
-				return nil, fmt.Errorf("codex usage missing response identity or counters")
-			}
-			if seen[p.ResponseID] {
-				continue
-			}
-			seen[p.ResponseID] = true
-			if current == nil {
-				continue
-			} // No observable tool/model output association.
-			current.SessionID = "codex-" + strings.TrimPrefix(session, "codex-")
-			current.MessageID, current.RequestID = p.ResponseID, p.ResponseID
-			current.Timestamp = row.Timestamp
-			if current.Model == "" {
-				return nil, fmt.Errorf("codex usage missing model")
-			}
-			tokens, err := p.Usage.tokens()
-			if err != nil {
-				return nil, fmt.Errorf("codex transcript line %d: %w", line, err)
-			}
-			current.Tokens = tokens
-			if current.ToolRelated() {
-				records = append(records, *current)
-			}
-			current = nil
-		}
+	return NewCodexTranscript().Read(reader)
+}
+
+// NewCodexTranscript starts an incremental read of a Codex rollout.
+func NewCodexTranscript() *Transcript {
+	return &Transcript{kind: "codex", state: &codexState{tools: map[string]Tool{}, seen: map[string]bool{}}}
+}
+
+type codexState struct {
+	line                                  int
+	records                               []Record
+	session, provider, model, serviceTier string
+	current                               *Record
+	pending                               []string
+	tools                                 map[string]Tool
+	seen                                  map[string]bool
+	sawLegacy, sawResponse                bool
+}
+
+func (s *codexState) parseLine(text []byte) error {
+	s.line++
+	if len(bytes.TrimSpace(text)) == 0 {
+		return nil
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read codex transcript: %w", err)
+	var row struct {
+		Timestamp string `json:"timestamp"`
+		Type      string `json:"type"`
+		Payload   struct {
+			Type          string      `json:"type"`
+			ID            string      `json:"id"`
+			ModelProvider string      `json:"model_provider"`
+			Model         string      `json:"model"`
+			ServiceTier   string      `json:"service_tier"`
+			Role          string      `json:"role"`
+			CallID        string      `json:"call_id"`
+			Name          string      `json:"name"`
+			Namespace     string      `json:"namespace"`
+			ToolsetName   string      `json:"toolset_name"`
+			ServerName    string      `json:"server_name"`
+			ThreadID      string      `json:"thread_id"`
+			ResponseID    string      `json:"response_id"`
+			Usage         *codexUsage `json:"usage"`
+		} `json:"payload"`
 	}
-	if provider == "openai" && sawLegacy && !sawResponse {
+	if err := json.Unmarshal(text, &row); err != nil {
+		return fmt.Errorf("codex transcript line %d: %w", s.line, err)
+	}
+	p := row.Payload
+	switch row.Type {
+	case "session_meta":
+		if s.session != "" && s.session != p.ID {
+			return fmt.Errorf("codex transcript has conflicting session IDs")
+		}
+		s.session, s.provider = p.ID, p.ModelProvider
+	case "turn_context":
+		s.model, s.serviceTier = p.Model, p.ServiceTier
+		if p.ModelProvider != "" {
+			s.provider = p.ModelProvider
+		}
+	case "compacted":
+		s.current, s.pending = nil, nil
+	case "event_msg":
+		switch p.Type {
+		case "token_count":
+			s.sawLegacy = true
+		case "task_started", "task_complete", "turn_aborted":
+			s.current, s.pending = nil, nil
+		}
+	case "response_item":
+		switch p.Type {
+		case "function_call_output", "custom_tool_call_output":
+			if p.CallID != "" && s.tools[p.CallID].Name != "" && !slices.Contains(s.pending, p.CallID) {
+				s.pending = append(s.pending, p.CallID)
+			}
+		case "message":
+			if p.Role == "user" {
+				s.pending = nil
+			}
+			if p.Role != "assistant" {
+				return nil
+			}
+			fallthrough
+		case "reasoning", "function_call", "custom_tool_call":
+			if s.current == nil {
+				s.current = &Record{Model: s.model, ServiceTier: s.serviceTier, Timestamp: row.Timestamp, ConsumedToolUseIDs: s.pending}
+				s.pending = nil
+			}
+			if (p.Type == "function_call" || p.Type == "custom_tool_call") && p.CallID != "" {
+				if !slices.Contains(s.current.ToolUseIDs, p.CallID) {
+					s.current.ToolUseIDs = append(s.current.ToolUseIDs, p.CallID)
+				}
+				s.tools[p.CallID] = mergeToolMetadata(s.tools[p.CallID], Tool{ID: p.CallID, Name: p.Name, Type: p.Type,
+					Namespace: p.Namespace, ToolsetName: p.ToolsetName, ServerName: p.ServerName})
+			}
+		}
+	case "token_usage_record":
+		s.sawResponse = true
+		// Forks can contain copied parent history. The recorded owning thread,
+		// rather than a filename or current hook, determines which usage belongs here.
+		if s.provider != "openai" || s.session == "" || p.ThreadID != s.session {
+			s.current, s.pending = nil, nil
+			return nil
+		}
+		if p.ResponseID == "" || p.Usage == nil {
+			return fmt.Errorf("codex usage missing response identity or counters")
+		}
+		if s.seen[p.ResponseID] {
+			return nil
+		}
+		s.seen[p.ResponseID] = true
+		if s.current == nil {
+			return nil
+		} // No observable tool/model output association.
+		s.current.SessionID = "codex-" + strings.TrimPrefix(s.session, "codex-")
+		s.current.MessageID, s.current.RequestID = p.ResponseID, p.ResponseID
+		s.current.Timestamp = row.Timestamp
+		if s.current.Model == "" {
+			return fmt.Errorf("codex usage missing model")
+		}
+		tokens, err := p.Usage.tokens()
+		if err != nil {
+			return fmt.Errorf("codex transcript line %d: %w", s.line, err)
+		}
+		s.current.Tokens = tokens
+		if s.current.ToolRelated() {
+			s.records = append(s.records, *s.current)
+		}
+		s.current = nil
+	}
+	return nil
+}
+
+func (s *codexState) finish() ([]Record, error) {
+	if s.provider == "openai" && s.sawLegacy && !s.sawResponse {
 		return nil, fmt.Errorf("unsupported Codex transcript: per-response token_usage_record required")
 	}
+	// Finished records never change, so only their tool lists are rebuilt.
+	records := slices.Clone(s.records)
 	for i := range records {
 		for _, id := range append(slices.Clone(records[i].ToolUseIDs), records[i].ConsumedToolUseIDs...) {
 			if !slices.ContainsFunc(records[i].Tools, func(t Tool) bool { return t.ID == id }) {
-				records[i].Tools = append(records[i].Tools, tools[id])
+				records[i].Tools = append(records[i].Tools, s.tools[id])
 			}
 		}
 	}
 	return records, nil
+}
+
+func (s *codexState) clone() transcriptState {
+	c := *s
+	c.records, c.pending = slices.Clone(s.records), slices.Clone(s.pending)
+	c.tools, c.seen = maps.Clone(s.tools), maps.Clone(s.seen)
+	if s.current != nil {
+		current := *s.current
+		current.ToolUseIDs = slices.Clone(current.ToolUseIDs)
+		c.current = &current
+	}
+	return &c
 }

@@ -3,11 +3,11 @@
 package modelusage
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 )
 
@@ -96,169 +96,182 @@ type anthropicUsage struct {
 // of adding its counters again. This function does not watch files, persist
 // records, or infer Cowork transcript locations.
 func ReadClaudeTranscript(reader io.Reader) ([]Record, error) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	scanner.Split(completeLines)
-	var records []Record
-	indices := make(map[[2]string]int)
+	return NewClaudeTranscript().Read(reader)
+}
+
+// NewClaudeTranscript starts an incremental read of a Claude Code transcript.
+func NewClaudeTranscript() *Transcript {
+	return &Transcript{kind: "claude", state: &claudeState{
+		indices:        make(map[[2]string]int),
+		pendingResults: make(map[string][]string),
+		tools:          make(map[[2]string]Tool),
+	}}
+}
+
+type claudeState struct {
+	line    int
+	records []Record
+	indices map[[2]string]int
 	// Only the next assistant request consumes a tool-result user message.
 	// A later ordinary user prompt clears the association.
-	pendingResults := make(map[string][]string)
-	tools := make(map[[2]string]Tool)
-	line := 0
-	for scanner.Scan() {
-		line++
-		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
-			continue
+	pendingResults map[string][]string
+	tools          map[[2]string]Tool
+}
+
+func (s *claudeState) parseLine(text []byte) error {
+	s.line++
+	if len(bytes.TrimSpace(text)) == 0 {
+		return nil
+	}
+	var envelope struct {
+		Type      string          `json:"type"`
+		SessionID string          `json:"sessionId"`
+		Message   json.RawMessage `json:"message"`
+	}
+	if err := json.Unmarshal(text, &envelope); err != nil {
+		return fmt.Errorf("claude transcript line %d: %w", s.line, err)
+	}
+	if envelope.Type == "user" {
+		var message struct {
+			Content json.RawMessage `json:"content"`
 		}
-		var envelope struct {
-			Type      string          `json:"type"`
-			SessionID string          `json:"sessionId"`
-			Message   json.RawMessage `json:"message"`
+		if err := json.Unmarshal(envelope.Message, &message); err != nil {
+			return fmt.Errorf("claude user message line %d: %w", s.line, err)
 		}
-		if err := json.Unmarshal(scanner.Bytes(), &envelope); err != nil {
-			return nil, fmt.Errorf("claude transcript line %d: %w", line, err)
+		var blocks []struct {
+			Type      string `json:"type"`
+			ToolUseID string `json:"tool_use_id"`
 		}
-		if envelope.Type == "user" {
-			var message struct {
-				Content json.RawMessage `json:"content"`
+		_ = json.Unmarshal(message.Content, &blocks)
+		var ids []string
+		for _, block := range blocks {
+			if block.Type == "tool_result" && block.ToolUseID != "" {
+				ids = append(ids, block.ToolUseID)
 			}
-			if err := json.Unmarshal(envelope.Message, &message); err != nil {
-				return nil, fmt.Errorf("claude user message line %d: %w", line, err)
-			}
-			var blocks []struct {
-				Type      string `json:"type"`
-				ToolUseID string `json:"tool_use_id"`
-			}
-			_ = json.Unmarshal(message.Content, &blocks)
-			var ids []string
-			for _, block := range blocks {
-				if block.Type == "tool_result" && block.ToolUseID != "" {
-					ids = append(ids, block.ToolUseID)
+		}
+		if len(ids) == 0 {
+			delete(s.pendingResults, envelope.SessionID)
+		} else {
+			for _, id := range ids {
+				if !slices.Contains(s.pendingResults[envelope.SessionID], id) {
+					s.pendingResults[envelope.SessionID] = append(s.pendingResults[envelope.SessionID], id)
 				}
 			}
-			if len(ids) == 0 {
-				delete(pendingResults, envelope.SessionID)
-			} else {
-				for _, id := range ids {
-					if !slices.Contains(pendingResults[envelope.SessionID], id) {
-						pendingResults[envelope.SessionID] = append(pendingResults[envelope.SessionID], id)
-					}
-				}
-			}
-			continue
 		}
-		if envelope.Type != "assistant" {
-			continue
-		}
-		var row struct {
-			SessionID string `json:"sessionId"`
-			RequestID string `json:"requestId"`
-			Timestamp string `json:"timestamp"`
-			Message   struct {
-				ID      string          `json:"id"`
-				Model   string          `json:"model"`
-				Usage   *anthropicUsage `json:"usage"`
-				Content []Tool          `json:"content"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
-			return nil, fmt.Errorf("claude transcript line %d: %w", line, err)
-		}
-		if row.Message.Usage == nil || row.Message.Model == "<synthetic>" {
-			continue
-		}
-		if row.SessionID == "" || row.Message.ID == "" || row.Message.Model == "" {
-			return nil, fmt.Errorf("claude transcript line %d: usage missing session, message ID, or model", line)
-		}
-		u := row.Message.Usage
-		tokens := Tokens{
-			InputUncached: u.InputTokens, InputCacheRead: u.CacheReadInputTokens,
-			InputCacheWrite: u.CacheCreationInputTokens,
-			CacheWrite5m:    u.CacheCreation.FiveMinute, CacheWrite1h: u.CacheCreation.OneHour,
-			Output: u.OutputTokens, Thinking: u.OutputTokensDetails.Thinking,
-		}
-		for _, count := range tokens.fields() {
-			if *count != nil && **count < 0 {
-				return nil, fmt.Errorf("claude transcript line %d: negative token count", line)
-			}
-		}
-		key := [2]string{row.SessionID, row.Message.ID}
-		index, exists := indices[key]
-		if !exists {
-			index = len(records)
-			indices[key] = index
-			records = append(records, Record{SessionID: row.SessionID, MessageID: row.Message.ID, Model: row.Message.Model})
-			records[index].ConsumedToolUseIDs = pendingResults[row.SessionID]
-			delete(pendingResults, row.SessionID)
-		}
-		record := &records[index]
-		if record.Model != row.Message.Model || (record.RequestID != "" && row.RequestID != "" && record.RequestID != row.RequestID) {
-			return nil, fmt.Errorf("claude transcript line %d: conflicting message identity", line)
-		}
-		if row.RequestID != "" {
-			record.RequestID = row.RequestID
-		}
-		if row.Timestamp != "" {
-			record.Timestamp = row.Timestamp
-		}
-		// Later snapshots can add fields or revise cumulative output counts.
-		previous := record.Tokens.fields()
-		for i, count := range tokens.fields() {
-			if *count != nil {
-				*previous[i] = *count
-			}
-		}
-		for _, field := range []struct {
-			dst *string
-			src string
-		}{
-			{&record.ServiceTier, u.ServiceTier}, {&record.InferenceGeo, u.InferenceGeo}, {&record.Speed, u.Speed},
-		} {
-			if field.src != "" {
-				*field.dst = field.src
-			}
-		}
-		for _, block := range row.Message.Content {
-			if block.Type == "tool_use" && block.ID != "" {
-				if !slices.Contains(record.ToolUseIDs, block.ID) {
-					record.ToolUseIDs = append(record.ToolUseIDs, block.ID)
-				}
-				key := [2]string{row.SessionID, block.ID}
-				tools[key] = mergeToolMetadata(tools[key], block)
-			}
+		return nil
+	}
+	if envelope.Type != "assistant" {
+		return nil
+	}
+	var row struct {
+		SessionID string `json:"sessionId"`
+		RequestID string `json:"requestId"`
+		Timestamp string `json:"timestamp"`
+		Message   struct {
+			ID      string          `json:"id"`
+			Model   string          `json:"model"`
+			Usage   *anthropicUsage `json:"usage"`
+			Content []Tool          `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(text, &row); err != nil {
+		return fmt.Errorf("claude transcript line %d: %w", s.line, err)
+	}
+	if row.Message.Usage == nil || row.Message.Model == "<synthetic>" {
+		return nil
+	}
+	if row.SessionID == "" || row.Message.ID == "" || row.Message.Model == "" {
+		return fmt.Errorf("claude transcript line %d: usage missing session, message ID, or model", s.line)
+	}
+	u := row.Message.Usage
+	tokens := Tokens{
+		InputUncached: u.InputTokens, InputCacheRead: u.CacheReadInputTokens,
+		InputCacheWrite: u.CacheCreationInputTokens,
+		CacheWrite5m:    u.CacheCreation.FiveMinute, CacheWrite1h: u.CacheCreation.OneHour,
+		Output: u.OutputTokens, Thinking: u.OutputTokensDetails.Thinking,
+	}
+	for _, count := range tokens.fields() {
+		if *count != nil && **count < 0 {
+			return fmt.Errorf("claude transcript line %d: negative token count", s.line)
 		}
 	}
+	key := [2]string{row.SessionID, row.Message.ID}
+	index, exists := s.indices[key]
+	if !exists {
+		index = len(s.records)
+		s.indices[key] = index
+		s.records = append(s.records, Record{SessionID: row.SessionID, MessageID: row.Message.ID, Model: row.Message.Model})
+		s.records[index].ConsumedToolUseIDs = s.pendingResults[row.SessionID]
+		delete(s.pendingResults, row.SessionID)
+	}
+	record := &s.records[index]
+	if record.Model != row.Message.Model || (record.RequestID != "" && row.RequestID != "" && record.RequestID != row.RequestID) {
+		return fmt.Errorf("claude transcript line %d: conflicting message identity", s.line)
+	}
+	if row.RequestID != "" {
+		record.RequestID = row.RequestID
+	}
+	if row.Timestamp != "" {
+		record.Timestamp = row.Timestamp
+	}
+	// Later snapshots can add fields or revise cumulative output counts.
+	previous := record.Tokens.fields()
+	for i, count := range tokens.fields() {
+		if *count != nil {
+			*previous[i] = *count
+		}
+	}
+	for _, field := range []struct {
+		dst *string
+		src string
+	}{
+		{&record.ServiceTier, u.ServiceTier}, {&record.InferenceGeo, u.InferenceGeo}, {&record.Speed, u.Speed},
+	} {
+		if field.src != "" {
+			*field.dst = field.src
+		}
+	}
+	for _, block := range row.Message.Content {
+		if block.Type == "tool_use" && block.ID != "" {
+			if !slices.Contains(record.ToolUseIDs, block.ID) {
+				record.ToolUseIDs = append(record.ToolUseIDs, block.ID)
+			}
+			key := [2]string{row.SessionID, block.ID}
+			s.tools[key] = mergeToolMetadata(s.tools[key], block)
+		}
+	}
+	return nil
+}
+
+func (s *claudeState) finish() ([]Record, error) {
+	records := slices.Clone(s.records)
 	for i := range records {
+		records[i].ToolUseIDs = slices.Clone(records[i].ToolUseIDs)
 		seen := make(map[string]bool)
 		for _, id := range append(slices.Clone(records[i].ToolUseIDs), records[i].ConsumedToolUseIDs...) {
 			if !seen[id] {
-				tool := tools[[2]string{records[i].SessionID, id}]
+				tool := s.tools[[2]string{records[i].SessionID, id}]
 				tool.ID = id
 				records[i].Tools = append(records[i].Tools, tool)
 				seen[id] = true
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read claude transcript: %w", err)
-	}
 	return records, nil
+}
+
+func (s *claudeState) clone() transcriptState {
+	c := &claudeState{line: s.line, records: slices.Clone(s.records), indices: maps.Clone(s.indices),
+		pendingResults: make(map[string][]string, len(s.pendingResults)), tools: maps.Clone(s.tools)}
+	for i := range c.records {
+		c.records[i].ToolUseIDs = slices.Clone(c.records[i].ToolUseIDs)
+	}
+	for session, ids := range s.pendingResults {
+		c.pendingResults[session] = slices.Clone(ids)
+	}
+	return c
 }
 
 func (t *Tokens) fields() []**int64 {
 	return []**int64{&t.InputUncached, &t.InputCacheRead, &t.InputCacheWrite, &t.CacheWrite5m, &t.CacheWrite30m, &t.CacheWrite1h, &t.Output, &t.Thinking}
-}
-
-func completeLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		return i + 1, data[:i], nil
-	}
-	if atEOF && json.Valid(data) {
-		return len(data), data, nil
-	}
-	if atEOF {
-		return len(data), nil, nil
-	}
-	return 0, nil, nil
 }
