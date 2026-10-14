@@ -160,7 +160,6 @@ ${download_strategy_preamble}class ${formula_class} < Formula
   version "${version}"
   license "MIT"
 
-  depends_on "llama.cpp"
 ${conflicts_line}
   on_macos do
     if Hardware::CPU.intel?

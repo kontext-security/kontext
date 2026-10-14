@@ -2,8 +2,10 @@ package managedobserve
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +24,7 @@ import (
 	"github.com/kontext-security/kontext/internal/ledgerping"
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/managedstream"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
@@ -1179,5 +1182,55 @@ func TestBoundElsewhereAlertMessage(t *testing.T) {
 	}
 	if got := LoadAuthError(dbPath); got == nil || got.Status != http.StatusConflict {
 		t.Fatalf("breadcrumb = %+v", got)
+	}
+}
+
+func TestPruneExportedLedgerFollowsStreamCursor(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "guard.db")
+	store, err := sqlite.OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	old := time.Now().UTC().Add(-2 * ledgerRetention)
+	if _, err := db.Exec(`insert into authorization_actions(id, session_id, canonical_event_type, status, created_at, updated_at, updated_at_cursor_key)
+values('act_old', 'session-1', 'request.observed', 'completed', ?, ?, ?)`, old.Format(time.RFC3339Nano), old.Format(time.RFC3339Nano), old.Format("2006-01-02T15:04:05.000000000Z07:00")); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		var n int
+		if err := db.QueryRow(`select count(*) from authorization_actions`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	opts := DaemonOptions{StreamStatePath: filepath.Join(dir, "stream-state.json"), Diagnostic: diagnostic.New(io.Discard, false)}
+	// Without a persisted export cursor nothing is known to be in the cloud.
+	if err := pruneExportedLedger(ctx, opts, dbPath); err != nil || count() != 1 {
+		t.Fatalf("pruned before any export: rows %d, err %v", count(), err)
+	}
+	exported := time.Now().UTC()
+	if err := managedstream.SaveState(opts.StreamStatePath, managedstream.State{UpdatedAfter: &exported}); err != nil {
+		t.Fatal(err)
+	}
+	// Accepted, but not by a server that reports what it stores altered.
+	if err := pruneExportedLedger(ctx, opts, dbPath); err != nil || count() != 1 {
+		t.Fatalf("pruned an unverified row: rows %d, err %v", count(), err)
+	}
+	verifiedAfter := old.Add(-time.Hour)
+	if err := managedstream.SaveState(opts.StreamStatePath, managedstream.State{UpdatedAfter: &exported, VerifiedAfter: &verifiedAfter}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pruneExportedLedger(ctx, opts, dbPath); err != nil || count() != 0 {
+		t.Fatalf("exported row kept: rows %d, err %v", count(), err)
 	}
 }

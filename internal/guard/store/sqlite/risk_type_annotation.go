@@ -106,14 +106,19 @@ func (s *Store) SaveRiskTypeAnnotation(ctx context.Context, record riskclassifie
 		return RiskTypeAnnotationRecord{}, false, fmt.Errorf("marshal risk-type annotation: %w", err)
 	}
 	id := riskTypeAnnotationID(record.ActionID, record.Verdict.Provenance.ModelVersion)
+	// Insert only while the action exists, in the same statement: ledger
+	// retention may delete it after the check above, and an annotation
+	// without its action can never be exported.
 	result, err := s.db.ExecContext(ctx, `
 insert into risk_type_annotations(
   id, action_id, session_id, tool_use_id, command_hash, input_kind,
   schema_version, model_version, annotation_json, created_at
-) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) select ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+where exists (select 1 from authorization_actions where id = ?)
 on conflict(action_id, model_version) do nothing
 	`, id, record.ActionID, record.SessionID, nullIfEmpty(record.ToolUseID), record.CommandHash, record.InputKind,
-		record.Verdict.SchemaVersion, record.Verdict.Provenance.ModelVersion, string(annotationJSON), record.CreatedAt.Format(time.RFC3339Nano))
+		record.Verdict.SchemaVersion, record.Verdict.Provenance.ModelVersion, string(annotationJSON), record.CreatedAt.Format(time.RFC3339Nano),
+		record.ActionID)
 	if err != nil {
 		return RiskTypeAnnotationRecord{}, false, err
 	}
@@ -122,6 +127,9 @@ on conflict(action_id, model_version) do nothing
 		return RiskTypeAnnotationRecord{}, false, err
 	}
 	stored, err := s.RiskTypeAnnotationForActionModel(ctx, record.ActionID, record.Verdict.Provenance.ModelVersion)
+	if affected == 0 && errors.Is(err, sql.ErrNoRows) {
+		return RiskTypeAnnotationRecord{}, false, fmt.Errorf("risk-type annotation for action %s: action no longer exists", record.ActionID)
+	}
 	if err != nil {
 		return RiskTypeAnnotationRecord{}, false, err
 	}

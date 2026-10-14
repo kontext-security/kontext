@@ -388,6 +388,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "tool_usage_sources", "error_fingerprint", "text not null default ''"); err != nil {
 		return err
 	}
+	if _, err := s.db.ExecContext(ctx, ledgerExportSkipsDDL); err != nil {
+		return err
+	}
 	return nil
 }
 
