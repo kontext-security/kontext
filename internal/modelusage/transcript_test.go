@@ -54,16 +54,20 @@ func transcriptCases(t *testing.T) []transcriptCase {
 {"type":"response_item","payload":{"type":"message","role":"assistant"}}
 {"type":"token_usage_record","payload":{"thread_id":"parent","response_id":"r3","usage":{"input_tokens":30}}}
 `
+	_, codexChild, codexGrandchild := codexSubagentRollouts()
 	return []transcriptCase{
 		{"claude testdata", NewClaudeTranscript, claude},
 		{"codex testdata", NewCodexTranscript, codex},
 		{"claude snapshots", NewClaudeTranscript, snapshots},
 		{"codex turns", NewCodexTranscript, codexTurns},
+		{"codex sub-agent", NewCodexTranscript, codexChild},
+		{"codex nested sub-agent", NewCodexTranscript, codexGrandchild},
 		{"claude without final newline", NewClaudeTranscript, strings.TrimSuffix(claude, "\n")},
 		// Each failure must surface at the same prefix, and stay, as in a full read.
 		{"claude conflicting identity", NewClaudeTranscript, snapshots + strings.ReplaceAll(strings.SplitAfter(snapshots, "\n")[0], `"r"`, `"other"`) + snapshots},
 		{"claude negative count", NewClaudeTranscript, claude + strings.ReplaceAll(strings.SplitAfter(claude, "\n")[0], `"output_tokens":83`, `"output_tokens":-1`) + claude},
-		{"codex conflicting session", NewCodexTranscript, codex + strings.ReplaceAll(strings.SplitAfter(codex, "\n")[0], "01a0afe3", "02a0afe3") + codex},
+		{"codex negative count", NewCodexTranscript, codexTurns + `{"type":"response_item","payload":{"type":"message","role":"assistant"}}` + "\n" +
+			`{"type":"token_usage_record","payload":{"thread_id":"s","response_id":"r4","usage":{"input_tokens":40,"output_tokens":-1}}}` + "\n" + codexTurns},
 		{"codex legacy only", NewCodexTranscript, `{"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}` + "\n" + `{"type":"event_msg","payload":{"type":"token_count"}}` + "\n" + codexTurns},
 	}
 }

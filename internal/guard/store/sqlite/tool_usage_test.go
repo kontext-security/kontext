@@ -524,6 +524,61 @@ func codexTurns(turns, base int) string {
 	return b.String()
 }
 
+// codexSubagent builds the rollout of a sub-agent of thread s, shaped like
+// Codex 0.154 and later: its own session_meta, whose session_id is s, then a
+// copy of the root's history, starting with the root's session_meta, then its
+// own turns.
+func codexSubagent(rootHistory string, turns, base int) string {
+	own := strings.NewReplacer(`"thread_id":"s"`, `"thread_id":"child"`, `"response_id":"r`, `"response_id":"child-r`, `"call_id":"c`, `"call_id":"child-c`).Replace(codexTurns(turns, base))
+	_, own, _ = strings.Cut(own, "\n")
+	return `{"type":"session_meta","payload":{"id":"child","session_id":"s","forked_from_id":"s","parent_thread_id":"s","thread_source":"subagent","model_provider":"openai"}}` + "\n" +
+		rootHistory + `{"type":"event_msg","payload":{"type":"task_started"}}` + "\n" + own
+}
+
+func TestToolUsageImportsCodexSubagentRolloutsUnderHookSession(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	root := codexTurns(3, 100)
+	for name, content := range map[string]string{"root": root, "child": codexSubagent(root, 2, 200)} {
+		path := filepath.Join(dir, name+".jsonl")
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		// Codex reports a sub-agent's hooks under its root thread's session.
+		if err := store.TrackToolTranscript(ctx, hook.Event{SessionID: "codex-s", Agent: "codex", HookName: hook.HookPostToolUse, TranscriptPath: path}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var failed int
+	if err := store.db.QueryRowContext(ctx, `select count(*) from tool_usage_sources where fingerprint='' or error!=''`).Scan(&failed); err != nil || failed != 0 {
+		t.Fatalf("%d sources failed: %v", failed, err)
+	}
+	rows, err := store.PendingToolUsage(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, row := range rows {
+		if row.SessionID != "codex-s" {
+			t.Fatalf("usage outside the hook session: %+v", row)
+		}
+		got = append(got, row.MessageID)
+	}
+	// The copied root responses count once, from the root's own rollout.
+	slices.Sort(got)
+	if want := []string{"child-r0", "child-r1", "r0", "r1", "r2"}; !slices.Equal(got, want) {
+		t.Fatalf("records %v, want %v", got, want)
+	}
+}
+
 // transcriptCopy is one store reading its own copy of a transcript.
 type transcriptCopy struct {
 	store *Store
@@ -618,6 +673,7 @@ func TestToolUsageCursorMatchesFullReads(t *testing.T) {
 	}{
 		{"claude appends", "claude", "s", grow("", claude, 12)},
 		{"codex appends", "codex", "codex-s", grow("", codex, 12)},
+		{"codex sub-agent appends", "codex", "codex-s", grow("", codexSubagent(codexTurns(20, 100), 20, 200), 12)},
 		{"claude replaced, rewritten, and truncated", "claude", "s", slices.Concat(
 			grow("", half, 3),
 			// A new file that differs only before the parsed tail.
@@ -725,7 +781,7 @@ func TestToolUsageCursorMatchesFullReads(t *testing.T) {
 			if err := incremental.store.db.QueryRow(`select error from tool_usage_sources`).Scan(&message); err != nil {
 				t.Fatal(err)
 			}
-			if failing := strings.Contains(scenario.name, "failing"); failing != strings.Contains(message, "negative token count") {
+			if failing := strings.Contains(scenario.name, "failing"); failing != strings.Contains(message, "negative token count") || !failing && message != "" {
 				t.Fatalf("source error %q", message)
 			}
 		})
@@ -1056,5 +1112,47 @@ func TestToolUsageReconcileWaitsForAnotherWriter(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A Codex sub-agent started without its parent's history has one session_meta
+// whose session_id names the root. The previous adapter labeled its records
+// with the sub-agent's own id, so they were dropped, yet the read succeeded
+// and its fingerprint was saved. The adapter version in the fingerprint makes
+// such a source read once more.
+func TestToolUsageRereadsSourcesReadByThePreviousAdapter(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	path := filepath.Join(dir, "rollout-child.jsonl")
+	rollout := `{"type":"session_meta","payload":{"id":"child","session_id":"root","thread_source":"subagent","model_provider":"openai"}}
+{"type":"turn_context","payload":{"model":"gpt-6-astra"}}
+{"type":"response_item","payload":{"type":"function_call","call_id":"c","name":"exec_command"}}
+{"timestamp":"2026-09-17T10:00:00Z","type":"token_usage_record","payload":{"thread_id":"child","response_id":"r","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2}}}
+`
+	if err := os.WriteFile(path, []byte(rollout), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TrackToolTranscript(ctx, hook.Event{SessionID: "codex-root", Agent: "codex", HookName: hook.HookStop, TranscriptPath: path}); err != nil {
+		t.Fatal(err)
+	}
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `update tool_usage_sources set fingerprint=?, checked_at=?`,
+		fmt.Sprintf("tool-metadata-v3:%d:%d", stat.Size(), stat.ModTime().UnixNano()), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.PendingToolUsage(ctx, 50)
+	if err != nil || len(rows) != 1 || rows[0].SessionID != "codex-root" {
+		t.Fatalf("records = %+v, error = %v", rows, err)
 	}
 }
