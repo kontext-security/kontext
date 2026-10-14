@@ -25,6 +25,9 @@ def main():
         "a   b", "a\u00a0b", "\u0000\ufffd\u0378", "x\u2028x", "cafe\u0301",
         "中文 😊🚀 test", " leading   spaces  ",
         '[TOOL_NAME]\nBash\n[ARGUMENTS]\n{"command":"ls -la"}',
+        # x/text before v0.42.0 truncated NFC composition keys to 16 bits,
+        # so these composed as if the starter were U+00C6 or U+0041.
+        "\U000100c6\u0304", "\U000900c6\u0304", "x\U00010041\u0301y",
     ]
     rng = random.Random(42)
     parts = [

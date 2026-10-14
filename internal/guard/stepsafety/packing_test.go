@@ -115,6 +115,10 @@ func TestNormalizeTextPreservesPinnedUnicodeRules(t *testing.T) {
 		{"a\u00a0\u2003b", "a b"},
 		{"a\u2028b", "a\u2028b"},
 		{"\t", ""},
+		// x/text before v0.42.0 composed these as Ǣ and U+1134B because
+		// its composition keys kept only the low 16 bits of each rune.
+		{"\U000100c6\u0304", "\U000100c6\u0304"},
+		{"\u1347\U0001133e", "\u1347\U0001133e"},
 	} {
 		if got := normalizeText(c.input); got != c.want {
 			t.Errorf("normalize(%q)=%q, want %q", c.input, got, c.want)
