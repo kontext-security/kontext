@@ -48,6 +48,9 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
+    env:
+      # The cask needs notarized binaries; see scripts/render-homebrew-cask.sh.
+      PUBLISH_CASK: ${{ secrets.MACOS_SIGN_P12 != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,6 +108,11 @@ jobs:
           version="${TAG_NAME#v}"
           ./scripts/render-homebrew-formula.sh "$version" dist/checksums.txt > homebrew-tap/Formula/kontext.rb
           ruby -c homebrew-tap/Formula/kontext.rb
+          if [[ "$PUBLISH_CASK" == "true" ]]; then
+            mkdir -p homebrew-tap/Casks
+            ./scripts/render-homebrew-cask.sh "$version" dist/checksums.txt > homebrew-tap/Casks/kontext.rb
+            ruby -c homebrew-tap/Casks/kontext.rb
+          fi
 
       - name: Publish Homebrew formula
         env:
@@ -115,5 +123,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/kontext.rb
+          if [[ "$PUBLISH_CASK" == "true" ]]; then
+            git add Casks/kontext.rb
+          fi
           git commit -m "chore: update kontext formula to ${version}"
           git push

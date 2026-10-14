@@ -45,7 +45,7 @@ func runSelfServeHookMigration(ctx context.Context, loaded managedconfig.LoadedC
 	if !filepath.IsAbs(root) {
 		return
 	}
-	brew, ok := currentExecutableBrewPath()
+	brew, _, ok := currentExecutableBrewPath()
 	if !ok {
 		return
 	}

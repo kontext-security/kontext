@@ -884,14 +884,14 @@ func writeUserManagedConfig(slot target, cloudURL, label string, allowHTTPLoopba
 
 // stableBinaryPath picks the path baked into hooks and the LaunchAgent. The
 // brew prefix symlink (/opt/homebrew/bin, /usr/local/bin) survives `brew
-// upgrade`; a Cellar path dies with the next version, so prefer a stable
-// symlink that resolves to the same binary.
+// upgrade`; a Cellar or Caskroom path dies with the next version, so prefer a
+// stable symlink that resolves to the same binary.
 func stableBinaryPath() (string, string) {
 	exe, err := executablePath()
 	if err != nil || exe == "" {
 		return claudemanaged.DefaultKontextBinary, ""
 	}
-	if !strings.Contains(exe, "/Cellar/") {
+	if !strings.Contains(exe, "/Cellar/") && !strings.Contains(exe, "/Caskroom/") {
 		return exe, ""
 	}
 	real, err := filepath.EvalSymlinks(exe)
@@ -907,7 +907,7 @@ func stableBinaryPath() (string, string) {
 			return candidate, ""
 		}
 	}
-	return exe, "note: using a Homebrew Cellar path for hooks; re-run `kontext setup` after `brew upgrade kontext`"
+	return exe, "note: using a versioned Homebrew path for hooks; re-run `kontext setup` after `brew upgrade kontext`"
 }
 
 func managedSettingsData(binary string) ([]byte, error) {

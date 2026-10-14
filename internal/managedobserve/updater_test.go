@@ -29,6 +29,7 @@ func TestHomebrewUpdaterEligibility(t *testing.T) {
 		noUpdate     string
 		want         bool
 		wantBrewPath string
+		wantKind     string
 	}{
 		{
 			name:         "user scope brew install enables updater",
@@ -38,6 +39,17 @@ func TestHomebrewUpdaterEligibility(t *testing.T) {
 			optBrew:      true,
 			want:         true,
 			wantBrewPath: "/opt/homebrew/bin/brew",
+			wantKind:     "--formula",
+		},
+		{
+			name:         "cask install enables updater for the cask",
+			goos:         "darwin",
+			scope:        managedconfig.ScopeUser,
+			exe:          "/opt/homebrew/Caskroom/kontext/1.2.3/kontext",
+			optBrew:      true,
+			want:         true,
+			wantBrewPath: "/opt/homebrew/bin/brew",
+			wantKind:     "--cask",
 		},
 		{
 			name:         "intel brew install uses matching brew path",
@@ -48,6 +60,7 @@ func TestHomebrewUpdaterEligibility(t *testing.T) {
 			intelBrew:    true,
 			want:         true,
 			wantBrewPath: "/usr/local/bin/brew",
+			wantKind:     "--formula",
 		},
 		{
 			name:      "system scope skips updater",
@@ -118,10 +131,13 @@ func TestHomebrewUpdaterEligibility(t *testing.T) {
 				}
 				return nil, os.ErrNotExist
 			}
-			var gotBrewPath string
+			var gotBrewPath, gotKind string
 			runCommand = func(_ context.Context, path string, args ...string) (string, error) {
-				if reflect.DeepEqual(args, []string{"list", "--versions", homebrewFormula}) {
-					gotBrewPath = path
+				if len(args) == 4 && args[0] == "list" && args[2] == "--versions" {
+					gotBrewPath, gotKind = path, args[1]
+					if want := map[string]string{"--formula": homebrewFormula, "--cask": "kontext"}[args[1]]; args[3] != want {
+						t.Fatalf("brew list name = %q, want %q", args[3], want)
+					}
 					if tc.listErr != nil {
 						return "", tc.listErr
 					}
@@ -141,9 +157,14 @@ func TestHomebrewUpdaterEligibility(t *testing.T) {
 			if gotBrewPath != tc.wantBrewPath {
 				t.Fatalf("brew path = %q, want %q", gotBrewPath, tc.wantBrewPath)
 			}
+			if tc.wantKind != "" && gotKind != tc.wantKind {
+				t.Fatalf("brew kind = %q, want %q", gotKind, tc.wantKind)
+			}
 		})
 	}
 }
+
+var formulaUpdater = homebrewUpdaterConfigValue{brewPath: "/opt/homebrew/bin/brew", kind: "--formula"}
 
 func TestCheckHomebrewUpgradeNoVersionChange(t *testing.T) {
 	resetUpdaterSeams(t)
@@ -156,7 +177,7 @@ func TestCheckHomebrewUpgradeNoVersionChange(t *testing.T) {
 		return "", nil
 	}
 
-	changed, err := checkHomebrewUpgrade(context.Background(), "/opt/homebrew/bin/brew")
+	changed, err := checkHomebrewUpgrade(context.Background(), formulaUpdater)
 	if err != nil {
 		t.Fatalf("checkHomebrewUpgrade() error = %v", err)
 	}
@@ -164,10 +185,10 @@ func TestCheckHomebrewUpgradeNoVersionChange(t *testing.T) {
 		t.Fatal("checkHomebrewUpgrade() changed = true, want false")
 	}
 	want := [][]string{
-		{"list", "--versions", homebrewFormula},
+		{"list", "--formula", "--versions", homebrewFormula},
 		{"update-if-needed"},
 		{"upgrade", "--formula", "--no-ask", homebrewFormula},
-		{"list", "--versions", homebrewFormula},
+		{"list", "--formula", "--versions", homebrewFormula},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("commands = %#v, want %#v", calls, want)
@@ -189,7 +210,7 @@ func TestHomebrewUpdaterEligibilityHonorsCanceledContext(t *testing.T) {
 	}
 	sawCanceledContext := false
 	runCommand = func(ctx context.Context, _ string, args ...string) (string, error) {
-		if !reflect.DeepEqual(args, []string{"list", "--versions", homebrewFormula}) {
+		if !reflect.DeepEqual(args, []string{"list", "--formula", "--versions", homebrewFormula}) {
 			t.Fatalf("unexpected command args = %v", args)
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -223,7 +244,7 @@ func TestCheckHomebrewUpgradeVersionChange(t *testing.T) {
 		return "kontext-security/tap/kontext 1.2.4\n", nil
 	}
 
-	changed, err := checkHomebrewUpgrade(context.Background(), "/opt/homebrew/bin/brew")
+	changed, err := checkHomebrewUpgrade(context.Background(), formulaUpdater)
 	if err != nil {
 		t.Fatalf("checkHomebrewUpgrade() error = %v", err)
 	}
@@ -249,6 +270,7 @@ func TestRunHomebrewUpdaterLogsUpdateFailureAndKeepsRunning(t *testing.T) {
 		defer close(done)
 		runHomebrewUpdater(ctx, homebrewUpdaterConfigValue{
 			brewPath: "/opt/homebrew/bin/brew",
+			kind:     "--formula",
 			interval: time.Millisecond,
 		}, diagnostic.New(channelWriter{ch: logs}, true), upgraded)
 	}()
@@ -289,7 +311,7 @@ func TestCheckHomebrewUpgradeUpgradeFailure(t *testing.T) {
 		return "kontext-security/tap/kontext 1.2.3\n", nil
 	}
 
-	changed, err := checkHomebrewUpgrade(context.Background(), "/opt/homebrew/bin/brew")
+	changed, err := checkHomebrewUpgrade(context.Background(), formulaUpdater)
 	if err == nil || !strings.Contains(err.Error(), "brew upgrade") {
 		t.Fatalf("checkHomebrewUpgrade() error = %v, want brew upgrade error", err)
 	}
@@ -310,7 +332,7 @@ func TestCheckHomebrewUpgradeTimeout(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	changed, err := checkHomebrewUpgrade(ctx, "/opt/homebrew/bin/brew")
+	changed, err := checkHomebrewUpgrade(ctx, formulaUpdater)
 	if err == nil || !strings.Contains(err.Error(), "brew update-if-needed") {
 		t.Fatalf("checkHomebrewUpgrade() error = %v, want update timeout error", err)
 	}
