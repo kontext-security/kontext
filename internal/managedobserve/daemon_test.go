@@ -1222,6 +1222,14 @@ values('act_old', 'session-1', 'request.observed', 'completed', ?, ?, ?)`, old.F
 	if err := managedstream.SaveState(opts.StreamStatePath, managedstream.State{UpdatedAfter: &exported}); err != nil {
 		t.Fatal(err)
 	}
+	// Accepted, but not by a server that reports what it stores altered.
+	if err := pruneExportedLedger(ctx, opts, dbPath); err != nil || count() != 1 {
+		t.Fatalf("pruned an unverified row: rows %d, err %v", count(), err)
+	}
+	verifiedAfter := old.Add(-time.Hour)
+	if err := managedstream.SaveState(opts.StreamStatePath, managedstream.State{UpdatedAfter: &exported, VerifiedAfter: &verifiedAfter}); err != nil {
+		t.Fatal(err)
+	}
 	if err := pruneExportedLedger(ctx, opts, dbPath); err != nil || count() != 0 {
 		t.Fatalf("exported row kept: rows %d, err %v", count(), err)
 	}

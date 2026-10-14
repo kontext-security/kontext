@@ -43,6 +43,11 @@ type LedgerPruneOptions struct {
 	RiskTypeAnnotationID  string
 	MerlinCreatedAfter    *time.Time
 	MerlinAnnotationID    string
+	// VerifiedAfter is where the hosted ledger began reporting which accepted
+	// rows it stores differently from what was sent. Only actions after it
+	// are known to be held exactly as sent; nil means none are.
+	VerifiedAfter   *time.Time
+	VerifiedAfterID string
 	// OlderThan keeps recent history local regardless of export state.
 	OlderThan time.Time
 	// MaxRowBytes bounds the stored size of an action, its receipts and its
@@ -70,7 +75,7 @@ type LedgerPruneOptions struct {
 // now, never for ones old enough to prune. Freed pages are reused; the file
 // is not shrunk.
 func (s *Store) PruneExportedLedger(ctx context.Context, opts LedgerPruneOptions) (int, error) {
-	if opts.Limit <= 0 || opts.MaxRowBytes <= 0 || opts.ActionsExportedBefore.IsZero() || opts.OlderThan.IsZero() {
+	if opts.Limit <= 0 || opts.MaxRowBytes <= 0 || opts.ActionsExportedBefore.IsZero() || opts.OlderThan.IsZero() || opts.VerifiedAfter == nil {
 		return 0, nil
 	}
 	before := opts.ActionsExportedBefore
@@ -85,6 +90,16 @@ where a.updated_at_cursor_key < ?
     + (select coalesce(sum(` + storedBytes(authorizationReceiptsSelect, "r") + `), 0) from authorization_receipts r where r.action_id = a.id)
     + (select coalesce(sum(` + storedBytes(agentSessionsSelect, "session") + `), 0) from agent_sessions session where session.id = a.session_id) <= ?`
 	args := []any{ledgerTimestampCursorKeyFromTime(before), opts.MaxRowBytes}
+	// Mirror the export query's cursor: rows after VerifiedAfter were sent in
+	// batches whose responses reported every alteration.
+	verified := ledgerTimestampCursorKeyFromTime(*opts.VerifiedAfter)
+	if opts.VerifiedAfterID != "" {
+		eligible += "\n  and (a.updated_at_cursor_key > ? or (a.updated_at_cursor_key = ? and a.id > ?))"
+		args = append(args, verified, verified, opts.VerifiedAfterID)
+	} else {
+		eligible += "\n  and a.updated_at_cursor_key > ?"
+		args = append(args, verified)
+	}
 	// Mirror the export queries: an annotation they would still return has
 	// not been uploaded yet.
 	for _, pending := range []struct {

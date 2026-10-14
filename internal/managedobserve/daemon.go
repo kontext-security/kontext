@@ -789,6 +789,8 @@ func pruneExportedLedger(ctx context.Context, opts DaemonOptions, dbPath string)
 		RiskTypeAnnotationID:  state.RiskTypeAnnotationID,
 		MerlinCreatedAfter:    state.MerlinCreatedAfter,
 		MerlinAnnotationID:    state.MerlinAnnotationID,
+		VerifiedAfter:         state.VerifiedAfter,
+		VerifiedAfterID:       state.VerifiedAfterID,
 		OlderThan:             time.Now().UTC().Add(-ledgerRetention),
 		MaxRowBytes:           managedstream.MaxPayloadBytes / 4,
 		Limit:                 ledgerPruneBatch,

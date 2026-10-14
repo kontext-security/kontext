@@ -186,6 +186,11 @@ type State struct {
 	RiskTypeAnnotationID   string
 	LastHeartbeatAttemptAt string
 	LastHeartbeatAt        string
+	// VerifiedAfter is where the hosted ledger began reporting which accepted
+	// rows it stores differently from what was sent. Only actions after it,
+	// in export order, are known to be held by the cloud exactly as sent.
+	VerifiedAfter   *time.Time
+	VerifiedAfterID string
 }
 
 type persistedState struct {
@@ -199,6 +204,8 @@ type persistedState struct {
 	RiskTypeAnnotationID   string `json:"risk_type_annotation_id,omitempty"`
 	LastHeartbeatAttemptAt string `json:"last_heartbeat_attempt_at,omitempty"`
 	LastHeartbeatAt        string `json:"last_heartbeat_at,omitempty"`
+	VerifiedAfter          string `json:"verified_after,omitempty"`
+	VerifiedAfterID        string `json:"verified_after_id,omitempty"`
 }
 
 func isAuthStatus(status int) bool {
@@ -378,7 +385,8 @@ func flushLedger(ctx context.Context, opts Options) error {
 			continue
 		}
 
-		if err := post(ctx, opts, body); err != nil {
+		result, err := post(ctx, opts, body)
+		if err != nil {
 			var hostedErr *hostedIngestError
 			if errors.As(err, &hostedErr) && shouldRetryWithSmallerBatch(hostedErr.StatusCode) {
 				if limit == 1 {
@@ -394,6 +402,10 @@ func flushLedger(ctx context.Context, opts Options) error {
 				limit = nextLimit
 				continue
 			}
+			return err
+		}
+		// Before the cursor moves past this batch, so a crash re-sends it.
+		if err := recordStoredAsSent(ctx, store, &state, batch, result, pageUpdatedAfter, pageActionID); err != nil {
 			return err
 		}
 
@@ -473,7 +485,7 @@ func postHeartbeatIfDue(ctx context.Context, opts Options, statePath string, sta
 	if err != nil {
 		return err
 	}
-	if err := post(ctx, opts, body); err != nil {
+	if _, err := post(ctx, opts, body); err != nil {
 		return err
 	}
 
@@ -564,14 +576,28 @@ func nonNilRecords(records []sqlite.LedgerRecord) []sqlite.LedgerRecord {
 	return []sqlite.LedgerRecord{}
 }
 
-func post(ctx context.Context, opts Options, body []byte) error {
+// ingestResult is what a hosted ingest response says about the accepted
+// rows. Altered is nil when the server does not report alterations at all.
+type ingestResult struct {
+	Quarantined []ingestRow  `json:"quarantined"`
+	Altered     *[]ingestRow `json:"altered"`
+}
+
+type ingestRow struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+const maxIngestResponseBytes = 1 << 20
+
+func post(ctx context.Context, opts Options, body []byte) (ingestResult, error) {
 	endpoint, err := endpointURL(opts.CloudURL)
 	if err != nil {
-		return err
+		return ingestResult{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return ingestResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(opts.InstallToken))
@@ -582,16 +608,77 @@ func post(ctx context.Context, opts Options, body []byte) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return ingestResult{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &hostedIngestError{
+		return ingestResult{}, &hostedIngestError{
 			StatusCode: resp.StatusCode,
 			Body:       responseBodySummary(resp.Body),
 		}
 	}
-	return nil
+	// The post succeeded either way. A body this client cannot read only
+	// means the batch is not known to be stored as sent.
+	var result ingestResult
+	if data, err := io.ReadAll(io.LimitReader(resp.Body, maxIngestResponseBytes)); err == nil {
+		if err := json.Unmarshal(data, &result); err != nil {
+			result = ingestResult{}
+		}
+	}
+	return result, nil
+}
+
+// recordStoredAsSent marks the actions of an accepted batch that the hosted
+// ledger does not hold exactly as sent, so ledger retention never deletes
+// the only full copy: quarantined rows, rows it altered (a receipt counts
+// for its action), and every action of a batch answered without an
+// alteration report once reports have begun. The first report starts the
+// verified range at this page's position; nothing exported before it is
+// known to be stored as sent.
+func recordStoredAsSent(ctx context.Context, store *sqlite.Store, state *State, batch sqlite.LedgerBatch, result ingestResult, pageAfter *time.Time, pageAfterID string) error {
+	receiptActions := map[string]string{}
+	for _, receipt := range batch.Receipts {
+		id, _ := receipt["id"].(string)
+		actionID, _ := receipt["action_id"].(string)
+		receiptActions[id] = actionID
+	}
+	actionIDs := func(rows []ingestRow) []string {
+		var ids []string
+		for _, row := range rows {
+			switch row.Kind {
+			case "authorization_action":
+				ids = append(ids, row.ID)
+			case "authorization_receipt":
+				if actionID := receiptActions[row.ID]; actionID != "" {
+					ids = append(ids, actionID)
+				}
+			}
+		}
+		return ids
+	}
+	if err := store.RecordLedgerExportSkips(ctx, actionIDs(result.Quarantined), "hosted_quarantined"); err != nil {
+		return err
+	}
+	if result.Altered != nil {
+		if state.VerifiedAfter == nil {
+			start := time.Unix(0, 0).UTC()
+			if pageAfter != nil {
+				start = pageAfter.UTC()
+			}
+			state.VerifiedAfter, state.VerifiedAfterID = &start, pageAfterID
+		}
+		return store.RecordLedgerExportSkips(ctx, actionIDs(*result.Altered), "hosted_altered")
+	}
+	if state.VerifiedAfter == nil {
+		return nil
+	}
+	var all []string
+	for _, action := range batch.Actions {
+		if id, _ := action["id"].(string); id != "" {
+			all = append(all, id)
+		}
+	}
+	return store.RecordLedgerExportSkips(ctx, all, "hosted_unverified")
 }
 
 type hostedIngestError struct {
@@ -867,6 +954,14 @@ func LoadState(path string) (State, error) {
 	state.MerlinAnnotationID = strings.TrimSpace(persisted.MerlinAnnotationID)
 	state.LastHeartbeatAttemptAt = strings.TrimSpace(persisted.LastHeartbeatAttemptAt)
 	state.LastHeartbeatAt = strings.TrimSpace(persisted.LastHeartbeatAt)
+	if value := strings.TrimSpace(persisted.VerifiedAfter); value != "" {
+		parsed, err := parseStateUpdatedAfter(value)
+		if err != nil {
+			return State{}, fmt.Errorf("parse managed stream verified state: %w", err)
+		}
+		state.VerifiedAfter = &parsed
+	}
+	state.VerifiedAfterID = strings.TrimSpace(persisted.VerifiedAfterID)
 	return state, nil
 }
 
@@ -890,6 +985,10 @@ func SaveState(path string, state State) error {
 	}
 	if state.MerlinCreatedAfter != nil {
 		persisted.MerlinCreatedAfter = state.MerlinCreatedAfter.UTC().Format(time.RFC3339Nano)
+	}
+	if state.VerifiedAfter != nil {
+		persisted.VerifiedAfter = state.VerifiedAfter.UTC().Format(time.RFC3339Nano)
+		persisted.VerifiedAfterID = strings.TrimSpace(state.VerifiedAfterID)
 	}
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {

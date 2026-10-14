@@ -28,6 +28,8 @@ func TestPruneExportedLedgerDeletesOnlyAcceptedOldRows(t *testing.T) {
 	}
 	// Exported long ago but after the persisted cursor.
 	insertLedgerTestAction(t, tx, "act_unexported", base.Add(20*24*time.Hour))
+	// Exported before the hosted ledger reported alterations.
+	insertLedgerTestAction(t, tx, "act_unverified", base.Add(-24*time.Hour))
 	insertLedgerTestAction(t, tx, "act_recent", now.Add(-24*time.Hour))
 	// Receipts of other actions sit inside this action's receipt range, so an
 	// older client may have skipped its minimum batch as too wide.
@@ -61,8 +63,10 @@ values('ssv_pending', 'act_merlin_pending', 'session-1', 'Bash', 'allow', 0.5, '
 	}
 
 	riskCursor, merlinCursor := base.Add(time.Minute), base.Add(time.Minute)
+	verifiedAfter := base.Add(-time.Hour)
 	opts := LedgerPruneOptions{
 		ActionsExportedBefore: base.Add(10 * 24 * time.Hour),
+		VerifiedAfter:         &verifiedAfter,
 		RiskTypeCreatedAfter:  &riskCursor,
 		MerlinCreatedAfter:    &merlinCursor,
 		OlderThan:             now.Add(-30 * 24 * time.Hour),
@@ -77,7 +81,7 @@ values('ssv_pending', 'act_merlin_pending', 'session-1', 'Bash', 'allow', 0.5, '
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"act_big", "act_interleaved", "act_merlin_pending", "act_recent", "act_risk_pending", "act_skipped", "act_unexported"}
+	want := []string{"act_big", "act_interleaved", "act_merlin_pending", "act_recent", "act_risk_pending", "act_skipped", "act_unexported", "act_unverified"}
 	if !slices.Equal(actions, want) {
 		t.Fatalf("remaining actions = %v, want %v", actions, want)
 	}
@@ -109,7 +113,7 @@ values('ssv_pending', 'act_merlin_pending', 'session-1', 'Bash', 'allow', 0.5, '
 		t.Fatalf("second prune %d, err %v; want both annotated actions and act_unexported", pruned, err)
 	}
 	actions, err = queryStrings(ctx, store.db, `select id from authorization_actions order by id`)
-	if err != nil || !slices.Equal(actions, []string{"act_big", "act_interleaved", "act_recent", "act_skipped"}) {
+	if err != nil || !slices.Equal(actions, []string{"act_big", "act_interleaved", "act_recent", "act_skipped", "act_unverified"}) {
 		t.Fatalf("remaining actions = %v, err %v", actions, err)
 	}
 }
@@ -137,6 +141,11 @@ func TestPruneExportedLedgerRequiresCursorAndHonorsLimit(t *testing.T) {
 		t.Fatalf("pruned %d without an export cursor, err %v", pruned, err)
 	}
 	opts.ActionsExportedBefore = time.Now()
+	if pruned, err := store.PruneExportedLedger(ctx, opts); err != nil || pruned != 0 {
+		t.Fatalf("pruned %d before the hosted ledger reported alterations, err %v", pruned, err)
+	}
+	verifiedAfter := base.Add(-time.Hour)
+	opts.VerifiedAfter = &verifiedAfter
 	if pruned, err := store.PruneExportedLedger(ctx, opts); err != nil || pruned != 2 {
 		t.Fatalf("pruned %d, err %v; want the limit", pruned, err)
 	}
@@ -176,8 +185,10 @@ values('rta_new', 'act_annotated_meanwhile', 'session-1', 'h', 'shell', 'v1', 'm
 		}
 	}
 	exported := base.Add(time.Hour)
+	verifiedAfter := base.Add(-time.Hour)
 	pruned, err := store.PruneExportedLedger(ctx, LedgerPruneOptions{
 		ActionsExportedBefore: time.Now(),
+		VerifiedAfter:         &verifiedAfter,
 		RiskTypeCreatedAfter:  &exported,
 		OlderThan:             time.Now().Add(-30 * 24 * time.Hour),
 		MaxRowBytes:           1 << 20,
