@@ -65,6 +65,13 @@ select id, session_id, turn_id, tool_use_id, trace_id, span_id, parent_span_id,
   proposed_at, decision_at, completed_at, created_at, updated_at
 from authorization_actions`
 
+const agentSessionsSelect = `
+select id, runtime_kind, runtime_instance_id, adapter_kind, adapter_version, agent_provider, agent,
+  conversation_id, trace_id, principal_id, identity_context_json, identity_hash,
+  policy_version, policy_hash, cwd, source, status, external_id, closed_at,
+  mode, created_at, updated_at
+from agent_sessions`
+
 const authorizationReceiptsSelect = `
 select id, action_id, session_id, receipt_type, decision_result, decision_category,
   reason_code, approval_channel, approval_result, approver_id, approved_at,
@@ -140,12 +147,7 @@ func (s *Store) AgentSessions(ctx context.Context, ids []string) ([]LedgerRecord
 		for _, id := range chunk {
 			args = append(args, id)
 		}
-		chunkRecords, err := queryLedgerRecords(ctx, s.db, fmt.Sprintf(`
-select id, runtime_kind, runtime_instance_id, adapter_kind, adapter_version, agent_provider, agent,
-  conversation_id, trace_id, principal_id, identity_context_json, identity_hash,
-  policy_version, policy_hash, cwd, source, status, external_id, closed_at,
-  mode, created_at, updated_at
-from agent_sessions
+		chunkRecords, err := queryLedgerRecords(ctx, s.db, agentSessionsSelect+fmt.Sprintf(`
 where id in (%s)
 	`, placeholders), args...)
 		if err != nil {

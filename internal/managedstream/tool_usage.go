@@ -57,7 +57,7 @@ func flushToolUsage(ctx context.Context, opts Options) error {
 			limit = (limit + 1) / 2
 			continue
 		}
-		if err := post(ctx, opts, body); err != nil {
+		if _, err := post(ctx, opts, body); err != nil {
 			return err
 		}
 		if opts.OnFlushSuccess != nil {
