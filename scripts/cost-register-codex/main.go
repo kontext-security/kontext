@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,9 +27,10 @@ func register(db, path, session string) error {
 	var meta struct {
 		Type    string `json:"type"`
 		Payload struct {
-			ID       string `json:"id"`
-			Provider string `json:"model_provider"`
-			CWD      string `json:"cwd"`
+			ID        string `json:"id"`
+			SessionID string `json:"session_id"`
+			Provider  string `json:"model_provider"`
+			CWD       string `json:"cwd"`
 		} `json:"payload"`
 	}
 	scanner := bufio.NewScanner(f)
@@ -47,13 +49,15 @@ func register(db, path, session string) error {
 		return err
 	}
 	defer store.Close()
-	// The cloud requires each usage batch to include its owning session.
-	if _, err := store.BackfillObservedSessionWithMode(context.Background(), "codex-"+session, "codex", meta.Payload.CWD, "observe"); err != nil {
+	// The cloud requires each usage batch to include its owning session. As its
+	// hooks do, a sub-agent's usage belongs to its root thread's session.
+	owner := "codex-" + cmp.Or(meta.Payload.SessionID, session)
+	if _, err := store.BackfillObservedSessionWithMode(context.Background(), owner, "codex", meta.Payload.CWD, "observe"); err != nil {
 		return err
 	}
 	// Reuse source registration only. No fabricated Stop event is ingested.
 	return store.TrackToolTranscript(context.Background(), hook.Event{
-		SessionID: "codex-" + session, Agent: "codex",
+		SessionID: owner, Agent: "codex",
 		HookName: hook.HookStop, TranscriptPath: path,
 	})
 }

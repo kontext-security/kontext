@@ -1,6 +1,7 @@
 package modelusage
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -144,5 +145,63 @@ func TestCodexPartialToolSnapshotsPreserveResultConsumption(t *testing.T) {
 				t.Fatalf("result-consuming request has incorrect identity or usage: %+v", rows[1])
 			}
 		})
+	}
+}
+
+// codexSubagentRollouts returns the rollouts of a root thread, of a sub-agent
+// it spawned, and of a sub-agent that one spawned, shaped like Codex 0.154 and
+// later. A sub-agent's rollout starts with its own session_meta, whose
+// session_id is the root thread's, then copies its parent's history, starting
+// with the parent's session_meta, then its own turn. These copies include the
+// parent's tool calls and usage, which count only in the parent's rollout.
+func codexSubagentRollouts() (root, child, grandchild string) {
+	meta := func(id, parent string) string {
+		return fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":"root","forked_from_id":%q,"parent_thread_id":%q,"thread_source":"subagent","model_provider":"openai"}}`+"\n", id, parent, parent)
+	}
+	turn := func(thread, minute string) string {
+		return strings.NewReplacer("THREAD", thread, "MINUTE", minute).Replace(`{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"turn_context","payload":{"model":"gpt-6-astra"}}
+{"type":"response_item","payload":{"type":"function_call","call_id":"THREAD-call","name":"exec_command"}}
+{"timestamp":"2026-09-17T10:MINUTE:00Z","type":"token_usage_record","payload":{"thread_id":"THREAD","response_id":"THREAD-1","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2}}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"THREAD-call"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"THREAD-spawn","name":"spawn_agent"}}
+{"timestamp":"2026-09-17T10:MINUTE:01Z","type":"token_usage_record","payload":{"thread_id":"THREAD","response_id":"THREAD-2","usage":{"input_tokens":20,"cached_input_tokens":10,"cache_write_input_tokens":0,"output_tokens":3}}}
+`)
+	}
+	root = `{"type":"session_meta","payload":{"id":"root","session_id":"root","thread_source":"user","model_provider":"openai"}}` + "\n" + turn("root", "00")
+	child = meta("child", "root") + root + turn("child", "01")
+	grandchild = meta("grandchild", "child") + meta("child", "root") + turn("child", "01") + turn("grandchild", "02")
+	return root, child, grandchild
+}
+
+func TestCodexSubagentRolloutKeepsOwnUsageUnderRootSession(t *testing.T) {
+	root, child, grandchild := codexSubagentRollouts()
+	for _, c := range []struct{ name, thread, raw string }{
+		{"root", "root", root},
+		{"sub-agent", "child", child},
+		{"nested sub-agent", "grandchild", grandchild},
+	} {
+		rows, err := ReadCodexTranscript(strings.NewReader(c.raw))
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("%s: %+v %v", c.name, rows, err)
+		}
+		for i, row := range rows {
+			// Hooks report every thread's tool calls under the root session.
+			// Only the rollout's own thread's responses count, so each
+			// response is imported from exactly one rollout.
+			if row.SessionID != "codex-root" || row.RequestID != fmt.Sprintf("%s-%d", c.thread, i+1) {
+				t.Fatalf("%s: wrong session or another thread's usage: %+v", c.name, row)
+			}
+			for _, tool := range row.Tools {
+				if !strings.HasPrefix(tool.ID, c.thread+"-") {
+					t.Fatalf("%s: copied tool call attributed to %s: %+v", c.name, row.RequestID, tool)
+				}
+			}
+		}
+	}
+	// Without a session_id, a rollout's session is its own thread.
+	rows, err := ReadCodexTranscript(strings.NewReader(strings.Replace(child, `"session_id":"root",`, "", 1)))
+	if err != nil || len(rows) != 2 || rows[0].SessionID != "codex-child" || rows[0].RequestID != "child-1" {
+		t.Fatalf("legacy session: %+v %v", rows, err)
 	}
 }

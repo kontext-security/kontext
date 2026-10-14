@@ -42,6 +42,9 @@ Multiple calls in one response share one response cost. Thread/turn totals and
 The SQLite identity is `(codex-prefixed session ID, OpenAI response ID)`, with
 revisioned upload acknowledgements. Re-reading/resuming does not add the same
 response twice. Copied parent records in a fork are rejected by owning thread ID.
+The owning thread is the rollout's first `session_meta`. A sub-agent's rollout
+then copies its parent's history, starting with the parent's `session_meta`,
+which does not change the owner.
 Only the `openai` model provider is accepted; custom OpenAI-compatible providers
 must not inherit OpenAI rates based on a model name alone.
 
@@ -50,8 +53,10 @@ toolset/server metadata, model, timestamp, usage, and optional service tier ente
 the usage payload. In code mode, `exec` is the model-facing wrapper. Its inner
 tool calls cannot be inferred safely from the usage record; the cloud groups it
 under Code execution. Hosted tool service fees and
-whole-session usage are outside this feature. Subagent rollouts require their
-own registered hook/session path; parent usage is not used to guess their cost.
+whole-session usage are outside this feature. Codex hooks report a sub-agent's
+tool calls under its root thread's session (`session_meta.session_id`) with the
+sub-agent's own rollout as `transcript_path`, so its usage carries that session.
+Parent usage is not used to guess a sub-agent's cost.
 
 ## Local end-to-end verification
 
@@ -110,12 +115,13 @@ bash scripts/tool-cost-local.sh register-codex [SESSION_ID]
 ```
 
 Inside Codex, the ID defaults to `CODEX_THREAD_ID`. The helper locates exactly one
-matching rollout, validates its owning session and OpenAI provider, and uses the
-store's registration API plus session metadata upsert. No synthetic Stop or tool
-event is ingested, no hook trust changes are made, and unrelated transcripts are
-not imported. The existing worker backfills only tool-related responses, then
-continues following the registered file, including across collector restarts.
-Sources are revisited for the existing seven-day registration window.
+matching rollout, validates its owning thread and OpenAI provider, and uses the
+store's registration API plus session metadata upsert under the session its hooks
+report. No synthetic Stop or tool event is ingested, no hook trust changes are
+made, and unrelated transcripts are not imported. The existing worker backfills
+only tool-related responses, then continues following the registered file,
+including across collector restarts. Sources are revisited for the existing
+seven-day registration window.
 
 Verified the active task uploaded hundreds of Astra requests and new records
 continued uploading during development; the local Cost page now shows Astra

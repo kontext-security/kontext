@@ -2,6 +2,7 @@ package modelusage
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,9 +55,13 @@ func NewCodexTranscript() *Transcript {
 	return &Transcript{kind: "codex", state: &codexState{tools: map[string]Tool{}, seen: map[string]bool{}}}
 }
 
+// codexState is a rollout's parser state. thread owns the rollout's usage, and
+// session is the ID hooks report that thread under: a top-level thread's own
+// ID, or for a sub-agent its root thread's.
 type codexState struct {
 	line                                  int
 	records                               []Record
+	thread                                string
 	session, provider, model, serviceTier string
 	current                               *Record
 	pending                               []string
@@ -76,6 +81,7 @@ func (s *codexState) parseLine(text []byte) error {
 		Payload   struct {
 			Type          string      `json:"type"`
 			ID            string      `json:"id"`
+			SessionID     string      `json:"session_id"`
 			ModelProvider string      `json:"model_provider"`
 			Model         string      `json:"model"`
 			ServiceTier   string      `json:"service_tier"`
@@ -96,10 +102,13 @@ func (s *codexState) parseLine(text []byte) error {
 	p := row.Payload
 	switch row.Type {
 	case "session_meta":
-		if s.session != "" && s.session != p.ID {
-			return fmt.Errorf("codex transcript has conflicting session IDs")
+		// A sub-agent's rollout starts with its own session_meta and then
+		// copies its parent's history, beginning with the parent's
+		// session_meta. Only the first names this rollout's thread.
+		if s.thread != "" && s.thread != p.ID {
+			return nil
 		}
-		s.session, s.provider = p.ID, p.ModelProvider
+		s.thread, s.session, s.provider = p.ID, cmp.Or(p.SessionID, p.ID), p.ModelProvider
 	case "turn_context":
 		s.model, s.serviceTier = p.Model, p.ServiceTier
 		if p.ModelProvider != "" {
@@ -143,9 +152,10 @@ func (s *codexState) parseLine(text []byte) error {
 		}
 	case "token_usage_record":
 		s.sawResponse = true
-		// Forks can contain copied parent history. The recorded owning thread,
-		// rather than a filename or current hook, determines which usage belongs here.
-		if s.provider != "openai" || s.session == "" || p.ThreadID != s.session {
+		// Forks and sub-agents can contain copied parent history. The recorded
+		// owning thread, rather than a filename or current hook, determines
+		// which usage belongs here.
+		if s.provider != "openai" || s.thread == "" || p.ThreadID != s.thread {
 			s.current, s.pending = nil, nil
 			return nil
 		}

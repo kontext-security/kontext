@@ -56,3 +56,39 @@ func TestRegisterPreservesIdentityAndReconcilesWithoutHookEvents(t *testing.T) {
 		t.Fatalf("duplicate upload: %d, %v", len(rows), err)
 	}
 }
+
+func TestRegisterSubagentUnderItsRootSession(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "guard.db")
+	path := filepath.Join(dir, "rollout-child.jsonl")
+	rollout := `{"type":"session_meta","payload":{"id":"child","session_id":"root","forked_from_id":"root","parent_thread_id":"root","thread_source":"subagent","model_provider":"openai","cwd":"/work"}}
+{"type":"session_meta","payload":{"id":"root","session_id":"root","model_provider":"openai","cwd":"/work"}}
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"turn_context","payload":{"model":"gpt-6-astra"}}
+{"type":"response_item","payload":{"type":"function_call","call_id":"c","name":"exec_command"}}
+{"timestamp":"2026-09-17T10:00:00Z","type":"token_usage_record","payload":{"thread_id":"child","response_id":"r","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2}}}
+`
+	if err := os.WriteFile(path, []byte(rollout), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := register(db, path, "child"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sqlite.OpenStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.PendingToolUsage(ctx, 50)
+	if err != nil || len(rows) != 1 || rows[0].SessionID != "codex-root" || rows[0].MessageID != "r" {
+		t.Fatalf("records = %+v, error = %v", rows, err)
+	}
+	sessions, err := store.AgentSessions(ctx, []string{"codex-root"})
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("owning session missing: %v", err)
+	}
+}
