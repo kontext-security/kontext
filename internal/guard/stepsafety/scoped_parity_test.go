@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"slices"
 	"testing"
-	"time"
 )
 
 func TestScopedPythonNativeParity(t *testing.T) {
@@ -42,7 +41,7 @@ func TestScopedPythonNativeParity(t *testing.T) {
 	}
 	// Use the same cold-start allowance as the other native parity tests;
 	// race instrumentation is much slower while loading the checkpoint.
-	b, e := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: 2 * time.Minute}))
+	b, e := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: nativeTestStartupTimeout}))
 	if e != nil {
 		t.Fatal(e)
 	}
