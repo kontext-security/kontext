@@ -115,9 +115,23 @@ func TestNormalizeTextPreservesPinnedUnicodeRules(t *testing.T) {
 		{"a\u00a0\u2003b", "a b"},
 		{"a\u2028b", "a\u2028b"},
 		{"\t", ""},
+		// x/text before v0.42.0 composed these as Ǣ and U+1134B because
+		// its composition keys kept only the low 16 bits of each rune.
+		{"\U000100c6\u0304", "\U000100c6\u0304"},
+		{"\u1347\U0001133e", "\u1347\U0001133e"},
+		// HF NFC has Unicode 9.0 tables, so it neither reorders nor composes
+		// around later marks: x/text would emit U+031B U+07FD, U+00E9 U+1DFA,
+		// U+1DFA U+0301, U+11938 and (Unicode 17 tables) U+105C9.
+		{"\u07fd\u031b", "\u07fd\u031b"},
+		{"e\u1dfa\u0301", "e\u1dfa\u0301"},
+		{"\u0301\u1dfa", "\u0301\u1dfa"},
+		{"\U00011935\U00011930", "\U00011935\U00011930"},
+		{"\U000105d2\u0307", "\U000105d2\u0307"},
+		{"e\u0301\u1dfa", "\u00e9\u1dfa"},
+		{"cafe\u0301 \u0d3b\u0334", "caf\u00e9 \u0d3b\u0334"},
 	} {
 		if got := normalizeText(c.input); got != c.want {
-			t.Errorf("normalize(%q)=%q, want %q", c.input, got, c.want)
+			t.Errorf("normalize(%+q)=%+q, want %+q", c.input, got, c.want)
 		}
 	}
 }

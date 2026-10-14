@@ -309,7 +309,7 @@ func TestCedarEnforceAllowsEvaluationErrorsAndPreservesDenies(t *testing.T) {
 	}
 }
 
-func TestCedarEnforceFailsClosedWithoutFallback(t *testing.T) {
+func TestCedarEnforceNotReadyAllowsWithoutFallback(t *testing.T) {
 	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, `@id("permit") permit(principal, action, resource);`)
 	tests := []struct {
 		name     string
@@ -326,8 +326,8 @@ func TestCedarEnforceFailsClosedWithoutFallback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if current.calls != 0 || decision.Decision != risk.DecisionDeny || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
-				t.Fatalf("calls = %d decision = %#v, want no fallback and deny", current.calls, decision)
+			if current.calls != 0 || decision.Decision != risk.DecisionAllow || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
+				t.Fatalf("calls = %d decision = %#v, want no fallback and a not-ready allow", current.calls, decision)
 			}
 		})
 	}
@@ -404,14 +404,14 @@ func TestCedarEnforceDoesNotFallbackOnNonRollbackResponseStates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if current.calls != 0 || decision.Decision != risk.DecisionDeny {
-				t.Fatalf("calls = %d decision = %#v, want retained Cedar authority and deny", current.calls, decision)
+			if current.calls != 0 || decision.Decision != risk.DecisionAllow || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
+				t.Fatalf("calls = %d decision = %#v, want retained Cedar authority and a not-ready allow", current.calls, decision)
 			}
 		})
 	}
 }
 
-func TestCedarEnforceFailsClosedWithoutLastKnownGood(t *testing.T) {
+func TestCedarEnforceNotReadyWithoutLastKnownGoodAllows(t *testing.T) {
 	states := []cedarpolicy.State{
 		"",
 		cedarpolicy.StatePrincipalUnavailable,
@@ -430,8 +430,8 @@ func TestCedarEnforceFailsClosedWithoutLastKnownGood(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if current.calls != 0 || decision.Decision != risk.DecisionDeny || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
-				t.Fatalf("calls = %d decision = %#v, want fail-closed Cedar authority", current.calls, decision)
+			if current.calls != 0 || decision.Decision != risk.DecisionAllow || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
+				t.Fatalf("calls = %d decision = %#v, want Cedar authority to allow while not ready", current.calls, decision)
 			}
 		})
 	}
@@ -530,7 +530,7 @@ func TestCedarRemoteFollowsEnforceRollout(t *testing.T) {
 	}
 }
 
-func TestCedarRemoteFailsClosedWhenPersistedEnforceCacheIsIncompatible(t *testing.T) {
+func TestCedarRemoteAllowsWhenPersistedEnforceCacheIsIncompatible(t *testing.T) {
 	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
 	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{
 		PersistedEnforce: true,
@@ -542,8 +542,8 @@ func TestCedarRemoteFailsClosedWhenPersistedEnforceCacheIsIncompatible(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.calls != 0 || decision.Decision != risk.DecisionDeny || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
-		t.Fatalf("calls = %d decision = %#v, want persisted enforce claim to fail closed", current.calls, decision)
+	if current.calls != 0 || decision.Decision != risk.DecisionAllow || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
+		t.Fatalf("calls = %d decision = %#v, want the persisted enforce claim to keep authority and allow", current.calls, decision)
 	}
 }
 
@@ -684,14 +684,14 @@ func TestCedarEnforceDenyReasonNamesRule(t *testing.T) {
 	}
 }
 
-func TestCedarEnforceNamesNotReadyDeny(t *testing.T) {
+func TestCedarEnforceNamesNotReadyAllow(t *testing.T) {
 	provider := newCedarPolicyProvider(&countingHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{State: cedarpolicy.StateUnauthorized}}, CedarEnforcementStatic)
 	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Read", map[string]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Decision != risk.DecisionDeny || decision.Reason != "Cedar enforcement is not ready" {
-		t.Fatalf("decision = %#v, want the not-ready deny named", decision)
+	if decision.Decision != risk.DecisionAllow || decision.Reason != "Policy not ready; allowing tool call" {
+		t.Fatalf("decision = %#v, want the not-ready allow named", decision)
 	}
 }
 
@@ -1072,8 +1072,8 @@ func TestCedarRemoteHoldsLastKnownGoodEnforce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.calls != 0 || decision.Decision != risk.DecisionDeny || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
-		t.Fatalf("calls = %d decision = %#v, want fail-closed enforcement while only LKG enforce is cached", current.calls, decision)
+	if current.calls != 0 || decision.Decision != risk.DecisionAllow || decision.ReasonCode != string(cedareval.ReasonEnforcementNotReady) {
+		t.Fatalf("calls = %d decision = %#v, want enforcement held but allowing while only LKG enforce is cached", current.calls, decision)
 	}
 }
 
@@ -1227,12 +1227,22 @@ func TestCedarDecisionReasonDistinguishesDenyCauses(t *testing.T) {
 			want: "Approval required but unavailable",
 		},
 		{
-			name: "not ready",
+			name: "not ready allows",
 			mapping: cedareval.DecisionMapping{
-				EffectiveExecutionAction: cedareval.EffectiveExecutionActionDeny,
+				EvaluationState:          cedareval.EvaluationStateNotEvaluated,
+				EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow,
 				EffectiveReasonCode:      cedareval.ReasonEnforcementNotReady,
 			},
-			want: "Cedar enforcement is not ready",
+			want: "Policy not ready; allowing tool call",
+		},
+		{
+			name: "unresolved principal allows",
+			mapping: cedareval.DecisionMapping{
+				EvaluationState:          cedareval.EvaluationStatePrincipalUnresolved,
+				EffectiveExecutionAction: cedareval.EffectiveExecutionActionAllow,
+				EffectiveReasonCode:      cedareval.ReasonPrincipalUnresolved,
+			},
+			want: "Principal unresolved; allowing tool call",
 		},
 		{
 			name: "engine error",

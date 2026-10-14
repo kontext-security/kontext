@@ -25,6 +25,14 @@ def main():
         "a   b", "a\u00a0b", "\u0000\ufffd\u0378", "x\u2028x", "cafe\u0301",
         "中文 😊🚀 test", " leading   spaces  ",
         '[TOOL_NAME]\nBash\n[ARGUMENTS]\n{"command":"ls -la"}',
+        # x/text before v0.42.0 truncated NFC composition keys to 16 bits,
+        # so these composed as if the starter were U+00C6 or U+0041.
+        "\U000100c6\u0304", "\U000900c6\u0304", "x\U00010041\u0301y",
+        # HF NFC has Unicode 9.0 tables, so it neither reorders nor composes
+        # around marks from Unicode 10, 11, 14, 15 and 16; x/text does.
+        "\u07fd\u031b", "e\u1dfa\u0301", "\u0301\u1dfa", "cafe\u0301 \u0d3b\u0334",
+        "x\u0c3c\u0334 y", "a\u0345\u08d3", "\u1e00\u1df6\u0334", "\U0001e4ec\u0316",
+        "\U000105d2\u0307",
     ]
     rng = random.Random(42)
     parts = [
