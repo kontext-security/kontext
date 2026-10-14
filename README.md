@@ -76,8 +76,6 @@ Create an install token in the
 kontext setup
 ```
 
-The optional local risk model needs llama.cpp: run `brew install llama.cpp`, then `kontext setup --with-local-llm`.
-
 Setup:
 
 - stores the install token in the macOS login keychain;

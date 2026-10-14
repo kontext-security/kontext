@@ -46,7 +46,7 @@ const (
 	RiskStatusSkipped   RiskStatus = "skipped"
 )
 
-// Risk carries advisory analysis (the local LLM judge) for the same call.
+// Risk preserves the shared advisory-analysis contract for historical facts.
 // Advisory output never becomes its own decision row; it rides on the fact.
 type Risk struct {
 	Status      RiskStatus `json:"status"`
@@ -60,8 +60,7 @@ type Risk struct {
 	FailureKind *string    `json:"failure_kind"`
 }
 
-// Classifier carries the advisory bash risk annotation for the same call: a
-// char-n-gram SVM embedded in the CLI, and optionally a local guardrail LLM.
+// Classifier carries the embedded SVM advisory annotation for the same call.
 // It rides on the fact rather than in a parallel column so one decision has one
 // source of truth — the receipt signs the whole fact, so a nested annotation is
 // tamper-evident without a hash of its own.
@@ -70,7 +69,8 @@ type Risk struct {
 // final and nothing consults it. Field names are the shared ingest contract and
 // must not be renamed on either side of the mirror.
 type Classifier struct {
-	SVM      *ClassifierSVM `json:"svm"`
+	SVM *ClassifierSVM `json:"svm"`
+	// Legacy fields are not omitempty in the signed contract; new facts emit null.
 	LLM      *ClassifierLLM `json:"llm"`
 	LLMError *string        `json:"llm_error"`
 	// Command is the credential-redacted command the verdicts describe, capped at
@@ -99,10 +99,7 @@ type ClassifierSVM struct {
 	ModelVersion string  `json:"model_version"`
 }
 
-// ClassifierLLM is the guardrail model's read, absent whenever the LLM was
-// shed — unavailable, disabled, or over budget — in which case LLMError says so.
-// Cached reports a local LRU hit for a byte-identical repeat; it says nothing
-// about the model.
+// ClassifierLLM preserves the shared schema for historical signed facts.
 type ClassifierLLM struct {
 	Verdict    string `json:"verdict"`
 	Model      string `json:"model"`
@@ -538,8 +535,7 @@ func (fact DecisionFact) validateEvidenceCoherence(invalid func(string, ...any))
 
 // validateClassifier pins the annotation's shape. The SVM is embedded and
 // always runs, so its absence means the block was assembled wrong rather than
-// that a model was unavailable — the LLM is the failable half, and its absence
-// is recorded in llm_error instead. Scores are unbounded (a signed decision
+// that a model was unavailable. Scores are unbounded (a signed decision
 // margin, not a probability), so only finiteness is checked; JSON cannot carry
 // NaN, and a fact that cannot marshal must fail here rather than at export.
 func (fact DecisionFact) validateClassifier(invalid func(string, ...any)) {

@@ -318,7 +318,7 @@ func (r guardHookRuntime) recordStepSafety(ctx context.Context, actionID string,
 }
 
 // annotate attaches the advisory risk verdict to a settled decision. The
-// binary and optional LLM models run for every outcome, denies included: a
+// binary SVM runs for every outcome, denies included: a
 // deny is precisely the case where knowing whether the models agreed with the
 // policy is worth the most, and the annotation cannot change what has already
 // been decided. Risk types
@@ -336,7 +336,6 @@ func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, de
 		return
 	}
 	annotation := &risk.ClassifierAnnotation{
-		LLMError:         verdicts.LLMError,
 		RiskTypeError:    verdicts.RiskTypeError,
 		Command:          verdicts.Command,
 		CommandHash:      verdicts.CommandHash,
@@ -351,16 +350,6 @@ func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, de
 	}
 	if verdicts.RiskTypes != nil {
 		annotation.RiskTypes = classifierRiskTypes(verdicts.RiskTypes)
-	}
-	if verdicts.LLM != nil {
-		annotation.LLMPromptID = verdicts.LLM.PromptID
-		annotation.LLMRaw = verdicts.LLM.Raw
-		annotation.LLM = &risk.ClassifierLLM{
-			Verdict:    verdicts.LLM.Verdict,
-			Model:      verdicts.LLM.Model,
-			DurationMs: verdicts.LLM.DurationMs,
-			Cached:     verdicts.LLM.Cached,
-		}
 	}
 	decision.Classifier = annotation
 }
@@ -383,7 +372,6 @@ func (r guardHookRuntime) recordAnnotation(ctx context.Context, actionID string,
 		CommandHash:      annotation.CommandHash,
 		CommandTruncated: annotation.CommandTruncated,
 		AgentTask:        annotation.AgentTask,
-		LLMError:         annotation.LLMError,
 		RiskTypeError:    annotation.RiskTypeError,
 		SVM: &riskclassifier.SVMVerdict{
 			Verdict:      annotation.SVM.Verdict,
@@ -391,16 +379,6 @@ func (r guardHookRuntime) recordAnnotation(ctx context.Context, actionID string,
 			Threshold:    annotation.SVM.Threshold,
 			ModelVersion: annotation.SVM.ModelVersion,
 		},
-	}
-	if annotation.LLM != nil {
-		record.LLM = &riskclassifier.LLMVerdict{
-			Verdict:    annotation.LLM.Verdict,
-			Model:      annotation.LLM.Model,
-			Raw:        annotation.LLMRaw,
-			PromptID:   annotation.LLMPromptID,
-			DurationMs: annotation.LLM.DurationMs,
-			Cached:     annotation.LLM.Cached,
-		}
 	}
 	// Advisory data: a failed write must not fail the tool call.
 	_, _ = r.store.SaveClassifierVerdict(ctx, record)

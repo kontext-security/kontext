@@ -113,14 +113,6 @@ func MigrateLegacyInstall(ctx context.Context, out io.Writer) (migrated bool, er
 		return nil
 	}
 
-	// Hoist the cached model weights to the shared root BEFORE moving the ledger
-	// directory that currently contains them. They are machine-scoped and can be
-	// hundreds of megabytes; left inside the profile they would be stranded where
-	// nothing looks for them, and the next profile would re-download them.
-	if err := hoistSharedModelCache(legacyRoot, out, move); err != nil {
-		return false, rollback(err)
-	}
-
 	for _, name := range present {
 		from := filepath.Join(legacyRoot, name)
 		to := filepath.Join(dir, name)
@@ -139,43 +131,6 @@ func MigrateLegacyInstall(ctx context.Context, out io.Writer) (migrated bool, er
 		fmt.Fprintf(out, "  ✓ Active profile is now %q (%s)\n", profile.DefaultName, dir)
 	}
 	return true, nil
-}
-
-// hoistSharedModelCache moves <root>/managed-observe/judge-models up to
-// <root>/judge-models, which is where the shared (machine-scoped) resolution
-// looks for it once a profile is active.
-//
-// Absent cache is the common case and not an error — the guardrail LLM is
-// optional. An existing destination is left alone rather than merged: two caches
-// are self-healing (the loser is re-downloaded on demand), whereas interleaving
-// two sets of partially-downloaded weights is not.
-// move is injected so the hoist participates in the caller's rollback: if a
-// later step fails, this relocation is undone too.
-func hoistSharedModelCache(legacyRoot string, out io.Writer, move func(from, to string) error) error {
-	from := filepath.Join(legacyRoot, profile.ManagedObserveDir, profile.ModelCacheDirName)
-	info, err := os.Lstat(from)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	if !info.IsDir() {
-		return nil
-	}
-	to := filepath.Join(legacyRoot, profile.ModelCacheDirName)
-	if _, err := os.Lstat(to); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := move(from, to); err != nil {
-		return fmt.Errorf("move the model cache to %s: %w", to, err)
-	}
-	if out != nil {
-		fmt.Fprintf(out, "  ✓ Moved %s to the shared root (kept for every profile)\n", profile.ModelCacheDirName)
-	}
-	return nil
 }
 
 // legacyEntriesPresent returns the migratable entries that actually exist under

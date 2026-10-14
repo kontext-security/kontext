@@ -9,10 +9,8 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
-	"github.com/kontext-security/kontext/internal/guard/judge"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
-	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 func newTestServer(t *testing.T, store *sqlite.Store) *Server {
@@ -84,7 +82,7 @@ func TestStorePersistsSummaryCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The local chain is advisory: guardrail/judge analysis is recorded but
+	// The local chain is advisory: observations are recorded but
 	// nothing denies, so no action is critical.
 	if summary.Actions != 3 || summary.Warnings != 0 || summary.Critical != 0 || summary.Sessions != 1 {
 		t.Fatalf("summary = %+v", summary)
@@ -265,15 +263,13 @@ func TestSessionEventsHideModelMetadata(t *testing.T) {
 	policy := recordingPolicy{
 		decision: risk.RiskDecision{
 			Decision:     risk.DecisionDeny,
-			Reason:       "local judge denied",
-			ReasonCode:   risk.DecisionStageJudgeDeny,
-			ModelVersion: "qwen3-0.6b-q4",
+			Reason:       "custom policy denied",
+			ReasonCode:   "custom_policy",
+			ModelVersion: "model-v1",
 			RiskEvent: risk.RiskEvent{
-				Type:           risk.EventNormalToolCall,
-				DecisionStage:  risk.DecisionStageJudgeDeny,
-				ModelVersion:   "qwen3-0.6b-q4",
-				JudgeModel:     "qwen3-0.6b-q4",
-				JudgeRiskLevel: "high",
+				Type:          risk.EventNormalToolCall,
+				DecisionStage: "custom_policy",
+				ModelVersion:  "model-v1",
 			},
 			Cedar: enforcedDenyEvidence(),
 		},
@@ -292,9 +288,8 @@ func TestSessionEventsHideModelMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(stored) != 1 ||
-		stored[0].ModelVersion != "qwen3-0.6b-q4" ||
-		stored[0].RiskEvent.ModelVersion != "qwen3-0.6b-q4" ||
-		stored[0].RiskEvent.JudgeModel != "qwen3-0.6b-q4" {
+		stored[0].ModelVersion != "model-v1" ||
+		stored[0].RiskEvent.ModelVersion != "model-v1" {
 		t.Fatalf("stored events = %+v, want model metadata retained internally", stored)
 	}
 
@@ -311,318 +306,8 @@ func TestSessionEventsHideModelMetadata(t *testing.T) {
 	}
 	if len(response) != 1 ||
 		response[0].ModelVersion != "" ||
-		response[0].RiskEvent.ModelVersion != "" ||
-		response[0].RiskEvent.JudgeModel != "" {
+		response[0].RiskEvent.ModelVersion != "" {
 		t.Fatalf("response = %+v, want model metadata hidden", response)
-	}
-}
-
-func TestJudgePolicyDeniesFromLocalJudge(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	localJudge := &recordingJudge{
-		result: judge.Result{
-			Output: judge.Output{
-				Decision:   judge.DecisionDeny,
-				RiskLevel:  judge.RiskLevelHigh,
-				Categories: []string{"destructive_operation"},
-				Reason:     "Risky operation.",
-			},
-			Metadata: judge.Metadata{
-				Runtime:    "openai-compatible",
-				Model:      "qwen3-0.6b-q4",
-				DurationMs: 12,
-			},
-		},
-	}
-	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
-		SessionID:     "s1",
-		HookEventName: "PreToolUse",
-		Agent:         "claude",
-		ToolName:      "Bash",
-		ToolInput:     map[string]any{"command": "python scripts/deploy.py --dry-run"},
-		CWD:           "/tmp/project",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if localJudge.calls != 1 {
-		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
-	}
-	if localJudge.input.ToolName != "Bash" || localJudge.input.ToolInput.Command != "python scripts/deploy.py --dry-run" {
-		t.Fatalf("judge input = %+v", localJudge.input)
-	}
-	// The judge is advisory: its deny verdict is recorded as analysis, but
-	// the chain never decides — only Cedar can block.
-	if decision.Decision != risk.DecisionAllow || decision.ReasonCode != "judge_deny" {
-		t.Fatalf("decision = %+v", decision)
-	}
-	if decision.RiskEvent.DecisionStage != risk.DecisionStageJudgeDeny || decision.RiskEvent.JudgeModel != "qwen3-0.6b-q4" || decision.RiskEvent.JudgeRiskLevel != "high" {
-		t.Fatalf("risk event = %+v", decision.RiskEvent)
-	}
-}
-
-func TestJudgePolicyAllowsFromLocalJudge(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	localJudge := &recordingJudge{
-		result: judge.Result{
-			Output: judge.Output{
-				Decision:   judge.DecisionAllow,
-				RiskLevel:  judge.RiskLevelLow,
-				Categories: []string{"normal_coding"},
-				Reason:     "Safe local read.",
-			},
-			Metadata: judge.Metadata{
-				Runtime:    "openai-compatible",
-				Model:      "qwen3-0.6b-q4",
-				DurationMs: 8,
-			},
-		},
-	}
-	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
-		SessionID:     "s1",
-		HookEventName: "PreToolUse",
-		Agent:         "claude",
-		ToolName:      "Read",
-		ToolInput:     map[string]any{"file_path": "README.md"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if localJudge.calls != 1 {
-		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
-	}
-	if localJudge.input.ToolName != "Read" || localJudge.input.ToolInput.Path != "project_file" || localJudge.input.ToolInput.Request != "Read project_file" {
-		t.Fatalf("judge input = %+v", localJudge.input)
-	}
-	if decision.Decision != risk.DecisionAllow || decision.ReasonCode != risk.DecisionStageJudgeAllow {
-		t.Fatalf("decision = %+v", decision)
-	}
-	if decision.RiskEvent.DecisionStage != risk.DecisionStageJudgeAllow {
-		t.Fatalf("risk event = %+v", decision.RiskEvent)
-	}
-}
-
-func TestJudgePolicyRedactsCredentialValuesFromJudgeInput(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	localJudge := &recordingJudge{
-		result: judge.Result{
-			Output: judge.Output{
-				Decision:   judge.DecisionAllow,
-				RiskLevel:  judge.RiskLevelLow,
-				Categories: []string{"normal_coding"},
-				Reason:     "Safe.",
-			},
-			Metadata: judge.Metadata{Runtime: "openai-compatible", Model: "qwen3-0.6b-q4"},
-		},
-	}
-	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = server.ProcessHookEvent(context.Background(), risk.HookEvent{
-		SessionID:     "s1",
-		HookEventName: "PreToolUse",
-		Agent:         "claude",
-		ToolName:      "Bash",
-		ToolInput:     map[string]any{"command": `echo API_TOKEN=real-secret-123`},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if localJudge.calls != 1 {
-		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
-	}
-	got := localJudge.input.ToolInput.Command
-	if strings.Contains(got, "real-secret-123") {
-		t.Fatalf("judge input leaked credential value: %+v", localJudge.input)
-	}
-	if !strings.Contains(got, payloadcapture.RedactedPlaceholder) {
-		t.Fatalf("judge input missing redaction marker: %+v", localJudge.input)
-	}
-}
-
-func TestJudgePolicyPreservesExplicitIntentForJudgeInput(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	localJudge := &recordingJudge{
-		result: judge.Result{
-			Output: judge.Output{
-				Decision:   judge.DecisionAllow,
-				RiskLevel:  judge.RiskLevelMedium,
-				Categories: []string{"explicit_user_intent"},
-				Reason:     "Approved preview action.",
-			},
-		},
-	}
-	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = server.ProcessHookEvent(context.Background(), risk.HookEvent{
-		SessionID:     "s1",
-		HookEventName: "PreToolUse",
-		Agent:         "claude",
-		ToolName:      "Bash",
-		ToolInput:     map[string]any{"command": "npm run deploy:preview approved_by_user"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if localJudge.calls != 1 {
-		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
-	}
-	if !localJudge.input.ExplicitUserIntent {
-		t.Fatalf("judge input missing explicit intent: %+v", localJudge.input)
-	}
-}
-
-func TestJudgeInputClassifiesCredentialPathForNonReadTools(t *testing.T) {
-	tests := []struct {
-		name      string
-		path      string
-		wantClass string
-	}{
-		{name: "env file", path: ".env", wantClass: "env_file"},
-		{name: "relative aws credentials", path: ".aws/credentials", wantClass: "cloud_credentials"},
-		{name: "dot relative gcloud credentials", path: "./.gcloud/application_default_credentials.json", wantClass: "cloud_credentials"},
-		{name: "relative railway config", path: ".config/railway/config.json", wantClass: "cloud_credentials"},
-		{name: "nested aws credentials", path: "nested/.aws/config", wantClass: "cloud_credentials"},
-		{name: "normal project file", path: "README.md", wantClass: "project_file"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			input := judgeInputFromRiskEvent(
-				risk.HookEvent{
-					ToolName:  "Write",
-					ToolInput: map[string]any{"file_path": tt.path},
-				},
-				risk.RiskEvent{RequestSummary: "Write " + tt.path},
-			)
-			if input.ToolInput.Path != tt.wantClass {
-				t.Fatalf("judge input path = %q, want %q: %+v", input.ToolInput.Path, tt.wantClass, input)
-			}
-			wantRequest := "Write " + tt.wantClass
-			if tt.wantClass == "env_file" || tt.wantClass == "cloud_credentials" {
-				wantRequest = "Write credential_path " + tt.wantClass
-			}
-			if input.ToolInput.Request != wantRequest {
-				t.Fatalf("judge input request = %q, want %q: %+v", input.ToolInput.Request, wantRequest, input)
-			}
-			if strings.Contains(input.ToolInput.Request, tt.path) {
-				t.Fatalf("judge input leaked raw path in request: %+v", input)
-			}
-		})
-	}
-}
-
-func TestJudgeInputPreservesRedactedCommandSeparators(t *testing.T) {
-	event := risk.HookEvent{
-		ToolName:  "Bash",
-		ToolInput: map[string]any{"command": "printf ok;TOKEN=secret echo next"},
-	}
-	riskEvent := risk.NormalizeHookEvent(event)
-	input := judgeInputFromRiskEvent(event, riskEvent)
-
-	if input.ToolInput.Command != "printf ok;TOKEN=[REDACTED_SECRET] echo next" {
-		t.Fatalf("judge command = %q", input.ToolInput.Command)
-	}
-	if strings.Contains(input.ToolInput.Command, "secret") {
-		t.Fatalf("judge command leaked credential: %q", input.ToolInput.Command)
-	}
-}
-
-func TestJudgeInputDescribesPathOnlyLocalReads(t *testing.T) {
-	rawPath := "/Users/michelosswald/.codex/worktrees/a693/kontext-cli/internal/guard/policy/types.go"
-	input := judgeInputFromRiskEvent(
-		risk.HookEvent{
-			ToolName:  "Read",
-			ToolInput: map[string]any{"file_path": rawPath},
-		},
-		risk.RiskEvent{RequestSummary: "Read " + rawPath},
-	)
-	if input.ToolInput.Path != "project_file" || input.ToolInput.Request != "Read project_file" {
-		t.Fatalf("judge input = %+v, want sanitized local project read", input)
-	}
-	if strings.Contains(input.ToolInput.Request, rawPath) || strings.Contains(input.ToolInput.Request, "/Users/") {
-		t.Fatalf("judge input leaked raw path in request: %+v", input)
-	}
-}
-
-func TestJudgeInputIncludesSkillName(t *testing.T) {
-	input := judgeInputFromRiskEvent(
-		risk.HookEvent{
-			ToolName:  "Skill",
-			ToolInput: map[string]any{"skill": "review", "args": "ignored"},
-		},
-		risk.RiskEvent{RequestSummary: "Skill"},
-	)
-	if input.ToolInput.Request != "Skill review" {
-		t.Fatalf("judge input request = %q, want %q", input.ToolInput.Request, "Skill review")
-	}
-}
-
-func TestJudgeInputSkillWithoutNameFallsBack(t *testing.T) {
-	input := judgeInputFromRiskEvent(
-		risk.HookEvent{
-			ToolName:  "Skill",
-			ToolInput: map[string]any{},
-		},
-		risk.RiskEvent{RequestSummary: "Skill"},
-	)
-	if input.ToolInput.Request != "Skill" {
-		t.Fatalf("judge input request = %q, want %q", input.ToolInput.Request, "Skill")
-	}
-}
-
-func TestJudgePolicyFailsOpenWhenJudgeUnavailable(t *testing.T) {
-	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	server, err := NewServerWithOptions(store, Options{
-		Judge: &recordingJudge{err: judge.Error{Kind: judge.FailureTimeout, Err: context.DeadlineExceeded}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
-		SessionID:     "s1",
-		HookEventName: "PreToolUse",
-		ToolName:      "Bash",
-		ToolInput:     map[string]any{"command": "python scripts/deploy.py --dry-run"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decision.Decision != risk.DecisionAllow || decision.ReasonCode != "judge_unavailable_allow" {
-		t.Fatalf("decision = %+v", decision)
-	}
-	if decision.RiskEvent.JudgeFailureKind != judge.FailureTimeout || decision.RiskEvent.DecisionStage != risk.DecisionStageJudgeFailOpen {
-		t.Fatalf("risk event = %+v", decision.RiskEvent)
 	}
 }
 
@@ -708,22 +393,6 @@ type recordingPolicy struct {
 	called   bool
 	decision risk.RiskDecision
 	err      error
-}
-
-type recordingJudge struct {
-	calls  int
-	input  judge.Input
-	result judge.Result
-	err    error
-}
-
-func (j *recordingJudge) Decide(_ context.Context, input judge.Input) (judge.Result, error) {
-	j.calls++
-	j.input = input
-	if j.err != nil {
-		return judge.Result{}, j.err
-	}
-	return j.result, nil
 }
 
 func (p *recordingPolicy) DecideHook(_ context.Context, _ risk.HookEvent) (risk.RiskDecision, error) {

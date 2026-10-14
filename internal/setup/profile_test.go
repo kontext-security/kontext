@@ -370,61 +370,6 @@ func TestMigrateLegacyInstallMovesStateIntoDefault(t *testing.T) {
 	}
 }
 
-// Cached model weights are machine-scoped and can be hundreds of megabytes.
-// Migration must hoist them OUT of the ledger directory it moves, or they end up
-// stranded inside one profile where nothing looks for them — and the next
-// profile silently re-downloads them.
-func TestMigrateLegacyInstallHoistsModelCacheToSharedRoot(t *testing.T) {
-	h := profileHarness(t)
-	if err := Run(context.Background(), h.options("kt_legacy", pingServer(t, "kt_legacy"))); err != nil {
-		t.Fatal(err)
-	}
-	root := kontextRoot(h.home)
-	cacheDir := filepath.Join(root, profile.ManagedObserveDir, profile.ModelCacheDirName)
-	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	weights := filepath.Join(cacheDir, "model.gguf")
-	if err := os.WriteFile(weights, []byte("pretend-weights"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := MigrateLegacyInstall(context.Background(), nil); err != nil {
-		t.Fatalf("MigrateLegacyInstall() error = %v", err)
-	}
-
-	// It landed at the shared root, with its contents.
-	hoisted := filepath.Join(root, profile.ModelCacheDirName, "model.gguf")
-	data, err := os.ReadFile(hoisted)
-	if err != nil {
-		t.Fatalf("model cache was not hoisted to the shared root: %v", err)
-	}
-	if string(data) != "pretend-weights" {
-		t.Errorf("hoisted cache contents = %q", data)
-	}
-	// And it is NOT inside the profile.
-	stranded := filepath.Join(root, "profiles", profile.DefaultName, profile.ManagedObserveDir, profile.ModelCacheDirName)
-	if _, err := os.Lstat(stranded); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("model cache is stranded inside the profile (err = %v)", err)
-	}
-	// The ledger itself still moved into the profile.
-	if _, err := os.Lstat(filepath.Join(root, "profiles", profile.DefaultName, profile.ManagedObserveDir)); err != nil {
-		t.Errorf("ledger directory did not move into the profile: %v", err)
-	}
-}
-
-// No cache is the normal case (the guardrail LLM is optional) and must not fail.
-func TestMigrateLegacyInstallWithoutModelCache(t *testing.T) {
-	h := profileHarness(t)
-	if err := Run(context.Background(), h.options("kt_legacy", pingServer(t, "kt_legacy"))); err != nil {
-		t.Fatal(err)
-	}
-	migrated, err := MigrateLegacyInstall(context.Background(), nil)
-	if err != nil || !migrated {
-		t.Fatalf("MigrateLegacyInstall() = %v, %v", migrated, err)
-	}
-}
-
 // Migration must stop the daemon before moving the database and start it after.
 func TestMigrateLegacyInstallStopsAndRestartsAgent(t *testing.T) {
 	h := profileHarness(t)

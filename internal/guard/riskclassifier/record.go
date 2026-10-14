@@ -19,11 +19,8 @@ const (
 // and prior_commands is not duplicated per row — earlier records in the same
 // session reconstruct it at read/export time.
 //
-// The original verdict blocks are recorded here: the embedded binary SVM and
-// the local guardrail LLM. Successful risk types use their separate derived
-// table; RiskTypeError retains a missing second-stage result. The LLM half is
-// absent when the guardrail is off or its call failed, in which case LLMError
-// says why — a missing verdict is data too.
+// The embedded binary SVM verdict is recorded here. Successful risk types use
+// their separate derived table; RiskTypeError retains a missing result.
 type Record struct {
 	ActionID  string `json:"action_id"`
 	SessionID string `json:"session_id"`
@@ -43,9 +40,7 @@ type Record struct {
 	// when the daemon has not observed one.
 	AgentTask string `json:"agent_task,omitempty"`
 
-	SVM      *SVMVerdict `json:"svm,omitempty"`
-	LLM      *LLMVerdict `json:"llm,omitempty"`
-	LLMError string      `json:"llm_error,omitempty"`
+	SVM *SVMVerdict `json:"svm,omitempty"`
 	// RiskTypeError records advisory model load/inference degradation for an
 	// eligible binary-risky shell call. A successful derived annotation lives
 	// in the separate append-only risk_type_annotations table.

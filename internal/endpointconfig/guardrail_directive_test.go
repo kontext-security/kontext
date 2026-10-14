@@ -44,17 +44,14 @@ func TestResponseWithoutTheFlagIsRejected(t *testing.T) {
 	}
 
 	// And the disable is untouched by the rejected attempt.
-	directive := cache.Current().GuardrailLLMDirective
+	directive := cache.Current().Configured.GuardrailLLMEnabled
 	if directive == nil || *directive {
 		t.Errorf("rejected response disturbed the disable: %v", directive)
 	}
 }
 
-// The remembered directive also has to survive a response-version upgrade. A
-// cache written under an older version cannot be revalidated — its identity was
-// computed over a different preimage — so it is discarded, and without the
-// remembered value a deliberate disable would be lost at exactly that moment.
-func TestRememberedDirectiveSurvivesAResponseVersionUpgrade(t *testing.T) {
+// An older response version is discarded without failing cache load.
+func TestOlderResponseVersionIsDiscarded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "endpoint-config.json")
 	stale := guardrailResponse(t, payloadcapture.ModeSummary, boolPtr(false))
 	stale.ResponseVersion = ResponseVersion - 1
@@ -70,57 +67,12 @@ func TestRememberedDirectiveSurvivesAResponseVersionUpgrade(t *testing.T) {
 		t.Fatalf("load across a version upgrade should not fail: %v", err)
 	}
 	snapshot := cache.Current()
-	if snapshot.GuardrailLLMDirective == nil || *snapshot.GuardrailLLMDirective {
-		t.Errorf("disable lost across the upgrade: %v", snapshot.GuardrailLLMDirective)
-	}
 	if snapshot.Confirmed {
 		t.Error("a discarded cache must not read as confirmed")
 	}
 }
 
-// Clearing a disable takes an explicit true. Silence is not a directive.
-func TestExplicitEnableClearsADisable(t *testing.T) {
-	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
-	now := time.Now().UTC()
-
-	disable := guardrailResponse(t, payloadcapture.ModeSummary, boolPtr(false))
-	if err := cache.Apply(FetchResult{Response: &disable, ETag: disable.ConfigIdentity}, now); err != nil {
-		t.Fatalf("apply disable: %v", err)
-	}
-	enable := guardrailResponse(t, payloadcapture.ModeSummary, boolPtr(true))
-	if err := cache.Apply(FetchResult{Response: &enable, ETag: enable.ConfigIdentity}, now.Add(time.Minute)); err != nil {
-		t.Fatalf("apply enable: %v", err)
-	}
-	directive := cache.Current().GuardrailLLMDirective
-	if directive == nil || !*directive {
-		t.Errorf("explicit enable was not adopted: %v", directive)
-	}
-}
-
-// The remembered directive has to survive a restart, since a kill switch that
-// forgets on restart fails in the state it exists for.
-func TestRememberedDirectiveSurvivesReload(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "endpoint-config.json")
-	now := time.Now().UTC()
-
-	first := NewCache(path)
-	disable := guardrailResponse(t, payloadcapture.ModeSummary, boolPtr(false))
-	if err := first.Apply(FetchResult{Response: &disable, ETag: disable.ConfigIdentity}, now); err != nil {
-		t.Fatalf("apply disable: %v", err)
-	}
-
-	reloaded := NewCache(path)
-	if err := reloaded.Load(); err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	directive := reloaded.Current().GuardrailLLMDirective
-	if directive == nil || *directive {
-		t.Errorf("disable did not survive the reload: %v", directive)
-	}
-}
-
-// A cache written before the directive was remembered must still load, carrying
-// no directive rather than failing.
+// Version one cache files must still load.
 func TestVersionOneCacheStillLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "endpoint-config.json")
 	response := testResponse(t, payloadcapture.ModeFull)
@@ -134,8 +86,31 @@ func TestVersionOneCacheStillLoads(t *testing.T) {
 	if err := cache.Load(); err != nil {
 		t.Fatalf("load version 1: %v", err)
 	}
-	if directive := cache.Current().GuardrailLLMDirective; directive != nil {
-		t.Errorf("version 1 cache produced a directive: %v", *directive)
+	if cache.Current().Configured.PayloadCaptureMode != payloadcapture.ModeFull {
+		t.Error("version 1 cache lost its configured capture mode")
+	}
+}
+
+// Existing cache files may contain the retired directive beside the response.
+func TestLegacyDirectiveCacheLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "endpoint-config.json")
+	now := time.Now().UTC()
+
+	response := guardrailResponse(t, payloadcapture.ModeSummary, boolPtr(false))
+	writeCacheFileForTest(t, path, cacheFile{
+		Version:               cacheFileVersion,
+		FetchedAt:             now.Format(time.RFC3339Nano),
+		Response:              &response,
+		GuardrailLLMDirective: boolPtr(false),
+	})
+
+	reloaded := NewCache(path)
+	if err := reloaded.Load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	directive := reloaded.Current().Configured.GuardrailLLMEnabled
+	if directive == nil || *directive {
+		t.Errorf("stored contract value did not survive the reload: %v", directive)
 	}
 }
 

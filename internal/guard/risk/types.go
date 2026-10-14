@@ -60,9 +60,6 @@ const (
 const (
 	DecisionStageDeterministicDeny = "deterministic_deny"
 	DecisionStageAdvisory          = "advisory"
-	DecisionStageJudgeAllow        = "judge_allow"
-	DecisionStageJudgeDeny         = "judge_deny"
-	DecisionStageJudgeFailOpen     = "judge_fail_open"
 )
 
 type RiskEvent struct {
@@ -95,12 +92,6 @@ type RiskEvent struct {
 	PolicyRuleID       string    `json:"policy_rule_id,omitempty"`
 	PolicyRuleCategory string    `json:"policy_rule_category,omitempty"`
 	PolicySignals      []string  `json:"policy_signals,omitempty"`
-	JudgeRuntime       string    `json:"judge_runtime,omitempty"`
-	JudgeModel         string    `json:"judge_model,omitempty"`
-	JudgeDurationMs    *int64    `json:"judge_duration_ms,omitempty"`
-	JudgeFailureKind   string    `json:"judge_failure_kind,omitempty"`
-	JudgeRiskLevel     string    `json:"judge_risk_level,omitempty"`
-	JudgeCategories    []string  `json:"judge_categories,omitempty"`
 }
 
 type RiskDecision struct {
@@ -175,38 +166,22 @@ type CedarEvidence struct {
 // ClassifierAnnotation is one action's risk annotation. AgentTask and the
 // command fields stay local; only the verdict block is uploaded.
 type ClassifierAnnotation struct {
-	SVM           *ClassifierSVM       `json:"svm,omitempty"`
-	LLM           *ClassifierLLM       `json:"llm,omitempty"`
-	LLMError      string               `json:"llm_error,omitempty"`
-	RiskTypes     *ClassifierRiskTypes `json:"-"`
-	RiskTypeError string               `json:"-"`
-	// LLMPromptID records which prompt variant produced the verdict. Local
-	// only: the hosted block deliberately omits it.
-	LLMPromptID string `json:"-"`
-	// LLMRaw is what the model literally answered, also local only. The model is
-	// the weak half of this pair, so its exact words are what make an odd verdict
-	// diagnosable later; the normalized verdict alone loses that.
-	LLMRaw           string `json:"-"`
-	Command          string `json:"-"`
-	CommandHash      string `json:"-"`
-	CommandTruncated bool   `json:"-"`
-	AgentTask        string `json:"-"`
+	SVM              *ClassifierSVM       `json:"svm,omitempty"`
+	RiskTypes        *ClassifierRiskTypes `json:"-"`
+	RiskTypeError    string               `json:"-"`
+	Command          string               `json:"-"`
+	CommandHash      string               `json:"-"`
+	CommandTruncated bool                 `json:"-"`
+	AgentTask        string               `json:"-"`
 }
 
-// ClassifierSVM and ClassifierLLM use the field names the hosted ingest
+// ClassifierSVM uses the field names the hosted ingest
 // expects. Renaming them breaks the upload contract.
 type ClassifierSVM struct {
 	Verdict      string  `json:"verdict"`
 	Score        float64 `json:"score"`
 	Threshold    float64 `json:"threshold"`
 	ModelVersion string  `json:"model_version"`
-}
-
-type ClassifierLLM struct {
-	Verdict    string `json:"verdict"`
-	Model      string `json:"model"`
-	DurationMs int64  `json:"duration_ms"`
-	Cached     bool   `json:"cached"`
 }
 
 // ClassifierRiskTypes is local derived data, deliberately excluded from the

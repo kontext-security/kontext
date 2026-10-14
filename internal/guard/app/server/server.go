@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
-	"github.com/kontext-security/kontext/internal/guard/judge"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
@@ -36,7 +35,6 @@ type Server struct {
 	currentSessionID string
 	mode             string
 	classifier       *riskclassifier.Classifier
-	llmGate          *riskclassifier.LLMGate
 	stepSafety       *stepsafety.Evaluator
 	hookSlots        chan struct{}
 }
@@ -49,7 +47,6 @@ type ProcessResponse struct {
 }
 
 type Options struct {
-	Judge            judge.Judge
 	CedarPolicies    cedarpolicy.SnapshotProvider
 	CedarEnforcement CedarEnforcementSource
 	CurrentSessionID string
@@ -72,20 +69,8 @@ type Options struct {
 	DeferRecord func(job func(context.Context) error) error
 }
 
-// RiskClassifierOptions configure the risk classifier. The binary SVM is
-// embedded and always runs; the risk-type SVM is embedded and gated to risky
-// shell commands. The fields here govern the guardrail LLM, which needs a
-// local endpoint and whose placement relative to the hook path is a cost
-// decision.
-type RiskClassifierOptions struct {
-	Mode             riskclassifier.Mode
-	GuardrailBaseURL string
-	GuardrailModel   string
-	GuardrailTimeout time.Duration
-	// Gate is the runtime on/off switch for the guardrail LLM, consulted per
-	// command. Nil builds one internally.
-	Gate *riskclassifier.LLMGate
-}
+// RiskClassifierOptions enables the embedded binary and risk-type SVMs.
+type RiskClassifierOptions struct{}
 
 // ClassifierFeedbackRequest is the dashboard's ground-truth label for one
 // observe-mode verdict: "should_allow" (false alarm) or "should_block" (miss).
@@ -101,26 +86,8 @@ func (s *Server) SetPayloadCaptureConfiguration(config payloadcapture.RuntimeCon
 	s.store.SetPayloadCaptureConfiguration(config)
 }
 
-// SetGuardrailLLMEnabled forwards the org's kill switch for the classifier's
-// guardrail LLM. It rides the same refresh channel as payload capture. A local
-// override, if one was configured, wins and this becomes a no-op. The embedded
-// SVM is never affected.
-func (s *Server) SetGuardrailLLMEnabled(enabled bool) {
-	if s == nil {
-		return
-	}
-	s.llmGate.SetRemote(enabled)
-}
-
-func riskClassifierGate(opts *RiskClassifierOptions) *riskclassifier.LLMGate {
-	if opts == nil {
-		return nil
-	}
-	return opts.Gate
-}
-
 func NewServerWithOptions(store *sqlite.Store, opts Options) (*Server, error) {
-	return NewServerWithPolicyAndOptions(store, NewRiskPolicyProviderWithJudge(judgeForOptions(opts)), opts)
+	return NewServerWithPolicyAndOptions(store, NewRiskPolicyProvider(), opts)
 }
 
 // NewServerWithPolicy creates a Guard server with an injected policy provider.
@@ -143,9 +110,6 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 	// One instance, shared: the runtime feeds it session prompts and the policy
 	// provider reads them back when annotating, so a second instance would
 	// silently lose every agent_task.
-	if opts.RiskClassifier != nil && opts.RiskClassifier.Gate == nil {
-		opts.RiskClassifier.Gate = riskclassifier.NewLLMGate()
-	}
 	classifier := newRiskClassifier(opts.RiskClassifier)
 	runtime := newGuardHookRuntime(store, policy, currentSessionID, mode, classifier, opts.StepSafety, opts.DeferRecord)
 	core, err := runtimecore.New(runtime)
@@ -159,7 +123,6 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		currentSessionID: currentSessionID,
 		mode:             mode,
 		classifier:       classifier,
-		llmGate:          riskClassifierGate(opts.RiskClassifier),
 		stepSafety:       opts.StepSafety,
 		hookSlots:        make(chan struct{}, runtimecore.MaxPendingHookRequests),
 	}
@@ -196,43 +159,8 @@ func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 		// the same text and the same hash. Depending on staying under someone
 		// else's limit would also mean a change made for display reasons could
 		// silently break this, with no failing test in that diff.
-		Redact:     redactEvidence,
-		Guardrail:  newGuardrail(opts),
-		LLMEnabled: opts.Gate.Enabled,
+		Redact: redactEvidence,
 	})
-}
-
-// judgeForOptions drops the JSON judge whenever the guardrail LLM is enabled.
-// The guardrail supersedes it: one local model, one prompt. Keeping both would
-// run two inferences per gated call — and the JSON judge is the expensive one,
-// measured at ~247 ms per call against ~42 ms for the guardrail's single word.
-func judgeForOptions(opts Options) judge.Judge {
-	if opts.RiskClassifier != nil && opts.RiskClassifier.Mode.UsesLLM() && newGuardrail(opts.RiskClassifier) != nil {
-		return nil
-	}
-	return opts.Judge
-}
-
-// newGuardrail builds the guardrail client when the mode wants an LLM and an
-// endpoint is available. Every failure degrades to nil (SVM only) rather than
-// blocking startup: this path collects feedback data and must never keep Guard
-// from running.
-func newGuardrail(opts *RiskClassifierOptions) *riskclassifier.Guardrail {
-	if opts == nil || !opts.Mode.UsesLLM() {
-		return nil
-	}
-	if strings.TrimSpace(opts.GuardrailBaseURL) == "" || strings.TrimSpace(opts.GuardrailModel) == "" {
-		return nil
-	}
-	guardrail, err := riskclassifier.NewGuardrail(riskclassifier.GuardrailOptions{
-		BaseURL: opts.GuardrailBaseURL,
-		Model:   opts.GuardrailModel,
-		Timeout: opts.GuardrailTimeout,
-	})
-	if err != nil {
-		return nil
-	}
-	return guardrail
 }
 
 func (s *Server) Handler() http.Handler {
@@ -540,7 +468,6 @@ func redactedDecisionRecords(records []sqlite.DecisionRecord) []sqlite.DecisionR
 		out[i] = record
 		out[i].ModelVersion = ""
 		out[i].RiskEvent.ModelVersion = ""
-		out[i].RiskEvent.JudgeModel = ""
 	}
 	return out
 }

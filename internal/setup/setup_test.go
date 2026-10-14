@@ -1146,7 +1146,7 @@ func TestInstallLaunchAgentRejectsLoadedStaleJob(t *testing.T) {
 		return "", nil
 	})
 
-	_, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext", nil)
+	_, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext")
 	if err == nil || !strings.Contains(err.Error(), "launchctl bootout failed") {
 		t.Fatalf("installLaunchAgent() error = %v, want stale loaded job failure", err)
 	}
@@ -1155,7 +1155,7 @@ func TestInstallLaunchAgentRejectsLoadedStaleJob(t *testing.T) {
 func TestInstallLaunchAgentBootsOutOwnedPlistBeforeBootstrap(t *testing.T) {
 	h := newHarness(t)
 
-	_, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext", nil)
+	_, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1193,7 +1193,7 @@ func TestInstallLaunchAgentIgnoresBootoutWhenServiceIsAbsent(t *testing.T) {
 		}
 	})
 
-	if _, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext", nil); err != nil {
+	if _, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1221,7 +1221,7 @@ func TestInstallLaunchAgentBoundsMutatingLaunchctlCalls(t *testing.T) {
 		return "", nil
 	})
 
-	if _, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext", nil); err != nil {
+	if _, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext"); err != nil {
 		t.Fatal(err)
 	}
 	if checked != 2 {
@@ -1239,7 +1239,7 @@ func TestInstallLaunchAgentSurfacesBootstrapFailure(t *testing.T) {
 		return "", nil
 	})
 
-	_, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext", nil)
+	_, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext")
 	if err == nil || !strings.Contains(err.Error(), "launchctl bootstrap failed") {
 		t.Fatalf("installLaunchAgent() error = %v, want bootstrap failure", err)
 	}
@@ -1258,7 +1258,7 @@ func TestInstallLaunchAgentDoesNotKickstartAfterBootstrap(t *testing.T) {
 		return "", nil
 	})
 
-	if _, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext", nil); err != nil {
+	if _, _, err := installLaunchAgent(context.Background(), "/opt/homebrew/bin/kontext"); err != nil {
 		t.Fatalf("installLaunchAgent() error = %v", err)
 	}
 }

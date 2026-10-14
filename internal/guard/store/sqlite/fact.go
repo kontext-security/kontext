@@ -30,7 +30,6 @@ func applyDecisionFact(action map[string]any, event risk.HookEvent, decision ris
 		ResourceID:      stringValue(action["resource_id"]),
 		ParametersHash:  bareHexHash(stringValue(action["parameters_hash"])),
 		ExecutionAction: executionActionFromDecision(decision.Decision),
-		Risk:            advisoryRisk(decision),
 		Classifier:      advisoryClassifier(decision),
 	}
 	if evidence := decision.Cedar; evidence != nil && cedarIsEngineOfRecord(*evidence) {
@@ -131,7 +130,7 @@ func executionActionFromDecision(decision risk.Decision) cedareval.EffectiveExec
 
 // advisoryClassifier records the bash risk annotation on the fact. It carries
 // only the fields the shared contract defines, so what stays local — the command
-// hash, the agent task, the prompt id, the feedback label — stays local by
+// hash, the agent task, the feedback label — stays local by
 // construction rather than by remembering to strip it. The redacted command does
 // ship: a verdict without the text it judged cannot be analysed or corrected.
 // The SVM always runs, so an annotation without one is dropped rather than
@@ -150,85 +149,11 @@ func advisoryClassifier(decision risk.RiskDecision) *ledgerfact.Classifier {
 			ModelVersion: annotation.SVM.ModelVersion,
 		},
 	}
-	if annotation.LLM != nil {
-		classifier.LLM = &ledgerfact.ClassifierLLM{
-			Verdict:    annotation.LLM.Verdict,
-			Model:      annotation.LLM.Model,
-			DurationMs: annotation.LLM.DurationMs,
-			Cached:     annotation.LLM.Cached,
-		}
-	}
-	if annotation.LLMError != "" {
-		llmError := annotation.LLMError
-		classifier.LLMError = &llmError
-	}
 	if annotation.Command != "" {
 		command := annotation.Command
 		classifier.Command = &command
 	}
 	return &classifier
-}
-
-// advisoryRisk records the local LLM judge's analysis on the fact when the
-// judge ran. Deterministic guardrail output is not a risk evaluation — its
-// signals stay on the row's legacy risk columns — and the authoritative
-// Cedar path never runs the judge, so those calls carry no risk block.
-func advisoryRisk(decision risk.RiskDecision) *ledgerfact.Risk {
-	riskEvent := decision.RiskEvent
-	evaluator := riskEvent.JudgeModel
-	if evaluator == "" {
-		evaluator = riskEvent.JudgeRuntime
-	}
-	if failure := string(riskEvent.JudgeFailureKind); failure != "" {
-		if evaluator == "" {
-			evaluator = "local_llm_judge"
-		}
-		failed := ledgerfact.Risk{
-			Status:      ledgerfact.RiskStatusFailed,
-			Evaluator:   &evaluator,
-			Signals:     []string{},
-			Categories:  []string{},
-			FailureKind: &failure,
-		}
-		if summary := decision.Reason; summary != "" {
-			failed.Summary = &summary
-		}
-		return &failed
-	}
-	if evaluator == "" {
-		return nil
-	}
-
-	advisory := ledgerfact.Risk{
-		Status:     ledgerfact.RiskStatusEvaluated,
-		Evaluator:  &evaluator,
-		Signals:    nonEmptyStringsOnly(riskEvent.Signals),
-		Categories: nonEmptyStringsOnly(riskEvent.JudgeCategories),
-	}
-	if score := decision.RiskScore; score != nil && *score >= 0 && *score <= 1 {
-		value := *score
-		advisory.Score = &value
-	}
-	if level := riskEvent.JudgeRiskLevel; level != "" {
-		advisory.Level = &level
-	}
-	if confidence := riskEvent.Confidence; confidence > 0 && confidence <= 1 {
-		advisory.Confidence = &confidence
-	}
-	if summary := decision.Reason; summary != "" {
-		advisory.Summary = &summary
-	}
-	return &advisory
-}
-
-func nonEmptyStringsOnly(values []string) []string {
-	kept := make([]string, 0, len(values))
-	for _, value := range values {
-		if value != "" {
-			kept = append(kept, value)
-		}
-	}
-	return kept
 }
 
 // mergeDecisionContext rewrites the row's context payload so the one row
