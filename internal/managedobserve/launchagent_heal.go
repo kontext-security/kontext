@@ -13,8 +13,8 @@ import (
 
 // plistFixes are the settings older setups wrote that make the hook see a
 // dead daemon. Background is macOS's throttled QoS: the daemon starves
-// whenever the user does anything, the hook times out and fails closed in
-// enforce. ThrottleInterval 30 makes launchd hold a relaunch for up to 30 s
+// whenever the user does anything, the hook times out and the call goes
+// through without a policy check. ThrottleInterval 30 makes launchd hold a relaunch for up to 30 s
 // when the daemon restarts twice in a row (doctor --fix after an upgrade),
 // longer than the hook waits; 10 is launchd's floor.
 var plistFixes = [][2]string{

@@ -230,9 +230,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// classifier inference or the guard.db write. On a long-running
 		// install the first write after idle drags cold pages of a large
 		// database back from disk for seconds, which the hook client reads
-		// as a dead daemon — fail-open in observe (silent), fail-closed in
-		// enforce (every tool call denied). Close drains pending writes
-		// before the store shuts.
+		// as a dead daemon, so the call fails open without a policy check.
+		// Close drains pending writes before the store shuts.
 		AsyncDecisionRecording: true,
 	})
 	if err != nil {

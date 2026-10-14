@@ -32,10 +32,13 @@ and records the decision and outcome in an authorization ledger.
 Start in observe mode. See what policy would stop. Move supported boundaries
 into enforcement when you are ready.
 
-Policy evaluation errors allow the tool call, including in enforce mode, and
-remain visible as failures in the activity record. Completed policy denies and
-unavailable required approvals still block. This error fallback does not change
-behavior when the daemon is unavailable or enforcement has no usable policy.
+Policy evaluation errors, a policy that is not ready (missing, corrupt, or
+expired), and an unresolved identity allow the tool call, including in enforce
+mode, and remain visible as failures in the activity record. Only completed
+policy denies and unavailable required approvals block. When the hook cannot
+get a decision at all, because the daemon is down, restarting, too slow, or
+returns something unreadable, the tool call is not blocked and Kontext returns
+no decision, so the agent's own permission settings apply.
 
 - **Local decisions:** policy evaluation happens alongside the agent.
 - **Pre-action enforcement:** matching actions can be denied at supported

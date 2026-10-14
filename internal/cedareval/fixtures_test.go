@@ -27,6 +27,8 @@ var fixtureDigests = map[string]string{
 	"decision-contract-v2.json": "17a5bb7c93e7fffb7aa9879bd97d46c15554f644aba8d74a6b1ea211dba732d9",
 	"decision-mapping-v2.json":  "a5b6dc52a62d62ac9fcd59299582d1da3000d135bacbf63e95db311686ceec6d",
 	"evaluation-errors-v2.json": "0fa793d084cbb6c95142f7b3554fef12ae1a12cebb29a54049b090e8e7d56147",
+	"decision-contract-v3.json": "54f6a272cf208ee2ea3b969b3fdd8a06c3c792c9cee072e04405e43f526a68e3",
+	"decision-mapping-v3.json":  "7a6685382d9927020fde6e7c743d1a9a409839aec113798e0346c6ae45433167",
 
 	"authorization-v1.json":          "c7f8aaf5da2acbf9a5d832ebf2bcf3ca531a617cdea3a6aed1b6b1840c4735b5",
 	"context-errors-v1.json":         "945e6be23af02aa4d0c7bd382f5963b6342f46a02602bfbc8f134ae283b6773e",
@@ -455,8 +457,11 @@ func readFixture(t *testing.T, name string, destination any) {
 	}
 	wantVersion := portableFixtureContractVersion
 	switch name {
-	case "decision-contract-v2.json", "decision-mapping-v2.json", "evaluation-errors-v2.json":
+	case "decision-contract-v3.json", "decision-mapping-v3.json":
 		wantVersion = cedareval.DecisionContractVersion
+	case "decision-contract-v2.json", "decision-mapping-v2.json", "evaluation-errors-v2.json":
+		// The evaluation-error corpus is unchanged since decision contract v2.
+		wantVersion = 2
 	}
 	for index, fixture := range metadata {
 		if fixture.Version != wantVersion {

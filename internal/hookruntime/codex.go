@@ -90,6 +90,10 @@ func EncodeCodexResult(hookEventName string, result hook.Result) ([]byte, error)
 	if !codexSupportedHook(hookName) {
 		return nil, fmt.Errorf("codex: unsupported hook event %q", hookEventName)
 	}
+	// A fail-open result says nothing, not even its reason as model context.
+	if result.FailedOpen {
+		return json.Marshal(codexHookOutput{})
+	}
 
 	reason := codexMeaningfulReason(result)
 	if hookName == hook.HookPreToolUse {

@@ -2,8 +2,6 @@ package cedarpolicy
 
 import (
 	"encoding/json"
-	"io"
-	"os"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
 )
@@ -36,22 +34,6 @@ func DeploymentClaimsEnforce(snapshot Snapshot) bool {
 		return legacy.RolloutMode == cedareval.RolloutModeEnforce
 	}
 	return snapshot.PersistedEnforce
-}
-
-// PersistedDeploymentClaimsEnforce reads only the rollout claim from a cache.
-// It keeps outage behavior stable across compatible cache and catalog upgrades,
-// even when the cached policy itself can no longer be evaluated.
-func PersistedDeploymentClaimsEnforce(path string) bool {
-	file, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, MaxResponseBytes+1))
-	if err != nil || len(data) > MaxResponseBytes {
-		return false
-	}
-	return cacheDataClaimsEnforce(data)
 }
 
 func cacheDataClaimsEnforce(data []byte) bool {

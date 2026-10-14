@@ -342,3 +342,17 @@ func TestDecodeCodexTranscriptPath(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeCodexFailOpenSaysNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, event := range []string{"PreToolUse", "UserPromptSubmit", "SessionStart"} {
+		out, err := EncodeCodexResult(event, hook.FailOpen("managed policy daemon unavailable"))
+		if err != nil {
+			t.Fatalf("EncodeCodexResult(%s) error = %v", event, err)
+		}
+		if got := string(out); got != "{}" {
+			t.Fatalf("EncodeCodexResult(%s) = %s, want no decision and no model context", event, got)
+		}
+	}
+}
