@@ -30,4 +30,5 @@ gofmt -w ./cmd ./internal
 
 - `release-please` opens release PRs and calculates semver bumps from conventional commits.
 - GitHub Releases are built with GoReleaser.
+- macOS binaries are signed with a Developer ID certificate and notarized when the `MACOS_SIGN_P12`, `MACOS_SIGN_PASSWORD`, `MACOS_NOTARY_ISSUER_ID`, `MACOS_NOTARY_KEY_ID` and `MACOS_NOTARY_KEY` secrets are set (`.p12` and `.p8` base64-encoded). Without them the release ships ad-hoc signed binaries.
 - Homebrew publishing is handled from the release workflow.

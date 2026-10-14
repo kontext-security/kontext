@@ -44,7 +44,8 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Notarization can wait up to 20 minutes for Apple.
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
@@ -57,12 +58,39 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # GoReleaser signs as soon as MACOS_SIGN_P12 is set but silently skips
+      # notarization when a notary secret is empty. Refuse a half configuration
+      # rather than ship signed, un-notarized binaries.
+      - name: Check macOS signing secrets
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          [[ -z "$MACOS_SIGN_P12" ]] && exit 0
+          for name in MACOS_SIGN_PASSWORD MACOS_NOTARY_ISSUER_ID MACOS_NOTARY_KEY_ID MACOS_NOTARY_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::MACOS_SIGN_P12 is set but $name is empty"
+              exit 1
+            fi
+          done
+
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "~> v2.13"
+          # v2.16+ ships the quill fix that writes the Team ID into the
+          # signature; 2.13 left TeamIdentifier unset.
+          version: "~> v2.18"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Developer ID signing and notarization; see .goreleaser.yaml.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
