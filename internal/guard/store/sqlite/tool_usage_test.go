@@ -2,15 +2,19 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -538,12 +542,17 @@ func (c transcriptCopy) cursor() *modelusage.Transcript {
 
 func (c transcriptCopy) tables(t *testing.T) string {
 	t.Helper()
-	var b strings.Builder
-	for _, query := range []string{
+	return dumpQueries(t, c.store,
 		`select revision, session_id, message_id, agent, payload, exported from tool_usage_records order by revision`,
 		`select session_id, agent, fingerprint, error from tool_usage_sources`,
-	} {
-		rows, err := c.store.db.Query(query)
+	)
+}
+
+func dumpQueries(t *testing.T, store *Store, queries ...string) string {
+	t.Helper()
+	var b strings.Builder
+	for _, query := range queries {
+		rows, err := store.db.Query(query)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -731,5 +740,321 @@ func TestToolUsageCursorEvictsIdleTranscripts(t *testing.T) {
 	transcriptCursors.evict(now)
 	if transcriptCursors.take(idle) != nil || transcriptCursors.take(active) == nil {
 		t.Fatal("only the idle transcript's parser state should be dropped")
+	}
+}
+
+// countRecordWrites reopens store's connection through one that counts the
+// statements writing tool_usage_records, including those that change no row.
+func countRecordWrites(t *testing.T, store *Store) *atomic.Int64 {
+	t.Helper()
+	writes := new(atomic.Int64)
+	connector := countingConnector{driver: store.db.Driver(), dsn: store.path, writes: writes}
+	if err := store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store.db = sql.OpenDB(connector)
+	store.db.SetMaxOpenConns(1)
+	if _, err := store.db.Exec("pragma busy_timeout = 5000"); err != nil {
+		t.Fatal(err)
+	}
+	return writes
+}
+
+type countingConnector struct {
+	driver driver.Driver
+	dsn    string
+	writes *atomic.Int64
+}
+
+func (c countingConnector) Connect(context.Context) (driver.Conn, error) {
+	conn, err := c.driver.Open(c.dsn)
+	if err != nil {
+		return nil, err
+	}
+	return countingConn{conn.(sqliteConn), c.writes}, nil
+}
+
+func (c countingConnector) Driver() driver.Driver { return c.driver }
+
+type sqliteConn interface {
+	driver.Conn
+	driver.ConnBeginTx
+	driver.ExecerContext
+	driver.QueryerContext
+}
+
+type countingConn struct {
+	sqliteConn
+	writes *atomic.Int64
+}
+
+func (c countingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if strings.HasPrefix(query, "insert or replace into tool_usage_records") {
+		c.writes.Add(1)
+	}
+	return c.sqliteConn.ExecContext(ctx, query, args)
+}
+
+// applyEveryToolUsageRecord is applyToolUsageUpdates as it was before it
+// skipped unchanged records: one statement per record, then the source row.
+func applyEveryToolUsageRecord(ctx context.Context, s *Store, updates []toolUsageUpdate, now time.Time) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, update := range updates {
+		src := update.source
+		if update.retire {
+			if _, err := tx.ExecContext(ctx, `delete from tool_usage_sources where session_id=? and transcript_path=? and last_seen=?`, src.session, src.path, src.lastSeen); err != nil {
+				return err
+			}
+			continue
+		}
+		for _, record := range update.records {
+			if err := saveToolUsage(ctx, tx, src.agent, record); err != nil {
+				return err
+			}
+		}
+		if update.read {
+			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=?, error=?, error_fingerprint=? where session_id=? and transcript_path=?`,
+				now.Format(time.RFC3339Nano), update.fingerprint, update.message, update.errorFingerprint, src.session, src.path)
+		} else {
+			_, err = tx.ExecContext(ctx, `update tool_usage_sources set error=?, error_fingerprint='' where session_id=? and transcript_path=?`,
+				update.message, src.session, src.path)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// TestToolUsageSkippingUnchangedRecordsMatchesSavingAll applies the same
+// passes with and without skipping unchanged records. Two transcripts share a
+// session and its message IDs, agents get corrected, a pass may carry a
+// message twice, and uploads are acknowledged while later passes replace
+// their revisions. Records, revisions, and acknowledgements must stay
+// identical, and every skipped statement must be one that would have changed
+// nothing.
+func TestToolUsageSkippingUnchangedRecordsMatchesSavingAll(t *testing.T) {
+	ctx := context.Background()
+	var stores [2]*Store
+	for i := range stores {
+		store, err := OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { store.Close() })
+		stores[i] = store
+	}
+	skipping, saving := stores[0], stores[1]
+	writes := countRecordWrites(t, skipping)
+	sources := []toolUsageSource{
+		{session: "s", path: "/p/main.jsonl", agent: "claude"},
+		{session: "s", path: "/p/subagent.jsonl", agent: "claude"},
+		{session: "codex-s", path: "/p/rollout.jsonl", agent: "codex"},
+	}
+	// Each transcript's messages and their current output tokens. A read
+	// returns all of them, as every pass does.
+	transcripts := make([]map[string]int64, len(sources))
+	for i := range transcripts {
+		transcripts[i] = map[string]int64{}
+	}
+	record := func(session, message string, output int64) modelusage.Record {
+		return modelusage.Record{SessionID: session, MessageID: message, Timestamp: "2026-09-16T13:36:44Z",
+			ToolUseIDs: []string{"t-" + message}, Tokens: modelusage.Tokens{Output: &output}}
+	}
+	queries := []string{
+		`select revision, session_id, message_id, agent, payload, exported from tool_usage_records order by revision`,
+		`select seq from sqlite_sequence where name='tool_usage_records'`,
+	}
+	rng := rand.New(rand.NewSource(1))
+	var inFlight [2][]ToolUsageRecord
+	uploading, offered, foreign := false, 0, 0
+	for pass := range 500 {
+		var updates []toolUsageUpdate
+		for i, src := range sources {
+			switch rng.Intn(10) {
+			case 0, 1:
+				continue // unchanged transcript
+			case 2:
+				updates = append(updates, toolUsageUpdate{source: src, message: "stat failed"})
+				continue
+			case 3:
+				updates = append(updates, toolUsageUpdate{source: src, retire: true})
+				continue
+			}
+			if rng.Intn(5) == 0 {
+				src.agent = "cowork"
+			}
+			transcripts[i][fmt.Sprintf("m%d", rng.Intn(8))] = int64(rng.Intn(3))
+			update := toolUsageUpdate{source: src, read: true, fingerprint: fmt.Sprint(pass)}
+			for _, message := range slices.Sorted(maps.Keys(transcripts[i])) {
+				update.records = append(update.records, record(src.session, message, transcripts[i][message]))
+			}
+			if rng.Intn(10) == 0 {
+				twice := update.records[rng.Intn(len(update.records))]
+				update.records = append(update.records, record(twice.SessionID, twice.MessageID, *twice.Tokens.Output+1))
+			}
+			if rng.Intn(10) == 0 {
+				update.records = append(update.records, record("other", "m0", int64(rng.Intn(3))))
+				foreign++
+			}
+			if rng.Intn(10) == 0 {
+				update.records = append(update.records, modelusage.Record{SessionID: src.session, MessageID: "m0"})
+			}
+			for _, record := range update.records {
+				if record.ToolRelated() {
+					offered++
+				}
+			}
+			updates = append(updates, update)
+		}
+		rng.Shuffle(len(updates), func(i, j int) { updates[i], updates[j] = updates[j], updates[i] })
+		if !uploading && rng.Intn(2) == 0 {
+			limit := 1 + rng.Intn(10)
+			for i, store := range stores {
+				page, err := store.PendingToolUsage(ctx, limit)
+				if err != nil {
+					t.Fatal(err)
+				}
+				inFlight[i] = page
+			}
+			if !reflect.DeepEqual(inFlight[0], inFlight[1]) {
+				t.Fatalf("pass %d: uploads diverged:\n got %+v\nwant %+v", pass, inFlight[0], inFlight[1])
+			}
+			uploading = true
+		}
+		now := time.Unix(1_800_000_000+int64(pass), 0).UTC()
+		if err := skipping.applyToolUsageUpdates(ctx, updates, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := applyEveryToolUsageRecord(ctx, saving, updates, now); err != nil {
+			t.Fatal(err)
+		}
+		if uploading && rng.Intn(2) == 0 {
+			for i, store := range stores {
+				if err := store.AcknowledgeToolUsage(ctx, inFlight[i]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			uploading = false
+		}
+		if got, want := dumpQueries(t, skipping, queries...), dumpQueries(t, saving, queries...); got != want {
+			t.Fatalf("pass %d: tables diverged:\n got %s\nwant %s", pass, got, want)
+		}
+	}
+	var revisions int64
+	if err := skipping.db.QueryRow(queries[1]).Scan(&revisions); err != nil {
+		t.Fatal(err)
+	}
+	// A statement that changes nothing is issued only for a record of
+	// another session, which reconcile passes never carry.
+	if writes.Load() < revisions || writes.Load() > revisions+int64(foreign) || revisions >= int64(offered) {
+		t.Fatalf("%d statements for %d revisions out of %d records, %d of another session", writes.Load(), revisions, offered, foreign)
+	}
+}
+
+func TestToolUsageUnchangedRecordsIssueNoStatements(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	writes := countRecordWrites(t, store)
+	path := filepath.Join(dir, "session.jsonl")
+	t.Cleanup(func() { transcriptCursors.take(transcriptKey{path: path}) })
+	if err := store.TrackToolTranscript(ctx, hook.Event{SessionID: "s", Agent: "claude", HookName: hook.HookPostToolUse, TranscriptPath: path}); err != nil {
+		t.Fatal(err)
+	}
+	var revision int64
+	for n, appended := range []string{
+		claudeTurns(40, 100),
+		// Re-read without changing any record.
+		`{"type":"progress","message":"still working"}` + "\n",
+		claudeTurns(41, 100)[len(claudeTurns(40, 100)):],
+	} {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.WriteString(appended)
+		if err := errors.Join(err, f.Close()); err != nil {
+			t.Fatal(err)
+		}
+		writes.Store(0)
+		before := totalChanges(t, store)
+		if err := store.ReconcileToolUsage(ctx); err != nil {
+			t.Fatal(err)
+		}
+		changes := totalChanges(t, store) - before
+		var revised int64
+		if err := store.db.QueryRow(`select count(*), coalesce(max(revision), ?) from tool_usage_records where revision > ?`, revision, revision).Scan(&revised, &revision); err != nil {
+			t.Fatal(err)
+		}
+		// Every statement allocates a revision, and only the unchanged pass
+		// allocates none: it writes the source row and nothing else.
+		if writes.Load() != revised || (revised == 0) != (n == 1) || n == 1 && changes != 1 {
+			t.Fatalf("pass %d: %d record statements, %d new revisions, %d row changes", n, writes.Load(), revised, changes)
+		}
+	}
+}
+
+// A pass that reads stored records must still wait for another connection's
+// write lock. If its transaction read before writing, SQLite would refuse the
+// upgrade to a write with SQLITE_BUSY at once, without busy_timeout.
+func TestToolUsageReconcileWaitsForAnotherWriter(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	var stores [2]*Store
+	for i := range stores {
+		store, err := OpenStore(filepath.Join(dir, "guard.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		stores[i] = store
+	}
+	store, other := stores[0], stores[1]
+	path := filepath.Join(dir, "session.jsonl")
+	t.Cleanup(func() { transcriptCursors.take(transcriptKey{path: path}) })
+	if err := os.WriteFile(path, []byte(claudeTurns(3, 100)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TrackToolTranscript(ctx, hook.Event{SessionID: "s", Agent: "claude", HookName: hook.HookPostToolUse, TranscriptPath: path}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(claudeTurns(4, 100)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := other.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `update tool_usage_sources set last_seen=last_seen`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- store.ReconcileToolUsage(ctx) }()
+	select {
+	case err := <-done:
+		t.Fatalf("pass ended while another connection held the write lock: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
