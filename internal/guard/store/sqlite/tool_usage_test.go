@@ -1114,3 +1114,45 @@ func TestToolUsageReconcileWaitsForAnotherWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A Codex sub-agent started without its parent's history has one session_meta
+// whose session_id names the root. The previous adapter labeled its records
+// with the sub-agent's own id, so they were dropped, yet the read succeeded
+// and its fingerprint was saved. The adapter version in the fingerprint makes
+// such a source read once more.
+func TestToolUsageRereadsSourcesReadByThePreviousAdapter(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	path := filepath.Join(dir, "rollout-child.jsonl")
+	rollout := `{"type":"session_meta","payload":{"id":"child","session_id":"root","thread_source":"subagent","model_provider":"openai"}}
+{"type":"turn_context","payload":{"model":"gpt-6-astra"}}
+{"type":"response_item","payload":{"type":"function_call","call_id":"c","name":"exec_command"}}
+{"timestamp":"2026-09-17T10:00:00Z","type":"token_usage_record","payload":{"thread_id":"child","response_id":"r","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2}}}
+`
+	if err := os.WriteFile(path, []byte(rollout), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TrackToolTranscript(ctx, hook.Event{SessionID: "codex-root", Agent: "codex", HookName: hook.HookStop, TranscriptPath: path}); err != nil {
+		t.Fatal(err)
+	}
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `update tool_usage_sources set fingerprint=?, checked_at=?`,
+		fmt.Sprintf("tool-metadata-v3:%d:%d", stat.Size(), stat.ModTime().UnixNano()), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.PendingToolUsage(ctx, 50)
+	if err != nil || len(rows) != 1 || rows[0].SessionID != "codex-root" {
+		t.Fatalf("records = %+v, error = %v", rows, err)
+	}
+}

@@ -92,3 +92,36 @@ func TestRegisterSubagentUnderItsRootSession(t *testing.T) {
 		t.Fatalf("owning session missing: %v", err)
 	}
 }
+
+func TestRegisterSubagentKeepsRootSessionMetadata(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "guard.db")
+	store, err := sqlite.OpenStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := store.BackfillObservedSessionWithMode(ctx, "codex-root", "codex", "/root-work", "enforce"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rollout-child.jsonl")
+	rollout := `{"type":"session_meta","payload":{"id":"child","session_id":"root","thread_source":"subagent","model_provider":"openai","cwd":"/child-work"}}` + "\n"
+	if err := os.WriteFile(path, []byte(rollout), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := register(db, path, "child"); err != nil {
+		t.Fatal(err)
+	}
+	store, err = sqlite.OpenStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	root, err := store.Session(ctx, "codex-root")
+	if err != nil || root.CWD != "/root-work" || root.Mode != "enforce" {
+		t.Fatalf("root session rewritten: %+v, %v", root, err)
+	}
+}

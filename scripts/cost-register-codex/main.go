@@ -6,7 +6,9 @@ import (
 	"bufio"
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,12 +53,25 @@ func register(db, path, session string) error {
 	defer store.Close()
 	// The cloud requires each usage batch to include its owning session. As its
 	// hooks do, a sub-agent's usage belongs to its root thread's session.
+	ctx := context.Background()
 	owner := "codex-" + cmp.Or(meta.Payload.SessionID, session)
-	if _, err := store.BackfillObservedSessionWithMode(context.Background(), owner, "codex", meta.Payload.CWD, "observe"); err != nil {
-		return err
+	// Attaching a sub-agent must not rewrite its root session's own directory
+	// or mode; only a root this store has never seen is created from it.
+	create := owner == "codex-"+session
+	if !create {
+		_, err := store.Session(ctx, owner)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		create = err != nil
+	}
+	if create {
+		if _, err := store.BackfillObservedSessionWithMode(ctx, owner, "codex", meta.Payload.CWD, "observe"); err != nil {
+			return err
+		}
 	}
 	// Reuse source registration only. No fabricated Stop event is ingested.
-	return store.TrackToolTranscript(context.Background(), hook.Event{
+	return store.TrackToolTranscript(ctx, hook.Event{
 		SessionID: owner, Agent: "codex",
 		HookName: hook.HookStop, TranscriptPath: path,
 	})
