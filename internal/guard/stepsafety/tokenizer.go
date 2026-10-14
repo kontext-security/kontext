@@ -1,23 +1,19 @@
 package stepsafety
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
-	sentencepiece "github.com/tggo/goSentencePiece"
 	"golang.org/x/text/unicode/norm"
 )
 
 // This adapter is deliberately specific to the checksum-pinned DeBERTa
-// tokenizer. The SentencePiece library supplies Unigram segmentation; we
-// implement the pinned HF Replace -> NFC -> Strip normalizer here because
-// the library only implements precompiled normalizers.
-type tokenizer struct{ unigram *sentencepiece.Tokenizer }
+// tokenizer: the HF Replace -> NFC -> Strip normalizer and added special
+// tokens here, Metaspace and Unigram segmentation in unigram.go.
+type tokenizer struct{ unigram *unigram }
 
 var specialTokens = []string{"[PAD]", "[CLS]", "[SEP]", "[UNK]", "[MASK]", "[USER_REQUEST]", "[INTERACTION_HISTORY]", "[CURRENT_ACTION]", "[TOOL_DESCRIPTIONS]"}
 var specialTokenIDs = []int64{0, 1, 2, 3, 128000, 128001, 128002, 128003, 128004}
@@ -31,19 +27,7 @@ func loadTokenizer(path string) (*tokenizer, error) {
 }
 
 func parseTokenizer(data []byte) (*tokenizer, error) {
-	var config map[string]json.RawMessage
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, err
-	}
-	// Flatten the one-element Sequence so the library recognizes Metaspace.
-	// These changes are in memory only; the original artifact stays pinned.
-	config["pre_tokenizer"] = json.RawMessage(`{"type":"Metaspace","replacement":"▁","prepend_scheme":"always","split":true}`)
-	config["normalizer"] = json.RawMessage(`null`)
-	data, err := json.Marshal(config)
-	if err != nil {
-		return nil, err
-	}
-	unigram, err := sentencepiece.NewTokenizerFromJSONReader(bytes.NewReader(data))
+	unigram, err := parseUnigram(data)
 	if err != nil {
 		return nil, err
 	}
@@ -72,13 +56,7 @@ func (t *tokenizer) encode(ctx context.Context, text string) ([]int64, error) {
 		if strings.Count(normalized, "\u034f") != strings.Count(segment, "\u034f") {
 			return nil, backendError(ErrorUnsupportedText, nil)
 		}
-		pieces, err := t.unigram.Encode(normalized)
-		if err != nil {
-			return nil, err
-		}
-		for _, id := range pieces {
-			ids = append(ids, int64(id))
-		}
+		ids = t.unigram.encode(normalized, ids)
 		if special < 0 {
 			break
 		}
@@ -116,5 +94,29 @@ func normalizeText(text string) string {
 			out.WriteString(whitespace)
 		}
 	}
-	return strings.TrimRightFunc(norm.NFC.String(out.String()), unicode.IsSpace)
+	return strings.TrimRightFunc(nfcUnicode9(out.String()), unicode.IsSpace)
+}
+
+// nfcUnicode9 matches HF NFC, whose tables are Unicode 9.0. HF treats every
+// later character as an unassigned starter that never reorders or composes,
+// while x/text's newer tables move or merge the ones in postUnicode9NFC. NFC
+// cannot act across such a starter, so normalizing the text between them and
+// copying them unchanged reproduces HF.
+func nfcUnicode9(text string) string {
+	var out strings.Builder
+	for {
+		i := strings.IndexFunc(text, func(r rune) bool { return unicode.Is(postUnicode9NFC, r) })
+		if i < 0 {
+			break
+		}
+		_, size := utf8.DecodeRuneInString(text[i:])
+		out.WriteString(norm.NFC.String(text[:i]))
+		out.WriteString(text[i : i+size])
+		text = text[i+size:]
+	}
+	if out.Len() == 0 {
+		return norm.NFC.String(text)
+	}
+	out.WriteString(norm.NFC.String(text))
+	return out.String()
 }

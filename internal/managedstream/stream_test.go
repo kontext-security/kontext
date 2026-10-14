@@ -916,6 +916,16 @@ func TestFlushAdvancesCursorPastOversizedMinimumBatch(t *testing.T) {
 	if state.UpdatedAfter == nil || state.ActionID == "" {
 		t.Fatalf("state = %+v, want cursor advanced", state)
 	}
+	// Retention must never mistake the skipped row for an exported one.
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var skipped int
+	if err := db.QueryRow(`select count(*) from ledger_export_skips where action_id = ?`, state.ActionID).Scan(&skipped); err != nil || skipped != 1 {
+		t.Fatalf("skipped action %s recorded %d times, err %v", state.ActionID, skipped, err)
+	}
 }
 
 func TestFlushAdvancesCursorPastMinimumBatchWithWideReceiptRange(t *testing.T) {
@@ -1458,5 +1468,120 @@ func TestPayloadDiscoveryAtomicPair(t *testing.T) {
 				t.Fatalf("wire contract: %s", body)
 			}
 		})
+	}
+}
+
+func ledgerExportSkips(t *testing.T, dbPath string) map[string]string {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`select action_id, reason from ledger_export_skips`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	skips := map[string]string{}
+	for rows.Next() {
+		var id, reason string
+		if err := rows.Scan(&id, &reason); err != nil {
+			t.Fatal(err)
+		}
+		skips[id] = reason
+	}
+	return skips
+}
+
+func ingestServer(t *testing.T, respond func(Payload) string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload Payload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(respond(payload)))
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestFlushKeepsRowsTheHostedLedgerDidNotStoreAsSent(t *testing.T) {
+	store, dbPath := testStore(t)
+	saveTestDecision(t, store, "session-1", "toolu_1")
+	saveTestDecision(t, store, "session-1", "toolu_2")
+	var quarantined, altered string
+	server := ingestServer(t, func(payload Payload) string {
+		if len(payload.Actions) == 0 {
+			return `{"quarantined":[],"altered":[]}`
+		}
+		quarantined, _ = payload.Actions[0]["id"].(string)
+		// An altered receipt keeps the action it belongs to.
+		receipt := payload.Receipts[len(payload.Receipts)-1]
+		altered, _ = receipt["action_id"].(string)
+		return fmt.Sprintf(`{"quarantined":[{"kind":"authorization_action","id":%q}],"altered":[{"kind":"authorization_receipt","id":%q,"reason":"redacted"}]}`, quarantined, receipt["id"])
+	})
+	statePath := filepath.Join(t.TempDir(), "stream-state.json")
+	if err := Flush(context.Background(), Options{
+		DBPath: dbPath, StatePath: statePath, CloudURL: server.URL,
+		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", InstallToken: "test-install-token",
+		HTTPClient: server.Client(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	skips := ledgerExportSkips(t, dbPath)
+	if quarantined == altered || skips[quarantined] != "hosted_quarantined" || skips[altered] != "hosted_altered" || len(skips) != 2 {
+		t.Fatalf("skips = %v, want %s quarantined and %s altered", skips, quarantined, altered)
+	}
+	state, err := LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.VerifiedAfter == nil {
+		t.Fatal("a server reporting alterations must start the verified range")
+	}
+}
+
+func TestFlushVerifiesNothingWithoutAnAlterationReport(t *testing.T) {
+	store, dbPath := testStore(t)
+	saveTestDecision(t, store, "session-1", "toolu_1")
+	server := ingestServer(t, func(Payload) string { return `{"quarantined":[]}` })
+	statePath := filepath.Join(t.TempDir(), "stream-state.json")
+	opts := Options{
+		DBPath: dbPath, StatePath: statePath, CloudURL: server.URL,
+		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", InstallToken: "test-install-token",
+		HTTPClient: server.Client(),
+	}
+	if err := Flush(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	state, err := LoadState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.VerifiedAfter != nil || len(ledgerExportSkips(t, dbPath)) != 0 {
+		t.Fatalf("an older server verified rows: %+v %v", state.VerifiedAfter, ledgerExportSkips(t, dbPath))
+	}
+	// Once reports have begun, a batch answered without one is kept whole,
+	// for example after the hosted ledger is rolled back.
+	verifiedAfter := time.Unix(0, 0).UTC()
+	state.VerifiedAfter = &verifiedAfter
+	if err := SaveState(statePath, state); err != nil {
+		t.Fatal(err)
+	}
+	saveTestDecision(t, store, "session-1", "toolu_2")
+	if err := Flush(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	skips := ledgerExportSkips(t, dbPath)
+	if len(skips) == 0 {
+		t.Fatal("unverified batch was not kept")
+	}
+	for id, reason := range skips {
+		if reason != "hosted_unverified" {
+			t.Fatalf("skip %s reason %q", id, reason)
+		}
 	}
 }
