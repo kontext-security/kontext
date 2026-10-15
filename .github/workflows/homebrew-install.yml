@@ -73,8 +73,17 @@ jobs:
             esac
           }
           # Apple's check for standalone binaries; spctl is meant for apps.
+          # A bare binary cannot carry a stapled ticket, so this asks Apple
+          # online; retry so one failed lookup does not fail the job.
+          is_notarized() {
+            for attempt in 1 2 3; do
+              if codesign -vvvv -R="notarized" --check-notarization "$1"; then return 0; fi
+              sleep 10
+            done
+            return 1
+          }
           require_notarized() {
-            if ! codesign -vvvv -R="notarized" --check-notarization "$1"; then
+            if ! is_notarized "$1"; then
               echo "::error::$1 is not notarized"
               return 1
             fi
@@ -131,7 +140,7 @@ jobs:
           if cask_published; then
             require_notarized "$binary"
             kontext-cask --version | grep -F "$VERSION"
-          elif codesign -vvvv -R="notarized" --check-notarization "$binary"; then
+          elif is_notarized "$binary"; then
             kontext-cask --version | grep -F "$VERSION"
           else
             echo "::warning::$VERSION is not notarized and no cask is published yet; installed but not run"
@@ -185,8 +194,17 @@ jobs:
             esac
           }
           # Apple's check for standalone binaries; spctl is meant for apps.
+          # A bare binary cannot carry a stapled ticket, so this asks Apple
+          # online; retry so one failed lookup does not fail the job.
+          is_notarized() {
+            for attempt in 1 2 3; do
+              if codesign -vvvv -R="notarized" --check-notarization "$1"; then return 0; fi
+              sleep 10
+            done
+            return 1
+          }
           require_notarized() {
-            if ! codesign -vvvv -R="notarized" --check-notarization "$1"; then
+            if ! is_notarized "$1"; then
               echo "::error::$1 is not notarized"
               return 1
             fi
