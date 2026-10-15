@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.12.0](https://github.com/kontext-security/kontext/compare/v1.11.0...v1.12.0) (2026-10-15)
+
+
+### Features
+
+* **homebrew:** publish a cask next to the tap formula ([#570](https://github.com/kontext-security/kontext/issues/570)) ([adb4592](https://github.com/kontext-security/kontext/commit/adb45928b62118e22904b4dad31e75958bc2aad9))
+* **ledger:** prune ledger rows the hosted ledger has accepted ([#558](https://github.com/kontext-security/kontext/issues/558)) ([f682c93](https://github.com/kontext-security/kontext/commit/f682c93e68961a1425883630fb96bea8b406718e))
+* **release:** sign and notarize macOS binaries with Developer ID ([#569](https://github.com/kontext-security/kontext/issues/569)) ([1d71930](https://github.com/kontext-security/kontext/commit/1d71930e29f0d5d6c24e1c7f4873b38f33587ed4))
+
+
+### Bug Fixes
+
+* **cost:** import Codex sub-agent usage under the session its hooks report ([#567](https://github.com/kontext-security/kontext/issues/567)) ([bbe8f40](https://github.com/kontext-security/kontext/commit/bbe8f40389558235cbffbccdcd8eecc96480729d))
+* **cost:** parse only appended transcript lines on each stream flush ([#564](https://github.com/kontext-security/kontext/issues/564)) ([93ebc5f](https://github.com/kontext-security/kontext/commit/93ebc5f7995b703e91496e7629ecd8e953f64aff))
+* **cost:** skip unchanged tool usage records on each stream flush ([#566](https://github.com/kontext-security/kontext/issues/566)) ([3822ff8](https://github.com/kontext-security/kontext/commit/3822ff8cab62b92145c69dcd5233d66aca9d661e))
+* **cost:** stop rewriting every transcript source on each stream flush ([#557](https://github.com/kontext-security/kontext/issues/557)) ([1099adb](https://github.com/kontext-security/kontext/commit/1099adb1814b3a306e09b11547859c16deed3408))
+* **guard:** bump x/text to v0.43.0 so step-safety NFC matches HF ([#562](https://github.com/kontext-security/kontext/issues/562)) ([b3c768f](https://github.com/kontext-security/kontext/commit/b3c768fe1a51d3ed78aa9dfc8cb67874761123a1))
+* **guard:** match HF's Unicode 9.0 NFC around newer combining marks ([#563](https://github.com/kontext-security/kontext/issues/563)) ([ccf1ed4](https://github.com/kontext-security/kontext/commit/ccf1ed4b612b0d9baf86dd96c234ec6baa7be34e))
+* **guard:** replace goSentencePiece with an HF-exact Unigram encoder ([#559](https://github.com/kontext-security/kontext/issues/559)) ([88f175b](https://github.com/kontext-security/kontext/commit/88f175b36fc582f8c3aba03f0cf85542bdf62ecb))
+* **homebrew:** drop conflicts_with so the formula installs from an untrusted tap ([#574](https://github.com/kontext-security/kontext/issues/574)) ([8e3b03a](https://github.com/kontext-security/kontext/commit/8e3b03af053fa51d22030134016a88c350166eb0))
+* **homebrew:** drop the llama.cpp dependency from the tap formula ([#568](https://github.com/kontext-security/kontext/issues/568)) ([3868fe8](https://github.com/kontext-security/kontext/commit/3868fe84c50f037fe8cd5341558d6fd8441d48fd))
+* **policy:** allow tool calls when the policy is not ready or the principal is unresolved ([#560](https://github.com/kontext-security/kontext/issues/560)) ([efa8622](https://github.com/kontext-security/kontext/commit/efa86223321fac926970e939ad55c92b854dbb85))
+
 ## [1.11.0](https://github.com/kontext-security/kontext/compare/v1.10.0...v1.11.0) (2026-10-13)
 
 
