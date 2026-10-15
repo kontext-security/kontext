@@ -118,7 +118,7 @@ jobs:
           fi
           brew install kontext/trust/kontext 2>&1 | tee "$RUNNER_TEMP/formula.log"
           kontext --version | grep -F "$VERSION"
-          brew uninstall kontext
+          brew uninstall --formula kontext
 
       - name: Cask installs without developer tools
         run: |
@@ -145,7 +145,6 @@ jobs:
           path: ${{ runner.temp }}/*.log
 
   published:
-    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
@@ -199,7 +198,17 @@ jobs:
           set -euo pipefail
           brew install kontext-security/tap/kontext 2>&1 | tee "$RUNNER_TEMP/published.log"
           kontext --version
-          brew uninstall kontext
+
+      - name: Daemon updater commands work against the published formula
+        run: |
+          set -euo pipefail
+          # The daemon auto-updater runs these. Releases up to 1.11 omit
+          # --formula; with a same-name cask in an untrusted tap that must
+          # still resolve, or older installs stop updating.
+          brew list --versions kontext-security/tap/kontext
+          brew list --formula --versions kontext-security/tap/kontext
+          brew upgrade --formula --no-ask kontext-security/tap/kontext
+          brew uninstall --formula kontext
 
       - name: Install the published cask without developer tools
         run: |
@@ -212,6 +221,9 @@ jobs:
           brew install --cask kontext-security/tap/kontext 2>&1 | tee -a "$RUNNER_TEMP/published.log"
           require_notarized "$(readlink -f "$(brew --prefix)/bin/kontext")"
           kontext --version
+          # What the daemon updater runs for a cask install.
+          brew list --cask --versions kontext
+          brew upgrade --cask --no-ask kontext-security/tap/kontext
 
       - name: Upload install log
         if: always()
