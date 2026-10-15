@@ -832,9 +832,7 @@ func startTestDaemon(t *testing.T) (string, string, func()) {
 
 func waitForSocket(t *testing.T, socketPath string, errCh <-chan error) {
 	t.Helper()
-	// Default-on Merlin can use its 30-second initialization budget before
-	// opening the socket, particularly in a cold race-instrumented process.
-	deadline := time.Now().Add(40 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-errCh:
