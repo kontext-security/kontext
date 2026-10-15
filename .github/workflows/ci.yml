@@ -35,13 +35,35 @@ jobs:
         run: go mod verify
 
       - name: Check formatting
-        run: test -z "$(gofmt -l $(find cmd internal pkg scripts -name '*.go' -type f))"
+        run: test -z "$(gofmt -l cmd internal pkg scripts)"
 
       - name: Build
         run: go build ./...
 
       - name: Vet
         run: go vet ./...
+
+      - name: Windows amd64 build, vet and test compile
+        # Cross-compiled on Linux: test binaries are linked but not run (-exec /usr/bin/true).
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          go build ./...
+          go vet ./...
+          go test -count=1 -run '^$' -exec /usr/bin/true ./...
+
+      - name: Windows arm64 build, vet and test compile
+        # Cross-compiled on Linux: test binaries are linked but not run (-exec /usr/bin/true).
+        env:
+          GOOS: windows
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: |
+          go build ./...
+          go vet ./...
+          go test -count=1 -run '^$' -exec /usr/bin/true ./...
 
       - name: Test
         run: go test -race ./...
