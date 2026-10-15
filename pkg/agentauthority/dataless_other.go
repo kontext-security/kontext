@@ -1,13 +1,9 @@
-//go:build !darwin
+//go:build !unix && !windows
 
 package agentauthority
 
-import (
-	"os"
-	"syscall"
-)
+import "os"
 
-func isDataless(info os.FileInfo) bool {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && info.Mode().IsRegular() && stat.Size > 0 && stat.Blocks == 0
-}
+// isDataless has no placeholder check on targets that are neither unix nor Windows; readGuarded
+// refuses every read there anyway (limits_other.go).
+func isDataless(os.FileInfo) bool { return false }

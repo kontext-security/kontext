@@ -35,7 +35,7 @@ jobs:
         run: go mod verify
 
       - name: Check formatting
-        run: test -z "$(gofmt -l $(find cmd internal -name '*.go' -type f))"
+        run: test -z "$(gofmt -l $(find cmd internal pkg scripts -name '*.go' -type f))"
 
       - name: Build
         run: go build ./...
