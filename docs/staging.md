@@ -57,7 +57,8 @@ repo (org members). Homebrew needs that account's token to download assets:
 # one-time
 gh auth login
 
-brew uninstall kontext 2>/dev/null || true   # same bin/kontext as prod
+brew uninstall --formula kontext 2>/dev/null || true   # prod formula: same bin/kontext
+brew uninstall --cask kontext 2>/dev/null || true      # or the prod cask
 HOMEBREW_GITHUB_API_TOKEN="$(gh auth token)" \
   brew install kontext-security/tap/kontext-staging
 
