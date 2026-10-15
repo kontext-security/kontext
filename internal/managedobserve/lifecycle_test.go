@@ -556,10 +556,11 @@ func TestMain(m *testing.M) {
 	// Keep the unavailable-daemon tests fast; the restart wait is exercised
 	// by TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget.
 	daemonRestartWait = 500 * time.Millisecond
-	// No test here checks step-safety. Left on, every daemon starts loading
-	// the embedded model, which under -race holds the socket for its 30 s
-	// startup budget and keeps the CPU busy long after, so the 2 s waits in
-	// the stream tests time out. internal/guard/stepsafety tests the model.
+	// No test here checks step-safety. Left on, the first daemon starts the
+	// shared load of the embedded model; under -race each daemon then holds
+	// its socket for the 30 s startup budget and the load keeps the CPU busy
+	// long after, so the 2 s waits in the stream tests time out.
+	// internal/guard/stepsafety tests the model.
 	_ = os.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "false")
 	os.Exit(m.Run())
 }
