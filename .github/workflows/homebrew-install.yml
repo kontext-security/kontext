@@ -87,30 +87,38 @@ jobs:
           tag="$(gh release view --repo kontext-security/kontext --json tagName --jq .tagName)"
           version="${tag#v}"
           gh release download "$tag" --repo kontext-security/kontext -p checksums.txt -D "$RUNNER_TEMP"
+          # The formulae live in a git tap with their real names, like
+          # kontext-security/homebrew-tap: Homebrew 7 trusts only the formula
+          # named on the command line, so a formula that loads its sibling
+          # fails here exactly as it does for customers.
+          repo="$RUNNER_TEMP/homebrew-tap"
+          mkdir -p "$repo/Formula"
+          ./scripts/render-homebrew-formula.sh "$version" "$RUNNER_TEMP/checksums.txt" > "$repo/Formula/kontext.rb"
+          ./scripts/render-homebrew-formula.sh "$version" "$RUNNER_TEMP/checksums.txt" --staging > "$repo/Formula/kontext-staging.rb"
+          git -C "$repo" init -q
+          git -C "$repo" add -A
+          git -C "$repo" -c user.name=ci -c user.email=ci@localhost commit -qm "rendered formulae"
+          brew tap kontext/trust "$repo"
           brew tap-new --no-git kontext/ci
           tap="$(brew --repo kontext/ci)"
           mkdir -p "$tap/Casks"
-          # Renamed so the formula and the cask can be installed side by side.
-          ./scripts/render-homebrew-formula.sh "$version" "$RUNNER_TEMP/checksums.txt" \
-            | sed -e 's/^class Kontext < Formula/class KontextFormula < Formula/' \
-                  -e '/conflicts_with/d' \
-                  -e 's#bin.install "kontext"#bin.install "kontext" => "kontext-formula"#' \
-                  -e 's#bin/"kontext"#bin/"kontext-formula"#' > "$tap/Formula/kontext-formula.rb"
+          # Renamed so the cask can be installed next to the formula.
           ./scripts/render-homebrew-cask.sh "$version" "$RUNNER_TEMP/checksums.txt" \
             | sed -e 's/^cask "kontext" do/cask "kontext-cask" do/' \
                   -e 's/^  binary "kontext"$/  binary "kontext", target: "kontext-cask"/' > "$tap/Casks/kontext-cask.rb"
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Formula has no dependencies and installs
+      - name: Formula installs from an untrusted tap with no dependencies
         run: |
           set -euo pipefail
-          deps="$(brew deps --formula kontext/ci/kontext-formula)"
+          deps="$(brew deps --formula kontext/trust/kontext)"
           if [[ -n "$deps" ]]; then
             echo "::error::formula pulls dependencies: $deps"
             exit 1
           fi
-          brew install kontext/ci/kontext-formula 2>&1 | tee "$RUNNER_TEMP/formula.log"
-          kontext-formula --version | grep -F "$VERSION"
+          brew install kontext/trust/kontext 2>&1 | tee "$RUNNER_TEMP/formula.log"
+          kontext --version | grep -F "$VERSION"
+          brew uninstall kontext
 
       - name: Cask installs without developer tools
         run: |
