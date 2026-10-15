@@ -20,8 +20,9 @@ before the branch lands on `main` and becomes a prod release.
   staging-releases repo, so release-please in the source repo never sees them.
 
 The staging formula installs the same `kontext` binary as prod, so the two
-formulae `conflicts_with` each other — uninstall one before installing the
-other.
+formulae cannot be linked at the same time — uninstall one before installing
+the other. They deliberately do not declare `conflicts_with`: Homebrew 7 trusts
+only the formula named on the command line and refuses to load the other one.
 
 ## Publishing a staging build
 
@@ -56,7 +57,7 @@ repo (org members). Homebrew needs that account's token to download assets:
 # one-time
 gh auth login
 
-brew uninstall kontext 2>/dev/null || true   # conflicts_with prod
+brew uninstall kontext 2>/dev/null || true   # same bin/kontext as prod
 HOMEBREW_GITHUB_API_TOKEN="$(gh auth token)" \
   brew install kontext-security/tap/kontext-staging
 
@@ -101,7 +102,7 @@ in the private repo as throwaway artifacts; prune old ones occasionally.
   is preferred over the older `KONTEXT_API_URL` export — that variable is not
   inherited by the LaunchAgent, so it never reached the daemon.
 - Both formulae install a binary named `kontext`, so the staging and prod
-  channels `conflicts_with` each other. Profiles are per-machine state and
+  channels cannot be linked at the same time. Profiles are per-machine state and
   survive swapping the binary underneath them.
 - The staging backend hostname is not secret — it appears in this public
   repo. The private-releases mechanism only gates the binaries, not the
