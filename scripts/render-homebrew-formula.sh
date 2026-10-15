@@ -6,7 +6,7 @@ usage() {
   echo "" >&2
   echo "  default     renders the prod Formula/kontext.rb (public kontext releases)" >&2
   echo "  --staging   renders Formula/kontext-staging.rb (private kontext-staging-releases" >&2
-  echo "              repo, token-gated download strategy, conflicts_with prod formula)" >&2
+  echo "              repo, token-gated download strategy)" >&2
   exit 1
 }
 
@@ -58,12 +58,10 @@ if [[ "$staging" == true ]]; then
   strategy_class="KontextStagingGitHubPrivateRepositoryReleaseDownloadStrategy"
   release_repo="kontext-security/kontext-staging-releases"
   tag="v${version}"
-  conflicts_line=$'  conflicts_with "kontext"\n'
 else
   formula_class="Kontext"
   release_repo="kontext-security/kontext"
   tag="v${version}"
-  conflicts_line=$'  conflicts_with "kontext-staging"\n'
 fi
 
 # Staging formulae download from a private repo. Private release assets 404
@@ -133,8 +131,8 @@ if [[ "$staging" == true ]]; then
   def caveats
     <<~EOS
       This is the STAGING build of kontext, for testing against the staging
-      backend. It conflicts with the prod formula (brew uninstall kontext
-      first, or vice versa).
+      backend. It installs the same kontext binary as the prod formula
+      (brew uninstall kontext first, or vice versa).
 
       Point it at the staging backend before setup:
         export KONTEXT_API_URL=https://api.staging.kontext.security
@@ -160,7 +158,11 @@ ${download_strategy_preamble}class ${formula_class} < Formula
   version "${version}"
   license "MIT"
 
-${conflicts_line}
+  # No conflicts_with: Homebrew 7 trusts only the formula named on the
+  # command line, and loading the other channel to check the conflict makes
+  # it refuse the install ("Refusing to load formula ... from untrusted
+  # tap"). Both channels install bin/kontext, so brew still will not link one
+  # over the other.
   on_macos do
     if Hardware::CPU.intel?
       url "https://github.com/${release_repo}/releases/download/${tag}/${darwin_amd64_archive}"${url_suffix}
