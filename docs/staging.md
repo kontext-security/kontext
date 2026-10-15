@@ -102,7 +102,7 @@ in the private repo as throwaway artifacts; prune old ones occasionally.
   is preferred over the older `KONTEXT_API_URL` export — that variable is not
   inherited by the LaunchAgent, so it never reached the daemon.
 - Both formulae install a binary named `kontext`, so the staging and prod
-  channels cannot be installed side by side. Profiles are per-machine state and
+  channels cannot be linked at the same time. Profiles are per-machine state and
   survive swapping the binary underneath them.
 - The staging backend hostname is not secret — it appears in this public
   repo. The private-releases mechanism only gates the binaries, not the
