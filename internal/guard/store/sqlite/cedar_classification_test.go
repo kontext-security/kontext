@@ -21,6 +21,7 @@ func TestCedarClassification(t *testing.T) {
 		{"none", nil, nil},
 		{"mcp tool", &risk.CedarEvidence{Tool: &cedareval.ToolClassificationV2{Provider: "databricks", Product: "sql", Access: "delete"}}, &cedareval.ToolClassificationV2{Provider: "databricks", Product: "sql", Access: "delete"}},
 		{"catalogued read", &risk.CedarEvidence{Shell: []cedareval.ShellProjectionV2{shell("databricks/route=catalogued", "databricks/product=compute")}}, &cedareval.ToolClassificationV2{Provider: "databricks", Product: "compute", Access: "read"}},
+		{"delete beats admin", &risk.CedarEvidence{Shell: []cedareval.ShellProjectionV2{shell("databricks/route=catalogued", "databricks/product=sql", "databricks/write=true", "databricks/delete=true", "databricks/admin=true")}}, &cedareval.ToolClassificationV2{Provider: "databricks", Product: "sql", Access: "delete"}},
 		{"admin beats write", &risk.CedarEvidence{Shell: []cedareval.ShellProjectionV2{shell("databricks/route=catalogued", "databricks/product=workspace", "databricks/write=true", "databricks/admin=true")}}, &cedareval.ToolClassificationV2{Provider: "databricks", Product: "workspace", Access: "admin"}},
 		{"strictest projection wins", &risk.CedarEvidence{Shell: []cedareval.ShellProjectionV2{
 			shell("databricks/route=catalogued", "databricks/product=compute"),

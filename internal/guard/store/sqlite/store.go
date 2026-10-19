@@ -1020,7 +1020,7 @@ func capturedRecordJSON(payload map[string]any, mode payloadcapture.Mode) any {
 // cedarClassification is the provider, product and tier the Cedar request
 // classified a call as: an MCP tool's catalog entry (context.tool), or a
 // shell command's databricks/* facts, the strictest across its
-// projections. It is nil when the request carried neither.
+// projections (delete over admin). It is nil when the request carried neither.
 func cedarClassification(evidence *risk.CedarEvidence) *cedareval.ToolClassificationV2 {
 	if evidence == nil {
 		return nil
@@ -1028,7 +1028,8 @@ func cedarClassification(evidence *risk.CedarEvidence) *cedareval.ToolClassifica
 	if evidence.Tool != nil && evidence.Tool.Provider != "" {
 		return evidence.Tool
 	}
-	rank := map[string]int{"": 0, "read": 1, "write": 2, "delete": 3, "admin": 4}
+	// Delete ranks above admin, as for MCP SQL that does both.
+	rank := map[string]int{"": 0, "read": 1, "write": 2, "admin": 3, "delete": 4}
 	var classified *cedareval.ToolClassificationV2
 	for _, projection := range evidence.Shell {
 		// An unrecognized route has no tier; a catalogued one is a read

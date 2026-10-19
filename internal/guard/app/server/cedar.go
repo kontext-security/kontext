@@ -335,7 +335,17 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput))
 	}
 	serverURL, serverName := mcpServers.Server(event.Agent, event.SessionID, event.CWD, event.ToolName)
-	if toolID, github := toolcatalog.Resolve(event.ToolName, serverURL, serverName, event.ToolInput); github {
+	toolID, resolved := toolcatalog.Resolve(event.ToolName, serverURL, serverName, event.ToolInput)
+	// A claude.ai connector's URL in the Claude Code CLI comes from Claude
+	// Desktop's cached connector list, which can predate a change to the
+	// connector. That URL may raise what the name alone resolves to, never
+	// lower it.
+	if serverURL != "" && strings.HasPrefix(event.ToolName, "mcp__claude_ai_") {
+		if byName, named := toolcatalog.Resolve(event.ToolName, "", "", event.ToolInput); named && (!resolved || accessRank(byName, event) > accessRank(toolID, event)) {
+			toolID, resolved = byName, true
+		}
+	}
+	if resolved {
 		return toolID, nil
 	}
 	if legacyUnknown {
@@ -345,6 +355,16 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 		return name, nil
 	}
 	return cedareval.ToolUnknownV2, nil
+}
+
+// accessRank orders a resolved tool id by its catalog tier; an id without
+// one ranks lowest. Delete ranks above admin, as for SQL that does both.
+func accessRank(toolID string, event risk.HookEvent) int {
+	class, ok := toolcatalog.ClassifyCall(toolID, event.ToolName, event.ToolInput)
+	if !ok {
+		return 0
+	}
+	return map[string]int{toolcatalog.AccessRead: 1, toolcatalog.AccessWrite: 2, toolcatalog.AccessAdmin: 3, toolcatalog.AccessDelete: 4}[class.Access]
 }
 
 // unknownToolLiteral is how a policy names the pre-pass-through catch-all.

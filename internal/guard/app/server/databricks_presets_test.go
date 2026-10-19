@@ -71,7 +71,8 @@ func TestCedarDatabricksPresets(t *testing.T) {
 	const account, org = "11111111-2222-4333-8444-555555555555", "66666666-7777-4888-9999-000000000000"
 	writeConfig(t, filepath.Join(home, ".claude.json"), `{"mcpServers": `+servers+`, "oauthAccount": {"accountUuid": "`+account+`", "organizationUuid": "`+org+`"}}`)
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions", account, org, "local_w.json"),
-		`{"cliSessionId": "session-w", "remoteMcpServersConfig": [{"uuid": "w", "name": "Warehouse", "url": "`+workspace+`/ai-gateway/mcp-services/system.ai.dbsql?o=1"}]}`)
+		`{"cliSessionId": "session-w", "remoteMcpServersConfig": [{"uuid": "w", "name": "Warehouse", "url": "`+workspace+`/ai-gateway/mcp-services/system.ai.dbsql?o=1"},
+  {"uuid": "v", "name": "Databricks", "url": "`+workspace+`/api/2.0/mcp/vector-search/main/docs"}]}`)
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": `+servers+`}`)
 	codex := ""
 	for name, path := range map[string]string{"wh": "/api/2.0/mcp/sql", "github": "/api/2.0/mcp/sql", "genie": "/api/2.0/mcp/genie/01ef", "genieone": "/ai-gateway/mcp-services/system.ai.genie_one_mcp", "fns": "/api/2.0/mcp/functions/main/default", "vs": "/api/2.0/mcp/vector-search/main/docs", "sandbox": "/ai-gateway/mcp-services/system.ai.sandbox", "websearch": "/ai-gateway/mcp-services/system.ai.web_search", "serving": "/serving-endpoints/chat/invocations"} {
@@ -154,6 +155,9 @@ func TestCedarDatabricksPresets(t *testing.T) {
 	}{
 		{"claude.ai connector in the CLI, select", "mcp__claude_ai_Warehouse__execute_sql", sql("SELECT 1"), []string{readOnly}},
 		{"claude.ai connector in the CLI, drop", "mcp__claude_ai_Warehouse__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
+		// The cached connector list can predate a change to the connector:
+		// a URL that would classify lower than the name never wins.
+		{"stale connector URL cannot lower the name", "mcp__claude_ai_Databricks__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
 	}
 	for preset, forbid := range databricksPresets {
 		policy := `@id("allow") permit(principal, action == Kontext::Action::"ToolUse", resource);
