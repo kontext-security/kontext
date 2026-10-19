@@ -74,8 +74,9 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	writeConfig(t, filepath.Join(home, "src/broken/.mcp.json"), `{"mcpServers": {`)
 	writeConfig(t, filepath.Join(home, "managed/managed-mcp.json"), `{"mcpServers": {"corp": `+atlassian+`}}`)
 	plugin := filepath.Join(home, ".claude/plugins/cache/market/jira-tools/1.0.0")
-	writeConfig(t, filepath.Join(plugin, ".claude-plugin/plugin.json"), `{"name": "jira-tools"}`)
-	writeConfig(t, filepath.Join(plugin, ".mcp.json"), `{"mcpServers": {"cloud": `+atlassian+`}}`)
+	// plugin.json's inline servers override the plugin's .mcp.json.
+	writeConfig(t, filepath.Join(plugin, ".claude-plugin/plugin.json"), `{"name": "jira-tools", "mcpServers": {"cloud": `+atlassian+`}}`)
+	writeConfig(t, filepath.Join(plugin, ".mcp.json"), `{"mcpServers": {"cloud": {"url": "https://api.githubcopilot.com/mcp/"}, "files": `+atlassian+`}}`)
 	// A stdio entry in a higher scope shadows the user URL.
 	writeConfig(t, filepath.Join(home, "src/shadow/.mcp.json"), `{"mcpServers": {"work": {"command": "npx", "args": ["github-mcp"]}}}`)
 	// Two installations of one plugin name disagree about a server.
@@ -120,6 +121,7 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		{"claude local entry, normalized name", "claude", filepath.Join(project, "pkg"), "mcp__local_desk__createTeam", risk.DecisionDeny},
 		{"claude managed config", "claude-code", "", "mcp__corp__createTeam", risk.DecisionDeny},
 		{"claude plugin server", "claude", "", "mcp__plugin_jira-tools_cloud__createTeam", risk.DecisionDeny},
+		{"claude plugin server from .mcp.json", "claude", "", "mcp__plugin_jira-tools_files__createTeam", risk.DecisionDeny},
 		{"codex", "codex", "", "mcp__work__createTeam", risk.DecisionDeny},
 		{"cowork", "cowork", "", "mcp__work__createTeam", risk.DecisionDeny},
 		// Unidentified servers: the raw name passes through and is allowed.

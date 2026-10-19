@@ -311,8 +311,9 @@ func (r *Resolver) plugin(configDir, server string) (string, bool) {
 			if !ok {
 				continue
 			}
-			// A plugin declares servers in .mcp.json or inline in plugin.json.
-			for _, file := range []string{".mcp.json", ".claude-plugin/plugin.json"} {
+			// A plugin declares servers inline in plugin.json, which wins, or
+			// in .mcp.json.
+			for _, file := range []string{".claude-plugin/plugin.json", ".mcp.json"} {
 				if url, found := find(r.servers(filepath.Join(path, file)), name); found {
 					urls[url] = true
 					break
