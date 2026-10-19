@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,9 +63,21 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	writeConfig(t, filepath.Join(home, "src/broken/.mcp.json"), `{"mcpServers": {`)
 	writeConfig(t, filepath.Join(home, "managed/managed-mcp.json"), `{"mcpServers": {"corp": `+atlassian+`}}`)
 	plugin := filepath.Join(home, ".claude/plugins/cache/market/jira-tools/1.0.0")
-	writeConfig(t, filepath.Join(home, ".claude/plugins/installed_plugins.json"), `{"plugins": {"jira-tools@market": [{"installPath": "`+plugin+`"}]}}`)
 	writeConfig(t, filepath.Join(plugin, ".claude-plugin/plugin.json"), `{"name": "jira-tools"}`)
 	writeConfig(t, filepath.Join(plugin, ".mcp.json"), `{"mcpServers": {"cloud": `+atlassian+`}}`)
+	// A stdio entry in a higher scope shadows the user URL.
+	writeConfig(t, filepath.Join(home, "src/shadow/.mcp.json"), `{"mcpServers": {"work": {"command": "npx", "args": ["github-mcp"]}}}`)
+	// Two installations of one plugin name disagree about a server.
+	for i, server := range []string{atlassian, `{"command": "npx"}`} {
+		dup := filepath.Join(home, ".claude/plugins/cache", fmt.Sprintf("m%d", i), "dup-tools/1.0.0")
+		writeConfig(t, filepath.Join(dup, ".claude-plugin/plugin.json"), `{"name": "dup-tools"}`)
+		writeConfig(t, filepath.Join(dup, ".mcp.json"), `{"mcpServers": {"cloud": `+server+`}}`)
+	}
+	writeConfig(t, filepath.Join(home, ".claude/plugins/installed_plugins.json"), `{"plugins": {
+  "jira-tools@market": [{"installPath": "`+plugin+`"}],
+  "dup-tools@m0": [{"installPath": "`+filepath.Join(home, ".claude/plugins/cache/m0/dup-tools/1.0.0")+`"}],
+  "dup-tools@m1": [{"installPath": "`+filepath.Join(home, ".claude/plugins/cache/m1/dup-tools/1.0.0")+`"}]
+}}`)
 	writeConfig(t, filepath.Join(home, ".codex/config.toml"), "[mcp_servers.work]\nurl = \"https://mcp.atlassian.com/v1/mcp\"\n")
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": {"work": `+atlassian+`}}`)
 
@@ -91,6 +104,8 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		// Unidentified servers: the raw name passes through and is allowed.
 		{"stdio bridge", "claude", "", "mcp__bridge__createTeam", risk.DecisionAllow},
 		{"malformed project config", "claude", filepath.Join(home, "src/broken"), "mcp__broken__createTeam", risk.DecisionAllow},
+		{"stdio entry shadows a user URL", "claude", filepath.Join(home, "src/shadow"), "mcp__work__createTeam", risk.DecisionAllow},
+		{"plugin installations disagree", "claude", "", "mcp__plugin_dup-tools_cloud__createTeam", risk.DecisionAllow},
 		{"unlisted server", "claude", project, "mcp__elsewhere__createTeam", risk.DecisionAllow},
 		{"unknown agent", "gemini", project, "mcp__work__createTeam", risk.DecisionAllow},
 	}

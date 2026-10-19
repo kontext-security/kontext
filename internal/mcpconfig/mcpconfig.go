@@ -13,8 +13,10 @@
 //   - Claude Cowork: Claude Desktop's claude_desktop_config.json.
 //   - Codex: config.toml [mcp_servers].
 //
-// A server that no source lists, a stdio server and a URL that does not
-// parse all return "", and the catalog falls back to the server name.
+// The first source that defines a server wins whole, so a stdio entry
+// shadows a URL in a lower scope. A server that no source lists, a stdio
+// server, a URL that does not parse and a lookup that stalls all return "",
+// and the catalog falls back to the server name.
 package mcpconfig
 
 import (
@@ -37,6 +39,14 @@ const ManagedMCPPath = "/Library/Application Support/ClaudeCode/managed-mcp.json
 // maxConfigBytes bounds one config read. ~/.claude.json grows with history.
 const maxConfigBytes = 64 << 20
 
+// lookupTimeout bounds one lookup, so a config on a stalled mount (a
+// network drive, an evicted cloud file) costs a hook this long at most.
+// maxLookups bounds the lookups still blocked on such a file.
+const (
+	lookupTimeout = 250 * time.Millisecond
+	maxLookups    = 4
+)
+
 // Resolver caches parsed config files by modification time and size, so a
 // hook pays one stat per file unless the file changed. It is safe for
 // concurrent use. The zero value reads the current user's home directory
@@ -45,8 +55,10 @@ type Resolver struct {
 	Home    string
 	Managed string
 
-	mu    sync.Mutex
-	cache map[string]cachedFile
+	mu      sync.Mutex
+	cache   map[string]cachedFile
+	once    sync.Once
+	lookups chan struct{}
 }
 
 type cachedFile struct {
@@ -57,8 +69,31 @@ type cachedFile struct {
 }
 
 // ServerURL returns the configured URL of the MCP server behind toolName
-// (mcp__<server>__<tool>) for the agent that reported it, or "".
+// (mcp__<server>__<tool>) for the agent that reported it, or "". A lookup
+// that does not finish within lookupTimeout returns "".
 func (r *Resolver) ServerURL(agent, cwd, toolName string) string {
+	r.once.Do(func() { r.lookups = make(chan struct{}, maxLookups) })
+	timer := time.NewTimer(lookupTimeout)
+	defer timer.Stop()
+	select {
+	case r.lookups <- struct{}{}:
+	case <-timer.C:
+		return ""
+	}
+	result := make(chan string, 1)
+	go func() {
+		defer func() { <-r.lookups }()
+		result <- r.lookup(agent, cwd, toolName)
+	}()
+	select {
+	case url := <-result:
+		return url
+	case <-timer.C:
+		return ""
+	}
+}
+
+func (r *Resolver) lookup(agent, cwd, toolName string) string {
 	rest, ok := strings.CutPrefix(toolName, "mcp__")
 	if !ok {
 		return ""
@@ -74,23 +109,20 @@ func (r *Resolver) ServerURL(agent, cwd, toolName string) string {
 			return ""
 		}
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.cache == nil {
-		r.cache = map[string]cachedFile{}
-	}
 	switch agent {
 	case "claude", "claude-code", "claude_code":
 		return r.claude(home, cwd, server)
 	case "cowork", "claude-cowork", "claude_cowork":
-		return find(r.servers(filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json")), server)
+		url, _ := find(r.servers(filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json")), server)
+		return url
 	case "codex":
 		dir := os.Getenv("CODEX_HOME")
 		if dir == "" {
 			dir = filepath.Join(home, ".codex")
 		}
 		config, _ := load(r, filepath.Join(dir, "config.toml"), readers.Codex)
-		return find(config.MCPServers, server)
+		url, _ := find(config.MCPServers, server)
+		return url
 	}
 	return ""
 }
@@ -100,7 +132,9 @@ func (r *Resolver) claude(home, cwd, server string) string {
 	if managed == "" {
 		managed = ManagedMCPPath
 	}
-	if url := find(r.servers(managed), server); url != "" {
+	// The first source that defines the server wins whole, as in Claude
+	// Code: a stdio entry shadows a URL in a lower scope.
+	if url, found := find(r.servers(managed), server); found {
 		return url
 	}
 	configDir := filepath.Join(home, ".claude")
@@ -112,10 +146,10 @@ func (r *Resolver) claude(home, cwd, server string) string {
 	root, _ := load(r, userConfig, readers.Claude)
 	if filepath.IsAbs(cwd) {
 		for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
-			if url := find(root.Projects[dir].MCPServers, server); url != "" {
+			if url, found := find(root.Projects[dir].MCPServers, server); found {
 				return url
 			}
-			if url := find(r.servers(filepath.Join(dir, ".mcp.json")), server); url != "" {
+			if url, found := find(r.servers(filepath.Join(dir, ".mcp.json")), server); found {
 				return url
 			}
 			if dir == filepath.Dir(dir) {
@@ -123,14 +157,16 @@ func (r *Resolver) claude(home, cwd, server string) string {
 			}
 		}
 	}
-	if url := find(root.MCPServers, server); url != "" {
+	if url, found := find(root.MCPServers, server); found {
 		return url
 	}
 	return r.plugin(configDir, server)
 }
 
 // plugin resolves a plugin's MCP server, which Claude Code names
-// plugin_<plugin>_<server>.
+// plugin_<plugin>_<server>. Installed records do not say which installation
+// of a plugin name is active, so when installations disagree about the
+// server the URL is unknown.
 func (r *Resolver) plugin(configDir, server string) string {
 	if !strings.HasPrefix(server, "plugin_") {
 		return ""
@@ -145,6 +181,7 @@ func (r *Resolver) plugin(configDir, server string) string {
 	}
 	index, _ := load(r, filepath.Join(configDir, "plugins/installed_plugins.json"), parseJSON[installed])
 	cacheDir := filepath.Join(configDir, "plugins/cache") + string(filepath.Separator)
+	urls := map[string]bool{}
 	for _, entries := range index.Plugins {
 		for _, entry := range entries {
 			// Read only inside the plugin cache, never a path a file names.
@@ -163,11 +200,18 @@ func (r *Resolver) plugin(configDir, server string) string {
 			}
 			// A plugin declares servers in .mcp.json or inline in plugin.json.
 			for _, file := range []string{".mcp.json", ".claude-plugin/plugin.json"} {
-				if url := find(r.servers(filepath.Join(path, file)), name); url != "" {
-					return url
+				if url, found := find(r.servers(filepath.Join(path, file)), name); found {
+					urls[url] = true
+					break
 				}
 			}
 		}
+	}
+	if len(urls) != 1 {
+		return ""
+	}
+	for url := range urls {
+		return url
 	}
 	return ""
 }
@@ -180,18 +224,24 @@ func (r *Resolver) servers(path string) map[string]readers.MCP {
 }
 
 // find returns the URL of the configured server whose name the agent turns
-// into server. Claude Code and Codex replace every character outside
-// [A-Za-z0-9_-] with "_" in tool names.
-func find(servers map[string]readers.MCP, server string) string {
+// into server ("" for a stdio server), and whether one is configured.
+// Claude Code and Codex replace every character outside [A-Za-z0-9_-] with
+// "_" in tool names; two names that normalize alike leave the URL unknown.
+func find(servers map[string]readers.MCP, server string) (string, bool) {
 	if config, ok := servers[server]; ok {
-		return strings.TrimSpace(config.URL)
+		return strings.TrimSpace(config.URL), true
 	}
+	url, found := "", false
 	for name, config := range servers {
-		if normalize(name) == server {
-			return strings.TrimSpace(config.URL)
+		if normalize(name) != server {
+			continue
 		}
+		if found && strings.TrimSpace(config.URL) != url {
+			return "", true
+		}
+		url, found = strings.TrimSpace(config.URL), true
 	}
-	return ""
+	return url, found
 }
 
 func normalize(name string) string {
@@ -211,11 +261,18 @@ func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bo
 	// One file can be read as two shapes (plugin.json), so the key has both.
 	key := fmt.Sprintf("%s\x00%T", path, zero)
 	info, err := os.Stat(path)
+	r.mu.Lock()
+	if r.cache == nil {
+		r.cache = map[string]cachedFile{}
+	}
+	cached, hit := r.cache[key]
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxConfigBytes {
 		delete(r.cache, key)
+		r.mu.Unlock()
 		return zero, false
 	}
-	if cached, ok := r.cache[key]; ok && cached.modTime.Equal(info.ModTime()) && cached.size == info.Size() {
+	r.mu.Unlock()
+	if hit && cached.modTime.Equal(info.ModTime()) && cached.size == info.Size() {
 		value, _ := cached.value.(T)
 		return value, cached.ok
 	}
@@ -229,6 +286,8 @@ func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bo
 	if !ok {
 		parsed = zero
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.cache[key] = cachedFile{modTime: info.ModTime(), size: info.Size(), value: parsed, ok: ok}
 	return parsed, ok
 }
