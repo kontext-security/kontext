@@ -11,9 +11,10 @@ import (
 //
 // Each top-level statement is looked up by its leading keywords, after any
 // WITH prefix, in databricksStatementTypes, and a few clauses at its top level
-// add to that: CREATE OR REPLACE|REFRESH, INSERT OVERWRITE, INSERT … REPLACE
-// WHERE|USING|ON and MERGE … THEN DELETE delete; ALTER … OWNER TO, column
-// masks, row filters and tags are admin. Admin comes only from a statement
+// add to that: INSERT OVERWRITE, INSERT … REPLACE WHERE|USING|ON and MERGE …
+// THEN DELETE delete; ALTER … OWNER TO, column masks, row filters and tags are
+// admin; CREATE OR REPLACE|REFRESH is both, as it drops masks and filters the
+// new definition leaves out. Admin comes only from a statement
 // type or one of these clauses, never from a stray keyword. The strictest
 // statement wins.
 //
@@ -171,7 +172,8 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 
 	// Clauses at the statement's top level; a CREATE's column definitions,
 	// its first group before AS, and ALTER … ADD COLUMNS sit one level down.
-	depth, angle, columns, grouped, adding := 0, 0, false, false, false
+	depth, columns, grouped, adding := 0, false, false, false
+	insert := verb == "INSERT" || verb == "FROM" // FROM s INSERT … is a multi-insert
 	for i := start; i < len(stmt); i++ {
 		tok, prev, next := stmt[i], at(i-1), at(i+1)
 		switch {
@@ -182,10 +184,6 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 		case tok.is(")"):
 			depth--
 			columns = columns && depth > 0
-		case tok.is("<") && (prev.is("STRUCT") || prev.is("ARRAY") || prev.is("MAP")):
-			angle++
-		case tok.is(">") && angle > 0:
-			angle--
 		}
 		if tok.kind != sqlWord {
 			continue
@@ -195,9 +193,11 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 		}
 		if depth == 0 {
 			switch {
-			case verb == "CREATE" && i == start+2 && prev.is("OR") && (tok.is("REPLACE") || tok.is("REFRESH")),
-				(verb == "INSERT" || verb == "LOAD" || verb == "PUT") && tok.is("OVERWRITE"),
-				verb == "INSERT" && tok.is("REPLACE") && (next.is("WHERE") || next.is("USING") || next.is("ON")),
+			case verb == "CREATE" && i == start+2 && prev.is("OR") && (tok.is("REPLACE") || tok.is("REFRESH")):
+				// Replacing a definition drops any mask or filter it leaves out.
+				effect |= sqlBoth
+			case (insert || verb == "LOAD" || verb == "PUT") && tok.is("OVERWRITE"),
+				insert && tok.is("REPLACE") && (next.is("WHERE") || next.is("USING") || next.is("ON")),
 				verb == "MERGE" && tok.is("DELETE") && prev.is("THEN"),
 				verb == "ALTER" && (tok.is("DROP") || tok.is("REPLACE") && next.is("COLUMNS")),
 				verb == "REFRESH" && (tok.is("FULL") || tok.is("WHERE")),
@@ -211,7 +211,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 				(verb == "MSCK" || verb == "REPAIR") && tok.is("PRIVILEGES"):
 				effect |= sqlAdmin
 			case verb == "ALTER" && tok.is("ADD"):
-				adding = true
+				adding = next.is("COLUMN") || next.is("COLUMNS")
 			case verb == "DECLARE" && (tok.is("HANDLER") || tok.is("CONDITION")):
 				opaque = true // SQL scripting, not a session variable
 			}
@@ -221,8 +221,9 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 		}
 		// A column mask in a column definition: CREATE … (c t MASK f) or
 		// ALTER … ADD COLUMN(S) c t MASK f.
-		if tok.is("MASK") && angle == 0 && (columns && depth == 1 || adding && depth <= 1) &&
-			(next.kind == sqlWord || next.kind == sqlName) && !prev.is("(") && !prev.is(",") &&
+		// ponytail: a STRUCT<mask …> field reads as a mask too, which only adds admin.
+		if tok.is("MASK") && (columns && depth == 1 || adding && depth <= 1) &&
+			(next.kind == sqlWord || next.kind == sqlName) && !prev.is("(") && !prev.is(",") && !prev.is(".") &&
 			!databricksBeforeColumnName[prev.text] {
 			effect |= sqlAdmin
 		}
@@ -231,8 +232,8 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 }
 
 // databricksStatementStart returns where the statement proper begins: past
-// any leading parentheses and one WITH [RECURSIVE] name [(cols)] AS (query),
-// … prefix. In Databricks a CTE body is a query, never a write.
+// any leading parentheses and one WITH [RECURSIVE] name … AS (query), …
+// prefix. In Databricks a CTE body is a query, never a write.
 func databricksStatementStart(stmt []sqlToken) int {
 	at := func(i int) sqlToken {
 		if i < len(stmt) {
@@ -264,13 +265,15 @@ func databricksStatementStart(stmt []sqlToken) int {
 		i++
 	}
 	for i < len(stmt) {
-		i++ // the CTE name
-		if at(i).is("(") {
-			i = skipGroup(i)
+		i++ // the CTE name, then any column list or MAX RECURSION LEVEL n up to AS
+		for i < len(stmt) && !at(i).is("AS") {
+			if at(i).is("(") {
+				i = skipGroup(i)
+			} else {
+				i++
+			}
 		}
-		if at(i).is("AS") {
-			i++
-		}
+		i++
 		if at(i).is("(") {
 			i = skipGroup(i)
 		}
