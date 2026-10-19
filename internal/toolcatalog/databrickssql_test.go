@@ -54,6 +54,8 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"replace on", "INSERT INTO t AS t REPLACE ON t.k = k2 (SELECT * FROM s)", AccessDelete, false, true},
 		// A qualified column before a subquery reads as a UDF call: still delete.
 		{"replace on qualified", "INSERT INTO t AS t REPLACE ON t.k = s.k (SELECT * FROM s) AS s", AccessDelete, false, false},
+		{"refresh full", "REFRESH STREAMING TABLE sales FULL", AccessDelete, false, true},
+		{"refresh where", "REFRESH MATERIALIZED VIEW mv WHERE d < '2026-01-01'", AccessDelete, false, true},
 		{"drop inside unknown form", "BEGIN DROP TABLE t; END", AccessDelete, false, false},
 		{"explain drop raises", "EXPLAIN DROP TABLE t", AccessDelete, false, true},
 
@@ -80,6 +82,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"create governed tag", "CREATE GOVERNED TAG pii DESCRIPTION 'x'", AccessAdmin, false, true},
 		{"alter governed tag", "ALTER GOVERNED TAG pii SET VALUES ('a', 'b')", AccessAdmin, false, true},
 		{"drop governed tag", "DROP GOVERNED TAG pii", AccessAdmin, false, true},
+		{"clean room", "CREATE CLEAN ROOM r COMMENT 'x'", AccessAdmin, false, true},
 		{"alter group", "ALTER GROUP g ADD USER `u`", AccessAdmin, false, true},
 
 		// Keywords in comments, strings and quoted names do not raise.
@@ -142,6 +145,8 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"create_file", "SELECT create_file('x', '/Volumes/main/default/v/file', 'overwrite')", AccessWrite, false, false},
 		{"copy_file overwrite raises", "SELECT copy_file('/Volumes/a', '/Volumes/b', overwrite => true)", AccessDelete, false, false},
 		{"try_copy_file", "SELECT try_copy_file('/Volumes/a', '/Volumes/b')", AccessWrite, false, false},
+		{"lateral view udtf", "SELECT * FROM t LATERAL VIEW app.external_udtf(c) AS x", AccessWrite, false, false},
+		{"qualified view column list", "CREATE VIEW main.default.v (a, b) AS SELECT 1, 2", AccessWrite, false, true},
 		{"udf with keyword arguments", "SELECT main.default.f(select => 1), main.default.g(with), main.default.h(from, 1)", AccessWrite, false, false},
 		{"reflect", "SELECT reflect('java.util.UUID', 'randomUUID')", AccessWrite, false, false},
 		{"java_method", "SELECT java_method('java.lang.System', 'getenv', 'HOME')", AccessWrite, false, false},
@@ -156,6 +161,8 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"read_files", "SELECT * FROM read_files('s3://bucket/path')", AccessWrite, false, false},
 		{"multiple statements", "SELECT 1; SELECT 2", AccessWrite, false, false},
 		{"alter outside known forms", "ALTER TABLE t ADD COLUMN c INT", AccessWrite, false, false},
+		{"refresh", "REFRESH STREAMING TABLE sales", AccessWrite, false, false},
+		{"create or refresh full join", "CREATE OR REFRESH MATERIALIZED VIEW mv AS SELECT * FROM a FULL JOIN b USING (k)", AccessWrite, false, true},
 		{"optimize", "OPTIMIZE t ZORDER BY (a)", AccessWrite, false, false},
 		{"scripting block", "BEGIN SELECT 1; END", AccessWrite, false, false},
 		{"unterminated string alone", "SELECT 'abc", AccessWrite, false, false},

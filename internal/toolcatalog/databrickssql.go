@@ -60,7 +60,7 @@ var (
 	databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "DESC", "EXPLAIN",
 		"INSERT", "UPDATE", "MERGE", "CREATE", "COPY", "SET", "USE")
 	databricksRaiseForms = setOf("DROP", "DELETE", "TRUNCATE", "VACUUM", "RESTORE", "REMOVE",
-		"GRANT", "REVOKE", "DENY", "ALTER")
+		"GRANT", "REVOKE", "DENY", "ALTER", "REFRESH")
 )
 
 // A qualified name before ( is a call unless a table keyword precedes it: a
@@ -68,9 +68,9 @@ var (
 var databricksTableKeywords = setOf("INTO", "TABLE", "VIEW", "FUNCTION", "EXISTS")
 
 // Objects whose CREATE, ALTER or DROP is administration: access policies,
-// governed tags, credentials, external locations, Delta Sharing and workspace
+// governed tags, credentials, external locations, Delta Sharing, clean rooms and workspace
 // groups.
-var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", "LOCATION", "SHARE",
+var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", "LOCATION", "SHARE", "CLEAN",
 	"RECIPIENT", "PROVIDER", "GROUP", "METASTORE")
 
 // Words between CREATE, ALTER or DROP and the object kind.
@@ -114,7 +114,9 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 				for at(start - 1).is(".") {
 					start -= 2
 				}
-				if !(at(start-1).kind == sqlWord && databricksTableKeywords[at(start-1).text]) {
+				columnList := at(start-1).kind == sqlWord && databricksTableKeywords[at(start-1).text] &&
+					!(at(start-1).text == "VIEW" && at(start-2).is("LATERAL"))
+				if !columnList {
 					opaque = true
 				}
 			}
@@ -146,6 +148,10 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 		case "TAG", "TAGS":
 			if prev.is("SET") || prev.is("UNSET") {
 				raise(sqlTierAdmin)
+			}
+		case "FULL", "WHERE": // REFRESH … FULL truncates; REFRESH … WHERE deletes the rows it matches
+			if stmt[first].is("REFRESH") {
+				raise(sqlTierDelete)
 			}
 		case "EXECUTE", "CALL":
 			opaque = true
