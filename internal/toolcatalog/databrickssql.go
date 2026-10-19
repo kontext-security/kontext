@@ -65,12 +65,11 @@ var databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE",
 	"INSERT", "UPDATE", "MERGE", "CREATE", "COPY", "SET", "USE")
 
 // SQL scripting: a statement headed by one of these holds statements of its
-// own, each starting after a word in databricksBlockWords.
-var (
-	databricksScriptForms = setOf("BEGIN", "IF", "ELSEIF", "ELSE", "CASE", "WHEN", "FOR", "WHILE", "LOOP",
-		"REPEAT", "DECLARE")
-	databricksBlockWords = setOf("BEGIN", "ATOMIC", "THEN", "ELSE", "DO", "LOOP", "REPEAT")
-)
+// own. They start after a BEGIN [[NOT] ATOMIC], LOOP, REPEAT or ELSE that heads
+// a statement, after a THEN or DO outside any CASE expression, and after the
+// conditions of DECLARE … HANDLER FOR.
+var databricksScriptForms = setOf("BEGIN", "IF", "ELSEIF", "ELSE", "CASE", "WHEN", "FOR", "WHILE", "LOOP",
+	"REPEAT", "DECLARE")
 
 // A qualified name before ( is a call unless a table keyword precedes it: a
 // column list. A qualified column before a subquery reads as a call too.
@@ -86,9 +85,9 @@ var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", 
 var databricksObjectModifiers = setOf("OR", "REPLACE", "IF", "NOT", "EXISTS", "TEMPORARY", "TEMP",
 	"GLOBAL", "EXTERNAL", "STORAGE", "SERVICE", "GOVERNED")
 
-// Words that, outside parentheses, end the column definitions of a CREATE: a
-// MASK after them is a name, not a column mask.
-var databricksDefinitionEnds = setOf("AS", "SELECT", "VALUES", "RETURN", "RETURNS")
+// Words that open a query: a CREATE's first parenthesised group starting with
+// one holds no column definitions.
+var databricksQueryStarts = setOf("SELECT", "WITH", "FROM", "VALUES", "TABLE")
 
 var databricksSecretFunctions = setOf("SECRET", "TRY_SECRET", "LIST_SECRETS")
 
@@ -115,27 +114,40 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 		first += 2
 	}
 	// head is the form of the statement being read: the first word, or in a
-	// scripting block the word that opens a nested statement. A THEN or ELSE
-	// inside a CASE expression opens none.
-	head, opaque, refresh, repair, definition := "", false, false, false, true
-	depth, caseDepth, handlerStart := 0, 0, -1
+	// scripting block the word at nextHead, where a nested statement starts.
+	head, opaque, refresh, repair := "", false, false, false
+	depth, caseDepth, nextHead := 0, 0, -1
+	columns, grouped := false, false // inside a CREATE's column definitions
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
-		after := prev // the word before the statement, past any label
-		if prev.is(":") {
-			after = at(i - 3)
+		if i == nextHead && tok.kind == sqlWord && next.is(":") {
+			nextHead = i + 2 // past a label
 		}
-		atHead := tok.kind == sqlWord && !next.is(":") && (i == first || i == handlerStart ||
-			databricksScriptForms[head] && caseDepth == 0 && after.kind == sqlWord && databricksBlockWords[after.text] &&
-				tok.text != "ATOMIC" && !(tok.text == "NOT" && next.is("ATOMIC")))
+		atHead := tok.kind == sqlWord && (i == first || i == nextHead)
 		if atHead {
-			head, definition, depth = tok.text, true, 0
+			head, depth, columns, grouped = tok.text, 0, false, false
+		}
+		if tok.kind == sqlWord && databricksScriptForms[head] && caseDepth == 0 {
+			switch {
+			case atHead && tok.text == "BEGIN" && next.is("NOT") && at(i+2).is("ATOMIC"):
+				nextHead = i + 3
+			case atHead && tok.text == "BEGIN" && next.is("ATOMIC"):
+				nextHead = i + 2
+			case atHead && (tok.text == "BEGIN" || tok.text == "LOOP" || tok.text == "REPEAT" || tok.text == "ELSE"),
+				!atHead && (tok.text == "THEN" || tok.text == "ELSE" || tok.text == "DO"):
+				nextHead = i + 1
+			}
 		}
 		switch {
 		case tok.is("("):
+			if depth == 0 && head == "CREATE" && !grouped {
+				grouped = true
+				columns = !(next.kind == sqlWord && databricksQueryStarts[next.text])
+			}
 			depth++
 		case tok.is(")"):
 			depth--
+			columns = columns && depth > 0
 		case tok.is("CASE") && !atHead:
 			caseDepth++
 		case tok.is("END") && caseDepth > 0:
@@ -167,9 +179,6 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 		if tok.kind != sqlWord {
 			continue
 		}
-		if depth <= 0 && databricksDefinitionEnds[tok.text] {
-			definition = false
-		}
 		ddl := head == "ALTER" || head == "CREATE"
 		switch tok.text {
 		case "GRANT", "REVOKE", "DENY":
@@ -191,11 +200,12 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 		case "MASK": // SET|DROP MASK, or a column mask in a CREATE's column definitions
 			nameNext := next.kind == sqlWord || next.kind == sqlName
 			admin = admin || head == "ALTER" && (prev.is("SET") || prev.is("DROP")) ||
-				head == "CREATE" && definition && nameNext && !prev.is("(") && !prev.is(",") && !prev.is("AS")
+				columns && depth == 1 && nameNext && !prev.is("(") && !prev.is(",")
 		case "FILTER": // SET|DROP|WITH ROW FILTER
 			admin = admin || ddl && prev.is("ROW") && (at(i-2).is("SET") || at(i-2).is("DROP") || at(i-2).is("WITH"))
 		case "TO":
-			admin = admin || head == "ALTER" && prev.is("OWNER")
+			// not RENAME COLUMN owner TO …
+			admin = admin || head == "ALTER" && prev.is("OWNER") && !at(i-2).is("COLUMN") && !at(i-2).is(".")
 		case "TAG", "TAGS": // ALTER … SET|UNSET TAGS, SET|UNSET TAG ON
 			admin = admin || (head == "ALTER" || head == "SET" || head == "UNSET") && (prev.is("SET") || prev.is("UNSET"))
 		case "FULL", "WHERE": // REFRESH … FULL truncates; REFRESH … WHERE deletes the rows it matches
@@ -225,7 +235,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 					}
 					j++
 				}
-				handlerStart = j
+				nextHead = j
 			}
 		case "EXECUTE", "CALL":
 			opaque = true
