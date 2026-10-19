@@ -23,7 +23,16 @@ type Agent struct {
 	ID          string      `json:"id"`
 	MCPServers  []MCPServer `json:"mcp_servers"`
 	Plugins     []Plugin    `json:"plugins"`
+	Connectors  []Connector `json:"connectors,omitempty"`
 	Permissions Permissions `json:"permissions"`
+}
+
+// Connector names a claude.ai connector that tool calls only show by UUID.
+type Connector struct {
+	UUID     string  `json:"uuid"`
+	Name     string  `json:"name"`
+	URLHost  *string `json:"url_host"`
+	LastSeen *string `json:"last_seen"`
 }
 type MCPServer struct {
 	Name      string   `json:"name"`

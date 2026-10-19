@@ -17,6 +17,7 @@ import (
 
 const maxFiles = 500
 const maxFileBytes = 1024 * 1024
+const maxSessionEntries = 10000
 const maxReportBytes = 64 * 1024
 const managedRoot = "/Library/Application Support/ClaudeCode"
 
@@ -326,6 +327,11 @@ func readGuarded(ctx context.Context, path, mode string) (result fileResult) {
 		if result.err == nil {
 			result.data, result.err = io.ReadAll(io.LimitReader(file, tailBytes))
 		}
+	case "sessions":
+		result.entries, result.err = file.ReadDir(maxSessionEntries + 1)
+		if result.err == io.EOF {
+			result.err = nil
+		}
 	case "list":
 		result.entries, result.err = file.ReadDir(maxFiles + 1)
 		if result.err == io.EOF {
@@ -340,6 +346,21 @@ func (g *guard) read(path string) []byte {
 		return nil
 	}
 	return result.data
+}
+
+// sessionEntries lists a Claude session folder in full (bounded), so the
+// newest sessions are found wherever the filesystem happens to list them.
+func (g *guard) sessionEntries(path string) []os.DirEntry {
+	result := g.access(path, "sessions")
+	if result.err != nil {
+		return nil
+	}
+	if len(result.entries) > maxSessionEntries {
+		g.report.Coverage.Limits = append(g.report.Coverage.Limits, "session entries limited to 10000")
+		g.skip()
+		result.entries = result.entries[:maxSessionEntries]
+	}
+	return result.entries
 }
 func (g *guard) entries(path string) []os.DirEntry {
 	result := g.access(path, "list")
