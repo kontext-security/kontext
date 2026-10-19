@@ -93,7 +93,17 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 			return false
 		}
 		switch node := node.(type) {
+		case *syntax.Assign:
+			// BASH_ENV and ENV name a startup file a nested shell runs first.
+			if node.Name != nil && (node.Name.Value == "BASH_ENV" || node.Name.Value == "ENV") {
+				stateChanges = append(stateChanges, int(node.Pos().Offset()))
+			}
 		case *syntax.CallExpr:
+			for _, arg := range node.Args {
+				if word, _ := literalWord(arg); strings.HasPrefix(word, "BASH_ENV=") || strings.HasPrefix(word, "ENV=") {
+					stateChanges = append(stateChanges, int(node.Pos().Offset()))
+				}
+			}
 			if len(node.Args) > 0 {
 				calls = append(calls, node)
 				if first, ok := literalWord(node.Args[0]); !ok || stateChangingCommands[first] {
