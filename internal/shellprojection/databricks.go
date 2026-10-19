@@ -206,10 +206,9 @@ var databricksFlagRaises = map[string]map[string]databricksOperation{
 // flagSet reports whether a flag is given with a value other than false or
 // none.
 func flagSet(args []string, flag string) bool {
+	// "--" is not a terminator here: it may be an earlier option's value
+	// (--log-file --), and reading a later word as a flag only raises.
 	for _, arg := range args {
-		if arg == "--" {
-			return false
-		}
 		if arg == flag {
 			return true
 		}
@@ -550,12 +549,19 @@ func mergeDatabricksProducts(facts []string) []string {
 	return slices.DeleteFunc(facts, func(fact string) bool { return fact == sql })
 }
 
-// curlGlobOverflowFacts are the facts of a globbed curl URL too large to
-// expand: on a Databricks host it could reach any route, so it carries every
+// databricksDomains are the domains in a URL that may name a Databricks host.
+var databricksDomains = []string{"databricks.com", "azuredatabricks.net", "databricks.us", "databricks.mil", "databricks.azure.us", "databricks.azure.cn"}
+
+// databricksUnreadableURLFacts are the facts of a curl URL the projection
+// cannot read (it does not parse, or a glob is too large to expand) that
+// names a Databricks domain: it could reach any route, so it carries every
 // tier and the products the presets single out.
-func curlGlobOverflowFacts(urlText string) []string {
-	parsed, err := url.Parse(urlText)
-	if err != nil || !toolcatalog.IsDatabricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")) {
+func databricksUnreadableURLFacts(urlText string) []string {
+	text := strings.ToLower(urlText)
+	if decoded, err := url.PathUnescape(text); err == nil {
+		text = decoded
+	}
+	if !slices.ContainsFunc(databricksDomains, func(domain string) bool { return strings.Contains(text, domain) }) {
 		return nil
 	}
 	return []string{FactDatabricksRouteUnrecognized, databricksProductFact("secrets"), databricksProductFact("execution"),

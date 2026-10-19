@@ -1,6 +1,7 @@
 package shellprojection
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/url"
 	"path/filepath"
@@ -993,6 +994,7 @@ type curlOperation struct {
 	custom                  string
 	head, get, upload, data bool
 	requestTarget           string
+	protoDefault            string
 	urls, bodies            []string
 	bodyFile                bool
 }
@@ -1023,8 +1025,6 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	// URL is then also judged under every method and with every body.
 	everyMethod := false
 	var methods []string
-	protoDefault := "http"
-	valueOptions := map[string]bool{"-H": true, "--header": true, "-A": true, "--user-agent": true, "-u": true, "--user": true, "-o": true, "--output": true, "--connect-timeout": true, "--max-time": true, "--retry": true}
 	safeFlags := map[string]bool{"-s": true, "-S": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
 	unknownBefore := false
 	for i := 0; i < len(args); i++ {
@@ -1034,6 +1034,11 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			args = slices.Concat(args[:i], expanded, args[i+1:])
 			i--
 			continue
+		}
+		if unknownBefore && strings.HasPrefix(arg, "-") {
+			// The unknown option before may have taken this word as its
+			// value, so the method this option implies is not certain.
+			everyMethod = true
 		}
 		unknown := false
 		// value returns the option's value: attached after = or the next word.
@@ -1058,7 +1063,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		case arg == "--request-target" || strings.HasPrefix(arg, "--request-target="):
 			op.requestTarget, _ = value("--request-target")
 		case arg == "--proto-default" || strings.HasPrefix(arg, "--proto-default="):
-			protoDefault, _ = value("--proto-default")
+			op.protoDefault, _ = value("--proto-default")
 		case arg == "-I" || arg == "--head":
 			op.head = true
 		case arg == "--no-head":
@@ -1083,7 +1088,11 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			if _, ok := value("--upload-file"); ok {
 				op.upload = true
 			}
-		case valueOptions[arg]:
+		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
+			everyMethod = true
+			complete = false
+			value("--config")
+		case curlValueOption(arg):
 			if i+1 >= len(args) {
 				complete = false
 				continue
@@ -1101,10 +1110,6 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			complete = false
 			operations = append(operations, op)
 			op = curlOperation{}
-		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
-			everyMethod = true
-			complete = false
-			value("--config")
 		case strings.HasPrefix(arg, "-"):
 			// Unknown curl flags can change request behavior.
 			complete = false
@@ -1133,15 +1138,16 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	var all curlOperation
 	for _, op := range operations {
 		for _, urlText := range op.urls {
-			urlText = normalizeCurlURL(urlText, protoDefault)
-			if op.requestTarget != "" {
-				urlText = withRequestTarget(urlText, op.requestTarget)
-			}
+			// curl expands a glob first, so a glob can spell the scheme.
 			expanded, ok := expandCurlGlob(urlText)
 			if !ok {
 				overflowed = append(overflowed, urlText)
 			}
 			for _, each := range expanded {
+				each = normalizeCurlURL(each, cmp.Or(op.protoDefault, "http"))
+				if op.requestTarget != "" {
+					each = withRequestTarget(each, op.requestTarget)
+				}
 				requests = append(requests, request{each, op.method(), op.bodies, op.bodyFile})
 				all.urls = append(all.urls, each)
 			}
@@ -1176,7 +1182,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		features = append(features, projection.Features...)
 	}
 	for _, urlText := range overflowed {
-		facts = append(facts, curlGlobOverflowFacts(urlText)...)
+		facts = append(facts, databricksUnreadableURLFacts(urlText)...)
 	}
 	return projection("curl", mergeDatabricksProducts(facts), features, false)
 }
@@ -1184,16 +1190,57 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 var curlScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*):/*`)
 
 // normalizeCurlURL reads a URL the way curl does: without a scheme it uses
-// --proto-default (http unless set), and any number of slashes may follow the
-// scheme (https:/host and https:///host are https://host).
+// --proto-default (http unless set), any number of slashes may follow the
+// scheme (https:/host and https:///host are https://host), and percent
+// escapes in the host are decoded.
 func normalizeCurlURL(urlText, protoDefault string) string {
 	if urlText == "" {
 		return ""
 	}
+	scheme, rest := protoDefault, urlText
 	if match := curlScheme.FindStringSubmatch(urlText); match != nil && strings.Contains(urlText, ":/") {
-		return match[1] + "://" + urlText[len(match[0]):]
+		scheme, rest = match[1], urlText[len(match[0]):]
 	}
-	return protoDefault + "://" + urlText
+	end := strings.IndexAny(rest, "/?#")
+	if end < 0 {
+		end = len(rest)
+	}
+	if authority, err := url.PathUnescape(rest[:end]); err == nil {
+		rest = authority + rest[end:]
+	}
+	return scheme + "://" + rest
+}
+
+// curlLongValueOptions are curl's long options that take a value.
+var curlLongValueOptions = words("--abstract-unix-socket", "--alt-svc", "--aws-sigv4", "--cacert", "--capath", "--cert",
+	"--cert-type", "--ciphers", "--config", "--connect-timeout", "--connect-to", "--continue-at", "--cookie", "--cookie-jar",
+	"--create-file-mode", "--crlfile", "--curves", "--data", "--data-ascii", "--data-binary", "--data-raw",
+	"--data-urlencode", "--delegation", "--dns-interface", "--dns-ipv4-addr", "--dns-ipv6-addr", "--dns-servers",
+	"--doh-url", "--dump-header", "--ech", "--egd-file", "--engine", "--etag-compare", "--etag-save",
+	"--expect100-timeout", "--form", "--form-string", "--ftp-account", "--ftp-alternative-to-user", "--ftp-method",
+	"--ftp-port", "--ftp-ssl-ccc-mode", "--happy-eyeballs-timeout-ms", "--header", "--hostpubmd5", "--hostpubsha256",
+	"--hsts", "--interface", "--ip-tos", "--ipfs-gateway", "--json", "--keepalive-cnt", "--keepalive-time", "--key",
+	"--key-type", "--krb", "--libcurl", "--limit-rate", "--local-port", "--login-options", "--mail-auth", "--mail-from",
+	"--mail-rcpt", "--max-filesize", "--max-redirs", "--max-time", "--netrc-file", "--oauth2-bearer", "--output",
+	"--output-dir", "--parallel-max", "--pass", "--pinnedpubkey", "--preproxy", "--proto", "--proto-default",
+	"--proto-redir", "--proxy", "--proxy-cacert", "--proxy-capath", "--proxy-cert", "--proxy-cert-type",
+	"--proxy-ciphers", "--proxy-crlfile", "--proxy-header", "--proxy-key", "--proxy-key-type", "--proxy-pass",
+	"--proxy-pinnedpubkey", "--proxy-service-name", "--proxy-tls13-ciphers", "--proxy-tlsauthtype",
+	"--proxy-tlspassword", "--proxy-tlsuser", "--proxy-user", "--proxy1.0", "--pubkey", "--quote", "--random-file",
+	"--range", "--rate", "--referer", "--request", "--request-target", "--resolve", "--retry", "--retry-delay",
+	"--retry-max-time", "--sasl-authzid", "--service-name", "--socks4", "--socks4a", "--socks5",
+	"--socks5-gssapi-service", "--socks5-hostname", "--speed-limit", "--speed-time", "--ssl-sessions", "--stderr",
+	"--telnet-option", "--tftp-blksize", "--time-cond", "--tls-max", "--tls13-ciphers", "--tlsauthtype",
+	"--tlspassword", "--tlsuser", "--trace", "--trace-ascii", "--trace-config", "--unix-socket", "--upload-file",
+	"--upload-flags", "--url", "--url-query", "--user", "--user-agent", "--variable", "--write-out")
+
+// curlValueOption reports a curl option that takes the next word as its
+// value.
+func curlValueOption(arg string) bool {
+	if len(arg) == 2 && arg[0] == '-' && arg[1] != '-' {
+		return strings.IndexByte(curlShortValueOptions, arg[1]) >= 0
+	}
+	return curlLongValueOptions[arg]
 }
 
 // curlShortValueOptions are curl's one-letter options that take a value.
@@ -1242,7 +1289,7 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		}
 	}
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return projection("curl", nil, []string{"dynamic-or-invalid-url"}, false)
+		return projection("curl", databricksUnreadableURLFacts(urlText), []string{"dynamic-or-invalid-url"}, false)
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 	switch {
