@@ -18,7 +18,7 @@ func TestServerURLSkipsNonRegularFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json")}
-	if got, _ := r.Server("claude", "s", project, "mcp__work__search"); got != "" {
+	if got, _, _ := r.Server("claude", "s", project, "mcp__work__search"); got != "" {
 		t.Fatalf("ServerURL() = %q", got)
 	}
 	if _, err := readFile(filepath.Join(project, ".mcp.json")); err == nil {

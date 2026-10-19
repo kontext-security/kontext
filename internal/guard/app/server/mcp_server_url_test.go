@@ -53,6 +53,8 @@ func writeConfig(t *testing.T, path, content string) {
 // allowed.
 func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	const (
+		account         = "11111111-2222-4333-8444-555555555555"
+		org             = "66666666-7777-4888-9999-000000000000"
 		connectorURL    = "c2be245b-9fd0-47e8-9a48-80c63e49e3fb"
 		connectorName   = "7a1d0b3c-2e4f-4a5b-8c6d-0e1f2a3b4c5d"
 		coworkConnector = "219594f1-0962-43db-80ef-5c9151f8459d"
@@ -62,8 +64,9 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	const atlassian = `{"type":"http","url":"https://mcp.atlassian.com/v1/mcp"}`
 	const hubspot = `{"type":"http","url":"https://mcp.hubspot.com/anthropic"}`
 	writeConfig(t, filepath.Join(home, ".claude.json"), `{
+  "oauthAccount": {"accountUuid": "`+account+`", "organizationUuid": "`+org+`"},
   "mcpServers": {"work": `+atlassian+`, "tickets": {"url": "https://mcp.linear.app/sse"}, "0f6a1c2d-3b4e-4f5a-8b6c-7d8e9f0a1b2c": `+atlassian+`, "bridge": {"command": "npx", "args": ["mcp-remote", "https://mcp.atlassian.com/v1/sse"]},
-    "jira": `+atlassian+`, "atlassian-pending": `+atlassian+`, "jira.prod": `+atlassian+`, "jira_prod": `+hubspot+`},
+    "jira": `+atlassian+`, "atlassian-pending": `+atlassian+`, "claude_ai_Configured": `+atlassian+`, "jira.prod": `+atlassian+`, "jira_prod": `+hubspot+`},
   "projects": {
     "`+project+`": {"mcpServers": {"local.desk": `+atlassian+`}, "enabledMcpjsonServers": ["tickets"], "disabledMcpjsonServers": ["jira"]},
     "`+filepath.Join(home, "src/shadow")+`": {},
@@ -105,7 +108,28 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 ]}`)
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions/acct/org/local_cowork.json"), `{"cliSessionId": "session-1", "remoteMcpServersConfig": [{"uuid": "`+coworkConnector+`", "name": "Atlassian"}]}`)
 	writeConfig(t, filepath.Join(home, ".codex/config.toml"), "[mcp_servers.work]\nurl = \"https://mcp.atlassian.com/v1/mcp\"\n")
-	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": {"work": `+atlassian+`}}`)
+	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": {"work": `+atlassian+`, "claude_ai_Board": {"url": "https://api.githubcopilot.com/mcp/"}}}`)
+	// The Claude Code CLI names claude.ai connectors claude_ai_<Name>; their
+	// URLs come from the newest Desktop record of the signed-in organization.
+	desktop := filepath.Join(home, "Library/Application Support/Claude")
+	orgRecords := filepath.Join(desktop, "claude-code-sessions", account, org)
+	older := filepath.Join(orgRecords, "local_older.json")
+	writeConfig(t, older, `{"cliSessionId": "s-old", "remoteMcpServersConfig": [{"uuid": "a", "name": "Board", "url": "https://api.githubcopilot.com/mcp/"}, {"uuid": "b", "name": "Old Only", "url": "https://mcp.atlassian.com/v1/mcp"}]}`)
+	writeConfig(t, filepath.Join(orgRecords, "local_newer.json"), `{"cliSessionId": "s-new", "remoteMcpServersConfig": [
+  {"uuid": "a", "name": "Board", "url": "https://mcp.atlassian.com/v1/mcp"},
+  {"uuid": "f", "name": "Configured", "url": "https://api.githubcopilot.com/mcp/"},
+  {"uuid": "c", "name": "Dup.Name", "url": "https://mcp.atlassian.com/v1/mcp"},
+  {"uuid": "d", "name": "Dup Name", "url": "https://mcp.hubspot.com/anthropic"}
+]}`)
+	coworkRecord := filepath.Join(desktop, "local-agent-mode-sessions", account, org, "local_cowork.json")
+	writeConfig(t, coworkRecord, `{"cliSessionId": "s-cowork", "remoteMcpServersConfig": [{"uuid": "a", "name": "Board"}]}`)
+	writeConfig(t, filepath.Join(desktop, "claude-code-sessions", account, "77777777-8888-4999-aaaa-bbbbbbbbbbbb", "local_x.json"), `{"cliSessionId": "s-x", "remoteMcpServersConfig": [{"uuid": "e", "name": "Elsewhere", "url": "https://mcp.atlassian.com/v1/mcp"}]}`)
+	for path, age := range map[string]time.Duration{older: time.Hour, coworkRecord: -time.Minute} {
+		when := time.Now().Add(-age)
+		if err := os.Chtimes(path, when, when); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	provider := atlassianReadOnlyProvider(t)
 	// createTeam is a generic name: without a name hint only the URL makes
@@ -146,6 +170,14 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		{"cowork connector by name only", "cowork", "", "mcp__" + coworkConnector + "__createTeam", risk.DecisionDeny},
 		{"configured server with a UUID name", "claude", project, "mcp__0f6a1c2d-3b4e-4f5a-8b6c-7d8e9f0a1b2c__createTeam", risk.DecisionDeny},
 		{"unknown desktop connector", "claude", "", "mcp__0d4c6e3a-1111-4222-8333-944445555666__createTeam", risk.DecisionAllow},
+		{"claude.ai connector, newest record", "claude", "", "mcp__claude_ai_Board__createTeam", risk.DecisionDeny},
+		{"claude.ai connector, older record only", "claude", "", "mcp__claude_ai_Old_Only__createTeam", risk.DecisionDeny},
+		{"claude.ai connectors that normalize alike", "claude", "", "mcp__claude_ai_Dup_Name__createTeam", risk.DecisionAllow},
+		// A server configured under the connector's name wins, and Cowork
+		// never takes the CLI's connector alias.
+		{"configured server named like a connector", "claude", "", "mcp__claude_ai_Configured__createTeam", risk.DecisionDeny},
+		{"cowork keeps its configured server", "cowork", "", "mcp__claude_ai_Board__createTeam", risk.DecisionAllow},
+		{"claude.ai connector of another organization", "claude", "", "mcp__claude_ai_Elsewhere__createTeam", risk.DecisionAllow},
 		{"unlisted server", "claude", project, "mcp__elsewhere__createTeam", risk.DecisionAllow},
 		{"unknown agent", "gemini", project, "mcp__work__createTeam", risk.DecisionAllow},
 	}

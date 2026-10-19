@@ -9,6 +9,12 @@ type ClaudeRoot struct {
 		EnabledMcpjsonServers  []string       `json:"enabledMcpjsonServers"`
 		DisabledMcpjsonServers []string       `json:"disabledMcpjsonServers"`
 	} `json:"projects"`
+	// OAuthAccount names the claude.ai account and organization the CLI is
+	// signed in to; Claude Desktop files its session records under both.
+	OAuthAccount struct {
+		AccountUUID      string `json:"accountUuid"`
+		OrganizationUUID string `json:"organizationUuid"`
+	} `json:"oauthAccount"`
 }
 type ClaudeSettings struct {
 	Permissions struct {

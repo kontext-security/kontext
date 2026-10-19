@@ -161,6 +161,10 @@ type CedarEvidence struct {
 	ToolID string                          `json:"toolId,omitempty"`
 	Shell  []cedareval.ShellProjectionV2   `json:"shell,omitempty"`
 	Tool   *cedareval.ToolClassificationV2 `json:"tool,omitempty"`
+	// AlternateToolIDs are the other tool ids the call was also judged as
+	// (a cached claude.ai connector URL plus its tool name's readings); any
+	// one of them denying denied the call.
+	AlternateToolIDs []string `json:"alternateToolIds,omitempty"`
 }
 
 // ClassifierAnnotation is one action's risk annotation. AgentTask and the

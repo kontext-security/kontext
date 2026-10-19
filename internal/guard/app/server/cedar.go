@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -134,8 +135,9 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	var principal *cedareval.EvaluationPrincipal
 	// Resolve the tool before any branch so the evidence always says what
 	// policy saw (or would have seen), including in observe mode.
-	toolID, projections := resolveTool(event, namesUnknownTool(snapshot))
+	toolID, projections, alternates := resolveTool(event, namesUnknownTool(snapshot))
 	evidence.ToolID = toolID
+	evidence.AlternateToolIDs = alternates
 	evidence.Shell = projections
 	evidence.Tool = toolClassification(toolID, event)
 
@@ -159,7 +161,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 			outcome.Reason = cedareval.ReasonInvalidCachedPolicy
 			evidence.EngineErrorCount = 1
 		} else {
-			inputs := cedarInputsV2(principalValue, event, toolID, projections)
+			inputs := cedarInputsV2(principalValue, event, toolID, projections, alternates)
 			if result, evaluateErr := evaluateAll(evaluator, inputs); evaluateErr != nil {
 				var conversionErr *cedareval.ConversionError
 				if errors.As(evaluateErr, &conversionErr) {
@@ -327,24 +329,45 @@ var mcpServers = &mcpconfig.Resolver{}
 // Kontext::Tool::"unknown" to mean "every other tool"; `legacyUnknown` keeps
 // that mapping for such a policy set, so updating the daemon cannot turn its
 // permits into denies or let its forbids stop applying.
-func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.ShellProjectionV2) {
+func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.ShellProjectionV2, []string) {
 	// Cowork exposes its built-in shell through a workspace MCP tool. Scope
 	// this alias to Cowork so unrelated MCP servers keep their named tool id.
 	coworkShell := (event.Agent == "cowork" || event.Agent == "claude-cowork") && event.ToolName == "mcp__workspace__bash"
 	if risk.IsShellTool(event.ToolName) || coworkShell {
-		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput))
+		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput)), nil
 	}
-	serverURL, serverName := mcpServers.Server(event.Agent, event.SessionID, event.CWD, event.ToolName)
-	if toolID, github := toolcatalog.Resolve(event.ToolName, serverURL, serverName, event.ToolInput); github {
-		return toolID, nil
+	serverURL, serverName, cached := mcpServers.Server(event.Agent, event.SessionID, event.CWD, event.ToolName)
+	toolID, resolved := toolcatalog.Resolve(event.ToolName, serverURL, serverName, event.ToolInput)
+	// A claude.ai connector's URL in the Claude Code CLI comes from Claude
+	// Desktop's cached connector list, which can predate a change to the
+	// connector. The call is judged as the URL says and also as its tool
+	// name reads, within the URL's catalog and by the name hints; Cedar
+	// denies when any reading is denied, so a stale URL cannot drop a match.
+	var alternates []string
+	if cached && resolved {
+		inCatalog, inCatalogOK := toolcatalog.ResolveInCatalog(toolID, event.ToolName, event.ToolInput)
+		byName, byNameOK := toolcatalog.Resolve(event.ToolName, "", "", event.ToolInput)
+		for _, candidate := range []struct {
+			id string
+			ok bool
+		}{{inCatalog, inCatalogOK}, {byName, byNameOK}} {
+			// Only a reading with a tier can add a match; an unrecognized
+			// one would only trip the opt-in guards on the URL's kinds.
+			if candidate.ok && candidate.id != toolID && !slices.Contains(alternates, candidate.id) && toolClassification(candidate.id, event) != nil {
+				alternates = append(alternates, candidate.id)
+			}
+		}
+	}
+	if resolved {
+		return toolID, nil, alternates
 	}
 	if legacyUnknown {
-		return cedareval.ToolUnknownV2, nil
+		return cedareval.ToolUnknownV2, nil, nil
 	}
 	if name := strings.TrimSpace(event.ToolName); name != "" && utf8.ValidString(name) && len(name) <= 4096 {
-		return name, nil
+		return name, nil, nil
 	}
-	return cedareval.ToolUnknownV2, nil
+	return cedareval.ToolUnknownV2, nil, nil
 }
 
 // unknownToolLiteral is how a policy names the pre-pass-through catch-all.
@@ -374,7 +397,9 @@ func toolClassification(toolID string, event risk.HookEvent) *cedareval.ToolClas
 	return &cedareval.ToolClassificationV2{Provider: class.Provider, Product: class.Product, Access: class.Access}
 }
 
-func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent, toolID string, projections []cedareval.ShellProjectionV2) []cedareval.ToolUseInputV2 {
+// alternates are other tool ids the call is also judged as (see
+// resolveTool); each becomes one more request.
+func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent, toolID string, projections []cedareval.ShellProjectionV2, alternates []string) []cedareval.ToolUseInputV2 {
 	agentID := ""
 	switch event.Agent {
 	case "claude", "claude-code", "cowork", "claude-cowork", cedareval.AgentClaudeCodeV2:
@@ -394,7 +419,13 @@ func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent
 	}
 	if toolID != cedareval.ToolShellV2 {
 		base.Tool = toolClassification(toolID, event)
-		return []cedareval.ToolUseInputV2{base}
+		inputs := []cedareval.ToolUseInputV2{base}
+		for _, alternate := range alternates {
+			input := base
+			input.ToolID, input.Tool = alternate, toolClassification(alternate, event)
+			inputs = append(inputs, input)
+		}
+		return inputs
 	}
 	inputs := make([]cedareval.ToolUseInputV2, len(projections))
 	for i := range projections {

@@ -162,6 +162,25 @@ func Resolve(toolName, serverURL, serverName string, input map[string]any) (stri
 	return resolveGitHub(tool, input, githubServer)
 }
 
+// ResolveInCatalog resolves toolName by its tool name within the catalog
+// toolID belongs to, as on a server that catalog claims, without URL kinds
+// or gateway routing.
+func ResolveInCatalog(toolID, toolName string, input map[string]any) (string, bool) {
+	_, tool, ok := splitMCPToolName(toolName)
+	if !ok {
+		return "", false
+	}
+	if strings.HasPrefix(toolID, GitHubToolPrefix) {
+		return resolveGitHub(tool, input, true)
+	}
+	for i := range providers {
+		if strings.HasPrefix(toolID, providers[i].catalog.ToolIDPrefix) {
+			return providers[i].resolve(tool, input, true)
+		}
+	}
+	return "", false
+}
+
 func resolveGitHub(tool string, input map[string]any, githubServer bool) (string, bool) {
 	catalogued, known := githubTools[tool]
 	if !known {

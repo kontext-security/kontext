@@ -298,6 +298,14 @@ func TestBuildCarriesCedarRequest(t *testing.T) {
 	if got := built.Evidence.CedarRequest; got == nil || got.Tool == nil || *got.Tool != *tier || got.Tool == tier {
 		t.Fatalf("cedar_request tool = %+v, want a copy of %+v", got, tier)
 	}
+	// A decision that also evaluated alternate tool ids cannot be replayed
+	// from one request, so the request is omitted.
+	altInput, altCedar := input, mcpCedar
+	altCedar.AlternateToolIDs = []string{"github-mcp/delete_repository"}
+	altInput.Cedar = &altCedar
+	if alt, err := ledgerfact.Build(altInput); err != nil || alt.Evidence.CedarRequest != nil {
+		t.Fatalf("cedar_request = %+v (%v), want omitted with alternates", alt.Evidence.CedarRequest, err)
+	}
 	encoded, err = json.Marshal(built.Evidence.CedarRequest)
 	if err != nil {
 		t.Fatalf("marshal mcp cedar_request: %v", err)

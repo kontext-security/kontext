@@ -17,6 +17,10 @@
 //     Desktop session record (claude-code-sessions/ for Code tab sessions,
 //     local-agent-mode-sessions/ for Cowork) whose cliSessionId is the
 //     hook's session id. Cowork records may carry only the name.
+//   - claude.ai connectors in the Claude Code CLI, whose tools are named
+//     mcp__claude_ai_<Name>__<tool>: the connector's URL in the newest
+//     Desktop session record of the claude.ai organization the CLI is
+//     signed in to (oauthAccount in ~/.claude.json) that lists the name.
 //   - Codex: config.toml [mcp_servers].
 //
 // The first source that defines a server wins whole, so a stdio entry
@@ -79,11 +83,13 @@ type cachedFile struct {
 // Server returns the configured URL of the MCP server behind toolName
 // (mcp__<server>__<tool>) for the agent that reported it, or "". name is
 // the server's display name when the tool name does not carry it (a Claude
-// Desktop connector), else "". A lookup that does not finish within
-// lookupTimeout returns nothing.
-func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name string) {
+// Desktop connector), else "". cached reports a URL taken from Claude
+// Desktop's cached claude.ai connector list rather than a config or the
+// session's own record, so it may predate a change to the connector. A
+// lookup that does not finish within lookupTimeout returns nothing.
+func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name string, cached bool) {
 	if !strings.HasPrefix(toolName, "mcp__") {
-		return "", ""
+		return "", "", false
 	}
 	r.once.Do(func() { r.lookups = make(chan struct{}, maxLookups) })
 	timer := time.NewTimer(lookupTimeout)
@@ -91,33 +97,37 @@ func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name str
 	select {
 	case r.lookups <- struct{}{}:
 	case <-timer.C:
-		return "", ""
+		return "", "", false
 	}
-	result := make(chan [2]string, 1)
+	type found struct {
+		url, name string
+		cached    bool
+	}
+	result := make(chan found, 1)
 	go func() {
 		defer func() { <-r.lookups }()
-		url, name := r.lookup(agent, sessionID, cwd, toolName)
-		result <- [2]string{url, name}
+		url, name, cached := r.lookup(agent, sessionID, cwd, toolName)
+		result <- found{url, name, cached}
 	}()
 	select {
-	case found := <-result:
-		return found[0], found[1]
+	case f := <-result:
+		return f.url, f.name, f.cached
 	case <-timer.C:
-		return "", ""
+		return "", "", false
 	}
 }
 
-func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name string) {
+func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name string, cached bool) {
 	rest, _ := strings.CutPrefix(toolName, "mcp__")
 	server, _, ok := strings.Cut(rest, "__")
 	if !ok || server == "" {
-		return "", ""
+		return "", "", false
 	}
 	home := r.Home
 	if home == "" {
 		var err error
 		if home, err = os.UserHomeDir(); err != nil {
-			return "", ""
+			return "", "", false
 		}
 	}
 	switch agent {
@@ -126,17 +136,30 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 		// UUID no session record lists may still be a configured server.
 		if uuidPattern.MatchString(server) {
 			if url, name, found := r.desktopConnector(home, sessionID, server); found {
-				return url, name
+				return url, name, false
 			}
 		}
 	}
-	return r.configURL(home, agent, cwd, server), ""
+	switch agent {
+	case "claude", "claude-code", "claude_code":
+		// The Claude Code CLI names a claude.ai connector's server
+		// "claude.ai <Name>", so its tools carry claude_ai_<Name>. A server
+		// configured under that name wins, as it would in Claude Code.
+		url, found := r.claude(home, cwd, server)
+		if !found && strings.HasPrefix(server, "claude_ai_") {
+			url, _ = r.claudeAIConnector(home, server)
+			return url, "", url != ""
+		}
+		return url, "", false
+	}
+	return r.configURL(home, agent, cwd, server), "", false
 }
 
 func (r *Resolver) configURL(home, agent, cwd, server string) string {
 	switch agent {
 	case "claude", "claude-code", "claude_code":
-		return r.claude(home, cwd, server)
+		url, _ := r.claude(home, cwd, server)
+		return url
 	case "cowork", "claude-cowork", "claude_cowork":
 		url, _ := find(r.servers(filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json")), server)
 		return url
@@ -152,7 +175,10 @@ func (r *Resolver) configURL(home, agent, cwd, server string) string {
 	return ""
 }
 
-func (r *Resolver) claude(home, cwd, server string) string {
+// claude returns the URL Claude Code's config gives server, and whether any
+// source defines it (a stdio server, or definitions that disagree, have no
+// URL).
+func (r *Resolver) claude(home, cwd, server string) (string, bool) {
 	managed := r.Managed
 	if managed == "" {
 		managed = ManagedMCPPath
@@ -160,19 +186,14 @@ func (r *Resolver) claude(home, cwd, server string) string {
 	// The first source that defines the server wins whole, as in Claude
 	// Code: a stdio entry shadows a URL in a lower scope.
 	if url, found := find(r.servers(managed), server); found {
-		return url
+		return url, true
 	}
-	configDir := filepath.Join(home, ".claude")
-	userConfig := filepath.Join(home, ".claude.json")
-	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
-		configDir = dir
-		userConfig = filepath.Join(dir, ".claude.json")
-	}
+	configDir, userConfig := claudeConfigPaths(home)
 	root, _ := load(r, userConfig, readers.Claude)
 	project := projectRoot(root, cwd)
 	url, found := r.claudeScopes(root, configDir, project, server)
 	if !filepath.IsAbs(cwd) {
-		return url
+		return url, found
 	}
 	// Local and project scope belong to the session's project, taken as the
 	// deepest directory Claude Code has recorded in ~/.claude.json. Another
@@ -184,14 +205,14 @@ func (r *Resolver) claude(home, cwd, server string) string {
 				break
 			}
 			if otherURL, defines := find(scope, server); defines && (!found || otherURL != url) {
-				return ""
+				return "", true
 			}
 		}
 		if dir == filepath.Dir(dir) {
 			break
 		}
 	}
-	return url
+	return url, found
 }
 
 // claudeScopes resolves server through the session project's local and
@@ -254,6 +275,57 @@ func projectRoot(root readers.ClaudeRoot, cwd string) string {
 	}
 }
 
+func claudeConfigPaths(home string) (configDir, userConfig string) {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return dir, filepath.Join(dir, ".claude.json")
+	}
+	return filepath.Join(home, ".claude"), filepath.Join(home, ".claude.json")
+}
+
+// claudeAIConnector resolves a claude.ai connector the Claude Code CLI
+// reports as claude_ai_<Name>. The CLI keeps no connector URLs on disk, but
+// Claude Desktop records the organization's connectors in every session
+// record, filed under <account>/<organization>. The newest record of the
+// organization the CLI is signed in to that lists the name decides. Two
+// connectors whose names normalize alike with different URLs leave the URL
+// unknown; a name no record lists is not found.
+func (r *Resolver) claudeAIConnector(home, server string) (url string, found bool) {
+	_, userConfig := claudeConfigPaths(home)
+	root, _ := load(r, userConfig, readers.Claude)
+	account, org := root.OAuthAccount.AccountUUID, root.OAuthAccount.OrganizationUUID
+	if !uuidPattern.MatchString(account) || !uuidPattern.MatchString(org) {
+		return "", false
+	}
+	var paths []string
+	for _, dir := range desktopRecordDirs {
+		matches, _ := filepath.Glob(filepath.Join(home, "Library/Application Support/Claude", dir, account, org, "local_*.json"))
+		paths = append(paths, matches...)
+	}
+	for _, path := range newestFirst(paths) {
+		session, ok := load(r, path, parseJSON[desktopSession])
+		if !ok {
+			continue
+		}
+		urls := map[string]bool{}
+		for _, connector := range session.Connectors {
+			if normalize("claude.ai "+connector.Name) == server && strings.TrimSpace(connector.URL) != "" {
+				urls[strings.TrimSpace(connector.URL)] = true
+			}
+		}
+		switch len(urls) {
+		case 0:
+			// Cowork records may list a connector without its URL.
+			continue
+		case 1:
+			for url := range urls {
+				return url, true
+			}
+		}
+		return "", true
+	}
+	return "", false
+}
+
 // Warm parses the Claude Desktop session records into the cache, so the
 // first connector lookup after the daemon starts, for a session without a
 // record, costs one stat per record instead of a full scan that times out.
@@ -270,9 +342,24 @@ func (r *Resolver) Warm() {
 	}
 }
 
+// desktopRecordDirs hold Claude Desktop's session records: Code tab
+// sessions and Cowork sessions.
+var desktopRecordDirs = []string{"claude-code-sessions", "local-agent-mode-sessions"}
+
+func newestFirst(paths []string) []string {
+	modTimes := make(map[string]time.Time, len(paths))
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil {
+			modTimes[path] = info.ModTime()
+		}
+	}
+	sort.Slice(paths, func(i, j int) bool { return modTimes[paths[i]].After(modTimes[paths[j]]) })
+	return paths
+}
+
 func desktopRecords(home string) []string {
 	var paths []string
-	for _, dir := range []string{"claude-code-sessions", "local-agent-mode-sessions"} {
+	for _, dir := range desktopRecordDirs {
 		found, _ := filepath.Glob(filepath.Join(home, "Library/Application Support/Claude", dir, "*/*/local_*.json"))
 		paths = append(paths, found...)
 	}
@@ -299,15 +386,7 @@ func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name s
 	if sessionID == "" {
 		return "", "", false
 	}
-	paths := desktopRecords(home)
-	modTimes := make(map[string]time.Time, len(paths))
-	for _, path := range paths {
-		if info, err := os.Stat(path); err == nil {
-			modTimes[path] = info.ModTime()
-		}
-	}
-	sort.Slice(paths, func(i, j int) bool { return modTimes[paths[i]].After(modTimes[paths[j]]) })
-	for _, path := range paths {
+	for _, path := range newestFirst(desktopRecords(home)) {
 		session, ok := load(r, path, parseJSON[desktopSession])
 		if !ok || session.CLISessionID != sessionID {
 			continue

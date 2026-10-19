@@ -65,7 +65,17 @@ func TestCedarDatabricksPresets(t *testing.T) {
 "websearch": {"url": "` + workspace + `/ai-gateway/mcp-services/system.ai.web_search"},
 "e2b": {"url": "https://mcp.e2b.dev/sse"},
 "serving": {"url": "` + workspace + `/serving-endpoints/chat/invocations"}}`
-	writeConfig(t, filepath.Join(home, ".claude.json"), `{"mcpServers": `+servers+`}`)
+	// The Claude Code CLI reports a claude.ai connector as claude_ai_<Name>
+	// (ENG-758 F3): "Warehouse" is the signed-in organization's Databricks
+	// SQL connector, listed in its Desktop session records.
+	const account, org = "11111111-2222-4333-8444-555555555555", "66666666-7777-4888-9999-000000000000"
+	writeConfig(t, filepath.Join(home, ".claude.json"), `{"mcpServers": `+servers+`, "oauthAccount": {"accountUuid": "`+account+`", "organizationUuid": "`+org+`"}}`)
+	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions", account, org, "local_w.json"),
+		`{"cliSessionId": "session-w", "remoteMcpServersConfig": [{"uuid": "w", "name": "Warehouse", "url": "`+workspace+`/ai-gateway/mcp-services/system.ai.dbsql?o=1"},
+  {"uuid": "v", "name": "Databricks", "url": "`+workspace+`/api/2.0/mcp/vector-search/main/docs"},
+  {"uuid": "c", "name": "CRM", "url": "`+workspace+`/ai-gateway/mcp-services/main.default.crm"},
+  {"uuid": "t", "name": "Databricks Tools", "url": "`+workspace+`/ai-gateway/mcp-services/main.tools.sql"},
+  {"uuid": "l", "name": "Lakehouse", "url": "`+workspace+`/api/2.0/mcp/vector-search/main/docs"}]}`)
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": `+servers+`}`)
 	codex := ""
 	for name, path := range map[string]string{"wh": "/api/2.0/mcp/sql", "github": "/api/2.0/mcp/sql", "genie": "/api/2.0/mcp/genie/01ef", "genieone": "/ai-gateway/mcp-services/system.ai.genie_one_mcp", "fns": "/api/2.0/mcp/functions/main/default", "vs": "/api/2.0/mcp/vector-search/main/docs", "sandbox": "/ai-gateway/mcp-services/system.ai.sandbox", "websearch": "/ai-gateway/mcp-services/system.ai.web_search", "serving": "/serving-endpoints/chat/invocations"} {
@@ -139,6 +149,24 @@ func TestCedarDatabricksPresets(t *testing.T) {
 		{"desktop sandbox connector", "mcp__" + sandboxConnector + "__run_code", map[string]any{"code": "print(1)"}, []string{readOnly, exceptSQL, runs}},
 		{"desktop web search connector", "mcp__" + searchConnector + "__web_search", map[string]any{"query": "q"}, nil},
 	}
+	// Only the Claude Code CLI names connectors claude_ai_<Name>.
+	cliConnector := []struct {
+		name   string
+		tool   string
+		input  map[string]any
+		denies []string
+	}{
+		{"claude.ai connector in the CLI, select", "mcp__claude_ai_Warehouse__execute_sql", sql("SELECT 1"), []string{readOnly}},
+		{"claude.ai connector in the CLI, drop", "mcp__claude_ai_Warehouse__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
+		// The cached connector list can predate a change to the connector:
+		// a URL that would classify lower than the name never wins.
+		{"stale connector URL cannot lower the name", "mcp__claude_ai_Databricks__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
+		{"stale connector URL, neutral name", "mcp__claude_ai_Lakehouse__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
+		// The URL's own id is always judged too: the opt-in guard still
+		// matches a registered gateway service.
+		{"URL's provider is still judged", "mcp__claude_ai_CRM__create_issue", map[string]any{"owner": "o", "repo": "r", "title": "t"}, []string{unrecogniz}},
+		{"URL's unrecognized id is still judged", "mcp__claude_ai_Databricks_Tools__execute_sql", sql("DROP TABLE t"), []string{unrecogniz, readOnly, deletion}},
+	}
 	for preset, forbid := range databricksPresets {
 		policy := `@id("allow") permit(principal, action == Kontext::Action::"ToolUse", resource);
 @id("` + preset + `") ` + forbid
@@ -148,6 +176,9 @@ func TestCedarDatabricksPresets(t *testing.T) {
 			agentCalls := calls
 			if agent != "codex" {
 				agentCalls = append(agentCalls, desktop...)
+			}
+			if agent == "claude" {
+				agentCalls = append(agentCalls, cliConnector...)
 			}
 			for _, call := range agentCalls {
 				want := risk.DecisionAllow
@@ -165,6 +196,9 @@ func TestCedarDatabricksPresets(t *testing.T) {
 					}
 					if decision.Cedar == nil || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateEvaluated || decision.Cedar.EngineErrorCount != 0 {
 						t.Fatalf("Cedar evidence = %#v, want evaluation without errors", decision.Cedar)
+					}
+					if call.name == "stale connector URL, neutral name" && (len(decision.Cedar.AlternateToolIDs) != 1 || decision.Cedar.AlternateToolIDs[0] != "databricks-mcp/execute_sql") {
+						t.Fatalf("alternates = %v, want the in-catalog execute_sql reading", decision.Cedar.AlternateToolIDs)
 					}
 					if decision.Decision != want {
 						t.Fatalf("decision = %q (tool %q, %+v), want %q", decision.Decision, decision.Cedar.ToolID, decision.Cedar.Tool, want)
