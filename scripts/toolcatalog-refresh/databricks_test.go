@@ -16,6 +16,7 @@ import (
 	"github.com/databricks/databricks-sdk-go/service/compute"
 	"github.com/databricks/databricks-sdk-go/service/files"
 	"github.com/databricks/databricks-sdk-go/service/settings"
+	"github.com/databricks/databricks-sdk-go/service/sharing"
 )
 
 func NewWorkspaceClient() *WorkspaceClient {
@@ -26,6 +27,7 @@ func NewWorkspaceClient() *WorkspaceClient {
 		CommandExecution: commandExecution,
 		Files:            files.NewFiles(databricksClient),
 		Settings:         settings.NewSettings(databricksClient),
+		Shares:           sharing.NewShares(databricksClient),
 	}
 }
 `),
@@ -197,6 +199,19 @@ func (a *filesImpl) DataPlane(ctx context.Context) error {
 	return a.client.ApiClient().Do(ctx, http.MethodPost, url)
 }
 `),
+		// SharesAPI.List in ext_api.go wraps ListShares; the CLI calls List.
+		"service/sharing/impl.go": []byte(`package sharing
+
+type ListSharesRequest struct{}
+
+type sharesImpl struct{ client *client.DatabricksClient }
+
+func (a *sharesImpl) internalListShares(ctx context.Context, request ListSharesRequest) (*ListProviderSharesResponse, error) {
+	path := "/api/2.1/unity-catalog/shares"
+	err := a.client.Do(ctx, http.MethodGet, path, headers, queryParams, request, &out)
+	return &out, err
+}
+`),
 		"service/apps/impl.go": []byte(`package apps
 
 type CreateAppDeploymentRequest struct {
@@ -256,6 +271,7 @@ import (
 	apps "github.com/databricks/cli/cmd/workspace/apps"
 	clusters "github.com/databricks/cli/cmd/workspace/clusters"
 	settings "github.com/databricks/cli/cmd/workspace/settings"
+	shares "github.com/databricks/cli/cmd/workspace/shares"
 )
 
 func All() []*cobra.Command {
@@ -263,6 +279,7 @@ func All() []*cobra.Command {
 	out = append(out, apps.New())
 	out = append(out, clusters.New())
 	out = append(out, settings.New())
+	out = append(out, shares.New())
 	return out
 }
 `),
@@ -362,6 +379,23 @@ func newExecute() *cobra.Command {
 	return cmd
 }
 `),
+		"cmd/workspace/shares/overrides.go": []byte(`package shares
+
+func New() *cobra.Command {
+	return &cobra.Command{Use: "shares"}
+}
+
+func newList() *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.Use = "list"
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		w := cmdctx.WorkspaceClient(ctx)
+		response := w.Shares.List(ctx, listReq)
+		return cmdio.RenderIterator(ctx, response)
+	}
+	return cmd
+}
+`),
 		"cmd/workspace/settings/settings.go": []byte(`package settings
 
 import default_namespace "github.com/databricks/cli/cmd/workspace/default-namespace"
@@ -439,6 +473,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 		"compute.Clusters.GetPermissions":  {Operation: "compute.Clusters.GetPermissions", Client: "workspace", Method: "GET", Path: "/api/2.0/permissions/clusters/{cluster_id}", Product: "admin", Access: "read"},
 		"compute.CommandExecution.Execute": {Operation: "compute.CommandExecution.Execute", Client: "workspace", Method: "POST", Path: "/api/1.2/commands/execute", Commands: []string{"clusters execute"}, Product: "execution", Access: "write"},
 		"iam.AccountGroups.Delete":         {Operation: "iam.AccountGroups.Delete", Client: "account", Method: "DELETE", Path: "/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}", Commands: []string{"account groups delete"}, Product: "admin", Access: "admin"},
+		"sharing.Shares.ListShares":        {Operation: "sharing.Shares.ListShares", Client: "workspace", Method: "GET", Path: "/api/2.1/unity-catalog/shares", Commands: []string{"shares list"}, Product: "data", Access: "read"},
 		"networking.Endpoints.GetEndpoint": {Operation: "networking.Endpoints.GetEndpoint", Client: "account", Method: "GET", Path: "/api/networking/v1/{name}", Product: "admin", Access: "read"},
 		"files.Files.Upload":               {Operation: "files.Files.Upload", Client: "workspace", Method: "PUT", Path: "/api/2.0/fs/files{file_path+}", Product: "data", Access: "write"},
 		"settings.DefaultNamespace.Get":    {Operation: "settings.DefaultNamespace.Get", Client: "workspace", Method: "GET", Path: "/api/2.0/settings/types/default_namespace_ws/names/default", Commands: []string{"settings default-namespace get"}, Product: "admin", Access: "read"},

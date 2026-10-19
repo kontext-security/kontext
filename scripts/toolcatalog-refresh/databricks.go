@@ -87,7 +87,7 @@ type sdkOperation struct {
 }
 
 var (
-	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|single_user_name|ssh_public_keys)$`)
+	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|access_token|single_user_name|ssh_public_keys)$`)
 	databricksReadSuffix = regexp.MustCompile(`(?i)[/:](batch)?(get|list|search|query|export|scan)([-_][a-z0-9_-]*)?$`)
 	databricksDelete     = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge|Remove|Clear|Trash|Truncate|Drop|Pop)`)
 	databricksPermission = regexp.MustCompile(`^(Get|Set|Update)Permissions$|^GetPermissionLevels$`)
@@ -233,6 +233,11 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 	for key := range databricksAdminOperations {
 		if index.operations[key] == nil {
 			stale = append(stale, "admin operation "+key)
+		}
+	}
+	for key, target := range databricksCommandAliases {
+		if index.operations[target] == nil {
+			stale = append(stale, "command alias "+key)
 		}
 	}
 	services := map[string]bool{}
@@ -1022,7 +1027,11 @@ func resolveCommand(calls []sdkCall, index *sdkIndex) ([]string, string) {
 			service = pkg + "." + call.sub
 		}
 		display = call.display
-		if op := service + "." + call.method; index.operations[op] != nil && !slices.Contains(ops, op) {
+		op := service + "." + call.method
+		if alias := databricksCommandAliases[op]; alias != "" {
+			op = alias
+		}
+		if index.operations[op] != nil && !slices.Contains(ops, op) {
 			ops = append(ops, op)
 		}
 	}
@@ -1145,7 +1154,6 @@ var databricksServiceProducts = map[string]string{
 	"catalog.ResourceQuotas":                          "data",
 	"catalog.Schemas":                                 "data",
 	"catalog.StorageCredentials":                      "data",
-	"catalog.SystemSchemas":                           "data",
 	"catalog.TableConstraints":                        "data",
 	"catalog.Tables":                                  "data",
 	"catalog.Volumes":                                 "data",
@@ -1161,7 +1169,6 @@ var databricksServiceProducts = map[string]string{
 	"files.Dbfs":                                      "data",
 	"files.Files":                                     "data",
 	"marketplace.ConsumerFulfillments":                "data",
-	"marketplace.ConsumerInstallations":               "data",
 	"marketplace.ConsumerListings":                    "data",
 	"marketplace.ConsumerPersonalizationRequests":     "data",
 	"marketplace.ConsumerProviders":                   "data",
@@ -1184,7 +1191,6 @@ var databricksServiceProducts = map[string]string{
 	"compute.Libraries":                   "compute",
 	"compute.PolicyComplianceForClusters": "compute",
 	"compute.PolicyFamilies":              "compute",
-	"environments.Environments":           "compute",
 	"sql.DataSources":                     "compute",
 	"sql.QueryHistory":                    "compute",
 	"sql.Warehouses":                      "compute",
@@ -1233,6 +1239,7 @@ var databricksServiceProducts = map[string]string{
 	"workspace.Repos":                    "workspace",
 	"workspace.Workspace":                "workspace",
 	// secrets
+	"marketplace.ConsumerInstallations":   "secrets", // responses carry bearer tokens
 	"catalog.SecretsUc":                   "secrets",
 	"catalog.TemporaryPathCredentials":    "secrets",
 	"catalog.TemporaryTableCredentials":   "secrets",
@@ -1247,6 +1254,8 @@ var databricksServiceProducts = map[string]string{
 	"workspace.GitCredentials":            "secrets",
 	"workspace.Secrets":                   "secrets",
 	// admin
+	"catalog.SystemSchemas":                          "admin", // metastore-wide audit and billing schemas
+	"environments.Environments":                      "admin", // workspace-wide base environments
 	"billing.BillableUsage":                          "admin",
 	"billing.BudgetPolicy":                           "admin",
 	"billing.Budgets":                                "admin",
@@ -1342,7 +1351,8 @@ var databricksServiceProducts = map[string]string{
 // databricksOperationProducts places operations their service's default does
 // not fit: running code now or deploying it (execution; testing a job
 // webhook runs the job), running SQL (sql; a Genie message generates and runs
-// it) and minting or holding credentials (secrets).
+// it) and minting or returning credentials (secrets; a recipient carries
+// its activation URL).
 var databricksOperationProducts = map[string]string{
 	"apps.Apps.Deploy":                                       "execution",
 	"apps.Apps.Start":                                        "execution",
@@ -1362,6 +1372,9 @@ var databricksOperationProducts = map[string]string{
 	"catalog.AiGateway.DeleteMcpServiceUserMappedCredential": "secrets",
 	"catalog.AiGateway.GetMcpServiceUserMappedCredential":    "secrets",
 	"catalog.Credentials.GenerateTemporaryServiceCredential": "secrets",
+	"sharing.Recipients.Create":                              "secrets",
+	"sharing.Recipients.Get":                                 "secrets",
+	"sharing.Recipients.List":                                "secrets",
 	"database.Database.GenerateDatabaseCredential":           "secrets",
 	"postgres.Postgres.GenerateDatabaseCredential":           "secrets",
 	"sharing.Recipients.RotateToken":                         "secrets",
@@ -1427,6 +1440,12 @@ var databricksPostReads = map[string]bool{
 	"vectorsearch.VectorSearchIndexes.QueryIndex":                   true,
 	"vectorsearch.VectorSearchIndexes.QueryNextPage":                true,
 	"vectorsearch.VectorSearchIndexes.ScanIndex":                    true,
+}
+
+// databricksCommandAliases map SDK API wrappers the CLI calls to the
+// operation they make (SharesAPI.List in ext_api.go calls ListShares).
+var databricksCommandAliases = map[string]string{
+	"sharing.Shares.List": "sharing.Shares.ListShares",
 }
 
 // databricksHandCommands are hand-written CLI commands that run many

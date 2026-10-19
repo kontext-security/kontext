@@ -25,6 +25,9 @@ func TestDatabricksRoute(t *testing.T) {
 		{"secret read", "GET", "/api/2.0/secrets/get?scope=prod&key=token", "workspace.Secrets.GetSecret", "workspace", "secrets", "read", nil},
 		{"publishing with embedded credentials", "POST", "/api/2.0/lakeview/dashboards/01ef/published", "dashboards.Lakeview.Publish", "workspace", "workspace", "admin", []string{"embed_credentials"}},
 		{"apps deploy over REST", "POST", "/api/2.0/apps/my-app/deployments", "apps.Apps.Deploy", "workspace", "execution", "write", nil},
+		{"recipient with its activation URL", "GET", "/api/2.1/unity-catalog/recipients/acme", "sharing.Recipients.Get", "workspace", "secrets", "read", nil},
+		{"installations carry bearer tokens", "GET", "/api/2.1/marketplace-consumer/installations", "marketplace.ConsumerInstallations.List", "workspace", "secrets", "read", nil},
+		{"system schema", "PUT", "/api/2.1/unity-catalog/metastores/abc/systemschemas/access", "catalog.SystemSchemas.Enable", "workspace", "admin", "admin", nil},
 		{"running a job", "POST", "/api/2.2/jobs/run-now", "jobs.Jobs.RunNow", "workspace", "execution", "write", nil},
 		{"another API version", "POST", "/api/2.1/jobs/run-now", "jobs.Jobs.RunNow", "workspace", "execution", "write", nil},
 		{"trailing slash", "GET", "/api/2.1/unity-catalog/catalogs/", "catalog.Catalogs.List", "workspace", "data", "read", nil},
@@ -126,6 +129,13 @@ func TestDatabricksCommand(t *testing.T) {
 		{"recipients", "rotate-token", "sharing.Recipients.RotateToken", "workspace", "secrets", "admin"},
 		{"serving-endpoints", "http-request", "serving.ServingEndpoints.HttpRequest", "workspace", "execution", "admin"},
 		{"agent-kit", "pop-session-item", "agentkit.AgentKit.PopSessionItem", "workspace", "ai", "delete"},
+		{"shares", "list", "sharing.Shares.ListShares", "workspace", "data", "read"},
+		{"system-schemas", "enable", "catalog.SystemSchemas.Enable", "workspace", "admin", "admin"},
+		{"system-schemas", "disable", "catalog.SystemSchemas.Disable", "workspace", "admin", "admin"},
+		{"environments", "update-default-workspace-base-environment", "environments.Environments.UpdateDefaultWorkspaceBaseEnvironment", "workspace", "admin", "admin"},
+		{"consumer-installations", "list", "marketplace.ConsumerInstallations.List", "workspace", "secrets", "read"},
+		{"recipients", "get", "sharing.Recipients.Get", "workspace", "secrets", "read"},
+		{"model-registry", "create-webhook", "ml.ModelRegistry.CreateWebhook", "workspace", "ai", "admin"},
 		// Without an app name, apps delete destroys the bundle.
 		{"apps", "delete", "cli.apps.delete", "", "workloads", "admin"},
 		// bundle deploy applies permissions blocks; destroy can drop Postgres roles.

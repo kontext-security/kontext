@@ -7257,7 +7257,10 @@
         "model-registry create-webhook"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "job_spec.access_token"
+      ]
     },
     {
       "operation": "ml.ModelRegistry.DeleteWebhook",
@@ -7301,7 +7304,10 @@
         "model-registry update-webhook"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "job_spec.access_token"
+      ]
     },
     {
       "operation": "ml.Experiments.CreateRun",
@@ -12348,7 +12354,7 @@
       "commands": [
         "consumer-installations list"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "read"
     },
     {
@@ -12403,7 +12409,7 @@
       "commands": [
         "consumer-installations list-listing-installations"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "read"
     },
     {
@@ -12414,7 +12420,7 @@
       "commands": [
         "consumer-installations create"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "write"
     },
     {
@@ -12425,7 +12431,7 @@
       "commands": [
         "consumer-installations delete"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "delete"
     },
     {
@@ -12436,7 +12442,7 @@
       "commands": [
         "consumer-installations update"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "write"
     },
     {
@@ -13194,7 +13200,7 @@
       "commands": [
         "system-schemas list"
       ],
-      "product": "data",
+      "product": "admin",
       "access": "read"
     },
     {
@@ -13205,8 +13211,8 @@
       "commands": [
         "system-schemas disable"
       ],
-      "product": "data",
-      "access": "delete"
+      "product": "admin",
+      "access": "admin"
     },
     {
       "operation": "catalog.SystemSchemas.Enable",
@@ -13216,8 +13222,8 @@
       "commands": [
         "system-schemas enable"
       ],
-      "product": "data",
-      "access": "write"
+      "product": "admin",
+      "access": "admin"
     },
     {
       "operation": "catalog.AiGateway.ListModelProviderServices",
@@ -13600,7 +13606,7 @@
       "commands": [
         "recipients list"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "read"
     },
     {
@@ -13611,7 +13617,7 @@
       "commands": [
         "recipients create"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "admin",
       "adminFields": [
         "owner"
@@ -13636,7 +13642,7 @@
       "commands": [
         "recipients get"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "read"
     },
     {
@@ -13824,6 +13830,7 @@
       "method": "GET",
       "path": "/api/2.1/unity-catalog/shares",
       "commands": [
+        "shares list",
         "shares list-shares"
       ],
       "product": "data",
@@ -15306,7 +15313,7 @@
       "commands": [
         "environments list-workspace-base-environments"
       ],
-      "product": "compute",
+      "product": "admin",
       "access": "read"
     },
     {
@@ -15317,8 +15324,8 @@
       "commands": [
         "environments create-workspace-base-environment"
       ],
-      "product": "compute",
-      "access": "write"
+      "product": "admin",
+      "access": "admin"
     },
     {
       "operation": "environments.Environments.DeleteWorkspaceBaseEnvironment",
@@ -15328,8 +15335,8 @@
       "commands": [
         "environments delete-workspace-base-environment"
       ],
-      "product": "compute",
-      "access": "delete"
+      "product": "admin",
+      "access": "admin"
     },
     {
       "operation": "environments.Environments.GetDefaultWorkspaceBaseEnvironment",
@@ -15339,7 +15346,7 @@
       "commands": [
         "environments get-default-workspace-base-environment"
       ],
-      "product": "compute",
+      "product": "admin",
       "access": "read"
     },
     {
@@ -15350,7 +15357,7 @@
       "commands": [
         "environments get-operation"
       ],
-      "product": "compute",
+      "product": "admin",
       "access": "read"
     },
     {
@@ -15361,7 +15368,7 @@
       "commands": [
         "environments get-workspace-base-environment"
       ],
-      "product": "compute",
+      "product": "admin",
       "access": "read"
     },
     {
@@ -15372,8 +15379,8 @@
       "commands": [
         "environments update-default-workspace-base-environment"
       ],
-      "product": "compute",
-      "access": "write"
+      "product": "admin",
+      "access": "admin"
     },
     {
       "operation": "environments.Environments.UpdateWorkspaceBaseEnvironment",
@@ -15383,8 +15390,8 @@
       "commands": [
         "environments update-workspace-base-environment"
       ],
-      "product": "compute",
-      "access": "write"
+      "product": "admin",
+      "access": "admin"
     },
     {
       "operation": "environments.Environments.RefreshWorkspaceBaseEnvironment",
@@ -15394,8 +15401,8 @@
       "commands": [
         "environments refresh-workspace-base-environment"
       ],
-      "product": "compute",
-      "access": "write"
+      "product": "admin",
+      "access": "admin"
     },
     {
       "operation": "networking.Endpoints.DeleteEndpoint",
