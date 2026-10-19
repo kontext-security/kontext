@@ -32,7 +32,7 @@ func TestDatabricksRoute(t *testing.T) {
 		{"pending policy enforcement", "POST", "/api/2.0/policies/clusters:cancelPendingClusterEnforcement", "compute.PolicyComplianceForClusters.CancelPendingClusterEnforcement", "workspace", "compute", "admin", nil},
 		{"one-time credential download", "GET", "/api/2.1/unity-catalog/public/data_sharing_activation/abc", "sharing.RecipientActivation.RetrieveToken", "workspace", "secrets", "write", nil},
 		{"AI Gateway guardrails", "PUT", "/api/2.0/serving-endpoints/chat/ai-gateway", "serving.ServingEndpoints.PutAiGateway", "workspace", "ai", "admin", nil},
-		{"inference table capture", "PUT", "/api/2.0/serving-endpoints/chat/config", "serving.ServingEndpoints.UpdateConfig", "workspace", "ai", "admin", []string{"auto_capture_config"}},
+		{"inference table capture", "PUT", "/api/2.0/serving-endpoints/chat/config", "serving.ServingEndpoints.UpdateConfig", "workspace", "ai", "admin", []string{"auto_capture_config", "served_entities.external_model.amazon_bedrock_config.instance_profile_arn", "served_entities.instance_profile_arn", "served_models.instance_profile_arn"}},
 		{"installing a library", "POST", "/api/2.0/libraries/install", "compute.Libraries.Install", "workspace", "execution", "write", nil},
 		{"external location with fallback", "POST", "/api/2.1/unity-catalog/external-locations", "catalog.ExternalLocations.Create", "workspace", "data", "admin", nil},
 		{"repo update can discard work", "PATCH", "/api/2.0/repos/42", "workspace.Repos.Update", "workspace", "workspace", "delete", nil},
