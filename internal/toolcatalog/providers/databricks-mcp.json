@@ -75,12 +75,17 @@
     {
       "pathPrefix": "/api/2.0/mcp/ai-search/",
       "toolId": "databricks-mcp/ai-search"
+    },
+    {
+      "pathPrefix": "/ai-gateway/mcp-services/system.ai.sandbox",
+      "toolId": "databricks-mcp/run_code"
     }
   ],
   "sources": [
     "Databricks managed MCP servers (https://docs.databricks.com/aws/en/generative-ai/mcp/managed-mcp), server URLs and tool names read 2026-10-19",
     "AWS sample tools/list response for the Databricks SQL and Genie managed MCP servers, read 2026-10-19",
-    "Synthetic ids: uc-function (Unity Catalog function servers, whose tool names are per-workspace function names) and ai-search (Vector Search / AI Search servers), set by urlKinds"
+    "Synthetic ids: uc-function (Unity Catalog function servers, whose tool names are per-workspace function names) and ai-search (Vector Search / AI Search servers), set by urlKinds",
+    "Databricks Unity AI Gateway console, system.ai.sandbox (run_code, required code) and system.ai.web_search (web_search, required query) tool lists read 2026-10-19"
   ],
   "dispatchers": [],
   "tools": [
@@ -139,12 +144,22 @@
       "access": "read"
     },
     {
+      "name": "run_code",
+      "product": "execution",
+      "access": "write"
+    },
+    {
       "name": "uc-function",
       "product": "execution",
       "access": "write"
     },
     {
       "name": "view_ask",
+      "product": "ai",
+      "access": "read"
+    },
+    {
+      "name": "web_search",
       "product": "ai",
       "access": "read"
     }

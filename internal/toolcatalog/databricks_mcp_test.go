@@ -25,7 +25,18 @@ func TestResolveDatabricksMCP(t *testing.T) {
 		{"azure genie", "mcp__space__genie_cancel_response", genieURL, nil, "databricks-mcp/genie_cancel_response", true},
 		{"older genie tool", "mcp__space__query_space", genieURL, nil, "databricks-mcp/query_space", true},
 		{"govcloud host", "mcp__w__execute_sql", "https://dbc-9.cloud.databricks.us/api/2.0/mcp/sql", nil, "databricks-mcp/execute_sql", true},
-		{"sandbox or web search, not catalogued yet", "mcp__w__run_code", sqlURL, nil, "databricks-mcp/unrecognized", true},
+		{"new tool on a Databricks server", "mcp__w__run_python", sqlURL, nil, "databricks-mcp/unrecognized", true},
+		// The sandbox and web search gateway services. The sandbox runs code
+		// whatever its tool is called; run_code and web_search are generic
+		// names, so another vendor's server keeps them.
+		{"sandbox", "mcp__sb__run_code", proxy + "system.ai.sandbox", map[string]any{"code": "print(1)"}, "databricks-mcp/run_code", true},
+		{"sandbox, trailing slash, other tool", "mcp__sb__upload", proxy + "system.ai.sandbox/", nil, "databricks-mcp/run_code", true},
+		{"web search", "mcp__ws__web_search", proxy + "system.ai.web_search", map[string]any{"query": "q"}, "databricks-mcp/web_search", true},
+		{"web search, new tool", "mcp__ws__fetch_page", proxy + "system.ai.web_search", nil, "databricks-mcp/unrecognized", true},
+		{"run_code on a name-hinted Databricks server", "mcp__databricks__run_code", "", nil, "databricks-mcp/run_code", true},
+		{"run_code on another vendor's server", "mcp__e2b__run_code", "https://mcp.e2b.dev/sse", nil, "", false},
+		{"run_code on an unconfigured server", "mcp__sandbox__run_code", "", nil, "", false},
+		{"web_search on another vendor's server", "mcp__search__web_search", "", nil, "", false},
 		// URL kinds name the tool whatever the workspace calls it.
 		{"UC function", "mcp__fns__main__default__get_weather", fnURL, nil, "databricks-mcp/uc-function", true},
 		{"UC function named like a read tool", "mcp__fns__execute_sql_read_only", fnURL, nil, "databricks-mcp/uc-function", true},
@@ -87,6 +98,8 @@ func TestClassifyDatabricksSQLCall(t *testing.T) {
 		{"read-only secret", databricksExecuteSQLReadOnly, map[string]any{"query": "SELECT secret('s', 'k')"}, ProviderClassification{"databricks", "secrets", AccessRead}},
 		{"uc function", "databricks-mcp/uc-function", nil, ProviderClassification{"databricks", "execution", AccessWrite}},
 		{"ai search", "databricks-mcp/ai-search", nil, ProviderClassification{"databricks", "ai", AccessRead}},
+		{"sandbox", "databricks-mcp/run_code", nil, ProviderClassification{"databricks", "execution", AccessWrite}},
+		{"web search", "databricks-mcp/web_search", nil, ProviderClassification{"databricks", "ai", AccessRead}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -61,19 +61,30 @@ func TestCedarDatabricksPresets(t *testing.T) {
 "genieone": {"url": "` + workspace + `/ai-gateway/mcp-services/system.ai.genie_one_mcp"},
 "fns": {"url": "` + workspace + `/api/2.0/mcp/functions/main/default"},
 "vs": {"url": "` + workspace + `/api/2.0/mcp/vector-search/main/docs"},
+"sandbox": {"url": "` + workspace + `/ai-gateway/mcp-services/system.ai.sandbox"},
+"websearch": {"url": "` + workspace + `/ai-gateway/mcp-services/system.ai.web_search"},
+"e2b": {"url": "https://mcp.e2b.dev/sse"},
 "serving": {"url": "` + workspace + `/serving-endpoints/chat/invocations"}}`
 	writeConfig(t, filepath.Join(home, ".claude.json"), `{"mcpServers": `+servers+`}`)
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": `+servers+`}`)
 	codex := ""
-	for name, path := range map[string]string{"wh": "/api/2.0/mcp/sql", "github": "/api/2.0/mcp/sql", "genie": "/api/2.0/mcp/genie/01ef", "genieone": "/ai-gateway/mcp-services/system.ai.genie_one_mcp", "fns": "/api/2.0/mcp/functions/main/default", "vs": "/api/2.0/mcp/vector-search/main/docs", "serving": "/serving-endpoints/chat/invocations"} {
+	for name, path := range map[string]string{"wh": "/api/2.0/mcp/sql", "github": "/api/2.0/mcp/sql", "genie": "/api/2.0/mcp/genie/01ef", "genieone": "/ai-gateway/mcp-services/system.ai.genie_one_mcp", "fns": "/api/2.0/mcp/functions/main/default", "vs": "/api/2.0/mcp/vector-search/main/docs", "sandbox": "/ai-gateway/mcp-services/system.ai.sandbox", "websearch": "/ai-gateway/mcp-services/system.ai.web_search", "serving": "/serving-endpoints/chat/invocations"} {
 		codex += "[mcp_servers." + name + "]\nurl = \"" + workspace + path + "\"\n"
 	}
 	writeConfig(t, filepath.Join(home, ".codex/config.toml"), codex)
 	// A claude.ai Databricks connector in Claude Desktop: its tools carry
 	// the connector UUID, and the session record has its URL.
-	const connector = "c2be245b-9fd0-47e8-9a48-80c63e49e3fb"
+	const (
+		connector        = "c2be245b-9fd0-47e8-9a48-80c63e49e3fb"
+		sandboxConnector = "5b0c1d2e-3f4a-4b5c-8d6e-7f8a9b0c1d2e"
+		searchConnector  = "6c1d2e3f-4a5b-4c6d-9e7f-8a9b0c1d2e3f"
+	)
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions/acct/org/local_s.json"),
-		`{"cliSessionId": "session-1", "remoteMcpServersConfig": [{"uuid": "`+connector+`", "name": "Databricks", "url": "`+workspace+`/ai-gateway/mcp-services/system.ai.dbsql"}]}`)
+		`{"cliSessionId": "session-1", "remoteMcpServersConfig": [
+  {"uuid": "`+connector+`", "name": "Databricks", "url": "`+workspace+`/ai-gateway/mcp-services/system.ai.dbsql"},
+  {"uuid": "`+sandboxConnector+`", "name": "Sandbox", "url": "`+workspace+`/ai-gateway/mcp-services/system.ai.sandbox"},
+  {"uuid": "`+searchConnector+`", "name": "Web search", "url": "`+workspace+`/ai-gateway/mcp-services/system.ai.web_search"}
+]}`)
 
 	const (
 		readOnly   = "databricks-read-only"
@@ -109,6 +120,9 @@ func TestCedarDatabricksPresets(t *testing.T) {
 		{"genie one cancel", "mcp__genieone__genie_cancel_response", map[string]any{}, []string{readOnly, exceptSQL}},
 		{"uc function", "mcp__fns__main__default__refund", map[string]any{"id": 1}, []string{readOnly, exceptSQL, runs}},
 		{"ai search", "mcp__vs__main__docs_index", map[string]any{"query": "q"}, nil},
+		{"sandbox run_code", "mcp__sandbox__run_code", map[string]any{"code": "print(1)"}, []string{readOnly, exceptSQL, runs}},
+		{"web search", "mcp__websearch__web_search", map[string]any{"query": "q"}, nil},
+		{"run_code on another vendor's server", "mcp__e2b__run_code", map[string]any{"code": "print(1)"}, nil},
 		{"new tool on a Databricks server", "mcp__wh__run_python", map[string]any{}, []string{unrecogniz}},
 		// Unidentified servers keep their raw names and are allowed.
 		{"URL miss", "mcp__serving__execute_sql", sql("DROP TABLE t"), nil},
@@ -122,6 +136,8 @@ func TestCedarDatabricksPresets(t *testing.T) {
 	}{
 		{"desktop connector drop", "mcp__" + connector + "__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
 		{"desktop connector select", "mcp__" + connector + "__execute_sql", sql("SELECT 1"), []string{readOnly}},
+		{"desktop sandbox connector", "mcp__" + sandboxConnector + "__run_code", map[string]any{"code": "print(1)"}, []string{readOnly, exceptSQL, runs}},
+		{"desktop web search connector", "mcp__" + searchConnector + "__web_search", map[string]any{"query": "q"}, nil},
 	}
 	for preset, forbid := range databricksPresets {
 		policy := `@id("allow") permit(principal, action == Kontext::Action::"ToolUse", resource);

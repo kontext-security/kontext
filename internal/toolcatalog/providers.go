@@ -215,7 +215,7 @@ func (p *providerIndex) resolveURL(tool, path string, input map[string]any) (str
 						return providers[i].resolve(tool, input, true)
 					}
 				}
-			case "system.ai.dbsql", "system.ai.genie_one_mcp":
+			case "system.ai.dbsql", "system.ai.genie_one_mcp", "system.ai.web_search":
 			default:
 				// A registered service's tools are its own, whatever they
 				// are called.
@@ -231,8 +231,9 @@ const DatabricksProvider = "databricks"
 
 // databricksGatewayPrefix is where Databricks' AI Gateway serves MCP
 // services: the proxies for GitHub and Atlassian (system.ai.github,
-// system.ai.atlassian), Databricks SQL and Genie One (system.ai.dbsql,
-// system.ai.genie_one_mcp), resolved by tool name here, and services
+// system.ai.atlassian), Databricks SQL, Genie One and web search
+// (system.ai.dbsql, system.ai.genie_one_mcp, system.ai.web_search), resolved
+// by tool name here, the sandbox (system.ai.sandbox, a URL kind), and services
 // customers register (<catalog>.<schema>.<service>), which are unrecognized.
 const databricksGatewayPrefix = "/ai-gateway/mcp-services/"
 

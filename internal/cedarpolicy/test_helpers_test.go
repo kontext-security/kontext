@@ -24,7 +24,7 @@ const testSchema = `namespace Kontext {
   };
 }`
 
-const testToolCatalogDigest = "654dbe189f1d749aa7ded4a9af306c4649d0676a97221e16be38bc8bf4cf7806"
+const testToolCatalogDigest = "ed744afcbe51dba4845d9554857309f1e156699c56e97cfb45bfb9fb7f5699fa"
 
 func testDeployment(t *testing.T, mode cedareval.RolloutMode) Deployment {
 	t.Helper()

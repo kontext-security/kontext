@@ -254,6 +254,31 @@ func projectRoot(root readers.ClaudeRoot, cwd string) string {
 	}
 }
 
+// Warm parses the Claude Desktop session records into the cache, so the
+// first connector lookup after the daemon starts, for a session without a
+// record, costs one stat per record instead of a full scan that times out.
+func (r *Resolver) Warm() {
+	home := r.Home
+	if home == "" {
+		var err error
+		if home, err = os.UserHomeDir(); err != nil {
+			return
+		}
+	}
+	for _, path := range desktopRecords(home) {
+		load(r, path, parseJSON[desktopSession])
+	}
+}
+
+func desktopRecords(home string) []string {
+	var paths []string
+	for _, dir := range []string{"claude-code-sessions", "local-agent-mode-sessions"} {
+		found, _ := filepath.Glob(filepath.Join(home, "Library/Application Support/Claude", dir, "*/*/local_*.json"))
+		paths = append(paths, found...)
+	}
+	return paths
+}
+
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // desktopSession is the part of a Claude Desktop session record the lookup
@@ -274,11 +299,7 @@ func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name s
 	if sessionID == "" {
 		return "", "", false
 	}
-	var paths []string
-	for _, dir := range []string{"claude-code-sessions", "local-agent-mode-sessions"} {
-		found, _ := filepath.Glob(filepath.Join(home, "Library/Application Support/Claude", dir, "*/*/local_*.json"))
-		paths = append(paths, found...)
-	}
+	paths := desktopRecords(home)
 	modTimes := make(map[string]time.Time, len(paths))
 	for _, path := range paths {
 		if info, err := os.Stat(path); err == nil {

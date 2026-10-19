@@ -102,6 +102,7 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		policy = NewRiskPolicyProvider()
 	}
 	policy = newCedarPolicyProvider(policy, opts.CedarPolicies, opts.CedarEnforcement)
+	go mcpServers.Warm()
 	currentSessionID := strings.TrimSpace(opts.CurrentSessionID)
 	mode := strings.TrimSpace(opts.Mode)
 	if currentSessionID != "" && mode == "" {
