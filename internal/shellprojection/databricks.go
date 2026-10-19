@@ -216,10 +216,13 @@ func flagSet(args []string, flag string) bool {
 			return true
 		}
 		// A short flag inside a cluster: -fb is -f -b, and -fb=v gives the
-		// last letter the value. A letter after one that takes a value is
-		// that value, but reading it as a flag only raises.
+		// last letter the value. The letters after one that takes a value
+		// are its value (-pabc is the profile abc).
 		if len(flag) == 2 && len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
 			letters, value, hasValue := strings.Cut(arg[1:], "=")
+			if end := strings.IndexAny(letters, databricksShortValueLetters); end >= 0 {
+				letters, hasValue = letters[:end], false
+			}
 			if at := strings.IndexByte(letters, flag[1]); at >= 0 && (!hasValue || at < len(letters)-1 || flagValueTrue(value)) {
 				return true
 			}
@@ -227,6 +230,11 @@ func flagSet(args []string, flag string) bool {
 	}
 	return false
 }
+
+// databricksShortValueLetters are the one-letter flags of the commands with
+// flag raises that take a value: the global -p, -o, -t and -e, and bundle
+// generate's -s and -d.
+const databricksShortValueLetters = "potesd"
 
 func flagValueTrue(value string) bool {
 	switch strings.ToLower(value) {

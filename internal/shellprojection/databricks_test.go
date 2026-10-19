@@ -112,6 +112,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"bundle generate clustered -fb=true binds", "databricks bundle generate job --existing-job-id 1 -fb=true", []string{dbCat, dbP("workloads"), dbW}, true},
 		{"bundle generate clustered -fb=false does not bind", "databricks bundle generate job --existing-job-id 1 -fb=false", []string{dbCat, dbP("workloads")}, true},
 		{"-- as an option value does not end the flags", "databricks auth describe --log-file -- --sensitive", []string{dbCat, dbP("secrets")}, true},
+		{"a profile name is not a bind flag", "databricks bundle generate job --existing-job-id 1 -pabc", []string{dbCat, dbP("workloads")}, true},
 		{"bundle generate --bind binds", "databricks bundle generate job --existing-job-id 1 -b", []string{dbCat, dbP("workloads"), dbW}, true},
 		{"auth describe is local", "databricks auth describe", []string{dbCat}, true},
 		{"auth describe --sensitive prints credentials", "databricks auth describe --sensitive", []string{dbCat, dbP("secrets")}, true},
@@ -185,6 +186,8 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl glob spells the scheme", "curl -X DELETE '{https,https}://dbc-1234.cloud.databricks.com/api/2.0/repos/12'", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
 		{"curl percent-encoded host", "curl -X DELETE 'https://%64bc-1234.cloud.databricks.com/api/2.0/repos/12'", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"curl unparseable databricks url assumes the worst", "curl -X DELETE 'https://dbc-1234%zz.cloud.databricks.com/api/2.0/repos/12'", []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		{"curl output format is not a method", `curl -X POST -w-XGET -d '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
+		{"curl request target only for its own operation", "curl '" + dbHost + "/api/2.0/secrets/get?scope=s&key=k' --next --request-target /api/2.1/clusters/list " + dbHost + "/", []string{dbP("compute"), dbP("secrets"), dbUnk}, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.
