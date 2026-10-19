@@ -123,8 +123,16 @@ var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA"
 	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE", "LIST_FILES", "TO_FILE", "TRY_TO_FILE",
 	"READ_STATESTORE", "READ_STATE_METADATA", "CLOUD_FILES_STATE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
 
-// Words a column or constraint name follows: a MASK after them is that name.
-var databricksBeforeColumnName = setOf("COLUMN", "COLUMNS", "CONSTRAINT", "AS")
+// databricksMaskIsName reports whether a MASK between prev and next is a name
+// (a column, alias, table or field) or sits in an expression, not a mask.
+func databricksMaskIsName(prev, beforePrev, next sqlToken) bool {
+	keyword := func(t sqlToken, words ...string) bool {
+		return t.kind == sqlWord && setOf(words...)[t.text]
+	}
+	return prev.is("(") || prev.is(",") || prev.is(".") || keyword(prev, "AS", "TABLE", "VIEW") ||
+		keyword(prev, "COLUMN", "COLUMNS", "CONSTRAINT") && keyword(beforePrev, "ADD", "ALTER", "DROP", "RENAME") ||
+		keyword(next, "IS", "AND", "OR", "IN", "BETWEEN", "LIKE", "FROM", "WHERE", "THEN", "ELSE", "END", "AS")
+}
 
 func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bool) {
 	at := func(i int) sqlToken {
@@ -170,33 +178,27 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 	effect = databricksStatementTypes[typ]
 	verb := words[0]
 
-	// Clauses at the statement's top level; a CREATE's column definitions,
-	// its first group before AS, and ALTER … ADD COLUMNS sit one level down.
-	depth, columns, grouped, adding := 0, false, false, false
+	// Clauses at the statement's top level, and column masks at any depth.
+	depth := 0
 	insert := verb == "INSERT" || verb == "FROM" // FROM s INSERT … is a multi-insert
 	for i := start; i < len(stmt); i++ {
 		tok, prev, next := stmt[i], at(i-1), at(i+1)
 		switch {
 		case tok.is("("):
-			columns = columns || depth == 0 && verb == "CREATE" && !grouped
-			grouped = grouped || depth == 0
 			depth++
 		case tok.is(")"):
 			depth--
-			columns = columns && depth > 0
 		}
 		if tok.kind != sqlWord {
 			continue
-		}
-		if depth == 0 && tok.is("AS") && !prev.is(".") && !next.is(".") {
-			grouped = true // a CREATE's query follows AS
 		}
 		if depth == 0 {
 			switch {
 			case verb == "CREATE" && i == start+2 && prev.is("OR") && (tok.is("REPLACE") || tok.is("REFRESH")):
 				// Replacing a definition drops any mask or filter it leaves out.
 				effect |= sqlBoth
-			case (insert || verb == "LOAD" || verb == "PUT") && tok.is("OVERWRITE"),
+			case insert && tok.is("OVERWRITE") && prev.is("INSERT"),
+				(verb == "LOAD" || verb == "PUT") && tok.is("OVERWRITE"),
 				insert && tok.is("REPLACE") && (next.is("WHERE") || next.is("USING") || next.is("ON")),
 				verb == "MERGE" && tok.is("DELETE") && prev.is("THEN"),
 				verb == "ALTER" && (tok.is("DROP") || tok.is("REPLACE") && next.is("COLUMNS")),
@@ -210,8 +212,6 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 				verb == "CREATE" && tok.is("FILTER") && prev.is("ROW") && at(i-2).is("WITH"),
 				(verb == "MSCK" || verb == "REPAIR") && tok.is("PRIVILEGES"):
 				effect |= sqlAdmin
-			case verb == "ALTER" && tok.is("ADD"):
-				adding = next.is("COLUMN") || next.is("COLUMNS")
 			case verb == "DECLARE" && (tok.is("HANDLER") || tok.is("CONDITION")):
 				opaque = true // SQL scripting, not a session variable
 			}
@@ -220,11 +220,11 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 			effect |= sqlDeletes
 		}
 		// A column mask in a column definition: CREATE … (c t MASK f) or
-		// ALTER … ADD COLUMN(S) c t MASK f.
-		// ponytail: a STRUCT<mask …> field reads as a mask too, which only adds admin.
-		if tok.is("MASK") && (columns && depth == 1 || adding && depth <= 1) &&
-			(next.kind == sqlWord || next.kind == sqlName) && !prev.is("(") && !prev.is(",") && !prev.is(".") &&
-			!databricksBeforeColumnName[prev.text] {
+		// ALTER … ADD [COLUMN] c t MASK f, unless MASK is itself a name.
+		// ponytail: a STRUCT<mask …> field or a CTAS alias without AS reads as
+		// a mask too, which only over-flags admin.
+		if (verb == "CREATE" || verb == "ALTER") && tok.is("MASK") && (next.kind == sqlWord || next.kind == sqlName) &&
+			!databricksMaskIsName(prev, at(i-2), next) {
 			effect |= sqlAdmin
 		}
 	}
