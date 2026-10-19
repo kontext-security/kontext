@@ -1024,6 +1024,8 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	// option's value), or a config file (-K), which can set any option. Every
 	// URL is then also judged under every method and with every body.
 	everyMethod := false
+	// A config file can also replace the request target.
+	config := false
 	var methods []string
 	safeFlags := map[string]bool{"-s": true, "-S": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
 	unknownBefore := false
@@ -1089,7 +1091,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				op.upload = true
 			}
 		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
-			everyMethod = true
+			everyMethod, config = true, true
 			complete = false
 			value("--config")
 		case curlValueOption(arg):
@@ -1182,9 +1184,39 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		features = append(features, projection.Features...)
 	}
 	for _, urlText := range overflowed {
-		facts = append(facts, databricksUnreadableURLFacts(urlText)...)
+		facts = append(facts, curlGlobOverflowFacts(urlText)...)
+	}
+	if config {
+		for _, urlText := range all.urls {
+			facts = append(facts, databricksUnreadableURLFacts(urlText)...)
+		}
 	}
 	return projection("curl", mergeDatabricksProducts(facts), features, false)
+}
+
+// curlGlobOverflowFacts are the facts of a globbed URL too large to expand.
+// Its host part is expanded on its own, so a glob in the host still names
+// it.
+func curlGlobOverflowFacts(urlText string) []string {
+	start := 0
+	if scheme := strings.Index(urlText, "://"); scheme >= 0 {
+		start = scheme + 3
+	}
+	end := strings.IndexAny(urlText[start:], "/?#")
+	if end < 0 {
+		end = len(urlText) - start
+	}
+	hosts, ok := expandCurlGlob(urlText[:start+end])
+	if !ok {
+		// The host itself is past the cap: it could be anything.
+		return databricksWorstFacts()
+	}
+	for _, host := range hosts {
+		if facts := databricksUnreadableURLFacts(host); facts != nil {
+			return facts
+		}
+	}
+	return nil
 }
 
 var curlScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*):/*`)

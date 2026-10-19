@@ -169,7 +169,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl short option cluster", "curl -sX DELETE " + dbHost + "/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"curl clustered body", `curl -sd'{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl --request-target is the path requested", "curl --request-target '/api/2.0/secrets/get?scope=s&key=k' " + dbHost + "/api/2.1/clusters/list", []string{dbCat, dbP("secrets")}, true},
-		{"curl config file can set the method", "curl -K opts.txt " + dbHost + "/api/2.0/repos/12", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
+		{"curl config file can set the method and target", "curl -K opts.txt " + dbHost + "/api/2.0/repos/12", []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbP("workspace"), dbUnk, dbW}, false},
 		{"curl --no-get cancels -G", `curl -G --no-get --json '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl request target per operation", "curl --request-target '/api/2.0/secrets/get?scope=s&key=k' " + dbHost + "/api/2.1/clusters/list --next --request-target /api/2.1/clusters/list " + dbHost + "/api/2.1/clusters/list", []string{dbP("compute"), dbP("secrets"), dbUnk}, false},
 		{"curl bodies per operation", `curl --json '{"statement":"SELECT 1"}' ` + dbHost + `/api/2.0/sql/statements --next --json '{"statement":"' --json 'DROP TABLE t"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbD, dbP("sql"), dbUnk, dbW}, false},
@@ -188,6 +188,8 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl unparseable databricks url assumes the worst", "curl -X DELETE 'https://dbc-1234%zz.cloud.databricks.com/api/2.0/repos/12'", []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
 		{"curl output format is not a method", `curl -X POST -w-XGET -d '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl request target only for its own operation", "curl '" + dbHost + "/api/2.0/secrets/get?scope=s&key=k' --next --request-target /api/2.1/clusters/list " + dbHost + "/", []string{dbP("compute"), dbP("secrets"), dbUnk}, false},
+		{"curl glob overflow with a globbed host", `curl --json '{"cluster_id":"x"}' 'https://dbc-1234.cloud.databr{icks,icks}.com/api/2.1/clusters/[a-z][a-z]lete'`, []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		{"curl glob overflow on another host", "curl 'https://example.com/[a-z][a-z]'", nil, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.

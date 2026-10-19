@@ -565,8 +565,8 @@ func mergeDatabricksProducts(facts []string) []string {
 var databricksDomains = []string{"databricks.com", "azuredatabricks.net", "databricks.us", "databricks.mil", "databricks.azure.us", "databricks.azure.cn"}
 
 // databricksUnreadableURLFacts are the facts of a curl URL the projection
-// cannot read (it does not parse, or a glob is too large to expand) that
-// names a Databricks domain: it could reach any route, so it carries every
+// cannot read (it does not parse, a glob is too large to expand, or a config
+// file may replace its target) that names a Databricks domain: it could reach any route, so it carries every
 // tier and the products the presets single out.
 func databricksUnreadableURLFacts(urlText string) []string {
 	text := strings.ToLower(urlText)
@@ -576,6 +576,12 @@ func databricksUnreadableURLFacts(urlText string) []string {
 	if !slices.ContainsFunc(databricksDomains, func(domain string) bool { return strings.Contains(text, domain) }) {
 		return nil
 	}
+	return databricksWorstFacts()
+}
+
+// databricksWorstFacts are the facts of a request that could reach any
+// Databricks route: every tier and the products the presets single out.
+func databricksWorstFacts() []string {
 	return []string{FactDatabricksRouteUnrecognized, databricksProductFact("secrets"), databricksProductFact("execution"),
 		writeFact(productDatabricks), deleteFact(productDatabricks), adminFact(productDatabricks)}
 }
