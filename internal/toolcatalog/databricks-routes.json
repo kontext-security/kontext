@@ -6299,7 +6299,7 @@
       "commands": [
         "libraries install"
       ],
-      "product": "compute",
+      "product": "execution",
       "access": "write"
     },
     {
@@ -6658,7 +6658,7 @@
         "provider-listings create"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderListings.List",
@@ -6702,7 +6702,7 @@
         "provider-listings update"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderPersonalizationRequests.Update",
@@ -6713,7 +6713,7 @@
         "provider-personalization-requests update"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderPersonalizationRequests.List",
@@ -10520,7 +10520,11 @@
         "serving-endpoints create"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "ai_gateway",
+        "config.auto_capture_config"
+      ]
     },
     {
       "operation": "serving.ServingEndpoints.CreateProvisionedThroughputEndpoint",
@@ -10531,7 +10535,10 @@
         "serving-endpoints create-provisioned-throughput-endpoint"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "ai_gateway"
+      ]
     },
     {
       "operation": "serving.ServingEndpoints.UpdateProvisionedThroughputEndpointConfig",
@@ -10586,7 +10593,10 @@
         "serving-endpoints update-config"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "auto_capture_config"
+      ]
     },
     {
       "operation": "serving.ServingEndpoints.ExportMetrics",
@@ -10674,7 +10684,7 @@
         "serving-endpoints patch-telemetry-config"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "settings.AibiDashboardEmbeddingAccessPolicy.Delete",

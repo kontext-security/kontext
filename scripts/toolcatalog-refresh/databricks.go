@@ -88,7 +88,7 @@ type sdkOperation struct {
 }
 
 var (
-	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|access_token|single_user_name|ssh_public_keys|enable_pg_native_login|jwt_role_claim_key)$`)
+	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|access_token|single_user_name|ssh_public_keys|enable_pg_native_login|jwt_role_claim_key|ai_gateway|auto_capture_config)$`)
 	databricksReadSuffix = regexp.MustCompile(`(?i)[/:](batch)?(get|list|search|query|export|scan)([-_][a-z0-9_-]*)?$`)
 	databricksDelete     = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge|Remove|Clear|Trash|Truncate|Drop|Pop)`)
 	databricksPermission = regexp.MustCompile(`^(Get|Set|Update|Share)Permissions$|^GetPermissionLevels$`)
@@ -1372,12 +1372,13 @@ var databricksServiceProducts = map[string]string{
 
 // databricksOperationProducts places operations their service's default does
 // not fit: running code now or deploying it (execution; testing a job
-// webhook runs the job), running SQL (sql; a Genie message generates and runs
+// webhook runs the job, installing a library runs its install code), running SQL (sql; a Genie message generates and runs
 // it) and minting or returning credentials (secrets; a recipient carries
 // its activation URL, a provider its recipient profile's bearer token).
 var databricksOperationProducts = map[string]string{
 	"apps.Apps.Deploy":                                       "execution",
 	"apps.Apps.Start":                                        "execution",
+	"compute.Libraries.Install":                              "execution",
 	"jobs.Jobs.RepairRun":                                    "execution",
 	"jobs.Jobs.RunNow":                                       "execution",
 	"jobs.Jobs.Submit":                                       "execution",
@@ -1412,9 +1413,9 @@ var databricksOperationProducts = map[string]string{
 // recipient token is another party's), clean-room approvals that let
 // collaborators' notebooks run unreviewed, cluster policies (the access
 // mode rules live in a JSON string) and cancelling their pending
-// enforcement, marketplace exchange filters and listings (who may see a
-// private exchange's data), the AI Gateway (PII filtering, guardrails,
-// payload logging), and the external HTTP proxy, whose method and path the
+// enforcement, marketplace listings, exchange filters and fulfilled
+// personalization requests (who may see shared data), the AI Gateway and
+// endpoint telemetry (PII filtering, guardrails, payload logging), and the external HTTP proxy, whose method and path the
 // caller picks.
 var databricksAdminOperations = map[string]bool{
 	"cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview":               true,
@@ -1422,6 +1423,9 @@ var databricksAdminOperations = map[string]bool{
 	"compute.PolicyComplianceForClusters.CancelPendingClusterEnforcement": true,
 	"compute.ClusterPolicies.Delete":                                      true,
 	"compute.ClusterPolicies.Edit":                                        true,
+	"marketplace.ProviderListings.Create":                                 true,
+	"marketplace.ProviderListings.Update":                                 true,
+	"marketplace.ProviderPersonalizationRequests.Update":                  true,
 	"marketplace.ProviderExchanges.AddListingToExchange":                  true,
 	"marketplace.ProviderExchanges.DeleteListingFromExchange":             true,
 	"marketplace.ProviderExchangeFilters.Create":                          true,
@@ -1429,6 +1433,7 @@ var databricksAdminOperations = map[string]bool{
 	"marketplace.ProviderExchangeFilters.Update":                          true,
 	"serving.ServingEndpoints.HttpRequest":                                true,
 	"serving.ServingEndpoints.PutAiGateway":                               true,
+	"serving.ServingEndpoints.PatchTelemetryConfig":                       true,
 	"sharing.Recipients.RotateToken":                                      true,
 	"cleanrooms.CleanRoomAutoApprovalRules.Create":                        true,
 	"cleanrooms.CleanRoomAutoApprovalRules.Delete":                        true,
