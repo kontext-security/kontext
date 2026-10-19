@@ -70,7 +70,7 @@ var databricksTableKeywords = setOf("INTO", "TABLE", "VIEW", "FUNCTION", "EXISTS
 // Objects whose CREATE, ALTER or DROP is administration: access policies,
 // governed tags, credentials, external locations, Delta Sharing, clean rooms and workspace
 // groups.
-var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", "LOCATION", "SHARE", "CLEAN",
+var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", "SERVER", "LOCATION", "SHARE", "CLEAN",
 	"RECIPIENT", "PROVIDER", "GROUP", "METASTORE")
 
 // Words between CREATE, ALTER or DROP and the object kind.

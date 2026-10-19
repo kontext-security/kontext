@@ -84,6 +84,8 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"create governed tag", "CREATE GOVERNED TAG pii DESCRIPTION 'x'", AccessAdmin, false, true},
 		{"alter governed tag", "ALTER GOVERNED TAG pii SET VALUES ('a', 'b')", AccessAdmin, false, true},
 		{"drop governed tag", "DROP GOVERNED TAG pii", AccessAdmin, false, true},
+		{"server is a connection", "CREATE SERVER c TYPE POSTGRESQL OPTIONS (host 'db.example', port '5432')", AccessAdmin, false, true},
+		{"alter server", "ALTER SERVER c OPTIONS (host 'db2')", AccessAdmin, false, true},
 		{"clean room", "CREATE CLEAN ROOM r COMMENT 'x'", AccessAdmin, false, true},
 		{"alter group", "ALTER GROUP g ADD USER `u`", AccessAdmin, false, true},
 
