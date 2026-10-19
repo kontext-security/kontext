@@ -166,6 +166,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl short option cluster", "curl -sX DELETE " + dbHost + "/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"curl clustered body", `curl -sd'{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl --request-target is the path requested", "curl --request-target '/api/2.0/secrets/get?scope=s&key=k' " + dbHost + "/api/2.1/clusters/list", []string{dbCat, dbP("secrets")}, true},
+		{"curl config file can set the method", "curl -K opts.txt " + dbHost + "/api/2.0/repos/12", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.

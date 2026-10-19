@@ -995,7 +995,9 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	// --next starts a new request with its own method. Which option values
 	// it resets is not modelled: with --next, every URL is judged under every
 	// method the command names.
-	next := false
+	everyMethod := false
+	// A config file (-K) can set any option, the method included.
+	config := false
 	requestTarget := ""
 	var urls []string
 	bodies := make([]string, 0, 2)
@@ -1086,8 +1088,15 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			complete = false
 		case safeFlags[arg]:
 		case arg == "--next" || arg == "-:":
-			next = true
+			everyMethod = true
 			complete = false
+		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
+			config = true
+			complete = false
+			if arg != "--config" && arg != "-K" || i+1 >= len(args) {
+				continue
+			}
+			i++
 		case strings.HasPrefix(arg, "-"):
 			// Unknown curl flags can change request behavior.
 			complete = false
@@ -1109,7 +1118,11 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		method = "POST"
 	}
 	methods := []string{method}
-	if next {
+	if config {
+		customs = append(customs, "POST", "PUT", "PATCH", "DELETE")
+		everyMethod = true
+	}
+	if everyMethod {
 		methods = append(customs, "GET")
 		for implied, set := range map[string]bool{"HEAD": head, "PUT": upload, "POST": data} {
 			if set {
@@ -1129,7 +1142,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		}
 	}
 	urls = expanded
-	if len(urls) <= 1 && !next && len(overflowed) == 0 {
+	if len(urls) <= 1 && !everyMethod && len(overflowed) == 0 {
 		urlText := ""
 		if len(urls) == 1 {
 			urlText = urls[0]
