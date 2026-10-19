@@ -7,18 +7,20 @@ import (
 )
 
 // ClassifyDatabricksSQL raises the tier of a Databricks SQL text above the
-// SQL base tier, write. It never lowers it.
+// SQL base tier, write. It never lowers it: access is write or a delete or
+// admin form found in any statement, and the caller applies it as is.
 //
-// A delete or admin form found in any statement raises access, and recognized
-// is then true: the tier is proven whatever else the text holds. Otherwise
-// recognized is true only for a single statement of a known write form that
-// runs no dynamic SQL and no function with outside effects. When it is false,
-// access is write and the caller keeps its base tier. touchesSecrets reports
-// a secret() call anywhere, recognized or not.
+// recognized is true only when access is exact: one statement of a known
+// form, lexed to the end, that runs no dynamic SQL, no user-defined function
+// and no function with outside effects. When it is false, access is a lower
+// bound; with nothing raised it is write, the base tier the caller keeps.
+// touchesSecrets reports a secret() call anywhere, recognized or not.
 //
 // ponytail: a keyword scan over a lexer that follows Spark's, not a grammar,
-// so a false positive can only raise a tier. Upgrade path: a parser generated
-// from Spark's SqlBaseParser.g4, if a tier ever needs lowering.
+// so a false positive can only raise a tier. A user-defined function called by
+// its bare name reads as a built-in. Upgrade path: a parser generated from
+// Spark's SqlBaseParser.g4 and the function catalog, if a tier ever needs
+// lowering.
 func ClassifyDatabricksSQL(sql string) (access string, touchesSecrets bool, recognized bool) {
 	tokens, complete := lexDatabricksSQL(sql)
 	tier, statements, known := sqlTierWrite, 0, complete
@@ -41,10 +43,7 @@ func ClassifyDatabricksSQL(sql string) (access string, touchesSecrets bool, reco
 		touchesSecrets = touchesSecrets || secrets
 		known = known && stmtKnown
 	}
-	if tier > sqlTierWrite {
-		return sqlTiers[tier], touchesSecrets, true
-	}
-	return AccessWrite, touchesSecrets, known && statements == 1
+	return sqlTiers[tier], touchesSecrets, known && statements == 1
 }
 
 const (
@@ -55,10 +54,21 @@ const (
 
 var sqlTiers = [...]string{AccessWrite, AccessDelete, AccessAdmin}
 
-// Statement forms that stay at write. Delete and admin forms are found by the
-// scan wherever they sit, so they need no entry.
-var databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "DESC", "EXPLAIN",
-	"INSERT", "UPDATE", "MERGE", "CREATE", "COPY", "SET", "USE")
+// Statement forms whose tier the scan decides. The scan raises any statement
+// wherever a delete or admin form sits; raiseForms are known only once raised.
+var (
+	databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "DESC", "EXPLAIN",
+		"INSERT", "UPDATE", "MERGE", "CREATE", "COPY", "SET", "USE")
+	databricksRaiseForms = setOf("DROP", "DELETE", "TRUNCATE", "VACUUM", "RESTORE", "REMOVE",
+		"GRANT", "REVOKE", "DENY", "ALTER")
+)
+
+// A qualified name before ( is a call unless a table keyword precedes it (a
+// column list) or a query follows (a subquery after a column reference).
+var (
+	databricksTableKeywords = setOf("INTO", "TABLE", "VIEW", "FUNCTION", "EXISTS")
+	databricksQueryStarts   = setOf("SELECT", "WITH", "VALUES", "FROM", "TABLE")
+)
 
 // Objects whose CREATE, ALTER or DROP is administration: access policies,
 // credentials, external locations, Delta Sharing and workspace groups.
@@ -87,7 +97,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 	for first < len(stmt)-1 && stmt[first].is("(") {
 		first++
 	}
-	known = stmt[first].kind == sqlWord && databricksWriteForms[stmt[first].text]
+	opaque := false
 	raise := func(to int) { tier = max(tier, to) }
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
@@ -97,7 +107,17 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 			case databricksSecretFunctions[name]:
 				secrets = true
 			case databricksOpaqueFunctions[name] || strings.HasPrefix(name, "AI_"):
-				known = false
+				opaque = true
+			}
+			builtin := at(i-2).text == "BUILTIN" && (!at(i-3).is(".") || at(i-4).text == "SYSTEM" && !at(i-5).is("."))
+			if prev.is(".") && !builtin && !databricksQueryStarts[at(i+2).text] {
+				start := i - 2 // a qualified call is a user-defined function
+				for at(start - 1).is(".") {
+					start -= 2
+				}
+				if !(at(start-1).kind == sqlWord && databricksTableKeywords[at(start-1).text]) {
+					opaque = true
+				}
 			}
 		}
 		if tok.kind != sqlWord {
@@ -129,7 +149,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 				raise(sqlTierAdmin)
 			}
 		case "EXECUTE", "CALL":
-			known = false
+			opaque = true
 		case "CREATE", "ALTER", "DROP":
 			if tok.text == "DROP" {
 				raise(sqlTierDelete)
@@ -143,13 +163,15 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 			}
 		}
 	}
-	return tier, secrets, known
+	head := stmt[first]
+	known = head.kind == sqlWord && (databricksWriteForms[head.text] || tier > sqlTierWrite && databricksRaiseForms[head.text])
+	return tier, secrets, known && !opaque
 }
 
 const (
 	sqlWord   = iota + 1 // unquoted word, upper-cased: a keyword or a name
 	sqlName              // backtick or double-quoted, upper-cased: never a keyword
-	sqlString            // single-quoted, raw or $$ literal: content dropped
+	sqlString            // single-quoted, raw or dollar-quoted literal: content dropped
 	sqlPunct
 )
 
@@ -163,15 +185,27 @@ func (t sqlToken) is(text string) bool {
 }
 
 // lexDatabricksSQL splits sql the way Spark's SqlBaseLexer does, dropping
-// comments and literal content. complete is false when a quote or comment
-// never closes; the lexer then reads past its opener as code, so a keyword
-// hidden behind an unterminated quote is still seen.
+// comments and literal content. complete is false when a quote, comment or
+// dollar body never closes; the lexer then reads the rest as plain code, with
+// no quotes or comments, so nothing after the opener can hide a keyword and
+// the scan stays linear.
 func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 	complete = true
 	for i := 0; i < len(sql); {
 		rest := sql[i:]
 		r, size := utf8.DecodeRuneInString(rest)
 		switch {
+		case !complete:
+			if isSQLWordRune(r) {
+				j := sqlWordEnd(rest)
+				tokens = append(tokens, sqlToken{kind: sqlWord, text: strings.ToUpper(rest[:j])})
+				i += j
+			} else {
+				if r < utf8.RuneSelf && !unicode.IsSpace(r) {
+					tokens = append(tokens, sqlToken{kind: sqlPunct, text: rest[:1]})
+				}
+				i += size
+			}
 		case strings.HasPrefix(rest, "--"):
 			i += 2
 			for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
@@ -186,14 +220,13 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 			end := sqlCommentEnd(rest)
 			if end < 0 {
 				complete = false
-				end = 2
+				continue
 			}
 			i += end
 		case r == '\'' || r == '"' || r == '`':
 			end := sqlQuoteEnd(rest, r != '`')
 			if end < 0 {
 				complete = false
-				i++
 				continue
 			}
 			if r == '\'' {
@@ -202,31 +235,23 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 				tokens = append(tokens, sqlToken{kind: sqlName, text: strings.ToUpper(rest[1 : end-1])})
 			}
 			i += end
-		case strings.HasPrefix(rest, "$$"):
-			end := strings.Index(rest[2:], "$$")
+		case sqlDollarTag(rest) != "":
+			tag := sqlDollarTag(rest)
+			end := strings.Index(rest[len(tag):], tag)
 			if end < 0 {
 				complete = false
-				i += 2
 				continue
 			}
 			tokens = append(tokens, sqlToken{kind: sqlString})
-			i += 2 + end + 2
+			i += len(tag) + end + len(tag)
 		case isSQLWordRune(r):
-			j := i
-			for j < len(sql) {
-				wr, n := utf8.DecodeRuneInString(sql[j:])
-				if !isSQLWordRune(wr) {
-					break
-				}
-				j += n
-			}
+			j := i + sqlWordEnd(rest)
 			word := sql[i:j]
 			if (word == "r" || word == "R") && j < len(sql) && (sql[j] == '\'' || sql[j] == '"') {
 				// A raw literal: a backslash escapes nothing.
 				end := strings.IndexByte(sql[j+1:], sql[j])
 				if end < 0 {
 					complete = false
-					i = j + 1
 					continue
 				}
 				tokens = append(tokens, sqlToken{kind: sqlString})
@@ -251,6 +276,34 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 // splits words more finely: a keyword is never hidden inside a longer word.
 func isSQLWordRune(r rune) bool {
 	return r == '_' || r != utf8.RuneError && (unicode.IsLetter(r) || unicode.IsDigit(r))
+}
+
+func sqlWordEnd(s string) int {
+	for i, r := range s {
+		if !isSQLWordRune(r) {
+			return i
+		}
+	}
+	return len(s)
+}
+
+// sqlDollarTag returns the $$ or $tag$ that opens a dollar-quoted body at the
+// start of s, or "".
+func sqlDollarTag(s string) string {
+	if !strings.HasPrefix(s, "$") {
+		return ""
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '$':
+			return s[:i+1]
+		case c == '_' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || i > 1 && '0' <= c && c <= '9':
+		default:
+			return ""
+		}
+	}
+	return ""
 }
 
 // sqlCommentEnd returns the length of the nested /* */ comment that starts s,

@@ -3,6 +3,7 @@ package toolcatalog
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClassifyDatabricksSQL(t *testing.T) {
@@ -36,7 +37,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 
 		// Delete forms.
 		{"drop", "DROP TABLE t", AccessDelete, false, true},
-		{"commit then drop", "COMMIT; DROP TABLE t", AccessDelete, false, true},
+		{"commit then drop", "COMMIT; DROP TABLE t", AccessDelete, false, false},
 		{"delete", "DELETE FROM t WHERE a = 1", AccessDelete, false, true},
 		{"delete inside cte", "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d", AccessDelete, false, true},
 		{"delete in subquery", "SELECT * FROM (DELETE FROM t)", AccessDelete, false, true},
@@ -51,7 +52,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"replace where", "INSERT INTO t REPLACE WHERE d = '2026-01-01' SELECT * FROM s", AccessDelete, false, true},
 		{"replace using", "INSERT INTO t REPLACE USING (k) SELECT * FROM s", AccessDelete, false, true},
 		{"replace on", "INSERT INTO t AS t REPLACE ON t.k = s.k (SELECT * FROM s) AS s", AccessDelete, false, true},
-		{"drop inside unknown form", "BEGIN DROP TABLE t; END", AccessDelete, false, true},
+		{"drop inside unknown form", "BEGIN DROP TABLE t; END", AccessDelete, false, false},
 		{"explain drop raises", "EXPLAIN DROP TABLE t", AccessDelete, false, true},
 
 		// Admin forms.
@@ -92,10 +93,16 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"escape ends string", `SELECT 'a\'' DROP TABLE t --'`, AccessDelete, false, true},
 		{"raw string has no escapes", `SELECT r'a\' DROP TABLE t --'`, AccessDelete, false, true},
 		{"line comment continues past backslash", "SELECT 1 -- a\\\n'\nDROP TABLE t\n--'", AccessDelete, false, true},
-		{"hint in comment does not nest", "SELECT 1 /* /*+ */ ; DROP TABLE t; /* */", AccessDelete, false, true},
-		{"unclosed nested comment", "SELECT 1 /* /* */ DROP TABLE t", AccessDelete, false, true},
-		{"unterminated string", "SELECT 'x; DROP TABLE t", AccessDelete, false, true},
-		{"unterminated dollar body", "SELECT $$ x; GRANT ALL ON t TO u", AccessAdmin, false, true},
+		{"hint in comment does not nest", "SELECT 1 /* /*+ */ ; DROP TABLE t; /* */", AccessDelete, false, false},
+		{"unclosed nested comment", "SELECT 1 /* /* */ DROP TABLE t", AccessDelete, false, false},
+		{"unterminated string", "SELECT 'x; DROP TABLE t", AccessDelete, false, false},
+		{"unterminated dollar body", "SELECT $$ x; GRANT ALL ON t TO u", AccessAdmin, false, false},
+		{"tagged dollar body", "CREATE FUNCTION f() RETURNS STRING LANGUAGE PYTHON AS $py$ return 'DROP; $$ GRANT' $py$", AccessWrite, false, true},
+		{"quote in tagged dollar body", "CREATE FUNCTION f() RETURNS STRING LANGUAGE PYTHON AS $py$\n# '\nreturn 'ok'\n$py$;\nDROP TABLE victim;\n-- '", AccessDelete, false, false},
+		{"quote in tagged body then grant", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $a1$ # ' $a1$; GRANT ALL ON t TO u -- '", AccessAdmin, false, false},
+		{"quote in tagged body then secret", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $b$ # ' $b$; SELECT secret('s', 'k') -- '", AccessWrite, true, false},
+		{"unterminated tagged body", "SELECT $t$ x; DROP TABLE t", AccessDelete, false, false},
+		{"dollar without tag is punctuation", "SELECT $1 FROM t", AccessWrite, false, true},
 		{"dotless i spells I", "INSERT OVERWRıTE t SELECT 1", AccessDelete, false, true},
 		{"no-break space separates", "DROP TABLE t", AccessDelete, false, true},
 		{"comment splits words", "DROP/**/TABLE t", AccessDelete, false, true},
@@ -120,6 +127,16 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"quoted http_request", `SELECT "http_request"(conn => 'c')`, AccessWrite, false, false},
 		{"ai_query", "SELECT ai_query('endpoint', 'hi')", AccessWrite, false, false},
 		{"ai function", "SELECT `system`.`ai`.`ai_gen`('hi')", AccessWrite, false, false},
+		{"qualified udf", "SELECT main.default.sign_value('x')", AccessWrite, false, false},
+		{"backticked qualified udf", "SELECT `main`.`default`.`f`(a) FROM t", AccessWrite, false, false},
+		{"table valued udf", "SELECT * FROM main.default.tvf(1)", AccessWrite, false, false},
+		{"udf in a schema named builtin", "SELECT main.builtin.lower(a) FROM t", AccessWrite, false, false},
+		{"builtin qualified", "SELECT system.builtin.lower(a) FROM t", AccessWrite, false, true},
+		{"qualified insert column list", "INSERT INTO main.default.t (a, b) VALUES (1, 2)", AccessWrite, false, true},
+		{"qualified create column list", "CREATE TABLE IF NOT EXISTS main.default.t (a INT)", AccessWrite, false, true},
+		{"delete with opaque call", "DELETE FROM t; EXECUTE IMMEDIATE 'GRANT ALL ON t TO x'", AccessDelete, false, false},
+		{"drop with http_request", "DROP TABLE t; SELECT http_request(conn => 'c')", AccessDelete, false, false},
+		{"single raised unknown form", "OPTIMIZE t WHERE DELETE", AccessDelete, false, false},
 		{"read_files", "SELECT * FROM read_files('s3://bucket/path')", AccessWrite, false, false},
 		{"multiple statements", "SELECT 1; SELECT 2", AccessWrite, false, false},
 		{"alter outside known forms", "ALTER TABLE t ADD COLUMN c INT", AccessWrite, false, false},
@@ -132,7 +149,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"comment only", "-- DROP TABLE t", AccessWrite, false, false},
 
 		{"very long", long, AccessWrite, false, true},
-		{"very long then drop", long + "; DROP TABLE t", AccessDelete, false, true},
+		{"very long then drop", long + "; DROP TABLE t", AccessDelete, false, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -142,5 +159,20 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 					access, secrets, recognized, test.access, test.secrets, test.recognized)
 			}
 		})
+	}
+}
+
+// Malformed input must stay linear: each unterminated opener used to rescan
+// the rest of the text.
+func TestClassifyDatabricksSQLMalformedIsLinear(t *testing.T) {
+	for _, unit := range []string{"/*", `'\`, "$a$", "r'"} {
+		sql := strings.Repeat(unit, 1<<17) + " DROP TABLE t"
+		start := time.Now()
+		if access, _, recognized := ClassifyDatabricksSQL(sql); access != AccessDelete || recognized {
+			t.Errorf("%q x 2^17: got %q, %v; want delete, unrecognized", unit, access, recognized)
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("%q x 2^17 took %v", unit, elapsed)
+		}
 	}
 }
