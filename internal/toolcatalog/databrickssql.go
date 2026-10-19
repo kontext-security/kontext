@@ -150,8 +150,14 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 			if prev.is("SET") || prev.is("UNSET") {
 				raise(sqlTierAdmin)
 			}
-		case "REFRESH": // not CREATE OR REFRESH
-			refresh = refresh || !prev.is("OR")
+		case "REFRESH":
+			if prev.is("OR") {
+				// CREATE OR REFRESH replaces the definition and drops masks and
+				// filters it leaves out, as CREATE OR REPLACE does: delete, so
+				// the deletion preset still matches it.
+				raise(sqlTierDelete)
+			}
+			refresh = true
 		case "FULL", "WHERE": // REFRESH … FULL truncates; REFRESH … WHERE deletes the rows it matches
 			if refresh {
 				raise(sqlTierDelete)
@@ -316,12 +322,15 @@ func sqlDollarTag(s string) string {
 }
 
 // sqlCommentEnd returns the length of the nested /* */ comment that starts s,
-// or -1 if it never closes. As in Spark, /*+ inside a comment does not nest.
+// or -1 if it never closes. A /*+ inside a comment nests in newer Spark lexers
+// and not in older ones, so it returns -1 there too: the rest reads as code.
 func sqlCommentEnd(s string) int {
 	depth := 0
 	for i := 0; i < len(s); {
 		switch {
-		case strings.HasPrefix(s[i:], "/*") && (depth == 0 || !strings.HasPrefix(s[i:], "/*+")):
+		case depth > 0 && strings.HasPrefix(s[i:], "/*+"):
+			return -1
+		case strings.HasPrefix(s[i:], "/*"):
 			depth++
 			i += 2
 		case strings.HasPrefix(s[i:], "*/"):
