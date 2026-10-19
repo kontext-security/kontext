@@ -87,9 +87,9 @@ type sdkOperation struct {
 }
 
 var (
-	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials)$`)
+	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|single_user_name|ssh_public_keys)$`)
 	databricksReadSuffix = regexp.MustCompile(`(?i)[/:](batch)?(get|list|search|query|export|scan)([-_][a-z0-9_-]*)?$`)
-	databricksDelete     = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge|Remove|Clear|Trash|Truncate|Drop)`)
+	databricksDelete     = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge|Remove|Clear|Trash|Truncate|Drop|Pop)`)
 	databricksPermission = regexp.MustCompile(`^(Get|Set|Update)Permissions$|^GetPermissionLevels$`)
 	sprintfVerb          = regexp.MustCompile(`%[^v]`)
 	accessRankDatabricks = map[string]int{"read": 0, "write": 1, "delete": 2, "admin": 3}
@@ -254,11 +254,9 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 		return nil, nil, fmt.Errorf("databricks route table: give these services a product in databricksServiceProducts:\n  %s", strings.Join(unmapped, "\n  "))
 	}
 
-	table := &databricksTable{CLI: cliVersion, SDK: sdkVersion}
-	var postReads, adminByPayload, suggestedReads []string
+	entries := map[string]*databricksEntry{}
 	for _, op := range index.operations {
-		entry := databricksEntry{Operation: op.id, Client: databricksClient(op, index, commands[op.id]), Method: op.method, Path: op.path, Commands: commands[op.id]}
-		entry.Product = databricksProduct(op)
+		entry := &databricksEntry{Operation: op.id, Method: op.method, Path: op.path, Product: databricksProduct(op)}
 		if op.method == "POST" || op.method == "PUT" || op.method == "PATCH" {
 			for _, field := range op.bodyFields {
 				if databricksAdminField.MatchString(field[strings.LastIndex(field, ".")+1:]) {
@@ -267,31 +265,54 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 			}
 		}
 		entry.Access = databricksAccess(op, entry.Product, len(entry.AdminFields) > 0)
+		entries[op.id] = entry
+	}
+
+	// A command takes the strictest operation it calls, so a mutation
+	// followed by a status read stays a mutation. Hand-kept commands take
+	// over generated ones of the same name.
+	handCommands := map[string]bool{}
+	for _, hand := range databricksHandCommands {
+		for _, command := range hand.Commands {
+			handCommands[command] = true
+		}
+	}
+	var multiple []string
+	for _, command := range sortedKeys(commands) {
+		if handCommands[command] {
+			continue
+		}
+		ops := commands[command]
+		chosen := ops[0]
+		for _, op := range ops[1:] {
+			if accessRankDatabricks[entries[op].Access] >= accessRankDatabricks[entries[chosen].Access] {
+				chosen = op
+			}
+		}
+		if len(ops) > 1 {
+			multiple = append(multiple, fmt.Sprintf("`%s` calls %s; kept %s", command, strings.Join(ops, ", "), chosen))
+		}
+		entries[chosen].Commands = append(entries[chosen].Commands, command)
+	}
+
+	table := &databricksTable{CLI: cliVersion, SDK: sdkVersion}
+	var postReads, adminByPayload, suggestedReads []string
+	for _, op := range index.operations {
+		entry := entries[op.id]
+		entry.Client = databricksClient(op, index, entry.Commands)
 		line := fmt.Sprintf("`%s %s` %s (%s)", op.method, op.path, op.id, strings.Join(entry.Commands, ", "))
 		switch {
 		case entry.Access == "read" && op.method == "POST":
 			postReads = append(postReads, line)
-		case entry.Access == "admin" && entry.Product != "admin":
+		case entry.Access == "admin" && entry.Product != "admin" && len(entry.AdminFields) > 0:
 			adminByPayload = append(adminByPayload, fmt.Sprintf("%s: %s", line, strings.Join(entry.AdminFields, ", ")))
 		}
 		if entry.Access != "read" && op.method == "POST" && databricksReadSuffix.MatchString(op.path) {
 			suggestedReads = append(suggestedReads, line)
 		}
-		table.Routes = append(table.Routes, entry)
+		table.Routes = append(table.Routes, *entry)
 	}
-	handCommands := map[string]bool{}
-	for _, hand := range databricksHandCommands {
-		table.Routes = append(table.Routes, hand)
-		for _, command := range hand.Commands {
-			handCommands[command] = true
-		}
-	}
-	for i := range table.Routes[:len(index.operations)] {
-		table.Routes[i].Commands = slices.DeleteFunc(table.Routes[i].Commands, func(command string) bool { return handCommands[command] })
-		if len(table.Routes[i].Commands) == 0 {
-			table.Routes[i].Commands = nil
-		}
-	}
+	table.Routes = append(table.Routes, databricksHandCommands...)
 	sort.Slice(table.Routes, func(i, j int) bool {
 		a, b := table.Routes[i], table.Routes[j]
 		if a.Path != b.Path {
@@ -324,6 +345,7 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 		{"Admin because the body can carry an owner or permissions", adminByPayload},
 		{"POST routes whose path suggests a read (still write until reviewed)", suggestedReads},
 		{"CLI commands whose SDK call is not a route (unclassified)", unresolved},
+		{"CLI commands that call several operations", multiple},
 		{"Reviewed entries that match nothing upstream", stale},
 	} {
 		sort.Strings(section.lines)
@@ -377,10 +399,13 @@ func databricksProduct(op *sdkOperation) string {
 
 func databricksAccess(op *sdkOperation, product string, adminBody bool) string {
 	switch {
-	case op.method == "GET" || op.method == "HEAD" || (op.method == "POST" && databricksPostReads[op.id]):
+	case op.method == "GET" || op.method == "HEAD":
 		return "read"
 	case product == "admin" || adminBody || databricksAdminOperations[op.id]:
+		// Admin evidence beats the POST-read allowlist.
 		return "admin"
+	case op.method == "POST" && databricksPostReads[op.id]:
+		return "read"
 	case op.method == "DELETE" || databricksDelete.MatchString(op.name):
 		return "delete"
 	default:
@@ -868,6 +893,7 @@ type sdkCall struct {
 // parseCLI returns, per operation, the CLI commands that call it, plus the
 // commands whose call it could not place.
 func parseCLI(cli sourceTree, index *sdkIndex) (map[string][]string, []string, error) {
+	// commands maps each `<group> <verb>` to the operations it calls.
 	fileSet := token.NewFileSet()
 	packages := map[string]*cliPackage{}
 	roots := map[string][]string{}
@@ -949,12 +975,16 @@ func parseCLI(cli sourceTree, index *sdkIndex) (map[string][]string, []string, e
 		group := strings.TrimSpace(prefix + " " + pkg.group)
 		for _, verb := range sortedKeys(pkg.commands) {
 			command := group + " " + verb
-			op, display := resolveCommand(pkg.commands[verb], index)
-			if op == "" {
+			ops, display := resolveCommand(pkg.commands[verb], index)
+			if len(ops) == 0 {
 				unresolved = append(unresolved, fmt.Sprintf("`%s` (%s)", command, display))
 				continue
 			}
-			commands[op] = append(commands[op], command)
+			for _, op := range ops {
+				if !slices.Contains(commands[command], op) {
+					commands[command] = append(commands[command], op)
+				}
+			}
 		}
 		for _, child := range pkg.children {
 			if err := walk(child, group, depth+1); err != nil {
@@ -973,28 +1003,15 @@ func parseCLI(cli sourceTree, index *sdkIndex) (map[string][]string, []string, e
 			}
 		}
 	}
-	for op := range commands {
-		sort.Strings(commands[op])
-		commands[op] = slicesCompact(commands[op])
-	}
 	return commands, unresolved, nil
 }
 
-func slicesCompact(values []string) []string {
-	out := values[:0]
-	for i, value := range values {
-		if i == 0 || value != values[i-1] {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-// resolveCommand picks the operation a command runs: the last SDK call that
-// is an operation, skipping name-to-id lookups and the accessor in
-// w.Settings.X().Get.
-func resolveCommand(calls []sdkCall, index *sdkIndex) (string, string) {
-	op, display := "", "no SDK call"
+// resolveCommand lists the operations a command calls, skipping name-to-id
+// lookups and the accessor in w.Settings.X().Get; display names the last
+// SDK call for the report when none is an operation.
+func resolveCommand(calls []sdkCall, index *sdkIndex) ([]string, string) {
+	var ops []string
+	display := "no SDK call"
 	for _, call := range calls {
 		service := index.clients[call.client][call.field]
 		if service == "" || strings.HasSuffix(call.method, "Map") {
@@ -1005,11 +1022,11 @@ func resolveCommand(calls []sdkCall, index *sdkIndex) (string, string) {
 			service = pkg + "." + call.sub
 		}
 		display = call.display
-		if index.operations[service+"."+call.method] != nil {
-			op = service + "." + call.method
+		if op := service + "." + call.method; index.operations[op] != nil && !slices.Contains(ops, op) {
+			ops = append(ops, op)
 		}
 	}
-	return op, display
+	return ops, display
 }
 
 // cobraUse reads the first word of Use in New's &cobra.Command{...}.
@@ -1333,11 +1350,13 @@ var databricksOperationProducts = map[string]string{
 	"jobs.Jobs.RunNow":                                       "execution",
 	"jobs.Jobs.Submit":                                       "execution",
 	"ml.ModelRegistry.TestRegistryWebhook":                   "execution",
+	"serving.ServingEndpoints.HttpRequest":                   "execution",
 	"pipelines.Pipelines.StartUpdate":                        "execution",
 	"dashboards.Genie.CreateMessage":                         "sql",
 	"dashboards.Genie.ExecuteMessageAttachmentQuery":         "sql",
 	"dashboards.Genie.ExecuteMessageQuery":                   "sql",
 	"dashboards.Genie.GenerateDownloadFullQueryResult":       "sql",
+	"dashboards.Genie.GenieCreateEvalRun":                    "sql",
 	"dashboards.Genie.StartConversation":                     "sql",
 	"catalog.AiGateway.CreateMcpServiceUserMappedCredential": "secrets",
 	"catalog.AiGateway.DeleteMcpServiceUserMappedCredential": "secrets",
@@ -1352,10 +1371,22 @@ var databricksOperationProducts = map[string]string{
 // or body field that says so: database roles (superuser, createrole,
 // bypassrls) and database owners (spec.role), secret ACLs, the
 // workspace-wide warehouse security config, credentials minted, changed or
-// revoked for another identity (git credentials take a principal_id), and
-// clean-room approvals that let collaborators' notebooks run unreviewed.
+// revoked for another identity (git credentials take a principal_id, a
+// recipient token is another party's), clean-room approvals that let
+// collaborators' notebooks run unreviewed, cluster policies (the access
+// mode rules live in a JSON string), marketplace exchange filters (who may
+// see a private exchange), and the external HTTP proxy, whose method and
+// path the caller picks.
 var databricksAdminOperations = map[string]bool{
 	"cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview": true,
+	"compute.ClusterPolicies.Create":                        true,
+	"compute.ClusterPolicies.Delete":                        true,
+	"compute.ClusterPolicies.Edit":                          true,
+	"marketplace.ProviderExchangeFilters.Create":            true,
+	"marketplace.ProviderExchangeFilters.Delete":            true,
+	"marketplace.ProviderExchangeFilters.Update":            true,
+	"serving.ServingEndpoints.HttpRequest":                  true,
+	"sharing.Recipients.RotateToken":                        true,
 	"cleanrooms.CleanRoomAutoApprovalRules.Create":          true,
 	"cleanrooms.CleanRoomAutoApprovalRules.Delete":          true,
 	"cleanrooms.CleanRoomAutoApprovalRules.Update":          true,
@@ -1400,12 +1431,14 @@ var databricksPostReads = map[string]bool{
 
 // databricksHandCommands are hand-written CLI commands that run many
 // requests rather than one route, and generated commands the CLI overloads
-// (apps deploy without an app name deploys the bundle). bundle deploy applies
+// (without an app name, apps deploy deploys the bundle and apps delete
+// destroys it). bundle deploy applies
 // the bundle's permissions blocks through SetPermissions, and bundle destroy
 // can delete Postgres roles, so all three are admin unless the caller
 // inspects the bundle. A command listed here is dropped
 // from the operation it would otherwise map to.
 var databricksHandCommands = []databricksEntry{
+	{Operation: "cli.apps.delete", Commands: []string{"apps delete"}, Product: "workloads", Access: "admin"},
 	{Operation: "cli.apps.deploy", Commands: []string{"apps deploy"}, Product: "execution", Access: "admin"},
 	{Operation: "cli.bundle.deploy", Commands: []string{"bundle deploy"}, Product: "execution", Access: "admin"},
 	{Operation: "cli.bundle.destroy", Commands: []string{"bundle destroy"}, Product: "workloads", Access: "admin"},

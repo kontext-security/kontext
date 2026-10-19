@@ -3,6 +3,14 @@
   "sdk": "v0.188.0",
   "routes": [
     {
+      "operation": "cli.apps.delete",
+      "commands": [
+        "apps delete"
+      ],
+      "product": "workloads",
+      "access": "admin"
+    },
+    {
       "operation": "cli.apps.deploy",
       "commands": [
         "apps deploy"
@@ -2279,7 +2287,7 @@
         "agent-kit pop-session-item"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "mason.Mason.PopSessionItem",
@@ -2287,7 +2295,7 @@
       "method": "POST",
       "path": "/api/2.0/agents/{parent}/items:pop",
       "product": "ai",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "agentkit.AgentKit.ListSessions",
@@ -2892,9 +2900,6 @@
       "client": "workspace",
       "method": "DELETE",
       "path": "/api/2.0/apps/{name}",
-      "commands": [
-        "apps delete"
-      ],
       "product": "workloads",
       "access": "delete"
     },
@@ -4068,8 +4073,8 @@
       "commands": [
         "serving-endpoints http-request"
       ],
-      "product": "ai",
-      "access": "write"
+      "product": "execution",
+      "access": "admin"
     },
     {
       "operation": "ml.FeatureEngineering.ListFeatures",
@@ -4822,7 +4827,7 @@
       "commands": [
         "genie genie-create-eval-run"
       ],
-      "product": "ai",
+      "product": "sql",
       "access": "write"
     },
     {
@@ -6515,7 +6520,7 @@
         "provider-exchange-filters create"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderExchangeFilters.Delete",
@@ -6526,7 +6531,7 @@
         "provider-exchange-filters delete"
       ],
       "product": "data",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderExchangeFilters.Update",
@@ -6537,7 +6542,7 @@
         "provider-exchange-filters update"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderExchanges.ListListingsForExchange",
@@ -8578,6 +8583,7 @@
       "product": "workloads",
       "access": "admin",
       "adminFields": [
+        "clusters.ssh_public_keys",
         "run_as"
       ]
     },
@@ -8614,6 +8620,7 @@
       "product": "workloads",
       "access": "admin",
       "adminFields": [
+        "clusters.ssh_public_keys",
         "run_as"
       ]
     },
@@ -8626,7 +8633,10 @@
         "pipelines clone"
       ],
       "product": "workloads",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "clusters.ssh_public_keys"
+      ]
     },
     {
       "operation": "pipelines.Pipelines.ApplyEnvironment",
@@ -8703,7 +8713,7 @@
         "cluster-policies create"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "compute.ClusterPolicies.Delete",
@@ -8714,7 +8724,7 @@
         "cluster-policies delete"
       ],
       "product": "compute",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "compute.ClusterPolicies.Edit",
@@ -8725,7 +8735,7 @@
         "cluster-policies edit"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "compute.PolicyComplianceForClusters.EnforceCompliance",
@@ -12118,7 +12128,11 @@
         "clusters create"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "single_user_name",
+        "ssh_public_keys"
+      ]
     },
     {
       "operation": "compute.Clusters.Delete",
@@ -12140,7 +12154,11 @@
         "clusters edit"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "single_user_name",
+        "ssh_public_keys"
+      ]
     },
     {
       "operation": "compute.Clusters.Events",
@@ -12283,7 +12301,11 @@
         "clusters update"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "cluster.single_user_name",
+        "cluster.ssh_public_keys"
+      ]
     },
     {
       "operation": "sharing.Providers.ListProviderShareAssets",
@@ -13640,7 +13662,7 @@
         "recipients rotate-token"
       ],
       "product": "secrets",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "sharing.Recipients.SharePermissions",
@@ -14770,7 +14792,11 @@
       "access": "admin",
       "adminFields": [
         "access_control_list",
-        "run_as"
+        "job_clusters.new_cluster.single_user_name",
+        "job_clusters.new_cluster.ssh_public_keys",
+        "run_as",
+        "tasks.new_cluster.single_user_name",
+        "tasks.new_cluster.ssh_public_keys"
       ]
     },
     {
@@ -14817,7 +14843,11 @@
       "product": "workloads",
       "access": "admin",
       "adminFields": [
-        "new_settings.run_as"
+        "new_settings.job_clusters.new_cluster.single_user_name",
+        "new_settings.job_clusters.new_cluster.ssh_public_keys",
+        "new_settings.run_as",
+        "new_settings.tasks.new_cluster.single_user_name",
+        "new_settings.tasks.new_cluster.ssh_public_keys"
       ]
     },
     {
@@ -14931,7 +14961,11 @@
       "access": "admin",
       "adminFields": [
         "access_control_list",
-        "run_as"
+        "run_as",
+        "tasks.for_each_task.task.new_cluster.single_user_name",
+        "tasks.for_each_task.task.new_cluster.ssh_public_keys",
+        "tasks.new_cluster.single_user_name",
+        "tasks.new_cluster.ssh_public_keys"
       ]
     },
     {
@@ -14945,7 +14979,11 @@
       "product": "workloads",
       "access": "admin",
       "adminFields": [
-        "new_settings.run_as"
+        "new_settings.job_clusters.new_cluster.single_user_name",
+        "new_settings.job_clusters.new_cluster.ssh_public_keys",
+        "new_settings.run_as",
+        "new_settings.tasks.new_cluster.single_user_name",
+        "new_settings.tasks.new_cluster.ssh_public_keys"
       ]
     },
     {

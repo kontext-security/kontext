@@ -120,6 +120,14 @@ func TestDatabricksCommand(t *testing.T) {
 		{"genie", "start-conversation", "dashboards.Genie.StartConversation", "workspace", "sql", "write"},
 		{"genie", "create-message", "dashboards.Genie.CreateMessage", "workspace", "sql", "write"},
 		{"ai-gateway", "create-mcp-service-user-mapped-credential", "catalog.AiGateway.CreateMcpServiceUserMappedCredential", "workspace", "secrets", "write"},
+		{"cluster-policies", "edit", "compute.ClusterPolicies.Edit", "workspace", "compute", "admin"},
+		{"provider-exchange-filters", "create", "marketplace.ProviderExchangeFilters.Create", "workspace", "data", "admin"},
+		{"provider-exchange-filters", "delete", "marketplace.ProviderExchangeFilters.Delete", "workspace", "data", "admin"},
+		{"recipients", "rotate-token", "sharing.Recipients.RotateToken", "workspace", "secrets", "admin"},
+		{"serving-endpoints", "http-request", "serving.ServingEndpoints.HttpRequest", "workspace", "execution", "admin"},
+		{"agent-kit", "pop-session-item", "agentkit.AgentKit.PopSessionItem", "workspace", "ai", "delete"},
+		// Without an app name, apps delete destroys the bundle.
+		{"apps", "delete", "cli.apps.delete", "", "workloads", "admin"},
 		// bundle deploy applies permissions blocks; destroy can drop Postgres roles.
 		{"bundle", "destroy", "cli.bundle.destroy", "", "workloads", "admin"},
 		{"bundle", "deploy", "cli.bundle.deploy", "", "execution", "admin"},

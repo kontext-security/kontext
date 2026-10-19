@@ -316,6 +316,19 @@ func newList() *cobra.Command {
 	return cmd
 }
 
+// A mutation followed by a status read keeps the mutation's tier.
+func newEditAndList() *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.Use = "edit-and-list"
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		w := cmdctx.WorkspaceClient(ctx)
+		err := w.Clusters.Edit(ctx, editReq)
+		response := w.Clusters.List(ctx, listReq)
+		return cmdio.RenderIterator(ctx, response)
+	}
+	return cmd
+}
+
 func newExplode() *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Use = "explode"
@@ -422,7 +435,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 		"compute.Clusters.GetDetails":      {Operation: "compute.Clusters.GetDetails", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/get-details", Product: "compute", Access: "write"},
 		"compute.Clusters.List":            {Operation: "compute.Clusters.List", Client: "workspace", Method: "GET", Path: "/api/2.1/clusters/list", Commands: []string{"clusters list"}, Product: "compute", Access: "read"},
 		"compute.Clusters.ChangeOwner":     {Operation: "compute.Clusters.ChangeOwner", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/change-owner", Commands: []string{"clusters change-owner"}, Product: "compute", Access: "admin", AdminFields: []string{"owner_username"}},
-		"compute.Clusters.Edit":            {Operation: "compute.Clusters.Edit", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/edit", Product: "compute", Access: "admin", AdminFields: []string{"spec.access_control_list", "rules.owner"}},
+		"compute.Clusters.Edit":            {Operation: "compute.Clusters.Edit", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/edit", Commands: []string{"clusters edit-and-list"}, Product: "compute", Access: "admin", AdminFields: []string{"spec.access_control_list", "rules.owner"}},
 		"compute.Clusters.GetPermissions":  {Operation: "compute.Clusters.GetPermissions", Client: "workspace", Method: "GET", Path: "/api/2.0/permissions/clusters/{cluster_id}", Product: "admin", Access: "read"},
 		"compute.CommandExecution.Execute": {Operation: "compute.CommandExecution.Execute", Client: "workspace", Method: "POST", Path: "/api/1.2/commands/execute", Commands: []string{"clusters execute"}, Product: "execution", Access: "write"},
 		"iam.AccountGroups.Delete":         {Operation: "iam.AccountGroups.Delete", Client: "account", Method: "DELETE", Path: "/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}", Commands: []string{"account groups delete"}, Product: "admin", Access: "admin"},
@@ -450,12 +463,29 @@ func TestBuildDatabricksTable(t *testing.T) {
 	for _, line := range []string{
 		"| execution | 5 |",
 		"`POST /api/2.1/clusters/events` compute.Clusters.Events ()",
-		"`POST /api/2.1/clusters/edit` compute.Clusters.Edit (): spec.access_control_list, rules.owner",
+		"`POST /api/2.1/clusters/edit` compute.Clusters.Edit (clusters edit-and-list): spec.access_control_list, rules.owner",
+		"`clusters edit-and-list` calls compute.Clusters.Edit, compute.Clusters.List; kept compute.Clusters.Edit",
 		"## POST routes whose path suggests a read (still write until reviewed) (1)",
 		"`clusters explode` (w.Clusters.ExplodeAll)",
 	} {
 		if !strings.Contains(text, line) {
 			t.Errorf("report lacks %q:\n%s", line, text)
+		}
+	}
+}
+
+// An owner field on an allowlisted POST read wins over the allowlist.
+func TestBuildDatabricksTableAdminBeatsPostRead(t *testing.T) {
+	cli, sdk := databricksFixtures()
+	model := string(sdk["service/compute/model.go"])
+	sdk["service/compute/model.go"] = []byte(strings.Replace(model, "type GetEvents struct {\n", "type GetEvents struct {\n\tOwner string `json:\"owner\"`\n", 1))
+	table, _, err := buildDatabricksTable(cli, sdk, "v1.21.0", "v0.188.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range table.Routes {
+		if entry.Operation == "compute.Clusters.Events" && (entry.Access != "admin" || !reflect.DeepEqual(entry.AdminFields, []string{"owner"})) {
+			t.Fatalf("Events = %s %v, want admin [owner]", entry.Access, entry.AdminFields)
 		}
 	}
 }
