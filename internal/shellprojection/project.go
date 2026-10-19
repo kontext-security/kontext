@@ -148,7 +148,10 @@ func oneArgument(word *syntax.Word) bool {
 func quotedOneArgument(parts []syntax.WordPart) bool {
 	for _, part := range parts {
 		switch part := part.(type) {
-		case *syntax.Lit, *syntax.SglQuoted, *syntax.CmdSubst, *syntax.ArithmExp:
+		// Inside double quotes a single quote is not a quote: in
+		// "${A:-'$@'}" the $@ still splits, so a SglQuoted part is not
+		// accepted.
+		case *syntax.Lit, *syntax.CmdSubst, *syntax.ArithmExp:
 		case *syntax.DblQuoted:
 			if !quotedOneArgument(part.Parts) {
 				return false
