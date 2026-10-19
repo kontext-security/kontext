@@ -61,7 +61,7 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	project := filepath.Join(home, "src/app")
 	const atlassian = `{"type":"http","url":"https://mcp.atlassian.com/v1/mcp"}`
 	writeConfig(t, filepath.Join(home, ".claude.json"), `{
-  "mcpServers": {"work": `+atlassian+`, "tickets": {"url": "https://mcp.linear.app/sse"}, "bridge": {"command": "npx", "args": ["mcp-remote", "https://mcp.atlassian.com/v1/sse"]}},
+  "mcpServers": {"work": `+atlassian+`, "tickets": {"url": "https://mcp.linear.app/sse"}, "0f6a1c2d-3b4e-4f5a-8b6c-7d8e9f0a1b2c": `+atlassian+`, "bridge": {"command": "npx", "args": ["mcp-remote", "https://mcp.atlassian.com/v1/sse"]}},
   "projects": {
     "`+project+`": {"mcpServers": {"local.desk": `+atlassian+`}},
     "`+filepath.Join(home, "src/shadow")+`": {},
@@ -135,6 +135,7 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		{"desktop connector by name", "claude", "", "mcp__" + connectorName + "__createTeam", risk.DecisionDeny},
 		{"desktop connector in cowork", "cowork", "", "mcp__" + strings.ToUpper(connectorURL) + "__createTeam", risk.DecisionDeny},
 		{"cowork connector by name only", "cowork", "", "mcp__" + coworkConnector + "__createTeam", risk.DecisionDeny},
+		{"configured server with a UUID name", "claude", project, "mcp__0f6a1c2d-3b4e-4f5a-8b6c-7d8e9f0a1b2c__createTeam", risk.DecisionDeny},
 		{"unknown desktop connector", "claude", "", "mcp__0d4c6e3a-1111-4222-8333-944445555666__createTeam", risk.DecisionAllow},
 		{"unlisted server", "claude", project, "mcp__elsewhere__createTeam", risk.DecisionAllow},
 		{"unknown agent", "gemini", project, "mcp__work__createTeam", risk.DecisionAllow},

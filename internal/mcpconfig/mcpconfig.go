@@ -122,9 +122,12 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 	}
 	switch agent {
 	case "claude", "claude-code", "claude_code", "cowork", "claude-cowork", "claude_cowork":
-		// Claude Desktop names a claude.ai connector's tools by its UUID.
+		// Claude Desktop names a claude.ai connector's tools by its UUID. A
+		// UUID no session record lists may still be a configured server.
 		if uuidPattern.MatchString(server) {
-			return r.desktopConnector(home, sessionID, server)
+			if url, name, found := r.desktopConnector(home, sessionID, server); found {
+				return url, name
+			}
 		}
 	}
 	return r.configURL(home, agent, cwd, server), ""
@@ -243,9 +246,9 @@ type desktopSession struct {
 // desktopConnector resolves a connector UUID through the Claude Desktop
 // session record whose cliSessionId is the hook's session id. Records are
 // tried newest first, since the calling session is active.
-func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name string) {
+func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name string, found bool) {
 	if sessionID == "" {
-		return "", ""
+		return "", "", false
 	}
 	var paths []string
 	for _, dir := range []string{"claude-code-sessions", "local-agent-mode-sessions"} {
@@ -266,11 +269,11 @@ func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name s
 		}
 		for _, connector := range session.Connectors {
 			if strings.EqualFold(connector.UUID, server) {
-				return strings.TrimSpace(connector.URL), connector.Name
+				return strings.TrimSpace(connector.URL), connector.Name, true
 			}
 		}
 	}
-	return "", ""
+	return "", "", false
 }
 
 // plugin resolves a plugin's MCP server, which Claude Code names
