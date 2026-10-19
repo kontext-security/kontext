@@ -60,7 +60,7 @@ var (
 	databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "DESC", "EXPLAIN",
 		"INSERT", "UPDATE", "MERGE", "CREATE", "COPY", "SET", "USE")
 	databricksRaiseForms = setOf("DROP", "DELETE", "TRUNCATE", "VACUUM", "RESTORE", "REMOVE",
-		"GRANT", "REVOKE", "DENY", "ALTER", "REFRESH")
+		"GRANT", "REVOKE", "DENY", "ALTER", "REFRESH", "MSCK", "REPAIR")
 )
 
 // A qualified name before ( is a call unless a table keyword precedes it: a
@@ -97,7 +97,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 	for first < len(stmt)-1 && stmt[first].is("(") {
 		first++
 	}
-	opaque, refresh := false, false
+	opaque, refresh, repair := false, false, false
 	raise := func(to int) { tier = max(tier, to) }
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
@@ -162,6 +162,16 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 			if refresh {
 				raise(sqlTierDelete)
 			}
+		case "REPAIR":
+			repair = true
+		case "PRIVILEGES": // MSCK REPAIR … PRIVILEGES revokes grants
+			if repair {
+				raise(sqlTierAdmin)
+			}
+		case "SYNC": // MSCK REPAIR TABLE … SYNC PARTITIONS drops stale partitions
+			if repair && next.is("PARTITIONS") {
+				raise(sqlTierDelete)
+			}
 		case "EXECUTE", "CALL":
 			opaque = true
 		case "CREATE", "ALTER", "DROP":
@@ -201,8 +211,8 @@ func (t sqlToken) is(text string) bool {
 // lexDatabricksSQL splits sql the way Spark's SqlBaseLexer does, dropping
 // comments and literal content. complete is false when a quote, comment or
 // dollar body never closes; the lexer then reads the rest as plain code, with
-// no quotes or comments, so nothing after the opener can hide a keyword and
-// the scan stays linear.
+// no quotes or comments, so nothing after the opener can hide a keyword or a
+// call and the scan stays linear.
 func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 	complete = true
 	for i := 0; i < len(sql); {
@@ -215,7 +225,9 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 				tokens = append(tokens, sqlToken{kind: sqlWord, text: strings.ToUpper(rest[:j])})
 				i += j
 			} else {
-				if r < utf8.RuneSelf && !unicode.IsSpace(r) {
+				// Quotes split words but leave no token, so a quoted
+				// `secret`( still reads as a call.
+				if r < utf8.RuneSelf && !unicode.IsSpace(r) && !strings.ContainsRune("'\"`", r) {
 					tokens = append(tokens, sqlToken{kind: sqlPunct, text: rest[:1]})
 				}
 				i += size
@@ -253,7 +265,9 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 		case sqlDollarTag(rest) != "":
 			tag := sqlDollarTag(rest)
 			end := strings.Index(rest[len(tag):], tag)
-			if end < 0 {
+			// Spark matches the closing tag on upper-cased characters. If that
+			// could close the body anywhere else, read the rest as code.
+			if end < 0 || !sqlSameClose(rest[len(tag):len(tag)+end], tag) {
 				complete = false
 				continue
 			}
@@ -303,22 +317,24 @@ func sqlWordEnd(s string) int {
 }
 
 // sqlDollarTag returns the $$ or $tag$ that opens a dollar-quoted body at the
-// start of s, or "".
+// start of s, or "". It takes any word as a tag: outside a body, Spark SQL has
+// no other use for $, so a wider tag only reads a statement Spark rejects.
 func sqlDollarTag(s string) string {
 	if !strings.HasPrefix(s, "$") {
 		return ""
 	}
-	for i := 1; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c == '$':
-			return s[:i+1]
-		case c == '_' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || i > 1 && '0' <= c && c <= '9':
-		default:
-			return ""
-		}
+	end := 1 + sqlWordEnd(s[1:])
+	if end < len(s) && s[end] == '$' {
+		return s[:end+1]
 	}
 	return ""
+}
+
+// sqlSameClose reports whether no upper-cased variant of tag appears in body
+// or overlaps its exact closing tag, so either matching rule closes it there.
+func sqlSameClose(body, tag string) bool {
+	upper := strings.ToUpper(body)
+	return strings.Index(strings.ToUpper(body+tag), strings.ToUpper(tag)) == len(upper)
 }
 
 // sqlCommentEnd returns the length of the nested /* */ comment that starts s,
