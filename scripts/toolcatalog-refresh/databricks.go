@@ -87,10 +87,10 @@ type sdkOperation struct {
 }
 
 var (
-	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|access_token|single_user_name|ssh_public_keys)$`)
+	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|access_token|single_user_name|ssh_public_keys|enable_pg_native_login|jwt_role_claim_key)$`)
 	databricksReadSuffix = regexp.MustCompile(`(?i)[/:](batch)?(get|list|search|query|export|scan)([-_][a-z0-9_-]*)?$`)
 	databricksDelete     = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge|Remove|Clear|Trash|Truncate|Drop|Pop)`)
-	databricksPermission = regexp.MustCompile(`^(Get|Set|Update)Permissions$|^GetPermissionLevels$`)
+	databricksPermission = regexp.MustCompile(`^(Get|Set|Update|Share)Permissions$|^GetPermissionLevels$`)
 	sprintfVerb          = regexp.MustCompile(`%[^v]`)
 	accessRankDatabricks = map[string]int{"read": 0, "write": 1, "delete": 2, "admin": 3}
 )
@@ -1012,8 +1012,8 @@ func parseCLI(cli sourceTree, index *sdkIndex) (map[string][]string, []string, e
 }
 
 // resolveCommand lists the operations a command calls, skipping name-to-id
-// lookups and the accessor in w.Settings.X().Get; display names the last
-// SDK call for the report when none is an operation.
+// lookups. Any other SDK call that is not an operation leaves the command
+// unresolved; display names it.
 func resolveCommand(calls []sdkCall, index *sdkIndex) ([]string, string) {
 	var ops []string
 	display := "no SDK call"
@@ -1031,7 +1031,12 @@ func resolveCommand(calls []sdkCall, index *sdkIndex) ([]string, string) {
 		if alias := databricksCommandAliases[op]; alias != "" {
 			op = alias
 		}
-		if index.operations[op] != nil && !slices.Contains(ops, op) {
+		if index.operations[op] == nil {
+			// An SDK call that is no route could be the mutation; leave the
+			// command unclassified rather than judge it by the calls left.
+			return nil, display
+		}
+		if !slices.Contains(ops, op) {
 			ops = append(ops, op)
 		}
 	}
@@ -1085,9 +1090,12 @@ func firstWord(text string) string {
 // w.Field.Sub().Method(...) calls in source order.
 func sdkCalls(body *ast.BlockStmt) []sdkCall {
 	var calls []sdkCall
+	// accessors are the X() in w.Field.X().Method(...); Inspect reaches the
+	// outer call first.
+	accessors := map[*ast.CallExpr]bool{}
 	ast.Inspect(body, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
-		if !ok {
+		if !ok || accessors[call] {
 			return true
 		}
 		method, ok := call.Fun.(*ast.SelectorExpr)
@@ -1104,6 +1112,7 @@ func sdkCalls(body *ast.BlockStmt) []sdkCall {
 			if !ok || len(receiver.Args) != 0 {
 				return true
 			}
+			accessors[receiver] = true
 			field, ok := sub.X.(*ast.SelectorExpr)
 			if !ok {
 				return true
@@ -1352,7 +1361,7 @@ var databricksServiceProducts = map[string]string{
 // not fit: running code now or deploying it (execution; testing a job
 // webhook runs the job), running SQL (sql; a Genie message generates and runs
 // it) and minting or returning credentials (secrets; a recipient carries
-// its activation URL).
+// its activation URL, a provider its recipient profile's bearer token).
 var databricksOperationProducts = map[string]string{
 	"apps.Apps.Deploy":                                       "execution",
 	"apps.Apps.Start":                                        "execution",
@@ -1372,6 +1381,8 @@ var databricksOperationProducts = map[string]string{
 	"catalog.AiGateway.DeleteMcpServiceUserMappedCredential": "secrets",
 	"catalog.AiGateway.GetMcpServiceUserMappedCredential":    "secrets",
 	"catalog.Credentials.GenerateTemporaryServiceCredential": "secrets",
+	"sharing.Providers.Get":                                  "secrets",
+	"sharing.Providers.List":                                 "secrets",
 	"sharing.Recipients.Create":                              "secrets",
 	"sharing.Recipients.Get":                                 "secrets",
 	"sharing.Recipients.List":                                "secrets",
@@ -1387,40 +1398,42 @@ var databricksOperationProducts = map[string]string{
 // revoked for another identity (git credentials take a principal_id, a
 // recipient token is another party's), clean-room approvals that let
 // collaborators' notebooks run unreviewed, cluster policies (the access
-// mode rules live in a JSON string), marketplace exchange filters (who may
+// mode rules live in a JSON string) and cancelling their pending
+// enforcement, marketplace exchange filters (who may
 // see a private exchange), and the external HTTP proxy, whose method and
 // path the caller picks.
 var databricksAdminOperations = map[string]bool{
-	"cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview": true,
-	"compute.ClusterPolicies.Create":                        true,
-	"compute.ClusterPolicies.Delete":                        true,
-	"compute.ClusterPolicies.Edit":                          true,
-	"marketplace.ProviderExchangeFilters.Create":            true,
-	"marketplace.ProviderExchangeFilters.Delete":            true,
-	"marketplace.ProviderExchangeFilters.Update":            true,
-	"serving.ServingEndpoints.HttpRequest":                  true,
-	"sharing.Recipients.RotateToken":                        true,
-	"cleanrooms.CleanRoomAutoApprovalRules.Create":          true,
-	"cleanrooms.CleanRoomAutoApprovalRules.Delete":          true,
-	"cleanrooms.CleanRoomAutoApprovalRules.Update":          true,
-	"database.Database.CreateDatabaseInstanceRole":          true,
-	"oauth2.ServicePrincipalSecrets.Create":                 true,
-	"oauth2.ServicePrincipalSecrets.Delete":                 true,
-	"oauth2.ServicePrincipalSecretsProxy.Create":            true,
-	"oauth2.ServicePrincipalSecretsProxy.Delete":            true,
-	"settings.TokenManagement.Delete":                       true,
-	"database.Database.DeleteDatabaseInstanceRole":          true,
-	"postgres.Postgres.CreateDatabase":                      true,
-	"postgres.Postgres.CreateRole":                          true,
-	"postgres.Postgres.DeleteRole":                          true,
-	"postgres.Postgres.UpdateDatabase":                      true,
-	"postgres.Postgres.UpdateRole":                          true,
-	"settings.TokenManagement.CreateOboToken":               true,
-	"sql.Warehouses.SetWorkspaceWarehouseConfig":            true,
-	"workspace.GitCredentials.Create":                       true,
-	"workspace.GitCredentials.Delete":                       true,
-	"workspace.GitCredentials.Update":                       true,
-	"workspace.Secrets.DeleteAcl":                           true,
+	"cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview":               true,
+	"compute.ClusterPolicies.Create":                                      true,
+	"compute.PolicyComplianceForClusters.CancelPendingClusterEnforcement": true,
+	"compute.ClusterPolicies.Delete":                                      true,
+	"compute.ClusterPolicies.Edit":                                        true,
+	"marketplace.ProviderExchangeFilters.Create":                          true,
+	"marketplace.ProviderExchangeFilters.Delete":                          true,
+	"marketplace.ProviderExchangeFilters.Update":                          true,
+	"serving.ServingEndpoints.HttpRequest":                                true,
+	"sharing.Recipients.RotateToken":                                      true,
+	"cleanrooms.CleanRoomAutoApprovalRules.Create":                        true,
+	"cleanrooms.CleanRoomAutoApprovalRules.Delete":                        true,
+	"cleanrooms.CleanRoomAutoApprovalRules.Update":                        true,
+	"database.Database.CreateDatabaseInstanceRole":                        true,
+	"oauth2.ServicePrincipalSecrets.Create":                               true,
+	"oauth2.ServicePrincipalSecrets.Delete":                               true,
+	"oauth2.ServicePrincipalSecretsProxy.Create":                          true,
+	"oauth2.ServicePrincipalSecretsProxy.Delete":                          true,
+	"settings.TokenManagement.Delete":                                     true,
+	"database.Database.DeleteDatabaseInstanceRole":                        true,
+	"postgres.Postgres.CreateDatabase":                                    true,
+	"postgres.Postgres.CreateRole":                                        true,
+	"postgres.Postgres.DeleteRole":                                        true,
+	"postgres.Postgres.UpdateDatabase":                                    true,
+	"postgres.Postgres.UpdateRole":                                        true,
+	"settings.TokenManagement.CreateOboToken":                             true,
+	"sql.Warehouses.SetWorkspaceWarehouseConfig":                          true,
+	"workspace.GitCredentials.Create":                                     true,
+	"workspace.GitCredentials.Delete":                                     true,
+	"workspace.GitCredentials.Update":                                     true,
+	"workspace.Secrets.DeleteAcl":                                         true,
 }
 
 // databricksPostReads are the POST operations a reviewer confirmed change

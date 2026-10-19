@@ -3719,7 +3719,10 @@
         "database create-database-instance"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "enable_pg_native_login"
+      ]
     },
     {
       "operation": "database.Database.ListDatabaseCatalogs",
@@ -3818,7 +3821,10 @@
         "database update-database-instance"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "enable_pg_native_login"
+      ]
     },
     {
       "operation": "database.Database.FindDatabaseInstanceByUid",
@@ -8807,7 +8813,7 @@
         "policy-compliance-for-clusters cancel-pending-cluster-enforcement"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "jobs.PolicyComplianceForJobs.EnforceCompliance",
@@ -8908,6 +8914,8 @@
       "product": "data",
       "access": "admin",
       "adminFields": [
+        "spec.enable_pg_native_login",
+        "status.enable_pg_native_login",
         "status.owner"
       ]
     },
@@ -9195,7 +9203,11 @@
         "postgres update-data-api"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "spec.jwt_role_claim_key",
+        "status.jwt_role_claim_key"
+      ]
     },
     {
       "operation": "postgres.Postgres.UpdateDatabase",
@@ -9230,6 +9242,8 @@
       "product": "data",
       "access": "admin",
       "adminFields": [
+        "spec.enable_pg_native_login",
+        "status.enable_pg_native_login",
         "status.owner"
       ]
     },
@@ -9341,7 +9355,11 @@
         "postgres create-data-api"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "spec.jwt_role_claim_key",
+        "status.jwt_role_claim_key"
+      ]
     },
     {
       "operation": "postgres.Postgres.ListDatabases",
@@ -13515,7 +13533,7 @@
       "commands": [
         "providers list"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "read"
     },
     {
@@ -13548,7 +13566,7 @@
       "commands": [
         "providers get"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "read"
     },
     {
@@ -13678,7 +13696,7 @@
       "commands": [
         "recipients share-permissions"
       ],
-      "product": "data",
+      "product": "admin",
       "access": "read"
     },
     {
@@ -13891,7 +13909,7 @@
       "commands": [
         "shares share-permissions"
       ],
-      "product": "data",
+      "product": "admin",
       "access": "read"
     },
     {
