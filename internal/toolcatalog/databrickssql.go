@@ -67,8 +67,9 @@ var databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE",
 // SQL scripting: a statement headed by one of these holds statements of its
 // own, each starting after a word in databricksBlockWords.
 var (
-	databricksScriptForms = setOf("BEGIN", "IF", "ELSEIF", "ELSE", "CASE", "WHEN", "FOR", "WHILE", "LOOP", "REPEAT")
-	databricksBlockWords  = setOf("BEGIN", "THEN", "ELSE", "DO", "LOOP", "REPEAT")
+	databricksScriptForms = setOf("BEGIN", "IF", "ELSEIF", "ELSE", "CASE", "WHEN", "FOR", "WHILE", "LOOP",
+		"REPEAT", "DECLARE")
+	databricksBlockWords = setOf("BEGIN", "ATOMIC", "THEN", "ELSE", "DO", "LOOP", "REPEAT")
 )
 
 // A qualified name before ( is a call unless a table keyword precedes it: a
@@ -117,11 +118,16 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 	// scripting block the word that opens a nested statement. A THEN or ELSE
 	// inside a CASE expression opens none.
 	head, opaque, refresh, repair, definition := "", false, false, false, true
-	depth, caseDepth := 0, 0
+	depth, caseDepth, handlerStart := 0, 0, -1
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
-		atHead := tok.kind == sqlWord && (i == first ||
-			databricksScriptForms[head] && caseDepth == 0 && prev.kind == sqlWord && databricksBlockWords[prev.text])
+		after := prev // the word before the statement, past any label
+		if prev.is(":") {
+			after = at(i - 3)
+		}
+		atHead := tok.kind == sqlWord && !next.is(":") && (i == first || i == handlerStart ||
+			databricksScriptForms[head] && caseDepth == 0 && after.kind == sqlWord && databricksBlockWords[after.text] &&
+				tok.text != "ATOMIC" && !(tok.text == "NOT" && next.is("ATOMIC")))
 		if atHead {
 			head, definition, depth = tok.text, true, 0
 		}
@@ -146,7 +152,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 				opaque = true
 			}
 			builtin := at(i-2).text == "BUILTIN" && at(i-3).is(".") && at(i-4).text == "SYSTEM" && !at(i-5).is(".")
-			if prev.is(".") && !builtin {
+			if next.is("(") && prev.is(".") && !builtin {
 				start := i - 2 // a qualified call is a user-defined function
 				for at(start - 1).is(".") {
 					start -= 2
@@ -200,6 +206,27 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 			admin = admin || repair && (head == "MSCK" || head == "REPAIR")
 		case "SYNC": // MSCK REPAIR TABLE … SYNC PARTITIONS drops stale partitions
 			deletes = deletes || repair && next.is("PARTITIONS")
+		case "FOR": // DECLARE … HANDLER FOR conditions, then the handler's statement
+			if prev.is("HANDLER") && head == "DECLARE" {
+				j := i + 1
+				for {
+					switch {
+					case at(j).is("NOT") && at(j+1).is("FOUND"):
+						j += 2
+					case at(j).is("SQLSTATE") && at(j+1).is("VALUE"):
+						j += 3
+					case at(j).is("SQLSTATE"):
+						j += 2
+					default: // SQLEXCEPTION, SQLWARNING or a condition name
+						j++
+					}
+					if !at(j).is(",") {
+						break
+					}
+					j++
+				}
+				handlerStart = j
+			}
 		case "EXECUTE", "CALL":
 			opaque = true
 		case "CREATE", "ALTER", "DROP":

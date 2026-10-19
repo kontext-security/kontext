@@ -113,6 +113,13 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"case expression in if condition", "IF CASE WHEN a THEN grant END = 1 THEN SELECT 1; END IF", false, false, false, false},
 		{"scripting case statement", "CASE x WHEN 1 THEN GRANT SELECT ON t TO u; END CASE", false, true, false, true},
 		{"grant after expression case in if", "IF CASE WHEN a THEN 1 END = 1 THEN GRANT SELECT ON t TO u; END IF", false, true, false, true},
+		{"not atomic block grant", "BEGIN NOT ATOMIC GRANT SELECT ON TABLE t TO u; END", false, true, false, true},
+		{"atomic block owner to", "BEGIN ATOMIC ALTER TABLE t OWNER TO u; END", false, true, false, true},
+		{"labelled loop in block", "BEGIN l: LOOP GRANT SELECT ON t TO u; END LOOP", false, true, false, true},
+		{"handler block grant", "DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN GRANT ALL ON t TO u; END", false, true, false, true},
+		{"handler statement revoke", "DECLARE CONTINUE HANDLER FOR SQLSTATE VALUE '42000', NOT FOUND REVOKE ALL ON t FROM u", false, true, false, true},
+		{"handler on condition name", "DECLARE EXIT HANDLER FOR my_cond, SQLWARNING ALTER TABLE t SET TAGS ('a' = 'b')", false, true, false, true},
+		{"declare variable named grant", "DECLARE grant INT DEFAULT 0", false, false, false, false},
 		{"grant in scripting block", "BEGIN GRANT SELECT ON t TO u; END", false, true, false, true},
 		{"labelled block revoke", "l: BEGIN REVOKE SELECT ON t FROM u; END", false, true, false, true},
 		{"owner to in if", "IF x > 0 THEN ALTER TABLE t OWNER TO u; END IF", false, true, false, true},
@@ -243,7 +250,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 // Malformed input must stay linear: each unterminated opener used to rescan
 // the rest of the text.
 func TestClassifyDatabricksSQLMalformedIsLinear(t *testing.T) {
-	for _, unit := range []string{"/*", `'\`, "$a$", "r'"} {
+	for _, unit := range []string{"/*", `'\`, "$a$", "r'", "/* /*+ a.", "a."} {
 		sql := strings.Repeat(unit, 1<<17) + " DROP TABLE t"
 		start := time.Now()
 		if deletes, _, _, _ := ClassifyDatabricksSQL(sql); !deletes {
