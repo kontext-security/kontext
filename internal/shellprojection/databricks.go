@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -422,9 +423,10 @@ func classifyDatabricksAPI(method string, args []string, complete bool) cedareva
 	method = strings.ToUpper(method)
 	var target string
 	var bodies []string
-	// A computed word other than the body may be the path or a flag: the
-	// call is then unrecognized with no tier. A computed body keeps the
-	// route's tier, as SQL the projection cannot read does.
+	// A computed method, path or flag leaves the call unreadable: it is then
+	// unrecognized with no tier. A computed value of a value flag (--profile
+	// "$PROFILE") or a computed body does not change the operation, so the
+	// route's tier holds.
 	dynamic := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -585,27 +587,27 @@ func mergeDatabricksProducts(facts []string) []string {
 // databricksDomains are the domains in a URL that may name a Databricks host.
 var databricksDomains = []string{"databricks.com", "azuredatabricks.net", "databricks.us", "databricks.mil", "databricks.azure.us", "databricks.azure.cn"}
 
-// databricksURL reports a URL whose host is, or may be, a Databricks host:
-// it parses to one, its host part names a Databricks domain (an escape can
-// keep it from parsing), or a glob in the host ends in text a Databricks
-// domain could end with.
+// databricksURL reports a URL whose host is, or may be, a Databricks host. A
+// host that parses without a glob is judged exactly, so docs and lookalike
+// hosts are not Databricks. Otherwise (a glob in the scheme, host or port,
+// or an escape that keeps it from parsing) the host part may be Databricks
+// if it names a Databricks domain or a glob in it ends in text one could
+// end with.
 func databricksURL(urlText string) bool {
-	if parsed, err := url.Parse(urlText); err == nil && parsed.Host != "" &&
-		toolcatalog.IsDatabricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")) {
-		return true
+	if parsed, err := url.Parse(urlText); err == nil && parsed.Host != "" && !strings.ContainsAny(parsed.Host, "{}[]") {
+		return toolcatalog.IsDatabricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), "."))
 	}
-	host := strings.ToLower(urlText)
-	if scheme := strings.LastIndex(host, "://"); scheme >= 0 && !strings.ContainsAny(host[:scheme], "/?#") {
-		host = host[scheme+3:]
-	}
-	host = strings.TrimLeft(host, "/")
+	// Drop the scheme separators so a glob around the scheme
+	// ({https://,http://}host) leaves the host in place, then cut at the
+	// path.
+	host := databricksSchemeSeparator.ReplaceAllString(strings.ToLower(urlText), "")
 	if end := strings.IndexAny(host, "/?#"); end >= 0 {
 		host = host[:end]
 	}
 	if at := strings.LastIndex(host, "@"); at >= 0 {
 		host = host[at+1:]
 	}
-	if colon := strings.LastIndex(host, ":"); colon >= 0 && strings.Trim(host[colon+1:], "0123456789") == "" {
+	if colon := strings.LastIndex(host, ":"); colon >= 0 && strings.Trim(host[colon+1:], "0123456789{}[],-:") == "" {
 		host = host[:colon]
 	}
 	host = strings.TrimSuffix(host, ".")
@@ -617,3 +619,5 @@ func databricksURL(urlText string) bool {
 		return strings.Contains(host, domain) || strings.ContainsAny(host, "{[") && strings.HasSuffix("."+domain, tail)
 	})
 }
+
+var databricksSchemeSeparator = regexp.MustCompile(`:/+`)

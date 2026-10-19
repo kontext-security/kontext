@@ -1160,8 +1160,10 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	operations = append(operations, op)
 
 	// Each URL of each operation is judged with that operation's method and
-	// body. A URL glob ({a,b}, [x-y]) is not expanded: a Databricks URL with
-	// one is unrecognized, and any other is read as written.
+	// body. A URL glob ({a,b}, [x-y]) is not expanded, so the request cannot
+	// be read exactly: a Databricks URL with one is unrecognized with no
+	// tier, and any other is read as written but never as a catalogued
+	// route (a GitHub force push through a globbed path is not seen).
 	type request struct {
 		urlText, method string
 		bodies          []string
@@ -1176,7 +1178,9 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				normalized = withRequestTarget(normalized, op.requestTarget)
 			}
 			sent, sentURL, readable := op.withUpload(index, normalized)
-			if unclear || !readable || strings.ContainsAny(urlText, "{}[]") {
+			globbed := strings.ContainsAny(urlText, "{}[]")
+			complete = complete && !globbed
+			if unclear || !readable || globbed {
 				if databricksURL(urlText) || databricksURL(normalized) {
 					unrecognized = append(unrecognized, FactDatabricksRouteUnrecognized)
 					continue

@@ -194,7 +194,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl output format is not a method", `curl -X POST -w-XGET -d '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl request target only for its own operation", "curl '" + dbHost + "/api/2.0/secrets/get?scope=s&key=k' --next --request-target /api/2.1/clusters/list " + dbHost + "/", []string{dbP("compute"), dbP("secrets"), dbUnk}, false},
 		{"curl globbed host is unrecognized", `curl --json '{"cluster_id":"x"}' 'https://dbc-1234.cloud.databr{icks,icks}.com/api/2.1/clusters/[a-z][a-z]lete'`, []string{dbUnk}, false},
-		{"curl host glob on another domain", "curl 'https://example.com/[a-z][a-z]'", nil, true},
+		{"curl host glob on another domain", "curl 'https://example.com/[a-z][a-z]'", nil, false},
 		{"curl empty -T is no upload", `curl -T '' --json '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl -T applies to the first URL only", `curl -T f.json --json '{"cluster_id":"x"}' https://example.com/upload ` + dbHost + "/api/2.1/clusters/delete", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
 		{"curl options after -- are URLs", `curl --json '{"cluster_id":"x"}' -- ` + dbHost + "/api/2.1/clusters/delete -G", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
@@ -210,6 +210,11 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl -T does not append its name to a --request-target", "curl -X DELETE -T payload.json --request-target /api/2.0/repos/12/ " + dbHost + "/", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"curl globbed upload name is unrecognized", "curl -X POST -T '[d-z][e-z]lete' " + dbHost + "/api/2.1/clusters/", []string{dbUnk}, false},
 		{"curl upload name with a backslash is unrecognized", `curl -X POST -T 'payload\delete' ` + dbHost + "/api/2.1/clusters/", []string{dbUnk}, false},
+		{"curl globbed port is unrecognized", "curl -X DELETE 'https://dbc-1234.cloud.databr{icks,icks}.com:[4-4]43/api/2.0/repos/12'", []string{dbUnk}, false},
+		{"curl glob around the scheme is unrecognized", "curl -X DELETE '{https://,http://}dbc-1234.cloud.databricks.com/api/2.0/repos/12'", []string{dbUnk}, false},
+		{"curl docs host with a path glob is not databricks", "curl 'https://docs.databricks.com/{en,ja}/dev-tools/cli/index.html'", nil, false},
+		{"curl lookalike host with a path glob is not databricks", "curl 'https://databricks.com.example.org/{a,b}'", nil, false},
+		{"api computed profile keeps the tier", `databricks api delete /api/2.0/repos/12 --profile "$PROFILE"`, []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.
