@@ -29,10 +29,16 @@ func NewWorkspaceClient() *WorkspaceClient {
 `),
 		"account_client.go": []byte(`package databricks
 
-import "github.com/databricks/databricks-sdk-go/service/iam"
+import (
+	"github.com/databricks/databricks-sdk-go/service/iam"
+	"github.com/databricks/databricks-sdk-go/service/networking"
+)
 
 func NewAccountClient() *AccountClient {
-	return &AccountClient{Groups: iam.NewAccountGroups(apiClient)}
+	return &AccountClient{
+		Endpoints: networking.NewEndpoints(apiClient),
+		Groups:    iam.NewAccountGroups(apiClient),
+	}
 }
 `),
 		"service/compute/impl.go": []byte(`package compute
@@ -180,6 +186,21 @@ func (a *filesImpl) Upload(ctx context.Context, request UploadRequest) error {
 
 func (a *filesImpl) DataPlane(ctx context.Context) error {
 	return a.client.ApiClient().Do(ctx, http.MethodPost, url)
+}
+`),
+		// An account service whose path does not carry the account ID.
+		"service/networking/impl.go": []byte(`package networking
+
+type GetEndpointRequest struct {
+	Name string ` + "`json:\"-\" url:\"-\"`" + `
+}
+
+type endpointsImpl struct{ client *client.DatabricksClient }
+
+func (a *endpointsImpl) GetEndpoint(ctx context.Context, request GetEndpointRequest) (*Endpoint, error) {
+	path := fmt.Sprintf("/api/networking/v1/%v", request.Name)
+	err := a.client.Do(ctx, http.MethodGet, path, headers, queryParams, request, &out)
+	return &out, err
 }
 `),
 		"service/files/model.go": []byte(`package files
@@ -361,6 +382,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 		"compute.Clusters.GetPermissions":  {Operation: "compute.Clusters.GetPermissions", Client: "workspace", Method: "GET", Path: "/api/2.0/permissions/clusters/{cluster_id}", Product: "admin", Access: "read"},
 		"compute.CommandExecution.Execute": {Operation: "compute.CommandExecution.Execute", Client: "workspace", Method: "POST", Path: "/api/1.2/commands/execute", Commands: []string{"clusters execute"}, Product: "execution", Access: "write"},
 		"iam.AccountGroups.Delete":         {Operation: "iam.AccountGroups.Delete", Client: "account", Method: "DELETE", Path: "/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}", Commands: []string{"account groups delete"}, Product: "admin", Access: "admin"},
+		"networking.Endpoints.GetEndpoint": {Operation: "networking.Endpoints.GetEndpoint", Client: "account", Method: "GET", Path: "/api/networking/v1/{name}", Product: "admin", Access: "read"},
 		"files.Files.Upload":               {Operation: "files.Files.Upload", Client: "workspace", Method: "PUT", Path: "/api/2.0/fs/files{file_path+}", Product: "data", Access: "write"},
 		"settings.DefaultNamespace.Get":    {Operation: "settings.DefaultNamespace.Get", Client: "workspace", Method: "GET", Path: "/api/2.0/settings/types/default_namespace_ws/names/default", Commands: []string{"settings default-namespace get"}, Product: "admin", Access: "read"},
 		"cli.bundle.deploy":                databricksHandCommands[0],

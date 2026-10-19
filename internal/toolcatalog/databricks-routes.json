@@ -5755,7 +5755,7 @@
     },
     {
       "operation": "iamv2.AccountIamV2.DeleteIdentityVisibilityFilter",
-      "client": "workspace",
+      "client": "account",
       "method": "DELETE",
       "path": "/api/2.0/identity/{name}",
       "commands": [
@@ -5766,7 +5766,7 @@
     },
     {
       "operation": "iamv2.AccountIamV2.GetExternalGroup",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/2.0/identity/{name}",
       "commands": [
@@ -5777,7 +5777,7 @@
     },
     {
       "operation": "iamv2.AccountIamV2.GetExternalServicePrincipal",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/2.0/identity/{name}",
       "commands": [
@@ -5788,7 +5788,7 @@
     },
     {
       "operation": "iamv2.AccountIamV2.GetExternalUser",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/2.0/identity/{name}",
       "commands": [
@@ -5799,7 +5799,7 @@
     },
     {
       "operation": "iamv2.AccountIamV2.GetIdentityVisibilityFilter",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/2.0/identity/{name}",
       "commands": [
@@ -5843,7 +5843,7 @@
     },
     {
       "operation": "iamv2.AccountIamV2.ListIdentityVisibilityFilters",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/2.0/identity/{parent}/identity-visibility-filters",
       "commands": [
@@ -5854,7 +5854,7 @@
     },
     {
       "operation": "iamv2.AccountIamV2.CreateIdentityVisibilityFilter",
-      "client": "workspace",
+      "client": "account",
       "method": "POST",
       "path": "/api/2.0/identity/{parent}/identity-visibility-filters",
       "commands": [
@@ -15126,7 +15126,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.DeleteFailoverGroup",
-      "client": "workspace",
+      "client": "account",
       "method": "DELETE",
       "path": "/api/disaster-recovery/v1/{name}",
       "commands": [
@@ -15137,7 +15137,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.DeleteStableUrl",
-      "client": "workspace",
+      "client": "account",
       "method": "DELETE",
       "path": "/api/disaster-recovery/v1/{name}",
       "commands": [
@@ -15148,7 +15148,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.GetFailoverGroup",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/disaster-recovery/v1/{name}",
       "commands": [
@@ -15159,7 +15159,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.GetStableUrl",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/disaster-recovery/v1/{name}",
       "commands": [
@@ -15170,7 +15170,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.UpdateFailoverGroup",
-      "client": "workspace",
+      "client": "account",
       "method": "PATCH",
       "path": "/api/disaster-recovery/v1/{name}",
       "commands": [
@@ -15181,7 +15181,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.FailoverFailoverGroup",
-      "client": "workspace",
+      "client": "account",
       "method": "POST",
       "path": "/api/disaster-recovery/v1/{name}/failover",
       "commands": [
@@ -15192,7 +15192,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.ListFailoverGroups",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/disaster-recovery/v1/{parent}/failover-groups",
       "commands": [
@@ -15203,7 +15203,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.CreateFailoverGroup",
-      "client": "workspace",
+      "client": "account",
       "method": "POST",
       "path": "/api/disaster-recovery/v1/{parent}/failover-groups",
       "commands": [
@@ -15214,7 +15214,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.ListStableUrls",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/disaster-recovery/v1/{parent}/stable-urls",
       "commands": [
@@ -15225,7 +15225,7 @@
     },
     {
       "operation": "disasterrecovery.DisasterRecovery.CreateStableUrl",
-      "client": "workspace",
+      "client": "account",
       "method": "POST",
       "path": "/api/disaster-recovery/v1/{parent}/stable-urls",
       "commands": [
@@ -15335,7 +15335,7 @@
     },
     {
       "operation": "networking.Endpoints.DeleteEndpoint",
-      "client": "workspace",
+      "client": "account",
       "method": "DELETE",
       "path": "/api/networking/v1/{name}",
       "commands": [
@@ -15346,7 +15346,7 @@
     },
     {
       "operation": "networking.PrivateNetworkGateways.DeletePrivateNetworkGateway",
-      "client": "workspace",
+      "client": "account",
       "method": "DELETE",
       "path": "/api/networking/v1/{name}",
       "commands": [
@@ -15357,7 +15357,7 @@
     },
     {
       "operation": "networking.Endpoints.GetEndpoint",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/networking/v1/{name}",
       "commands": [
@@ -15368,7 +15368,7 @@
     },
     {
       "operation": "networking.PrivateNetworkGateways.GetPrivateNetworkGateway",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/networking/v1/{name}",
       "commands": [
@@ -15379,7 +15379,7 @@
     },
     {
       "operation": "networking.PrivateNetworkGateways.GetPrivateNetworkGatewayOperation",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/networking/v1/{name}",
       "commands": [
@@ -15390,7 +15390,7 @@
     },
     {
       "operation": "networking.PrivateNetworkGateways.UpdatePrivateNetworkGateway",
-      "client": "workspace",
+      "client": "account",
       "method": "PATCH",
       "path": "/api/networking/v1/{name}",
       "commands": [
@@ -15401,7 +15401,7 @@
     },
     {
       "operation": "networking.Endpoints.ListEndpoints",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/networking/v1/{parent}/endpoints",
       "commands": [
@@ -15412,7 +15412,7 @@
     },
     {
       "operation": "networking.Endpoints.CreateEndpoint",
-      "client": "workspace",
+      "client": "account",
       "method": "POST",
       "path": "/api/networking/v1/{parent}/endpoints",
       "commands": [
@@ -15423,7 +15423,7 @@
     },
     {
       "operation": "networking.PrivateNetworkGateways.ListPrivateNetworkGateways",
-      "client": "workspace",
+      "client": "account",
       "method": "GET",
       "path": "/api/networking/v1/{parent}/private-network-gateways",
       "commands": [
@@ -15434,7 +15434,7 @@
     },
     {
       "operation": "networking.PrivateNetworkGateways.CreatePrivateNetworkGateway",
-      "client": "workspace",
+      "client": "account",
       "method": "POST",
       "path": "/api/networking/v1/{parent}/private-network-gateways",
       "commands": [

@@ -256,10 +256,7 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 	table := &databricksTable{CLI: cliVersion, SDK: sdkVersion}
 	var postReads, adminByPayload, suggestedReads []string
 	for _, op := range index.operations {
-		entry := databricksEntry{Operation: op.id, Client: "workspace", Method: op.method, Path: op.path, Commands: commands[op.id]}
-		if op.account {
-			entry.Client = "account"
-		}
+		entry := databricksEntry{Operation: op.id, Client: databricksClient(op, index, commands[op.id]), Method: op.method, Path: op.path, Commands: commands[op.id]}
 		entry.Product = databricksProduct(op)
 		if op.method == "POST" || op.method == "PUT" || op.method == "PATCH" {
 			for _, field := range op.bodyFields {
@@ -325,6 +322,28 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 		}
 	}
 	return table, report, nil
+}
+
+// databricksClient says whether an operation runs against the account or a
+// workspace: by its account-ID path, else by the SDK client that owns its
+// service, else by where the CLI files its commands.
+func databricksClient(op *sdkOperation, index *sdkIndex, commands []string) string {
+	owners := map[string]bool{}
+	for client, fields := range index.clients {
+		for _, service := range fields {
+			if service == op.service {
+				owners[client] = true
+			}
+		}
+	}
+	accountCommands := len(commands) > 0
+	for _, command := range commands {
+		accountCommands = accountCommands && strings.HasPrefix(command, "account ")
+	}
+	if op.account || (owners["account"] && !owners["workspace"]) || (len(owners) != 1 && accountCommands) {
+		return "account"
+	}
+	return "workspace"
 }
 
 func countCommands(table *databricksTable) int {

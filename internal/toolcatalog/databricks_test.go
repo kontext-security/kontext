@@ -111,6 +111,7 @@ func TestDatabricksCommand(t *testing.T) {
 		{"sandbox", "get-sandbox", "sandbox.Sandbox.GetSandbox", "workspace", "execution", "read"},
 		// bundle deploy applies permissions blocks.
 		{"bundle", "deploy", "cli.bundle.deploy", "", "execution", "admin"},
+		{"account endpoints", "delete-endpoint", "networking.Endpoints.DeleteEndpoint", "account", "admin", "admin"},
 		{"bundle", "run", "cli.bundle.run", "", "execution", "write"},
 	} {
 		got, ok := DatabricksCommand(test.group, test.verb)
