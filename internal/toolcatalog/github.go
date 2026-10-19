@@ -109,22 +109,49 @@ func Known(toolID string) bool {
 	return ok && tool.Named
 }
 
-// Resolve maps an MCP tool call to a catalogued tool id. Provider catalogs
-// (Atlassian, HubSpot) are consulted first for servers not named for GitHub;
-// see resolveProvider. Otherwise the call is matched to the pinned GitHub catalog. The server
-// name is whatever the operator registered it as, so a catalogued tool name
-// is recognised under any mcp__<server>__ prefix and held to its pinned
-// input schema: input that no longer matches (a missing required field, a
-// wrong type) resolves to the unrecognized GitHub tool, fail-closed, whatever
-// the server is called. The one exception is a same-named tool on another
-// product whose input carries a field GitHub's schema does not have at all
-// (Linear's create_issue with teamId): that is clearly not GitHub. A server
-// whose name mentions GitHub is additionally held to the catalog for tools
-// it does not list, so a new GitHub tool is unrecognized rather than unknown.
-func Resolve(toolName string, input map[string]any) (string, bool) {
+// githubServerURLHints identify GitHub's hosted MCP server by URL. The
+// GitHub catalog is pinned by commit rather than as a provider catalog, and
+// the cloud never sees server URLs, so this list is not part of the digest.
+var githubServerURLHints = []ServerURLHint{{Host: "api.githubcopilot.com", PathPrefix: "/mcp"}}
+
+// Resolve maps an MCP tool call to a catalogued tool id. serverURL is the URL
+// the agent's configuration gives the server, or "" when it has none (a
+// stdio server, a claude.ai connector, an unreadable config). serverName,
+// when set, is the server's display name for the name hints in place of the
+// one in toolName (a Claude Desktop connector's tools carry its UUID).
+//
+// A URL a catalog claims decides the provider whatever the server is called,
+// so naming a Databricks server "github" cannot move it off its presets.
+// Without one, the server name is the hint: provider catalogs (Atlassian,
+// HubSpot) are consulted first for servers not named for GitHub; see
+// resolveProvider. Otherwise the call is matched to the pinned GitHub
+// catalog. The server name is whatever the operator registered it as, so a
+// catalogued tool name is recognised under any mcp__<server>__ prefix and
+// held to its pinned input schema: input that no longer matches (a missing
+// required field, a wrong type) resolves to the unrecognized GitHub tool,
+// fail-closed, whatever the server is called. The one exception is a
+// same-named tool on another product whose input carries a field GitHub's
+// schema does not have at all (Linear's create_issue with teamId): that is
+// clearly not GitHub. A GitHub server is additionally held to the catalog
+// for tools it does not list, so a new GitHub tool is unrecognized rather
+// than unknown.
+func Resolve(toolName, serverURL, serverName string, input map[string]any) (string, bool) {
 	server, tool, ok := splitMCPToolName(toolName)
 	if !ok {
 		return "", false
+	}
+	if serverName != "" {
+		server = serverName
+	}
+	if host, path := serverURLParts(serverURL); host != "" {
+		if matchesURLHints(githubServerURLHints, host, path) {
+			return resolveGitHub(tool, input, true)
+		}
+		for i := range providers {
+			if matchesURLHints(providers[i].catalog.ServerURLHints, host, path) {
+				return providers[i].resolve(tool, input, true)
+			}
+		}
 	}
 	githubServer := strings.Contains(strings.ToLower(server), "github")
 	if !githubServer {
@@ -132,6 +159,10 @@ func Resolve(toolName string, input map[string]any) (string, bool) {
 			return toolID, true
 		}
 	}
+	return resolveGitHub(tool, input, githubServer)
+}
+
+func resolveGitHub(tool string, input map[string]any, githubServer bool) (string, bool) {
 	catalogued, known := githubTools[tool]
 	if !known {
 		if githubServer {

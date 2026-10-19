@@ -5,8 +5,9 @@ import "encoding/json"
 type ClaudeRoot struct {
 	MCPServers map[string]MCP `json:"mcpServers"`
 	Projects   map[string]struct {
-		MCPServers            map[string]MCP `json:"mcpServers"`
-		EnabledMcpjsonServers []string       `json:"enabledMcpjsonServers"`
+		MCPServers             map[string]MCP `json:"mcpServers"`
+		EnabledMcpjsonServers  []string       `json:"enabledMcpjsonServers"`
+		DisabledMcpjsonServers []string       `json:"disabledMcpjsonServers"`
 	} `json:"projects"`
 }
 type ClaudeSettings struct {
