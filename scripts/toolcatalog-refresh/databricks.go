@@ -39,9 +39,10 @@ import (
 //
 // Tiers: a GET or HEAD is read unless databricksConsumingGets lists it; a
 // POST is read only when databricksPostReads lists it, so a new route is a
-// write until someone reviews it. Anything that
-// acts on permissions, grants, identities, settings or account provisioning
-// (product admin), whose body can carry an owner or permissions, or that
+// write until someone reviews it. Anything that acts on permissions,
+// grants, identities, settings or account provisioning (product admin),
+// whose request body can carry an owner, permissions, an access control
+// list or grants (one generic rule, computed fields aside), or that
 // databricksAdminOperations lists, is admin; a delete (by method, name or
 // databricksDeleteOperations) is delete; everything else is write. Products
 // are assigned per operation from databricksServiceProducts and
@@ -115,7 +116,7 @@ type sdkOperation struct {
 }
 
 var (
-	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|access_token|single_user_name|ssh_public_keys|enable_pg_native_login|jwt_role_claim_key|ai_gateway|auto_capture_config|instance_profile_arn)$`)
+	databricksAdminField = regexp.MustCompile(`^(owner|owner_[a-z_]+|[a-z_]+_owner|permissions|[a-z_]+_permissions|access_control_list|grants)$`)
 	// databricksOutputField matches fields the server computes and ignores
 	// on write: effective_* values and an AIP resource's status block.
 	databricksOutputField = regexp.MustCompile(`(^|\.)effective_[a-z_]+$|(^|\.)status\.`)
@@ -1479,96 +1480,129 @@ var databricksOperationProducts = map[string]string{
 	"sharing.Recipients.RotateToken":                         "secrets",
 }
 
-// databricksAdminOperations change who can do what without a name, product
-// or body field that says so: database roles (superuser, createrole,
-// bypassrls), database owners (spec.role) and branch protection (create
-// can replace an existing branch), secret ACLs, Kafka and stream
-// connection security (TLS verification, client certificates), Unity Catalog
-// storage and service credentials (they map cloud IAM roles), AI Gateway
-// MCP, model and model provider services (tool selectors, rate limits,
-// payload logging; an update can retarget the URL and keep the key), the
-// workspace-wide warehouse security config and default-warehouse overrides, credentials minted, changed or
-// revoked for another identity (git credentials take a principal_id, a
-// recipient token is another party's), clean-room approvals that let
-// collaborators' notebooks run unreviewed, cluster policies (the access
-// mode rules live in a JSON string) and cancelling their pending
-// enforcement, endpoint rate limits, governed tag assignments and data classification (they
-// drive ABAC row filters and column masks), external location creation
-// (fallback mode bypasses UC checks), marketplace exchanges, listings, filters and fulfilled
-// personalization requests (who may see shared data), the AI Gateway and
-// endpoint telemetry (PII filtering, guardrails, payload logging), and the external HTTP proxy, whose method and path the
-// caller picks.
+// databricksAdminOperations are the operations a reviewer placed at admin
+// because of what they do, beyond the generic rules (admin product, and a
+// request body that can carry an owner, permissions, an access control list
+// or grants):
+//   - identities and authentication: database roles and owners, native
+//     Postgres login, the data API's JWT role claim, branch protection,
+//     credentials minted, changed or revoked for another identity (service
+//     principal secrets, OBO tokens, git credentials, recipient tokens), UC
+//     storage and service credentials, model provider services
+//   - delegated identity: run_as on jobs, pipelines, queries, alerts and
+//     legacy dashboards, a dashboard published with embedded credentials, a
+//     registry webhook holding an access token, an app granting its service
+//     principal access to resources, a secret scope's initial MANAGE
+//     principal, secret ACLs
+//   - security controls: cluster policies and their pending enforcement, the
+//     workspace warehouse config and default-warehouse overrides, AI Gateway
+//     and serving guardrails, rate limits, payload logging and telemetry,
+//     Kafka and stream TLS settings, the external HTTP proxy
+//   - data access: governed tags and data classification (ABAC), external
+//     location creation (fallback mode), marketplace exchanges, listings,
+//     filters and fulfilled requests, clean-room approvals
 var databricksAdminOperations = map[string]bool{
+	"apps.Apps.Create":                                                    true,
+	"apps.Apps.CreateSpace":                                               true,
+	"apps.Apps.CreateUpdate":                                              true,
+	"apps.Apps.Update":                                                    true,
+	"apps.Apps.UpdateSpace":                                               true,
+	"catalog.AiGateway.CreateMcpService":                                  true,
+	"catalog.AiGateway.CreateModelProviderService":                        true,
+	"catalog.AiGateway.CreateModelService":                                true,
+	"catalog.AiGateway.UpdateMcpService":                                  true,
+	"catalog.AiGateway.UpdateModelProviderService":                        true,
+	"catalog.AiGateway.UpdateModelService":                                true,
+	"catalog.Credentials.CreateCredential":                                true,
+	"catalog.Credentials.DeleteCredential":                                true,
 	"catalog.EntityTagAssignments.Create":                                 true,
 	"catalog.EntityTagAssignments.Delete":                                 true,
 	"catalog.EntityTagAssignments.Update":                                 true,
 	"catalog.ExternalLocations.Create":                                    true,
-	"catalog.AiGateway.CreateMcpService":                                  true,
-	"catalog.AiGateway.CreateModelService":                                true,
-	"catalog.AiGateway.CreateModelProviderService":                        true,
-	"catalog.AiGateway.UpdateMcpService":                                  true,
-	"catalog.AiGateway.UpdateModelService":                                true,
-	"catalog.AiGateway.UpdateModelProviderService":                        true,
-	"catalog.Credentials.CreateCredential":                                true,
-	"catalog.Credentials.DeleteCredential":                                true,
 	"catalog.StorageCredentials.Create":                                   true,
 	"catalog.StorageCredentials.Delete":                                   true,
 	"cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview":               true,
+	"cleanrooms.CleanRoomAutoApprovalRules.Create":                        true,
+	"cleanrooms.CleanRoomAutoApprovalRules.Delete":                        true,
+	"cleanrooms.CleanRoomAutoApprovalRules.Update":                        true,
+	"compute.ClusterPolicies.Create":                                      true,
+	"compute.ClusterPolicies.Delete":                                      true,
+	"compute.ClusterPolicies.Edit":                                        true,
+	"compute.PolicyComplianceForClusters.CancelPendingClusterEnforcement": true,
+	"dashboards.Lakeview.Publish":                                         true,
+	"database.Database.CreateDatabaseInstance":                            true,
+	"database.Database.CreateDatabaseInstanceRole":                        true,
+	"database.Database.DeleteDatabaseInstanceRole":                        true,
+	"database.Database.UpdateDatabaseInstance":                            true,
 	"dataclassification.DataClassification.CreateCatalogConfig":           true,
 	"dataclassification.DataClassification.DeleteCatalogConfig":           true,
 	"dataclassification.DataClassification.UpdateCatalogConfig":           true,
-	"compute.ClusterPolicies.Create":                                      true,
-	"compute.PolicyComplianceForClusters.CancelPendingClusterEnforcement": true,
-	"compute.ClusterPolicies.Delete":                                      true,
-	"compute.ClusterPolicies.Edit":                                        true,
+	"jobs.Jobs.Reset":                                                     true,
+	"jobs.Jobs.Update":                                                    true,
+	"marketplace.ProviderExchangeFilters.Create":                          true,
+	"marketplace.ProviderExchangeFilters.Delete":                          true,
+	"marketplace.ProviderExchangeFilters.Update":                          true,
+	"marketplace.ProviderExchanges.AddListingToExchange":                  true,
+	"marketplace.ProviderExchanges.Create":                                true,
+	"marketplace.ProviderExchanges.DeleteListingFromExchange":             true,
+	"marketplace.ProviderExchanges.Update":                                true,
 	"marketplace.ProviderListings.Create":                                 true,
 	"marketplace.ProviderListings.Update":                                 true,
 	"marketplace.ProviderPersonalizationRequests.Update":                  true,
-	"marketplace.ProviderExchanges.Create":                                true,
-	"marketplace.ProviderExchanges.Update":                                true,
-	"marketplace.ProviderExchanges.AddListingToExchange":                  true,
-	"marketplace.ProviderExchanges.DeleteListingFromExchange":             true,
 	"ml.FeatureEngineering.CreateKafkaConfig":                             true,
 	"ml.FeatureEngineering.CreateStream":                                  true,
 	"ml.FeatureEngineering.UpdateKafkaConfig":                             true,
 	"ml.FeatureEngineering.UpdateStream":                                  true,
-	"marketplace.ProviderExchangeFilters.Create":                          true,
-	"marketplace.ProviderExchangeFilters.Delete":                          true,
-	"marketplace.ProviderExchangeFilters.Update":                          true,
-	"serving.ServingEndpoints.HttpRequest":                                true,
-	"serving.ServingEndpoints.Put":                                        true,
-	"serving.ServingEndpoints.PutAiGateway":                               true,
-	"serving.ServingEndpoints.PatchTelemetryConfig":                       true,
-	"sharing.Recipients.RotateToken":                                      true,
-	"cleanrooms.CleanRoomAutoApprovalRules.Create":                        true,
-	"cleanrooms.CleanRoomAutoApprovalRules.Delete":                        true,
-	"cleanrooms.CleanRoomAutoApprovalRules.Update":                        true,
-	"database.Database.CreateDatabaseInstanceRole":                        true,
+	"ml.ModelRegistry.CreateWebhook":                                      true,
+	"ml.ModelRegistry.UpdateWebhook":                                      true,
 	"oauth2.ServicePrincipalSecrets.Create":                               true,
 	"oauth2.ServicePrincipalSecrets.Delete":                               true,
 	"oauth2.ServicePrincipalSecretsProxy.Create":                          true,
 	"oauth2.ServicePrincipalSecretsProxy.Delete":                          true,
-	"settings.TokenManagement.Delete":                                     true,
-	"database.Database.DeleteDatabaseInstanceRole":                        true,
+	"pipelines.Pipelines.Create":                                          true,
+	"pipelines.Pipelines.Update":                                          true,
+	"postgres.Postgres.CreateBranch":                                      true,
+	"postgres.Postgres.CreateDataApi":                                     true,
 	"postgres.Postgres.CreateDatabase":                                    true,
+	"postgres.Postgres.CreateProject":                                     true,
 	"postgres.Postgres.CreateRole":                                        true,
 	"postgres.Postgres.DeleteRole":                                        true,
-	"postgres.Postgres.CreateBranch":                                      true,
 	"postgres.Postgres.UpdateBranch":                                      true,
+	"postgres.Postgres.UpdateDataApi":                                     true,
 	"postgres.Postgres.UpdateDatabase":                                    true,
+	"postgres.Postgres.UpdateProject":                                     true,
 	"postgres.Postgres.UpdateRole":                                        true,
+	"serving.ServingEndpoints.Create":                                     true,
+	"serving.ServingEndpoints.CreateProvisionedThroughputEndpoint":        true,
+	"serving.ServingEndpoints.HttpRequest":                                true,
+	"serving.ServingEndpoints.PatchTelemetryConfig":                       true,
+	"serving.ServingEndpoints.Put":                                        true,
+	"serving.ServingEndpoints.PutAiGateway":                               true,
+	"serving.ServingEndpoints.UpdateConfig":                               true,
 	"settings.TokenManagement.CreateOboToken":                             true,
+	"settings.TokenManagement.Delete":                                     true,
+	"sharing.Recipients.RotateToken":                                      true,
+	"sql.AlertsV2.CreateAlert":                                            true,
+	"sql.AlertsV2.UpdateAlert":                                            true,
+	"sql.Dashboards.Update":                                               true,
+	"sql.Queries.Create":                                                  true,
+	"sql.Queries.Update":                                                  true,
+	"sql.QueriesLegacy.Create":                                            true,
+	"sql.QueriesLegacy.Update":                                            true,
+	"sql.QueryVisualizationsLegacy.Update":                                true,
+	"sql.Warehouses.CreateDefaultWarehouseOverride":                       true,
+	"sql.Warehouses.DeleteDefaultWarehouseOverride":                       true,
+	"sql.Warehouses.SetWorkspaceWarehouseConfig":                          true,
+	"sql.Warehouses.UpdateDefaultWarehouseOverride":                       true,
 	"tags.WorkspaceEntityTagAssignments.CreateTagAssignment":              true,
 	"tags.WorkspaceEntityTagAssignments.DeleteTagAssignment":              true,
 	"tags.WorkspaceEntityTagAssignments.UpdateTagAssignment":              true,
-	"sql.Warehouses.CreateDefaultWarehouseOverride":                       true,
-	"sql.Warehouses.DeleteDefaultWarehouseOverride":                       true,
-	"sql.Warehouses.UpdateDefaultWarehouseOverride":                       true,
-	"sql.Warehouses.SetWorkspaceWarehouseConfig":                          true,
 	"workspace.GitCredentials.Create":                                     true,
 	"workspace.GitCredentials.Delete":                                     true,
 	"workspace.GitCredentials.Update":                                     true,
+	"workspace.Secrets.CreateScope":                                       true,
 	"workspace.Secrets.DeleteAcl":                                         true,
+	"workspace.Secrets.PutAcl":                                            true,
 }
 
 // databricksDeleteOperations can destroy data under a name that does not

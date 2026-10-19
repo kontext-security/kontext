@@ -1,7 +1,7 @@
 {
   "cli": "v1.21.0",
   "sdk": "v0.188.0",
-  "rules": "f2ddb7860df203613cfddffb25bba4b227d2e5d002cd1833cfe37f0092b9747d",
+  "rules": "8762e7f4db352f3f6d0b0bed33c01f4b2654671ed11c3fc0c523ca5efd458b9e",
   "routes": [
     {
       "operation": "cli.apps.delete",
@@ -2594,9 +2594,7 @@
       "product": "workspace",
       "access": "admin",
       "adminFields": [
-        "owner_user_name",
-        "run_as",
-        "run_as_user_name"
+        "owner_user_name"
       ]
     },
     {
@@ -2632,9 +2630,7 @@
       "product": "workspace",
       "access": "admin",
       "adminFields": [
-        "owner_user_name",
-        "run_as",
-        "run_as_user_name"
+        "owner_user_name"
       ]
     },
     {
@@ -2657,19 +2653,7 @@
         "apps create-space"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "resources.app.permission",
-        "resources.database.permission",
-        "resources.experiment.permission",
-        "resources.genie_space.permission",
-        "resources.job.permission",
-        "resources.postgres.permission",
-        "resources.secret.permission",
-        "resources.serving_endpoint.permission",
-        "resources.sql_warehouse.permission",
-        "resources.uc_securable.permission"
-      ]
+      "access": "admin"
     },
     {
       "operation": "apps.Apps.DeleteSpace",
@@ -2702,19 +2686,7 @@
         "apps update-space"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "resources.app.permission",
-        "resources.database.permission",
-        "resources.experiment.permission",
-        "resources.genie_space.permission",
-        "resources.job.permission",
-        "resources.postgres.permission",
-        "resources.secret.permission",
-        "resources.serving_endpoint.permission",
-        "resources.sql_warehouse.permission",
-        "resources.uc_securable.permission"
-      ]
+      "access": "admin"
     },
     {
       "operation": "apps.Apps.GetSpaceOperation",
@@ -2747,19 +2719,7 @@
         "apps create"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "resources.app.permission",
-        "resources.database.permission",
-        "resources.experiment.permission",
-        "resources.genie_space.permission",
-        "resources.job.permission",
-        "resources.postgres.permission",
-        "resources.secret.permission",
-        "resources.serving_endpoint.permission",
-        "resources.sql_warehouse.permission",
-        "resources.uc_securable.permission"
-      ]
+      "access": "admin"
     },
     {
       "operation": "apps.AppsSettings.ListCustomTemplates",
@@ -2781,15 +2741,7 @@
         "apps-settings create-custom-template"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "manifest.resource_specs.experiment_spec.permission",
-        "manifest.resource_specs.job_spec.permission",
-        "manifest.resource_specs.secret_spec.permission",
-        "manifest.resource_specs.serving_endpoint_spec.permission",
-        "manifest.resource_specs.sql_warehouse_spec.permission",
-        "manifest.resource_specs.uc_securable_spec.permission"
-      ]
+      "access": "write"
     },
     {
       "operation": "apps.AppsSettings.DeleteCustomTemplate",
@@ -2822,15 +2774,7 @@
         "apps-settings update-custom-template"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "manifest.resource_specs.experiment_spec.permission",
-        "manifest.resource_specs.job_spec.permission",
-        "manifest.resource_specs.secret_spec.permission",
-        "manifest.resource_specs.serving_endpoint_spec.permission",
-        "manifest.resource_specs.sql_warehouse_spec.permission",
-        "manifest.resource_specs.uc_securable_spec.permission"
-      ]
+      "access": "write"
     },
     {
       "operation": "apps.Apps.ListDeployments",
@@ -2882,19 +2826,7 @@
         "apps create-update"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "app.resources.app.permission",
-        "app.resources.database.permission",
-        "app.resources.experiment.permission",
-        "app.resources.genie_space.permission",
-        "app.resources.job.permission",
-        "app.resources.postgres.permission",
-        "app.resources.secret.permission",
-        "app.resources.serving_endpoint.permission",
-        "app.resources.sql_warehouse.permission",
-        "app.resources.uc_securable.permission"
-      ]
+      "access": "admin"
     },
     {
       "operation": "apps.Apps.Delete",
@@ -2924,19 +2856,7 @@
         "apps update"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "resources.app.permission",
-        "resources.database.permission",
-        "resources.experiment.permission",
-        "resources.genie_space.permission",
-        "resources.job.permission",
-        "resources.postgres.permission",
-        "resources.secret.permission",
-        "resources.serving_endpoint.permission",
-        "resources.sql_warehouse.permission",
-        "resources.uc_securable.permission"
-      ]
+      "access": "admin"
     },
     {
       "operation": "apps.Apps.Start",
@@ -3720,10 +3640,7 @@
         "database create-database-instance"
       ],
       "product": "data",
-      "access": "admin",
-      "adminFields": [
-        "enable_pg_native_login"
-      ]
+      "access": "admin"
     },
     {
       "operation": "database.Database.ListDatabaseCatalogs",
@@ -3822,10 +3739,7 @@
         "database update-database-instance"
       ],
       "product": "data",
-      "access": "admin",
-      "adminFields": [
-        "enable_pg_native_login"
-      ]
+      "access": "admin"
     },
     {
       "operation": "database.Database.FindDatabaseInstanceByUid",
@@ -5891,10 +5805,7 @@
         "instance-pools create"
       ],
       "product": "compute",
-      "access": "admin",
-      "adminFields": [
-        "aws_attributes.instance_profile_arn"
-      ]
+      "access": "write"
     },
     {
       "operation": "compute.InstancePools.Delete",
@@ -5949,10 +5860,7 @@
         "instance-profiles add"
       ],
       "product": "admin",
-      "access": "admin",
-      "adminFields": [
-        "instance_profile_arn"
-      ]
+      "access": "admin"
     },
     {
       "operation": "compute.InstanceProfiles.Edit",
@@ -5963,10 +5871,7 @@
         "instance-profiles edit"
       ],
       "product": "admin",
-      "access": "admin",
-      "adminFields": [
-        "instance_profile_arn"
-      ]
+      "access": "admin"
     },
     {
       "operation": "compute.InstanceProfiles.List",
@@ -5988,10 +5893,7 @@
         "instance-profiles remove"
       ],
       "product": "admin",
-      "access": "admin",
-      "adminFields": [
-        "instance_profile_arn"
-      ]
+      "access": "admin"
     },
     {
       "operation": "settings.IpAccessLists.List",
@@ -6156,10 +6058,7 @@
         "lakeview publish"
       ],
       "product": "workspace",
-      "access": "admin",
-      "adminFields": [
-        "embed_credentials"
-      ]
+      "access": "admin"
     },
     {
       "operation": "dashboards.LakeviewEmbedded.GetPublishedDashboardTokenInfo",
@@ -7276,10 +7175,7 @@
         "model-registry create-webhook"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "job_spec.access_token"
-      ]
+      "access": "admin"
     },
     {
       "operation": "ml.ModelRegistry.DeleteWebhook",
@@ -7323,10 +7219,7 @@
         "model-registry update-webhook"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "job_spec.access_token"
-      ]
+      "access": "admin"
     },
     {
       "operation": "ml.Experiments.CreateRun",
@@ -8606,12 +8499,7 @@
         "pipelines create"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "clusters.aws_attributes.instance_profile_arn",
-        "clusters.ssh_public_keys",
-        "run_as"
-      ]
+      "access": "admin"
     },
     {
       "operation": "pipelines.Pipelines.Delete",
@@ -8644,12 +8532,7 @@
         "pipelines update"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "clusters.aws_attributes.instance_profile_arn",
-        "clusters.ssh_public_keys",
-        "run_as"
-      ]
+      "access": "admin"
     },
     {
       "operation": "pipelines.Pipelines.Clone",
@@ -8660,11 +8543,7 @@
         "pipelines clone"
       ],
       "product": "execution",
-      "access": "admin",
-      "adminFields": [
-        "clusters.aws_attributes.instance_profile_arn",
-        "clusters.ssh_public_keys"
-      ]
+      "access": "write"
     },
     {
       "operation": "pipelines.Pipelines.ApplyEnvironment",
@@ -8928,10 +8807,7 @@
         "postgres create-project"
       ],
       "product": "data",
-      "access": "admin",
-      "adminFields": [
-        "spec.enable_pg_native_login"
-      ]
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.CreateSyncedTable",
@@ -9217,10 +9093,7 @@
         "postgres update-data-api"
       ],
       "product": "data",
-      "access": "admin",
-      "adminFields": [
-        "spec.jwt_role_claim_key"
-      ]
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.UpdateDatabase",
@@ -9253,10 +9126,7 @@
         "postgres update-project"
       ],
       "product": "data",
-      "access": "admin",
-      "adminFields": [
-        "spec.enable_pg_native_login"
-      ]
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.UpdateRole",
@@ -9366,10 +9236,7 @@
         "postgres create-data-api"
       ],
       "product": "data",
-      "access": "admin",
-      "adminFields": [
-        "spec.jwt_role_claim_key"
-      ]
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.ListDatabases",
@@ -10031,10 +9898,7 @@
         "dashboards update"
       ],
       "product": "workspace",
-      "access": "admin",
-      "adminFields": [
-        "run_as_role"
-      ]
+      "access": "admin"
     },
     {
       "operation": "sql.DataSources.List",
@@ -10097,10 +9961,7 @@
         "queries-legacy create"
       ],
       "product": "workspace",
-      "access": "admin",
-      "adminFields": [
-        "run_as_role"
-      ]
+      "access": "admin"
     },
     {
       "operation": "sql.QueriesLegacy.Restore",
@@ -10144,10 +10005,7 @@
         "queries-legacy update"
       ],
       "product": "workspace",
-      "access": "admin",
-      "adminFields": [
-        "run_as_role"
-      ]
+      "access": "admin"
     },
     {
       "operation": "sql.QueryVisualizationsLegacy.Create",
@@ -10180,10 +10038,7 @@
         "query-visualizations-legacy update"
       ],
       "product": "workspace",
-      "access": "admin",
-      "adminFields": [
-        "query.run_as_role"
-      ]
+      "access": "admin"
     },
     {
       "operation": "sql.DashboardWidgets.Create",
@@ -10425,10 +10280,7 @@
         "secrets put-acl"
       ],
       "product": "secrets",
-      "access": "admin",
-      "adminFields": [
-        "permission"
-      ]
+      "access": "admin"
     },
     {
       "operation": "workspace.Secrets.DeleteSecret",
@@ -10483,10 +10335,7 @@
         "secrets create-scope"
       ],
       "product": "secrets",
-      "access": "admin",
-      "adminFields": [
-        "initial_manage_principal"
-      ]
+      "access": "admin"
     },
     {
       "operation": "workspace.Secrets.DeleteScope",
@@ -10530,14 +10379,7 @@
         "serving-endpoints create"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "ai_gateway",
-        "config.auto_capture_config",
-        "config.served_entities.external_model.amazon_bedrock_config.instance_profile_arn",
-        "config.served_entities.instance_profile_arn",
-        "config.served_models.instance_profile_arn"
-      ]
+      "access": "admin"
     },
     {
       "operation": "serving.ServingEndpoints.CreateProvisionedThroughputEndpoint",
@@ -10548,10 +10390,7 @@
         "serving-endpoints create-provisioned-throughput-endpoint"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "ai_gateway"
-      ]
+      "access": "admin"
     },
     {
       "operation": "serving.ServingEndpoints.UpdateProvisionedThroughputEndpointConfig",
@@ -10606,13 +10445,7 @@
         "serving-endpoints update-config"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "auto_capture_config",
-        "served_entities.external_model.amazon_bedrock_config.instance_profile_arn",
-        "served_entities.instance_profile_arn",
-        "served_models.instance_profile_arn"
-      ]
+      "access": "admin"
     },
     {
       "operation": "serving.ServingEndpoints.ExportMetrics",
@@ -11242,10 +11075,7 @@
         "warehouses set-workspace-warehouse-config"
       ],
       "product": "compute",
-      "access": "admin",
-      "adminFields": [
-        "instance_profile_arn"
-      ]
+      "access": "admin"
     },
     {
       "operation": "sql.QueryHistory.List",
@@ -11278,10 +11108,7 @@
         "queries create"
       ],
       "product": "workspace",
-      "access": "admin",
-      "adminFields": [
-        "query.run_as_mode"
-      ]
+      "access": "admin"
     },
     {
       "operation": "sql.Queries.Delete",
@@ -11316,8 +11143,7 @@
       "product": "workspace",
       "access": "admin",
       "adminFields": [
-        "query.owner_user_name",
-        "query.run_as_mode"
+        "query.owner_user_name"
       ]
     },
     {
@@ -11416,10 +11242,7 @@
         "warehouses create"
       ],
       "product": "compute",
-      "access": "admin",
-      "adminFields": [
-        "instance_profile_arn"
-      ]
+      "access": "write"
     },
     {
       "operation": "sql.Warehouses.Delete",
@@ -11452,10 +11275,7 @@
         "warehouses edit"
       ],
       "product": "compute",
-      "access": "admin",
-      "adminFields": [
-        "instance_profile_arn"
-      ]
+      "access": "write"
     },
     {
       "operation": "sql.Warehouses.Start",
@@ -12187,12 +12007,7 @@
         "clusters create"
       ],
       "product": "compute",
-      "access": "admin",
-      "adminFields": [
-        "aws_attributes.instance_profile_arn",
-        "single_user_name",
-        "ssh_public_keys"
-      ]
+      "access": "write"
     },
     {
       "operation": "compute.Clusters.Delete",
@@ -12214,12 +12029,7 @@
         "clusters edit"
       ],
       "product": "compute",
-      "access": "admin",
-      "adminFields": [
-        "aws_attributes.instance_profile_arn",
-        "single_user_name",
-        "ssh_public_keys"
-      ]
+      "access": "write"
     },
     {
       "operation": "compute.Clusters.Events",
@@ -12362,12 +12172,7 @@
         "clusters update"
       ],
       "product": "compute",
-      "access": "admin",
-      "adminFields": [
-        "cluster.aws_attributes.instance_profile_arn",
-        "cluster.single_user_name",
-        "cluster.ssh_public_keys"
-      ]
+      "access": "write"
     },
     {
       "operation": "sharing.Providers.ListProviderShareAssets",
@@ -13491,10 +13296,7 @@
         "policies create-policy"
       ],
       "product": "admin",
-      "access": "admin",
-      "adminFields": [
-        "grant"
-      ]
+      "access": "admin"
     },
     {
       "operation": "catalog.Policies.ListPolicies",
@@ -13538,10 +13340,7 @@
         "policies update-policy"
       ],
       "product": "admin",
-      "access": "admin",
-      "adminFields": [
-        "grant"
-      ]
+      "access": "admin"
     },
     {
       "operation": "catalog.Grants.List",
@@ -14828,14 +14627,7 @@
       "product": "workloads",
       "access": "admin",
       "adminFields": [
-        "access_control_list",
-        "job_clusters.new_cluster.aws_attributes.instance_profile_arn",
-        "job_clusters.new_cluster.single_user_name",
-        "job_clusters.new_cluster.ssh_public_keys",
-        "run_as",
-        "tasks.new_cluster.aws_attributes.instance_profile_arn",
-        "tasks.new_cluster.single_user_name",
-        "tasks.new_cluster.ssh_public_keys"
+        "access_control_list"
       ]
     },
     {
@@ -14880,16 +14672,7 @@
         "jobs reset"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "new_settings.job_clusters.new_cluster.aws_attributes.instance_profile_arn",
-        "new_settings.job_clusters.new_cluster.single_user_name",
-        "new_settings.job_clusters.new_cluster.ssh_public_keys",
-        "new_settings.run_as",
-        "new_settings.tasks.new_cluster.aws_attributes.instance_profile_arn",
-        "new_settings.tasks.new_cluster.single_user_name",
-        "new_settings.tasks.new_cluster.ssh_public_keys"
-      ]
+      "access": "admin"
     },
     {
       "operation": "jobs.Jobs.RunNow",
@@ -15001,14 +14784,7 @@
       "product": "execution",
       "access": "admin",
       "adminFields": [
-        "access_control_list",
-        "run_as",
-        "tasks.for_each_task.task.new_cluster.aws_attributes.instance_profile_arn",
-        "tasks.for_each_task.task.new_cluster.single_user_name",
-        "tasks.for_each_task.task.new_cluster.ssh_public_keys",
-        "tasks.new_cluster.aws_attributes.instance_profile_arn",
-        "tasks.new_cluster.single_user_name",
-        "tasks.new_cluster.ssh_public_keys"
+        "access_control_list"
       ]
     },
     {
@@ -15020,16 +14796,7 @@
         "jobs update"
       ],
       "product": "workloads",
-      "access": "admin",
-      "adminFields": [
-        "new_settings.job_clusters.new_cluster.aws_attributes.instance_profile_arn",
-        "new_settings.job_clusters.new_cluster.single_user_name",
-        "new_settings.job_clusters.new_cluster.ssh_public_keys",
-        "new_settings.run_as",
-        "new_settings.tasks.new_cluster.aws_attributes.instance_profile_arn",
-        "new_settings.tasks.new_cluster.single_user_name",
-        "new_settings.tasks.new_cluster.ssh_public_keys"
-      ]
+      "access": "admin"
     },
     {
       "operation": "catalog.Rfa.UpdateAccessRequestDestinations",
