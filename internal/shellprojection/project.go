@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -1021,40 +1022,37 @@ func (op curlOperation) method() string {
 
 // withUpload returns the operation and URL as curl sends its index-th URL:
 // each -T applies to one URL in turn, and a URL ending in / gets the upload
-// file's name appended (each name of a globbed one).
-func (op curlOperation) withUpload(index int, urlText string) (curlOperation, []string) {
+// file's name appended, unless --request-target sets the path. readable is
+// false when that name is a glob or holds a backslash, which the projection
+// does not model.
+func (op curlOperation) withUpload(index int, urlText string) (_ curlOperation, _ string, readable bool) {
 	file := ""
 	if index < len(op.uploads) {
 		file = op.uploads[index]
 	}
 	op.upload = file != ""
 	parsed, err := url.Parse(urlText)
-	if !op.upload || file == "-" || file == "." || err != nil || !strings.HasSuffix("/"+parsed.Path, "/") {
-		return op, []string{urlText}
+	if !op.upload || op.requestTarget != "" || file == "-" || file == "." || err != nil || !strings.HasSuffix("/"+parsed.Path, "/") {
+		return op, urlText, true
 	}
-	names, _ := expandCurlGlob(file)
-	urls := make([]string, 0, len(names))
-	for _, name := range names {
-		appended := *parsed
-		appended.Path = strings.TrimSuffix(parsed.Path, "/") + "/" + filepath.Base(name)
-		appended.RawPath = ""
-		urls = append(urls, appended.String())
+	if strings.ContainsAny(file, "{}[]\\") {
+		return op, urlText, false
 	}
-	return op, urls
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/") + "/" + path.Base(file)
+	parsed.RawPath = ""
+	return op, parsed.String(), true
 }
 
 func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
+	// unclear is set when the request cannot be read exactly: a word the
+	// shell computes, a config file (-K), which can set any option, or an
+	// option the parser does not know followed by one that it may have taken
+	// as its value. By decision, a Databricks request that cannot be read
+	// exactly is unrecognized with no tier: it fails open.
+	unclear := !complete && slices.Contains(args, "")
 	args = slices.Clone(args)
 	var operations []curlOperation
 	var op curlOperation
-	// everyMethod is set when the options cannot be told apart reliably: a
-	// --next right after an option the parser does not know (it may be that
-	// option's value), or a config file (-K), which can set any option. Every
-	// URL is then also judged under every method and with every body.
-	everyMethod := false
-	// A config file can also replace the request target.
-	config := false
-	var methods []string
 	safeFlags := map[string]bool{"-s": true, "-S": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
 	unknownBefore := false
 	for i := 0; i < len(args); i++ {
@@ -1066,9 +1064,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			continue
 		}
 		if unknownBefore && strings.HasPrefix(arg, "-") {
-			// The unknown option before may have taken this word as its
-			// value, so the method this option implies is not certain.
-			everyMethod = true
+			unclear = true
 		}
 		if arg == "--" && !unknownBefore {
 			// Everything after the option terminator is a URL.
@@ -1093,7 +1089,6 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		case arg == "-X" || arg == "--request" || strings.HasPrefix(arg, "--request="):
 			if method, ok := value("--request"); ok {
 				op.custom = strings.ToUpper(method)
-				methods = append(methods, op.custom)
 			}
 		case arg == "--request-target" || strings.HasPrefix(arg, "--request-target="):
 			op.requestTarget, _ = value("--request-target")
@@ -1126,7 +1121,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				op.upload = op.upload || file != ""
 			}
 		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
-			everyMethod, config = true, true
+			unclear = true
 			complete = false
 			value("--config")
 		case curlValueOption(arg):
@@ -1143,7 +1138,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			complete = false
 		case safeFlags[arg]:
 		case arg == "--next" || arg == "-:":
-			everyMethod = everyMethod || unknownBefore
+			unclear = unclear || unknownBefore
 			complete = false
 			operations = append(operations, op)
 			op = curlOperation{}
@@ -1165,103 +1160,47 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	operations = append(operations, op)
 
 	// Each URL of each operation is judged with that operation's method and
-	// body; under everyMethod also with every method and every body.
+	// body. A URL glob ({a,b}, [x-y]) is not expanded: a Databricks URL with
+	// one is unrecognized, and any other is read as written.
 	type request struct {
 		urlText, method string
 		bodies          []string
 		bodyFile        bool
 	}
 	var requests []request
-	var overflowed []string
-	var all curlOperation
+	var unrecognized []string
 	for _, op := range operations {
 		for index, urlText := range op.urls {
-			// curl expands a glob first, so a glob can spell the scheme.
-			expanded, ok := expandCurlGlob(urlText)
-			if !ok {
-				overflowed = append(overflowed, urlText)
+			normalized := normalizeCurlURL(urlText, cmp.Or(op.protoDefault, "http"))
+			if op.requestTarget != "" {
+				normalized = withRequestTarget(normalized, op.requestTarget)
 			}
-			for _, each := range expanded {
-				each = normalizeCurlURL(each, cmp.Or(op.protoDefault, "http"))
-				if op.requestTarget != "" {
-					each = withRequestTarget(each, op.requestTarget)
-				}
-				sent, urls := op.withUpload(index, each)
-				for _, each := range urls {
-					requests = append(requests, request{each, sent.method(), op.bodies, op.bodyFile})
-					all.urls = append(all.urls, each)
+			sent, sentURL, readable := op.withUpload(index, normalized)
+			if unclear || !readable || strings.ContainsAny(urlText, "{}[]") {
+				if databricksURL(urlText) || databricksURL(normalized) {
+					unrecognized = append(unrecognized, FactDatabricksRouteUnrecognized)
+					continue
 				}
 			}
-		}
-		all.bodies = append(all.bodies, op.bodies...)
-		all.bodyFile = all.bodyFile || op.bodyFile
-		all.head, all.upload, all.data = all.head || op.head, all.upload || op.upload, all.data || op.data
-	}
-	if everyMethod {
-		methods = append(methods, "GET", "POST", "PUT", "PATCH", "DELETE")
-		if all.head {
-			methods = append(methods, "HEAD")
-		}
-		for _, urlText := range all.urls {
-			for _, method := range methods {
-				requests = append(requests, request{urlText, method, all.bodies, all.bodyFile})
-			}
+			requests = append(requests, request{sentURL, sent.method(), op.bodies, op.bodyFile})
 		}
 	}
-	if len(requests) <= 1 && len(operations) == 1 && len(overflowed) == 0 {
+	if len(requests) <= 1 && len(operations) == 1 && len(unrecognized) == 0 {
 		if len(requests) == 0 {
 			return classifyCurlURL("", op.method(), op.bodies, complete, op.bodyFile)
 		}
 		return classifyCurlURL(requests[0].urlText, requests[0].method, requests[0].bodies, complete, requests[0].bodyFile)
 	}
-	// Several requests: each is judged, and the whole is never a catalogued
-	// route.
-	var facts, features []string
+	// Several requests, or one that is unrecognized: each is judged, and the
+	// whole is never a catalogued route.
+	facts := unrecognized
+	var features []string
 	for _, each := range requests {
 		projection := classifyCurlURL(each.urlText, each.method, each.bodies, false, each.bodyFile)
 		facts = append(facts, projection.Facts...)
 		features = append(features, projection.Features...)
 	}
-	for _, urlText := range overflowed {
-		facts = append(facts, curlGlobOverflowFacts(urlText)...)
-	}
-	if config {
-		for _, urlText := range all.urls {
-			facts = append(facts, databricksUnreadableURLFacts(urlText)...)
-		}
-	}
 	return projection("curl", mergeDatabricksProducts(facts), features, false)
-}
-
-// curlGlobOverflowFacts are the facts of a globbed URL too large to expand.
-// Its host part is expanded on its own, so a glob in the host still names
-// it.
-func curlGlobOverflowFacts(urlText string) []string {
-	urlText = normalizeCurlURL(urlText, "http")
-	start := strings.Index(urlText, "://") + 3
-	end := strings.IndexAny(urlText[start:], "/?#")
-	if end < 0 {
-		end = len(urlText) - start
-	}
-	host := urlText[start : start+end]
-	hosts, ok := expandCurlGlob(host)
-	if !ok {
-		// The host is past the cap too: judge it by the fixed text after its
-		// last glob, which may still rule Databricks out.
-		tail := strings.ToLower(host[strings.LastIndexAny(host, "}]")+1:])
-		if slices.ContainsFunc(databricksDomains, func(domain string) bool {
-			return strings.HasSuffix(tail, domain) || strings.HasSuffix("."+domain, tail)
-		}) {
-			return databricksWorstFacts()
-		}
-		return nil
-	}
-	for _, each := range hosts {
-		if facts := databricksUnreadableURLFacts("https://" + each); facts != nil {
-			return facts
-		}
-	}
-	return nil
 }
 
 // curlSwitches are common curl options that take no value.
@@ -1382,8 +1321,8 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 	}
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		var facts []string
-		if err != nil || parsed.Host == "" {
-			facts = databricksUnreadableURLFacts(urlText)
+		if (err != nil || parsed.Host == "") && databricksURL(urlText) {
+			facts = []string{FactDatabricksRouteUnrecognized}
 		}
 		return projection("curl", facts, []string{"dynamic-or-invalid-url"}, false)
 	}
@@ -1422,69 +1361,6 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		facts = replaceFact(facts, "github/route=catalogued", FactRouteUnrecognized)
 	}
 	return projection("curl", facts, features, complete)
-}
-
-// maxCurlGlob bounds the URLs a globbed URL expands to.
-const maxCurlGlob = 256
-
-var curlGlob = regexp.MustCompile(`\{[^{}]*\}|\[(?:([0-9]+)-([0-9]+)|([a-zA-Z])-([a-zA-Z]))(?::([0-9]+))?\]`)
-
-// expandCurlGlob returns the URLs curl requests for a globbed URL: every
-// combination of its {a,b} alternatives and [x-y] ranges, which can change
-// the route. ok is false past maxCurlGlob URLs, and the URLs returned then
-// keep the rest of the glob literally.
-func expandCurlGlob(urlText string) (urls []string, ok bool) {
-	urls = []string{""}
-	last := 0
-	for _, match := range curlGlob.FindAllStringSubmatchIndex(urlText, -1) {
-		alternatives := curlGlobValues(urlText, match)
-		if len(urls)*len(alternatives) > maxCurlGlob {
-			break
-		}
-		var next []string
-		for _, prefix := range urls {
-			for _, alternative := range alternatives {
-				next = append(next, prefix+urlText[last:match[0]]+alternative)
-			}
-		}
-		urls, last = next, match[1]
-	}
-	for i := range urls {
-		urls[i] += urlText[last:]
-	}
-	return urls, last == len(urlText) || !curlGlob.MatchString(urlText[last:])
-}
-
-func curlGlobValues(urlText string, match []int) []string {
-	if urlText[match[0]] == '{' {
-		return strings.Split(urlText[match[0]+1:match[1]-1], ",")
-	}
-	step := 1
-	if match[10] >= 0 {
-		step, _ = strconv.Atoi(urlText[match[10]:match[11]])
-		step = max(step, 1)
-	}
-	var values []string
-	if match[2] >= 0 {
-		from, to := urlText[match[2]:match[3]], urlText[match[4]:match[5]]
-		low, _ := strconv.Atoi(from)
-		high, _ := strconv.Atoi(to)
-		for value := low; value <= high && len(values) <= maxCurlGlob; value += step {
-			text := strconv.Itoa(value)
-			if len(from) > 1 && from[0] == '0' {
-				text = strings.Repeat("0", max(len(from)-len(text), 0)) + text
-			}
-			values = append(values, text)
-		}
-		return values
-	}
-	for value := urlText[match[6]]; value <= urlText[match[8]] && len(values) <= maxCurlGlob; value += byte(step) {
-		values = append(values, string(value))
-		if int(value)+step > 'z' {
-			break
-		}
-	}
-	return values
 }
 
 var curlDataFlags = map[string]bool{"-d": true, "--data": true, "--data-raw": true, "--data-binary": true, "--data-urlencode": true, "--data-ascii": true, "--json": true, "-F": true, "--form": true, "--form-string": true}

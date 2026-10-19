@@ -279,8 +279,7 @@ func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV
 		case arg == "--":
 			i = len(args)
 		case arg == "":
-			// Cobra skips an empty word. A dynamic one (already incomplete)
-			// may be a flag, so the command around it still counts.
+			// Cobra skips an empty word; a dynamic one is judged below.
 			dynamic = true
 		case strings.HasPrefix(arg, "-") && len(arg) > 1:
 			if !strings.Contains(arg, "=") && !databricksBoolFlags[arg] && (strings.HasPrefix(arg, "--") || len(arg) == 2) {
@@ -328,6 +327,15 @@ func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV
 	}
 	rest := withoutIndexes(args, pathIndexes[:length])
 	command := strings.Join(path[:length], " ")
+	commandFact := productDatabricks + "/command=" + strings.Join(path[:length], "/")
+	// A word the shell computes may be a flag or a command word. Before the
+	// last command word, or in a command a flag raises, it leaves the call
+	// unreadable, and by decision what cannot be read exactly is
+	// unrecognized with no tier. Elsewhere it is an argument and the tier
+	// holds.
+	if at := slices.Index(args, ""); !complete && at >= 0 && (at < pathIndexes[length-1] || databricksFlagRaises[command] != nil) {
+		return projection(productDatabricks, []string{FactDatabricksRouteUnrecognized, commandFact}, nil, false)
+	}
 	if op.sql {
 		op = op.raiseSQL(databricksSQLArgs(rest))
 	}
@@ -336,7 +344,7 @@ func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV
 			op = op.raise(by)
 		}
 	}
-	facts := append(op.facts(), productDatabricks+"/command="+strings.Join(path[:length], "/"))
+	facts := append(op.facts(), commandFact)
 	if !complete {
 		facts = replaceFact(facts, FactDatabricksRouteCatalogued, FactDatabricksRouteUnrecognized)
 	}
@@ -414,10 +422,16 @@ func classifyDatabricksAPI(method string, args []string, complete bool) cedareva
 	method = strings.ToUpper(method)
 	var target string
 	var bodies []string
+	// A computed word other than the body may be the path or a flag: the
+	// call is then unrecognized with no tier. A computed body keeps the
+	// route's tier, as SQL the projection cannot read does.
+	dynamic := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		value, isJSON := "", false
 		switch {
+		case arg == "" && !complete:
+			dynamic = true
 		case arg == "--json" && i+1 < len(args):
 			i++
 			value, isJSON = args[i], true
@@ -432,6 +446,9 @@ func classifyDatabricksAPI(method string, args []string, complete bool) cedareva
 		if isJSON {
 			bodies = append(bodies, value)
 		}
+	}
+	if dynamic {
+		return projection(productDatabricks, []string{"databricks/command=api/" + strings.ToLower(method), FactDatabricksRouteUnrecognized}, nil, false)
 	}
 	if target != "" && !strings.Contains(target, "://") && !strings.HasPrefix(target, "/") {
 		// Read a relative path as rooted, in case the client joins it so.
@@ -485,12 +502,7 @@ func databricksRouteFacts(method, requestPath string, bodies []string) ([]string
 	}
 	op := databricksAccess(route.Product, route.Access)
 	if route.Method == "POST" && route.Path == databricksSQLRoute {
-		statements, ok := databricksStatements(bodies)
-		op = op.raiseSQL(statements)
-		if !ok {
-			// Too many pieces to join every way: assume the worst.
-			op = op.raise(databricksOperation{product: "secrets", write: true, del: true, admin: true})
-		}
+		op = op.raiseSQL(databricksStatements(bodies))
 	}
 	return op.facts(), true
 }
@@ -506,8 +518,9 @@ const databricksMaxBodyPieces = 8
 // --json, so each piece alone and every join of the pieces is read. A piece
 // read from a file (@name) is unknown and read as empty. Past
 // databricksMaxBodyPieces only each piece and the two uniform joins are
-// read, and ok is false.
-func databricksStatements(bodies []string) (statements []string, ok bool) {
+// read: SQL split some other way across more pieces keeps sql/write, as SQL
+// the projection cannot read does.
+func databricksStatements(bodies []string) (statements []string) {
 	var pieces []string
 	for _, body := range bodies {
 		if !strings.HasPrefix(body, "@") {
@@ -515,8 +528,7 @@ func databricksStatements(bodies []string) (statements []string, ok bool) {
 		}
 	}
 	candidates := append(slices.Clone(pieces), strings.Join(pieces, ""), strings.Join(pieces, "&"))
-	ok = len(pieces) <= databricksMaxBodyPieces
-	for mask := 0; ok && len(pieces) > 1 && mask < 1<<(len(pieces)-1); mask++ {
+	for mask := 0; len(pieces) <= databricksMaxBodyPieces && len(pieces) > 1 && mask < 1<<(len(pieces)-1); mask++ {
 		var joined strings.Builder
 		for i, piece := range pieces {
 			if i > 0 && mask&(1<<(i-1)) != 0 {
@@ -529,7 +541,7 @@ func databricksStatements(bodies []string) (statements []string, ok bool) {
 	for _, body := range candidates {
 		statements = append(statements, jsonStatements(body)...)
 	}
-	return statements, ok
+	return statements
 }
 
 func jsonStatements(body string) []string {
@@ -573,38 +585,35 @@ func mergeDatabricksProducts(facts []string) []string {
 // databricksDomains are the domains in a URL that may name a Databricks host.
 var databricksDomains = []string{"databricks.com", "azuredatabricks.net", "databricks.us", "databricks.mil", "databricks.azure.us", "databricks.azure.cn"}
 
-// databricksUnreadableURLFacts are the facts of a curl URL whose request
-// the projection cannot read (a glob too large to expand, or a config file
-// that may replace its target) on a Databricks host, or of a URL that does
-// not parse and names a Databricks domain in its host part: it could reach
-// any route, so it carries every tier and the products the presets single
-// out.
-func databricksUnreadableURLFacts(urlText string) []string {
-	if parsed, err := url.Parse(urlText); err == nil && parsed.Host != "" {
-		if toolcatalog.IsDatabricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")) {
-			return databricksWorstFacts()
-		}
-		return nil
+// databricksURL reports a URL whose host is, or may be, a Databricks host:
+// it parses to one, its host part names a Databricks domain (an escape can
+// keep it from parsing), or a glob in the host ends in text a Databricks
+// domain could end with.
+func databricksURL(urlText string) bool {
+	if parsed, err := url.Parse(urlText); err == nil && parsed.Host != "" &&
+		toolcatalog.IsDatabricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")) {
+		return true
 	}
-	authority := strings.ToLower(urlText)
-	if scheme := strings.Index(authority, "://"); scheme >= 0 {
-		authority = authority[scheme+3:]
+	host := strings.ToLower(urlText)
+	if scheme := strings.LastIndex(host, "://"); scheme >= 0 && !strings.ContainsAny(host[:scheme], "/?#") {
+		host = host[scheme+3:]
 	}
-	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
-		authority = authority[:end]
+	host = strings.TrimLeft(host, "/")
+	if end := strings.IndexAny(host, "/?#"); end >= 0 {
+		host = host[:end]
 	}
-	if decoded, err := url.PathUnescape(authority); err == nil {
-		authority = decoded
+	if at := strings.LastIndex(host, "@"); at >= 0 {
+		host = host[at+1:]
 	}
-	if slices.ContainsFunc(databricksDomains, func(domain string) bool { return strings.Contains(authority, domain) }) {
-		return databricksWorstFacts()
+	if colon := strings.LastIndex(host, ":"); colon >= 0 && strings.Trim(host[colon+1:], "0123456789") == "" {
+		host = host[:colon]
 	}
-	return nil
-}
-
-// databricksWorstFacts are the facts of a request that could reach any
-// Databricks route: every tier and the products the presets single out.
-func databricksWorstFacts() []string {
-	return []string{FactDatabricksRouteUnrecognized, databricksProductFact("secrets"), databricksProductFact("execution"),
-		writeFact(productDatabricks), deleteFact(productDatabricks), adminFact(productDatabricks)}
+	host = strings.TrimSuffix(host, ".")
+	if decoded, err := url.PathUnescape(host); err == nil {
+		host = decoded
+	}
+	tail := host[strings.LastIndexAny(host, "}]")+1:]
+	return slices.ContainsFunc(databricksDomains, func(domain string) bool {
+		return strings.Contains(host, domain) || strings.ContainsAny(host, "{[") && strings.HasSuffix("."+domain, tail)
+	})
 }
