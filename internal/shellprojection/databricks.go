@@ -446,13 +446,14 @@ func classifyDatabricksCurl(host string, parsed *url.URL, method string, bodies 
 }
 
 // databricksRouteFacts looks a request up in the route table. Curl and the
-// server resolve dot segments, so the path is cleaned first. MCP endpoints
+// server resolve dot segments and repeated slashes, so the path is cleaned
+// first. MCP endpoints
 // carry their operation in a JSON-RPC body the projection does not read, so
 // they are unrecognized. A POST to the SQL statements route raises its tier
 // by the statements in its literal body pieces; a piece read from a file
 // adds nothing, so SQL only in a file keeps the base tier.
 func databricksRouteFacts(method, requestPath string, bodies []string) ([]string, bool) {
-	if hasDotSegment(requestPath) {
+	if requestPath != "" {
 		requestPath = path.Clean(requestPath)
 	}
 	if strings.HasPrefix(requestPath, "/api/2.0/mcp/") || strings.HasPrefix(requestPath, "/ai-gateway/mcp-services/") {

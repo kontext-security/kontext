@@ -175,6 +175,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl one slash after the scheme", "curl -X DELETE https:/dbc-1234.cloud.databricks.com/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"curl glob overflow without a scheme", `curl --proto-default https --json '{"cluster_id":"x"}' 'dbc-1234.cloud.databricks.com/api/2.1/clusters/[a-z][a-z]lete'`, []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
 		{"curl empty attached body is a POST", "curl --json= " + dbHost + "/api/2.0/apps/my-app/start", []string{dbCat, dbP("execution"), dbW}, true},
+		{"curl repeated slashes are collapsed", "curl -X POST -d '{}' " + dbHost + "/api/2.1//clusters///delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.
