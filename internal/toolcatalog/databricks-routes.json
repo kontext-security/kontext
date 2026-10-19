@@ -12803,7 +12803,7 @@
       "commands": [
         "connections create"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "write"
     },
     {
@@ -12836,7 +12836,7 @@
       "commands": [
         "connections update"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "admin",
       "adminFields": [
         "owner"
@@ -13030,7 +13030,7 @@
         "external-locations create"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "catalog.ExternalLocations.Delete",
@@ -13554,7 +13554,7 @@
       "commands": [
         "providers create"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "write"
     },
     {
@@ -13587,7 +13587,7 @@
       "commands": [
         "providers update"
       ],
-      "product": "data",
+      "product": "secrets",
       "access": "admin",
       "adminFields": [
         "owner"
@@ -15067,7 +15067,7 @@
         "data-classification delete-catalog-config"
       ],
       "product": "data",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "dataclassification.DataClassification.GetCatalogConfig",
@@ -15089,7 +15089,7 @@
         "data-classification update-catalog-config"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "dataclassification.DataClassification.CreateCatalogConfig",
@@ -15100,7 +15100,7 @@
         "data-classification create-catalog-config"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "dataquality.DataQuality.ListMonitor",

@@ -1397,7 +1397,9 @@ var databricksServiceProducts = map[string]string{
 // webhook runs the job, installing a library runs its install code, cloning
 // a pipeline starts an update), running SQL (sql; a Genie message generates and runs
 // it) and minting or returning credentials (secrets; a recipient carries
-// its activation URL, a provider its recipient profile's bearer token).
+// its activation URL, a provider its recipient profile's bearer token,
+// which Create and Update import, a connection the database credentials in
+// its options).
 var databricksOperationProducts = map[string]string{
 	"apps.Apps.Deploy":                                       "execution",
 	"apps.Apps.Start":                                        "execution",
@@ -1418,9 +1420,13 @@ var databricksOperationProducts = map[string]string{
 	"catalog.AiGateway.CreateMcpServiceUserMappedCredential": "secrets",
 	"catalog.AiGateway.DeleteMcpServiceUserMappedCredential": "secrets",
 	"catalog.AiGateway.GetMcpServiceUserMappedCredential":    "secrets",
+	"catalog.Connections.Create":                             "secrets",
+	"catalog.Connections.Update":                             "secrets",
 	"catalog.Credentials.GenerateTemporaryServiceCredential": "secrets",
+	"sharing.Providers.Create":                               "secrets",
 	"sharing.Providers.Get":                                  "secrets",
 	"sharing.Providers.List":                                 "secrets",
+	"sharing.Providers.Update":                               "secrets",
 	"sharing.Recipients.Create":                              "secrets",
 	"sharing.Recipients.Get":                                 "secrets",
 	"sharing.Recipients.List":                                "secrets",
@@ -1438,8 +1444,9 @@ var databricksOperationProducts = map[string]string{
 // recipient token is another party's), clean-room approvals that let
 // collaborators' notebooks run unreviewed, cluster policies (the access
 // mode rules live in a JSON string) and cancelling their pending
-// enforcement, governed tag assignments (they drive ABAC row filters and
-// column masks), marketplace exchanges, listings, filters and fulfilled
+// enforcement, governed tag assignments and data classification (they
+// drive ABAC row filters and column masks), external location creation
+// (fallback mode bypasses UC checks), marketplace exchanges, listings, filters and fulfilled
 // personalization requests (who may see shared data), the AI Gateway and
 // endpoint telemetry (PII filtering, guardrails, payload logging), and the external HTTP proxy, whose method and path the
 // caller picks.
@@ -1447,11 +1454,15 @@ var databricksAdminOperations = map[string]bool{
 	"catalog.EntityTagAssignments.Create":                                 true,
 	"catalog.EntityTagAssignments.Delete":                                 true,
 	"catalog.EntityTagAssignments.Update":                                 true,
+	"catalog.ExternalLocations.Create":                                    true,
 	"catalog.Credentials.CreateCredential":                                true,
 	"catalog.Credentials.DeleteCredential":                                true,
 	"catalog.StorageCredentials.Create":                                   true,
 	"catalog.StorageCredentials.Delete":                                   true,
 	"cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview":               true,
+	"dataclassification.DataClassification.CreateCatalogConfig":           true,
+	"dataclassification.DataClassification.DeleteCatalogConfig":           true,
+	"dataclassification.DataClassification.UpdateCatalogConfig":           true,
 	"compute.ClusterPolicies.Create":                                      true,
 	"compute.PolicyComplianceForClusters.CancelPendingClusterEnforcement": true,
 	"compute.ClusterPolicies.Delete":                                      true,
