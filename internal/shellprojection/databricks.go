@@ -206,17 +206,24 @@ var databricksFlagRaises = map[string]map[string]databricksOperation{
 // flagSet reports whether a flag is given with a value other than false or
 // none.
 func flagSet(args []string, flag string) bool {
-	for i, arg := range args {
-		// "--" ends the flags unless it is an earlier option's value
-		// (--log-file --).
-		if arg == "--" && (i == 0 || !databricksMayTakeValue(args[i-1])) {
-			return false
+	set := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case databricksValueFlags[arg]:
+			// A global flag's value (--log-file --overwrite) is not a flag.
+			i++
+			continue
+		case arg == "--" && (i == 0 || !databricksMayTakeValue(args[i-1])):
+			// "--" ends the flags unless an unknown option may have taken it
+			// as its value.
+			return set
+		case arg == flag:
+			set = true
 		}
-		if arg == flag {
-			return true
-		}
-		if value, ok := strings.CutPrefix(arg, flag+"="); ok && flagValueTrue(value) {
-			return true
+		// The last value given wins (--overwrite --overwrite=false).
+		if value, ok := strings.CutPrefix(arg, flag+"="); ok {
+			set = flagValueTrue(value)
 		}
 		// A short flag inside a cluster: -fb is -f -b, and -fb=v gives the
 		// last letter the value. The letters after one that takes a value
@@ -226,12 +233,12 @@ func flagSet(args []string, flag string) bool {
 			if end := strings.IndexAny(letters, databricksShortValueLetters); end >= 0 {
 				letters, hasValue = letters[:end], false
 			}
-			if at := strings.IndexByte(letters, flag[1]); at >= 0 && (!hasValue || at < len(letters)-1 || flagValueTrue(value)) {
-				return true
+			if at := strings.IndexByte(letters, flag[1]); at >= 0 {
+				set = !hasValue || at < len(letters)-1 || flagValueTrue(value)
 			}
 		}
 	}
-	return false
+	return set
 }
 
 // databricksShortValueLetters are the one-letter flags of the commands with
