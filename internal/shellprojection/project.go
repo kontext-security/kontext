@@ -70,6 +70,10 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	calls := make([]*syntax.CallExpr, 0, 4)
 	nodes, nesting := 0, 0
 	tooComplex := false
+	// A nameref (declare -n H='arr[@]') makes a plain quoted "$H" expand to
+	// several arguments, and eval or source can declare one, so with any of
+	// them in the script no word counts as provably one argument.
+	namerefs := false
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil {
 			nesting--
@@ -83,6 +87,12 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 		}
 		if call, ok := node.(*syntax.CallExpr); ok && len(call.Args) > 0 {
 			calls = append(calls, call)
+			if first, _ := literalWord(call.Args[0]); first == "eval" || first == "source" || first == "." {
+				namerefs = true
+			}
+		}
+		if decl, ok := node.(*syntax.DeclClause); ok && declaresNameref(decl) {
+			namerefs = true
 		}
 		return true
 	})
@@ -101,7 +111,7 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 		// No wrapper either: env, sudo and launchers can rewrite argv.
 		direct := len(words) > 0 && words[0] == "gh"
 		cw := w
-		cw.oneArgumentEach = !slices.ContainsFunc(call.Args, func(word *syntax.Word) bool { return !oneArgument(word) })
+		cw.oneArgumentEach = !namerefs && !slices.ContainsFunc(call.Args, func(word *syntax.Word) bool { return !oneArgument(word) })
 		projections = append(projections, classify(words, complete, cw, helpAllowed && direct)...)
 	}
 	if len(projections) == 0 {
@@ -112,6 +122,24 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 
 // singlePlainCall reports a script that is one simple command with no
 // variable assignments (`BASH_ALIASES[gh]=…` defines an alias too).
+// declaresNameref reports a declare, local or typeset that may make a name a
+// reference (-n, or a flag it cannot read).
+func declaresNameref(decl *syntax.DeclClause) bool {
+	if decl.Variant != nil && decl.Variant.Value == "nameref" {
+		return true
+	}
+	for _, arg := range decl.Args {
+		if !arg.Naked || arg.Value == nil {
+			continue
+		}
+		flag, ok := literalWord(arg.Value)
+		if !ok || strings.HasPrefix(flag, "-") && strings.Contains(flag, "n") || strings.HasPrefix(flag, "+") && strings.Contains(flag, "n") {
+			return true
+		}
+	}
+	return false
+}
+
 // oneArgument reports a word the shell provably expands to exactly one
 // argument: outside quotes a literal with no brace expansion ({a,-X,DELETE})
 // and no glob, except the ? of a URL query; inside double quotes anything
