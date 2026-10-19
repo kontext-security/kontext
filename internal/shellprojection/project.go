@@ -3,6 +3,8 @@ package shellprojection
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
+	"math"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -993,10 +995,12 @@ type curlOperation struct {
 	// else is set; otherwise -I, -G, -T and a body imply one.
 	custom                  string
 	head, get, upload, data bool
-	requestTarget           string
-	protoDefault            string
-	urls, bodies            []string
-	bodyFile                bool
+	// uploads counts the -T files; a globbed one counts as many.
+	uploads       int
+	requestTarget string
+	protoDefault  string
+	urls, bodies  []string
+	bodyFile      bool
 }
 
 func (op curlOperation) method() string {
@@ -1013,6 +1017,14 @@ func (op curlOperation) method() string {
 		return "POST"
 	}
 	return "GET"
+}
+
+// withUpload returns the operation as curl sends its index-th URL: each -T
+// applies to one URL in turn, so a URL past the uploads goes without one. A
+// globbed -T can upload to any number of URLs.
+func (op curlOperation) withUpload(index int) curlOperation {
+	op.upload = index < op.uploads
+	return op
 }
 
 func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
@@ -1041,6 +1053,11 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			// The unknown option before may have taken this word as its
 			// value, so the method this option implies is not certain.
 			everyMethod = true
+		}
+		if arg == "--" && !unknownBefore {
+			// Everything after the option terminator is a URL.
+			op.urls = append(op.urls, args[i+1:]...)
+			break
 		}
 		unknown := false
 		// value returns the option's value: attached after = or the next word.
@@ -1084,11 +1101,16 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				continue
 			}
 			i++
-			body, isBody = args[i], true
+			body, isBody = curlBody(arg, args[i]), true
 		case isBody:
 		case arg == "-T" || arg == "--upload-file" || strings.HasPrefix(arg, "--upload-file="):
-			if _, ok := value("--upload-file"); ok {
+			// An empty file name is no upload.
+			if file, ok := value("--upload-file"); ok && file != "" {
 				op.upload = true
+				op.uploads++
+				if strings.ContainsAny(file, "{[") {
+					op.uploads = math.MaxInt
+				}
 			}
 		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
 			everyMethod, config = true, true
@@ -1139,7 +1161,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	var overflowed []string
 	var all curlOperation
 	for _, op := range operations {
-		for _, urlText := range op.urls {
+		for index, urlText := range op.urls {
 			// curl expands a glob first, so a glob can spell the scheme.
 			expanded, ok := expandCurlGlob(urlText)
 			if !ok {
@@ -1150,7 +1172,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				if op.requestTarget != "" {
 					each = withRequestTarget(each, op.requestTarget)
 				}
-				requests = append(requests, request{each, op.method(), op.bodies, op.bodyFile})
+				requests = append(requests, request{each, op.withUpload(index).method(), op.bodies, op.bodyFile})
 				all.urls = append(all.urls, each)
 			}
 		}
@@ -1434,13 +1456,48 @@ func isCurlDataFlag(arg string) bool {
 func curlDataOption(arg string) (string, bool) {
 	for _, prefix := range []string{"--data=", "--data-raw=", "--data-binary=", "--data-urlencode=", "--data-ascii=", "--json=", "--form=", "--form-string="} {
 		if value, ok := strings.CutPrefix(arg, prefix); ok {
-			return value, true
+			return curlBody(strings.TrimSuffix(prefix, "="), value), true
 		}
 	}
 	if strings.HasPrefix(arg, "-d") && len(arg) > 2 || strings.HasPrefix(arg, "-F") && len(arg) > 2 {
 		return arg[2:], true
 	}
 	return "", false
+}
+
+// curlBody returns the body piece curl sends for a data option's value:
+// --data-urlencode percent-encodes the content (all of it, after a leading =,
+// or after name=); a piece read from a file stays @name.
+func curlBody(flag, value string) string {
+	if flag != "--data-urlencode" {
+		return value
+	}
+	name, content, hasName := strings.Cut(value, "=")
+	if !hasName {
+		if before, file, ok := strings.Cut(value, "@"); ok && !strings.ContainsAny(before, "=") {
+			return "@" + file
+		}
+		return curlEscape(value)
+	}
+	if name == "" {
+		return curlEscape(content)
+	}
+	return name + "=" + curlEscape(content)
+}
+
+// curlEscape percent-encodes every byte but letters, digits and -._~, as
+// curl_easy_escape does.
+func curlEscape(value string) string {
+	var out strings.Builder
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("-._~", c) >= 0 {
+			out.WriteByte(c)
+		} else {
+			fmt.Fprintf(&out, "%%%02X", c)
+		}
+	}
+	return out.String()
 }
 
 func containsForceBody(bodies []string) bool {

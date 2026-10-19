@@ -190,6 +190,10 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl request target only for its own operation", "curl '" + dbHost + "/api/2.0/secrets/get?scope=s&key=k' --next --request-target /api/2.1/clusters/list " + dbHost + "/", []string{dbP("compute"), dbP("secrets"), dbUnk}, false},
 		{"curl glob overflow with a globbed host", `curl --json '{"cluster_id":"x"}' 'https://dbc-1234.cloud.databr{icks,icks}.com/api/2.1/clusters/[a-z][a-z]lete'`, []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
 		{"curl glob overflow on another host", "curl 'https://example.com/[a-z][a-z]'", nil, false},
+		{"curl empty -T is no upload", `curl -T '' --json '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
+		{"curl -T applies to the first URL only", `curl -T f.json --json '{"cluster_id":"x"}' https://example.com/upload ` + dbHost + "/api/2.1/clusters/delete", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
+		{"curl options after -- are URLs", `curl --json '{"cluster_id":"x"}' -- ` + dbHost + "/api/2.1/clusters/delete -G", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
+		{"curl --data-urlencode is encoded before the JSON is read", `curl --data-urlencode '{"warehouse_id":"w","statement":"DROP TABLE t -- =\q' --json '"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbD, dbP("sql"), dbW}, true},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.
