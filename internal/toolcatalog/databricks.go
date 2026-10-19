@@ -39,6 +39,7 @@ type DatabricksOperation struct {
 type databricksTable struct {
 	CLI    string                `json:"cli"`
 	SDK    string                `json:"sdk"`
+	Rules  string                `json:"rules"`
 	Routes []DatabricksOperation `json:"routes"`
 }
 

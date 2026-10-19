@@ -1,6 +1,7 @@
 {
   "cli": "v1.21.0",
   "sdk": "v0.188.0",
+  "rules": "f2ddb7860df203613cfddffb25bba4b227d2e5d002cd1833cfe37f0092b9747d",
   "routes": [
     {
       "operation": "cli.apps.delete",
@@ -4124,7 +4125,7 @@
         "feature-engineering create-kafka-config"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "ml.FeatureEngineering.DeleteKafkaConfig",
@@ -4157,7 +4158,7 @@
         "feature-engineering update-kafka-config"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "ml.FeatureEngineering.DeleteFeature",
@@ -4297,7 +4298,7 @@
         "feature-engineering create-stream"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "ml.FeatureEngineering.DeleteStream",
@@ -4330,7 +4331,7 @@
         "feature-engineering update-stream"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "ml.FeatureEngineering.GetOperation",
@@ -9321,7 +9322,7 @@
         "postgres create-branch"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.ListCdfConfigs",

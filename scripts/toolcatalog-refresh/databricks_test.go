@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -686,6 +688,25 @@ func TestBuildDatabricksTableFailsOnMissingRestriction(t *testing.T) {
 	cli, sdk := databricksFixtures()
 	if _, _, err := buildDatabricksTable(cli, sdk, "v1.21.0", "v0.188.0"); err == nil || !strings.Contains(err.Error(), "databricksAdminOperations compute.Clusters.RenamedUpstream") {
 		t.Fatalf("err = %v, want the missing restriction named", err)
+	}
+}
+
+// The committed table must come from the rules in this file: a rule edit
+// without a regeneration would ship the old classifications.
+func TestCommittedDatabricksTableMatchesRules(t *testing.T) {
+	raw, err := os.ReadFile("../../internal/toolcatalog/databricks-routes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table databricksTable
+	if err := json.Unmarshal(raw, &table); err != nil {
+		t.Fatal(err)
+	}
+	if table.Rules != databricksRulesFingerprint() {
+		t.Fatal("the Databricks rules changed since the table was generated; run go run ./scripts/toolcatalog-refresh -databricks internal/toolcatalog/databricks-routes.json -write")
+	}
+	if table.CLI != databricksCLIVersion {
+		t.Fatalf("table built from databricks/cli %s, generator pins %s", table.CLI, databricksCLIVersion)
 	}
 }
 

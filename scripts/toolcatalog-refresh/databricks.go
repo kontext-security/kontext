@@ -55,9 +55,35 @@ const (
 )
 
 type databricksTable struct {
-	CLI    string            `json:"cli"`
-	SDK    string            `json:"sdk"`
+	CLI string `json:"cli"`
+	SDK string `json:"sdk"`
+	// Rules fingerprints the reviewed rules below, so a test catches a rule
+	// change that was not regenerated into the table.
+	Rules  string            `json:"rules"`
 	Routes []databricksEntry `json:"routes"`
+}
+
+// databricksRulesFingerprint hashes every reviewed rule the table is built
+// from. encoding/json sorts map keys, so the hash is stable.
+func databricksRulesFingerprint() string {
+	rules, err := json.Marshal(map[string]any{
+		"adminField":        databricksAdminField.String(),
+		"adminOperations":   databricksAdminOperations,
+		"aliases":           databricksCommandAliases,
+		"consumingGets":     databricksConsumingGets,
+		"delete":            databricksDelete.String(),
+		"deleteOperations":  databricksDeleteOperations,
+		"handCommands":      databricksHandCommands,
+		"operationProducts": databricksOperationProducts,
+		"outputField":       databricksOutputField.String(),
+		"permission":        databricksPermission.String(),
+		"postReads":         databricksPostReads,
+		"serviceProducts":   databricksServiceProducts,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return fingerprint(rules)
 }
 
 // databricksEntry is one operation. Hand-kept CLI commands that call no
@@ -322,7 +348,7 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 		entries[chosen].Commands = append(entries[chosen].Commands, command)
 	}
 
-	table := &databricksTable{CLI: cliVersion, SDK: sdkVersion}
+	table := &databricksTable{CLI: cliVersion, SDK: sdkVersion, Rules: databricksRulesFingerprint()}
 	var postReads, adminByPayload, suggestedReads []string
 	for _, op := range index.operations {
 		entry := entries[op.id]
@@ -1455,8 +1481,9 @@ var databricksOperationProducts = map[string]string{
 
 // databricksAdminOperations change who can do what without a name, product
 // or body field that says so: database roles (superuser, createrole,
-// bypassrls), database owners (spec.role) and branch protection, secret
-// ACLs, Unity Catalog
+// bypassrls), database owners (spec.role) and branch protection (create
+// can replace an existing branch), secret ACLs, Kafka and stream
+// connection security (TLS verification, client certificates), Unity Catalog
 // storage and service credentials (they map cloud IAM roles), AI Gateway
 // MCP, model and model provider services (tool selectors, rate limits,
 // payload logging; an update can retarget the URL and keep the key), the
@@ -1501,6 +1528,10 @@ var databricksAdminOperations = map[string]bool{
 	"marketplace.ProviderExchanges.Update":                                true,
 	"marketplace.ProviderExchanges.AddListingToExchange":                  true,
 	"marketplace.ProviderExchanges.DeleteListingFromExchange":             true,
+	"ml.FeatureEngineering.CreateKafkaConfig":                             true,
+	"ml.FeatureEngineering.CreateStream":                                  true,
+	"ml.FeatureEngineering.UpdateKafkaConfig":                             true,
+	"ml.FeatureEngineering.UpdateStream":                                  true,
 	"marketplace.ProviderExchangeFilters.Create":                          true,
 	"marketplace.ProviderExchangeFilters.Delete":                          true,
 	"marketplace.ProviderExchangeFilters.Update":                          true,
@@ -1522,6 +1553,7 @@ var databricksAdminOperations = map[string]bool{
 	"postgres.Postgres.CreateDatabase":                                    true,
 	"postgres.Postgres.CreateRole":                                        true,
 	"postgres.Postgres.DeleteRole":                                        true,
+	"postgres.Postgres.CreateBranch":                                      true,
 	"postgres.Postgres.UpdateBranch":                                      true,
 	"postgres.Postgres.UpdateDatabase":                                    true,
 	"postgres.Postgres.UpdateRole":                                        true,
