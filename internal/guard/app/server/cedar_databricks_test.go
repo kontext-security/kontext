@@ -33,6 +33,9 @@ func decideDatabricks(t *testing.T, provider PolicyProvider, event risk.HookEven
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.HasPrefix(event.ToolName, "mcp__") && !strings.HasPrefix(decision.Cedar.ToolID, "databricks-mcp/") {
+		t.Fatalf("%s did not resolve to a Databricks MCP tool: %q", event.ToolName, decision.Cedar.ToolID)
+	}
 	if decision.Cedar.EngineErrorCount != 0 || len(decision.Cedar.ContextDiagnostics) != 0 {
 		t.Fatalf("decision = %#v, want no evaluation errors", decision)
 	}

@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
-	"github.com/kontext-security/kontext/internal/toolcatalog"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -1222,7 +1221,7 @@ var curlSwitches = words("-L", "--location", "--location-trusted", "-k", "--inse
 	"-a", "--proxy-insecure", "--proxy-anyauth", "--proxy-basic", "--proxy-digest", "--proxy-negotiate",
 	"--proxy-ntlm", "--doh-insecure", "--cert-status", "--false-start", "--sasl-ir", "--metalink", "-M", "--manual")
 
-var curlScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*):/*`)
+var curlScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*):/+`)
 
 // normalizeCurlURL reads a URL the way curl does: without a scheme it uses
 // --proto-default (http unless set), any number of slashes may follow the
@@ -1233,7 +1232,7 @@ func normalizeCurlURL(urlText, protoDefault string) string {
 		return ""
 	}
 	scheme, rest := protoDefault, urlText
-	if match := curlScheme.FindStringSubmatch(urlText); match != nil && strings.Contains(urlText, ":/") {
+	if match := curlScheme.FindStringSubmatch(urlText); match != nil {
 		scheme, rest = match[1], urlText[len(match[0]):]
 	}
 	end := strings.IndexAny(rest, "/?#")
@@ -1318,17 +1317,13 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		// Plain HTTP to a provider is still that provider's request; it is
 		// judged like HTTPS but never as a catalogued route.
 		host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-		if isAtlassianHost(host) || isHubSpotHost(host) || toolcatalog.IsDatabricksHost(host) || isJiraServerPath(parsed.Path) {
+		if isAtlassianHost(host) || isHubSpotHost(host) || databricksHost(host) || isJiraServerPath(parsed.Path) {
 			parsed.Scheme = "https"
 			complete = false
 		}
 	}
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		var facts []string
-		if (err != nil || parsed.Host == "") && databricksURL(urlText) {
-			facts = []string{FactDatabricksRouteUnrecognized}
-		}
-		return projection("curl", facts, []string{"dynamic-or-invalid-url"}, false)
+		return projection("curl", nil, []string{"dynamic-or-invalid-url"}, false)
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 	switch {
@@ -1336,7 +1331,7 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)
 	case isHubSpotHost(host):
 		return classifyHubSpotCurl(host, parsed, method, complete, bodyFile)
-	case toolcatalog.IsDatabricksHost(host):
+	case databricksHost(host):
 		return classifyDatabricksCurl(host, parsed, method, bodies, complete)
 	case isJiraServerPath(parsed.Path):
 		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)

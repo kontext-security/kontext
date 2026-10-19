@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/url"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -584,54 +583,16 @@ func mergeDatabricksProducts(facts []string) []string {
 	return slices.DeleteFunc(facts, func(fact string) bool { return fact == sql })
 }
 
-// databricksDomains are the domains in a URL that may name a Databricks host.
-var databricksDomains = []string{"databricks.com", "azuredatabricks.net", "databricks.us", "databricks.mil", "databricks.azure.us", "databricks.azure.cn"}
-
-// databricksURL reports a URL whose host is, or may be, a Databricks host. A
-// host that parses without a glob is judged exactly, so docs and lookalike
-// hosts are not Databricks. Otherwise (a glob in the scheme, host or port,
-// or an escape that keeps it from parsing) the host part may be Databricks
-// if it names a Databricks domain or a glob in it ends in text one could
-// end with.
-func databricksURL(urlText string) bool {
-	if parsed, err := url.Parse(normalizeCurlURL(urlText, "http")); err == nil && parsed.Host != "" && !strings.ContainsAny(parsed.Host, "{}[]") {
-		return toolcatalog.IsDatabricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), "."))
-	}
-	// Drop the scheme separators so a glob around the scheme
-	// ({https://,http://}host) leaves the host in place, then cut at the
-	// path.
-	host := databricksSchemeSeparator.ReplaceAllString(strings.ToLower(urlText), "")
-	if end := strings.IndexAny(host, "/?#"); end >= 0 {
-		host = host[:end]
-	}
-	if at := strings.LastIndex(host, "@"); at >= 0 {
-		host = host[at+1:]
-	}
-	// The port starts at the first colon outside a glob ([1-9:2] has one).
-	depth := 0
-	for i, c := range host {
-		switch c {
-		case '[', '{':
-			depth++
-		case ']', '}':
-			depth--
-		case ':':
-			if depth == 0 {
-				host = host[:i]
-			}
-		}
-		if c == ':' && depth == 0 {
-			break
-		}
-	}
-	host = strings.TrimSuffix(host, ".")
-	if decoded, err := url.PathUnescape(host); err == nil {
-		host = decoded
-	}
-	tail := host[strings.LastIndexAny(host, "}]")+1:]
-	return slices.ContainsFunc(databricksDomains, func(domain string) bool {
-		return strings.Contains(host, domain) || strings.ContainsAny(host, "{[") && strings.HasSuffix("."+domain, tail)
-	})
+// databricksHost reports a Databricks workspace or account host. A host with
+// a glob or brace is not identified: if the projection cannot tell a call is
+// Databricks, it is not one (decided, Q1).
+func databricksHost(host string) bool {
+	return !strings.ContainsAny(host, "{}[]") && toolcatalog.IsDatabricksHost(host)
 }
 
-var databricksSchemeSeparator = regexp.MustCompile(`:/+`)
+// databricksURL reports a URL, read as curl reads it, whose host parses and
+// is a Databricks host. A host that is globbed or does not parse is not one.
+func databricksURL(urlText string) bool {
+	parsed, err := url.Parse(normalizeCurlURL(urlText, "http"))
+	return err == nil && parsed.Host != "" && databricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), "."))
+}
