@@ -43,7 +43,7 @@ func TestResolveProviderMCP(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, matched := Resolve(test.tool, test.input)
+			got, matched := Resolve(test.tool, "", test.input)
 			if got != test.want || matched != test.matched {
 				t.Fatalf("Resolve() = %q, %v; want %q, %v", got, matched, test.want, test.matched)
 			}
@@ -139,7 +139,7 @@ func TestUnnamedGitHubToolsReportUnrecognizedWithTheirTier(t *testing.T) {
 		{"mcp__github__delete_file", map[string]any{"owner": "o", "repo": "r"}, GitHubUnrecognizedTool, ProviderClassification{Provider: "github", Product: "code", Access: AccessDelete}},
 	}
 	for _, test := range tests {
-		id, ok := Resolve(test.toolName, test.input)
+		id, ok := Resolve(test.toolName, "", test.input)
 		if !ok || id != test.wantID {
 			t.Errorf("Resolve(%q) = %q, %v; want %q", test.toolName, id, ok, test.wantID)
 		}
@@ -153,5 +153,107 @@ func TestUnnamedGitHubToolsReportUnrecognizedWithTheirTier(t *testing.T) {
 	}
 	if Known("github-mcp/delete_repository") {
 		t.Error("the daemon never reports an unnamed GitHub tool by name")
+	}
+}
+
+func TestResolveByServerURL(t *testing.T) {
+	const (
+		atlassianURL = "https://mcp.atlassian.com/v1/sse"
+		hubspotURL   = "https://MCP.HubSpot.com./anthropic"
+		githubURL    = "https://api.githubcopilot.com/mcp/"
+		otherURL     = "https://mcp.linear.app/sse"
+	)
+	tests := []struct {
+		name    string
+		tool    string
+		url     string
+		input   map[string]any
+		want    string
+		matched bool
+	}{
+		// A generic name on a server with no name hint resolves by URL.
+		{"atlassian generic tool, neutral name", "mcp__work__getTeam", atlassianURL, nil, "atlassian-mcp/getTeam", true},
+		{"atlassian new tool, neutral name", "mcp__work__archiveJiraIssue", atlassianURL, nil, "atlassian-mcp/unrecognized", true},
+		{"hubspot generic tool, case and trailing dot", "mcp__crm__get_user_details", hubspotURL, nil, "hubspot-mcp/get_user_details", true},
+		// The URL decides over a conflicting name.
+		{"atlassian URL named github", "mcp__github__get_me", atlassianURL, map[string]any{}, "atlassian-mcp/unrecognized", true},
+		{"atlassian URL named hubspot", "mcp__hubspot__get_user_details", atlassianURL, nil, "atlassian-mcp/unrecognized", true},
+		{"github URL named atlassian", "mcp__atlassian__get_me", githubURL, map[string]any{}, "github-mcp/get_me", true},
+		{"github URL named hubspot, new tool", "mcp__hubspot__search_crm_objects", githubURL, nil, GitHubUnrecognizedTool, true},
+		// A URL no catalog claims falls back to the name hints.
+		{"unclaimed URL, hinted name", "mcp__jira__getTeam", otherURL, nil, "atlassian-mcp/getTeam", true},
+		{"unclaimed URL, neutral name", "mcp__work__getTeam", otherURL, nil, "", false},
+		{"lookalike host", "mcp__work__getTeam", "https://mcp.atlassian.com.evil.example/v1/sse", nil, "", false},
+		{"not a URL", "mcp__work__getTeam", "npx mcp-remote", nil, "", false},
+		{"no URL", "mcp__work__getTeam", "", nil, "", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, matched := Resolve(test.tool, test.url, test.input)
+			if got != test.want || matched != test.matched {
+				t.Fatalf("Resolve() = %q, %v; want %q, %v", got, matched, test.want, test.matched)
+			}
+		})
+	}
+}
+
+// A server name that hints at a later catalog is held to that catalog
+// before an earlier catalog's distinctive names are tried.
+func TestResolveTriesNameHintedProvidersFirst(t *testing.T) {
+	if got, ok := Resolve("mcp__hubspot__deleteJiraIssue", "", nil); !ok || got != "hubspot-mcp/unrecognized" {
+		t.Fatalf("Resolve() = %q, %v; want hubspot-mcp/unrecognized", got, ok)
+	}
+}
+
+// The vectors kontext-cloud pins in provider-tool-catalog.test.ts
+// (kontext-cloud#1190): both sides must hash a catalog identically.
+func TestProviderDigestMatchesCloudVectors(t *testing.T) {
+	const base = `"provider":"databricks","toolIdPrefix":"databricks-mcp/","version":"2026-10-19","serverNameHints":["databricks"],"sources":[],` +
+		`"tools":[{"name":"genie-space","product":"genie","access":"read"},{"name":"uc-function","product":"unity_catalog","access":"write"}]`
+	tests := map[string]struct{ fields, want string }{
+		"absent": {`"dispatchers":[]`, "e67172264aed3836a6753bb09bfed2c99269a755393f616b404fbf82b1a54be3"},
+		"empty":  {`"dispatchers":[],"serverUrlHints":[],"urlKinds":[]`, "e67172264aed3836a6753bb09bfed2c99269a755393f616b404fbf82b1a54be3"},
+		"unsorted with dispatcher": {
+			`"serverUrlHints":[{"host":"dbc-1234.example.com","pathPrefix":"/api/2.0/mcp/"},{"host":"*.cloud.databricks.com","pathPrefix":"/api/2.0/mcp/"}],` +
+				`"urlKinds":[{"pathPrefix":"/api/2.0/mcp/genie/","toolId":"databricks-mcp/genie-space"},{"pathPrefix":"/api/2.0/mcp/functions/","toolId":"databricks-mcp/uc-function"}],` +
+				`"dispatchers":[{"name":"execute","operationField":"name"}]`,
+			"68da7716c81c102552956a2f4dfef6ee087fc39bd1e85468983d3b222148634f",
+		},
+	}
+	for name, test := range tests {
+		catalog, err := ParseProviderCatalog([]byte("{" + base + "," + test.fields + "}"))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := providerDigest(catalog); got != test.want {
+			t.Errorf("%s: providerDigest() = %s, want %s", name, got, test.want)
+		}
+	}
+}
+
+func TestParseProviderCatalogRejectsBadURLFields(t *testing.T) {
+	const head = `{"provider":"x","toolIdPrefix":"x-mcp/","version":"1","serverNameHints":[],"sources":[],"dispatchers":[],"tools":[{"name":"a","product":"p","access":"read"}],`
+	for name, fields := range map[string]string{
+		"uppercase host":       `"serverUrlHints":[{"host":"MCP.example.com","pathPrefix":"/"}]`,
+		"inner wildcard":       `"serverUrlHints":[{"host":"mcp.*.example.com","pathPrefix":"/"}]`,
+		"bare wildcard":        `"serverUrlHints":[{"host":"*.","pathPrefix":"/"}]`,
+		"empty label":          `"serverUrlHints":[{"host":"mcp..example.com","pathPrefix":"/"}]`,
+		"host with port":       `"serverUrlHints":[{"host":"mcp.example.com:443","pathPrefix":"/"}]`,
+		"relative path":        `"serverUrlHints":[{"host":"mcp.example.com","pathPrefix":"api/"}]`,
+		"path with tab":        `"serverUrlHints":[{"host":"mcp.example.com","pathPrefix":"/a\tb"}]`,
+		"path with space":      `"urlKinds":[{"pathPrefix":"/a b","toolId":"x-mcp/a"}]`,
+		"kind outside prefix":  `"urlKinds":[{"pathPrefix":"/a/","toolId":"y-mcp/a"}]`,
+		"kind not catalogued":  `"urlKinds":[{"pathPrefix":"/a/","toolId":"x-mcp/b"}]`,
+		"kind unrecognized":    `"urlKinds":[{"pathPrefix":"/a/","toolId":"x-mcp/unrecognized"}]`,
+		"host not a string":    `"serverUrlHints":[{"host":1,"pathPrefix":"/"}]`,
+		"unknown hint field":   `"serverUrlHints":[{"host":"mcp.example.com","pathPrefix":"/","port":1}]`,
+		"tool id with newline": `"urlKinds":[{"pathPrefix":"/a/","toolId":"x-mcp/a\n"}]`,
+	} {
+		if _, err := ParseProviderCatalog([]byte(head + fields + "}")); err == nil {
+			t.Errorf("%s: ParseProviderCatalog accepted %s", name, fields)
+		}
+	}
+	if _, err := ParseProviderCatalog([]byte(head + `"serverUrlHints":[{"host":"*.example.com","pathPrefix":"/api/2.0/mcp/"}],"urlKinds":[{"pathPrefix":"/a/","toolId":"x-mcp/a"}]}`)); err != nil {
+		t.Errorf("valid URL fields rejected: %v", err)
 	}
 }

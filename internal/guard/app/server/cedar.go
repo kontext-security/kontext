@@ -12,6 +12,7 @@ import (
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/mcpconfig"
 	"github.com/kontext-security/kontext/internal/shellprojection"
 	"github.com/kontext-security/kontext/internal/toolcatalog"
 )
@@ -312,6 +313,10 @@ func legacyDeployment(snapshot cedarpolicy.Snapshot) *cedarpolicy.LegacyDeployme
 	return snapshot.LegacyLastKnownGood
 }
 
+// mcpServers looks up the URL the agent's configuration gives an MCP server,
+// so catalogued providers are identified by URL before their server name.
+var mcpServers = &mcpconfig.Resolver{}
+
 // resolveTool maps a hook event to its tool id. Shell commands are projected
 // into one entry per call; pinned GitHub MCP tools resolve to their catalog
 // id; every other tool keeps the name the agent reported (an MCP tool as
@@ -329,7 +334,8 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 	if risk.IsShellTool(event.ToolName) || coworkShell {
 		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput))
 	}
-	if toolID, github := toolcatalog.Resolve(event.ToolName, event.ToolInput); github {
+	serverURL := mcpServers.ServerURL(event.Agent, event.CWD, event.ToolName)
+	if toolID, github := toolcatalog.Resolve(event.ToolName, serverURL, event.ToolInput); github {
 		return toolID, nil
 	}
 	if legacyUnknown {

@@ -5,6 +5,12 @@
   "serverNameHints": [
     "hubspot"
   ],
+  "serverUrlHints": [
+    {
+      "host": "mcp.hubspot.com",
+      "pathPrefix": "/"
+    }
+  ],
   "sources": [
     "HubSpot remote MCP server (https://mcp.hubspot.com), tool reference at https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-hubspot-mcp-server read 2026-10-07",
     "@hubspot/mcp-server@0.4.0 (npm), tool definitions and readOnlyHint annotations in dist/tools"

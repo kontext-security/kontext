@@ -42,7 +42,7 @@ func TestResolveGitHubMCP(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, matched := Resolve(test.tool, test.input)
+			got, matched := Resolve(test.tool, "", test.input)
 			if got != test.want || matched != test.matched {
 				t.Fatalf("Resolve() = %q, %v; want %q, %v", got, matched, test.want, test.matched)
 			}
@@ -51,7 +51,7 @@ func TestResolveGitHubMCP(t *testing.T) {
 }
 
 func TestCatalogDigestIsStable(t *testing.T) {
-	const want = "fb881a38b1e020f73c25ca60918816c00adb90baa768c27a5c4284e3c8831bbf"
+	const want = "ab1513b710acf1ba672af7b493758f70a0a50d04c13d859bdc6a00763233f2ef"
 	if got := Digest(); got != want {
 		t.Fatalf("Digest() = %q, want %q", got, want)
 	}

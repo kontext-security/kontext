@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,13 +34,33 @@ var providerCatalogFS embed.FS
 // providers/ are the contract shared with kontext-cloud, which carries a
 // byte-identical copy and derives its presets from it.
 type ProviderCatalog struct {
-	Provider        string               `json:"provider"`
-	ToolIDPrefix    string               `json:"toolIdPrefix"`
-	Version         string               `json:"version"`
-	ServerNameHints []string             `json:"serverNameHints"`
-	Sources         []string             `json:"sources"`
-	Dispatchers     []ProviderDispatcher `json:"dispatchers"`
-	Tools           []ProviderTool       `json:"tools"`
+	Provider        string   `json:"provider"`
+	ToolIDPrefix    string   `json:"toolIdPrefix"`
+	Version         string   `json:"version"`
+	ServerNameHints []string `json:"serverNameHints"`
+	// ServerURLHints identify the provider's server by its configured URL.
+	// A URL that matches decides the provider whatever the server is named;
+	// name hints only apply to servers without a matching URL.
+	ServerURLHints []ServerURLHint `json:"serverUrlHints,omitempty"`
+	// URLKinds name the catalogued tool a server under a URL path prefix
+	// runs, for servers whose tool names differ per workspace.
+	URLKinds    []URLKind            `json:"urlKinds,omitempty"`
+	Sources     []string             `json:"sources"`
+	Dispatchers []ProviderDispatcher `json:"dispatchers"`
+	Tools       []ProviderTool       `json:"tools"`
+}
+
+// ServerURLHint matches a server URL by host and path prefix. Host is an
+// exact lowercase host or "*." plus a suffix that matches any subdomain.
+type ServerURLHint struct {
+	Host       string `json:"host"`
+	PathPrefix string `json:"pathPrefix"`
+}
+
+// URLKind maps a server URL path prefix to a full catalogued tool id.
+type URLKind struct {
+	PathPrefix string `json:"pathPrefix"`
+	ToolID     string `json:"toolId"`
 }
 
 // ProviderDispatcher is a meta-tool that runs another catalog operation by
@@ -96,6 +118,14 @@ func providerDigest(catalog ProviderCatalog) string {
 	// (hints, distinctive flags, dispatchers) and what it is (product, tier).
 	material.WriteString(catalog.Provider + "\x00" + catalog.ToolIDPrefix + "\x00" + catalog.Version + "\x00")
 	material.WriteString("hints\t" + strings.Join(catalog.ServerNameHints, ",") + "\n")
+	// URL lines follow kontext-cloud's providerCatalogDigest: JSON order, no
+	// sorting, and nothing at all for an absent or empty list.
+	for _, hint := range catalog.ServerURLHints {
+		material.WriteString("urlhint\t" + hint.Host + "\t" + hint.PathPrefix + "\n")
+	}
+	for _, kind := range catalog.URLKinds {
+		material.WriteString("urlkind\t" + kind.PathPrefix + "\t" + kind.ToolID + "\n")
+	}
 	for _, dispatcher := range catalog.Dispatchers {
 		material.WriteString("dispatch\t" + dispatcher.Name + "\t" + dispatcher.OperationField + "\t" + strconv.FormatBool(dispatcher.Distinctive) + "\n")
 	}
@@ -106,42 +136,90 @@ func providerDigest(catalog ProviderCatalog) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// resolveProvider maps an MCP call to a provider catalog id. A server named
-// for the provider is held to the catalog (anything unlisted is
-// unrecognized, fail-closed); under any other server name only distinctive
-// tool names and dispatchers carrying a catalogued operation resolve.
+// resolveProvider maps an MCP call on a server without a URL any catalog
+// claims to a provider catalog id. A server named for the provider is held
+// to the catalog (anything unlisted is unrecognized, fail-closed); under any
+// other server name only distinctive tool names and dispatchers carrying a
+// catalogued operation resolve. Providers the server name hints at are
+// consulted first, so the order of the catalogs never decides.
 func resolveProvider(server, tool string, input map[string]any) (string, bool) {
 	lowerServer := strings.ToLower(server)
+	hinted := make([]bool, len(providers))
 	for i := range providers {
-		p := &providers[i]
-		hinted := false
-		for _, hint := range p.catalog.ServerNameHints {
+		for _, hint := range providers[i].catalog.ServerNameHints {
 			if strings.Contains(lowerServer, hint) {
-				hinted = true
+				hinted[i] = true
 				break
 			}
 		}
-		if dispatcher, ok := p.dispatchers[tool]; ok {
-			operation, _ := input[dispatcher.OperationField].(string)
-			// A generic dispatcher name (`execute`) on another server only
-			// counts when the operation itself is distinctive.
-			if catalogued, known := p.tools[operation]; known && (hinted || dispatcher.Distinctive || catalogued.Distinctive) {
-				return p.catalog.ToolIDPrefix + catalogued.Name, true
+	}
+	for _, pass := range []bool{true, false} {
+		for i := range providers {
+			if hinted[i] != pass {
+				continue
 			}
-			if hinted || dispatcher.Distinctive {
-				return p.catalog.ToolIDPrefix + UnrecognizedToolName, true
+			if toolID, ok := providers[i].resolve(tool, input, hinted[i]); ok {
+				return toolID, true
 			}
-			continue
-		}
-		catalogued, known := p.tools[tool]
-		switch {
-		case known && (hinted || catalogued.Distinctive):
-			return p.catalog.ToolIDPrefix + catalogued.Name, true
-		case hinted:
-			return p.catalog.ToolIDPrefix + UnrecognizedToolName, true
 		}
 	}
 	return "", false
+}
+
+// resolve maps a call to this catalog. On a hinted server it always
+// resolves: a tool the catalog does not list is unrecognized.
+func (p *providerIndex) resolve(tool string, input map[string]any, hinted bool) (string, bool) {
+	if dispatcher, ok := p.dispatchers[tool]; ok {
+		operation, _ := input[dispatcher.OperationField].(string)
+		// A generic dispatcher name (`execute`) on another server only
+		// counts when the operation itself is distinctive.
+		if catalogued, known := p.tools[operation]; known && (hinted || dispatcher.Distinctive || catalogued.Distinctive) {
+			return p.catalog.ToolIDPrefix + catalogued.Name, true
+		}
+		if hinted || dispatcher.Distinctive {
+			return p.catalog.ToolIDPrefix + UnrecognizedToolName, true
+		}
+		return "", false
+	}
+	catalogued, known := p.tools[tool]
+	switch {
+	case known && (hinted || catalogued.Distinctive):
+		return p.catalog.ToolIDPrefix + catalogued.Name, true
+	case hinted:
+		return p.catalog.ToolIDPrefix + UnrecognizedToolName, true
+	}
+	return "", false
+}
+
+// serverURLParts returns a server URL's lowercase host and its path, or ""
+// for anything that is not an absolute http(s) URL.
+func serverURLParts(serverURL string) (host, path string) {
+	parsed, err := url.Parse(strings.TrimSpace(serverURL))
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return "", ""
+	}
+	host = strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	path = parsed.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	return host, path
+}
+
+func matchesURLHints(hints []ServerURLHint, host, path string) bool {
+	for _, hint := range hints {
+		if !strings.HasPrefix(path, hint.PathPrefix) {
+			continue
+		}
+		if suffix, wildcard := strings.CutPrefix(hint.Host, "*"); wildcard {
+			if len(host) > len(suffix) && strings.HasSuffix(host, suffix) {
+				return true
+			}
+		} else if host == hint.Host {
+			return true
+		}
+	}
+	return false
 }
 
 func knownProviderTool(toolID string) bool {
@@ -271,6 +349,13 @@ func ParseProviderCatalog(raw []byte) (ProviderCatalog, error) {
 	if catalog.ToolIDPrefix == GitHubToolPrefix {
 		return ProviderCatalog{}, fmt.Errorf("the GitHub catalog is pinned separately")
 	}
+	// The same rules as kontext-cloud's catalog check: a value with a tab,
+	// newline or space could hash like two digest lines.
+	for _, hint := range catalog.ServerURLHints {
+		if !validURLHost(hint.Host) || !urlPathPattern.MatchString(hint.PathPrefix) {
+			return ProviderCatalog{}, fmt.Errorf("server URL hint %q%q is not a lowercase host and a /path prefix", hint.Host, hint.PathPrefix)
+		}
+	}
 	seen := map[string]bool{}
 	for _, dispatcher := range catalog.Dispatchers {
 		if dispatcher.Name == "" || dispatcher.OperationField == "" || seen[dispatcher.Name] {
@@ -295,5 +380,39 @@ func ParseProviderCatalog(raw []byte) (ProviderCatalog, error) {
 			return ProviderCatalog{}, fmt.Errorf("tools must be sorted by name (%q before %q)", catalog.Tools[i-1].Name, tool.Name)
 		}
 	}
+	for _, kind := range catalog.URLKinds {
+		name, prefixed := strings.CutPrefix(kind.ToolID, catalog.ToolIDPrefix)
+		if !urlPathPattern.MatchString(kind.PathPrefix) || !toolIDPattern.MatchString(kind.ToolID) || !prefixed || !catalogued(catalog.Tools, name) {
+			return ProviderCatalog{}, fmt.Errorf("URL kind %q -> %q needs a /path prefix and a catalogued tool id", kind.PathPrefix, kind.ToolID)
+		}
+	}
 	return catalog, nil
+}
+
+var (
+	hostLabelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	urlPathPattern   = regexp.MustCompile(`^/[!-~]*$`)
+	toolIDPattern    = regexp.MustCompile(`^[\w./-]+$`)
+)
+
+func validURLHost(host string) bool {
+	host = strings.TrimPrefix(host, "*.")
+	if host == "" {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !hostLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func catalogued(tools []ProviderTool, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }

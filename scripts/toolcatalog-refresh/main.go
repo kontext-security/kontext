@@ -57,13 +57,26 @@ import (
 )
 
 type catalog struct {
-	Provider        string       `json:"provider"`
-	ToolIDPrefix    string       `json:"toolIdPrefix"`
-	Version         string       `json:"version"`
-	ServerNameHints []string     `json:"serverNameHints"`
-	Sources         []string     `json:"sources"`
-	Dispatchers     []dispatcher `json:"dispatchers"`
-	Tools           []tool       `json:"tools"`
+	Provider        string   `json:"provider"`
+	ToolIDPrefix    string   `json:"toolIdPrefix"`
+	Version         string   `json:"version"`
+	ServerNameHints []string `json:"serverNameHints"`
+	// The refresh never edits the URL fields; it carries them through.
+	ServerURLHints []serverURLHint `json:"serverUrlHints,omitempty"`
+	URLKinds       []urlKind       `json:"urlKinds,omitempty"`
+	Sources        []string        `json:"sources"`
+	Dispatchers    []dispatcher    `json:"dispatchers"`
+	Tools          []tool          `json:"tools"`
+}
+
+type serverURLHint struct {
+	Host       string `json:"host"`
+	PathPrefix string `json:"pathPrefix"`
+}
+
+type urlKind struct {
+	PathPrefix string `json:"pathPrefix"`
+	ToolID     string `json:"toolId"`
 }
 
 type dispatcher struct {

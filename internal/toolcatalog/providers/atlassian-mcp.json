@@ -8,6 +8,12 @@
     "confluence",
     "rovo"
   ],
+  "serverUrlHints": [
+    {
+      "host": "mcp.atlassian.com",
+      "pathPrefix": "/"
+    }
+  ],
   "sources": [
     "Atlassian Rovo MCP server v2 (https://mcp.atlassian.com/v2/mcp?tools=all), tool reference at https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/ read 2026-10-07",
     "sooperset/mcp-atlassian@0a5d2427144d72f5aade07d4fabd385421cec401 (community server, tools namespaced jira_ and confluence_, read/write tags in src/mcp_atlassian/servers)",
