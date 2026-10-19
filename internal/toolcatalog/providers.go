@@ -191,19 +191,40 @@ func (p *providerIndex) resolve(tool string, input map[string]any, hinted bool) 
 	return "", false
 }
 
-// serverURLParts returns a server URL's lowercase host and its path, or ""
-// for anything that is not an absolute http(s) URL.
+// serverURLParts returns a server URL's lowercase host and its path with dot
+// segments resolved the way MCP clients' WHATWG URL parsers resolve them
+// ("%2e" included), so a configured /ai-search/../sql matches what the
+// client requests: /sql. Anything that is not an absolute http(s) URL, or
+// that WHATWG and Go parse differently (a backslash, userinfo), returns "".
 func serverURLParts(serverURL string) (host, path string) {
-	parsed, err := url.Parse(strings.TrimSpace(serverURL))
-	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+	raw := strings.TrimSpace(serverURL)
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.User != nil || strings.Contains(raw, "\\") {
 		return "", ""
 	}
 	host = strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-	path = parsed.EscapedPath()
-	if path == "" {
-		path = "/"
+	segments := strings.Split(parsed.EscapedPath(), "/")
+	resolved := []string{}
+	for i, segment := range segments {
+		if i == 0 {
+			continue
+		}
+		last := i == len(segments)-1
+		switch strings.ReplaceAll(strings.ToLower(segment), "%2e", ".") {
+		case ".":
+		case "..":
+			if len(resolved) > 0 {
+				resolved = resolved[:len(resolved)-1]
+			}
+		default:
+			resolved = append(resolved, segment)
+			continue
+		}
+		if last {
+			resolved = append(resolved, "")
+		}
 	}
-	return host, path
+	return host, "/" + strings.Join(resolved, "/")
 }
 
 func matchesURLHints(hints []ServerURLHint, host, path string) bool {

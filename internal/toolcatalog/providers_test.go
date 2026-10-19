@@ -257,3 +257,34 @@ func TestParseProviderCatalogRejectsBadURLFields(t *testing.T) {
 		t.Errorf("valid URL fields rejected: %v", err)
 	}
 }
+
+func TestServerURLPartsResolvesDotSegmentsLikeClients(t *testing.T) {
+	tests := map[string]string{
+		"https://H.example.com./a/b":               "/a/b",
+		"https://h.example.com":                    "/",
+		"https://h.example.com/a/ai-search/../sql": "/a/sql",
+		"https://h.example.com/a/%2E%2e/b":         "/b",
+		"https://h.example.com/a/./b/.":            "/a/b/",
+		"https://h.example.com/a/b/..":             "/a/",
+		"https://h.example.com/../../a":            "/a",
+		"https://h.example.com/a/%2fb":             "/a/%2fb",
+		"https://h.example.com/a/..b":              "/a/..b",
+	}
+	for raw, want := range tests {
+		if host, path := serverURLParts(raw); host != "h.example.com" || path != want {
+			t.Errorf("serverURLParts(%q) = %q, %q; want h.example.com, %q", raw, host, path, want)
+		}
+	}
+	for _, raw := range []string{"https://evil.example\\@h.example.com/a", "https://user@h.example.com/a", "ftp://h.example.com/a", "h.example.com/a", ""} {
+		if host, _ := serverURLParts(raw); host != "" {
+			t.Errorf("serverURLParts(%q) host = %q, want none", raw, host)
+		}
+	}
+	// The client requests the resolved path, so that is what decides.
+	if got, _ := Resolve("mcp__work__getTeam", "https://api.githubcopilot.com/mcp/../x", nil); got != "" {
+		t.Errorf("a path that leaves /mcp resolved to %q", got)
+	}
+	if got, _ := Resolve("mcp__work__get_me", "https://api.githubcopilot.com/x/../mcp/", map[string]any{}); got != "github-mcp/get_me" {
+		t.Errorf("a path that resolves into /mcp resolved to %q", got)
+	}
+}

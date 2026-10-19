@@ -73,6 +73,9 @@ type cachedFile struct {
 // (mcp__<server>__<tool>) for the agent that reported it, or "". A lookup
 // that does not finish within lookupTimeout returns "".
 func (r *Resolver) ServerURL(agent, cwd, toolName string) string {
+	if !strings.HasPrefix(toolName, "mcp__") {
+		return ""
+	}
 	r.once.Do(func() { r.lookups = make(chan struct{}, maxLookups) })
 	timer := time.NewTimer(lookupTimeout)
 	defer timer.Stop()
