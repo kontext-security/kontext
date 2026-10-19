@@ -113,9 +113,10 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 // singlePlainCall reports a script that is one simple command with no
 // variable assignments (`BASH_ALIASES[gh]=…` defines an alias too).
 // oneArgument reports a word the shell provably expands to exactly one
-// argument. Only plain forms count: inside double quotes a $NAME or ${NAME}
-// with no operator, index or indirection ("$@", "${A:-"$@"}" and "${!ref}"
-// can be several words), or a command substitution; outside quotes a literal
+// argument. Only plain forms count: inside double quotes a $NAME, ${NAME} or
+// ${A[i]} with no operator or indirection and no @ list ("$@", "${A[@]}",
+// "${A:-"$@"}" and "${!ref}" can be several words), or a command
+// substitution; outside quotes a literal
 // with no brace expansion ({a,-X,DELETE}) and no glob, except the ? of a URL
 // query.
 func oneArgument(word *syntax.Word) bool {
@@ -124,8 +125,10 @@ func oneArgument(word *syntax.Word) bool {
 		case *syntax.SglQuoted:
 		case *syntax.Lit:
 			text := part.Value
-			if _, query, ok := strings.Cut(text, "://"); ok {
-				text = strings.ReplaceAll(query, "?", "")
+			if scheme := strings.Index(text, "://"); scheme >= 0 {
+				// Only the ? of a URL query is exempt; the rest of the word
+				// is checked whole.
+				text = text[:scheme] + strings.ReplaceAll(text[scheme:], "?", "")
 			}
 			if strings.ContainsAny(text, "{}*?[") {
 				return false
@@ -135,9 +138,11 @@ func oneArgument(word *syntax.Word) bool {
 				switch inner := inner.(type) {
 				case *syntax.Lit, *syntax.CmdSubst, *syntax.ArithmExp:
 				case *syntax.ParamExp:
-					if inner.Param == nil || inner.Param.Value == "@" || inner.Param.Value == "*" || inner.Excl ||
-						inner.Index != nil || inner.Names != 0 || inner.NestedParam != nil || inner.Exp != nil ||
-						inner.Repl != nil || inner.Slice != nil {
+					// Quoted, only an @ list splits: "$*", "${A[*]}" and
+					// "${A[0]}" are one argument.
+					index, _ := inner.Index.(*syntax.Word)
+					if inner.Param == nil || inner.Param.Value == "@" || index != nil && index.Lit() == "@" || inner.Excl ||
+						inner.Names != 0 || inner.NestedParam != nil || inner.Exp != nil || inner.Repl != nil || inner.Slice != nil {
 						return false
 					}
 				default:
