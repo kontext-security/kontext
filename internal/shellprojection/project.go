@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/toolcatalog"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -216,6 +217,8 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 		return single(hsCLI.classify(args, complete))
 	case "forge":
 		return single(forgeCLI.classify(args, complete))
+	case "databricks":
+		return single(classifyDatabricks(args, complete))
 	case "bash", "sh", "zsh", "dash", "ksh":
 		return classifyShell(program, args, complete, w)
 	case "eval":
@@ -1089,7 +1092,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		facts = append(facts, each.Facts...)
 		features = append(features, each.Features...)
 	}
-	return projection("curl", facts, features, false)
+	return projection("curl", mergeDatabricksProducts(facts), features, false)
 }
 
 // classifyCurlURL classifies one request of a curl command.
@@ -1099,7 +1102,7 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		// Plain HTTP to a provider is still that provider's request; it is
 		// judged like HTTPS but never as a catalogued route.
 		host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-		if isAtlassianHost(host) || isHubSpotHost(host) || isJiraServerPath(parsed.Path) {
+		if isAtlassianHost(host) || isHubSpotHost(host) || toolcatalog.IsDatabricksHost(host) || isJiraServerPath(parsed.Path) {
 			parsed.Scheme = "https"
 			complete = false
 		}
@@ -1113,6 +1116,8 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)
 	case isHubSpotHost(host):
 		return classifyHubSpotCurl(host, parsed, method, complete, bodyFile)
+	case toolcatalog.IsDatabricksHost(host):
+		return classifyDatabricksCurl(host, parsed, method, bodies, complete, bodyFile)
 	case isJiraServerPath(parsed.Path):
 		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)
 	}

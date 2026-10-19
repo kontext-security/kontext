@@ -400,3 +400,17 @@ func TestIsShellTool(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeDirectProviderAPIDatabricks(t *testing.T) {
+	for _, command := range []string{
+		`curl -X POST https://dbc-1234.cloud.databricks.com/api/2.1/clusters/delete -d '{}'`,
+		`curl https://adb-1.2.azuredatabricks.net/api/2.0/clusters/list`,
+		`curl https://dbc-1.cloud.databricks.us/api/2.0/clusters/list`,
+		`curl https://adb-1.2.databricks.azure.cn/api/2.0/clusters/list`,
+	} {
+		event := NormalizeHookEvent(HookEvent{ToolName: "Bash", ToolInput: map[string]any{"command": command}})
+		if event.Type != EventDirectProviderAPICall || event.Provider != "databricks" {
+			t.Errorf("%s: type = %s provider = %s, want a databricks direct API call", command, event.Type, event.Provider)
+		}
+	}
+}

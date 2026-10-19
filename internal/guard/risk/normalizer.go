@@ -32,6 +32,14 @@ var directProviderHosts = map[string]string{
 	"googleapis.com":       "google_cloud",
 	"amazonaws.com":        "aws",
 	"api.github.com":       "github",
+	// Databricks workspaces live under many subdomains, so these are
+	// domain tokens matched as substrings, not host patterns.
+	"databricks.com":      "databricks",
+	"azuredatabricks.net": "databricks",
+	"databricks.us":       "databricks",
+	"databricks.mil":      "databricks",
+	"databricks.azure.us": "databricks",
+	"databricks.azure.cn": "databricks",
 }
 
 func NormalizeHookEvent(event HookEvent) RiskEvent {
