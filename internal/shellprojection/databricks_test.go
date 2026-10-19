@@ -221,6 +221,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl computed URL is unrecognized", `curl -X DELETE "$URL"`, nil, false},
 		{"curl sql and a read keep the sql exemption", `curl --json '{"statement":"SELECT 1"}' ` + dbHost + "/api/2.0/sql/statements --next " + dbHost + "/api/2.1/clusters/list", []string{dbP("compute"), dbP("sql"), dbUnk, dbW}, false},
 		{"curl glob in the fragment changes nothing", "curl -X DELETE '" + dbHost + "/api/2.0/repos/12#[1-2]'", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
+		{"curl request target not in origin form is unrecognized", "curl -X DELETE --request-target 'api/2.0/repos/12' " + dbHost + "/", []string{dbUnk}, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.

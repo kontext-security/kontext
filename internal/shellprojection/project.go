@@ -1180,10 +1180,15 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	for _, op := range operations {
 		for index, urlText := range op.urls {
 			normalized := normalizeCurlURL(urlText, cmp.Or(op.protoDefault, "http"))
-			if op.requestTarget != "" {
+			// Only a target in origin form (/path) replaces the path the
+			// projection can read; any other form (*, a relative or absolute
+			// URL) leaves the request unreadable.
+			targetReadable := op.requestTarget == "" || strings.HasPrefix(op.requestTarget, "/")
+			if op.requestTarget != "" && targetReadable {
 				normalized = withRequestTarget(normalized, op.requestTarget)
 			}
 			sent, sentURL, readable := op.withUpload(index, normalized)
+			readable = readable && targetReadable
 			// The fragment is not sent, so a glob in it changes nothing.
 			beforeFragment, _, _ := strings.Cut(urlText, "#")
 			globbed := strings.ContainsAny(beforeFragment, "{}[]")
