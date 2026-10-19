@@ -206,57 +206,38 @@ var databricksFlagRaises = map[string]map[string]databricksOperation{
 // flagSet reports whether a flag is given with a value other than false or
 // none.
 func flagSet(args []string, flag string) bool {
-	set := false
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case databricksValueFlags[arg]:
-			// A global flag's value (--log-file --overwrite) is not a flag.
-			i++
-			continue
-		case arg == "--" && (i == 0 || !databricksMayTakeValue(args[i-1])):
-			// "--" ends the flags unless an unknown option may have taken it
-			// as its value.
-			return set
-		case arg == flag:
-			set = true
+	// Any word that sets the flag counts, wherever it stands: without each
+	// command's flag arity, a word may be another option's value or follow
+	// a "--", and reading it as the flag only ever raises (over-strict,
+	// never looser: --log-file --overwrite reads as set).
+	for _, arg := range args {
+		if arg == flag {
+			return true
 		}
-		// A value only ever sets the flag: a later =false may be another
-		// option's value or a file name, so it does not clear an earlier
-		// one (--overwrite --overwrite=false reads as set, over-strict).
 		if value, ok := strings.CutPrefix(arg, flag+"="); ok && flagValueTrue(value) {
-			set = true
+			return true
 		}
 		// A short flag inside a cluster: -fb is -f -b, and -fb=v gives the
-		// last letter the value. The letters after one that takes a value
-		// are its value (-pabc is the profile abc).
+		// last letter the value. The letters after a global or bundle
+		// generate flag that takes a value are its value (-pabc is the
+		// profile abc).
 		if len(flag) == 2 && len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
 			letters, value, hasValue := strings.Cut(arg[1:], "=")
 			if end := strings.IndexAny(letters, databricksShortValueLetters); end >= 0 {
 				letters, hasValue = letters[:end], false
 			}
 			if at := strings.IndexByte(letters, flag[1]); at >= 0 && (!hasValue || at < len(letters)-1 || flagValueTrue(value)) {
-				set = true
+				return true
 			}
 		}
 	}
-	return set
+	return false
 }
 
 // databricksShortValueLetters are the one-letter flags of the commands with
 // flag raises that take a value: the global -p, -o, -t and -e, and bundle
 // generate's -s and -d.
 const databricksShortValueLetters = "potesd"
-
-// databricksMayTakeValue reports a flag that may have taken the next word as
-// its value.
-func databricksMayTakeValue(arg string) bool {
-	return strings.HasPrefix(arg, "-") && arg != "--" && !strings.Contains(arg, "=") && !databricksBoolFlags[arg] && !databricksBoolRaises[arg]
-}
-
-// databricksBoolRaises are the flag raises that take no value, so a "--"
-// after one ends the flags.
-var databricksBoolRaises = words("--overwrite", "--cleanup", "--deploy", "--sensitive", "--bind", "-b")
 
 func flagValueTrue(value string) bool {
 	switch strings.ToLower(value) {
