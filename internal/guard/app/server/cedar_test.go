@@ -42,7 +42,7 @@ const cedarTestSchema = `namespace Kontext {
   };
 }`
 
-const cedarTestToolCatalogDigest = "ab1513b710acf1ba672af7b493758f70a0a50d04c13d859bdc6a00763233f2ef"
+const cedarTestToolCatalogDigest = "654dbe189f1d749aa7ded4a9af306c4649d0676a97221e16be38bc8bf4cf7806"
 
 func cedarHookEvent(tool string, input map[string]any) risk.HookEvent {
 	return risk.HookEvent{SessionID: "session-1", Agent: "claude", HookEventName: "PreToolUse", ToolName: tool, ToolInput: input}

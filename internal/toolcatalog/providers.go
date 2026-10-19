@@ -191,6 +191,44 @@ func (p *providerIndex) resolve(tool string, input map[string]any, hinted bool) 
 	return "", false
 }
 
+// resolveURL resolves a call on a server this catalog claims by URL. A URL
+// kind names the tool whatever it is called (a Unity Catalog function
+// server names its tools after the workspace's functions); the first kind
+// whose path prefix matches wins. Databricks' AI Gateway proxies for GitHub
+// and Atlassian belong to those catalogs. Anything else is this catalog's,
+// unrecognized when it does not list the tool.
+func (p *providerIndex) resolveURL(tool, path string, input map[string]any) (string, bool) {
+	for _, kind := range p.catalog.URLKinds {
+		if strings.HasPrefix(path, kind.PathPrefix) {
+			return kind.ToolID, true
+		}
+	}
+	if p.catalog.Provider == DatabricksProvider {
+		if service, ok := strings.CutPrefix(path, databricksProxyPrefix); ok {
+			service, _, _ = strings.Cut(service, "/")
+			switch service {
+			case "github":
+				return resolveGitHub(tool, input, true)
+			case "atlassian":
+				for i := range providers {
+					if providers[i].catalog.Provider == "atlassian" {
+						return providers[i].resolve(tool, input, true)
+					}
+				}
+			}
+		}
+	}
+	return p.resolve(tool, input, true)
+}
+
+// DatabricksProvider is the provider the Databricks MCP catalog carries.
+const DatabricksProvider = "databricks"
+
+// databricksProxyPrefix is where Databricks' AI Gateway serves the external
+// MCP servers it proxies (system.ai.github, system.ai.atlassian). Other
+// registered services there are Databricks' own and unrecognized.
+const databricksProxyPrefix = "/ai-gateway/mcp-services/system.ai."
+
 // serverURLParts returns a server URL's lowercase host and its path with dot
 // segments resolved the way MCP clients' WHATWG URL parsers resolve them
 // ("%2e" included), so a configured /ai-search/../sql matches what the
@@ -282,9 +320,14 @@ type ProviderClassification struct {
 // is unnamed or its input drifted from the pinned schema, still carries its
 // catalogued tier, so tier presets judge it: a write with one extra field is
 // still a write to github-read-only. Only a tool the catalog does not list
-// carries none.
-func ClassifyCall(toolID, toolName string, _ map[string]any) (ProviderClassification, bool) {
-	if toolID != GitHubUnrecognizedTool {
+// carries none. Databricks SQL tools are raised by their query; see
+// classifyDatabricksSQLCall.
+func ClassifyCall(toolID, toolName string, input map[string]any) (ProviderClassification, bool) {
+	switch toolID {
+	case databricksExecuteSQL, databricksExecuteSQLReadOnly:
+		return classifyDatabricksSQLCall(toolID, input)
+	case GitHubUnrecognizedTool:
+	default:
 		return Classify(toolID)
 	}
 	_, tool, ok := splitMCPToolName(toolName)
@@ -296,6 +339,39 @@ func ClassifyCall(toolID, toolName string, _ map[string]any) (ProviderClassifica
 		return ProviderClassification{}, false
 	}
 	return ProviderClassification{Provider: GitHubProvider, Product: catalogued.Product, Access: catalogued.Access}, true
+}
+
+const (
+	databricksExecuteSQL         = "databricks-mcp/execute_sql"
+	databricksExecuteSQLReadOnly = "databricks-mcp/execute_sql_read_only"
+)
+
+// classifyDatabricksSQLCall raises a Databricks SQL tool's catalog tier by
+// what its query does (ClassifyDatabricksSQL); it never lowers it. SQL that
+// deletes and changes administration reports delete, since a call carries
+// one access and lost data cannot be restored. SQL that calls secret() is
+// product secrets. execute_sql_read_only keeps read, which Databricks
+// enforces. A missing or non-string query, or SQL the classifier does not
+// recognize, keeps the catalog tier.
+func classifyDatabricksSQLCall(toolID string, input map[string]any) (ProviderClassification, bool) {
+	class, ok := Classify(toolID)
+	query, isString := input["query"].(string)
+	if !ok || !isString {
+		return class, ok
+	}
+	deletes, admin, touchesSecrets, _ := ClassifyDatabricksSQL(query)
+	if touchesSecrets {
+		class.Product = "secrets"
+	}
+	if toolID == databricksExecuteSQL {
+		switch {
+		case deletes:
+			class.Access = AccessDelete
+		case admin:
+			class.Access = AccessAdmin
+		}
+	}
+	return class, true
 }
 
 // Classify returns the catalog entry behind a GitHub or provider tool id. Unrecognized
