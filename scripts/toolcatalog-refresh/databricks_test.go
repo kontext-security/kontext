@@ -347,6 +347,18 @@ func newEditAndList() *cobra.Command {
 }
 
 // An unknown call next to a known read leaves the command unclassified.
+func newUnknownField() *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.Use = "unknown-field"
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		w := cmdctx.WorkspaceClient(ctx)
+		err := w.NewService.Delete(ctx, req)
+		response := w.Clusters.List(ctx, listReq)
+		return cmdio.RenderIterator(ctx, response)
+	}
+	return cmd
+}
+
 func newHalf() *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Use = "half"
@@ -516,6 +528,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 		"## POST routes whose path suggests a read (still write until reviewed) (1)",
 		"`clusters explode` (w.Clusters.ExplodeAll)",
 		"`clusters half` (w.Clusters.Mystery)",
+		"`clusters unknown-field` (w.NewService.Delete)",
 	} {
 		if !strings.Contains(text, line) {
 			t.Errorf("report lacks %q:\n%s", line, text)

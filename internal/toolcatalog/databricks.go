@@ -92,6 +92,10 @@ func DatabricksCommand(group, verb string) (DatabricksOperation, bool) {
 // resolves them by command. Widening them needs the resource-name grammar
 // from the API spec, not the SDK source.
 func DatabricksRoute(method, path string) (DatabricksOperation, bool) {
+	return databricks().route(method, path)
+}
+
+func (index *databricksIndex) route(method, path string) (DatabricksOperation, bool) {
 	path, _, _ = strings.Cut(path, "?")
 	path, _, _ = strings.Cut(path, "#")
 	if len(path) > 1 {
@@ -103,7 +107,7 @@ func DatabricksRoute(method, path string) (DatabricksOperation, bool) {
 	}
 	var best []databricksRoute
 	bestLiterals, bestExact := -1, false
-	for _, route := range databricks().routes[strings.ToUpper(method)] {
+	for _, route := range index.routes[strings.ToUpper(method)] {
 		if !route.pattern.MatchString(path) {
 			continue
 		}
@@ -137,6 +141,10 @@ func loadDatabricks() *databricksIndex {
 	if err := json.Unmarshal(databricksRoutesJSON, &table); err != nil {
 		panic("invalid embedded Databricks route table: " + err.Error())
 	}
+	return newDatabricksIndex(table)
+}
+
+func newDatabricksIndex(table databricksTable) *databricksIndex {
 	index := &databricksIndex{commands: map[string]*DatabricksOperation{}, routes: map[string][]databricksRoute{}}
 	for i := range table.Routes {
 		operation := &table.Routes[i]

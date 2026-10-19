@@ -37,8 +37,9 @@ import (
 //   - CLI cmd/workspace and cmd/account give each `<group> <verb>` command
 //     and the SDK call it makes.
 //
-// Tiers: a GET or HEAD is read; a POST is read only when databricksPostReads
-// lists it, so a new route is a write until someone reviews it. Anything that
+// Tiers: a GET or HEAD is read unless databricksConsumingGets lists it; a
+// POST is read only when databricksPostReads lists it, so a new route is a
+// write until someone reviews it. Anything that
 // acts on permissions, grants, identities, settings or account provisioning
 // (product admin), whose body can carry an owner or permissions, or that
 // databricksAdminOperations lists, is admin; a delete is delete; everything
@@ -235,6 +236,11 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 			stale = append(stale, "admin operation "+key)
 		}
 	}
+	for key := range databricksConsumingGets {
+		if op := index.operations[key]; op == nil || op.method != "GET" {
+			stale = append(stale, "consuming GET "+key)
+		}
+	}
 	for key, target := range databricksCommandAliases {
 		if index.operations[target] == nil {
 			stale = append(stale, "command alias "+key)
@@ -404,6 +410,8 @@ func databricksProduct(op *sdkOperation) string {
 
 func databricksAccess(op *sdkOperation, product string, adminBody bool) string {
 	switch {
+	case databricksConsumingGets[op.id]:
+		return "write"
 	case op.method == "GET" || op.method == "HEAD":
 		return "read"
 	case product == "admin" || adminBody || databricksAdminOperations[op.id]:
@@ -1018,9 +1026,14 @@ func resolveCommand(calls []sdkCall, index *sdkIndex) ([]string, string) {
 	var ops []string
 	display := "no SDK call"
 	for _, call := range calls {
-		service := index.clients[call.client][call.field]
-		if service == "" || strings.HasSuffix(call.method, "Map") {
+		if strings.HasSuffix(call.method, "Map") {
 			continue
+		}
+		service := index.clients[call.client][call.field]
+		if service == "" {
+			// A client field the SDK clients do not build could be the
+			// mutation; leave the command unclassified.
+			return nil, call.display
 		}
 		if call.sub != "" {
 			pkg, _, _ := strings.Cut(service, ".")
@@ -1399,19 +1412,23 @@ var databricksOperationProducts = map[string]string{
 // recipient token is another party's), clean-room approvals that let
 // collaborators' notebooks run unreviewed, cluster policies (the access
 // mode rules live in a JSON string) and cancelling their pending
-// enforcement, marketplace exchange filters (who may
-// see a private exchange), and the external HTTP proxy, whose method and
-// path the caller picks.
+// enforcement, marketplace exchange filters and listings (who may see a
+// private exchange's data), the AI Gateway (PII filtering, guardrails,
+// payload logging), and the external HTTP proxy, whose method and path the
+// caller picks.
 var databricksAdminOperations = map[string]bool{
 	"cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview":               true,
 	"compute.ClusterPolicies.Create":                                      true,
 	"compute.PolicyComplianceForClusters.CancelPendingClusterEnforcement": true,
 	"compute.ClusterPolicies.Delete":                                      true,
 	"compute.ClusterPolicies.Edit":                                        true,
+	"marketplace.ProviderExchanges.AddListingToExchange":                  true,
+	"marketplace.ProviderExchanges.DeleteListingFromExchange":             true,
 	"marketplace.ProviderExchangeFilters.Create":                          true,
 	"marketplace.ProviderExchangeFilters.Delete":                          true,
 	"marketplace.ProviderExchangeFilters.Update":                          true,
 	"serving.ServingEndpoints.HttpRequest":                                true,
+	"serving.ServingEndpoints.PutAiGateway":                               true,
 	"sharing.Recipients.RotateToken":                                      true,
 	"cleanrooms.CleanRoomAutoApprovalRules.Create":                        true,
 	"cleanrooms.CleanRoomAutoApprovalRules.Delete":                        true,
@@ -1434,6 +1451,12 @@ var databricksAdminOperations = map[string]bool{
 	"workspace.GitCredentials.Delete":                                     true,
 	"workspace.GitCredentials.Update":                                     true,
 	"workspace.Secrets.DeleteAcl":                                         true,
+}
+
+// databricksConsumingGets are GETs that change state: retrieving a
+// recipient's credential uses up its one-time activation link.
+var databricksConsumingGets = map[string]bool{
+	"sharing.RecipientActivation.RetrieveToken": true,
 }
 
 // databricksPostReads are the POST operations a reviewer confirmed change

@@ -30,6 +30,8 @@ func TestDatabricksRoute(t *testing.T) {
 		{"system schema", "PUT", "/api/2.1/unity-catalog/metastores/abc/systemschemas/access", "catalog.SystemSchemas.Enable", "workspace", "admin", "admin", nil},
 		{"native Postgres login", "PATCH", "/api/2.0/database/instances/main", "database.Database.UpdateDatabaseInstance", "workspace", "data", "admin", []string{"enable_pg_native_login"}},
 		{"pending policy enforcement", "POST", "/api/2.0/policies/clusters:cancelPendingClusterEnforcement", "compute.PolicyComplianceForClusters.CancelPendingClusterEnforcement", "workspace", "compute", "admin", nil},
+		{"one-time credential download", "GET", "/api/2.1/unity-catalog/public/data_sharing_activation/abc", "sharing.RecipientActivation.RetrieveToken", "workspace", "secrets", "write", nil},
+		{"AI Gateway guardrails", "PUT", "/api/2.0/serving-endpoints/chat/ai-gateway", "serving.ServingEndpoints.PutAiGateway", "workspace", "ai", "admin", nil},
 		{"running a job", "POST", "/api/2.2/jobs/run-now", "jobs.Jobs.RunNow", "workspace", "execution", "write", nil},
 		{"another API version", "POST", "/api/2.1/jobs/run-now", "jobs.Jobs.RunNow", "workspace", "execution", "write", nil},
 		{"trailing slash", "GET", "/api/2.1/unity-catalog/catalogs/", "catalog.Catalogs.List", "workspace", "data", "read", nil},
@@ -132,6 +134,9 @@ func TestDatabricksCommand(t *testing.T) {
 		{"serving-endpoints", "http-request", "serving.ServingEndpoints.HttpRequest", "workspace", "execution", "admin"},
 		{"agent-kit", "pop-session-item", "agentkit.AgentKit.PopSessionItem", "workspace", "ai", "delete"},
 		{"shares", "list", "sharing.Shares.ListShares", "workspace", "data", "read"},
+		{"serving-endpoints", "put-ai-gateway", "serving.ServingEndpoints.PutAiGateway", "workspace", "ai", "admin"},
+		{"provider-exchanges", "add-listing-to-exchange", "marketplace.ProviderExchanges.AddListingToExchange", "workspace", "data", "admin"},
+		{"recipient-activation", "retrieve-token", "sharing.RecipientActivation.RetrieveToken", "workspace", "secrets", "write"},
 		{"shares", "share-permissions", "sharing.Shares.SharePermissions", "workspace", "admin", "read"},
 		{"database", "update-database-instance", "database.Database.UpdateDatabaseInstance", "workspace", "data", "admin"},
 		{"postgres", "update-data-api", "postgres.Postgres.UpdateDataApi", "workspace", "data", "admin"},
@@ -170,6 +175,37 @@ func TestDatabricksCommand(t *testing.T) {
 	}
 }
 
+// Overlap rules on a synthetic table: the most literal template wins, then
+// the requested version, then the strictest tier; equally strict
+// candidates in different products are not found.
+func TestDatabricksRouteOverlaps(t *testing.T) {
+	index := newDatabricksIndex(databricksTable{Routes: []DatabricksOperation{
+		{Operation: "v20.Get", Method: "GET", Path: "/api/2.0/things/{id}", Product: "data", Access: AccessRead},
+		{Operation: "v21.Get", Method: "GET", Path: "/api/2.1/things/{id}", Product: "compute", Access: AccessRead},
+		{Operation: "literal.Get", Method: "GET", Path: "/api/2.0/things/special", Product: "ai", Access: AccessRead},
+		{Operation: "a.Update", Method: "PATCH", Path: "/api/2.0/items/{name}", Product: "ai", Access: AccessWrite},
+		{Operation: "b.Update", Method: "PATCH", Path: "/api/2.0/items/{name}", Product: "ai", Access: AccessAdmin},
+		{Operation: "c.Delete", Method: "DELETE", Path: "/api/2.0/items/{name}", Product: "ai", Access: AccessDelete},
+		{Operation: "d.Delete", Method: "DELETE", Path: "/api/2.0/items/{name}", Product: "data", Access: AccessDelete},
+		{Operation: "catchall.Get", Method: "GET", Path: "/api/2.0/{name}", Product: "ai", Access: AccessRead},
+	}})
+	for _, test := range []struct{ method, path, want string }{
+		{"GET", "/api/2.1/things/7", "v21.Get"},
+		{"GET", "/api/2.0/things/7", "v20.Get"},
+		// 2.0 and 2.1 match equally and disagree on product.
+		{"GET", "/api/2.2/things/7", ""},
+		{"GET", "/api/2.1/things/special", "literal.Get"},
+		{"PATCH", "/api/2.0/items/x", "b.Update"},
+		{"DELETE", "/api/2.0/items/x", ""},
+		{"GET", "/api/2.0/anything", ""},
+	} {
+		got, ok := index.route(test.method, test.path)
+		if got.Operation != test.want || ok != (test.want != "") {
+			t.Errorf("route(%s %s) = %q, %v; want %q", test.method, test.path, got.Operation, ok, test.want)
+		}
+	}
+}
+
 // The generator's tier rules, checked over the whole embedded table.
 func TestDatabricksTableTiers(t *testing.T) {
 	table := databricks()
@@ -180,6 +216,11 @@ func TestDatabricksTableTiers(t *testing.T) {
 		for _, route := range routes {
 			op := route.operation
 			switch {
+			case op.Operation == "sharing.RecipientActivation.RetrieveToken":
+				// Retrieving the credential uses up the one-time link.
+				if op.Access != AccessWrite {
+					t.Errorf("%s is %s, want write", op.Operation, op.Access)
+				}
 			case (method == "GET" || method == "HEAD") && op.Access != AccessRead:
 				t.Errorf("%s %s (%s) is %s, want read", method, op.Path, op.Operation, op.Access)
 			case method != "GET" && method != "HEAD" && method != "POST" && op.Access == AccessRead:

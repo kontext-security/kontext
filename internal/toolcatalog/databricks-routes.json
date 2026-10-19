@@ -6460,7 +6460,7 @@
         "provider-exchanges add-listing-to-exchange"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderExchanges.DeleteListingFromExchange",
@@ -6471,7 +6471,7 @@
         "provider-exchanges delete-listing-from-exchange"
       ],
       "product": "data",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderExchanges.Delete",
@@ -10575,7 +10575,7 @@
         "serving-endpoints put-ai-gateway"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "serving.ServingEndpoints.UpdateConfig",
@@ -13603,7 +13603,7 @@
         "recipient-activation retrieve-token"
       ],
       "product": "secrets",
-      "access": "read"
+      "access": "write"
     },
     {
       "operation": "sharing.RecipientActivation.GetActivationUrlInfo",
