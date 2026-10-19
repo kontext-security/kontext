@@ -147,9 +147,10 @@ func TestUnrecognizedRouteOnlyForGitHubPrograms(t *testing.T) {
 
 func TestParseFailuresBecomeProjections(t *testing.T) {
 	runCorpus(t, []corpusCase{
-		{name: "syntax error", command: "git push -f origin main; (", programs: []string{"unknown"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-error"}, complete: false},
-		{name: "unrelated syntax error", command: `echo "unterminated`, programs: []string{"unknown"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-error"}, complete: false},
+		{name: "syntax error", command: "git push -f origin main; (", programs: []string{"git"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-error"}, complete: false},
+		{name: "unrelated syntax error", command: `echo "unterminated`, programs: []string{"echo"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-error"}, complete: false},
 		{name: "oversized", command: strings.Repeat("x", maxCommandBytes+1), programs: []string{"unknown"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "command-too-large"}, complete: false},
+		{name: "oversized databricks keeps its program", command: "databricks clusters delete " + strings.Repeat("x", maxCommandBytes), programs: []string{"databricks"}, facts: []string{incomplete, FactDatabricksRouteUnrecognized, "databricks/delete=true"}, features: []string{FeatureParseError, "command-too-large"}, complete: false},
 		{name: "too complex", command: strings.Repeat("(", maxSyntaxDepth+1) + "true" + strings.Repeat(")", maxSyntaxDepth+1), programs: []string{"unknown"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-too-complex"}, complete: false},
 		{name: "empty", command: "# nothing", programs: []string{"unknown"}, facts: []string{incomplete}, features: []string{"empty-command"}, complete: false},
 	})

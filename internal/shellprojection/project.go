@@ -56,11 +56,11 @@ type walk struct {
 
 func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	if len(command) > maxCommandBytes {
-		return []cedareval.ShellProjectionV2{parseFailure("command-too-large")}
+		return []cedareval.ShellProjectionV2{parseFailure("command-too-large", command)}
 	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "command")
 	if err != nil {
-		return []cedareval.ShellProjectionV2{parseFailure("syntax-error")}
+		return []cedareval.ShellProjectionV2{parseFailure("syntax-error", command)}
 	}
 
 	calls := make([]*syntax.CallExpr, 0, 4)
@@ -83,7 +83,7 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 		return true
 	})
 	if tooComplex {
-		return []cedareval.ShellProjectionV2{parseFailure("syntax-too-complex")}
+		return []cedareval.ShellProjectionV2{parseFailure("syntax-too-complex", command)}
 	}
 	sort.SliceStable(calls, func(i, j int) bool { return calls[i].Pos().Offset() < calls[j].Pos().Offset() })
 
@@ -115,8 +115,24 @@ func singlePlainCall(file *syntax.File) bool {
 	return ok && len(call.Assigns) == 0 && !stmt.Negated && !stmt.Background && !stmt.Coprocess
 }
 
-func parseFailure(reason string) cedareval.ShellProjectionV2 {
-	return projection("unknown", nil, []string{FeatureParseError, reason}, false)
+// programName matches a first word that names a program (a path or a name),
+// not shell syntax or padding.
+var programName = regexp.MustCompile(`^[A-Za-z0-9_./-]{1,128}$`)
+
+// parseFailure is the projection of a command that cannot be parsed. It keeps
+// the program its first word names. A command that mentions Databricks gets
+// the strictest Databricks facts: it is known to be Databricks and cannot be
+// read, so a padded or broken DROP is not let through (the base tier rule).
+func parseFailure(reason, command string) cedareval.ShellProjectionV2 {
+	program := "unknown"
+	if fields := strings.Fields(command[:min(len(command), 4096)]); len(fields) > 0 && programName.MatchString(fields[0]) {
+		program = strings.TrimSuffix(strings.ToLower(filepath.Base(fields[0])), ".exe")
+	}
+	var facts []string
+	if mentionsDatabricks.MatchString(command) {
+		facts = databricksWorstFacts()
+	}
+	return projection(program, facts, []string{FeatureParseError, reason}, false)
 }
 
 func literalWords(words []*syntax.Word) ([]string, bool) {
@@ -192,7 +208,11 @@ func unescape(value string, quoted bool) string {
 }
 
 func classify(words []string, complete bool, w walk, helpAllowed bool) []cedareval.ShellProjectionV2 {
-	words, complete, wrapper, ok := unwrap(words, complete)
+	// The words' own completeness and the wrappers' are kept apart: curl
+	// reads a computed header as opaque, but not stdin arguments from xargs.
+	wordsComplete := complete
+	words, wrapperComplete, wrapper, ok := unwrap(words, true)
+	complete = wordsComplete && wrapperComplete
 	if !ok {
 		return single(projection(wrapper, nil, []string{"unrecognized-wrapper-arguments"}, false))
 	}
@@ -211,7 +231,7 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 	case "gh":
 		return single(classifyGH(args, complete, helpAllowed))
 	case "curl":
-		return single(classifyCurl(args, complete))
+		return single(classifyCurl(args, complete, !wordsComplete && wrapperComplete))
 	case "acli":
 		return single(acliCLI.classify(args, complete))
 	case "jira":
@@ -1042,7 +1062,13 @@ func (op curlOperation) withUpload(index int, urlText string) (_ curlOperation, 
 	return op, parsed.String(), true
 }
 
-func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
+// classifyCurl classifies a curl command. opaqueValues is set when the
+// command is incomplete only because the shell computes some of its words
+// (a computed word is ""), not because a wrapper adds any: a computed header,
+// body or other option value is then opaque text that does not change the
+// route ("Authorization: Bearer $TOKEN"), while one in a URL, method or
+// target still leaves the request unclear.
+func classifyCurl(args []string, complete, opaqueValues bool) cedareval.ShellProjectionV2 {
 	// unclear is set when the request cannot be read exactly: a word the
 	// shell computes where an option, URL or method goes, a config file
 	// (-K), which can set any option, or an option the parser does not know
@@ -1052,6 +1078,10 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	// the route, so the route's tier holds.
 	unclear := false
 	computed := !complete
+	if opaqueValues {
+		complete = true
+	}
+	isComputed := func(word string) bool { return computed && word == "" }
 	args = slices.Clone(args)
 	var operations []curlOperation
 	var op curlOperation
@@ -1065,8 +1095,12 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			i--
 			continue
 		}
-		if unknownBefore && strings.HasPrefix(arg, "-") || arg == "" && computed {
+		if unknownBefore && strings.HasPrefix(arg, "-") {
 			unclear = true
+		}
+		if isComputed(arg) && !strings.HasPrefix(arg, "-") {
+			// A computed URL or other positional word.
+			unclear, complete = true, false
 		}
 		if arg == "--" && !unknownBefore {
 			// Everything after the option terminator is a URL.
@@ -1079,7 +1113,9 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		// computed value leaves the request unclear.
 		value := func(name string) (string, bool) {
 			if attached, ok := strings.CutPrefix(arg, name+"="); ok {
-				unclear = unclear || attached == "" && computed
+				if isComputed(attached) {
+					unclear, complete = true, false
+				}
 				return attached, true
 			}
 			if i+1 >= len(args) {
@@ -1087,7 +1123,9 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				return "", false
 			}
 			i++
-			unclear = unclear || args[i] == "" && computed
+			if isComputed(args[i]) {
+				unclear, complete = true, false
+			}
 			return args[i], true
 		}
 		body, isBody := curlDataOption(arg)

@@ -224,12 +224,24 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl host:port without a scheme keeps its host", "curl -X DELETE 'dbc-1234.cloud.databricks.com:443/api/2.0/repos/12?next=https://example.org'", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
 		{"curl fragment is not sent", "curl -X DELETE '" + dbHost + "/api/2.0/repos/12#%'", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"curl unparseable path on a databricks host is unrecognized", "curl -X DELETE '" + dbHost + "/api/2.0/repos/12%'", []string{dbUnk}, false},
-		{"curl computed body keeps the tier", `curl --json "$BODY" ` + dbHost + "/api/2.1/clusters/delete", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
+		{"curl computed body is opaque", `curl --json "$BODY" ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
+		{"curl computed header is opaque", `curl -sS -X POST -H "Authorization: Bearer $DATABRICKS_TOKEN" -H 'Content-Type: application/json' -d '{"job_id":1}' ` + dbHost + "/api/2.2/jobs/run-now", []string{dbCat, dbP("execution"), dbW}, true},
+		{"curl computed header on a read", `curl -sS -H "Authorization: Bearer $DATABRICKS_TOKEN" '` + dbHost + "/api/2.2/jobs/get?job_id=1'", []string{dbCat, dbP("workloads")}, true},
+		{"curl computed path hides the host (Q1)", `curl -H "Authorization: Bearer $T" -X DELETE ` + dbHost + `/api/2.0/repos/"$ID"`, nil, false},
+		{"curl computed method is unrecognized", `curl -H "Authorization: Bearer $T" -X "$M" ` + dbHost + "/api/2.0/repos/12", []string{dbUnk}, false},
+		{"xargs keeps curl incomplete", `xargs curl -H "Authorization: Bearer $T" ` + dbHost + "/api/2.2/jobs/get", []string{dbP("workloads"), dbUnk}, false},
 		{"curl computed URL is unrecognized", `curl -X DELETE "$URL"`, nil, false},
 		{"curl sql and a read keep the sql exemption", `curl --json '{"statement":"SELECT 1"}' ` + dbHost + "/api/2.0/sql/statements --next " + dbHost + "/api/2.1/clusters/list", []string{dbP("compute"), dbP("sql"), dbUnk, dbW}, false},
 		{"curl glob in the fragment changes nothing", "curl -X DELETE '" + dbHost + "/api/2.0/repos/12#[1-2]'", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"curl request target not in origin form is unrecognized", "curl -X DELETE --request-target 'api/2.0/repos/12' " + dbHost + "/", []string{dbUnk}, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
+
+		// A command the projection cannot parse: Databricks gets the
+		// strictest facts, anything else none.
+		{"oversized databricks query", dbQuery + "'SELECT 1 /* " + strings.Repeat("x", maxCommandBytes) + " */; DROP TABLE t'", []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		{"oversized curl to a workspace", "curl -X POST -d '{\"statement\":\"DROP TABLE t" + strings.Repeat(" ", maxCommandBytes) + "\"}' " + dbHost + "/api/2.0/sql/statements", []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		{"databricks syntax error", "databricks clusters delete 0123-abc; (", []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		{"oversized heredoc is not databricks", "cat > notes.txt <<'EOF'\n" + strings.Repeat("x", maxCommandBytes) + "\nEOF", nil, false},
 
 		// Wrappers.
 		{"bash -lc", `bash -lc "databricks clusters delete 0123-abc"`, []string{dbCat, dbD, dbP("compute"), dbW}, true},
