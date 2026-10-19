@@ -213,6 +213,11 @@ func flagSet(args []string, flag string) bool {
 		if arg == flag {
 			return true
 		}
+		// A short flag inside a cluster (-fb is -f -b), unless the cluster
+		// is a value attached to an earlier letter.
+		if len(flag) == 2 && len(arg) > 2 && arg[0] == '-' && arg[1] != '-' && !strings.Contains(arg, "=") && strings.ContainsRune(arg[1:], rune(flag[1])) {
+			return true
+		}
 		if value, ok := strings.CutPrefix(arg, flag+"="); ok {
 			switch strings.ToLower(value) {
 			case "false", "f", "0", "none", "":
@@ -452,11 +457,11 @@ func databricksRouteFacts(method, requestPath string, bodies []string) ([]string
 	op := databricksAccess(route.Product, route.Access)
 	if route.Method == "POST" && route.Path == databricksSQLRoute {
 		statements, ok := databricksStatements(bodies)
+		op = op.raiseSQL(statements)
 		if !ok {
 			// Too many pieces to join every way: assume the worst.
-			op.del, op.admin = true, true
+			op = op.raise(databricksOperation{product: "secrets", write: true, del: true, admin: true})
 		}
-		op = op.raiseSQL(statements)
 	}
 	return op.facts(), true
 }
@@ -470,8 +475,9 @@ const databricksMaxBodyPieces = 8
 // checked. The body is assembled from its literal pieces: curl joins -d
 // pieces with & and --json pieces with nothing, and the CLI keeps the last
 // --json, so each piece alone and every join of the pieces is read. A piece
-// read from a file (@name) is unknown and read as empty. ok is false when
-// there are too many pieces to try every join.
+// read from a file (@name) is unknown and read as empty. Past
+// databricksMaxBodyPieces only each piece and the two uniform joins are
+// read, and ok is false.
 func databricksStatements(bodies []string) (statements []string, ok bool) {
 	var pieces []string
 	for _, body := range bodies {
@@ -479,11 +485,9 @@ func databricksStatements(bodies []string) (statements []string, ok bool) {
 			pieces = append(pieces, body)
 		}
 	}
-	if len(pieces) > databricksMaxBodyPieces {
-		return nil, false
-	}
-	candidates := slices.Clone(pieces)
-	for mask := 0; len(pieces) > 1 && mask < 1<<(len(pieces)-1); mask++ {
+	candidates := append(slices.Clone(pieces), strings.Join(pieces, ""), strings.Join(pieces, "&"))
+	ok = len(pieces) <= databricksMaxBodyPieces
+	for mask := 0; ok && len(pieces) > 1 && mask < 1<<(len(pieces)-1); mask++ {
 		var joined strings.Builder
 		for i, piece := range pieces {
 			if i > 0 && mask&(1<<(i-1)) != 0 {
@@ -496,7 +500,7 @@ func databricksStatements(bodies []string) (statements []string, ok bool) {
 	for _, body := range candidates {
 		statements = append(statements, jsonStatements(body)...)
 	}
-	return statements, true
+	return statements, ok
 }
 
 func jsonStatements(body string) []string {
