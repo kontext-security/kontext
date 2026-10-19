@@ -229,6 +229,8 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl computed header on a read", `curl -sS -H "Authorization: Bearer $DATABRICKS_TOKEN" '` + dbHost + "/api/2.2/jobs/get?job_id=1'", []string{dbCat, dbP("workloads")}, true},
 		{"curl computed path hides the host (Q1)", `curl -H "Authorization: Bearer $T" -X DELETE ` + dbHost + `/api/2.0/repos/"$ID"`, nil, false},
 		{"curl computed method is unrecognized", `curl -H "Authorization: Bearer $T" -X "$M" ` + dbHost + "/api/2.0/repos/12", []string{dbUnk}, false},
+		{"curl unquoted computed header can split into options", `curl -H $HDR ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
+		{"curl computed list header can split into options", `curl -H "$@" ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
 		{"xargs keeps curl incomplete", `xargs curl -H "Authorization: Bearer $T" ` + dbHost + "/api/2.2/jobs/get", []string{dbP("workloads"), dbUnk}, false},
 		{"curl computed URL is unrecognized", `curl -X DELETE "$URL"`, nil, false},
 		{"curl sql and a read keep the sql exemption", `curl --json '{"statement":"SELECT 1"}' ` + dbHost + "/api/2.0/sql/statements --next " + dbHost + "/api/2.1/clusters/list", []string{dbP("compute"), dbP("sql"), dbUnk, dbW}, false},

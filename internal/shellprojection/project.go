@@ -52,6 +52,10 @@ func Project(command string) []cedareval.ShellProjectionV2 {
 // walk carries what a nested script inherits from the command around it.
 type walk struct {
 	depth int
+	// oneArgumentEach is set while classifying a call whose every word
+	// expands to exactly one argument: a computed word is then quoted, so
+	// it cannot split into extra options (see classifyCurl).
+	oneArgumentEach bool
 }
 
 func project(command string, w walk) []cedareval.ShellProjectionV2 {
@@ -96,7 +100,9 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 		words, complete := literalWords(call.Args)
 		// No wrapper either: env, sudo and launchers can rewrite argv.
 		direct := len(words) > 0 && words[0] == "gh"
-		projections = append(projections, classify(words, complete, w, helpAllowed && direct)...)
+		cw := w
+		cw.oneArgumentEach = !slices.ContainsFunc(call.Args, func(word *syntax.Word) bool { return !oneArgument(word) })
+		projections = append(projections, classify(words, complete, cw, helpAllowed && direct)...)
 	}
 	if len(projections) == 0 {
 		projections = append(projections, projection("unknown", nil, []string{"empty-command"}, false))
@@ -106,6 +112,27 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 
 // singlePlainCall reports a script that is one simple command with no
 // variable assignments (`BASH_ALIASES[gh]=…` defines an alias too).
+// oneArgument reports a word the shell expands to exactly one argument: its
+// expansions are inside double quotes and none is a list ("$@", an array, a
+// ${!prefix@} name list). An unquoted expansion can split into several words.
+func oneArgument(word *syntax.Word) bool {
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.Lit, *syntax.SglQuoted:
+		case *syntax.DblQuoted:
+			for _, inner := range part.Parts {
+				if param, ok := inner.(*syntax.ParamExp); ok &&
+					(param.Param != nil && (param.Param.Value == "@" || param.Param.Value == "*") || param.Index != nil || param.Names != 0 || param.NestedParam != nil) {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func singlePlainCall(file *syntax.File) bool {
 	if len(file.Stmts) != 1 {
 		return false
@@ -231,7 +258,7 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 	case "gh":
 		return single(classifyGH(args, complete, helpAllowed))
 	case "curl":
-		return single(classifyCurl(args, complete, !wordsComplete && wrapperComplete))
+		return single(classifyCurl(args, complete, !wordsComplete && wrapperComplete && w.oneArgumentEach))
 	case "acli":
 		return single(acliCLI.classify(args, complete))
 	case "jira":
@@ -1063,11 +1090,13 @@ func (op curlOperation) withUpload(index int, urlText string) (_ curlOperation, 
 }
 
 // classifyCurl classifies a curl command. opaqueValues is set when the
-// command is incomplete only because the shell computes some of its words
-// (a computed word is ""), not because a wrapper adds any: a computed header,
-// body or other option value is then opaque text that does not change the
-// route ("Authorization: Bearer $TOKEN"), while one in a URL, method or
-// target still leaves the request unclear.
+// command is incomplete only because the shell computes some of its words (a
+// computed word is ""), each quoted into exactly one argument, and no wrapper
+// adds any. For a Databricks request a computed header, body or other option
+// value is then opaque text that does not change the route ("Authorization:
+// Bearer $TOKEN"), while one in a URL, method or target still leaves it
+// unclear. Other providers keep main's reading: any computed word leaves
+// their request incomplete.
 func classifyCurl(args []string, complete, opaqueValues bool) cedareval.ShellProjectionV2 {
 	// unclear is set when the request cannot be read exactly: a word the
 	// shell computes where an option, URL or method goes, a config file
@@ -1243,9 +1272,11 @@ func classifyCurl(args []string, complete, opaqueValues bool) cedareval.ShellPro
 	}
 	if len(requests) <= 1 && len(operations) == 1 && len(unrecognized) == 0 {
 		if len(requests) == 0 {
-			return classifyCurlURL("", op.method(), op.bodies, complete, op.bodyFile)
+			return classifyCurlURL("", op.method(), op.bodies, complete && !opaqueValues, op.bodyFile)
 		}
-		return classifyCurlURL(requests[0].urlText, requests[0].method, requests[0].bodies, complete, requests[0].bodyFile)
+		// The opaque reading is for Databricks requests only.
+		requestComplete := complete && (!opaqueValues || databricksURL(requests[0].urlText))
+		return classifyCurlURL(requests[0].urlText, requests[0].method, requests[0].bodies, requestComplete, requests[0].bodyFile)
 	}
 	// Several requests, or one that is unrecognized: each is judged, and the
 	// whole is never a catalogued route.
