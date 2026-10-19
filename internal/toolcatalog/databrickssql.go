@@ -63,12 +63,9 @@ var (
 		"GRANT", "REVOKE", "DENY", "ALTER")
 )
 
-// A qualified name before ( is a call unless a table keyword precedes it (a
-// column list) or a query follows (a subquery after a column reference).
-var (
-	databricksTableKeywords = setOf("INTO", "TABLE", "VIEW", "FUNCTION", "EXISTS")
-	databricksQueryStarts   = setOf("SELECT", "WITH", "FROM")
-)
+// A qualified name before ( is a call unless a table keyword precedes it: a
+// column list. A qualified column before a subquery reads as a call too.
+var databricksTableKeywords = setOf("INTO", "TABLE", "VIEW", "FUNCTION", "EXISTS")
 
 // Objects whose CREATE, ALTER or DROP is administration: access policies,
 // governed tags, credentials, external locations, Delta Sharing and workspace
@@ -86,7 +83,7 @@ var databricksSecretFunctions = setOf("SECRET", "TRY_SECRET", "LIST_SECRETS")
 // run time. Every AI_ function calls a model endpoint and counts too.
 var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA", "READ_KINESIS",
 	"READ_PUBSUB", "READ_PULSAR", "REMOTE_QUERY", "VECTOR_SEARCH", "CLOUD_FILES", "IDENTIFIER",
-	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE")
+	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
 
 func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool) {
 	at := func(i int) sqlToken {
@@ -112,7 +109,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 				opaque = true
 			}
 			builtin := at(i-2).text == "BUILTIN" && (!at(i-3).is(".") || at(i-4).text == "SYSTEM" && !at(i-5).is("."))
-			if prev.is(".") && !builtin && !(at(i+2).kind == sqlWord && databricksQueryStarts[at(i+2).text]) {
+			if prev.is(".") && !builtin {
 				start := i - 2 // a qualified call is a user-defined function
 				for at(start - 1).is(".") {
 					start -= 2

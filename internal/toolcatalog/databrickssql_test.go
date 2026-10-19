@@ -51,7 +51,9 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"merge delete by source", "MERGE INTO t USING s ON t.k = s.k WHEN NOT MATCHED BY SOURCE THEN DELETE", AccessDelete, false, true},
 		{"replace where", "INSERT INTO t REPLACE WHERE d = '2026-01-01' SELECT * FROM s", AccessDelete, false, true},
 		{"replace using", "INSERT INTO t REPLACE USING (k) SELECT * FROM s", AccessDelete, false, true},
-		{"replace on", "INSERT INTO t AS t REPLACE ON t.k = s.k (SELECT * FROM s) AS s", AccessDelete, false, true},
+		{"replace on", "INSERT INTO t AS t REPLACE ON t.k = k2 (SELECT * FROM s)", AccessDelete, false, true},
+		// A qualified column before a subquery reads as a UDF call: still delete.
+		{"replace on qualified", "INSERT INTO t AS t REPLACE ON t.k = s.k (SELECT * FROM s) AS s", AccessDelete, false, false},
 		{"drop inside unknown form", "BEGIN DROP TABLE t; END", AccessDelete, false, false},
 		{"explain drop raises", "EXPLAIN DROP TABLE t", AccessDelete, false, true},
 
@@ -140,6 +142,10 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"create_file", "SELECT create_file('x', '/Volumes/main/default/v/file', 'overwrite')", AccessWrite, false, false},
 		{"copy_file overwrite raises", "SELECT copy_file('/Volumes/a', '/Volumes/b', overwrite => true)", AccessDelete, false, false},
 		{"try_copy_file", "SELECT try_copy_file('/Volumes/a', '/Volumes/b')", AccessWrite, false, false},
+		{"udf with keyword arguments", "SELECT main.default.f(select => 1), main.default.g(with), main.default.h(from, 1)", AccessWrite, false, false},
+		{"reflect", "SELECT reflect('java.util.UUID', 'randomUUID')", AccessWrite, false, false},
+		{"java_method", "SELECT java_method('java.lang.System', 'getenv', 'HOME')", AccessWrite, false, false},
+		{"try_reflect", "SELECT try_reflect('java.lang.System', 'setProperty', 'k', 'v')", AccessWrite, false, false},
 		{"udf in a schema named builtin", "SELECT main.builtin.lower(a) FROM t", AccessWrite, false, false},
 		{"builtin qualified", "SELECT system.builtin.lower(a) FROM t", AccessWrite, false, true},
 		{"qualified insert column list", "INSERT INTO main.default.t (a, b) VALUES (1, 2)", AccessWrite, false, true},
