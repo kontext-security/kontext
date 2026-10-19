@@ -215,6 +215,11 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl docs host without a scheme with a path glob is not databricks", "curl 'docs.databricks.com/{en,ja}/dev-tools/cli/index.html'", nil, false},
 		{"curl lookalike host without a scheme with a path glob is not databricks", "curl 'databricks.com.example.org/{a,b}'", nil, false},
 		{"curl host:port without a scheme keeps its host", "curl -X DELETE 'dbc-1234.cloud.databricks.com:443/api/2.0/repos/12?next=https://example.org'", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
+		{"curl fragment is not sent", "curl -X DELETE '" + dbHost + "/api/2.0/repos/12#%'", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
+		{"curl unparseable path on a databricks host is unrecognized", "curl -X DELETE '" + dbHost + "/api/2.0/repos/12%'", []string{dbUnk}, false},
+		{"curl computed body keeps the tier", `curl --json "$BODY" ` + dbHost + "/api/2.1/clusters/delete", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
+		{"curl computed URL is unrecognized", `curl -X DELETE "$URL"`, nil, false},
+		{"curl sql and a read keep the sql exemption", `curl --json '{"statement":"SELECT 1"}' ` + dbHost + "/api/2.0/sql/statements --next " + dbHost + "/api/2.1/clusters/list", []string{dbP("compute"), dbP("sql"), dbUnk, dbW}, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.

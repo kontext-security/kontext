@@ -568,19 +568,12 @@ func jsonStatements(body string) []string {
 	return statements
 }
 
-// mergeDatabricksProducts keeps a curl command that requests several URLs from
-// borrowing the SQL exemption: once the merged facts name another product
-// too, the SQL product fact is dropped, so read-only-except-sql judges the
-// other requests' writes.
-func mergeDatabricksProducts(facts []string) []string {
-	sql := databricksProductFact(databricksSQLProduct)
-	other := slices.ContainsFunc(facts, func(fact string) bool {
-		return strings.HasPrefix(fact, databricksProductPrefix) && fact != sql
+// databricksWritesOutsideSQL reports a request's facts that write to a
+// Databricks product other than SQL.
+func databricksWritesOutsideSQL(facts []string) bool {
+	return slices.Contains(facts, writeFact(productDatabricks)) && slices.ContainsFunc(facts, func(fact string) bool {
+		return strings.HasPrefix(fact, databricksProductPrefix) && fact != databricksProductFact(databricksSQLProduct)
 	})
-	if !other {
-		return facts
-	}
-	return slices.DeleteFunc(facts, func(fact string) bool { return fact == sql })
 }
 
 // databricksHost reports a Databricks workspace or account host. A host with
@@ -591,8 +584,15 @@ func databricksHost(host string) bool {
 }
 
 // databricksURL reports a URL, read as curl reads it, whose host parses and
-// is a Databricks host. A host that is globbed or does not parse is not one.
+// is a Databricks host. Only the scheme and authority are parsed, so a path
+// Go cannot parse does not hide a readable host. A host that is globbed or
+// does not parse is not one.
 func databricksURL(urlText string) bool {
-	parsed, err := url.Parse(normalizeCurlURL(urlText, "http"))
+	normalized := normalizeCurlURL(urlText, "http")
+	scheme, rest, _ := strings.Cut(normalized, "://")
+	if end := strings.IndexAny(rest, "/?"); end >= 0 {
+		rest = rest[:end]
+	}
+	parsed, err := url.Parse(scheme + "://" + rest)
 	return err == nil && parsed.Host != "" && databricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), "."))
 }

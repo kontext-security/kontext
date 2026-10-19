@@ -1044,11 +1044,14 @@ func (op curlOperation) withUpload(index int, urlText string) (_ curlOperation, 
 
 func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	// unclear is set when the request cannot be read exactly: a word the
-	// shell computes, a config file (-K), which can set any option, or an
-	// option the parser does not know followed by one that it may have taken
-	// as its value. By decision, a Databricks request that cannot be read
-	// exactly is unrecognized with no tier: it fails open.
-	unclear := !complete && slices.Contains(args, "")
+	// shell computes where an option, URL or method goes, a config file
+	// (-K), which can set any option, or an option the parser does not know
+	// followed by one that it may have taken as its value. By decision, a
+	// Databricks request that cannot be read exactly is unrecognized with no
+	// tier: it fails open. A computed body or header value does not change
+	// the route, so the route's tier holds.
+	unclear := false
+	computed := !complete
 	args = slices.Clone(args)
 	var operations []curlOperation
 	var op curlOperation
@@ -1062,7 +1065,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			i--
 			continue
 		}
-		if unknownBefore && strings.HasPrefix(arg, "-") {
+		if unknownBefore && strings.HasPrefix(arg, "-") || arg == "" && computed {
 			unclear = true
 		}
 		if arg == "--" && !unknownBefore {
@@ -1072,8 +1075,11 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		}
 		unknown := false
 		// value returns the option's value: attached after = or the next word.
+		// Every option that reads it shapes the method, target or URL, so a
+		// computed value leaves the request unclear.
 		value := func(name string) (string, bool) {
 			if attached, ok := strings.CutPrefix(arg, name+"="); ok {
+				unclear = unclear || attached == "" && computed
 				return attached, true
 			}
 			if i+1 >= len(args) {
@@ -1081,6 +1087,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				return "", false
 			}
 			i++
+			unclear = unclear || args[i] == "" && computed
 			return args[i], true
 		}
 		body, isBody := curlDataOption(arg)
@@ -1198,12 +1205,18 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	// whole is never a catalogued route.
 	facts := unrecognized
 	var features []string
+	otherWrite := false
 	for _, each := range requests {
 		projection := classifyCurlURL(each.urlText, each.method, each.bodies, false, each.bodyFile)
 		facts = append(facts, projection.Facts...)
 		features = append(features, projection.Features...)
+		otherWrite = otherWrite || databricksWritesOutsideSQL(projection.Facts)
 	}
-	return projection("curl", mergeDatabricksProducts(facts), features, false)
+	if otherWrite {
+		// One request must not lend the SQL exemption to another's write.
+		facts = slices.DeleteFunc(facts, func(fact string) bool { return fact == databricksProductFact(databricksSQLProduct) })
+	}
+	return projection("curl", facts, features, false)
 }
 
 // curlSwitches are common curl options that take no value.
@@ -1225,9 +1238,11 @@ var curlScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*):/+`)
 
 // normalizeCurlURL reads a URL the way curl does: without a scheme it uses
 // --proto-default (http unless set), any number of slashes may follow the
-// scheme (https:/host and https:///host are https://host), and percent
-// escapes in the host are decoded.
+// scheme (https:/host and https:///host are https://host), percent escapes
+// in the host are decoded, and the fragment, which curl does not send, is
+// dropped.
 func normalizeCurlURL(urlText, protoDefault string) string {
+	urlText, _, _ = strings.Cut(urlText, "#")
 	if urlText == "" {
 		return ""
 	}
@@ -1323,7 +1338,13 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		}
 	}
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return projection("curl", nil, []string{"dynamic-or-invalid-url"}, false)
+		var facts []string
+		if databricksURL(urlText) {
+			// A readable Databricks host with a request the parser cannot
+			// read (an invalid escape in the path).
+			facts = []string{FactDatabricksRouteUnrecognized}
+		}
+		return projection("curl", facts, []string{"dynamic-or-invalid-url"}, false)
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 	switch {
