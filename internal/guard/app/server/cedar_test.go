@@ -363,7 +363,7 @@ func TestCedarConversionErrorDoesNotDiscardCompletedDeny(t *testing.T) {
 		t.Fatal(err)
 	}
 	principal := cedareval.EvaluationPrincipal{EntityType: cedareval.EndpointEntityTypeV2, EntityID: "ins_test"}
-	good := cedarInputsV2(principal, cedarHookEvent("Read", nil), "Read", nil)[0]
+	good := cedarInputsV2(principal, cedarHookEvent("Read", nil), "Read", nil, nil)[0]
 	bad := good
 	bad.AgentID = "unsupported-agent"
 	for _, inputs := range [][]cedareval.ToolUseInputV2{{good, bad}, {bad, good}} {
