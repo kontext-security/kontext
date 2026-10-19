@@ -1,7 +1,7 @@
 {
   "cli": "v1.21.0",
   "sdk": "v0.188.0",
-  "rules": "4c61e6dcb439c5b48b8d9a0543a45f0ba88164caa921a9c7fbcabdb4159f9bcc",
+  "rules": "89e080b53b7393c9b88b57d5ea511256ca5474fb3292735c336003e4c25706b6",
   "routes": [
     {
       "operation": "cli.apps.delete",
@@ -3851,7 +3851,7 @@
       "method": "POST",
       "path": "/api/2.0/dbfs/create",
       "product": "data",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "files.Dbfs.Delete",
@@ -3899,7 +3899,7 @@
       "method": "POST",
       "path": "/api/2.0/dbfs/put",
       "product": "data",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "files.Dbfs.Read",
@@ -4474,7 +4474,7 @@
       "method": "PUT",
       "path": "/api/2.0/fs/files{file_path+}",
       "product": "data",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "dashboards.Genie.GenieCancelResponse",
@@ -10522,7 +10522,7 @@
         "serving-endpoints patch"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "serving.ServingEndpoints.PatchTelemetryConfig",
@@ -11696,7 +11696,7 @@
         "workspace import"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "workspace.Workspace.List",

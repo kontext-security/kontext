@@ -1620,10 +1620,17 @@ var databricksAdminOperations = map[string]bool{
 
 // databricksDeleteOperations can destroy data under a name that does not
 // say so: repos update --dangerously-force-discard-all drops uncommitted
-// work, and uninstalling a library removes it at the next restart.
+// work, uninstalling a library removes it at the next restart, an upload or
+// import with overwrite replaces what was there, and an endpoint tag patch
+// takes delete_tags.
 var databricksDeleteOperations = map[string]bool{
-	"compute.Libraries.Uninstall": true,
-	"workspace.Repos.Update":      true,
+	"compute.Libraries.Uninstall":    true,
+	"files.Dbfs.Create":              true,
+	"files.Dbfs.Put":                 true,
+	"files.Files.Upload":             true,
+	"serving.ServingEndpoints.Patch": true,
+	"workspace.Repos.Update":         true,
+	"workspace.Workspace.Import":     true,
 }
 
 // databricksConsumingGets are GETs that change state: retrieving a
