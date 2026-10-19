@@ -149,7 +149,7 @@ func databricksMaskIsName(verb string, prev, beforePrev sqlToken) bool {
 	keyword := func(t sqlToken, words ...string) bool {
 		return t.kind == sqlWord && setOf(words...)[t.text]
 	}
-	if verb == "ALTER" && keyword(beforePrev, "AFTER") { // ADD COLUMN c t AFTER other MASK f
+	if verb == "ALTER" && keyword(beforePrev, "AFTER") || beforePrev.is(":") { // AFTER other MASK f, :param MASK f
 		return false
 	}
 	return prev.is("(") || prev.is(",") || prev.is(".") || keyword(prev, "AS", "FROM", "JOIN") ||
@@ -228,7 +228,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 		// all come before it. Not a name (CREATE TABLE as) or GENERATED … AS.
 		// ponytail: a column named mask in a CHECK (…) or a STRUCT<…> reads
 		// as a mask, which only over-flags admin.
-		query = query || takesQuery && depth == 0 && tok.is("AS") && !next.is(".") &&
+		query = query || takesQuery && depth == 0 && tok.is("AS") && !next.is(".") && !prev.is(":") &&
 			!(prev.kind == sqlWord && setOf("TABLE", "VIEW", "EXISTS", "ALWAYS", "DEFAULT", "AFTER")[prev.text]) && !prev.is(".")
 		if depth == 0 {
 			switch {
