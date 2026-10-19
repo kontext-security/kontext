@@ -149,6 +149,9 @@ func TestDatabricksCommand(t *testing.T) {
 		{"warehouses", "create-default-warehouse-override", "sql.Warehouses.CreateDefaultWarehouseOverride", "workspace", "compute", "admin"},
 		{"external-locations", "create", "catalog.ExternalLocations.Create", "workspace", "data", "admin"},
 		{"data-classification", "update-catalog-config", "dataclassification.DataClassification.UpdateCatalogConfig", "workspace", "data", "admin"},
+		{"ai-gateway", "create-model-provider-service", "catalog.AiGateway.CreateModelProviderService", "workspace", "secrets", "admin"},
+		// effective_owner is computed by the server.
+		{"ai-gateway", "update-skill", "catalog.AiGateway.UpdateSkill", "workspace", "ai", "write"},
 		{"connections", "create", "catalog.Connections.Create", "workspace", "secrets", "write"},
 		{"providers", "create", "sharing.Providers.Create", "workspace", "secrets", "write"},
 		{"providers", "update", "sharing.Providers.Update", "workspace", "secrets", "admin"},

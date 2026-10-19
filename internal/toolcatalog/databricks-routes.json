@@ -8914,9 +8914,7 @@
       "product": "data",
       "access": "admin",
       "adminFields": [
-        "spec.enable_pg_native_login",
-        "status.enable_pg_native_login",
-        "status.owner"
+        "spec.enable_pg_native_login"
       ]
     },
     {
@@ -9205,8 +9203,7 @@
       "product": "data",
       "access": "admin",
       "adminFields": [
-        "spec.jwt_role_claim_key",
-        "status.jwt_role_claim_key"
+        "spec.jwt_role_claim_key"
       ]
     },
     {
@@ -9242,9 +9239,7 @@
       "product": "data",
       "access": "admin",
       "adminFields": [
-        "spec.enable_pg_native_login",
-        "status.enable_pg_native_login",
-        "status.owner"
+        "spec.enable_pg_native_login"
       ]
     },
     {
@@ -9357,8 +9352,7 @@
       "product": "data",
       "access": "admin",
       "adminFields": [
-        "spec.jwt_role_claim_key",
-        "status.jwt_role_claim_key"
+        "spec.jwt_role_claim_key"
       ]
     },
     {
@@ -13146,10 +13140,7 @@
         "ai-gateway create-mcp-service"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "effective_owner"
-      ]
+      "access": "write"
     },
     {
       "operation": "catalog.Metastores.Summary",
@@ -13272,11 +13263,8 @@
       "commands": [
         "ai-gateway create-model-provider-service"
       ],
-      "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "effective_owner"
-      ]
+      "product": "secrets",
+      "access": "admin"
     },
     {
       "operation": "catalog.AiGateway.ListModelServices",
@@ -13298,10 +13286,7 @@
         "ai-gateway create-model-service"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "effective_owner"
-      ]
+      "access": "write"
     },
     {
       "operation": "catalog.RegisteredModels.List",
@@ -13811,7 +13796,6 @@
       "product": "secrets",
       "access": "admin",
       "adminFields": [
-        "effective_owner",
         "owner"
       ]
     },
@@ -13848,7 +13832,6 @@
       "product": "secrets",
       "access": "admin",
       "adminFields": [
-        "effective_owner",
         "owner"
       ]
     },
@@ -13953,10 +13936,7 @@
         "ai-gateway create-skill"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "effective_owner"
-      ]
+      "access": "write"
     },
     {
       "operation": "catalog.StorageCredentials.List",
@@ -14427,10 +14407,7 @@
         "ai-gateway update-mcp-service"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "effective_owner"
-      ]
+      "access": "write"
     },
     {
       "operation": "catalog.AiGateway.UpdateModelProviderService",
@@ -14440,11 +14417,8 @@
       "commands": [
         "ai-gateway update-model-provider-service"
       ],
-      "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "effective_owner"
-      ]
+      "product": "secrets",
+      "access": "admin"
     },
     {
       "operation": "catalog.AiGateway.UpdateModelService",
@@ -14455,10 +14429,7 @@
         "ai-gateway update-model-service"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "effective_owner"
-      ]
+      "access": "write"
     },
     {
       "operation": "catalog.AiGateway.UpdateSkill",
@@ -14469,10 +14440,7 @@
         "ai-gateway update-skill"
       ],
       "product": "ai",
-      "access": "admin",
-      "adminFields": [
-        "effective_owner"
-      ]
+      "access": "write"
     },
     {
       "operation": "catalog.AiGateway.FinalizeSkill",

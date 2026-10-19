@@ -89,11 +89,14 @@ type sdkOperation struct {
 
 var (
 	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|access_token|single_user_name|ssh_public_keys|enable_pg_native_login|jwt_role_claim_key|ai_gateway|auto_capture_config)$`)
-	databricksReadSuffix = regexp.MustCompile(`(?i)[/:](batch)?(get|list|search|query|export|scan)([-_][a-z0-9_-]*)?$`)
-	databricksDelete     = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge|Remove|Clear|Trash|Truncate|Drop|Pop)`)
-	databricksPermission = regexp.MustCompile(`^(Get|Set|Update|Share)Permissions$|^GetPermissionLevels$`)
-	sprintfVerb          = regexp.MustCompile(`%[^v]`)
-	accessRankDatabricks = map[string]int{"read": 0, "write": 1, "delete": 2, "admin": 3}
+	// databricksOutputField matches fields the server computes and ignores
+	// on write: effective_* values and an AIP resource's status block.
+	databricksOutputField = regexp.MustCompile(`(^|\.)effective_[a-z_]+$|(^|\.)status\.`)
+	databricksReadSuffix  = regexp.MustCompile(`(?i)[/:](batch)?(get|list|search|query|export|scan)([-_][a-z0-9_-]*)?$`)
+	databricksDelete      = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge|Remove|Clear|Trash|Truncate|Drop|Pop)`)
+	databricksPermission  = regexp.MustCompile(`^(Get|Set|Update|Share)Permissions$|^GetPermissionLevels$`)
+	sprintfVerb           = regexp.MustCompile(`%[^v]`)
+	accessRankDatabricks  = map[string]int{"read": 0, "write": 1, "delete": 2, "admin": 3}
 )
 
 func (r *refresher) refreshDatabricks(outputPath string, write bool) error {
@@ -270,7 +273,7 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 		entry := &databricksEntry{Operation: op.id, Method: op.method, Path: op.path, Product: databricksProduct(op)}
 		if op.method == "POST" || op.method == "PUT" || op.method == "PATCH" {
 			for _, field := range op.bodyFields {
-				if databricksAdminField.MatchString(field[strings.LastIndex(field, ".")+1:]) {
+				if databricksAdminField.MatchString(field[strings.LastIndex(field, ".")+1:]) && !databricksOutputField.MatchString(field) {
 					entry.AdminFields = append(entry.AdminFields, field)
 				}
 			}
@@ -1399,7 +1402,7 @@ var databricksServiceProducts = map[string]string{
 // it) and minting or returning credentials (secrets; a recipient carries
 // its activation URL, a provider its recipient profile's bearer token,
 // which Create and Update import, a connection the database credentials in
-// its options).
+// its options, a model provider service the provider's API keys).
 var databricksOperationProducts = map[string]string{
 	"apps.Apps.Deploy":                                       "execution",
 	"apps.Apps.Start":                                        "execution",
@@ -1420,6 +1423,8 @@ var databricksOperationProducts = map[string]string{
 	"catalog.AiGateway.CreateMcpServiceUserMappedCredential": "secrets",
 	"catalog.AiGateway.DeleteMcpServiceUserMappedCredential": "secrets",
 	"catalog.AiGateway.GetMcpServiceUserMappedCredential":    "secrets",
+	"catalog.AiGateway.CreateModelProviderService":           "secrets",
+	"catalog.AiGateway.UpdateModelProviderService":           "secrets",
 	"catalog.Connections.Create":                             "secrets",
 	"catalog.Connections.Update":                             "secrets",
 	"catalog.Credentials.GenerateTemporaryServiceCredential": "secrets",
@@ -1438,7 +1443,8 @@ var databricksOperationProducts = map[string]string{
 // databricksAdminOperations change who can do what without a name, product
 // or body field that says so: database roles (superuser, createrole,
 // bypassrls) and database owners (spec.role), secret ACLs, Unity Catalog
-// storage and service credentials (they map cloud IAM roles), the
+// storage and service credentials (they map cloud IAM roles), model
+// provider services (an update can retarget the URL and keep the key), the
 // workspace-wide warehouse security config and default-warehouse overrides, credentials minted, changed or
 // revoked for another identity (git credentials take a principal_id, a
 // recipient token is another party's), clean-room approvals that let
@@ -1455,6 +1461,8 @@ var databricksAdminOperations = map[string]bool{
 	"catalog.EntityTagAssignments.Delete":                                 true,
 	"catalog.EntityTagAssignments.Update":                                 true,
 	"catalog.ExternalLocations.Create":                                    true,
+	"catalog.AiGateway.CreateModelProviderService":                        true,
+	"catalog.AiGateway.UpdateModelProviderService":                        true,
 	"catalog.Credentials.CreateCredential":                                true,
 	"catalog.Credentials.DeleteCredential":                                true,
 	"catalog.StorageCredentials.Create":                                   true,

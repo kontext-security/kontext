@@ -152,6 +152,13 @@ type EditCluster struct {
 	Spec      *ClusterSpec ` + "`json:\"spec,omitempty\"`" + `
 	Internal  string       ` + "`json:\"-\" url:\"internal\"`" + `
 	Rules     Rules        ` + "`json:\"rules,omitempty\"`" + `
+	// Computed by the server; they never make an operation admin.
+	EffectiveOwner string     ` + "`json:\"effective_owner,omitempty\"`" + `
+	Status         *Status    ` + "`json:\"status,omitempty\"`" + `
+}
+
+type Status struct {
+	Owner string ` + "`json:\"owner,omitempty\"`" + `
 }
 
 type Rules []Rule
