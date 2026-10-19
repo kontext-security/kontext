@@ -109,6 +109,8 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"sandbox config writes", "databricks sandbox config happy-panda-1234 --no-autostop", []string{dbCat, dbP("execution"), dbW}, true},
 		{"bundle generate is a read", "databricks bundle generate job --existing-job-id 1", []string{dbCat, dbP("workloads")}, true},
 		{"bundle generate clustered -fb binds", "databricks bundle generate job --existing-job-id 1 -fb", []string{dbCat, dbP("workloads"), dbW}, true},
+		{"bundle generate clustered -fb=true binds", "databricks bundle generate job --existing-job-id 1 -fb=true", []string{dbCat, dbP("workloads"), dbW}, true},
+		{"bundle generate clustered -fb=false does not bind", "databricks bundle generate job --existing-job-id 1 -fb=false", []string{dbCat, dbP("workloads")}, true},
 		{"bundle generate --bind binds", "databricks bundle generate job --existing-job-id 1 -b", []string{dbCat, dbP("workloads"), dbW}, true},
 		{"auth describe is local", "databricks auth describe", []string{dbCat}, true},
 		{"auth describe --sensitive prints credentials", "databricks auth describe --sensitive", []string{dbCat, dbP("secrets")}, true},
@@ -157,6 +159,13 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl glob alternatives are each requested", "curl -X POST -d '{}' '" + dbHost + "/api/{2.0/repos/list,2.1/clusters/delete}'", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
 		{"curl glob range", "curl -X POST -d '{}' '" + dbHost + "/api/2.1/clu[s-s]ters/delete'", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl url without a scheme is plain http", "curl -X DELETE dbc-1234.cloud.databricks.com/api/2.0/repos/12", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
+		{"curl --next resets -X", `curl -X GET https://example.com --next --json '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
+		{"curl -X wins over -G", "curl -X DELETE -G " + dbHost + "/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
+		{"curl every range value is requested", `curl --json '{"cluster_id":"x"}' '` + dbHost + "/api/2.1/clusters/[a-d]elete'", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
+		{"curl glob past the cap assumes the worst", "curl '" + dbHost + "/api/2.1/clusters/[a-z][a-z][a-z]'", []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		{"curl short option cluster", "curl -sX DELETE " + dbHost + "/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
+		{"curl clustered body", `curl -sd'{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
+		{"curl --request-target is the path requested", "curl --request-target '/api/2.0/secrets/get?scope=s&key=k' " + dbHost + "/api/2.1/clusters/list", []string{dbCat, dbP("secrets")}, true},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.

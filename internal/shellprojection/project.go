@@ -986,13 +986,17 @@ var ghAPINeutralValueOptions = map[string]bool{"-q": true, "--jq": true, "-t": t
 var ghAPINeutralValuePrefixes = []string{"--jq=", "--template=", "--cache=", "--hostname=", "--header=", "--preview="}
 
 func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
-	method := "GET"
+	args = slices.Clone(args)
+	// The method follows curl's precedence: -X replaces the method string
+	// whatever else is set; otherwise -I, -G, -T and a body imply one.
+	custom := ""
+	var customs []string
+	head, get, upload, data := false, false, false, false
 	// --next starts a new request with its own method. Which option values
 	// it resets is not modelled: with --next, every URL is judged under every
 	// method the command names.
 	next := false
-	methods := []string{method}
-	explicitMethod := false
+	requestTarget := ""
 	var urls []string
 	bodies := make([]string, 0, 2)
 	// A body read from a file is unknown content. Most routes treat it as an
@@ -1000,9 +1004,19 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	// a read whatever its body says.
 	bodyFile := false
 	valueOptions := map[string]bool{"-H": true, "--header": true, "-A": true, "--user-agent": true, "-u": true, "--user": true, "-o": true, "--output": true, "--connect-timeout": true, "--max-time": true, "--retry": true}
-	safeFlags := map[string]bool{"-s": true, "-S": true, "-sS": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
+	safeFlags := map[string]bool{"-s": true, "-S": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
+	setCustom := func(method string) {
+		custom = strings.ToUpper(method)
+		customs = append(customs, custom)
+	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if expanded, ok := expandCurlShortCluster(arg); ok {
+			// -sX DELETE is -s -X DELETE; -sd@f is -s -d @f.
+			args = slices.Concat(args[:i], expanded, args[i+1:])
+			i--
+			continue
+		}
 		switch {
 		case arg == "-X" || arg == "--request":
 			if i+1 >= len(args) {
@@ -1010,15 +1024,22 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				continue
 			}
 			i++
-			method, explicitMethod = strings.ToUpper(args[i]), true
-		case strings.HasPrefix(arg, "-X") && len(arg) > 2:
-			method, explicitMethod = strings.ToUpper(arg[2:]), true
+			setCustom(args[i])
 		case strings.HasPrefix(arg, "--request="):
-			method, explicitMethod = strings.ToUpper(strings.TrimPrefix(arg, "--request=")), true
+			setCustom(strings.TrimPrefix(arg, "--request="))
+		case arg == "--request-target":
+			if i+1 >= len(args) {
+				complete = false
+				continue
+			}
+			i++
+			requestTarget = args[i]
+		case strings.HasPrefix(arg, "--request-target="):
+			requestTarget = strings.TrimPrefix(arg, "--request-target=")
 		case arg == "-I" || arg == "--head":
-			method, explicitMethod = "HEAD", true
+			head = true
 		case arg == "-G" || arg == "--get":
-			method, explicitMethod = "GET", true
+			get = true
 		case arg == "--url":
 			if i+1 >= len(args) {
 				complete = false
@@ -1035,34 +1056,22 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			}
 			i++
 			bodies = append(bodies, args[i])
-			if strings.HasPrefix(args[i], "@") {
-				bodyFile = true
-			}
-			if !explicitMethod {
-				method = "POST"
-			}
+			bodyFile = bodyFile || strings.HasPrefix(args[i], "@")
+			data = true
 		case curlDataValue(arg) != "":
 			body := curlDataValue(arg)
 			bodies = append(bodies, body)
-			if strings.HasPrefix(body, "@") {
-				bodyFile = true
-			}
-			if !explicitMethod {
-				method = "POST"
-			}
+			bodyFile = bodyFile || strings.HasPrefix(body, "@")
+			data = true
 		case arg == "-T" || arg == "--upload-file":
 			if i+1 >= len(args) {
 				complete = false
 				continue
 			}
 			i++
-			if !explicitMethod {
-				method = "PUT"
-			}
+			upload = true
 		case strings.HasPrefix(arg, "--upload-file="):
-			if !explicitMethod {
-				method = "PUT"
-			}
+			upload = true
 		case valueOptions[arg]:
 			if i+1 >= len(args) {
 				complete = false
@@ -1085,27 +1094,42 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		default:
 			urls = append(urls, arg)
 		}
-		if !slices.Contains(methods, method) {
-			methods = append(methods, method)
-		}
 	}
-	var expanded []string
-	for _, urlText := range urls {
-		expanded = append(expanded, expandCurlGlob(urlText)...)
+	method := "GET"
+	switch {
+	case custom != "":
+		method = custom
+	case head:
+		method = "HEAD"
+	case get:
+		method = "GET"
+	case upload:
+		method = "PUT"
+	case data:
+		method = "POST"
 	}
-	urls = expanded
+	methods := []string{method}
 	if next {
-		var facts, features []string
-		for _, urlText := range urls {
-			for _, each := range methods {
-				projection := classifyCurlURL(urlText, each, bodies, false, bodyFile)
-				facts = append(facts, projection.Facts...)
-				features = append(features, projection.Features...)
+		methods = append(customs, "GET")
+		for implied, set := range map[string]bool{"HEAD": head, "PUT": upload, "POST": data} {
+			if set {
+				methods = append(methods, implied)
 			}
 		}
-		return projection("curl", mergeDatabricksProducts(facts), features, false)
 	}
-	if len(urls) <= 1 {
+	var expanded, overflowed []string
+	for _, urlText := range urls {
+		if requestTarget != "" {
+			urlText = withRequestTarget(urlText, requestTarget)
+		}
+		each, ok := expandCurlGlob(urlText)
+		expanded = append(expanded, each...)
+		if !ok {
+			overflowed = append(overflowed, urlText)
+		}
+	}
+	urls = expanded
+	if len(urls) <= 1 && !next && len(overflowed) == 0 {
 		urlText := ""
 		if len(urls) == 1 {
 			urlText = urls[0]
@@ -1116,11 +1140,49 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	// Each is judged, and the whole is never a catalogued route.
 	var facts, features []string
 	for _, urlText := range urls {
-		each := classifyCurlURL(urlText, method, bodies, false, bodyFile)
-		facts = append(facts, each.Facts...)
-		features = append(features, each.Features...)
+		for _, each := range methods {
+			projection := classifyCurlURL(urlText, each, bodies, false, bodyFile)
+			facts = append(facts, projection.Facts...)
+			features = append(features, projection.Features...)
+		}
+	}
+	for _, urlText := range overflowed {
+		facts = append(facts, curlGlobOverflowFacts(urlText)...)
 	}
 	return projection("curl", mergeDatabricksProducts(facts), features, false)
+}
+
+// curlShortValueOptions are curl's one-letter options that take a value.
+const curlShortValueOptions = "AbcCdDeEFHKmoPQrtTuUwxXyYz"
+
+// expandCurlShortCluster splits a short-option cluster the way curl reads
+// it: each letter is an option, and the first one that takes a value takes
+// the rest of the word (-XPOST, -sd@f) or, at the end, the next word.
+func expandCurlShortCluster(arg string) ([]string, bool) {
+	if len(arg) <= 2 || arg[0] != '-' || arg[1] == '-' {
+		return nil, false
+	}
+	var out []string
+	for j := 1; j < len(arg); j++ {
+		out = append(out, "-"+arg[j:j+1])
+		if strings.IndexByte(curlShortValueOptions, arg[j]) >= 0 {
+			if j+1 < len(arg) {
+				out = append(out, arg[j+1:])
+			}
+			break
+		}
+	}
+	return out, true
+}
+
+// withRequestTarget replaces a URL's path and query with the target curl
+// sends instead (--request-target).
+func withRequestTarget(urlText, target string) string {
+	parsed, err := url.Parse(urlText)
+	if err != nil || parsed.Host == "" {
+		return urlText
+	}
+	return parsed.Scheme + "://" + parsed.Host + target
 }
 
 // classifyCurlURL classifies one request of a curl command.
@@ -1182,43 +1244,64 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 // maxCurlGlob bounds the URLs a globbed URL expands to.
 const maxCurlGlob = 256
 
-var curlRange = regexp.MustCompile(`\[(?:[0-9]+-[0-9]+|[a-zA-Z]-[a-zA-Z])(?::[0-9]+)?\]`)
+var curlGlob = regexp.MustCompile(`\{[^{}]*\}|\[(?:([0-9]+)-([0-9]+)|([a-zA-Z])-([a-zA-Z]))(?::([0-9]+))?\]`)
 
 // expandCurlGlob returns the URLs curl requests for a globbed URL: every
-// combination of its {a,b} alternatives, which can hold slashes and so change
-// the route. A [x-y] range is letters or digits only and routes like any one
-// of its values, so it becomes its first value.
-//
-// ponytail: past maxCurlGlob URLs the remaining braces stay literal, so
-// those requests fall to unrecognized.
-func expandCurlGlob(urlText string) []string {
-	urlText = curlRange.ReplaceAllStringFunc(urlText, func(match string) string {
-		first, _, _ := strings.Cut(match[1:], "-")
-		return first
-	})
-	prefixes := []string{""}
-	for {
-		open := strings.IndexByte(urlText, '{')
-		if open < 0 {
-			break
-		}
-		length := strings.IndexByte(urlText[open:], '}')
-		alternatives := strings.Split(urlText[open+1:open+max(length, 1)], ",")
-		if length < 0 || len(prefixes)*len(alternatives) > maxCurlGlob {
+// combination of its {a,b} alternatives and [x-y] ranges, which can change
+// the route. ok is false past maxCurlGlob URLs, and the URLs returned then
+// keep the rest of the glob literally.
+func expandCurlGlob(urlText string) (urls []string, ok bool) {
+	urls = []string{""}
+	last := 0
+	for _, match := range curlGlob.FindAllStringSubmatchIndex(urlText, -1) {
+		alternatives := curlGlobValues(urlText, match)
+		if len(urls)*len(alternatives) > maxCurlGlob {
 			break
 		}
 		var next []string
-		for _, prefix := range prefixes {
+		for _, prefix := range urls {
 			for _, alternative := range alternatives {
-				next = append(next, prefix+urlText[:open]+alternative)
+				next = append(next, prefix+urlText[last:match[0]]+alternative)
 			}
 		}
-		prefixes, urlText = next, urlText[open+length+1:]
+		urls, last = next, match[1]
 	}
-	for i := range prefixes {
-		prefixes[i] += urlText
+	for i := range urls {
+		urls[i] += urlText[last:]
 	}
-	return prefixes
+	return urls, last == len(urlText) || !curlGlob.MatchString(urlText[last:])
+}
+
+func curlGlobValues(urlText string, match []int) []string {
+	if urlText[match[0]] == '{' {
+		return strings.Split(urlText[match[0]+1:match[1]-1], ",")
+	}
+	step := 1
+	if match[10] >= 0 {
+		step, _ = strconv.Atoi(urlText[match[10]:match[11]])
+		step = max(step, 1)
+	}
+	var values []string
+	if match[2] >= 0 {
+		from, to := urlText[match[2]:match[3]], urlText[match[4]:match[5]]
+		low, _ := strconv.Atoi(from)
+		high, _ := strconv.Atoi(to)
+		for value := low; value <= high && len(values) <= maxCurlGlob; value += step {
+			text := strconv.Itoa(value)
+			if len(from) > 1 && from[0] == '0' {
+				text = strings.Repeat("0", max(len(from)-len(text), 0)) + text
+			}
+			values = append(values, text)
+		}
+		return values
+	}
+	for value := urlText[match[6]]; value <= urlText[match[8]] && len(values) <= maxCurlGlob; value += byte(step) {
+		values = append(values, string(value))
+		if int(value)+step > 'z' {
+			break
+		}
+	}
+	return values
 }
 
 var curlDataFlags = map[string]bool{"-d": true, "--data": true, "--data-raw": true, "--data-binary": true, "--data-urlencode": true, "--data-ascii": true, "--json": true, "-F": true, "--form": true, "--form-string": true}

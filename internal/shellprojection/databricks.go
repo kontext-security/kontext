@@ -213,20 +213,28 @@ func flagSet(args []string, flag string) bool {
 		if arg == flag {
 			return true
 		}
-		// A short flag inside a cluster (-fb is -f -b), unless the cluster
-		// is a value attached to an earlier letter.
-		if len(flag) == 2 && len(arg) > 2 && arg[0] == '-' && arg[1] != '-' && !strings.Contains(arg, "=") && strings.ContainsRune(arg[1:], rune(flag[1])) {
+		if value, ok := strings.CutPrefix(arg, flag+"="); ok && flagValueTrue(value) {
 			return true
 		}
-		if value, ok := strings.CutPrefix(arg, flag+"="); ok {
-			switch strings.ToLower(value) {
-			case "false", "f", "0", "none", "":
-			default:
+		// A short flag inside a cluster: -fb is -f -b, and -fb=v gives the
+		// last letter the value. A letter after one that takes a value is
+		// that value, but reading it as a flag only raises.
+		if len(flag) == 2 && len(arg) > 2 && arg[0] == '-' && arg[1] != '-' {
+			letters, value, hasValue := strings.Cut(arg[1:], "=")
+			if at := strings.IndexByte(letters, flag[1]); at >= 0 && (!hasValue || at < len(letters)-1 || flagValueTrue(value)) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func flagValueTrue(value string) bool {
+	switch strings.ToLower(value) {
+	case "false", "f", "0", "none", "":
+		return false
+	}
+	return true
 }
 
 // databricksValueFlags are the global flags that take a value. Cobra treats
@@ -539,4 +547,16 @@ func mergeDatabricksProducts(facts []string) []string {
 		return facts
 	}
 	return slices.DeleteFunc(facts, func(fact string) bool { return fact == sql })
+}
+
+// curlGlobOverflowFacts are the facts of a globbed curl URL too large to
+// expand: on a Databricks host it could reach any route, so it carries every
+// tier and the products the presets single out.
+func curlGlobOverflowFacts(urlText string) []string {
+	parsed, err := url.Parse(urlText)
+	if err != nil || !toolcatalog.IsDatabricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")) {
+		return nil
+	}
+	return []string{FactDatabricksRouteUnrecognized, databricksProductFact("secrets"), databricksProductFact("execution"),
+		writeFact(productDatabricks), deleteFact(productDatabricks), adminFact(productDatabricks)}
 }
