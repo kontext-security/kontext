@@ -112,7 +112,16 @@ func TestDatabricksCommand(t *testing.T) {
 		{"storage-credentials", "validate", "catalog.StorageCredentials.Validate", "workspace", "data", "write"},
 		// Reachable by command although its template is a catch-all.
 		{"sandbox", "get-sandbox", "sandbox.Sandbox.GetSandbox", "workspace", "execution", "read"},
-		// bundle deploy applies permissions blocks.
+		{"postgres", "update-database", "postgres.Postgres.UpdateDatabase", "workspace", "data", "admin"},
+		{"git-credentials", "delete", "workspace.GitCredentials.Delete", "workspace", "secrets", "admin"},
+		{"clean-room-auto-approval-rules", "create", "cleanrooms.CleanRoomAutoApprovalRules.Create", "workspace", "data", "admin"},
+		{"clean-room-assets", "create-clean-room-asset-review", "cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview", "workspace", "data", "admin"},
+		{"model-registry", "test-registry-webhook", "ml.ModelRegistry.TestRegistryWebhook", "workspace", "execution", "write"},
+		{"genie", "start-conversation", "dashboards.Genie.StartConversation", "workspace", "sql", "write"},
+		{"genie", "create-message", "dashboards.Genie.CreateMessage", "workspace", "sql", "write"},
+		{"ai-gateway", "create-mcp-service-user-mapped-credential", "catalog.AiGateway.CreateMcpServiceUserMappedCredential", "workspace", "secrets", "write"},
+		// bundle deploy applies permissions blocks; destroy can drop Postgres roles.
+		{"bundle", "destroy", "cli.bundle.destroy", "", "workloads", "admin"},
 		{"bundle", "deploy", "cli.bundle.deploy", "", "execution", "admin"},
 		{"account endpoints", "delete-endpoint", "networking.Endpoints.DeleteEndpoint", "account", "admin", "admin"},
 		{"service-principal-secrets-proxy", "create", "oauth2.ServicePrincipalSecretsProxy.Create", "workspace", "secrets", "admin"},

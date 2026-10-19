@@ -149,6 +149,13 @@ type EditCluster struct {
 	ClusterId string       ` + "`json:\"cluster_id\"`" + `
 	Spec      *ClusterSpec ` + "`json:\"spec,omitempty\"`" + `
 	Internal  string       ` + "`json:\"-\" url:\"internal\"`" + `
+	Rules     Rules        ` + "`json:\"rules,omitempty\"`" + `
+}
+
+type Rules []Rule
+
+type Rule struct {
+	Owner string ` + "`json:\"owner,omitempty\"`" + `
 }
 
 type ClusterSpec struct {
@@ -415,7 +422,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 		"compute.Clusters.GetDetails":      {Operation: "compute.Clusters.GetDetails", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/get-details", Product: "compute", Access: "write"},
 		"compute.Clusters.List":            {Operation: "compute.Clusters.List", Client: "workspace", Method: "GET", Path: "/api/2.1/clusters/list", Commands: []string{"clusters list"}, Product: "compute", Access: "read"},
 		"compute.Clusters.ChangeOwner":     {Operation: "compute.Clusters.ChangeOwner", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/change-owner", Commands: []string{"clusters change-owner"}, Product: "compute", Access: "admin", AdminFields: []string{"owner_username"}},
-		"compute.Clusters.Edit":            {Operation: "compute.Clusters.Edit", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/edit", Product: "compute", Access: "admin", AdminFields: []string{"spec.access_control_list"}},
+		"compute.Clusters.Edit":            {Operation: "compute.Clusters.Edit", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/edit", Product: "compute", Access: "admin", AdminFields: []string{"spec.access_control_list", "rules.owner"}},
 		"compute.Clusters.GetPermissions":  {Operation: "compute.Clusters.GetPermissions", Client: "workspace", Method: "GET", Path: "/api/2.0/permissions/clusters/{cluster_id}", Product: "admin", Access: "read"},
 		"compute.CommandExecution.Execute": {Operation: "compute.CommandExecution.Execute", Client: "workspace", Method: "POST", Path: "/api/1.2/commands/execute", Commands: []string{"clusters execute"}, Product: "execution", Access: "write"},
 		"iam.AccountGroups.Delete":         {Operation: "iam.AccountGroups.Delete", Client: "account", Method: "DELETE", Path: "/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}", Commands: []string{"account groups delete"}, Product: "admin", Access: "admin"},
@@ -443,7 +450,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 	for _, line := range []string{
 		"| execution | 5 |",
 		"`POST /api/2.1/clusters/events` compute.Clusters.Events ()",
-		"`POST /api/2.1/clusters/edit` compute.Clusters.Edit (): spec.access_control_list",
+		"`POST /api/2.1/clusters/edit` compute.Clusters.Edit (): spec.access_control_list, rules.owner",
 		"## POST routes whose path suggests a read (still write until reviewed) (1)",
 		"`clusters explode` (w.Clusters.ExplodeAll)",
 	} {

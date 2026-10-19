@@ -24,7 +24,7 @@
         "bundle destroy"
       ],
       "product": "workloads",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "cli.bundle.run",
@@ -3370,7 +3370,7 @@
         "clean-room-assets create-clean-room-asset-review"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "cleanrooms.CleanRoomAssetRevisions.List",
@@ -3414,7 +3414,7 @@
         "clean-room-auto-approval-rules create"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "cleanrooms.CleanRoomAutoApprovalRules.Delete",
@@ -3425,7 +3425,7 @@
         "clean-room-auto-approval-rules delete"
       ],
       "product": "data",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "cleanrooms.CleanRoomAutoApprovalRules.Get",
@@ -3447,7 +3447,7 @@
         "clean-room-auto-approval-rules update"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "cleanrooms.CleanRooms.CreateOutputCatalog",
@@ -4668,7 +4668,7 @@
       "commands": [
         "genie create-message"
       ],
-      "product": "ai",
+      "product": "sql",
       "access": "write"
     },
     {
@@ -4866,7 +4866,7 @@
       "commands": [
         "genie start-conversation"
       ],
-      "product": "ai",
+      "product": "sql",
       "access": "write"
     },
     {
@@ -4900,7 +4900,7 @@
         "git-credentials create"
       ],
       "product": "secrets",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "workspace.GitCredentials.Delete",
@@ -4911,7 +4911,7 @@
         "git-credentials delete"
       ],
       "product": "secrets",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "workspace.GitCredentials.Get",
@@ -4933,7 +4933,7 @@
         "git-credentials update"
       ],
       "product": "secrets",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "compute.GlobalInitScripts.List",
@@ -7284,7 +7284,7 @@
       "commands": [
         "model-registry test-registry-webhook"
       ],
-      "product": "ai",
+      "product": "execution",
       "access": "write"
     },
     {
@@ -9190,7 +9190,7 @@
         "postgres update-database"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.UpdateEndpoint",
@@ -9347,7 +9347,7 @@
         "postgres create-database"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.ListEndpoints",
@@ -14436,7 +14436,7 @@
       "commands": [
         "ai-gateway delete-mcp-service-user-mapped-credential"
       ],
-      "product": "ai",
+      "product": "secrets",
       "access": "delete"
     },
     {
@@ -14447,7 +14447,7 @@
       "commands": [
         "ai-gateway get-mcp-service-user-mapped-credential"
       ],
-      "product": "ai",
+      "product": "secrets",
       "access": "read"
     },
     {
@@ -14458,7 +14458,7 @@
       "commands": [
         "ai-gateway create-mcp-service-user-mapped-credential"
       ],
-      "product": "ai",
+      "product": "secrets",
       "access": "write"
     },
     {

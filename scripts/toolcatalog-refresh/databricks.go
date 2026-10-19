@@ -442,7 +442,9 @@ func parseSDK(sdk sourceTree) (*sdkIndex, error) {
 						switch target := spec.Type.(type) {
 						case *ast.StructType:
 							index.structs[key] = sdkStruct{pkg: pkg, fields: target, imports: imports}
-						case *ast.Ident, *ast.SelectorExpr, *ast.StarExpr:
+						default:
+							// Named types and aliases, collections included
+							// (type Items []Item), resolve to what they name.
 							index.aliases[key] = sdkAlias{pkg: pkg, target: target, imports: imports}
 						}
 					}
@@ -629,7 +631,8 @@ func (index *sdkIndex) resolveType(pkg string, imports map[string]string, expr a
 		return index.resolveType(pkg, imports, expr.Elt)
 	case *ast.MapType:
 		return index.resolveType(pkg, imports, expr.Value)
-	case *ast.InterfaceType:
+	case *ast.InterfaceType, *ast.FuncType, *ast.ChanType:
+		// Not serialized into a body.
 		return "", nil
 	case *ast.Ident:
 		if goBuiltinTypes[expr.Name] {
@@ -1320,18 +1323,25 @@ var databricksServiceProducts = map[string]string{
 }
 
 // databricksOperationProducts places operations their service's default does
-// not fit: running code now or deploying it (execution), running SQL (sql)
-// and minting credentials (secrets).
+// not fit: running code now or deploying it (execution; testing a job
+// webhook runs the job), running SQL (sql; a Genie message generates and runs
+// it) and minting or holding credentials (secrets).
 var databricksOperationProducts = map[string]string{
-	"apps.Apps.Start":                                        "execution",
 	"apps.Apps.Deploy":                                       "execution",
+	"apps.Apps.Start":                                        "execution",
 	"jobs.Jobs.RepairRun":                                    "execution",
 	"jobs.Jobs.RunNow":                                       "execution",
 	"jobs.Jobs.Submit":                                       "execution",
+	"ml.ModelRegistry.TestRegistryWebhook":                   "execution",
 	"pipelines.Pipelines.StartUpdate":                        "execution",
-	"dashboards.Genie.GenerateDownloadFullQueryResult":       "sql",
-	"dashboards.Genie.ExecuteMessageQuery":                   "sql",
+	"dashboards.Genie.CreateMessage":                         "sql",
 	"dashboards.Genie.ExecuteMessageAttachmentQuery":         "sql",
+	"dashboards.Genie.ExecuteMessageQuery":                   "sql",
+	"dashboards.Genie.GenerateDownloadFullQueryResult":       "sql",
+	"dashboards.Genie.StartConversation":                     "sql",
+	"catalog.AiGateway.CreateMcpServiceUserMappedCredential": "secrets",
+	"catalog.AiGateway.DeleteMcpServiceUserMappedCredential": "secrets",
+	"catalog.AiGateway.GetMcpServiceUserMappedCredential":    "secrets",
 	"catalog.Credentials.GenerateTemporaryServiceCredential": "secrets",
 	"database.Database.GenerateDatabaseCredential":           "secrets",
 	"postgres.Postgres.GenerateDatabaseCredential":           "secrets",
@@ -1340,22 +1350,33 @@ var databricksOperationProducts = map[string]string{
 
 // databricksAdminOperations change who can do what without a name, product
 // or body field that says so: database roles (superuser, createrole,
-// bypassrls), secret ACLs, the workspace-wide warehouse security config,
-// credentials minted or revoked for another identity.
+// bypassrls) and database owners (spec.role), secret ACLs, the
+// workspace-wide warehouse security config, credentials minted, changed or
+// revoked for another identity (git credentials take a principal_id), and
+// clean-room approvals that let collaborators' notebooks run unreviewed.
 var databricksAdminOperations = map[string]bool{
-	"database.Database.CreateDatabaseInstanceRole": true,
-	"oauth2.ServicePrincipalSecrets.Create":        true,
-	"oauth2.ServicePrincipalSecrets.Delete":        true,
-	"oauth2.ServicePrincipalSecretsProxy.Create":   true,
-	"oauth2.ServicePrincipalSecretsProxy.Delete":   true,
-	"settings.TokenManagement.Delete":              true,
-	"database.Database.DeleteDatabaseInstanceRole": true,
-	"postgres.Postgres.CreateRole":                 true,
-	"postgres.Postgres.DeleteRole":                 true,
-	"postgres.Postgres.UpdateRole":                 true,
-	"settings.TokenManagement.CreateOboToken":      true,
-	"sql.Warehouses.SetWorkspaceWarehouseConfig":   true,
-	"workspace.Secrets.DeleteAcl":                  true,
+	"cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview": true,
+	"cleanrooms.CleanRoomAutoApprovalRules.Create":          true,
+	"cleanrooms.CleanRoomAutoApprovalRules.Delete":          true,
+	"cleanrooms.CleanRoomAutoApprovalRules.Update":          true,
+	"database.Database.CreateDatabaseInstanceRole":          true,
+	"oauth2.ServicePrincipalSecrets.Create":                 true,
+	"oauth2.ServicePrincipalSecrets.Delete":                 true,
+	"oauth2.ServicePrincipalSecretsProxy.Create":            true,
+	"oauth2.ServicePrincipalSecretsProxy.Delete":            true,
+	"settings.TokenManagement.Delete":                       true,
+	"database.Database.DeleteDatabaseInstanceRole":          true,
+	"postgres.Postgres.CreateDatabase":                      true,
+	"postgres.Postgres.CreateRole":                          true,
+	"postgres.Postgres.DeleteRole":                          true,
+	"postgres.Postgres.UpdateDatabase":                      true,
+	"postgres.Postgres.UpdateRole":                          true,
+	"settings.TokenManagement.CreateOboToken":               true,
+	"sql.Warehouses.SetWorkspaceWarehouseConfig":            true,
+	"workspace.GitCredentials.Create":                       true,
+	"workspace.GitCredentials.Delete":                       true,
+	"workspace.GitCredentials.Update":                       true,
+	"workspace.Secrets.DeleteAcl":                           true,
 }
 
 // databricksPostReads are the POST operations a reviewer confirmed change
@@ -1380,12 +1401,13 @@ var databricksPostReads = map[string]bool{
 // databricksHandCommands are hand-written CLI commands that run many
 // requests rather than one route, and generated commands the CLI overloads
 // (apps deploy without an app name deploys the bundle). bundle deploy applies
-// the bundle's permissions blocks through SetPermissions, so both are admin
-// unless the caller inspects the bundle. A command listed here is dropped
+// the bundle's permissions blocks through SetPermissions, and bundle destroy
+// can delete Postgres roles, so all three are admin unless the caller
+// inspects the bundle. A command listed here is dropped
 // from the operation it would otherwise map to.
 var databricksHandCommands = []databricksEntry{
 	{Operation: "cli.apps.deploy", Commands: []string{"apps deploy"}, Product: "execution", Access: "admin"},
 	{Operation: "cli.bundle.deploy", Commands: []string{"bundle deploy"}, Product: "execution", Access: "admin"},
-	{Operation: "cli.bundle.destroy", Commands: []string{"bundle destroy"}, Product: "workloads", Access: "delete"},
+	{Operation: "cli.bundle.destroy", Commands: []string{"bundle destroy"}, Product: "workloads", Access: "admin"},
 	{Operation: "cli.bundle.run", Commands: []string{"bundle run"}, Product: "execution", Access: "write"},
 }
