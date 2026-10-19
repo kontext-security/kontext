@@ -1184,7 +1184,9 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				normalized = withRequestTarget(normalized, op.requestTarget)
 			}
 			sent, sentURL, readable := op.withUpload(index, normalized)
-			globbed := strings.ContainsAny(urlText, "{}[]")
+			// The fragment is not sent, so a glob in it changes nothing.
+			beforeFragment, _, _ := strings.Cut(urlText, "#")
+			globbed := strings.ContainsAny(beforeFragment, "{}[]")
 			complete = complete && !globbed
 			if unclear || !readable || globbed {
 				if databricksURL(urlText) {
