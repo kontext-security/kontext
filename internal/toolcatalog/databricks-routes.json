@@ -4025,7 +4025,7 @@
         "workspace-entity-tag-assignments create-tag-assignment"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "tags.WorkspaceEntityTagAssignments.ListTagAssignments",
@@ -4047,7 +4047,7 @@
         "workspace-entity-tag-assignments delete-tag-assignment"
       ],
       "product": "workspace",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "tags.WorkspaceEntityTagAssignments.GetTagAssignment",
@@ -4069,7 +4069,7 @@
         "workspace-entity-tag-assignments update-tag-assignment"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "serving.ServingEndpoints.HttpRequest",
@@ -6438,7 +6438,7 @@
         "provider-exchanges create"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderExchanges.ListExchangesForListing",
@@ -6504,7 +6504,7 @@
         "provider-exchanges update"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "marketplace.ProviderExchangeFilters.List",
@@ -8644,7 +8644,7 @@
       "commands": [
         "pipelines clone"
       ],
-      "product": "workloads",
+      "product": "execution",
       "access": "admin",
       "adminFields": [
         "clusters.ssh_public_keys"
@@ -12884,7 +12884,7 @@
         "credentials create-credential"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "catalog.Credentials.DeleteCredential",
@@ -12895,7 +12895,7 @@
         "credentials delete-credential"
       ],
       "product": "data",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "catalog.Credentials.GetCredential",
@@ -12964,7 +12964,7 @@
         "entity-tag-assignments create"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "catalog.EntityTagAssignments.List",
@@ -12986,7 +12986,7 @@
         "entity-tag-assignments delete"
       ],
       "product": "data",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "catalog.EntityTagAssignments.Get",
@@ -13008,7 +13008,7 @@
         "entity-tag-assignments update"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "catalog.ExternalLocations.List",
@@ -13978,7 +13978,7 @@
         "storage-credentials create"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "catalog.StorageCredentials.Delete",
@@ -13989,7 +13989,7 @@
         "storage-credentials delete"
       ],
       "product": "data",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "catalog.StorageCredentials.Get",
@@ -15562,7 +15562,7 @@
         "warehouses create-default-warehouse-override"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "sql.Warehouses.DeleteDefaultWarehouseOverride",
@@ -15573,7 +15573,7 @@
         "warehouses delete-default-warehouse-override"
       ],
       "product": "compute",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "sql.Warehouses.GetDefaultWarehouseOverride",
@@ -15595,7 +15595,7 @@
         "warehouses update-default-warehouse-override"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "serving.ServingEndpoints.Query",

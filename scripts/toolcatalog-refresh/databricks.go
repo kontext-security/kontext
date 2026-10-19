@@ -1100,13 +1100,43 @@ func firstWord(text string) string {
 }
 
 // sdkCalls lists w.Field.Method(...), a.Field.Method(...) and
-// w.Field.Sub().Method(...) calls in source order.
+// w.Field.Sub().Method(...) calls in source order. A variable holding a
+// client (c := cmdctx.WorkspaceClient(ctx), c := w) or a service
+// (svc := w.Clusters) counts as what it holds, so a call through it is
+// not missed.
 func sdkCalls(body *ast.BlockStmt) []sdkCall {
+	clients := map[string]string{"w": "workspace", "a": "account"}
+	services := map[string]sdkCall{}
+	client := func(expr ast.Expr) string {
+		if ident, ok := expr.(*ast.Ident); ok {
+			return clients[ident.Name]
+		}
+		switch selectorPath(expr) {
+		case "cmdctx.WorkspaceClient":
+			return "workspace"
+		case "cmdctx.AccountClient":
+			return "account"
+		}
+		return ""
+	}
 	var calls []sdkCall
 	// accessors are the X() in w.Field.X().Method(...); Inspect reaches the
 	// outer call first.
 	accessors := map[*ast.CallExpr]bool{}
 	ast.Inspect(body, func(node ast.Node) bool {
+		if assign, ok := node.(*ast.AssignStmt); ok && len(assign.Lhs) == len(assign.Rhs) {
+			for i, lhs := range assign.Lhs {
+				ident, ok := lhs.(*ast.Ident)
+				if !ok || ident.Name == "_" {
+					continue
+				}
+				if name := client(assign.Rhs[i]); name != "" {
+					clients[ident.Name] = name
+				} else if field, ok := assign.Rhs[i].(*ast.SelectorExpr); ok && client(field.X) != "" {
+					services[ident.Name] = sdkCall{client: client(field.X), field: field.Sel.Name}
+				}
+			}
+		}
 		call, ok := node.(*ast.CallExpr)
 		if !ok || accessors[call] {
 			return true
@@ -1117,9 +1147,11 @@ func sdkCalls(body *ast.BlockStmt) []sdkCall {
 		}
 		var found sdkCall
 		switch receiver := method.X.(type) {
+		case *ast.Ident:
+			found = services[receiver.Name]
 		case *ast.SelectorExpr:
 			found.field = receiver.Sel.Name
-			found.client = clientIdent(receiver.X)
+			found.client = client(receiver.X)
 		case *ast.CallExpr:
 			sub, ok := receiver.Fun.(*ast.SelectorExpr)
 			if !ok || len(receiver.Args) != 0 {
@@ -1130,7 +1162,7 @@ func sdkCalls(body *ast.BlockStmt) []sdkCall {
 			if !ok {
 				return true
 			}
-			found.field, found.sub, found.client = field.Sel.Name, sub.Sel.Name, clientIdent(field.X)
+			found.field, found.sub, found.client = field.Sel.Name, sub.Sel.Name, client(field.X)
 		}
 		if found.client == "" {
 			return true
@@ -1141,16 +1173,6 @@ func sdkCalls(body *ast.BlockStmt) []sdkCall {
 		return true
 	})
 	return calls
-}
-
-func clientIdent(expr ast.Expr) string {
-	switch {
-	case isIdent(expr, "w"):
-		return "workspace"
-	case isIdent(expr, "a"):
-		return "account"
-	}
-	return ""
 }
 
 // databricksServiceProducts is each SDK service's default product, which a
@@ -1372,7 +1394,8 @@ var databricksServiceProducts = map[string]string{
 
 // databricksOperationProducts places operations their service's default does
 // not fit: running code now or deploying it (execution; testing a job
-// webhook runs the job, installing a library runs its install code), running SQL (sql; a Genie message generates and runs
+// webhook runs the job, installing a library runs its install code, cloning
+// a pipeline starts an update), running SQL (sql; a Genie message generates and runs
 // it) and minting or returning credentials (secrets; a recipient carries
 // its activation URL, a provider its recipient profile's bearer token).
 var databricksOperationProducts = map[string]string{
@@ -1384,6 +1407,7 @@ var databricksOperationProducts = map[string]string{
 	"jobs.Jobs.Submit":                                       "execution",
 	"ml.ModelRegistry.TestRegistryWebhook":                   "execution",
 	"serving.ServingEndpoints.HttpRequest":                   "execution",
+	"pipelines.Pipelines.Clone":                              "execution",
 	"pipelines.Pipelines.StartUpdate":                        "execution",
 	"dashboards.Genie.CreateMessage":                         "sql",
 	"dashboards.Genie.ExecuteMessageAttachmentQuery":         "sql",
@@ -1407,17 +1431,26 @@ var databricksOperationProducts = map[string]string{
 
 // databricksAdminOperations change who can do what without a name, product
 // or body field that says so: database roles (superuser, createrole,
-// bypassrls) and database owners (spec.role), secret ACLs, the
-// workspace-wide warehouse security config, credentials minted, changed or
+// bypassrls) and database owners (spec.role), secret ACLs, Unity Catalog
+// storage and service credentials (they map cloud IAM roles), the
+// workspace-wide warehouse security config and default-warehouse overrides, credentials minted, changed or
 // revoked for another identity (git credentials take a principal_id, a
 // recipient token is another party's), clean-room approvals that let
 // collaborators' notebooks run unreviewed, cluster policies (the access
 // mode rules live in a JSON string) and cancelling their pending
-// enforcement, marketplace listings, exchange filters and fulfilled
+// enforcement, governed tag assignments (they drive ABAC row filters and
+// column masks), marketplace exchanges, listings, filters and fulfilled
 // personalization requests (who may see shared data), the AI Gateway and
 // endpoint telemetry (PII filtering, guardrails, payload logging), and the external HTTP proxy, whose method and path the
 // caller picks.
 var databricksAdminOperations = map[string]bool{
+	"catalog.EntityTagAssignments.Create":                                 true,
+	"catalog.EntityTagAssignments.Delete":                                 true,
+	"catalog.EntityTagAssignments.Update":                                 true,
+	"catalog.Credentials.CreateCredential":                                true,
+	"catalog.Credentials.DeleteCredential":                                true,
+	"catalog.StorageCredentials.Create":                                   true,
+	"catalog.StorageCredentials.Delete":                                   true,
 	"cleanrooms.CleanRoomAssets.CreateCleanRoomAssetReview":               true,
 	"compute.ClusterPolicies.Create":                                      true,
 	"compute.PolicyComplianceForClusters.CancelPendingClusterEnforcement": true,
@@ -1426,6 +1459,8 @@ var databricksAdminOperations = map[string]bool{
 	"marketplace.ProviderListings.Create":                                 true,
 	"marketplace.ProviderListings.Update":                                 true,
 	"marketplace.ProviderPersonalizationRequests.Update":                  true,
+	"marketplace.ProviderExchanges.Create":                                true,
+	"marketplace.ProviderExchanges.Update":                                true,
 	"marketplace.ProviderExchanges.AddListingToExchange":                  true,
 	"marketplace.ProviderExchanges.DeleteListingFromExchange":             true,
 	"marketplace.ProviderExchangeFilters.Create":                          true,
@@ -1451,6 +1486,12 @@ var databricksAdminOperations = map[string]bool{
 	"postgres.Postgres.UpdateDatabase":                                    true,
 	"postgres.Postgres.UpdateRole":                                        true,
 	"settings.TokenManagement.CreateOboToken":                             true,
+	"tags.WorkspaceEntityTagAssignments.CreateTagAssignment":              true,
+	"tags.WorkspaceEntityTagAssignments.DeleteTagAssignment":              true,
+	"tags.WorkspaceEntityTagAssignments.UpdateTagAssignment":              true,
+	"sql.Warehouses.CreateDefaultWarehouseOverride":                       true,
+	"sql.Warehouses.DeleteDefaultWarehouseOverride":                       true,
+	"sql.Warehouses.UpdateDefaultWarehouseOverride":                       true,
 	"sql.Warehouses.SetWorkspaceWarehouseConfig":                          true,
 	"workspace.GitCredentials.Create":                                     true,
 	"workspace.GitCredentials.Delete":                                     true,

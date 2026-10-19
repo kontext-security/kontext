@@ -346,6 +346,20 @@ func newEditAndList() *cobra.Command {
 	return cmd
 }
 
+// A call through a variable holding the service still counts.
+func newAliased() *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.Use = "aliased"
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		svc := cmdctx.WorkspaceClient(ctx).Clusters
+		_, err := svc.Delete(ctx, deleteReq)
+		ws := w
+		response := ws.Clusters.List(ctx, listReq)
+		return cmdio.RenderIterator(ctx, response)
+	}
+	return cmd
+}
+
 // An unknown call next to a known read leaves the command unclassified.
 func newUnknownField() *cobra.Command {
 	cmd := &cobra.Command{}
@@ -489,7 +503,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 		got[entry.Operation] = entry
 	}
 	want := map[string]databricksEntry{
-		"compute.Clusters.Delete":          {Operation: "compute.Clusters.Delete", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/delete", Commands: []string{"clusters delete"}, Product: "compute", Access: "delete"},
+		"compute.Clusters.Delete":          {Operation: "compute.Clusters.Delete", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/delete", Commands: []string{"clusters aliased", "clusters delete"}, Product: "compute", Access: "delete"},
 		"compute.Clusters.Events":          {Operation: "compute.Clusters.Events", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/events", Product: "compute", Access: "read"},
 		"compute.Clusters.GetDetails":      {Operation: "compute.Clusters.GetDetails", Client: "workspace", Method: "POST", Path: "/api/2.1/clusters/get-details", Product: "compute", Access: "write"},
 		"compute.Clusters.List":            {Operation: "compute.Clusters.List", Client: "workspace", Method: "GET", Path: "/api/2.1/clusters/list", Commands: []string{"clusters list"}, Product: "compute", Access: "read"},
@@ -528,6 +542,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 		"## POST routes whose path suggests a read (still write until reviewed) (1)",
 		"`clusters explode` (w.Clusters.ExplodeAll)",
 		"`clusters half` (w.Clusters.Mystery)",
+		"`clusters aliased` calls compute.Clusters.Delete, compute.Clusters.List; kept compute.Clusters.Delete",
 		"`clusters unknown-field` (w.NewService.Delete)",
 	} {
 		if !strings.Contains(text, line) {
