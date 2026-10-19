@@ -101,7 +101,9 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 	raise := func(to int) { tier = max(tier, to) }
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
-		if next.is("(") && (tok.kind == sqlWord || tok.kind == sqlName) {
+		// After malformed input a comment may sit between a name and its (,
+		// so a listed name counts as called wherever it appears.
+		if (next.is("(") || tok.loose) && (tok.kind == sqlWord || tok.kind == sqlName) {
 			name := tok.text[strings.LastIndexByte(tok.text, '.')+1:]
 			switch {
 			case databricksSecretFunctions[name]:
@@ -200,8 +202,9 @@ const (
 )
 
 type sqlToken struct {
-	kind int
-	text string
+	kind  int
+	text  string
+	loose bool // lexed as plain code after malformed input
 }
 
 func (t sqlToken) is(text string) bool {
@@ -222,7 +225,7 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 		case !complete:
 			if isSQLWordRune(r) {
 				j := sqlWordEnd(rest)
-				tokens = append(tokens, sqlToken{kind: sqlWord, text: strings.ToUpper(rest[:j])})
+				tokens = append(tokens, sqlToken{kind: sqlWord, text: strings.ToUpper(rest[:j]), loose: true})
 				i += j
 			} else {
 				// Quotes split words but leave no token, so a quoted

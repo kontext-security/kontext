@@ -115,6 +115,8 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"quoted secret after ambiguous comment", "SELECT /* /*+ */ */ `secret`('scope', 'key')", AccessWrite, true, false},
 		{"double-quoted secret after unterminated quote", `SELECT 'oops\', "secret"(1)`, AccessWrite, true, false},
 		{"quoted http_request after ambiguous comment", "SELECT /* /*+ */ */ `http_request`(conn => 'c')", AccessWrite, false, false},
+		{"secret with comment before call after ambiguous comment", "SELECT /* /*+ */ */ secret/**/('scope', 'key')", AccessWrite, true, false},
+		{"try_secret with line comment after ambiguous comment", "SELECT /* /*+ */ */ try_secret --c\n('scope', 'key')", AccessWrite, true, false},
 		{"unclosed nested comment", "SELECT 1 /* /* */ DROP TABLE t", AccessDelete, false, false},
 		{"unterminated string", "SELECT 'x; DROP TABLE t", AccessDelete, false, false},
 		{"unterminated dollar body", "SELECT $$ x; GRANT ALL ON t TO u", AccessAdmin, false, false},
