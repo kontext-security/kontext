@@ -79,7 +79,7 @@ func (a *clustersImpl) ChangeOwner(ctx context.Context, request ChangeClusterOwn
 	return err
 }
 
-func (a *clustersImpl) Edit(ctx context.Context, request EditCluster) error {
+func (a *clustersImpl) Edit(ctx context.Context, request EditRequest) error {
 	path := "/api/2.1/clusters/edit"
 	err := a.client.Do(ctx, http.MethodPost, path, headers, queryParams, request, nil)
 	return err
@@ -108,9 +108,34 @@ type DeleteCluster struct {
 }
 
 type ChangeClusterOwner struct {
-	ClusterId     string ` + "`json:\"cluster_id\"`" + `
-	OwnerUsername string ` + "`json:\"owner_username\"`" + `
+	ClusterId string ` + "`json:\"cluster_id\"`" + `
+	OwnerFields
 }
+
+type OwnerFields struct {
+	OwnerUsername string ` + "`json:\"owner_username\"`" + `
+	State         State
+}
+
+type State string
+
+type GetEvents struct {
+	ClusterId string ` + "`json:\"cluster_id\"`" + `
+}
+
+type ListClustersRequest struct {
+	PageToken string ` + "`json:\"-\" url:\"page_token,omitempty\"`" + `
+}
+
+type GetClusterPermissionsRequest struct {
+	ClusterId string ` + "`json:\"-\" url:\"-\"`" + `
+}
+
+type Command struct {
+	Command string ` + "`json:\"command,omitempty\"`" + `
+}
+
+type EditRequest = EditCluster
 
 type EditCluster struct {
 	ClusterId string       ` + "`json:\"cluster_id\"`" + `
@@ -124,6 +149,10 @@ type ClusterSpec struct {
 }
 `),
 		"service/iam/model.go": []byte(`package iam
+
+type DeleteAccountGroupRequest struct {
+	Id string ` + "`json:\"-\" url:\"-\"`" + `
+}
 
 type AccessControlRequest struct {
 	UserName string ` + "`json:\"user_name,omitempty\"`" + `
@@ -155,6 +184,8 @@ func (a *filesImpl) DataPlane(ctx context.Context) error {
 `),
 		"service/files/model.go": []byte(`package files
 
+import "io"
+
 type UploadRequest struct {
 	Contents io.ReadCloser ` + "`json:\"-\"`" + `
 	FilePath string        ` + "`json:\"-\" url:\"-\"`" + `
@@ -163,6 +194,8 @@ type UploadRequest struct {
 		"service/settings/impl.go": []byte(`package settings
 
 type defaultNamespaceImpl struct{ client *client.DatabricksClient }
+
+type GetDefaultNamespaceSettingRequest struct{}
 
 func (a *defaultNamespaceImpl) Get(ctx context.Context, request GetDefaultNamespaceSettingRequest) (*DefaultNamespaceSetting, error) {
 	path := "/api/2.0/settings/types/default_namespace_ws/names/default"
@@ -385,6 +418,8 @@ func TestBuildDatabricksTableFailsOnUnmappedService(t *testing.T) {
 
 type thingsImpl struct{}
 
+type CreateThing struct{}
+
 func (a *thingsImpl) Create(ctx context.Context, request CreateThing) error {
 	path := "/api/2.0/things"
 	return a.client.Do(ctx, http.MethodPost, path, headers, queryParams, request, nil)
@@ -407,6 +442,8 @@ func TestBuildDatabricksTableRejectsUnparsableRoutes(t *testing.T) {
 
 type clustersImpl struct{}
 
+type GetCluster struct{}
+
 func (a *clustersImpl) Get(ctx context.Context, request GetCluster) error {
 	` + body + `
 	return a.client.Do(ctx, http.MethodGet, path, headers, queryParams, request, nil)
@@ -417,6 +454,28 @@ func (a *clustersImpl) Get(ctx context.Context, request GetCluster) error {
 			}
 		})
 	}
+}
+
+// A body type the SDK source does not declare would hide its fields (an
+// owner, an ACL), so it fails generation instead of passing as a write.
+func TestBuildDatabricksTableRejectsUnresolvedBodies(t *testing.T) {
+	for name, model := range map[string]string{
+		"missing type":   "type DeleteCluster struct{}\ntype GetEvents struct{}\ntype ListClustersRequest struct{}\ntype GetClusterPermissionsRequest struct{}\ntype Command struct{}\ntype EditRequest = EditCluster\ntype EditCluster struct{}\n",
+		"missing nested": strings.Replace(string(databricksFixtureModel()), "Spec      *ClusterSpec", "Spec      *Unknown", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			cli, sdk := databricksFixtures()
+			sdk["service/compute/model.go"] = []byte("package compute\n\n" + strings.TrimPrefix(model, "package compute\n"))
+			if _, _, err := buildDatabricksTable(cli, sdk, "v1.21.0", "v0.188.0"); err == nil || !strings.Contains(err.Error(), "not declared") {
+				t.Fatalf("err = %v, want an undeclared type", err)
+			}
+		})
+	}
+}
+
+func databricksFixtureModel() []byte {
+	_, sdk := databricksFixtures()
+	return sdk["service/compute/model.go"]
 }
 
 func TestGoModRequire(t *testing.T) {

@@ -8,7 +8,7 @@
         "bundle deploy"
       ],
       "product": "execution",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "cli.bundle.destroy",
@@ -2252,7 +2252,7 @@
         "agent-kit clear-session-items"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "mason.Mason.ClearSessionItems",
@@ -2260,7 +2260,7 @@
       "method": "POST",
       "path": "/api/2.0/agents/{parent}/items:clear",
       "product": "ai",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "agentkit.AgentKit.PopSessionItem",
@@ -2476,7 +2476,7 @@
         "ai-search remove-data"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "aisearch.AiSearch.ScanIndex",
@@ -2933,7 +2933,7 @@
       "commands": [
         "apps start"
       ],
-      "product": "workloads",
+      "product": "execution",
       "access": "write"
     },
     {
@@ -3740,7 +3740,7 @@
         "database create-database-instance-role"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "database.Database.DeleteDatabaseInstanceRole",
@@ -3751,7 +3751,7 @@
         "database delete-database-instance-role"
       ],
       "product": "data",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "database.Database.GetDatabaseInstanceRole",
@@ -8982,7 +8982,7 @@
         "postgres delete-role"
       ],
       "product": "data",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.DeleteSnapshot",
@@ -9216,7 +9216,7 @@
         "postgres update-role"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.UpdateSnapshotSchedule",
@@ -9381,7 +9381,7 @@
         "postgres create-role"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.ListSnapshots",
@@ -10326,7 +10326,7 @@
         "secrets delete-acl"
       ],
       "product": "secrets",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "workspace.Secrets.GetAcl",
@@ -10417,7 +10417,10 @@
         "secrets create-scope"
       ],
       "product": "secrets",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "initial_manage_principal"
+      ]
     },
     {
       "operation": "workspace.Secrets.DeleteScope",
@@ -11157,7 +11160,7 @@
         "warehouses set-workspace-warehouse-config"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "sql.QueryHistory.List",
@@ -11390,7 +11393,7 @@
         "token-management create-obo-token"
       ],
       "product": "secrets",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "settings.TokenManagement.List",
@@ -14118,7 +14121,7 @@
         "credentials validate-credential"
       ],
       "product": "data",
-      "access": "read"
+      "access": "write"
     },
     {
       "operation": "catalog.StorageCredentials.Validate",
@@ -14129,7 +14132,7 @@
         "storage-credentials validate"
       ],
       "product": "data",
-      "access": "read"
+      "access": "write"
     },
     {
       "operation": "catalog.Volumes.List",

@@ -59,6 +59,7 @@ type databricksIndex struct {
 var (
 	databricksVersion   = regexp.MustCompile(`^/api/(\d+\.\d+)/`)
 	databricksParameter = regexp.MustCompile(`\{[a-z0-9_]+\+?\}`)
+	databricksCatchAll  = regexp.MustCompile(`^(/api/\d+\.\d+)?/\{`)
 	databricks          = sync.OnceValue(loadDatabricks)
 )
 
@@ -78,17 +79,18 @@ func DatabricksCommand(group, verb string) (DatabricksOperation, bool) {
 
 // DatabricksRoute returns the operation an HTTP request path reaches, on a
 // workspace or account host. The query string and a trailing slash are
-// ignored, and a route published under one /api/2.x version also matches
-// another when no route has the requested version. When templates overlap,
-// the most literal one wins, then the strictest tier; candidates that still
+// ignored, and a route published under one /api/X.Y version also matches
+// another. When templates overlap, the most literal one wins, then one with
+// the requested version, then the strictest tier; candidates that still
 // disagree on product are not found, so the caller treats the call as
-// unrecognized.
+// unrecognized. Templates that start with a parameter (/api/2.1/{name})
+// would claim any unknown path, so they are only reachable by command.
 //
 // ponytail: {name} and {parent} match one segment, so AIP-style routes whose
-// resource name holds slashes (/api/2.0/{name} with name=sandboxes/abc) are
-// not found over curl; the CLI still resolves them by command. Widen them
-// only together with a rule that keeps catch-all templates from absorbing
-// unknown routes.
+// resource name holds slashes (/api/2.0/postgres/{name} with
+// name=projects/p/branches/b) are not found over curl; the CLI still
+// resolves them by command. Widening them needs the resource-name grammar
+// from the API spec, not the SDK source.
 func DatabricksRoute(method, path string) (DatabricksOperation, bool) {
 	path, _, _ = strings.Cut(path, "?")
 	path, _, _ = strings.Cut(path, "#")
@@ -100,19 +102,17 @@ func DatabricksRoute(method, path string) (DatabricksOperation, bool) {
 		version = match[1]
 	}
 	var best []databricksRoute
-	bestExact, bestLiterals := false, -1
+	bestLiterals, bestExact := -1, false
 	for _, route := range databricks().routes[strings.ToUpper(method)] {
 		if !route.pattern.MatchString(path) {
 			continue
 		}
 		exact := route.version == version
 		switch {
-		case exact != bestExact && !exact:
+		case route.literals < bestLiterals, route.literals == bestLiterals && bestExact && !exact:
 			continue
-		case exact != bestExact, route.literals > bestLiterals:
-			best, bestExact, bestLiterals = nil, exact, route.literals
-		case route.literals < bestLiterals:
-			continue
+		case route.literals > bestLiterals, exact && !bestExact:
+			best, bestLiterals, bestExact = nil, route.literals, exact
 		}
 		best = append(best, route)
 	}
@@ -149,7 +149,7 @@ func loadDatabricks() *databricksIndex {
 			}
 			index.commands[command] = operation
 		}
-		if operation.Path == "" {
+		if operation.Path == "" || databricksCatchAll.MatchString(operation.Path) {
 			continue
 		}
 		pattern, version, literals := databricksPattern(operation.Path)

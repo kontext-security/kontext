@@ -28,6 +28,12 @@ func TestDatabricksRoute(t *testing.T) {
 		{"trailing slash", "GET", "/api/2.1/unity-catalog/catalogs/", "catalog.Catalogs.List", "workspace", "data", "read", nil},
 		{"workspace SCIM", "DELETE", "/api/2.0/preview/scim/v2/Users/42", "iam.Users.Delete", "workspace", "admin", "admin", nil},
 		{"account SCIM", "DELETE", "/api/2.0/accounts/0d1a/scim/v2/Users/42", "iam.AccountUsers.Delete", "account", "admin", "admin", nil},
+		{"literal fallback beats a same-version catch-all", "GET", "/api/2.1/apps", "apps.Apps.List", "workspace", "workloads", "read", nil},
+		{"credential validation is not a read", "POST", "/api/2.1/unity-catalog/validate-storage-credentials", "catalog.StorageCredentials.Validate", "workspace", "data", "write", nil},
+		{"removing rows is a delete", "POST", "/api/2.0/ai-search/main.default.idx:removeData", "aisearch.AiSearch.RemoveData", "workspace", "ai", "delete", nil},
+		{"workspace warehouse security config", "PUT", "/api/2.0/sql/config/warehouses", "sql.Warehouses.SetWorkspaceWarehouseConfig", "workspace", "compute", "admin", nil},
+		{"secret ACL removal", "POST", "/api/2.0/secrets/acls/delete", "workspace.Secrets.DeleteAcl", "workspace", "secrets", "admin", nil},
+		{"secret scope with a manage principal", "POST", "/api/2.0/secrets/scopes/create", "workspace.Secrets.CreateScope", "workspace", "secrets", "admin", []string{"initial_manage_principal"}},
 		{"account provisioning", "POST", "/api/2.0/accounts/0d1a/workspaces", "provisioning.Workspaces.Create", "account", "admin", "admin", nil},
 	}
 	for _, test := range tests {
@@ -67,8 +73,10 @@ func TestDatabricksRouteNotFound(t *testing.T) {
 		{"PATCH", "/api/2.1/clusters/list"},
 		{"GET", "/api/2.1/unity-catalog/tables/a/b/c/d"},
 		{"GET", ""},
-		// Domains and the sandbox both claim DELETE /api/2.0/{name}.
+		// Templates that start with a parameter would claim any path.
 		{"DELETE", "/api/2.0/anything"},
+		{"GET", "/api/2.1/not-a-service"},
+		{"POST", "/api/2.0/not-a-service/start"},
 	} {
 		if got, ok := DatabricksRoute(test.method, test.path); ok {
 			t.Errorf("DatabricksRoute(%s %s) = %s, want not found", test.method, test.path, got.Operation)
@@ -92,7 +100,17 @@ func TestDatabricksCommand(t *testing.T) {
 		{"groups", "delete", "iam.Groups.Delete", "workspace", "admin", "admin"},
 		{"account groups", "delete", "iam.AccountGroups.Delete", "account", "admin", "admin"},
 		{"account  groups ", " list", "iam.AccountGroups.List", "account", "admin", "read"},
-		{"bundle", "deploy", "cli.bundle.deploy", "", "execution", "write"},
+		{"apps", "start", "apps.Apps.Start", "workspace", "execution", "write"},
+		{"ai-search", "remove-data", "aisearch.AiSearch.RemoveData", "workspace", "ai", "delete"},
+		{"postgres", "update-role", "postgres.Postgres.UpdateRole", "workspace", "data", "admin"},
+		{"postgres", "create-role", "postgres.Postgres.CreateRole", "workspace", "data", "admin"},
+		{"secrets", "delete-acl", "workspace.Secrets.DeleteAcl", "workspace", "secrets", "admin"},
+		{"warehouses", "set-workspace-warehouse-config", "sql.Warehouses.SetWorkspaceWarehouseConfig", "workspace", "compute", "admin"},
+		{"storage-credentials", "validate", "catalog.StorageCredentials.Validate", "workspace", "data", "write"},
+		// Reachable by command although its template is a catch-all.
+		{"sandbox", "get-sandbox", "sandbox.Sandbox.GetSandbox", "workspace", "execution", "read"},
+		// bundle deploy applies permissions blocks.
+		{"bundle", "deploy", "cli.bundle.deploy", "", "execution", "admin"},
 		{"bundle", "run", "cli.bundle.run", "", "execution", "write"},
 	} {
 		got, ok := DatabricksCommand(test.group, test.verb)

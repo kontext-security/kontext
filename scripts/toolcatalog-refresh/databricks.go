@@ -39,10 +39,11 @@ import (
 // Tiers: a GET or HEAD is read; a POST is read only when databricksPostReads
 // lists it, so a new route is a write until someone reviews it. Anything that
 // acts on permissions, grants, identities, settings or account provisioning
-// (product admin), or whose body can carry an owner or permissions, is admin;
-// a delete is delete; everything else is write. Products are assigned per
-// operation from databricksServiceProducts and databricksOperationProducts,
-// and a service neither lists fails generation so a reviewer has to place it.
+// (product admin), whose body can carry an owner or permissions, or that
+// databricksAdminOperations lists, is admin; a delete is delete; everything
+// else is write. Products are assigned per operation from
+// databricksServiceProducts and databricksOperationProducts, and a service
+// neither lists fails generation so a reviewer has to place it.
 
 const (
 	databricksCLIVersion = "v1.21.0"
@@ -85,9 +86,9 @@ type sdkOperation struct {
 }
 
 var (
-	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as)$`)
+	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|initial_manage_principal)$`)
 	databricksReadSuffix = regexp.MustCompile(`(?i)[/:](batch)?(get|list|search|query|export|scan)([-_][a-z0-9_-]*)?$`)
-	databricksDelete     = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge)`)
+	databricksDelete     = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge|Remove|Clear|Trash|Truncate|Drop)`)
 	databricksPermission = regexp.MustCompile(`^(Get|Set|Update)Permissions$|^GetPermissionLevels$`)
 	sprintfVerb          = regexp.MustCompile(`%[^v]`)
 	accessRankDatabricks = map[string]int{"read": 0, "write": 1, "delete": 2, "admin": 3}
@@ -228,6 +229,11 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 			stale = append(stale, "POST read "+key)
 		}
 	}
+	for key := range databricksAdminOperations {
+		if index.operations[key] == nil {
+			stale = append(stale, "admin operation "+key)
+		}
+	}
 	services := map[string]bool{}
 	for _, op := range index.operations {
 		services[op.service] = true
@@ -343,7 +349,7 @@ func databricksAccess(op *sdkOperation, product string, adminBody bool) string {
 	switch {
 	case op.method == "GET" || op.method == "HEAD" || (op.method == "POST" && databricksPostReads[op.id]):
 		return "read"
-	case product == "admin" || adminBody:
+	case product == "admin" || adminBody || databricksAdminOperations[op.id]:
 		return "admin"
 	case op.method == "DELETE" || databricksDelete.MatchString(op.name):
 		return "delete"
@@ -355,10 +361,20 @@ func databricksAccess(op *sdkOperation, product string, adminBody bool) string {
 // sdkIndex is what the SDK source says about its operations and clients.
 type sdkIndex struct {
 	operations map[string]*sdkOperation
-	// structs maps pkg.Type to its declaration and the file's imports.
+	// structs maps pkg.Type to its declaration and the file's imports;
+	// types holds every declared pkg.Type, structs or not (enums).
 	structs map[string]sdkStruct
+	types   map[string]bool
+	// aliases maps pkg.Type to the type it names (type A = B, type A B).
+	aliases map[string]sdkAlias
 	// clients maps "workspace"/"account" and a client field to pkg.Service.
 	clients map[string]map[string]string
+}
+
+type sdkAlias struct {
+	pkg     string
+	target  ast.Expr
+	imports map[string]string
 }
 
 type sdkStruct struct {
@@ -368,10 +384,11 @@ type sdkStruct struct {
 }
 
 func parseSDK(sdk sourceTree) (*sdkIndex, error) {
-	index := &sdkIndex{operations: map[string]*sdkOperation{}, structs: map[string]sdkStruct{}, clients: map[string]map[string]string{}}
+	index := &sdkIndex{operations: map[string]*sdkOperation{}, structs: map[string]sdkStruct{}, types: map[string]bool{}, aliases: map[string]sdkAlias{}, clients: map[string]map[string]string{}}
 	type implMethod struct {
-		pkg  string
-		decl *ast.FuncDecl
+		pkg     string
+		imports map[string]string
+		decl    *ast.FuncDecl
 	}
 	var methods []implMethod
 	fileSet := token.NewFileSet()
@@ -390,20 +407,25 @@ func parseSDK(sdk sourceTree) (*sdkIndex, error) {
 			case *ast.GenDecl:
 				for _, spec := range decl.Specs {
 					if spec, ok := spec.(*ast.TypeSpec); ok {
-						if fields, ok := spec.Type.(*ast.StructType); ok {
-							index.structs[pkg+"."+spec.Name.Name] = sdkStruct{pkg: pkg, fields: fields, imports: imports}
+						key := pkg + "." + spec.Name.Name
+						index.types[key] = true
+						switch target := spec.Type.(type) {
+						case *ast.StructType:
+							index.structs[key] = sdkStruct{pkg: pkg, fields: target, imports: imports}
+						case *ast.Ident, *ast.SelectorExpr, *ast.StarExpr:
+							index.aliases[key] = sdkAlias{pkg: pkg, target: target, imports: imports}
 						}
 					}
 				}
 			case *ast.FuncDecl:
 				if strings.HasSuffix(file, "impl.go") && implReceiver(decl) != "" && operationName(decl) != "" {
-					methods = append(methods, implMethod{pkg, decl})
+					methods = append(methods, implMethod{pkg, imports, decl})
 				}
 			}
 		}
 	}
 	for _, m := range methods {
-		op, err := index.parseOperation(m.pkg, m.decl)
+		op, err := index.parseOperation(m.pkg, m.imports, m.decl)
 		if err != nil {
 			return nil, fmt.Errorf("service/%s: %s.%s: %w", m.pkg, implReceiver(m.decl), m.decl.Name.Name, err)
 		}
@@ -479,7 +501,7 @@ func serviceName(pkg, impl string) string {
 // a.client.Do(ctx, http.MethodX, path, headers, queryParams, body, out) call.
 // A method that calls something else (a data-plane URL) has no fixed route
 // and is skipped.
-func (index *sdkIndex) parseOperation(pkg string, decl *ast.FuncDecl) (*sdkOperation, error) {
+func (index *sdkIndex) parseOperation(pkg string, imports map[string]string, decl *ast.FuncDecl) (*sdkOperation, error) {
 	var pathExpr ast.Expr
 	var calls []*ast.CallExpr
 	ast.Inspect(decl.Body, func(node ast.Node) bool {
@@ -531,11 +553,13 @@ func (index *sdkIndex) parseOperation(pkg string, decl *ast.FuncDecl) (*sdkOpera
 		if !ok || !isIdent(selector.X, "request") {
 			return nil, errors.New("request body is neither request nor one of its fields")
 		}
-		key, ok := index.typeKey(pkg, nil, requestType)
-		if !ok {
-			return nil, errors.New("request type is not a known struct")
+		key, err := index.resolveType(pkg, imports, requestType)
+		if err != nil || key == "" {
+			return nil, fmt.Errorf("request type is not a known struct: %v", err)
 		}
 		requestType = nil
+		// The field's type is spelled in the request struct's file.
+		pkg, imports = index.structs[key].pkg, index.structs[key].imports
 		for _, field := range index.structs[key].fields.Fields.List {
 			for _, name := range field.Names {
 				if name.Name == selector.Sel.Name {
@@ -549,65 +573,112 @@ func (index *sdkIndex) parseOperation(pkg string, decl *ast.FuncDecl) (*sdkOpera
 	default:
 		return nil, errors.New("request body without a request parameter")
 	}
-	if key, ok := index.typeKey(pkg, nil, requestType); ok {
-		index.collectFields(key, "", map[string]bool{}, &op.bodyFields)
+	key, err := index.resolveType(pkg, imports, requestType)
+	if err != nil {
+		return nil, err
+	}
+	if key != "" {
+		if err := index.collectFields(key, "", map[string]bool{}, &op.bodyFields); err != nil {
+			return nil, err
+		}
 	}
 	return op, nil
 }
 
-// typeKey resolves a field type to the pkg.Type of the struct it holds, if
-// any, looking through pointers, slices and maps.
-func (index *sdkIndex) typeKey(pkg string, imports map[string]string, expr ast.Expr) (string, bool) {
+var goBuiltinTypes = map[string]bool{"any": true, "bool": true, "byte": true, "float32": true, "float64": true, "int": true, "int32": true, "int64": true, "rune": true, "string": true, "uint": true, "uint32": true, "uint64": true}
+
+// resolveType returns the pkg.Type of the SDK struct a type holds, looking
+// through pointers, slices and maps; "" when it holds no SDK struct (a
+// builtin, an enum, io.ReadCloser). A type the SDK source does not declare
+// is an error: its fields, possibly an owner or an ACL, would go unseen.
+func (index *sdkIndex) resolveType(pkg string, imports map[string]string, expr ast.Expr) (string, error) {
 	switch expr := expr.(type) {
 	case *ast.StarExpr:
-		return index.typeKey(pkg, imports, expr.X)
+		return index.resolveType(pkg, imports, expr.X)
 	case *ast.ArrayType:
-		return index.typeKey(pkg, imports, expr.Elt)
+		return index.resolveType(pkg, imports, expr.Elt)
 	case *ast.MapType:
-		return index.typeKey(pkg, imports, expr.Value)
+		return index.resolveType(pkg, imports, expr.Value)
+	case *ast.InterfaceType:
+		return "", nil
 	case *ast.Ident:
-		key := pkg + "." + expr.Name
-		_, ok := index.structs[key]
-		return key, ok
+		if goBuiltinTypes[expr.Name] {
+			return "", nil
+		}
+		return index.declaredType(pkg + "." + expr.Name)
 	case *ast.SelectorExpr:
 		alias, ok := expr.X.(*ast.Ident)
 		if !ok {
-			return "", false
+			break
 		}
 		importPath, ok := imports[alias.Name]
-		if !ok || !strings.HasPrefix(importPath, databricksSDKModule+"/service/") {
-			return "", false
+		if !ok {
+			return "", fmt.Errorf("type %s.%s has no import", alias.Name, expr.Sel.Name)
 		}
-		key := path.Base(importPath) + "." + expr.Sel.Name
-		_, ok = index.structs[key]
-		return key, ok
+		if !strings.HasPrefix(importPath, databricksSDKModule+"/service/") {
+			return "", nil
+		}
+		return index.declaredType(path.Base(importPath) + "." + expr.Sel.Name)
 	}
-	return "", false
+	return "", fmt.Errorf("unsupported type expression %T", expr)
+}
+
+func (index *sdkIndex) declaredType(key string) (string, error) {
+	switch alias, isAlias := index.aliases[key]; {
+	case index.structs[key].fields != nil:
+		return key, nil
+	case isAlias:
+		// Upstream types never alias in a cycle; a cycle would not compile.
+		return index.resolveType(alias.pkg, alias.imports, alias.target)
+	case index.types[key]:
+		return "", nil
+	}
+	return "", fmt.Errorf("type %s is not declared in the SDK source", key)
 }
 
 // collectFields appends the dotted JSON path of every field a request body
-// can carry, nested structs included. visiting stops recursive types.
-func (index *sdkIndex) collectFields(key, prefix string, visiting map[string]bool, out *[]string) {
+// can carry, nested and embedded structs included. visiting stops recursive
+// types.
+func (index *sdkIndex) collectFields(key, prefix string, visiting map[string]bool, out *[]string) error {
 	if visiting[key] {
-		return
+		return nil
 	}
 	visiting[key] = true
 	defer delete(visiting, key)
 	declaration := index.structs[key]
 	for _, field := range declaration.fields.Fields.List {
-		if field.Tag == nil {
+		name := ""
+		if field.Tag != nil {
+			tag, _ := strconv.Unquote(field.Tag.Value)
+			name, _, _ = strings.Cut(reflect.StructTag(tag).Get("json"), ",")
+		}
+		embedded := len(field.Names) == 0 && name == ""
+		if name == "" && !embedded {
+			// encoding/json falls back to the Go name of an exported field.
+			if !field.Names[0].IsExported() {
+				continue
+			}
+			name = field.Names[0].Name
+		}
+		if name == "-" {
 			continue
 		}
-		tag, _ := strconv.Unquote(field.Tag.Value)
-		name, _, _ := strings.Cut(reflect.StructTag(tag).Get("json"), ",")
-		if name == "" || name == "-" {
-			continue
+		nested, err := index.resolveType(declaration.pkg, declaration.imports, field.Type)
+		if err != nil {
+			return fmt.Errorf("%s field %s: %w", key, prefix+name, err)
 		}
-		*out = append(*out, prefix+name)
-		if nested, ok := index.typeKey(declaration.pkg, declaration.imports, field.Type); ok {
-			index.collectFields(nested, prefix+name+".", visiting, out)
+		fieldPrefix := prefix
+		if !embedded {
+			*out = append(*out, prefix+name)
+			fieldPrefix = prefix + name + "."
+		}
+		if nested != "" {
+			if err := index.collectFields(nested, fieldPrefix, visiting, out); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // pathTemplate turns a path literal or fmt.Sprintf call into a template with
@@ -1222,6 +1293,7 @@ var databricksServiceProducts = map[string]string{
 // not fit: running code now or deploying it (execution), running SQL (sql)
 // and minting credentials (secrets).
 var databricksOperationProducts = map[string]string{
+	"apps.Apps.Start":                                        "execution",
 	"apps.Apps.Deploy":                                       "execution",
 	"jobs.Jobs.RepairRun":                                    "execution",
 	"jobs.Jobs.RunNow":                                       "execution",
@@ -1235,14 +1307,28 @@ var databricksOperationProducts = map[string]string{
 	"sharing.Recipients.RotateToken":                         "secrets",
 }
 
+// databricksAdminOperations change who can do what without a name, product
+// or body field that says so: database roles (superuser, createrole,
+// bypassrls), secret ACLs, the workspace-wide warehouse security config and
+// tokens minted for a service principal.
+var databricksAdminOperations = map[string]bool{
+	"database.Database.CreateDatabaseInstanceRole": true,
+	"database.Database.DeleteDatabaseInstanceRole": true,
+	"postgres.Postgres.CreateRole":                 true,
+	"postgres.Postgres.DeleteRole":                 true,
+	"postgres.Postgres.UpdateRole":                 true,
+	"settings.TokenManagement.CreateOboToken":      true,
+	"sql.Warehouses.SetWorkspaceWarehouseConfig":   true,
+	"workspace.Secrets.DeleteAcl":                  true,
+}
+
 // databricksPostReads are the POST operations a reviewer confirmed change
-// nothing. Every other POST is at least a write.
+// nothing. Every other POST is at least a write. Credential validation is
+// not here: it can test WRITE and DELETE against external storage.
 var databricksPostReads = map[string]bool{
 	"agentkit.AgentKit.SearchMemories":                              true,
 	"aisearch.AiSearch.QueryIndex":                                  true,
 	"aisearch.AiSearch.ScanIndex":                                   true,
-	"catalog.Credentials.ValidateCredential":                        true,
-	"catalog.StorageCredentials.Validate":                           true,
 	"compute.Clusters.Events":                                       true,
 	"mason.Mason.SearchMemories":                                    true,
 	"ml.Experiments.SearchExperiments":                              true,
@@ -1256,9 +1342,11 @@ var databricksPostReads = map[string]bool{
 }
 
 // databricksHandCommands are hand-written CLI commands that run many
-// requests rather than one route.
+// requests rather than one route. bundle deploy applies the bundle's
+// permissions blocks through SetPermissions, so it is admin unless the
+// caller inspects the bundle.
 var databricksHandCommands = []databricksEntry{
-	{Operation: "cli.bundle.deploy", Commands: []string{"bundle deploy"}, Product: "execution", Access: "write"},
+	{Operation: "cli.bundle.deploy", Commands: []string{"bundle deploy"}, Product: "execution", Access: "admin"},
 	{Operation: "cli.bundle.destroy", Commands: []string{"bundle destroy"}, Product: "workloads", Access: "delete"},
 	{Operation: "cli.bundle.run", Commands: []string{"bundle run"}, Product: "execution", Access: "write"},
 }
