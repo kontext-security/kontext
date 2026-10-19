@@ -249,8 +249,12 @@ const databricksShortValueLetters = "potesd"
 // databricksMayTakeValue reports a flag that may have taken the next word as
 // its value.
 func databricksMayTakeValue(arg string) bool {
-	return strings.HasPrefix(arg, "-") && arg != "--" && !strings.Contains(arg, "=") && !databricksBoolFlags[arg]
+	return strings.HasPrefix(arg, "-") && arg != "--" && !strings.Contains(arg, "=") && !databricksBoolFlags[arg] && !databricksBoolRaises[arg]
 }
+
+// databricksBoolRaises are the flag raises that take no value, so a "--"
+// after one ends the flags.
+var databricksBoolRaises = words("--overwrite", "--cleanup", "--deploy", "--sensitive", "--bind", "-b")
 
 func flagValueTrue(value string) bool {
 	switch strings.ToLower(value) {

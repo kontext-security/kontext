@@ -116,6 +116,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"a real -- ends the flags", "databricks fs cp -- --overwrite dbfs:/tmp/dest", []string{dbCat, dbP("data"), dbW}, true},
 		{"a global flag's value is not a raise", "databricks fs cp --log-file --overwrite a.txt dbfs:/tmp/a.txt", []string{dbCat, dbP("data"), dbW}, true},
 		{"the last value of a repeated flag wins", "databricks fs cp --overwrite --overwrite=false a.txt dbfs:/tmp/a.txt", []string{dbCat, dbP("data"), dbW}, true},
+		{"a file name after -- does not cancel a raise", "databricks fs cp --overwrite -- --overwrite=false dbfs:/tmp/dest", []string{dbCat, dbD, dbP("data"), dbW}, true},
 		{"bundle generate --bind binds", "databricks bundle generate job --existing-job-id 1 -b", []string{dbCat, dbP("workloads"), dbW}, true},
 		{"auth describe is local", "databricks auth describe", []string{dbCat}, true},
 		{"auth describe --sensitive prints credentials", "databricks auth describe --sensitive", []string{dbCat, dbP("secrets")}, true},
