@@ -167,6 +167,14 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl clustered body", `curl -sd'{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl --request-target is the path requested", "curl --request-target '/api/2.0/secrets/get?scope=s&key=k' " + dbHost + "/api/2.1/clusters/list", []string{dbCat, dbP("secrets")}, true},
 		{"curl config file can set the method", "curl -K opts.txt " + dbHost + "/api/2.0/repos/12", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
+		{"curl --no-get cancels -G", `curl -G --no-get --json '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
+		{"curl request target per operation", "curl --request-target '/api/2.0/secrets/get?scope=s&key=k' " + dbHost + "/api/2.1/clusters/list --next --request-target /api/2.1/clusters/list " + dbHost + "/api/2.1/clusters/list", []string{dbP("compute"), dbP("secrets"), dbUnk}, false},
+		{"curl bodies per operation", `curl --json '{"statement":"SELECT 1"}' ` + dbHost + `/api/2.0/sql/statements --next --json '{"statement":"' --json 'DROP TABLE t"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbD, dbP("sql"), dbUnk, dbW}, false},
+		{"curl proto-default and request target on a url without a scheme", "curl --proto-default https --request-target '/api/2.0/secrets/get?scope=s&key=k' dbc-1234.cloud.databricks.com/api/2.1/clusters/list", []string{dbCat, dbP("secrets")}, true},
+		{"curl three slashes after the scheme", "curl -X DELETE https:///dbc-1234.cloud.databricks.com/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
+		{"curl one slash after the scheme", "curl -X DELETE https:/dbc-1234.cloud.databricks.com/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
+		{"curl glob overflow without a scheme", `curl --proto-default https --json '{"cluster_id":"x"}' 'dbc-1234.cloud.databricks.com/api/2.1/clusters/[a-z][a-z]lete'`, []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		{"curl empty attached body is a POST", "curl --json= " + dbHost + "/api/2.0/apps/my-app/start", []string{dbCat, dbP("execution"), dbW}, true},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.

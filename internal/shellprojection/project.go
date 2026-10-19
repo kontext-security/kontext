@@ -985,32 +985,48 @@ var ghAPINeutralValueOptions = map[string]bool{"-q": true, "--jq": true, "-t": t
 
 var ghAPINeutralValuePrefixes = []string{"--jq=", "--template=", "--cache=", "--hostname=", "--header=", "--preview="}
 
+// curlOperation is one request of a curl command: --next starts the next one
+// with fresh options.
+type curlOperation struct {
+	// custom is the -X method, which replaces the method string whatever
+	// else is set; otherwise -I, -G, -T and a body imply one.
+	custom                  string
+	head, get, upload, data bool
+	requestTarget           string
+	urls, bodies            []string
+	bodyFile                bool
+}
+
+func (op curlOperation) method() string {
+	switch {
+	case op.custom != "":
+		return op.custom
+	case op.head:
+		return "HEAD"
+	case op.get:
+		return "GET"
+	case op.upload:
+		return "PUT"
+	case op.data:
+		return "POST"
+	}
+	return "GET"
+}
+
 func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 	args = slices.Clone(args)
-	// The method follows curl's precedence: -X replaces the method string
-	// whatever else is set; otherwise -I, -G, -T and a body imply one.
-	custom := ""
-	var customs []string
-	head, get, upload, data := false, false, false, false
-	// --next starts a new request with its own method. Which option values
-	// it resets is not modelled: with --next, every URL is judged under every
-	// method the command names.
+	var operations []curlOperation
+	var op curlOperation
+	// everyMethod is set when the options cannot be told apart reliably: a
+	// --next right after an option the parser does not know (it may be that
+	// option's value), or a config file (-K), which can set any option. Every
+	// URL is then also judged under every method and with every body.
 	everyMethod := false
-	// A config file (-K) can set any option, the method included.
-	config := false
-	requestTarget := ""
-	var urls []string
-	bodies := make([]string, 0, 2)
-	// A body read from a file is unknown content. Most routes treat it as an
-	// incomplete parse; a provider's read-over-POST route (Jira search) stays
-	// a read whatever its body says.
-	bodyFile := false
+	var methods []string
+	protoDefault := "http"
 	valueOptions := map[string]bool{"-H": true, "--header": true, "-A": true, "--user-agent": true, "-u": true, "--user": true, "-o": true, "--output": true, "--connect-timeout": true, "--max-time": true, "--retry": true}
 	safeFlags := map[string]bool{"-s": true, "-S": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
-	setCustom := func(method string) {
-		custom = strings.ToUpper(method)
-		customs = append(customs, custom)
-	}
+	unknownBefore := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if expanded, ok := expandCurlShortCluster(arg); ok {
@@ -1019,61 +1035,54 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			i--
 			continue
 		}
+		unknown := false
+		// value returns the option's value: attached after = or the next word.
+		value := func(name string) (string, bool) {
+			if attached, ok := strings.CutPrefix(arg, name+"="); ok {
+				return attached, true
+			}
+			if i+1 >= len(args) {
+				complete = false
+				return "", false
+			}
+			i++
+			return args[i], true
+		}
+		body, isBody := curlDataOption(arg)
 		switch {
-		case arg == "-X" || arg == "--request":
-			if i+1 >= len(args) {
-				complete = false
-				continue
+		case arg == "-X" || arg == "--request" || strings.HasPrefix(arg, "--request="):
+			if method, ok := value("--request"); ok {
+				op.custom = strings.ToUpper(method)
+				methods = append(methods, op.custom)
 			}
-			i++
-			setCustom(args[i])
-		case strings.HasPrefix(arg, "--request="):
-			setCustom(strings.TrimPrefix(arg, "--request="))
-		case arg == "--request-target":
-			if i+1 >= len(args) {
-				complete = false
-				continue
-			}
-			i++
-			requestTarget = args[i]
-		case strings.HasPrefix(arg, "--request-target="):
-			requestTarget = strings.TrimPrefix(arg, "--request-target=")
+		case arg == "--request-target" || strings.HasPrefix(arg, "--request-target="):
+			op.requestTarget, _ = value("--request-target")
+		case arg == "--proto-default" || strings.HasPrefix(arg, "--proto-default="):
+			protoDefault, _ = value("--proto-default")
 		case arg == "-I" || arg == "--head":
-			head = true
+			op.head = true
+		case arg == "--no-head":
+			op.head = false
 		case arg == "-G" || arg == "--get":
-			get = true
-		case arg == "--url":
-			if i+1 >= len(args) {
-				complete = false
-				continue
+			op.get = true
+		case arg == "--no-get":
+			op.get = false
+		case arg == "--url" || strings.HasPrefix(arg, "--url="):
+			if urlText, ok := value("--url"); ok {
+				op.urls = append(op.urls, urlText)
 			}
-			i++
-			urls = append(urls, args[i])
-		case strings.HasPrefix(arg, "--url="):
-			urls = append(urls, strings.TrimPrefix(arg, "--url="))
 		case isCurlDataFlag(arg):
 			if i+1 >= len(args) {
 				complete = false
 				continue
 			}
 			i++
-			bodies = append(bodies, args[i])
-			bodyFile = bodyFile || strings.HasPrefix(args[i], "@")
-			data = true
-		case curlDataValue(arg) != "":
-			body := curlDataValue(arg)
-			bodies = append(bodies, body)
-			bodyFile = bodyFile || strings.HasPrefix(body, "@")
-			data = true
-		case arg == "-T" || arg == "--upload-file":
-			if i+1 >= len(args) {
-				complete = false
-				continue
+			body, isBody = args[i], true
+		case isBody:
+		case arg == "-T" || arg == "--upload-file" || strings.HasPrefix(arg, "--upload-file="):
+			if _, ok := value("--upload-file"); ok {
+				op.upload = true
 			}
-			i++
-			upload = true
-		case strings.HasPrefix(arg, "--upload-file="):
-			upload = true
 		case valueOptions[arg]:
 			if i+1 >= len(args) {
 				complete = false
@@ -1088,81 +1097,103 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			complete = false
 		case safeFlags[arg]:
 		case arg == "--next" || arg == "-:":
+			everyMethod = everyMethod || unknownBefore
+			complete = false
+			operations = append(operations, op)
+			op = curlOperation{}
+		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
 			everyMethod = true
 			complete = false
-		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
-			config = true
-			complete = false
-			if arg != "--config" && arg != "-K" || i+1 >= len(args) {
-				continue
-			}
-			i++
+			value("--config")
 		case strings.HasPrefix(arg, "-"):
 			// Unknown curl flags can change request behavior.
 			complete = false
+			unknown = true
 		default:
-			urls = append(urls, arg)
+			op.urls = append(op.urls, arg)
 		}
+		if isBody {
+			op.bodies = append(op.bodies, body)
+			op.bodyFile = op.bodyFile || strings.HasPrefix(body, "@")
+			op.data = true
+		}
+		unknownBefore = unknown
 	}
-	method := "GET"
-	switch {
-	case custom != "":
-		method = custom
-	case head:
-		method = "HEAD"
-	case get:
-		method = "GET"
-	case upload:
-		method = "PUT"
-	case data:
-		method = "POST"
+	operations = append(operations, op)
+
+	// Each URL of each operation is judged with that operation's method and
+	// body; under everyMethod also with every method and every body.
+	type request struct {
+		urlText, method string
+		bodies          []string
+		bodyFile        bool
 	}
-	methods := []string{method}
-	if config {
-		customs = append(customs, "POST", "PUT", "PATCH", "DELETE")
-		everyMethod = true
+	var requests []request
+	var overflowed []string
+	var all curlOperation
+	for _, op := range operations {
+		for _, urlText := range op.urls {
+			urlText = normalizeCurlURL(urlText, protoDefault)
+			if op.requestTarget != "" {
+				urlText = withRequestTarget(urlText, op.requestTarget)
+			}
+			expanded, ok := expandCurlGlob(urlText)
+			if !ok {
+				overflowed = append(overflowed, urlText)
+			}
+			for _, each := range expanded {
+				requests = append(requests, request{each, op.method(), op.bodies, op.bodyFile})
+				all.urls = append(all.urls, each)
+			}
+		}
+		all.bodies = append(all.bodies, op.bodies...)
+		all.bodyFile = all.bodyFile || op.bodyFile
+		all.head, all.upload, all.data = all.head || op.head, all.upload || op.upload, all.data || op.data
 	}
 	if everyMethod {
-		methods = append(customs, "GET")
-		for implied, set := range map[string]bool{"HEAD": head, "PUT": upload, "POST": data} {
-			if set {
-				methods = append(methods, implied)
+		methods = append(methods, "GET", "POST", "PUT", "PATCH", "DELETE")
+		if all.head {
+			methods = append(methods, "HEAD")
+		}
+		for _, urlText := range all.urls {
+			for _, method := range methods {
+				requests = append(requests, request{urlText, method, all.bodies, all.bodyFile})
 			}
 		}
 	}
-	var expanded, overflowed []string
-	for _, urlText := range urls {
-		if requestTarget != "" {
-			urlText = withRequestTarget(urlText, requestTarget)
+	if len(requests) <= 1 && len(operations) == 1 && len(overflowed) == 0 {
+		if len(requests) == 0 {
+			return classifyCurlURL("", op.method(), op.bodies, complete, op.bodyFile)
 		}
-		each, ok := expandCurlGlob(urlText)
-		expanded = append(expanded, each...)
-		if !ok {
-			overflowed = append(overflowed, urlText)
-		}
+		return classifyCurlURL(requests[0].urlText, requests[0].method, requests[0].bodies, complete, requests[0].bodyFile)
 	}
-	urls = expanded
-	if len(urls) <= 1 && !everyMethod && len(overflowed) == 0 {
-		urlText := ""
-		if len(urls) == 1 {
-			urlText = urls[0]
-		}
-		return classifyCurlURL(urlText, method, bodies, complete, bodyFile)
-	}
-	// curl requests every URL it is given with the same method and body.
-	// Each is judged, and the whole is never a catalogued route.
+	// Several requests: each is judged, and the whole is never a catalogued
+	// route.
 	var facts, features []string
-	for _, urlText := range urls {
-		for _, each := range methods {
-			projection := classifyCurlURL(urlText, each, bodies, false, bodyFile)
-			facts = append(facts, projection.Facts...)
-			features = append(features, projection.Features...)
-		}
+	for _, each := range requests {
+		projection := classifyCurlURL(each.urlText, each.method, each.bodies, false, each.bodyFile)
+		facts = append(facts, projection.Facts...)
+		features = append(features, projection.Features...)
 	}
 	for _, urlText := range overflowed {
 		facts = append(facts, curlGlobOverflowFacts(urlText)...)
 	}
 	return projection("curl", mergeDatabricksProducts(facts), features, false)
+}
+
+var curlScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*):/*`)
+
+// normalizeCurlURL reads a URL the way curl does: without a scheme it uses
+// --proto-default (http unless set), and any number of slashes may follow the
+// scheme (https:/host and https:///host are https://host).
+func normalizeCurlURL(urlText, protoDefault string) string {
+	if urlText == "" {
+		return ""
+	}
+	if match := curlScheme.FindStringSubmatch(urlText); match != nil && strings.Contains(urlText, ":/") {
+		return match[1] + "://" + urlText[len(match[0]):]
+	}
+	return protoDefault + "://" + urlText
 }
 
 // curlShortValueOptions are curl's one-letter options that take a value.
@@ -1200,10 +1231,6 @@ func withRequestTarget(urlText, target string) string {
 
 // classifyCurlURL classifies one request of a curl command.
 func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile bool) cedareval.ShellProjectionV2 {
-	if urlText != "" && !strings.Contains(urlText, "://") {
-		// curl requests a URL without a scheme over plain HTTP.
-		urlText = "http://" + urlText
-	}
 	parsed, err := url.Parse(urlText)
 	if err == nil && parsed.Scheme == "http" && parsed.Host != "" {
 		// Plain HTTP to a provider is still that provider's request; it is
@@ -1323,16 +1350,18 @@ func isCurlDataFlag(arg string) bool {
 	return curlDataFlags[arg]
 }
 
-func curlDataValue(arg string) string {
+// curlDataOption returns the body of a data option with its value attached
+// (--json=…, -d…); an empty attached value is still a body.
+func curlDataOption(arg string) (string, bool) {
 	for _, prefix := range []string{"--data=", "--data-raw=", "--data-binary=", "--data-urlencode=", "--data-ascii=", "--json=", "--form=", "--form-string="} {
-		if strings.HasPrefix(arg, prefix) {
-			return strings.TrimPrefix(arg, prefix)
+		if value, ok := strings.CutPrefix(arg, prefix); ok {
+			return value, true
 		}
 	}
 	if strings.HasPrefix(arg, "-d") && len(arg) > 2 || strings.HasPrefix(arg, "-F") && len(arg) > 2 {
-		return arg[2:]
+		return arg[2:], true
 	}
-	return ""
+	return "", false
 }
 
 func containsForceBody(bodies []string) bool {
