@@ -221,9 +221,11 @@ func flagSet(args []string, flag string) bool {
 		case arg == flag:
 			set = true
 		}
-		// The last value given wins (--overwrite --overwrite=false).
-		if value, ok := strings.CutPrefix(arg, flag+"="); ok {
-			set = flagValueTrue(value)
+		// A value only ever sets the flag: a later =false may be another
+		// option's value or a file name, so it does not clear an earlier
+		// one (--overwrite --overwrite=false reads as set, over-strict).
+		if value, ok := strings.CutPrefix(arg, flag+"="); ok && flagValueTrue(value) {
+			set = true
 		}
 		// A short flag inside a cluster: -fb is -f -b, and -fb=v gives the
 		// last letter the value. The letters after one that takes a value
@@ -233,8 +235,8 @@ func flagSet(args []string, flag string) bool {
 			if end := strings.IndexAny(letters, databricksShortValueLetters); end >= 0 {
 				letters, hasValue = letters[:end], false
 			}
-			if at := strings.IndexByte(letters, flag[1]); at >= 0 {
-				set = !hasValue || at < len(letters)-1 || flagValueTrue(value)
+			if at := strings.IndexByte(letters, flag[1]); at >= 0 && (!hasValue || at < len(letters)-1 || flagValueTrue(value)) {
+				set = true
 			}
 		}
 	}
