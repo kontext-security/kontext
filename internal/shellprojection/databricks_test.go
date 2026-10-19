@@ -238,6 +238,8 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl brace expansion before :// can split into options", `curl -H {X-Test,-Kpayload}://opts -H "Authorization: Bearer $TOKEN" ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
 		{"curl quoted scalar forms are one argument", `curl -H "Authorization: Bearer ${TOKENS[0]}" -H "X-Args: $*" ` + dbHost + "/api/2.2/jobs/get", []string{dbCat, dbP("workloads")}, true},
 		{"curl quoted array list can split", `curl -H "${HEADERS[@]}" ` + dbHost + "/api/2.2/jobs/get", []string{dbP("workloads"), dbUnk}, false},
+		{"curl quoted defaults are one argument", `curl -H "Authorization: Bearer ${DATABRICKS_TOKEN:?missing token}" -H "X-Trace: ${TRACE:-}" ` + dbHost + "/api/2.2/jobs/get", []string{dbCat, dbP("workloads")}, true},
+		{"curl list inside a quoted default can split", `curl -H "${A:-$@}" ` + dbHost + "/api/2.2/jobs/get", []string{dbP("workloads"), dbUnk}, false},
 		{"xargs keeps curl incomplete", `xargs curl -H "Authorization: Bearer $T" ` + dbHost + "/api/2.2/jobs/get", []string{dbP("workloads"), dbUnk}, false},
 		{"curl computed URL is unrecognized", `curl -X DELETE "$URL"`, nil, false},
 		{"curl sql and a read keep the sql exemption", `curl --json '{"statement":"SELECT 1"}' ` + dbHost + "/api/2.0/sql/statements --next " + dbHost + "/api/2.1/clusters/list", []string{dbP("compute"), dbP("sql"), dbUnk, dbW}, false},

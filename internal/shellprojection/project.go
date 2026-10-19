@@ -113,12 +113,9 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 // singlePlainCall reports a script that is one simple command with no
 // variable assignments (`BASH_ALIASES[gh]=…` defines an alias too).
 // oneArgument reports a word the shell provably expands to exactly one
-// argument. Only plain forms count: inside double quotes a $NAME, ${NAME} or
-// ${A[i]} with no operator or indirection and no @ list ("$@", "${A[@]}",
-// "${A:-"$@"}" and "${!ref}" can be several words), or a command
-// substitution; outside quotes a literal
-// with no brace expansion ({a,-X,DELETE}) and no glob, except the ? of a URL
-// query.
+// argument: outside quotes a literal with no brace expansion ({a,-X,DELETE})
+// and no glob, except the ? of a URL query; inside double quotes anything
+// quotedOneArgument accepts.
 func oneArgument(word *syntax.Word) bool {
 	for _, part := range word.Parts {
 		switch part := part.(type) {
@@ -134,18 +131,43 @@ func oneArgument(word *syntax.Word) bool {
 				return false
 			}
 		case *syntax.DblQuoted:
-			for _, inner := range part.Parts {
-				switch inner := inner.(type) {
-				case *syntax.Lit, *syntax.CmdSubst, *syntax.ArithmExp:
-				case *syntax.ParamExp:
-					// Quoted, only an @ list splits: "$*", "${A[*]}" and
-					// "${A[0]}" are one argument.
-					index, _ := inner.Index.(*syntax.Word)
-					if inner.Param == nil || inner.Param.Value == "@" || index != nil && index.Lit() == "@" || inner.Excl ||
-						inner.Names != 0 || inner.NestedParam != nil || inner.Exp != nil || inner.Repl != nil || inner.Slice != nil {
-						return false
-					}
-				default:
+			if !quotedOneArgument(part.Parts) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// quotedOneArgument reports double-quoted parts that stay one argument: only
+// an @ list ("$@", "${A[@]}", also inside a default such as
+// "${A:-"$@"}"), indirection ("${!ref}") or a name list ("${!prefix@}")
+// splits. "$*", "${A[0]}", "${TOKEN:-}" and "${TOKEN:?missing}" do not.
+func quotedOneArgument(parts []syntax.WordPart) bool {
+	for _, part := range parts {
+		switch part := part.(type) {
+		case *syntax.Lit, *syntax.SglQuoted, *syntax.CmdSubst, *syntax.ArithmExp:
+		case *syntax.DblQuoted:
+			if !quotedOneArgument(part.Parts) {
+				return false
+			}
+		case *syntax.ParamExp:
+			index, _ := part.Index.(*syntax.Word)
+			if part.Param == nil || part.Param.Value == "@" || index != nil && index.Lit() == "@" ||
+				part.Excl || part.Names != 0 || part.NestedParam != nil {
+				return false
+			}
+			var operands []*syntax.Word
+			if part.Exp != nil {
+				operands = append(operands, part.Exp.Word)
+			}
+			if part.Repl != nil {
+				operands = append(operands, part.Repl.Orig, part.Repl.With)
+			}
+			for _, operand := range operands {
+				if operand != nil && !quotedOneArgument(operand.Parts) {
 					return false
 				}
 			}
