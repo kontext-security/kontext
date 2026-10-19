@@ -594,7 +594,7 @@ var databricksDomains = []string{"databricks.com", "azuredatabricks.net", "datab
 // if it names a Databricks domain or a glob in it ends in text one could
 // end with.
 func databricksURL(urlText string) bool {
-	if parsed, err := url.Parse(urlText); err == nil && parsed.Host != "" && !strings.ContainsAny(parsed.Host, "{}[]") {
+	if parsed, err := url.Parse(normalizeCurlURL(urlText, "http")); err == nil && parsed.Host != "" && !strings.ContainsAny(parsed.Host, "{}[]") {
 		return toolcatalog.IsDatabricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), "."))
 	}
 	// Drop the scheme separators so a glob around the scheme
@@ -607,8 +607,22 @@ func databricksURL(urlText string) bool {
 	if at := strings.LastIndex(host, "@"); at >= 0 {
 		host = host[at+1:]
 	}
-	if colon := strings.LastIndex(host, ":"); colon >= 0 && strings.Trim(host[colon+1:], "0123456789{}[],-:") == "" {
-		host = host[:colon]
+	// The port starts at the first colon outside a glob ([1-9:2] has one).
+	depth := 0
+	for i, c := range host {
+		switch c {
+		case '[', '{':
+			depth++
+		case ']', '}':
+			depth--
+		case ':':
+			if depth == 0 {
+				host = host[:i]
+			}
+		}
+		if c == ':' && depth == 0 {
+			break
+		}
 	}
 	host = strings.TrimSuffix(host, ".")
 	if decoded, err := url.PathUnescape(host); err == nil {

@@ -215,6 +215,9 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl docs host with a path glob is not databricks", "curl 'https://docs.databricks.com/{en,ja}/dev-tools/cli/index.html'", nil, false},
 		{"curl lookalike host with a path glob is not databricks", "curl 'https://databricks.com.example.org/{a,b}'", nil, false},
 		{"api computed profile keeps the tier", `databricks api delete /api/2.0/repos/12 --profile "$PROFILE"`, []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
+		{"curl stepped port glob is unrecognized", "curl -X DELETE 'https://dbc-1234.cloud.databr{icks,icks}.com:[443-443:1]/api/2.0/repos/12'", []string{dbUnk}, false},
+		{"curl docs host without a scheme with a path glob is not databricks", "curl 'docs.databricks.com/{en,ja}/dev-tools/cli/index.html'", nil, false},
+		{"curl lookalike host without a scheme with a path glob is not databricks", "curl 'databricks.com.example.org/{a,b}'", nil, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.

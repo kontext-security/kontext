@@ -1181,7 +1181,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			globbed := strings.ContainsAny(urlText, "{}[]")
 			complete = complete && !globbed
 			if unclear || !readable || globbed {
-				if databricksURL(urlText) || databricksURL(normalized) {
+				if databricksURL(urlText) {
 					unrecognized = append(unrecognized, FactDatabricksRouteUnrecognized)
 					continue
 				}

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,41 +12,8 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/risk"
 )
 
-// databricksPresets mirror the seven cloud Databricks presets (ENG-740) as
-// the cloud renders a tier preset: a shell clause that fails closed when the
-// shell context is missing, and an MCP clause on context.tool. Each is
-// evaluated on its own with the baseline permit.
-//
-// ponytail: hand-rendered until kontext-cloud exports its rendered presets
-// as a fixture (ENG-740); swap these for that file then.
-var databricksPresets = map[string]string{
-	"databricks-read-only": databricksTierPreset(`context.shell.facts.contains("databricks/write=true")`,
-		`["write", "delete", "admin"].contains(context.tool.access)`),
-	"databricks-read-only-except-sql": databricksTierPreset(`context.shell.facts.contains("databricks/write=true") && !context.shell.facts.contains("databricks/product=sql")`,
-		`context.tool.product != "sql" && ["write", "delete", "admin"].contains(context.tool.access)`),
-	"block-databricks-deletion": databricksTierPreset(`context.shell.facts.contains("databricks/delete=true")`,
-		`context.tool.access == "delete"`),
-	"protect-databricks-administration": databricksTierPreset(`context.shell.facts.contains("databricks/admin=true")`,
-		`context.tool.access == "admin"`),
-	"protect-databricks-secrets": databricksTierPreset(`context.shell.facts.contains("databricks/product=secrets")`,
-		`context.tool.product == "secrets"`),
-	"protect-databricks-runs-and-deploys": databricksTierPreset(`context.shell.facts.contains("databricks/product=execution") && context.shell.facts.contains("databricks/write=true")`,
-		`context.tool.product == "execution" && ["write", "delete", "admin"].contains(context.tool.access)`),
-	"block-unrecognized-databricks-operations": `forbid(principal, action == Kontext::Action::"ToolUse", resource)
-when {
-  resource == Kontext::Tool::"databricks-mcp/unrecognized" ||
-  (resource == Kontext::Tool::"shell" && context has shell && ["databricks", "curl"].contains(context.shell.program) && context.shell.facts.contains("databricks/route=unrecognized"))
-};`,
-}
-
-func databricksTierPreset(shell, tool string) string {
-	return fmt.Sprintf(`forbid(principal, action == Kontext::Action::"ToolUse", resource)
-when {
-  (resource == Kontext::Tool::"shell" && (!(context has shell) || (context has shell && (!(context.shell has facts) || (context.shell has facts && %s))))) ||
-  (context has tool && context.tool.provider == "databricks" && %s)
-};`, shell, tool)
-}
-
+// The presets are databricksPresets (databricks_presets_test.go), the cloud
+// rendering each preset is evaluated as on its own with the baseline permit.
 func databricksPresetProvider(t *testing.T, preset string) PolicyProvider {
 	t.Helper()
 	policy := `@id("allow") permit(principal, action == Kontext::Action::"ToolUse", resource);
@@ -57,6 +25,11 @@ func databricksPresetProvider(t *testing.T, preset string) PolicyProvider {
 func decideDatabricks(t *testing.T, provider PolicyProvider, event risk.HookEvent) risk.Decision {
 	t.Helper()
 	decision, err := provider.DecideHook(context.Background(), event)
+	// The MCP config lookup has a 250ms deadline, which a loaded test machine
+	// can miss; the server is then unresolved. Retry that, not a decision.
+	for retry := 0; retry < 3 && err == nil && strings.HasPrefix(event.ToolName, "mcp__") && !strings.HasPrefix(decision.Cedar.ToolID, "databricks-mcp/"); retry++ {
+		decision, err = provider.DecideHook(context.Background(), event)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,24 +44,25 @@ const (
 	dbDeny  = risk.DecisionDeny
 )
 
-// databricksSQLParity is shared with the MCP side (ENG-735): every SQL entry
-// point, MCP execute_sql included, must reach the decision listed for each
-// preset. Presets not listed allow. The one documented gap: an MCP call
+// databricksSQLParity: every SQL entry point, the MCP execute_sql tool and
+// the shell ones, must reach the decision listed for each preset. Presets not
+// listed allow. mcpAllows is the one documented gap (ENG-734): an MCP call
 // carries a single tier, so a statement that both deletes and administers is
 // blocked by protect-databricks-administration through the shell only.
 var databricksSQLParity = []struct {
-	sql  string
-	deny []string
+	sql       string
+	deny      []string
+	mcpAllows []string
 }{
-	{"SELECT * FROM main.sales.orders", []string{"databricks-read-only"}},
-	{"INSERT INTO t VALUES (1)", []string{"databricks-read-only"}},
-	{"DROP TABLE main.sales.orders", []string{"databricks-read-only", "block-databricks-deletion"}},
-	{"DELETE FROM t WHERE id = 1", []string{"databricks-read-only", "block-databricks-deletion"}},
-	{"GRANT SELECT ON TABLE t TO `users`", []string{"databricks-read-only", "protect-databricks-administration"}},
-	{"ALTER CATALOG main OWNER TO `someone`", []string{"databricks-read-only", "protect-databricks-administration"}},
-	{"DROP TABLE t; GRANT SELECT ON TABLE u TO `users`", []string{"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"}},
-	{"SELECT secret('scope', 'key')", []string{"databricks-read-only", "databricks-read-only-except-sql", "protect-databricks-secrets"}},
-	{"SELEC nonsense FRM", []string{"databricks-read-only"}},
+	{"SELECT * FROM main.sales.orders", []string{"databricks-read-only"}, nil},
+	{"INSERT INTO t VALUES (1)", []string{"databricks-read-only"}, nil},
+	{"DROP TABLE main.sales.orders", []string{"databricks-read-only", "block-databricks-deletion"}, nil},
+	{"DELETE FROM t WHERE id = 1", []string{"databricks-read-only", "block-databricks-deletion"}, nil},
+	{"GRANT SELECT ON TABLE t TO `users`", []string{"databricks-read-only", "protect-databricks-administration"}, nil},
+	{"ALTER CATALOG main OWNER TO `someone`", []string{"databricks-read-only", "protect-databricks-administration"}, nil},
+	{"DROP TABLE t; GRANT SELECT ON TABLE u TO `users`", []string{"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"}, []string{"protect-databricks-administration"}},
+	{"SELECT secret('scope', 'key')", []string{"databricks-read-only", "databricks-read-only-except-sql", "protect-databricks-secrets"}, nil},
+	{"SELEC nonsense FRM", []string{"databricks-read-only"}, nil},
 }
 
 func databricksSQLEntryPoints(sql string) map[string]risk.HookEvent {
@@ -101,10 +75,14 @@ func databricksSQLEntryPoints(sql string) map[string]risk.HookEvent {
 		"curl":             cedarHookEvent("Bash", map[string]any{"command": "curl -sS -X POST -H 'Authorization: Bearer x' --json '" + body + "' https://dbc-1234.cloud.databricks.com/api/2.0/sql/statements"}),
 		"codex query":      codexHookEvent("exec_command", map[string]any{"command": []any{"bash", "-lc", "databricks experimental aitools tools query " + quoted}}),
 		"codex argv api":   codexHookEvent("shell", map[string]any{"command": []any{"databricks", "api", "post", "/api/2.0/sql/statements", "--json", body}}),
+		"mcp execute_sql":  cedarHookEvent("mcp__wh__execute_sql", map[string]any{"query": sql, "warehouse_id": "abc"}),
 	}
 }
 
 func TestCedarDatabricksSQLParity(t *testing.T) {
+	// The MCP entry point is a configured Databricks SQL server.
+	home := useMCPHome(t)
+	writeConfig(t, filepath.Join(home, ".claude.json"), `{"mcpServers": {"wh": {"type": "http", "url": "https://dbc-1234.cloud.databricks.com/api/2.0/mcp/sql"}}}`)
 	for preset := range databricksPresets {
 		provider := databricksPresetProvider(t, preset)
 		for _, test := range databricksSQLParity {
@@ -113,6 +91,10 @@ func TestCedarDatabricksSQLParity(t *testing.T) {
 				want = dbDeny
 			}
 			for entry, event := range databricksSQLEntryPoints(test.sql) {
+				want := want
+				if entry == "mcp execute_sql" && containsString(test.mcpAllows, preset) {
+					want = dbAllow
+				}
 				if got := decideDatabricks(t, provider, event); got != want {
 					t.Errorf("%s, %s, %q: decision = %s, want %s", preset, entry, test.sql, got, want)
 				}
@@ -121,9 +103,9 @@ func TestCedarDatabricksSQLParity(t *testing.T) {
 	}
 }
 
-// TestCedarDatabricksPresets checks each preset on its own against the CLI,
-// databricks api and curl, through Claude's Bash and Codex's shell tools.
-func TestCedarDatabricksPresets(t *testing.T) {
+// TestCedarDatabricksShellPresets checks each preset on its own against the
+// CLI, databricks api and curl, through Claude's Bash and Codex's shell tools.
+func TestCedarDatabricksShellPresets(t *testing.T) {
 	commands := map[string][]string{
 		"databricks clusters list":                                                                      nil,
 		"databricks bundle validate":                                                                    nil,
