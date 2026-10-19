@@ -206,9 +206,12 @@ var databricksFlagRaises = map[string]map[string]databricksOperation{
 // flagSet reports whether a flag is given with a value other than false or
 // none.
 func flagSet(args []string, flag string) bool {
-	// "--" is not a terminator here: it may be an earlier option's value
-	// (--log-file --), and reading a later word as a flag only raises.
-	for _, arg := range args {
+	for i, arg := range args {
+		// "--" ends the flags unless it is an earlier option's value
+		// (--log-file --).
+		if arg == "--" && (i == 0 || !databricksMayTakeValue(args[i-1])) {
+			return false
+		}
 		if arg == flag {
 			return true
 		}
@@ -235,6 +238,12 @@ func flagSet(args []string, flag string) bool {
 // flag raises that take a value: the global -p, -o, -t and -e, and bundle
 // generate's -s and -d.
 const databricksShortValueLetters = "potesd"
+
+// databricksMayTakeValue reports a flag that may have taken the next word as
+// its value.
+func databricksMayTakeValue(arg string) bool {
+	return strings.HasPrefix(arg, "-") && arg != "--" && !strings.Contains(arg, "=") && !databricksBoolFlags[arg]
+}
 
 func flagValueTrue(value string) bool {
 	switch strings.ToLower(value) {
@@ -564,19 +573,33 @@ func mergeDatabricksProducts(facts []string) []string {
 // databricksDomains are the domains in a URL that may name a Databricks host.
 var databricksDomains = []string{"databricks.com", "azuredatabricks.net", "databricks.us", "databricks.mil", "databricks.azure.us", "databricks.azure.cn"}
 
-// databricksUnreadableURLFacts are the facts of a curl URL the projection
-// cannot read (it does not parse, a glob is too large to expand, or a config
-// file may replace its target) that names a Databricks domain: it could reach any route, so it carries every
-// tier and the products the presets single out.
+// databricksUnreadableURLFacts are the facts of a curl URL whose request
+// the projection cannot read (a glob too large to expand, or a config file
+// that may replace its target) on a Databricks host, or of a URL that does
+// not parse and names a Databricks domain in its host part: it could reach
+// any route, so it carries every tier and the products the presets single
+// out.
 func databricksUnreadableURLFacts(urlText string) []string {
-	text := strings.ToLower(urlText)
-	if decoded, err := url.PathUnescape(text); err == nil {
-		text = decoded
-	}
-	if !slices.ContainsFunc(databricksDomains, func(domain string) bool { return strings.Contains(text, domain) }) {
+	if parsed, err := url.Parse(urlText); err == nil && parsed.Host != "" {
+		if toolcatalog.IsDatabricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")) {
+			return databricksWorstFacts()
+		}
 		return nil
 	}
-	return databricksWorstFacts()
+	authority := strings.ToLower(urlText)
+	if scheme := strings.Index(authority, "://"); scheme >= 0 {
+		authority = authority[scheme+3:]
+	}
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	if decoded, err := url.PathUnescape(authority); err == nil {
+		authority = decoded
+	}
+	if slices.ContainsFunc(databricksDomains, func(domain string) bool { return strings.Contains(authority, domain) }) {
+		return databricksWorstFacts()
+	}
+	return nil
 }
 
 // databricksWorstFacts are the facts of a request that could reach any

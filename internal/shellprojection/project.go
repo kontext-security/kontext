@@ -1148,9 +1148,10 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			operations = append(operations, op)
 			op = curlOperation{}
 		case strings.HasPrefix(arg, "-"):
-			// Unknown curl flags can change request behavior.
+			// Unknown curl flags can change request behavior. A known switch
+			// takes no value, so it cannot hide the next word.
 			complete = false
-			unknown = true
+			unknown = !curlSwitches[arg]
 		default:
 			op.urls = append(op.urls, arg)
 		}
@@ -1236,26 +1237,47 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 // Its host part is expanded on its own, so a glob in the host still names
 // it.
 func curlGlobOverflowFacts(urlText string) []string {
-	start := 0
-	if scheme := strings.Index(urlText, "://"); scheme >= 0 {
-		start = scheme + 3
-	}
+	urlText = normalizeCurlURL(urlText, "http")
+	start := strings.Index(urlText, "://") + 3
 	end := strings.IndexAny(urlText[start:], "/?#")
 	if end < 0 {
 		end = len(urlText) - start
 	}
-	hosts, ok := expandCurlGlob(urlText[:start+end])
+	host := urlText[start : start+end]
+	hosts, ok := expandCurlGlob(host)
 	if !ok {
-		// The host itself is past the cap: it could be anything.
-		return databricksWorstFacts()
+		// The host is past the cap too: judge it by the fixed text after its
+		// last glob, which may still rule Databricks out.
+		tail := strings.ToLower(host[strings.LastIndexAny(host, "}]")+1:])
+		if slices.ContainsFunc(databricksDomains, func(domain string) bool {
+			return strings.HasSuffix(tail, domain) || strings.HasSuffix("."+domain, tail)
+		}) {
+			return databricksWorstFacts()
+		}
+		return nil
 	}
-	for _, host := range hosts {
-		if facts := databricksUnreadableURLFacts(host); facts != nil {
+	for _, each := range hosts {
+		if facts := databricksUnreadableURLFacts("https://" + each); facts != nil {
 			return facts
 		}
 	}
 	return nil
 }
+
+// curlSwitches are common curl options that take no value.
+var curlSwitches = words("-L", "--location", "--location-trusted", "-k", "--insecure", "-v", "--verbose", "-i",
+	"--include", "--show-headers", "-f", "-#", "--progress-bar", "--no-progress-meter", "-N", "--no-buffer", "-O",
+	"--remote-name", "--remote-name-all", "-J", "--remote-header-name", "-g", "--globoff", "-q", "--disable",
+	"-0", "--http1.0", "--http1.1", "--http2", "--http2-prior-knowledge", "--http3", "--http3-only", "-4", "--ipv4",
+	"-6", "--ipv6", "--raw", "-n", "--netrc", "--netrc-optional", "--tcp-nodelay", "-Z", "--parallel",
+	"--parallel-immediate", "--fail-early", "--create-dirs", "--path-as-is", "--retry-all-errors",
+	"--retry-connrefused", "--anyauth", "--basic", "--digest", "--negotiate", "--ntlm", "-l", "--list-only", "-B",
+	"--use-ascii", "-j", "--junk-session-cookies", "-R", "--remote-time", "-p", "--proxytunnel", "-V", "--version",
+	"--styled-output", "--no-keepalive", "--no-sessionid", "--tr-encoding", "--xattr", "--ssl", "--ssl-reqd",
+	"--ssl-no-revoke", "--ssl-allow-beast", "--ssl-revoke-best-effort", "--no-alpn", "--no-npn", "--compressed-ssh",
+	"--suppress-connect-headers", "--disallow-username-in-url", "--ignore-content-length", "--crlf", "--append",
+	"-a", "--proxy-insecure", "--proxy-anyauth", "--proxy-basic", "--proxy-digest", "--proxy-negotiate",
+	"--proxy-ntlm", "--doh-insecure", "--cert-status", "--false-start", "--sasl-ir", "--metalink", "-M", "--manual")
 
 var curlScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*):/*`)
 
@@ -1359,7 +1381,11 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		}
 	}
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return projection("curl", databricksUnreadableURLFacts(urlText), []string{"dynamic-or-invalid-url"}, false)
+		var facts []string
+		if err != nil || parsed.Host == "" {
+			facts = databricksUnreadableURLFacts(urlText)
+		}
+		return projection("curl", facts, []string{"dynamic-or-invalid-url"}, false)
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 	switch {

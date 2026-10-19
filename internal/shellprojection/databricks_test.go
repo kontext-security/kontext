@@ -113,6 +113,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"bundle generate clustered -fb=false does not bind", "databricks bundle generate job --existing-job-id 1 -fb=false", []string{dbCat, dbP("workloads")}, true},
 		{"-- as an option value does not end the flags", "databricks auth describe --log-file -- --sensitive", []string{dbCat, dbP("secrets")}, true},
 		{"a profile name is not a bind flag", "databricks bundle generate job --existing-job-id 1 -pabc", []string{dbCat, dbP("workloads")}, true},
+		{"a real -- ends the flags", "databricks fs cp -- --overwrite dbfs:/tmp/dest", []string{dbCat, dbP("data"), dbW}, true},
 		{"bundle generate --bind binds", "databricks bundle generate job --existing-job-id 1 -b", []string{dbCat, dbP("workloads"), dbW}, true},
 		{"auth describe is local", "databricks auth describe", []string{dbCat}, true},
 		{"auth describe --sensitive prints credentials", "databricks auth describe --sensitive", []string{dbCat, dbP("secrets")}, true},
@@ -196,6 +197,11 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl --data-urlencode is encoded before the JSON is read", `curl --data-urlencode '{"warehouse_id":"w","statement":"DROP TABLE t -- =\q' --json '"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbD, dbP("sql"), dbW}, true},
 		{"curl empty -T keeps its URL slot", "curl -T '' -T permissions.json https://example.com " + dbHost + "/api/2.0/permissions/jobs/123", []string{dbA, dbP("admin"), dbUnk, dbW}, false},
 		{"curl -T appends its file name to a URL ending in /", "curl -X POST -T delete " + dbHost + "/api/2.1/clusters/", []string{dbCat, dbD, dbP("compute"), dbW}, true},
+		{"curl known switches do not hide the next option", "curl -L -s " + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
+		{"curl glob overflow after three slashes", `curl --json '{"cluster_id":"x"}' 'https:///dbc-1234.cloud.databricks.com/api/2.1/clusters/[a-z][a-z]lete'`, []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		{"curl host glob past the cap on another domain", "curl 'https://node[001-300].example.com/file'", nil, false},
+		{"curl host glob past the cap that could be databricks", "curl 'https://node[001-300].cloud.databricks.com/file'", []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		{"curl databricks.com in another host's path", "curl http://example.com/releases/databricks.com/archive.zip", nil, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.
