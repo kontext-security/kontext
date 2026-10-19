@@ -149,7 +149,7 @@ func Resolve(toolName, serverURL, serverName string, input map[string]any) (stri
 		}
 		for i := range providers {
 			if matchesURLHints(providers[i].catalog.ServerURLHints, host, path) {
-				return providers[i].resolve(tool, input, true)
+				return providers[i].resolveURL(tool, path, input)
 			}
 		}
 	}

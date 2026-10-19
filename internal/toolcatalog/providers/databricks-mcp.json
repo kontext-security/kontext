@@ -1,0 +1,152 @@
+{
+  "provider": "databricks",
+  "toolIdPrefix": "databricks-mcp/",
+  "version": "2026-10-19",
+  "serverNameHints": [
+    "databricks"
+  ],
+  "serverUrlHints": [
+    {
+      "host": "*.cloud.databricks.com",
+      "pathPrefix": "/api/2.0/mcp/"
+    },
+    {
+      "host": "*.cloud.databricks.com",
+      "pathPrefix": "/ai-gateway/mcp-services/"
+    },
+    {
+      "host": "*.gcp.databricks.com",
+      "pathPrefix": "/api/2.0/mcp/"
+    },
+    {
+      "host": "*.gcp.databricks.com",
+      "pathPrefix": "/ai-gateway/mcp-services/"
+    },
+    {
+      "host": "*.azuredatabricks.net",
+      "pathPrefix": "/api/2.0/mcp/"
+    },
+    {
+      "host": "*.azuredatabricks.net",
+      "pathPrefix": "/ai-gateway/mcp-services/"
+    },
+    {
+      "host": "*.databricks.com",
+      "pathPrefix": "/api/2.0/mcp/"
+    },
+    {
+      "host": "*.databricks.com",
+      "pathPrefix": "/ai-gateway/mcp-services/"
+    },
+    {
+      "host": "*.cloud.databricks.us",
+      "pathPrefix": "/api/2.0/mcp/"
+    },
+    {
+      "host": "*.cloud.databricks.us",
+      "pathPrefix": "/ai-gateway/mcp-services/"
+    },
+    {
+      "host": "*.cloud.databricks.mil",
+      "pathPrefix": "/api/2.0/mcp/"
+    },
+    {
+      "host": "*.cloud.databricks.mil",
+      "pathPrefix": "/ai-gateway/mcp-services/"
+    },
+    {
+      "host": "*.databricks.azure.cn",
+      "pathPrefix": "/api/2.0/mcp/"
+    },
+    {
+      "host": "*.databricks.azure.cn",
+      "pathPrefix": "/ai-gateway/mcp-services/"
+    }
+  ],
+  "urlKinds": [
+    {
+      "pathPrefix": "/api/2.0/mcp/functions/",
+      "toolId": "databricks-mcp/uc-function"
+    },
+    {
+      "pathPrefix": "/api/2.0/mcp/vector-search/",
+      "toolId": "databricks-mcp/ai-search"
+    },
+    {
+      "pathPrefix": "/api/2.0/mcp/ai-search/",
+      "toolId": "databricks-mcp/ai-search"
+    }
+  ],
+  "sources": [
+    "Databricks managed MCP servers (https://docs.databricks.com/aws/en/generative-ai/mcp/managed-mcp), server URLs and tool names read 2026-10-19",
+    "AWS sample tools/list response for the Databricks SQL and Genie managed MCP servers, read 2026-10-19",
+    "Synthetic ids: uc-function (Unity Catalog function servers, whose tool names are per-workspace function names) and ai-search (Vector Search / AI Search servers), set by urlKinds"
+  ],
+  "dispatchers": [],
+  "tools": [
+    {
+      "name": "ai-search",
+      "product": "ai",
+      "access": "read"
+    },
+    {
+      "name": "execute_sql",
+      "product": "sql",
+      "access": "write"
+    },
+    {
+      "name": "execute_sql_read_only",
+      "product": "sql",
+      "access": "read"
+    },
+    {
+      "name": "genie_ask",
+      "product": "ai",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "genie_cancel_response",
+      "product": "ai",
+      "access": "write",
+      "distinctive": true
+    },
+    {
+      "name": "genie_get_query_result",
+      "product": "ai",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "genie_poll_response",
+      "product": "ai",
+      "access": "read",
+      "distinctive": true
+    },
+    {
+      "name": "poll_response",
+      "product": "ai",
+      "access": "read"
+    },
+    {
+      "name": "poll_sql_result",
+      "product": "sql",
+      "access": "read"
+    },
+    {
+      "name": "query_space",
+      "product": "ai",
+      "access": "read"
+    },
+    {
+      "name": "uc-function",
+      "product": "execution",
+      "access": "write"
+    },
+    {
+      "name": "view_ask",
+      "product": "ai",
+      "access": "read"
+    }
+  ]
+}
