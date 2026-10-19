@@ -96,6 +96,23 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"statement submit", `databricks experimental aitools tools statement submit "TRUNCATE TABLE t"`, []string{dbCat, dbD, dbP("sql"), dbW}, true},
 		{"statement status is a read", "databricks experimental aitools tools statement status 01ef", []string{dbCat, dbP("sql")}, true},
 
+		{"quoted SQL is checked as the CLI cleans it", dbQuery + `'"DROP TABLE t"'`, []string{dbCat, dbD, dbP("sql"), dbW}, true},
+
+		// Flags that raise a command.
+		{"fs cp --overwrite=false stays a write", "databricks fs cp --overwrite=false a.txt dbfs:/tmp/a.txt", []string{dbCat, dbP("data"), dbW}, true},
+		{"workspace import-dir --overwrite deletes", "databricks workspace import-dir ./src /Users/me/src --overwrite", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
+		{"apps init is local", "databricks apps init --name my-app", []string{dbCat}, true},
+		{"apps init --deploy deploys", "databricks apps init --name my-app --deploy", []string{dbCat, dbA, dbP("execution"), dbW}, true},
+		{"apps init --run runs", "databricks apps init --name my-app --run=dev-remote", []string{dbCat, dbP("execution"), dbW}, true},
+		{"apps import deploys", "databricks apps import --name my-app", []string{dbCat, dbA, dbP("execution"), dbW}, true},
+		{"apps import --cleanup deletes", "databricks apps import --name my-app --cleanup", []string{dbCat, dbA, dbD, dbP("execution"), dbW}, true},
+		{"sandbox config writes", "databricks sandbox config happy-panda-1234 --no-autostop", []string{dbCat, dbP("execution"), dbW}, true},
+		{"bundle generate is a read", "databricks bundle generate job --existing-job-id 1", []string{dbCat, dbP("workloads")}, true},
+		{"bundle generate --bind binds", "databricks bundle generate job --existing-job-id 1 -b", []string{dbCat, dbP("workloads"), dbW}, true},
+		{"auth describe is local", "databricks auth describe", []string{dbCat}, true},
+		{"auth describe --sensitive prints credentials", "databricks auth describe --sensitive", []string{dbCat, dbP("secrets")}, true},
+		{"auth docker token prints a credential", "databricks auth docker token", []string{dbCat, dbP("secrets")}, true},
+
 		// databricks api.
 		{"api read", "databricks api get /api/2.1/clusters/list", []string{dbCat, dbP("compute")}, true},
 		{"api delete", `databricks api post /api/2.1/clusters/delete --json '{"cluster_id":"x"}'`, []string{dbCat, dbD, dbP("compute"), dbW}, true},
@@ -104,6 +121,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"api sql body from a file", "databricks api post /api/2.0/sql/statements --json @q.json", []string{dbCat, dbP("sql"), dbW}, true},
 		{"api write body from a file keeps the tier", "databricks api post /api/2.1/unity-catalog/catalogs --json @c.json", []string{dbCat, dbP("data"), dbW}, true},
 		{"api full url", "databricks api delete https://dbc-1234.cloud.databricks.com/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
+		{"api file body overridden by a literal one", `databricks api post /api/2.0/sql/statements --json @/dev/null --json '{"statement":"DROP TABLE t"}'`, []string{dbCat, dbD, dbP("sql"), dbW}, true},
 		{"api unknown route fails open", "databricks api post /api/2.0/not-a-route", []string{dbUnk}, false},
 
 		// Unknown fails open: no tier facts.
@@ -119,6 +137,10 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl sql", `curl -X POST --json '{"statement":"DROP TABLE t","warehouse_id":"w"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbD, dbP("sql"), dbW}, true},
 		{"curl sql duplicate key", `curl --json '{"statement":"SELECT 1","statement":"DROP TABLE t"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbD, dbP("sql"), dbW}, true},
 		{"curl sql body from a file", "curl -d @q.json " + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbP("sql"), dbW}, true},
+		{"curl split --json body", `curl --json '{"warehouse_id":"w","statement":' --json '"DROP TABLE t"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbD, dbP("sql"), dbW}, true},
+		{"curl split -d body", `curl -d '{"statement":"SELECT 1' -d ' ; DROP TABLE t"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbD, dbP("sql"), dbW}, true},
+		{"curl empty file piece before a literal body", `curl --json @/dev/null --json '{"statement":"DROP TABLE t"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbD, dbP("sql"), dbW}, true},
+		{"curl too many pieces assumes the worst", "curl -d a -d b -d c -d d -d e -d f -d g -d h -d i " + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbA, dbD, dbP("sql"), dbW}, true},
 		{"curl secrets read", "curl " + dbHost + "/api/2.0/secrets/get?scope=s&key=k", []string{dbCat, dbP("secrets")}, true},
 		{"curl dot segments are resolved", "curl -X POST -d '{}' " + dbHost + "/api/2.1/clusters/list/../delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl azure", "curl -X DELETE https://adb-1.2.azuredatabricks.net/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},

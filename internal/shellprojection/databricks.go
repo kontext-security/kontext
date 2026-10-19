@@ -35,8 +35,16 @@ type databricksOperation struct {
 	write, del, admin bool
 	// sql marks a command whose positional arguments and stdin are SQL.
 	sql bool
-	// overwriteDeletes raises the call to delete when --overwrite is set.
-	overwriteDeletes bool
+}
+
+// raise adds what a flag makes a command do: its tiers, and its product when
+// it names one.
+func (op databricksOperation) raise(by databricksOperation) databricksOperation {
+	if by.product != "" {
+		op.product = by.product
+	}
+	op.write, op.del, op.admin = op.write || by.write, op.del || by.del, op.admin || by.admin
+	return op
 }
 
 func databricksAccess(product, access string) databricksOperation {
@@ -91,7 +99,8 @@ var databricksCommands = func() map[string]databricksOperation {
 	}{
 		{databricksOperation{}, []string{
 			"help", "configure", "version", "cache clear",
-			"auth login", "auth logout", "auth profiles", "auth switch", "auth describe", "auth docker",
+			"auth login", "auth logout", "auth profiles", "auth switch", "auth describe",
+			"auth docker host", "auth docker configure", "auth docker profile",
 			"completion bash", "completion zsh", "completion fish", "completion powershell",
 			"completion install", "completion uninstall", "completion status",
 			"aitools install", "aitools update", "aitools uninstall", "aitools list", "aitools version",
@@ -106,7 +115,7 @@ var databricksCommands = func() map[string]databricksOperation {
 			"labs list", "labs show", "labs installed", "labs clear-cache",
 		}},
 		// They print credentials.
-		{databricksAccess("secrets", dbRead), []string{"auth token", "auth env"}},
+		{databricksAccess("secrets", dbRead), []string{"auth token", "auth env", "auth docker token"}},
 
 		{databricksAccess("workloads", dbRead), []string{
 			"bundle validate", "bundle summary", "bundle plan", "bundle config-remote-sync",
@@ -116,32 +125,33 @@ var databricksCommands = func() map[string]databricksOperation {
 		}},
 		{databricksAccess("workloads", dbWrite), []string{
 			"bundle deployment bind", "bundle deployment unbind", "bundle deployment migrate",
-			"pipelines stop", "apps import", "air images push",
+			"pipelines stop", "air images push",
 		}},
 		{databricksOperation{product: "workloads", write: true, del: true, admin: true}, []string{
 			"bundle destroy", "pipelines destroy", "apps delete",
 		}},
 
 		{databricksAccess("execution", dbRead), []string{
-			"sandbox list", "sandbox status", "sandbox config", "sandbox ssh-key list", "air get", "air list", "air logs",
+			"sandbox list", "sandbox status", "sandbox ssh-key list", "air get", "air list", "air logs",
 		}},
 		{databricksAccess("execution", dbWrite), []string{
 			"bundle run", "pipelines run", "pipelines dry-run", "apps dev-remote",
 			"psql", "experimental postgres query",
-			"sandbox create", "sandbox start", "sandbox stop", "sandbox register", "sandbox ssh",
+			"sandbox create", "sandbox start", "sandbox stop", "sandbox register", "sandbox ssh", "sandbox config",
 			"air run", "air cancel", "ssh connect", "ssh server", "ssh agent-shim",
 			"labs install", "labs upgrade", "labs uninstall",
 		}},
 		{databricksAccess("execution", dbDel), []string{"sandbox delete", "sandbox ssh-key delete"}},
 		// Deploys can set permissions.
-		{databricksAccess("execution", dbAdmin), []string{"bundle deploy", "pipelines deploy", "apps deploy"}},
+		// apps import deploys the imported bundle and starts the app.
+		{databricksAccess("execution", dbAdmin), []string{"bundle deploy", "pipelines deploy", "apps deploy", "apps import"}},
 
 		{databricksAccess("data", dbRead), []string{"fs ls", "fs cat"}},
 		{databricksAccess("data", dbWrite), []string{"fs mkdir", "fs mkdirs"}},
 		{databricksAccess("data", dbDel), []string{"fs rm"}},
-		{databricksOperation{product: "data", write: true, overwriteDeletes: true}, []string{"fs cp"}},
+		{databricksAccess("data", dbWrite), []string{"fs cp"}},
 		{databricksAccess("workspace", dbRead), []string{"workspace export-dir"}},
-		{databricksOperation{product: "workspace", write: true, overwriteDeletes: true}, []string{"workspace import-dir"}},
+		{databricksAccess("workspace", dbWrite), []string{"workspace import-dir"}},
 		// Sync mirrors local deletions to the workspace.
 		{databricksAccess("workspace", dbDel), []string{"sync", "bundle sync"}},
 		{databricksAccess("compute", dbRead), []string{
@@ -170,6 +180,49 @@ var databricksCommands = func() map[string]databricksOperation {
 	}
 	return table
 }()
+
+// databricksFlagRaises are what a flag adds to a command: overwriting deletes
+// the old content, apps import --cleanup deletes the old source folder, apps
+// init can deploy and run the new app, auth describe --sensitive prints
+// credentials, and bundle generate --bind binds the live resource.
+var databricksFlagRaises = map[string]map[string]databricksOperation{
+	"fs cp":                {"--overwrite": {del: true, write: true}},
+	"workspace import-dir": {"--overwrite": {del: true, write: true}},
+	"apps import":          {"--cleanup": {del: true, write: true}},
+	"apps init": {
+		"--deploy": databricksAccess("execution", dbAdmin),
+		"--run":    databricksAccess("execution", dbWrite),
+	},
+	"auth describe": {"--sensitive": {product: "secrets"}},
+	// --bind binds the generated config to the live resource, as bundle
+	// deployment bind does.
+	"bundle generate job":         {"--bind": databricksAccess("workloads", dbWrite), "-b": databricksAccess("workloads", dbWrite)},
+	"bundle generate pipeline":    {"--bind": databricksAccess("workloads", dbWrite), "-b": databricksAccess("workloads", dbWrite)},
+	"bundle generate dashboard":   {"--bind": databricksAccess("workloads", dbWrite), "-b": databricksAccess("workloads", dbWrite)},
+	"bundle generate app":         {"--bind": databricksAccess("workloads", dbWrite), "-b": databricksAccess("workloads", dbWrite)},
+	"bundle generate genie-space": {"--bind": databricksAccess("workloads", dbWrite), "-b": databricksAccess("workloads", dbWrite)},
+}
+
+// flagSet reports whether a flag is given with a value other than false or
+// none.
+func flagSet(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == flag {
+			return true
+		}
+		if value, ok := strings.CutPrefix(arg, flag+"="); ok {
+			switch strings.ToLower(value) {
+			case "false", "f", "0", "none", "":
+			default:
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // databricksValueFlags are the global flags that take a value. Cobra treats
 // every other flag it does not know, while it looks for the command, as
@@ -245,11 +298,14 @@ func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV
 		return projection(productDatabricks, facts, nil, false)
 	}
 	rest := withoutIndexes(args, pathIndexes[:length])
+	command := strings.Join(path[:length], " ")
 	if op.sql {
 		op = op.raiseSQL(databricksSQLArgs(rest))
 	}
-	if op.overwriteDeletes && slices.ContainsFunc(rest, func(arg string) bool { return strings.HasPrefix(arg, "--overwrite") }) {
-		op.del = true
+	for flag, by := range databricksFlagRaises[command] {
+		if flagSet(rest, flag) {
+			op = op.raise(by)
+		}
 	}
 	facts := append(op.facts(), productDatabricks+"/command="+strings.Join(path[:length], "/"))
 	if !complete {
@@ -291,7 +347,7 @@ func databricksSQLArgs(args []string) []string {
 		arg := args[i]
 		switch {
 		case arg == "--":
-			return append(texts, args[i+1:]...)
+			return withCleanedSQL(append(texts, args[i+1:]...))
 		case databricksSQLValueFlags[arg]:
 			i++
 		case strings.HasPrefix(arg, "-") && len(arg) > 1:
@@ -299,7 +355,28 @@ func databricksSQLArgs(args []string) []string {
 			texts = append(texts, arg)
 		}
 	}
-	return texts
+	return withCleanedSQL(texts)
+}
+
+// withCleanedSQL adds each text as the CLI's cleanSQL sends it: trimmed, one
+// pair of enclosing quotes removed, and lines starting with -- dropped. Both
+// readings are checked, so quoting cannot hide a statement.
+func withCleanedSQL(texts []string) []string {
+	out := slices.Clone(texts)
+	for _, text := range texts {
+		text = strings.TrimSpace(text)
+		if len(text) >= 2 && (text[0] == '"' && text[len(text)-1] == '"' || text[0] == '\'' && text[len(text)-1] == '\'') {
+			text = text[1 : len(text)-1]
+		}
+		var lines []string
+		for line := range strings.SplitSeq(text, "\n") {
+			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "--") {
+				lines = append(lines, line)
+			}
+		}
+		out = append(out, strings.Join(lines, "\n"))
+	}
+	return out
 }
 
 // classifyDatabricksAPI classifies `databricks api <method> <path>`. The path
@@ -308,7 +385,6 @@ func classifyDatabricksAPI(method string, args []string, complete bool) cedareva
 	method = strings.ToUpper(method)
 	var target string
 	var bodies []string
-	bodyFile := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		value, isJSON := "", false
@@ -326,7 +402,6 @@ func classifyDatabricksAPI(method string, args []string, complete bool) cedareva
 		}
 		if isJSON {
 			bodies = append(bodies, value)
-			bodyFile = bodyFile || strings.HasPrefix(value, "@")
 		}
 	}
 	parsed, err := url.Parse(target)
@@ -335,7 +410,7 @@ func classifyDatabricksAPI(method string, args []string, complete bool) cedareva
 		return projection(productDatabricks, facts, nil, false)
 	}
 	facts := []string{"databricks/command=api/" + strings.ToLower(method), "http/method=" + method, "http/path=" + parsed.EscapedPath()}
-	routeFacts, known := databricksRouteFacts(method, parsed.Path, bodies, bodyFile)
+	routeFacts, known := databricksRouteFacts(method, parsed.Path, bodies)
 	complete = complete && known
 	facts = append(facts, routeFacts...)
 	if !complete {
@@ -346,9 +421,9 @@ func classifyDatabricksAPI(method string, args []string, complete bool) cedareva
 
 // classifyDatabricksCurl classifies a literal curl request to a Databricks
 // workspace or account host.
-func classifyDatabricksCurl(host string, parsed *url.URL, method string, bodies []string, complete, bodyFile bool) cedareval.ShellProjectionV2 {
+func classifyDatabricksCurl(host string, parsed *url.URL, method string, bodies []string, complete bool) cedareval.ShellProjectionV2 {
 	facts := []string{"curl/host=" + host, "http/method=" + method, "http/path=" + parsed.EscapedPath()}
-	routeFacts, known := databricksRouteFacts(method, parsed.Path, bodies, bodyFile)
+	routeFacts, known := databricksRouteFacts(method, parsed.Path, bodies)
 	complete = complete && known
 	facts = append(facts, routeFacts...)
 	if !complete {
@@ -361,8 +436,9 @@ func classifyDatabricksCurl(host string, parsed *url.URL, method string, bodies 
 // server resolve dot segments, so the path is cleaned first. MCP endpoints
 // carry their operation in a JSON-RPC body the projection does not read, so
 // they are unrecognized. A POST to the SQL statements route raises its tier
-// by the statement in its JSON body; a body from a file keeps the base tier.
-func databricksRouteFacts(method, requestPath string, bodies []string, bodyFile bool) ([]string, bool) {
+// by the statements in its literal body pieces; a piece read from a file
+// adds nothing, so SQL only in a file keeps the base tier.
+func databricksRouteFacts(method, requestPath string, bodies []string) ([]string, bool) {
 	if hasDotSegment(requestPath) {
 		requestPath = path.Clean(requestPath)
 	}
@@ -374,37 +450,73 @@ func databricksRouteFacts(method, requestPath string, bodies []string, bodyFile 
 		return []string{FactDatabricksRouteUnrecognized}, false
 	}
 	op := databricksAccess(route.Product, route.Access)
-	if route.Method == "POST" && route.Path == databricksSQLRoute && !bodyFile {
-		op = op.raiseSQL(databricksStatements(bodies))
+	if route.Method == "POST" && route.Path == databricksSQLRoute {
+		statements, ok := databricksStatements(bodies)
+		if !ok {
+			// Too many pieces to join every way: assume the worst.
+			op.del, op.admin = true, true
+		}
+		op = op.raiseSQL(statements)
 	}
 	return op.facts(), true
 }
 
+// databricksMaxBodyPieces bounds the joins databricksStatements tries.
+const databricksMaxBodyPieces = 8
+
 // databricksStatements returns every top-level "statement" string in the
-// request bodies, matched case-insensitively and duplicates included, so a
+// request body, matched case-insensitively and duplicates included, so a
 // server that reads a different copy than Go would still has its copy
-// checked. curl joins several bodies with &, so the join is read too.
-func databricksStatements(bodies []string) []string {
-	var statements []string
-	candidates := append(append([]string{}, bodies...), strings.Join(bodies, "&"))
-	for _, body := range candidates {
-		decoder := json.NewDecoder(strings.NewReader(body))
-		if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-			continue
+// checked. The body is assembled from its literal pieces: curl joins -d
+// pieces with & and --json pieces with nothing, and the CLI keeps the last
+// --json, so each piece alone and every join of the pieces is read. A piece
+// read from a file (@name) is unknown and read as empty. ok is false when
+// there are too many pieces to try every join.
+func databricksStatements(bodies []string) (statements []string, ok bool) {
+	var pieces []string
+	for _, body := range bodies {
+		if !strings.HasPrefix(body, "@") {
+			pieces = append(pieces, body)
 		}
-		for decoder.More() {
-			key, err := decoder.Token()
-			if err != nil {
-				break
+	}
+	if len(pieces) > databricksMaxBodyPieces {
+		return nil, false
+	}
+	candidates := slices.Clone(pieces)
+	for mask := 0; len(pieces) > 1 && mask < 1<<(len(pieces)-1); mask++ {
+		var joined strings.Builder
+		for i, piece := range pieces {
+			if i > 0 && mask&(1<<(i-1)) != 0 {
+				joined.WriteByte('&')
 			}
-			var value json.RawMessage
-			if decoder.Decode(&value) != nil {
-				break
-			}
-			var statement string
-			if name, ok := key.(string); ok && strings.EqualFold(name, "statement") && json.Unmarshal(value, &statement) == nil {
-				statements = append(statements, statement)
-			}
+			joined.WriteString(piece)
+		}
+		candidates = append(candidates, joined.String())
+	}
+	for _, body := range candidates {
+		statements = append(statements, jsonStatements(body)...)
+	}
+	return statements, true
+}
+
+func jsonStatements(body string) []string {
+	var statements []string
+	decoder := json.NewDecoder(strings.NewReader(body))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return nil
+	}
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			break
+		}
+		var statement string
+		if name, ok := key.(string); ok && strings.EqualFold(name, "statement") && json.Unmarshal(value, &statement) == nil {
+			statements = append(statements, statement)
 		}
 	}
 	return statements

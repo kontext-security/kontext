@@ -1117,7 +1117,7 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 	case isHubSpotHost(host):
 		return classifyHubSpotCurl(host, parsed, method, complete, bodyFile)
 	case toolcatalog.IsDatabricksHost(host):
-		return classifyDatabricksCurl(host, parsed, method, bodies, complete, bodyFile)
+		return classifyDatabricksCurl(host, parsed, method, bodies, complete)
 	case isJiraServerPath(parsed.Path):
 		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)
 	}
