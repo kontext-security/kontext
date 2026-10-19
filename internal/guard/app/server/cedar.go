@@ -334,15 +334,16 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 	if risk.IsShellTool(event.ToolName) || coworkShell {
 		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput))
 	}
-	serverURL, serverName := mcpServers.Server(event.Agent, event.SessionID, event.CWD, event.ToolName)
+	serverURL, serverName, cached := mcpServers.Server(event.Agent, event.SessionID, event.CWD, event.ToolName)
 	toolID, resolved := toolcatalog.Resolve(event.ToolName, serverURL, serverName, event.ToolInput)
 	// A claude.ai connector's URL in the Claude Code CLI comes from Claude
 	// Desktop's cached connector list, which can predate a change to the
-	// connector. That URL may raise what the name alone resolves to, never
-	// lower it.
-	if serverURL != "" && strings.HasPrefix(event.ToolName, "mcp__claude_ai_") {
-		if byName, named := toolcatalog.Resolve(event.ToolName, "", "", event.ToolInput); named && (!resolved || accessRank(byName, event) > accessRank(toolID, event)) {
-			toolID, resolved = byName, true
+	// connector's endpoint. Within the provider the URL names, the name may
+	// raise the tier the URL gives; it never moves the call to another
+	// provider or off that provider's unrecognized id.
+	if cached && resolved && !strings.HasSuffix(toolID, "/"+toolcatalog.UnrecognizedToolName) {
+		if byName, named := toolcatalog.Resolve(event.ToolName, "", "", event.ToolInput); named && sameCatalog(byName, toolID) && accessRank(byName, event) > accessRank(toolID, event) {
+			toolID = byName
 		}
 	}
 	if resolved {
@@ -355,6 +356,12 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 		return name, nil
 	}
 	return cedareval.ToolUnknownV2, nil
+}
+
+func sameCatalog(a, b string) bool {
+	prefixA, _, _ := strings.Cut(a, "/")
+	prefixB, _, _ := strings.Cut(b, "/")
+	return prefixA == prefixB
 }
 
 // accessRank orders a resolved tool id by its catalog tier; an id without

@@ -83,11 +83,13 @@ type cachedFile struct {
 // Server returns the configured URL of the MCP server behind toolName
 // (mcp__<server>__<tool>) for the agent that reported it, or "". name is
 // the server's display name when the tool name does not carry it (a Claude
-// Desktop connector), else "". A lookup that does not finish within
-// lookupTimeout returns nothing.
-func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name string) {
+// Desktop connector), else "". cached reports a URL taken from Claude
+// Desktop's cached claude.ai connector list rather than a config or the
+// session's own record, so it may predate a change to the connector. A
+// lookup that does not finish within lookupTimeout returns nothing.
+func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name string, cached bool) {
 	if !strings.HasPrefix(toolName, "mcp__") {
-		return "", ""
+		return "", "", false
 	}
 	r.once.Do(func() { r.lookups = make(chan struct{}, maxLookups) })
 	timer := time.NewTimer(lookupTimeout)
@@ -95,33 +97,37 @@ func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name str
 	select {
 	case r.lookups <- struct{}{}:
 	case <-timer.C:
-		return "", ""
+		return "", "", false
 	}
-	result := make(chan [2]string, 1)
+	type found struct {
+		url, name string
+		cached    bool
+	}
+	result := make(chan found, 1)
 	go func() {
 		defer func() { <-r.lookups }()
-		url, name := r.lookup(agent, sessionID, cwd, toolName)
-		result <- [2]string{url, name}
+		url, name, cached := r.lookup(agent, sessionID, cwd, toolName)
+		result <- found{url, name, cached}
 	}()
 	select {
-	case found := <-result:
-		return found[0], found[1]
+	case f := <-result:
+		return f.url, f.name, f.cached
 	case <-timer.C:
-		return "", ""
+		return "", "", false
 	}
 }
 
-func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name string) {
+func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name string, cached bool) {
 	rest, _ := strings.CutPrefix(toolName, "mcp__")
 	server, _, ok := strings.Cut(rest, "__")
 	if !ok || server == "" {
-		return "", ""
+		return "", "", false
 	}
 	home := r.Home
 	if home == "" {
 		var err error
 		if home, err = os.UserHomeDir(); err != nil {
-			return "", ""
+			return "", "", false
 		}
 	}
 	switch agent {
@@ -130,7 +136,7 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 		// UUID no session record lists may still be a configured server.
 		if uuidPattern.MatchString(server) {
 			if url, name, found := r.desktopConnector(home, sessionID, server); found {
-				return url, name
+				return url, name, false
 			}
 		}
 	}
@@ -142,10 +148,11 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 		url, found := r.claude(home, cwd, server)
 		if !found && strings.HasPrefix(server, "claude_ai_") {
 			url, _ = r.claudeAIConnector(home, server)
+			return url, "", url != ""
 		}
-		return url, ""
+		return url, "", false
 	}
-	return r.configURL(home, agent, cwd, server), ""
+	return r.configURL(home, agent, cwd, server), "", false
 }
 
 func (r *Resolver) configURL(home, agent, cwd, server string) string {
