@@ -64,12 +64,20 @@ func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recogniz
 var databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "DESC", "EXPLAIN",
 	"INSERT", "UPDATE", "MERGE", "CREATE", "COPY", "SET", "USE")
 
-// SQL scripting: a statement headed by one of these holds statements of its
-// own. They start after a BEGIN [[NOT] ATOMIC], LOOP, REPEAT or ELSE that heads
-// a statement, after a THEN or DO outside any CASE expression, and after the
-// conditions of DECLARE … HANDLER FOR.
-var databricksScriptForms = setOf("BEGIN", "IF", "ELSEIF", "ELSE", "CASE", "WHEN", "FOR", "WHILE", "LOOP",
-	"REPEAT", "DECLARE")
+// SQL scripting: a statement headed by a script form holds statements of its
+// own. One starts after a block word (or a label after one), outside any CASE
+// expression, and only with a statement keyword, so a variable named do or
+// begin opens nothing. The conditions of DECLARE … HANDLER FOR end one too.
+var (
+	databricksScriptForms = setOf("BEGIN", "IF", "ELSEIF", "ELSE", "CASE", "WHEN", "FOR", "WHILE", "LOOP",
+		"REPEAT", "DECLARE")
+	databricksBlockWords = setOf("BEGIN", "ATOMIC", "THEN", "ELSE", "DO", "LOOP", "REPEAT")
+	databricksStatements = setOf("SELECT", "WITH", "VALUES", "INSERT", "UPDATE", "DELETE", "MERGE", "COPY",
+		"CREATE", "ALTER", "DROP", "TRUNCATE", "VACUUM", "RESTORE", "REFRESH", "MSCK", "REPAIR", "OPTIMIZE",
+		"GRANT", "REVOKE", "DENY", "SET", "UNSET", "USE", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "COMMENT",
+		"CALL", "EXECUTE", "DECLARE", "BEGIN", "IF", "CASE", "FOR", "WHILE", "LOOP", "REPEAT", "ITERATE",
+		"LEAVE", "RETURN", "SIGNAL", "RESIGNAL")
+)
 
 // A qualified name before ( is a call unless a table keyword precedes it: a
 // column list. A qualified column before a subquery reads as a call too.
@@ -114,29 +122,24 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 		first += 2
 	}
 	// head is the form of the statement being read: the first word, or in a
-	// scripting block the word at nextHead, where a nested statement starts.
+	// scripting block the statement keyword that opens a nested statement.
 	head, opaque, refresh, repair := "", false, false, false
-	depth, caseDepth, nextHead := 0, 0, -1
+	depth, caseDepth, handlerStart := 0, 0, -1
 	columns, grouped := false, false // inside a CREATE's column definitions
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
-		if i == nextHead && tok.kind == sqlWord && next.is(":") {
-			nextHead = i + 2 // past a label
+		block := prev // the word before this one, past any label
+		if prev.is(":") && (at(i-2).kind == sqlWord || at(i-2).kind == sqlName) {
+			block = at(i - 3)
 		}
-		atHead := tok.kind == sqlWord && (i == first || i == nextHead)
+		atHead := tok.kind == sqlWord && (i == first || i == handlerStart ||
+			databricksScriptForms[head] && caseDepth == 0 && databricksStatements[tok.text] &&
+				block.kind == sqlWord && databricksBlockWords[block.text])
 		if atHead {
 			head, depth, columns, grouped = tok.text, 0, false, false
 		}
-		if tok.kind == sqlWord && databricksScriptForms[head] && caseDepth == 0 {
-			switch {
-			case atHead && tok.text == "BEGIN" && next.is("NOT") && at(i+2).is("ATOMIC"):
-				nextHead = i + 3
-			case atHead && tok.text == "BEGIN" && next.is("ATOMIC"):
-				nextHead = i + 2
-			case atHead && (tok.text == "BEGIN" || tok.text == "LOOP" || tok.text == "REPEAT" || tok.text == "ELSE"),
-				!atHead && (tok.text == "THEN" || tok.text == "ELSE" || tok.text == "DO"):
-				nextHead = i + 1
-			}
+		if depth == 0 && (tok.is("AS") || tok.is("SELECT") || tok.is("WITH") || tok.is("VALUES")) {
+			grouped = true // past a CREATE's header: no column definitions follow
 		}
 		switch {
 		case tok.is("("):
@@ -235,7 +238,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 					}
 					j++
 				}
-				nextHead = j
+				handlerStart = j
 			}
 		case "EXECUTE", "CALL":
 			opaque = true
