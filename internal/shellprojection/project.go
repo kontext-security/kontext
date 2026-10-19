@@ -1184,6 +1184,7 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			// projection can read; any other form (*, a relative or absolute
 			// URL) leaves the request unreadable.
 			targetReadable := op.requestTarget == "" || strings.HasPrefix(op.requestTarget, "/")
+			complete = complete && targetReadable
 			if op.requestTarget != "" && targetReadable {
 				normalized = withRequestTarget(normalized, op.requestTarget)
 			}
