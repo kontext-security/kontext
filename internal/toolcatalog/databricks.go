@@ -120,13 +120,19 @@ func (index *databricksIndex) route(method, path string) (DatabricksOperation, b
 		}
 		best = append(best, route)
 	}
+	// The strictest tier wins; equally strict candidates must agree on
+	// product. Order of candidates does not matter.
+	strictest := -1
+	for _, route := range best {
+		strictest = max(strictest, databricksAccessRank[route.operation.Access])
+	}
 	var chosen *DatabricksOperation
 	for _, route := range best {
 		switch {
-		case chosen == nil || databricksAccessRank[route.operation.Access] > databricksAccessRank[chosen.Access]:
+		case databricksAccessRank[route.operation.Access] != strictest:
+		case chosen == nil:
 			chosen = route.operation
-		case route.operation.Access == chosen.Access && route.operation.Product != chosen.Product:
-			// Equally strict candidates in different products: ambiguous.
+		case route.operation.Product != chosen.Product:
 			return DatabricksOperation{}, false
 		}
 	}

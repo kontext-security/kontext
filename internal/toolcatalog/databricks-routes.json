@@ -5890,7 +5890,10 @@
         "instance-pools create"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "aws_attributes.instance_profile_arn"
+      ]
     },
     {
       "operation": "compute.InstancePools.Delete",
@@ -5945,7 +5948,10 @@
         "instance-profiles add"
       ],
       "product": "admin",
-      "access": "admin"
+      "access": "admin",
+      "adminFields": [
+        "instance_profile_arn"
+      ]
     },
     {
       "operation": "compute.InstanceProfiles.Edit",
@@ -5956,7 +5962,10 @@
         "instance-profiles edit"
       ],
       "product": "admin",
-      "access": "admin"
+      "access": "admin",
+      "adminFields": [
+        "instance_profile_arn"
+      ]
     },
     {
       "operation": "compute.InstanceProfiles.List",
@@ -5978,7 +5987,10 @@
         "instance-profiles remove"
       ],
       "product": "admin",
-      "access": "admin"
+      "access": "admin",
+      "adminFields": [
+        "instance_profile_arn"
+      ]
     },
     {
       "operation": "settings.IpAccessLists.List",
@@ -8595,6 +8607,7 @@
       "product": "workloads",
       "access": "admin",
       "adminFields": [
+        "clusters.aws_attributes.instance_profile_arn",
         "clusters.ssh_public_keys",
         "run_as"
       ]
@@ -8632,6 +8645,7 @@
       "product": "workloads",
       "access": "admin",
       "adminFields": [
+        "clusters.aws_attributes.instance_profile_arn",
         "clusters.ssh_public_keys",
         "run_as"
       ]
@@ -8647,6 +8661,7 @@
       "product": "execution",
       "access": "admin",
       "adminFields": [
+        "clusters.aws_attributes.instance_profile_arn",
         "clusters.ssh_public_keys"
       ]
     },
@@ -9190,7 +9205,7 @@
         "postgres update-branch"
       ],
       "product": "data",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "postgres.Postgres.UpdateDataApi",
@@ -10517,7 +10532,10 @@
       "access": "admin",
       "adminFields": [
         "ai_gateway",
-        "config.auto_capture_config"
+        "config.auto_capture_config",
+        "config.served_entities.external_model.amazon_bedrock_config.instance_profile_arn",
+        "config.served_entities.instance_profile_arn",
+        "config.served_models.instance_profile_arn"
       ]
     },
     {
@@ -10589,7 +10607,10 @@
       "product": "ai",
       "access": "admin",
       "adminFields": [
-        "auto_capture_config"
+        "auto_capture_config",
+        "served_entities.external_model.amazon_bedrock_config.instance_profile_arn",
+        "served_entities.instance_profile_arn",
+        "served_models.instance_profile_arn"
       ]
     },
     {
@@ -10634,7 +10655,7 @@
         "serving-endpoints put"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "serving.ServingEndpoints.BuildLogs",
@@ -11220,7 +11241,10 @@
         "warehouses set-workspace-warehouse-config"
       ],
       "product": "compute",
-      "access": "admin"
+      "access": "admin",
+      "adminFields": [
+        "instance_profile_arn"
+      ]
     },
     {
       "operation": "sql.QueryHistory.List",
@@ -11391,7 +11415,10 @@
         "warehouses create"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "instance_profile_arn"
+      ]
     },
     {
       "operation": "sql.Warehouses.Delete",
@@ -11424,7 +11451,10 @@
         "warehouses edit"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "instance_profile_arn"
+      ]
     },
     {
       "operation": "sql.Warehouses.Start",
@@ -12158,6 +12188,7 @@
       "product": "compute",
       "access": "admin",
       "adminFields": [
+        "aws_attributes.instance_profile_arn",
         "single_user_name",
         "ssh_public_keys"
       ]
@@ -12184,6 +12215,7 @@
       "product": "compute",
       "access": "admin",
       "adminFields": [
+        "aws_attributes.instance_profile_arn",
         "single_user_name",
         "ssh_public_keys"
       ]
@@ -12331,6 +12363,7 @@
       "product": "compute",
       "access": "admin",
       "adminFields": [
+        "cluster.aws_attributes.instance_profile_arn",
         "cluster.single_user_name",
         "cluster.ssh_public_keys"
       ]
@@ -14795,9 +14828,11 @@
       "access": "admin",
       "adminFields": [
         "access_control_list",
+        "job_clusters.new_cluster.aws_attributes.instance_profile_arn",
         "job_clusters.new_cluster.single_user_name",
         "job_clusters.new_cluster.ssh_public_keys",
         "run_as",
+        "tasks.new_cluster.aws_attributes.instance_profile_arn",
         "tasks.new_cluster.single_user_name",
         "tasks.new_cluster.ssh_public_keys"
       ]
@@ -14846,9 +14881,11 @@
       "product": "workloads",
       "access": "admin",
       "adminFields": [
+        "new_settings.job_clusters.new_cluster.aws_attributes.instance_profile_arn",
         "new_settings.job_clusters.new_cluster.single_user_name",
         "new_settings.job_clusters.new_cluster.ssh_public_keys",
         "new_settings.run_as",
+        "new_settings.tasks.new_cluster.aws_attributes.instance_profile_arn",
         "new_settings.tasks.new_cluster.single_user_name",
         "new_settings.tasks.new_cluster.ssh_public_keys"
       ]
@@ -14965,8 +15002,10 @@
       "adminFields": [
         "access_control_list",
         "run_as",
+        "tasks.for_each_task.task.new_cluster.aws_attributes.instance_profile_arn",
         "tasks.for_each_task.task.new_cluster.single_user_name",
         "tasks.for_each_task.task.new_cluster.ssh_public_keys",
+        "tasks.new_cluster.aws_attributes.instance_profile_arn",
         "tasks.new_cluster.single_user_name",
         "tasks.new_cluster.ssh_public_keys"
       ]
@@ -14982,9 +15021,11 @@
       "product": "workloads",
       "access": "admin",
       "adminFields": [
+        "new_settings.job_clusters.new_cluster.aws_attributes.instance_profile_arn",
         "new_settings.job_clusters.new_cluster.single_user_name",
         "new_settings.job_clusters.new_cluster.ssh_public_keys",
         "new_settings.run_as",
+        "new_settings.tasks.new_cluster.aws_attributes.instance_profile_arn",
         "new_settings.tasks.new_cluster.single_user_name",
         "new_settings.tasks.new_cluster.ssh_public_keys"
       ]

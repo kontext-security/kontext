@@ -44,7 +44,7 @@ func TestDatabricksRoute(t *testing.T) {
 		{"literal fallback beats a same-version catch-all", "GET", "/api/2.1/apps", "apps.Apps.List", "workspace", "workloads", "read", nil},
 		{"credential validation is not a read", "POST", "/api/2.1/unity-catalog/validate-storage-credentials", "catalog.StorageCredentials.Validate", "workspace", "data", "write", nil},
 		{"removing rows is a delete", "POST", "/api/2.0/ai-search/main.default.idx:removeData", "aisearch.AiSearch.RemoveData", "workspace", "ai", "delete", nil},
-		{"workspace warehouse security config", "PUT", "/api/2.0/sql/config/warehouses", "sql.Warehouses.SetWorkspaceWarehouseConfig", "workspace", "compute", "admin", nil},
+		{"workspace warehouse security config", "PUT", "/api/2.0/sql/config/warehouses", "sql.Warehouses.SetWorkspaceWarehouseConfig", "workspace", "compute", "admin", []string{"instance_profile_arn"}},
 		{"secret ACL removal", "POST", "/api/2.0/secrets/acls/delete", "workspace.Secrets.DeleteAcl", "workspace", "secrets", "admin", nil},
 		{"secret scope with a manage principal", "POST", "/api/2.0/secrets/scopes/create", "workspace.Secrets.CreateScope", "workspace", "secrets", "admin", []string{"initial_manage_principal"}},
 		{"account provisioning", "POST", "/api/2.0/accounts/0d1a/workspaces", "provisioning.Workspaces.Create", "account", "admin", "admin", nil},
@@ -155,6 +155,9 @@ func TestDatabricksCommand(t *testing.T) {
 		{"ai-gateway", "update-skill", "catalog.AiGateway.UpdateSkill", "workspace", "ai", "write"},
 		{"ai-gateway", "update-mcp-service", "catalog.AiGateway.UpdateMcpService", "workspace", "ai", "admin"},
 		{"ai-gateway", "update-model-service", "catalog.AiGateway.UpdateModelService", "workspace", "ai", "admin"},
+		{"serving-endpoints", "put", "serving.ServingEndpoints.Put", "workspace", "ai", "admin"},
+		{"postgres", "update-branch", "postgres.Postgres.UpdateBranch", "workspace", "data", "admin"},
+		{"instance-pools", "create", "compute.InstancePools.Create", "workspace", "compute", "admin"},
 		{"repos", "update", "workspace.Repos.Update", "workspace", "workspace", "delete"},
 		{"connections", "create", "catalog.Connections.Create", "workspace", "secrets", "write"},
 		{"providers", "create", "sharing.Providers.Create", "workspace", "secrets", "write"},
@@ -228,6 +231,25 @@ func TestDatabricksRouteOverlaps(t *testing.T) {
 		got, ok := index.route(test.method, test.path)
 		if got.Operation != test.want || ok != (test.want != "") {
 			t.Errorf("route(%s %s) = %q, %v; want %q", test.method, test.path, got.Operation, ok, test.want)
+		}
+	}
+}
+
+// The strictest candidate wins whatever order the candidates come in.
+func TestDatabricksRouteOverlapOrder(t *testing.T) {
+	candidates := []DatabricksOperation{
+		{Operation: "ai.Write", Method: "POST", Path: "/api/2.0/x/{id}", Product: "ai", Access: AccessWrite},
+		{Operation: "data.Write", Method: "POST", Path: "/api/2.0/x/{id}", Product: "data", Access: AccessWrite},
+		{Operation: "ai.Admin", Method: "POST", Path: "/api/2.0/x/{id}", Product: "ai", Access: AccessAdmin},
+	}
+	for _, order := range [][]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+		var routes []DatabricksOperation
+		for _, i := range order {
+			routes = append(routes, candidates[i])
+		}
+		got, ok := newDatabricksIndex(databricksTable{Routes: routes}).route("POST", "/api/2.0/x/1")
+		if !ok || got.Operation != "ai.Admin" {
+			t.Errorf("order %v: got %q, %v; want ai.Admin", order, got.Operation, ok)
 		}
 	}
 }

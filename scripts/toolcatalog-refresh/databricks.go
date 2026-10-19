@@ -89,7 +89,7 @@ type sdkOperation struct {
 }
 
 var (
-	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|access_token|single_user_name|ssh_public_keys|enable_pg_native_login|jwt_role_claim_key|ai_gateway|auto_capture_config)$`)
+	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials|access_token|single_user_name|ssh_public_keys|enable_pg_native_login|jwt_role_claim_key|ai_gateway|auto_capture_config|instance_profile_arn)$`)
 	// databricksOutputField matches fields the server computes and ignores
 	// on write: effective_* values and an AIP resource's status block.
 	databricksOutputField = regexp.MustCompile(`(^|\.)effective_[a-z_]+$|(^|\.)status\.`)
@@ -222,32 +222,35 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 	if err != nil {
 		return nil, nil, err
 	}
-	// Reviewed entries that no longer match are only reported: they cannot
-	// loosen anything. A service nobody has placed fails generation.
-	var stale, unmapped []string
+	// A restrictive entry (an admin, delete or consuming-GET tier, or an
+	// operation's product) that matches nothing fails generation: upstream
+	// may have renamed the operation, which would lose the restriction.
+	// Stale permissive or cosmetic entries (POST reads, aliases, services)
+	// are only reported. A service nobody has placed fails too.
+	var stale, missing, unmapped []string
 	for key := range databricksOperationProducts {
 		if index.operations[key] == nil {
-			stale = append(stale, "product override "+key)
+			missing = append(missing, "databricksOperationProducts "+key)
+		}
+	}
+	for key := range databricksAdminOperations {
+		if index.operations[key] == nil {
+			missing = append(missing, "databricksAdminOperations "+key)
+		}
+	}
+	for key := range databricksDeleteOperations {
+		if index.operations[key] == nil {
+			missing = append(missing, "databricksDeleteOperations "+key)
+		}
+	}
+	for key := range databricksConsumingGets {
+		if op := index.operations[key]; op == nil || op.method != "GET" {
+			missing = append(missing, "databricksConsumingGets "+key)
 		}
 	}
 	for key := range databricksPostReads {
 		if op := index.operations[key]; op == nil || op.method != "POST" {
 			stale = append(stale, "POST read "+key)
-		}
-	}
-	for key := range databricksAdminOperations {
-		if index.operations[key] == nil {
-			stale = append(stale, "admin operation "+key)
-		}
-	}
-	for key := range databricksDeleteOperations {
-		if index.operations[key] == nil {
-			stale = append(stale, "delete operation "+key)
-		}
-	}
-	for key := range databricksConsumingGets {
-		if op := index.operations[key]; op == nil || op.method != "GET" {
-			stale = append(stale, "consuming GET "+key)
 		}
 	}
 	for key, target := range databricksCommandAliases {
@@ -268,6 +271,10 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 		if !services[service] {
 			stale = append(stale, "service "+service)
 		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, nil, fmt.Errorf("databricks route table: these reviewed restrictions match no upstream operation; find where each went and move it:\n  %s", strings.Join(missing, "\n  "))
 	}
 	if len(unmapped) > 0 {
 		sort.Strings(unmapped)
@@ -1448,7 +1455,8 @@ var databricksOperationProducts = map[string]string{
 
 // databricksAdminOperations change who can do what without a name, product
 // or body field that says so: database roles (superuser, createrole,
-// bypassrls) and database owners (spec.role), secret ACLs, Unity Catalog
+// bypassrls), database owners (spec.role) and branch protection, secret
+// ACLs, Unity Catalog
 // storage and service credentials (they map cloud IAM roles), AI Gateway
 // MCP, model and model provider services (tool selectors, rate limits,
 // payload logging; an update can retarget the URL and keep the key), the
@@ -1457,7 +1465,7 @@ var databricksOperationProducts = map[string]string{
 // recipient token is another party's), clean-room approvals that let
 // collaborators' notebooks run unreviewed, cluster policies (the access
 // mode rules live in a JSON string) and cancelling their pending
-// enforcement, governed tag assignments and data classification (they
+// enforcement, endpoint rate limits, governed tag assignments and data classification (they
 // drive ABAC row filters and column masks), external location creation
 // (fallback mode bypasses UC checks), marketplace exchanges, listings, filters and fulfilled
 // personalization requests (who may see shared data), the AI Gateway and
@@ -1497,6 +1505,7 @@ var databricksAdminOperations = map[string]bool{
 	"marketplace.ProviderExchangeFilters.Delete":                          true,
 	"marketplace.ProviderExchangeFilters.Update":                          true,
 	"serving.ServingEndpoints.HttpRequest":                                true,
+	"serving.ServingEndpoints.Put":                                        true,
 	"serving.ServingEndpoints.PutAiGateway":                               true,
 	"serving.ServingEndpoints.PatchTelemetryConfig":                       true,
 	"sharing.Recipients.RotateToken":                                      true,
@@ -1513,6 +1522,7 @@ var databricksAdminOperations = map[string]bool{
 	"postgres.Postgres.CreateDatabase":                                    true,
 	"postgres.Postgres.CreateRole":                                        true,
 	"postgres.Postgres.DeleteRole":                                        true,
+	"postgres.Postgres.UpdateBranch":                                      true,
 	"postgres.Postgres.UpdateDatabase":                                    true,
 	"postgres.Postgres.UpdateRole":                                        true,
 	"settings.TokenManagement.CreateOboToken":                             true,

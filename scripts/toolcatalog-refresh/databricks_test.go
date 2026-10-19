@@ -500,6 +500,7 @@ func newDelete() *cobra.Command {
 }
 
 func TestBuildDatabricksTable(t *testing.T) {
+	useFixtureRules(t)
 	cli, sdk := databricksFixtures()
 	table, report, err := buildDatabricksTable(cli, sdk, "v1.21.0", "v0.188.0")
 	if err != nil {
@@ -560,6 +561,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 
 // An owner field on an allowlisted POST read wins over the allowlist.
 func TestBuildDatabricksTableAdminBeatsPostRead(t *testing.T) {
+	useFixtureRules(t)
 	cli, sdk := databricksFixtures()
 	model := string(sdk["service/compute/model.go"])
 	sdk["service/compute/model.go"] = []byte(strings.Replace(model, "type GetEvents struct {\n", "type GetEvents struct {\n\tOwner string `json:\"owner\"`\n", 1))
@@ -575,6 +577,7 @@ func TestBuildDatabricksTableAdminBeatsPostRead(t *testing.T) {
 }
 
 func TestBuildDatabricksTableIsDeterministic(t *testing.T) {
+	useFixtureRules(t)
 	cli, sdk := databricksFixtures()
 	var previous []byte
 	for range 5 {
@@ -594,6 +597,7 @@ func TestBuildDatabricksTableIsDeterministic(t *testing.T) {
 }
 
 func TestBuildDatabricksTableFailsOnUnmappedService(t *testing.T) {
+	useFixtureRules(t)
 	cli, sdk := databricksFixtures()
 	sdk["service/brandnew/impl.go"] = []byte(`package brandnew
 
@@ -612,6 +616,7 @@ func (a *thingsImpl) Create(ctx context.Context, request CreateThing) error {
 }
 
 func TestBuildDatabricksTableRejectsUnparsableRoutes(t *testing.T) {
+	useFixtureRules(t)
 	for name, body := range map[string]string{
 		"non-%v verb":      `path := fmt.Sprintf("/api/2.0/things/%s", request.Id)`,
 		"unknown argument": `path := fmt.Sprintf("/api/2.0/things/%v", someID())`,
@@ -640,6 +645,7 @@ func (a *clustersImpl) Get(ctx context.Context, request GetCluster) error {
 // A body type the SDK source does not declare would hide its fields (an
 // owner, an ACL), so it fails generation instead of passing as a write.
 func TestBuildDatabricksTableRejectsUnresolvedBodies(t *testing.T) {
+	useFixtureRules(t)
 	for name, model := range map[string]string{
 		"missing type":   "type DeleteCluster struct{}\ntype GetEvents struct{}\ntype ListClustersRequest struct{}\ntype GetClusterPermissionsRequest struct{}\ntype Command struct{}\ntype EditRequest = EditCluster\ntype EditCluster struct{}\n",
 		"missing nested": strings.Replace(string(databricksFixtureModel()), "Spec      *ClusterSpec", "Spec      *Unknown", 1),
@@ -657,6 +663,30 @@ func TestBuildDatabricksTableRejectsUnresolvedBodies(t *testing.T) {
 func databricksFixtureModel() []byte {
 	_, sdk := databricksFixtures()
 	return sdk["service/compute/model.go"]
+}
+
+// useFixtureRules swaps the reviewed restrictions for the few the fixtures
+// exercise, so the check for restrictions matching nothing passes.
+func useFixtureRules(t *testing.T) {
+	products, admin, deletes, gets := databricksOperationProducts, databricksAdminOperations, databricksDeleteOperations, databricksConsumingGets
+	t.Cleanup(func() {
+		databricksOperationProducts, databricksAdminOperations, databricksDeleteOperations, databricksConsumingGets = products, admin, deletes, gets
+	})
+	databricksOperationProducts = map[string]string{"apps.Apps.Deploy": "execution"}
+	databricksAdminOperations = map[string]bool{}
+	databricksDeleteOperations = map[string]bool{}
+	databricksConsumingGets = map[string]bool{}
+}
+
+// A restriction whose operation upstream renamed fails generation instead of
+// silently falling back to a looser tier.
+func TestBuildDatabricksTableFailsOnMissingRestriction(t *testing.T) {
+	useFixtureRules(t)
+	databricksAdminOperations = map[string]bool{"compute.Clusters.RenamedUpstream": true}
+	cli, sdk := databricksFixtures()
+	if _, _, err := buildDatabricksTable(cli, sdk, "v1.21.0", "v0.188.0"); err == nil || !strings.Contains(err.Error(), "databricksAdminOperations compute.Clusters.RenamedUpstream") {
+		t.Fatalf("err = %v, want the missing restriction named", err)
+	}
 }
 
 func TestGoModRequire(t *testing.T) {
