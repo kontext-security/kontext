@@ -129,7 +129,10 @@ func databricksMaskIsName(prev, beforePrev, next sqlToken) bool {
 	keyword := func(t sqlToken, words ...string) bool {
 		return t.kind == sqlWord && setOf(words...)[t.text]
 	}
-	return prev.is("(") || prev.is(",") || prev.is(".") || keyword(prev, "AS", "TABLE", "VIEW") ||
+	return prev.is("(") || prev.is(",") || prev.is(".") || keyword(prev, "AS") ||
+		keyword(prev, "TABLE", "VIEW") && keyword(beforePrev, "CREATE", "ALTER", "REPLACE", "TEMPORARY", "TEMP",
+			"GLOBAL", "MATERIALIZED", "STREAMING", "EXTERNAL", "LIVE") ||
+		keyword(prev, "EXISTS") && keyword(beforePrev, "NOT") ||
 		keyword(prev, "COLUMN", "COLUMNS", "CONSTRAINT") && keyword(beforePrev, "ADD", "ALTER", "DROP", "RENAME") ||
 		keyword(next, "IS", "AND", "OR", "IN", "BETWEEN", "LIKE", "FROM", "WHERE", "THEN", "ELSE", "END", "AS")
 }
@@ -197,7 +200,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 			case verb == "CREATE" && i == start+2 && prev.is("OR") && (tok.is("REPLACE") || tok.is("REFRESH")):
 				// Replacing a definition drops any mask or filter it leaves out.
 				effect |= sqlBoth
-			case insert && tok.is("OVERWRITE") && prev.is("INSERT"),
+			case insert && tok.is("OVERWRITE") && (prev.is("INSERT") || prev.is("EVOLUTION") && at(i-3).is("WITH") && at(i-4).is("INSERT")),
 				(verb == "LOAD" || verb == "PUT") && tok.is("OVERWRITE"),
 				insert && tok.is("REPLACE") && (next.is("WHERE") || next.is("USING") || next.is("ON")),
 				verb == "MERGE" && tok.is("DELETE") && prev.is("THEN"),
@@ -265,17 +268,25 @@ func databricksStatementStart(stmt []sqlToken) int {
 		i++
 	}
 	for i < len(stmt) {
-		i++ // the CTE name, then any column list or MAX RECURSION LEVEL n up to AS
-		for i < len(stmt) && !at(i).is("AS") {
+		// The CTE name, any column list or MAX RECURSION LEVEL n, an optional
+		// AS, then the body: the group that starts with a query.
+		for i++; i < len(stmt); {
 			if at(i).is("(") {
+				body := at(i + 1)
 				i = skipGroup(i)
+				if body.is("SELECT") || body.is("WITH") || body.is("VALUES") || body.is("FROM") ||
+					body.is("TABLE") || body.is("(") {
+					break
+				}
+			} else if at(i).is("AS") {
+				i++
+				if at(i).is("(") {
+					i = skipGroup(i)
+					break
+				}
 			} else {
 				i++
 			}
-		}
-		i++
-		if at(i).is("(") {
-			i = skipGroup(i)
 		}
 		if !at(i).is(",") {
 			break
