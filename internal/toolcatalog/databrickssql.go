@@ -210,7 +210,8 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 	verb := words[0]
 
 	// Clauses at the statement's top level, and column masks at any depth.
-	depth, query, check := 0, false, -1          // check: the depth of a CHECK (…) expression
+	depth, query := 0, false
+	takesQuery := verb == "CREATE" || typ == "ALTER VIEW" || typ == "ALTER MATERIALIZED VIEW"
 	insert := verb == "INSERT" || verb == "FROM" // FROM s INSERT … is a multi-insert
 	for i := start; i < len(stmt); i++ {
 		tok, prev, next := stmt[i], at(i-1), at(i+1)
@@ -219,20 +220,16 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 			depth++
 		case tok.is(")"):
 			depth--
-			if depth < check {
-				check = -1
-			}
 		}
 		if tok.kind != sqlWord {
 			continue
 		}
 		// The AS that starts a CREATE's or ALTER VIEW's query; column masks
 		// all come before it. Not a name (CREATE TABLE as) or GENERATED … AS.
-		query = query || depth == 0 && tok.is("AS") && !next.is(".") &&
+		// ponytail: a column named mask in a CHECK (…) or a STRUCT<…> reads
+		// as a mask, which only over-flags admin.
+		query = query || takesQuery && depth == 0 && tok.is("AS") && !next.is(".") &&
 			!(prev.kind == sqlWord && setOf("TABLE", "VIEW", "EXISTS", "ALWAYS", "DEFAULT", "AFTER")[prev.text]) && !prev.is(".")
-		if tok.is("CHECK") && next.is("(") {
-			check = depth + 1
-		}
 		if depth == 0 {
 			switch {
 			case verb == "CREATE" && i == start+2 && prev.is("OR") && (tok.is("REPLACE") || tok.is("REFRESH")):
@@ -264,7 +261,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 		// ALTER … ADD [COLUMN] c t MASK f, unless MASK is itself a name.
 		// ponytail: a STRUCT<mask …> field or a CTAS alias without AS reads as
 		// a mask too, which only over-flags admin.
-		if (verb == "CREATE" || verb == "ALTER") && !query && (check < 0 || depth < check) && tok.is("MASK") &&
+		if (verb == "CREATE" || verb == "ALTER") && !query && tok.is("MASK") &&
 			(next.kind == sqlWord || next.kind == sqlName) && !databricksMaskIsName(verb, prev, at(i-2)) {
 			effect |= sqlAdmin
 		}
