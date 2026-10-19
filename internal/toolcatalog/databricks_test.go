@@ -23,6 +23,8 @@ func TestDatabricksRoute(t *testing.T) {
 		{"warehouse permissions", "PUT", "/api/2.0/permissions/warehouses/abc123", "sql.Warehouses.SetPermissions", "workspace", "admin", "admin", []string{"access_control_list"}},
 		{"owner in body", "PATCH", "/api/2.1/unity-catalog/catalogs/main", "catalog.Catalogs.Update", "workspace", "data", "admin", []string{"owner"}},
 		{"secret read", "GET", "/api/2.0/secrets/get?scope=prod&key=token", "workspace.Secrets.GetSecret", "workspace", "secrets", "read", nil},
+		{"publishing with embedded credentials", "POST", "/api/2.0/lakeview/dashboards/01ef/published", "dashboards.Lakeview.Publish", "workspace", "workspace", "admin", []string{"embed_credentials"}},
+		{"apps deploy over REST", "POST", "/api/2.0/apps/my-app/deployments", "apps.Apps.Deploy", "workspace", "execution", "write", nil},
 		{"running a job", "POST", "/api/2.2/jobs/run-now", "jobs.Jobs.RunNow", "workspace", "execution", "write", nil},
 		{"another API version", "POST", "/api/2.1/jobs/run-now", "jobs.Jobs.RunNow", "workspace", "execution", "write", nil},
 		{"trailing slash", "GET", "/api/2.1/unity-catalog/catalogs/", "catalog.Catalogs.List", "workspace", "data", "read", nil},
@@ -94,7 +96,8 @@ func TestDatabricksCommand(t *testing.T) {
 		{"jobs", "run-now", "jobs.Jobs.RunNow", "workspace", "execution", "write"},
 		{"jobs", "create", "jobs.Jobs.Create", "workspace", "workloads", "admin"},
 		{"pipelines", "start-update", "pipelines.Pipelines.StartUpdate", "workspace", "execution", "write"},
-		{"apps", "deploy", "apps.Apps.Deploy", "workspace", "execution", "write"},
+		// Without an app name, apps deploy deploys the bundle.
+		{"apps", "deploy", "cli.apps.deploy", "", "execution", "admin"},
 		{"secrets", "get-secret", "workspace.Secrets.GetSecret", "workspace", "secrets", "read"},
 		{"settings default-namespace", "get", "settings.DefaultNamespace.Get", "workspace", "admin", "read"},
 		{"groups", "delete", "iam.Groups.Delete", "workspace", "admin", "admin"},
@@ -112,6 +115,10 @@ func TestDatabricksCommand(t *testing.T) {
 		// bundle deploy applies permissions blocks.
 		{"bundle", "deploy", "cli.bundle.deploy", "", "execution", "admin"},
 		{"account endpoints", "delete-endpoint", "networking.Endpoints.DeleteEndpoint", "account", "admin", "admin"},
+		{"service-principal-secrets-proxy", "create", "oauth2.ServicePrincipalSecretsProxy.Create", "workspace", "secrets", "admin"},
+		{"token-management", "delete", "settings.TokenManagement.Delete", "workspace", "secrets", "admin"},
+		{"lakeview", "publish", "dashboards.Lakeview.Publish", "workspace", "workspace", "admin"},
+		{"genie", "generate-download-full-query-result", "dashboards.Genie.GenerateDownloadFullQueryResult", "workspace", "sql", "write"},
 		{"bundle", "run", "cli.bundle.run", "", "execution", "write"},
 	} {
 		got, ok := DatabricksCommand(test.group, test.verb)

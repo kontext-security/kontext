@@ -12,6 +12,7 @@ func databricksFixtures() (cli, sdk sourceTree) {
 		"workspace_client.go": []byte(`package databricks
 
 import (
+	"github.com/databricks/databricks-sdk-go/service/apps"
 	"github.com/databricks/databricks-sdk-go/service/compute"
 	"github.com/databricks/databricks-sdk-go/service/files"
 	"github.com/databricks/databricks-sdk-go/service/settings"
@@ -20,6 +21,7 @@ import (
 func NewWorkspaceClient() *WorkspaceClient {
 	commandExecution := compute.NewCommandExecution(databricksClient)
 	return &WorkspaceClient{
+		Apps:             apps.NewApps(databricksClient),
 		Clusters:         compute.NewClusters(databricksClient),
 		CommandExecution: commandExecution,
 		Files:            files.NewFiles(databricksClient),
@@ -188,6 +190,20 @@ func (a *filesImpl) DataPlane(ctx context.Context) error {
 	return a.client.ApiClient().Do(ctx, http.MethodPost, url)
 }
 `),
+		"service/apps/impl.go": []byte(`package apps
+
+type CreateAppDeploymentRequest struct {
+	AppName string ` + "`json:\"-\" url:\"-\"`" + `
+}
+
+type appsImpl struct{ client *client.DatabricksClient }
+
+func (a *appsImpl) Deploy(ctx context.Context, request CreateAppDeploymentRequest) (*AppDeployment, error) {
+	path := fmt.Sprintf("/api/2.0/apps/%v/deployments", request.AppName)
+	err := a.client.Do(ctx, http.MethodPost, path, headers, queryParams, request, &out)
+	return &out, err
+}
+`),
 		// An account service whose path does not carry the account ID.
 		"service/networking/impl.go": []byte(`package networking
 
@@ -230,15 +246,36 @@ func (a *defaultNamespaceImpl) Get(ctx context.Context, request GetDefaultNamesp
 		"cmd/workspace/cmd.go": []byte(`package workspace
 
 import (
+	apps "github.com/databricks/cli/cmd/workspace/apps"
 	clusters "github.com/databricks/cli/cmd/workspace/clusters"
 	settings "github.com/databricks/cli/cmd/workspace/settings"
 )
 
 func All() []*cobra.Command {
 	var out []*cobra.Command
+	out = append(out, apps.New())
 	out = append(out, clusters.New())
 	out = append(out, settings.New())
 	return out
+}
+`),
+		// The CLI overloads apps deploy with a bundle deploy; the hand entry
+		// takes the command over.
+		"cmd/workspace/apps/apps.go": []byte(`package apps
+
+func New() *cobra.Command {
+	return &cobra.Command{Use: "apps"}
+}
+
+func newDeploy() *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.Use = "deploy APP_NAME"
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		w := cmdctx.WorkspaceClient(ctx)
+		_, err := w.Apps.Deploy(ctx, deployReq)
+		return err
+	}
+	return cmd
 }
 `),
 		"cmd/workspace/clusters/clusters.go": []byte(`package clusters
@@ -385,9 +422,10 @@ func TestBuildDatabricksTable(t *testing.T) {
 		"networking.Endpoints.GetEndpoint": {Operation: "networking.Endpoints.GetEndpoint", Client: "account", Method: "GET", Path: "/api/networking/v1/{name}", Product: "admin", Access: "read"},
 		"files.Files.Upload":               {Operation: "files.Files.Upload", Client: "workspace", Method: "PUT", Path: "/api/2.0/fs/files{file_path+}", Product: "data", Access: "write"},
 		"settings.DefaultNamespace.Get":    {Operation: "settings.DefaultNamespace.Get", Client: "workspace", Method: "GET", Path: "/api/2.0/settings/types/default_namespace_ws/names/default", Commands: []string{"settings default-namespace get"}, Product: "admin", Access: "read"},
-		"cli.bundle.deploy":                databricksHandCommands[0],
-		"cli.bundle.destroy":               databricksHandCommands[1],
-		"cli.bundle.run":                   databricksHandCommands[2],
+		"apps.Apps.Deploy":                 {Operation: "apps.Apps.Deploy", Client: "workspace", Method: "POST", Path: "/api/2.0/apps/{app_name}/deployments", Product: "execution", Access: "write"},
+	}
+	for _, hand := range databricksHandCommands {
+		want[hand.Operation] = hand
 	}
 	if !reflect.DeepEqual(got, want) {
 		for key := range want {
@@ -403,7 +441,7 @@ func TestBuildDatabricksTable(t *testing.T) {
 	}
 	text := strings.Join(report, "\n")
 	for _, line := range []string{
-		"| execution | 3 |",
+		"| execution | 5 |",
 		"`POST /api/2.1/clusters/events` compute.Clusters.Events ()",
 		"`POST /api/2.1/clusters/edit` compute.Clusters.Edit (): spec.access_control_list",
 		"## POST routes whose path suggests a read (still write until reviewed) (1)",

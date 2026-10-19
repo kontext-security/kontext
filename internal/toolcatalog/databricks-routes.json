@@ -3,6 +3,14 @@
   "sdk": "v0.188.0",
   "routes": [
     {
+      "operation": "cli.apps.deploy",
+      "commands": [
+        "apps deploy"
+      ],
+      "product": "execution",
+      "access": "admin"
+    },
+    {
       "operation": "cli.bundle.deploy",
       "commands": [
         "bundle deploy"
@@ -105,7 +113,7 @@
         "service-principal-secrets-proxy create"
       ],
       "product": "secrets",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "oauth2.ServicePrincipalSecretsProxy.Delete",
@@ -116,7 +124,7 @@
         "service-principal-secrets-proxy delete"
       ],
       "product": "secrets",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "provisioning.Credentials.List",
@@ -1310,7 +1318,7 @@
         "account service-principal-secrets create"
       ],
       "product": "secrets",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "oauth2.ServicePrincipalSecrets.Delete",
@@ -1321,7 +1329,7 @@
         "account service-principal-secrets delete"
       ],
       "product": "secrets",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "oauth2.ServicePrincipalFederationPolicy.List",
@@ -2578,7 +2586,8 @@
       "access": "admin",
       "adminFields": [
         "owner_user_name",
-        "run_as"
+        "run_as",
+        "run_as_user_name"
       ]
     },
     {
@@ -2615,7 +2624,8 @@
       "access": "admin",
       "adminFields": [
         "owner_user_name",
-        "run_as"
+        "run_as",
+        "run_as_user_name"
       ]
     },
     {
@@ -2829,9 +2839,6 @@
       "client": "workspace",
       "method": "POST",
       "path": "/api/2.0/apps/{app_name}/deployments",
-      "commands": [
-        "apps deploy"
-      ],
       "product": "execution",
       "access": "write"
     },
@@ -4694,7 +4701,7 @@
       "commands": [
         "genie generate-download-full-query-result"
       ],
-      "product": "ai",
+      "product": "sql",
       "access": "write"
     },
     {
@@ -6125,7 +6132,10 @@
         "lakeview publish"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "embed_credentials"
+      ]
     },
     {
       "operation": "dashboards.LakeviewEmbedded.GetPublishedDashboardTokenInfo",
@@ -9977,7 +9987,10 @@
         "dashboards update"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "run_as_role"
+      ]
     },
     {
       "operation": "sql.DataSources.List",
@@ -10040,7 +10053,10 @@
         "queries-legacy create"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "run_as_role"
+      ]
     },
     {
       "operation": "sql.QueriesLegacy.Restore",
@@ -10084,7 +10100,10 @@
         "queries-legacy update"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "run_as_role"
+      ]
     },
     {
       "operation": "sql.QueryVisualizationsLegacy.Create",
@@ -10117,7 +10136,10 @@
         "query-visualizations-legacy update"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "query.run_as_role"
+      ]
     },
     {
       "operation": "sql.DashboardWidgets.Create",
@@ -11193,7 +11215,10 @@
         "queries create"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "admin",
+      "adminFields": [
+        "query.run_as_mode"
+      ]
     },
     {
       "operation": "sql.Queries.Delete",
@@ -11228,7 +11253,8 @@
       "product": "workspace",
       "access": "admin",
       "adminFields": [
-        "query.owner_user_name"
+        "query.owner_user_name",
+        "query.run_as_mode"
       ]
     },
     {
@@ -11415,7 +11441,7 @@
         "token-management delete"
       ],
       "product": "secrets",
-      "access": "delete"
+      "access": "admin"
     },
     {
       "operation": "settings.TokenManagement.Get",

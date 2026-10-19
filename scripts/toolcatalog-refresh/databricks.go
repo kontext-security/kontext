@@ -15,6 +15,7 @@ import (
 	"path"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,7 +87,7 @@ type sdkOperation struct {
 }
 
 var (
-	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|initial_manage_principal)$`)
+	databricksAdminField = regexp.MustCompile(`^(owner|owners|owner_[a-z_]+|[a-z_]+_owner|access_control_list|[a-z_]+_access_control_list|grants?|[a-z_]+_grants|permissions?|[a-z_]+_permissions?|privilege_assignments|run_as|run_as_(mode|role|user_name)|initial_manage_principal|embed_credentials)$`)
 	databricksReadSuffix = regexp.MustCompile(`(?i)[/:](batch)?(get|list|search|query|export|scan)([-_][a-z0-9_-]*)?$`)
 	databricksDelete     = regexp.MustCompile(`^(Delete|PermanentDelete|Destroy|Purge|Remove|Clear|Trash|Truncate|Drop)`)
 	databricksPermission = regexp.MustCompile(`^(Get|Set|Update)Permissions$|^GetPermissionLevels$`)
@@ -278,8 +279,18 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 		}
 		table.Routes = append(table.Routes, entry)
 	}
+	handCommands := map[string]bool{}
 	for _, hand := range databricksHandCommands {
 		table.Routes = append(table.Routes, hand)
+		for _, command := range hand.Commands {
+			handCommands[command] = true
+		}
+	}
+	for i := range table.Routes[:len(index.operations)] {
+		table.Routes[i].Commands = slices.DeleteFunc(table.Routes[i].Commands, func(command string) bool { return handCommands[command] })
+		if len(table.Routes[i].Commands) == 0 {
+			table.Routes[i].Commands = nil
+		}
 	}
 	sort.Slice(table.Routes, func(i, j int) bool {
 		a, b := table.Routes[i], table.Routes[j]
@@ -1318,6 +1329,7 @@ var databricksOperationProducts = map[string]string{
 	"jobs.Jobs.RunNow":                                       "execution",
 	"jobs.Jobs.Submit":                                       "execution",
 	"pipelines.Pipelines.StartUpdate":                        "execution",
+	"dashboards.Genie.GenerateDownloadFullQueryResult":       "sql",
 	"dashboards.Genie.ExecuteMessageQuery":                   "sql",
 	"dashboards.Genie.ExecuteMessageAttachmentQuery":         "sql",
 	"catalog.Credentials.GenerateTemporaryServiceCredential": "secrets",
@@ -1328,10 +1340,15 @@ var databricksOperationProducts = map[string]string{
 
 // databricksAdminOperations change who can do what without a name, product
 // or body field that says so: database roles (superuser, createrole,
-// bypassrls), secret ACLs, the workspace-wide warehouse security config and
-// tokens minted for a service principal.
+// bypassrls), secret ACLs, the workspace-wide warehouse security config,
+// credentials minted or revoked for another identity.
 var databricksAdminOperations = map[string]bool{
 	"database.Database.CreateDatabaseInstanceRole": true,
+	"oauth2.ServicePrincipalSecrets.Create":        true,
+	"oauth2.ServicePrincipalSecrets.Delete":        true,
+	"oauth2.ServicePrincipalSecretsProxy.Create":   true,
+	"oauth2.ServicePrincipalSecretsProxy.Delete":   true,
+	"settings.TokenManagement.Delete":              true,
 	"database.Database.DeleteDatabaseInstanceRole": true,
 	"postgres.Postgres.CreateRole":                 true,
 	"postgres.Postgres.DeleteRole":                 true,
@@ -1361,10 +1378,13 @@ var databricksPostReads = map[string]bool{
 }
 
 // databricksHandCommands are hand-written CLI commands that run many
-// requests rather than one route. bundle deploy applies the bundle's
-// permissions blocks through SetPermissions, so it is admin unless the
-// caller inspects the bundle.
+// requests rather than one route, and generated commands the CLI overloads
+// (apps deploy without an app name deploys the bundle). bundle deploy applies
+// the bundle's permissions blocks through SetPermissions, so both are admin
+// unless the caller inspects the bundle. A command listed here is dropped
+// from the operation it would otherwise map to.
 var databricksHandCommands = []databricksEntry{
+	{Operation: "cli.apps.deploy", Commands: []string{"apps deploy"}, Product: "execution", Access: "admin"},
 	{Operation: "cli.bundle.deploy", Commands: []string{"bundle deploy"}, Product: "execution", Access: "admin"},
 	{Operation: "cli.bundle.destroy", Commands: []string{"bundle destroy"}, Product: "workloads", Access: "delete"},
 	{Operation: "cli.bundle.run", Commands: []string{"bundle run"}, Product: "execution", Access: "write"},
