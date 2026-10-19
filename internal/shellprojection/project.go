@@ -1089,6 +1089,11 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			methods = append(methods, method)
 		}
 	}
+	var expanded []string
+	for _, urlText := range urls {
+		expanded = append(expanded, expandCurlGlob(urlText)...)
+	}
+	urls = expanded
 	if next {
 		var facts, features []string
 		for _, urlText := range urls {
@@ -1120,6 +1125,10 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 
 // classifyCurlURL classifies one request of a curl command.
 func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile bool) cedareval.ShellProjectionV2 {
+	if urlText != "" && !strings.Contains(urlText, "://") {
+		// curl requests a URL without a scheme over plain HTTP.
+		urlText = "http://" + urlText
+	}
 	parsed, err := url.Parse(urlText)
 	if err == nil && parsed.Scheme == "http" && parsed.Host != "" {
 		// Plain HTTP to a provider is still that provider's request; it is
@@ -1168,6 +1177,48 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		facts = replaceFact(facts, "github/route=catalogued", FactRouteUnrecognized)
 	}
 	return projection("curl", facts, features, complete)
+}
+
+// maxCurlGlob bounds the URLs a globbed URL expands to.
+const maxCurlGlob = 256
+
+var curlRange = regexp.MustCompile(`\[(?:[0-9]+-[0-9]+|[a-zA-Z]-[a-zA-Z])(?::[0-9]+)?\]`)
+
+// expandCurlGlob returns the URLs curl requests for a globbed URL: every
+// combination of its {a,b} alternatives, which can hold slashes and so change
+// the route. A [x-y] range is letters or digits only and routes like any one
+// of its values, so it becomes its first value.
+//
+// ponytail: past maxCurlGlob URLs the remaining braces stay literal, so
+// those requests fall to unrecognized.
+func expandCurlGlob(urlText string) []string {
+	urlText = curlRange.ReplaceAllStringFunc(urlText, func(match string) string {
+		first, _, _ := strings.Cut(match[1:], "-")
+		return first
+	})
+	prefixes := []string{""}
+	for {
+		open := strings.IndexByte(urlText, '{')
+		if open < 0 {
+			break
+		}
+		length := strings.IndexByte(urlText[open:], '}')
+		alternatives := strings.Split(urlText[open+1:open+max(length, 1)], ",")
+		if length < 0 || len(prefixes)*len(alternatives) > maxCurlGlob {
+			break
+		}
+		var next []string
+		for _, prefix := range prefixes {
+			for _, alternative := range alternatives {
+				next = append(next, prefix+urlText[:open]+alternative)
+			}
+		}
+		prefixes, urlText = next, urlText[open+length+1:]
+	}
+	for i := range prefixes {
+		prefixes[i] += urlText
+	}
+	return prefixes
 }
 
 var curlDataFlags = map[string]bool{"-d": true, "--data": true, "--data-raw": true, "--data-binary": true, "--data-urlencode": true, "--data-ascii": true, "--json": true, "-F": true, "--form": true, "--form-string": true}

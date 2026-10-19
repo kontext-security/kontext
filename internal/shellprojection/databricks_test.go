@@ -154,6 +154,9 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl --next as an option value is not a separator", "curl -X DELETE --user-agent --next " + dbHost + "/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"curl --next after an unknown option keeps every method", "curl -X DELETE --proxy --next " + dbHost + "/api/2.0/repos/12", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
 		{"curl --next keeps each request's method", `curl -X POST -d '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete --next -X GET https://example.com", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
+		{"curl glob alternatives are each requested", "curl -X POST -d '{}' '" + dbHost + "/api/{2.0/repos/list,2.1/clusters/delete}'", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
+		{"curl glob range", "curl -X POST -d '{}' '" + dbHost + "/api/2.1/clu[s-s]ters/delete'", []string{dbCat, dbD, dbP("compute"), dbW}, true},
+		{"curl url without a scheme is plain http", "curl -X DELETE dbc-1234.cloud.databricks.com/api/2.0/repos/12", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.
