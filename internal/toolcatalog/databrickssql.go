@@ -6,24 +6,38 @@ import (
 	"unicode/utf8"
 )
 
-// ClassifyDatabricksSQL raises the tier of a Databricks SQL text above the
-// SQL base tier, write. It never lowers it: access is write or a delete or
-// admin form found in any statement, and the caller applies it as is.
+// ClassifyDatabricksSQL reports what a Databricks SQL text does beyond the SQL
+// base tier, write, which the caller sets. It only ever adds to that tier.
 //
-// recognized is true only when access is exact: one statement of a known
-// form, lexed to the end, that runs no dynamic SQL, no user-defined function
-// and no function with outside effects. When it is false, access is a lower
-// bound; with nothing raised it is write, the base tier the caller keeps.
-// touchesSecrets reports a secret() call anywhere, recognized or not.
+//   - deletes: a delete form in any statement (DROP, DELETE, TRUNCATE, INSERT
+//     OVERWRITE, REPLACE WHERE|USING|ON, VACUUM, RESTORE, MERGE … DELETE, …),
+//     found wherever it sits, CTEs and subqueries included.
+//   - admin: an administrative statement form (GRANT, REVOKE, DENY, ALTER …
+//     OWNER TO, tags, column masks, row filters, policies, credentials,
+//     connections, shares, groups, …). Only a recognized form sets it; the
+//     same word as an alias, identifier or string never does.
+//   - Both: CREATE OR REPLACE and CREATE OR REFRESH, which replace data and
+//     drop any mask or filter the new definition leaves out, and DROP POLICY.
+//   - touchesSecrets: a secret() call anywhere, recognized or not.
+//   - recognized: false means nothing was proven: both flags are false and the
+//     caller keeps write. A set flag is proven, and recognized is then true
+//     whatever else the text holds. Otherwise it is true only for one
+//     statement of a known write form, lexed to the end, that runs no dynamic
+//     SQL, no user-defined function and no function with outside effects.
 //
-// ponytail: a keyword scan over a lexer that follows Spark's, not a grammar,
-// so a false positive can only raise a tier. A user-defined function called by
-// its bare name reads as a built-in. Upgrade path: a parser generated from
-// Spark's SqlBaseParser.g4 and the function catalog, if a tier ever needs
-// lowering.
-func ClassifyDatabricksSQL(sql string) (access string, touchesSecrets bool, recognized bool) {
+// Callers (decided in ENG-734): the shell emits databricks/delete=true and
+// databricks/admin=true for each flag set. An MCP call carries a single
+// context.tool.access, so a statement with both flags reports delete there,
+// and protect-databricks-administration does not see its admin side.
+//
+// ponytail: a keyword scan over a lexer that follows Spark's, not a grammar.
+// A false positive only adds a flag, and admin needs a statement form, not a
+// word. A user-defined function called by its bare name reads as a built-in.
+// Upgrade path: a parser generated from Spark's SqlBaseParser.g4 and the
+// function catalog, if the scan ever needs to prove less.
+func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recognized bool) {
 	tokens, complete := lexDatabricksSQL(sql)
-	tier, statements, known := sqlTierWrite, 0, complete
+	statements, known := 0, complete
 	for len(tokens) > 0 {
 		end := len(tokens)
 		for i, tok := range tokens {
@@ -38,29 +52,23 @@ func ClassifyDatabricksSQL(sql string) (access string, touchesSecrets bool, reco
 			continue
 		}
 		statements++
-		stmtTier, secrets, stmtKnown := classifyDatabricksStatement(stmt)
-		tier = max(tier, stmtTier)
+		d, a, secrets, stmtKnown := classifyDatabricksStatement(stmt)
+		deletes, admin = deletes || d, admin || a
 		touchesSecrets = touchesSecrets || secrets
 		known = known && stmtKnown
 	}
-	return sqlTiers[tier], touchesSecrets, known && statements == 1
+	return deletes, admin, touchesSecrets, deletes || admin || known && statements == 1
 }
 
-const (
-	sqlTierWrite = iota
-	sqlTierDelete
-	sqlTierAdmin
-)
+// Statement forms that stay at write when nothing else is found.
+var databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "DESC", "EXPLAIN",
+	"INSERT", "UPDATE", "MERGE", "CREATE", "COPY", "SET", "USE")
 
-var sqlTiers = [...]string{AccessWrite, AccessDelete, AccessAdmin}
-
-// Statement forms whose tier the scan decides. The scan raises any statement
-// wherever a delete or admin form sits; raiseForms are known only once raised.
+// SQL scripting: a statement headed by one of these holds statements of its
+// own, each starting after a word in databricksBlockWords.
 var (
-	databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "DESC", "EXPLAIN",
-		"INSERT", "UPDATE", "MERGE", "CREATE", "COPY", "SET", "USE")
-	databricksRaiseForms = setOf("DROP", "DELETE", "TRUNCATE", "VACUUM", "RESTORE", "REMOVE",
-		"GRANT", "REVOKE", "DENY", "ALTER", "REFRESH", "MSCK", "REPAIR")
+	databricksScriptForms = setOf("BEGIN", "IF", "ELSEIF", "ELSE", "CASE", "WHEN", "FOR", "WHILE", "LOOP", "REPEAT")
+	databricksBlockWords  = setOf("BEGIN", "THEN", "ELSE", "DO", "LOOP", "REPEAT")
 )
 
 // A qualified name before ( is a call unless a table keyword precedes it: a
@@ -68,25 +76,30 @@ var (
 var databricksTableKeywords = setOf("INTO", "TABLE", "VIEW", "FUNCTION", "EXISTS")
 
 // Objects whose CREATE, ALTER or DROP is administration: access policies,
-// governed tags, credentials, external locations, Delta Sharing, clean rooms and workspace
-// groups.
-var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", "SERVER", "LOCATION", "SHARE", "CLEAN",
-	"RECIPIENT", "PROVIDER", "GROUP", "METASTORE")
+// governed tags, credentials, connections, external locations, Delta Sharing,
+// clean rooms and workspace groups.
+var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", "SERVER", "LOCATION",
+	"SHARE", "CLEAN", "RECIPIENT", "PROVIDER", "GROUP", "METASTORE")
 
 // Words between CREATE, ALTER or DROP and the object kind.
 var databricksObjectModifiers = setOf("OR", "REPLACE", "IF", "NOT", "EXISTS", "TEMPORARY", "TEMP",
 	"GLOBAL", "EXTERNAL", "STORAGE", "SERVICE", "GOVERNED")
 
+// Words that end the column definitions of a CREATE: a MASK after them is a
+// name, not a column mask.
+var databricksDefinitionEnds = setOf("AS", "SELECT", "VALUES", "RETURN", "RETURNS")
+
 var databricksSecretFunctions = setOf("SECRET", "TRY_SECRET", "LIST_SECRETS")
 
 // Functions that reach outside the warehouse, read or write files, run Java
-// or name objects at run time. Every AI_ function calls a model endpoint and counts too.
+// or name objects at run time. Every AI_ function calls a model endpoint and
+// counts too.
 var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA", "READ_KINESIS",
 	"READ_PUBSUB", "READ_PULSAR", "REMOTE_QUERY", "VECTOR_SEARCH", "CLOUD_FILES", "IDENTIFIER",
 	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE", "LIST_FILES", "TO_FILE", "TRY_TO_FILE",
 	"READ_STATESTORE", "READ_STATE_METADATA", "CLOUD_FILES_STATE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
 
-func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool) {
+func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, known bool) {
 	at := func(i int) sqlToken {
 		if i < 0 || i >= len(stmt) {
 			return sqlToken{}
@@ -97,10 +110,19 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 	for first < len(stmt)-1 && stmt[first].is("(") {
 		first++
 	}
-	opaque, refresh, repair := false, false, false
-	raise := func(to int) { tier = max(tier, to) }
+	if at(first + 1).is(":") { // a scripting label
+		first += 2
+	}
+	script := databricksScriptForms[at(first).text] && at(first).kind == sqlWord
+	// head is the form of the statement being read: the first word, or in a
+	// scripting block the word that opens a nested statement.
+	head, opaque, refresh, repair, definition := "", false, false, false, true
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
+		atHead := tok.kind == sqlWord && (i == first || script && prev.kind == sqlWord && databricksBlockWords[prev.text])
+		if atHead {
+			head, definition = tok.text, true
+		}
 		// After malformed input a comment may sit between a name and its (,
 		// so a listed name counts as called wherever it appears.
 		if (next.is("(") || tok.loose) && (tok.kind == sqlWord || tok.kind == sqlName) {
@@ -127,71 +149,62 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 		if tok.kind != sqlWord {
 			continue
 		}
+		if databricksDefinitionEnds[tok.text] {
+			definition = false
+		}
+		ddl := head == "ALTER" || head == "CREATE"
 		switch tok.text {
 		case "GRANT", "REVOKE", "DENY":
-			raise(sqlTierAdmin)
+			admin = admin || atHead
 		case "DELETE", "TRUNCATE", "OVERWRITE", "VACUUM", "RESTORE", "PURGE", "REMOVE":
-			raise(sqlTierDelete)
+			deletes = true
 		case "REPLACE": // CREATE OR REPLACE, INSERT … REPLACE WHERE|USING|ON; not replace()
 			if !next.is("(") {
-				raise(sqlTierDelete)
+				deletes = true
 			}
-		case "MASK": // a column mask; not the mask() function
-			if !next.is("(") {
-				raise(sqlTierAdmin)
-			}
-		case "FILTER":
-			if prev.is("ROW") {
-				raise(sqlTierAdmin)
-			}
-		case "TO":
-			if prev.is("OWNER") {
-				raise(sqlTierAdmin)
-			}
-		case "TAG", "TAGS":
-			if prev.is("SET") || prev.is("UNSET") {
-				raise(sqlTierAdmin)
-			}
+			// CREATE OR REPLACE drops any mask or filter the new definition
+			// leaves out.
+			admin = admin || prev.is("OR") && head == "CREATE"
 		case "REFRESH":
-			if prev.is("OR") {
-				// CREATE OR REFRESH replaces the definition and drops masks and
-				// filters it leaves out, as CREATE OR REPLACE does: delete, so
-				// the deletion preset still matches it.
-				raise(sqlTierDelete)
+			if prev.is("OR") { // CREATE OR REFRESH, as CREATE OR REPLACE
+				deletes = true
+				admin = admin || head == "CREATE"
+			} else {
+				refresh = true
 			}
-			refresh = true
+		case "MASK": // SET|DROP MASK, or a column mask in a CREATE's column definitions
+			nameNext := next.kind == sqlWord || next.kind == sqlName
+			admin = admin || head == "ALTER" && (prev.is("SET") || prev.is("DROP")) ||
+				head == "CREATE" && definition && nameNext && !prev.is("(") && !prev.is(",") && !prev.is("AS")
+		case "FILTER": // SET|DROP|WITH ROW FILTER
+			admin = admin || ddl && prev.is("ROW") && (at(i-2).is("SET") || at(i-2).is("DROP") || at(i-2).is("WITH"))
+		case "TO":
+			admin = admin || head == "ALTER" && prev.is("OWNER")
+		case "TAG", "TAGS": // ALTER … SET|UNSET TAGS, SET|UNSET TAG ON
+			admin = admin || (head == "ALTER" || head == "SET" || head == "UNSET") && (prev.is("SET") || prev.is("UNSET"))
 		case "FULL", "WHERE": // REFRESH … FULL truncates; REFRESH … WHERE deletes the rows it matches
-			if refresh {
-				raise(sqlTierDelete)
-			}
+			deletes = deletes || refresh
 		case "REPAIR":
 			repair = true
 		case "PRIVILEGES": // MSCK REPAIR … PRIVILEGES revokes grants
-			if repair {
-				raise(sqlTierAdmin)
-			}
+			admin = admin || repair && (head == "MSCK" || head == "REPAIR")
 		case "SYNC": // MSCK REPAIR TABLE … SYNC PARTITIONS drops stale partitions
-			if repair && next.is("PARTITIONS") {
-				raise(sqlTierDelete)
-			}
+			deletes = deletes || repair && next.is("PARTITIONS")
 		case "EXECUTE", "CALL":
 			opaque = true
 		case "CREATE", "ALTER", "DROP":
-			if tok.text == "DROP" {
-				raise(sqlTierDelete)
-			}
-			j := i + 1
-			for at(j).kind == sqlWord && databricksObjectModifiers[at(j).text] {
-				j++
-			}
-			if at(j).kind == sqlWord && databricksAdminObjects[at(j).text] {
-				raise(sqlTierAdmin)
+			deletes = deletes || tok.text == "DROP"
+			if atHead {
+				j := i + 1
+				for at(j).kind == sqlWord && databricksObjectModifiers[at(j).text] {
+					j++
+				}
+				admin = admin || at(j).kind == sqlWord && databricksAdminObjects[at(j).text]
 			}
 		}
 	}
-	head := stmt[first]
-	known = head.kind == sqlWord && (databricksWriteForms[head.text] || tier > sqlTierWrite && databricksRaiseForms[head.text])
-	return tier, secrets, known && !opaque
+	known = at(first).kind == sqlWord && databricksWriteForms[at(first).text] && !opaque
+	return deletes, admin, secrets, known
 }
 
 const (
