@@ -38,8 +38,27 @@ import (
 // change inside them stays write: only the read-only preset catches it.
 // Upgrade path: a parser generated from Spark's SqlBaseParser.g4.
 func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recognized bool) {
-	tokens, complete := lexDatabricksSQL(sql)
-	statements, known := 0, complete
+	// Spark lexers differ on a /*+ inside a comment (newer ones nest it) and
+	// on "…" (a string with backslash escapes, or with ANSI double-quoted
+	// identifiers a name without them). Where the text can read either way,
+	// every reading is classified and the strictest wins.
+	known := true
+	for _, hintNests := range []bool{false, true} {
+		for _, dqIdentifiers := range []bool{false, true} {
+			if hintNests && !strings.Contains(sql, "/*+") ||
+				dqIdentifiers && !(strings.Contains(sql, `"`) && strings.Contains(sql, `\`)) {
+				continue
+			}
+			d, a, secrets, k := classifyDatabricksTokens(lexDatabricksSQL(sql, hintNests, dqIdentifiers))
+			deletes, admin, touchesSecrets, known = deletes || d, admin || a, touchesSecrets || secrets, known && k
+		}
+	}
+	return deletes, admin, touchesSecrets, deletes || admin || known
+}
+
+func classifyDatabricksTokens(tokens []sqlToken, complete bool) (deletes, admin, touchesSecrets, known bool) {
+	statements := 0
+	known = complete
 	for len(tokens) > 0 {
 		end := len(tokens)
 		for i, tok := range tokens {
@@ -60,7 +79,7 @@ func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recogniz
 		touchesSecrets = touchesSecrets || secrets
 		known = known && stmtKnown
 	}
-	return deletes, admin, touchesSecrets, deletes || admin || known && statements > 0
+	return deletes, admin, touchesSecrets, known && statements > 0
 }
 
 const (
@@ -123,11 +142,10 @@ var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA"
 	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE", "LIST_FILES", "TO_FILE", "TRY_TO_FILE",
 	"READ_STATESTORE", "READ_STATE_METADATA", "CLOUD_FILES_STATE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
 
-// databricksMaskIsName reports whether a MASK between prev and next is a name
-// (a column, alias, table or field) or sits in an expression, not a mask. An
-// expression shows as a reserved word after it that the expression goes on
-// past; MASK limit.f, MASK end) and MASK from USING … name a function.
-func databricksMaskIsName(verb string, prev, beforePrev, next, afterNext sqlToken) bool {
+// databricksMaskIsName reports whether a MASK after prev is a name (a column,
+// alias, table or field) rather than a mask clause. Whatever follows MASK may
+// be a function with any name, keywords included.
+func databricksMaskIsName(verb string, prev, beforePrev sqlToken) bool {
 	keyword := func(t sqlToken, words ...string) bool {
 		return t.kind == sqlWord && setOf(words...)[t.text]
 	}
@@ -138,10 +156,7 @@ func databricksMaskIsName(verb string, prev, beforePrev, next, afterNext sqlToke
 		keyword(prev, "TABLE", "VIEW") && keyword(beforePrev, "CREATE", "ALTER", "REPLACE", "TEMPORARY", "TEMP",
 			"GLOBAL", "MATERIALIZED", "STREAMING", "EXTERNAL", "LIVE") ||
 		keyword(prev, "EXISTS") && keyword(beforePrev, "NOT") ||
-		keyword(prev, "COLUMN", "COLUMNS", "CONSTRAINT") && keyword(beforePrev, "ADD", "ALTER", "DROP", "RENAME") ||
-		!afterNext.is(".") && !afterNext.is(")") && !afterNext.is(",") && !afterNext.is("USING") && afterNext.kind != 0 &&
-			keyword(next, "IS", "AND", "OR", "IN", "BETWEEN", "LIKE", "FROM", "WHERE", "THEN", "ELSE", "END", "AS",
-				"JOIN", "ON", "USING", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "GROUP", "ORDER", "UNION")
+		keyword(prev, "COLUMN", "COLUMNS", "CONSTRAINT") && keyword(beforePrev, "ADD", "ALTER", "DROP", "RENAME")
 }
 
 func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bool) {
@@ -195,7 +210,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 	verb := words[0]
 
 	// Clauses at the statement's top level, and column masks at any depth.
-	depth := 0
+	depth, query, check := 0, false, -1          // check: the depth of a CHECK (…) expression
 	insert := verb == "INSERT" || verb == "FROM" // FROM s INSERT … is a multi-insert
 	for i := start; i < len(stmt); i++ {
 		tok, prev, next := stmt[i], at(i-1), at(i+1)
@@ -204,9 +219,19 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 			depth++
 		case tok.is(")"):
 			depth--
+			if depth < check {
+				check = -1
+			}
 		}
 		if tok.kind != sqlWord {
 			continue
+		}
+		// The AS that starts a CREATE's or ALTER VIEW's query; column masks
+		// all come before it. Not a name (CREATE TABLE as) or GENERATED … AS.
+		query = query || depth == 0 && tok.is("AS") && !next.is(".") &&
+			!(prev.kind == sqlWord && setOf("TABLE", "VIEW", "EXISTS", "ALWAYS", "DEFAULT", "AFTER")[prev.text]) && !prev.is(".")
+		if tok.is("CHECK") && next.is("(") {
+			check = depth + 1
 		}
 		if depth == 0 {
 			switch {
@@ -239,8 +264,8 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 		// ALTER … ADD [COLUMN] c t MASK f, unless MASK is itself a name.
 		// ponytail: a STRUCT<mask …> field or a CTAS alias without AS reads as
 		// a mask too, which only over-flags admin.
-		if (verb == "CREATE" || verb == "ALTER") && tok.is("MASK") && (next.kind == sqlWord || next.kind == sqlName) &&
-			!databricksMaskIsName(verb, prev, at(i-2), next, at(i+2)) {
+		if (verb == "CREATE" || verb == "ALTER") && !query && (check < 0 || depth < check) && tok.is("MASK") &&
+			(next.kind == sqlWord || next.kind == sqlName) && !databricksMaskIsName(verb, prev, at(i-2)) {
 			effect |= sqlAdmin
 		}
 	}
@@ -341,7 +366,7 @@ func (t sqlToken) is(text string) bool {
 // dollar body never closes; the lexer then reads the rest as plain code, with
 // no quotes or comments, so nothing after the opener can hide a keyword or a
 // call and the scan stays linear.
-func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
+func lexDatabricksSQL(sql string, hintNests, dqIdentifiers bool) (tokens []sqlToken, complete bool) {
 	complete = true
 	for i := 0; i < len(sql); {
 		rest := sql[i:]
@@ -371,18 +396,15 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 		case strings.HasPrefix(rest, "/*+"):
 			i += 3 // A hint is parsed, not ignored: read its body as code.
 		case strings.HasPrefix(rest, "/*"):
-			end := sqlCommentEnd(rest)
+			end := sqlCommentEnd(rest, hintNests)
 			if end < 0 {
 				complete = false
 				continue
 			}
 			i += end
 		case r == '\'' || r == '"' || r == '`':
-			end := sqlQuoteEnd(rest, r != '`')
-			// "…" is a string with backslash escapes, or with ANSI double-quoted
-			// identifiers on, a name without them. A backslash inside could end
-			// it in either place, so read the rest as code.
-			if end < 0 || r == '"' && strings.Contains(rest[:end], `\`) {
+			end := sqlQuoteEnd(rest, r == '\'' || r == '"' && !dqIdentifiers)
+			if end < 0 {
 				complete = false
 				continue
 			}
@@ -469,14 +491,14 @@ func sqlSameClose(body, tag string) bool {
 }
 
 // sqlCommentEnd returns the length of the nested /* */ comment that starts s,
-// or -1 if it never closes. A /*+ inside a comment nests in newer Spark lexers
-// and not in older ones, so it returns -1 there too: the rest reads as code.
-func sqlCommentEnd(s string) int {
+// or -1 if it never closes. A /*+ inside a comment nests only if hintNests,
+// as in newer Spark lexers; older ones read it as plain characters.
+func sqlCommentEnd(s string, hintNests bool) int {
 	depth := 0
 	for i := 0; i < len(s); {
 		switch {
-		case depth > 0 && strings.HasPrefix(s[i:], "/*+"):
-			return -1
+		case depth > 0 && !hintNests && strings.HasPrefix(s[i:], "/*+"):
+			i++
 		case strings.HasPrefix(s[i:], "/*"):
 			depth++
 			i += 2
