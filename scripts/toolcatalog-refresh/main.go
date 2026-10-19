@@ -28,6 +28,9 @@
 //
 // GitHub's MCP server follows the same rules (see github.go); its catalog is
 // re-pinned to upstream HEAD whenever a tool changes.
+//
+// With -databricks it instead regenerates the Databricks route table from
+// the pinned databricks/cli release and its Go SDK (see databricks.go).
 package main
 
 import (
@@ -127,10 +130,15 @@ func main() {
 	dir := flag.String("dir", "internal/toolcatalog/providers", "provider catalog directory")
 	write := flag.Bool("write", false, "write additions to the catalogs")
 	reportPath := flag.String("report", "", "also write the markdown report to this file")
+	databricks := flag.String("databricks", "", "instead, regenerate this Databricks route table (internal/toolcatalog/databricks-routes.json)")
 	flag.Parse()
 
 	r := &refresher{client: &http.Client{Timeout: 60 * time.Second}}
-	if err := r.run(*dir, *write); err != nil {
+	run := func() error { return r.run(*dir, *write) }
+	if *databricks != "" {
+		run = func() error { return r.refreshDatabricks(*databricks, *write) }
+	}
+	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "toolcatalog-refresh:", err)
 		os.Exit(1)
 	}
