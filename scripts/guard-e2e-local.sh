@@ -96,38 +96,7 @@ process.stdin.on("end", () => {
   return 1
 }
 
-assert_hook() {
-  local name="$1"
-  local payload="$2"
-  local expected_reason="$3"
-  local expected_phrase="$4"
-  local output
-
-  output="$(printf '%s' "$payload" | go run ./cmd/kontext hook --agent claude --mode observe --socket "$SOCKET_PATH")"
-  EXPECTED_REASON="$expected_reason" EXPECTED_PHRASE="$expected_phrase" node -e '
-const expectedReason = process.env.EXPECTED_REASON;
-const expectedPhrase = process.env.EXPECTED_PHRASE;
-let raw = "";
-process.stdin.on("data", (chunk) => raw += chunk);
-process.stdin.on("end", () => {
-  const payload = JSON.parse(raw);
-  const output = payload.hookSpecificOutput ?? {};
-  if (output.permissionDecision !== "allow") {
-    throw new Error(`expected observe mode to allow Claude Code, got ${output.permissionDecision}`);
-  }
-  const reason = output.permissionDecisionReason ?? "";
-  if (!reason.includes(expectedReason)) {
-    throw new Error(`missing reason ${expectedReason} in ${reason}`);
-  }
-  if (!reason.includes(expectedPhrase)) {
-    throw new Error(`missing phrase ${expectedPhrase} in ${reason}`);
-  }
-});
-' <<<"$output"
-  echo "ok ${name}: ${expected_phrase}"
-}
-
-assert_telemetry_hook() {
+assert_silent_hook() {
   local name="$1"
   local payload="$2"
   local output
@@ -140,35 +109,29 @@ process.stdin.on("end", () => {
   const payload = JSON.parse(raw);
   const output = payload.hookSpecificOutput ?? {};
   if (output.permissionDecision) {
-    throw new Error(`expected telemetry hook to omit permissionDecision, got ${output.permissionDecision}`);
+    throw new Error(`expected hook to leave the decision to Claude Code, got ${output.permissionDecision}`);
   }
   if (payload.suppressOutput !== true) {
-    throw new Error(`expected telemetry hook to suppress output, got ${JSON.stringify(payload)}`);
+    throw new Error(`expected hook to suppress output, got ${JSON.stringify(payload)}`);
   }
 });
 ' <<<"$output"
-  echo "ok ${name}: telemetry recorded"
+  echo "ok ${name}: no permission decision"
 }
 
-assert_hook \
+assert_silent_hook \
   "safe read" \
-  "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"README.md\"}}" \
-  "observed; no local analysis wired" \
-  "would allow"
+  "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"README.md\"}}"
 
-assert_hook \
+assert_silent_hook \
   "credential read" \
-  "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\".env\"}}" \
-  "observed; no local analysis wired" \
-  "would allow"
+  "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\".env\"}}"
 
-assert_hook \
+assert_silent_hook \
   "provider credential" \
-  "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'\"}}" \
-  "observed; no local analysis wired" \
-  "would allow"
+  "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'\"}}"
 
-assert_telemetry_hook \
+assert_silent_hook \
   "async telemetry" \
   "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}"
 
@@ -259,7 +222,7 @@ process.stdin.on("end", () => {
 '
   echo "ok step safety: shell operations abstain, file tools excluded, policy unchanged"
 
-  assert_telemetry_hook \
+  assert_silent_hook \
     "shadow history request" \
     '{"session_id":"e2e-step-history","hook_event_name":"UserPromptSubmit","prompt":"What is the file size?"}'
 
@@ -267,12 +230,10 @@ process.stdin.on("end", () => {
 const content = "prefix " + Array.from({length: 600}, (_, i) => `event-token-${String(i).padStart(3, "0")}`).join(" ") + " suffix";
 process.stdout.write(JSON.stringify({session_id: "e2e-step-history", hook_event_name: "PostToolUse", tool_name: "search", tool_input: {query: "public docs"}, tool_response: {content, status: "complete"}}));
 ')"
-  assert_telemetry_hook "large supported history" "$HISTORY_PAYLOAD"
-  assert_hook \
+  assert_silent_hook "large supported history" "$HISTORY_PAYLOAD"
+  assert_silent_hook \
     "shadow after large history" \
-    '{"session_id":"e2e-step-history","hook_event_name":"PreToolUse","tool_name":"delete_file","tool_input":{"file_id":"example"}}' \
-    "observed; no local analysis wired" \
-    "would allow"
+    '{"session_id":"e2e-step-history","hook_event_name":"PreToolUse","tool_name":"delete_file","tool_input":{"file_id":"example"}}'
 
   wait_for_step_safety "e2e-step-history" 1
   curl -fsS "${BASE_URL}/api/sessions/e2e-step-history/step-safety" | node -e '
@@ -307,14 +268,12 @@ process.stdin.on("end", () => {
   # Ordinary E2E must obtain a real score under the daemon's production
   # deadline. Use a short call in a fresh session so long history and runner
   # variance on larger inputs cannot turn this into an all-unavailable pass.
-  assert_telemetry_hook \
+  assert_silent_hook \
     "scoring probe prompt capture" \
     '{"session_id":"e2e-merlin-score","hook_event_name":"UserPromptSubmit","prompt":"What is the file size?"}'
-  assert_hook \
+  assert_silent_hook \
     "production-deadline scoring probe" \
-    '{"session_id":"e2e-merlin-score","hook_event_name":"PreToolUse","tool_name":"delete_file","tool_input":{"file_id":"example"}}' \
-    "observed; no local analysis wired" \
-    "would allow"
+    '{"session_id":"e2e-merlin-score","hook_event_name":"PreToolUse","tool_name":"delete_file","tool_input":{"file_id":"example"}}'
   wait_for_step_safety "e2e-merlin-score" 1
   curl -fsS "${BASE_URL}/api/sessions/e2e-merlin-score/step-safety" | node -e '
 const candidate = require(process.cwd() + "/internal/guard/stepsafety/model/native/candidate.json");

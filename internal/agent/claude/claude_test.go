@@ -154,55 +154,37 @@ func TestDecodeHookInputPreservesExplicitZeroDuration(t *testing.T) {
 	}
 }
 
-func TestEncodeAllowOmitsPlaceholderReason(t *testing.T) {
+func TestEncodeAllowLeavesDecisionToClaude(t *testing.T) {
 	t.Parallel()
 
 	out, err := (&Claude{}).EncodeHookResult(
 		hook.Event{HookName: hook.HookPreToolUse},
-		hook.Result{Decision: hook.DecisionAllow, Reason: "allowed"},
+		hook.Result{Decision: hook.DecisionAllow, Reason: "Allowed by read-only policy", Mode: "enforce"},
 	)
 	if err != nil {
 		t.Fatalf("EncodeHookResult() error = %v", err)
 	}
-	if strings.Contains(string(out), "permissionDecisionReason") {
-		t.Fatalf("EncodeHookResult() = %s, want no placeholder reason", out)
+	if got := string(out); got != `{"suppressOutput":true}` {
+		t.Fatalf("EncodeHookResult() = %s, want no permission decision", got)
 	}
 }
 
-func TestEncodeAllowKeepsMeaningfulReason(t *testing.T) {
+func TestEncodeAllowWithUpdatedInputStillLeavesDecisionToClaude(t *testing.T) {
 	t.Parallel()
 
-	out, err := (&Claude{}).EncodeHookResult(
-		hook.Event{HookName: hook.HookPreToolUse},
-		hook.Result{Decision: hook.DecisionAllow, Reason: "Allowed by read-only policy"},
-	)
-	if err != nil {
-		t.Fatalf("EncodeHookResult() error = %v", err)
-	}
-	if !strings.Contains(string(out), "Allowed by read-only policy") {
-		t.Fatalf("EncodeHookResult() = %s, want meaningful reason", out)
-	}
-}
-
-func TestEncodeAllowIncludesUpdatedInput(t *testing.T) {
-	t.Parallel()
-
+	// A rewrite carries no permission decision either.
 	out, err := (&Claude{}).EncodeHookResult(
 		hook.Event{HookName: hook.HookPreToolUse},
 		hook.Result{
 			Decision:     hook.DecisionAllow,
-			Reason:       "allowed",
 			UpdatedInput: map[string]any{"command": `GITHUB_TOKEN="$(cat '/tmp/token')" gh pr view`},
 		},
 	)
 	if err != nil {
 		t.Fatalf("EncodeHookResult() error = %v", err)
 	}
-	if !strings.Contains(string(out), "updatedInput") {
-		t.Fatalf("EncodeHookResult() = %s, want updatedInput", out)
-	}
-	if !strings.Contains(string(out), "suppressOutput") {
-		t.Fatalf("EncodeHookResult() = %s, want suppressOutput", out)
+	if got := string(out); got != `{"suppressOutput":true}` {
+		t.Fatalf("EncodeHookResult() = %s, want no permission decision", got)
 	}
 }
 
