@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -985,6 +986,14 @@ var ghAPINeutralValueOptions = map[string]bool{"-q": true, "--jq": true, "-t": t
 var ghAPINeutralValuePrefixes = []string{"--jq=", "--template=", "--cache=", "--hostname=", "--header=", "--preview="}
 
 func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
+	// --next starts a new request with its own method, body and URLs. Each is
+	// judged on its own, and the whole is never a catalogued route.
+	if next := slices.IndexFunc(args, func(arg string) bool { return arg == "--next" || arg == "-:" }); next >= 0 {
+		first, rest := classifyCurl(args[:next], false), classifyCurl(args[next+1:], false)
+		facts := append(append([]string{}, first.Facts...), rest.Facts...)
+		features := append(append([]string{}, first.Features...), rest.Features...)
+		return projection("curl", mergeDatabricksProducts(facts), features, false)
+	}
 	method := "GET"
 	explicitMethod := false
 	var urls []string

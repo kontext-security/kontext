@@ -37,6 +37,7 @@ func TestGitHubShellCorpus(t *testing.T) {
 		{name: "gh unknown", command: "gh extension-command run", programs: []string{"gh"}, facts: []string{unrecognized, incomplete}, complete: false},
 		{name: "gh api force", command: "gh api repos/acme/api/git/refs/heads/main -X PATCH -f force=true", programs: []string{"gh"}, facts: []string{forcePush, write, "http/method=PATCH"}, complete: true},
 		{name: "curl force", command: `curl -X PATCH -d '{"force":true}' https://api.github.com/repos/acme/api/git/refs/heads/main`, programs: []string{"curl"}, facts: []string{forcePush, write, "http/method=PATCH"}, complete: true},
+		{name: "curl --next keeps the first request's method", command: `curl -X PATCH -d '{"force":true}' https://api.github.com/repos/acme/api/git/refs/heads/main --next -X GET https://example.com`, programs: []string{"curl"}, facts: []string{forcePush, write, unrecognized}, complete: false},
 		{name: "curl compact json", command: `curl --request=PATCH --json='{"force":true}' https://api.github.com/repos/acme/api/git/refs/heads/main`, programs: []string{"curl"}, facts: []string{forcePush, write}, complete: true},
 		{name: "curl upload", command: "curl -sS -T asset.zip https://uploads.github.com/repos/acme/api/releases/1/assets", programs: []string{"curl"}, facts: []string{write, "http/method=PUT"}, complete: true},
 		{name: "curl read", command: "curl https://api.github.com/repos/acme/api", programs: []string{"curl"}, facts: []string{catalogued, "http/method=GET"}, absentFacts: []string{write}, complete: true},

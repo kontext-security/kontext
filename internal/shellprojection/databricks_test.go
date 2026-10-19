@@ -149,6 +149,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl mcp is unrecognized", `curl -X POST -d '{}' ` + dbHost + "/api/2.0/mcp/sql", []string{dbUnk}, false},
 		{"plain http keeps the tier", "curl -X DELETE http://dbc-1234.cloud.databricks.com/api/2.0/repos/12", []string{dbD, dbP("workspace"), dbUnk, dbW}, false},
 		{"several urls do not borrow the sql exemption", `curl --json '{"statement":"SELECT 1","cluster_id":"x"}' ` + dbHost + "/api/2.0/sql/statements " + dbHost + "/api/2.1/clusters/delete", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
+		{"curl --next keeps each request's method", `curl -X POST -d '{"cluster_id":"x"}' ` + dbHost + "/api/2.1/clusters/delete --next -X GET https://example.com", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.
