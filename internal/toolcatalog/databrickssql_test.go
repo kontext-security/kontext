@@ -56,6 +56,8 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"replace on qualified", "INSERT INTO t AS t REPLACE ON t.k = s.k (SELECT * FROM s) AS s", AccessDelete, false, false},
 		{"refresh full", "REFRESH STREAMING TABLE sales FULL", AccessDelete, false, true},
 		{"refresh where", "REFRESH MATERIALIZED VIEW mv WHERE d < '2026-01-01'", AccessDelete, false, true},
+		{"refresh full in block", "BEGIN REFRESH STREAMING TABLE sales FULL; END", AccessDelete, false, false},
+		{"refresh where in if", "IF x > 0 THEN REFRESH MATERIALIZED VIEW mv WHERE d < 1; END IF", AccessDelete, false, false},
 		{"drop inside unknown form", "BEGIN DROP TABLE t; END", AccessDelete, false, false},
 		{"explain drop raises", "EXPLAIN DROP TABLE t", AccessDelete, false, true},
 
@@ -151,6 +153,9 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"reflect", "SELECT reflect('java.util.UUID', 'randomUUID')", AccessWrite, false, false},
 		{"java_method", "SELECT java_method('java.lang.System', 'getenv', 'HOME')", AccessWrite, false, false},
 		{"try_reflect", "SELECT try_reflect('java.lang.System', 'setProperty', 'k', 'v')", AccessWrite, false, false},
+		{"two-part builtin", "SELECT builtin.side_effect()", AccessWrite, false, false},
+		{"quoted two-part builtin", "SELECT `builtin`.`side_effect`()", AccessWrite, false, false},
+		{"system builtin under a catalog", "SELECT c.system.builtin.lower(a) FROM t", AccessWrite, false, false},
 		{"udf in a schema named builtin", "SELECT main.builtin.lower(a) FROM t", AccessWrite, false, false},
 		{"builtin qualified", "SELECT system.builtin.lower(a) FROM t", AccessWrite, false, true},
 		{"qualified insert column list", "INSERT INTO main.default.t (a, b) VALUES (1, 2)", AccessWrite, false, true},

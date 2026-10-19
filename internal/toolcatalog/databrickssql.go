@@ -96,7 +96,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 	for first < len(stmt)-1 && stmt[first].is("(") {
 		first++
 	}
-	opaque := false
+	opaque, refresh := false, false
 	raise := func(to int) { tier = max(tier, to) }
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
@@ -108,7 +108,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 			case databricksOpaqueFunctions[name] || strings.HasPrefix(name, "AI_"):
 				opaque = true
 			}
-			builtin := at(i-2).text == "BUILTIN" && (!at(i-3).is(".") || at(i-4).text == "SYSTEM" && !at(i-5).is("."))
+			builtin := at(i-2).text == "BUILTIN" && at(i-3).is(".") && at(i-4).text == "SYSTEM" && !at(i-5).is(".")
 			if prev.is(".") && !builtin {
 				start := i - 2 // a qualified call is a user-defined function
 				for at(start - 1).is(".") {
@@ -149,8 +149,10 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 			if prev.is("SET") || prev.is("UNSET") {
 				raise(sqlTierAdmin)
 			}
+		case "REFRESH": // not CREATE OR REFRESH
+			refresh = refresh || !prev.is("OR")
 		case "FULL", "WHERE": // REFRESH … FULL truncates; REFRESH … WHERE deletes the rows it matches
-			if stmt[first].is("REFRESH") {
+			if refresh {
 				raise(sqlTierDelete)
 			}
 		case "EXECUTE", "CALL":
