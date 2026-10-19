@@ -93,6 +93,9 @@ var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", 
 var databricksObjectModifiers = setOf("OR", "REPLACE", "IF", "NOT", "EXISTS", "TEMPORARY", "TEMP",
 	"GLOBAL", "EXTERNAL", "STORAGE", "SERVICE", "GOVERNED")
 
+// Words a column or constraint name follows: a MASK after them is that name.
+var databricksBeforeColumnName = setOf("COLUMN", "COLUMNS", "CONSTRAINT", "AS")
+
 var databricksSecretFunctions = setOf("SECRET", "TRY_SECRET", "LIST_SECRETS")
 
 // Functions that reach outside the warehouse, read or write files, run Java
@@ -114,14 +117,24 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 	for first < len(stmt)-1 && stmt[first].is("(") {
 		first++
 	}
-	if at(first + 1).is(":") { // a scripting label
+	// a scripting label, not a parameter marker as in SELECT :id
+	if at(first+1).is(":") && !databricksStatements[at(first).text] && databricksScriptForms[at(first+2).text] {
 		first += 2
 	}
 	// head is the form of the statement being read: the first word, or in a
 	// scripting block the statement keyword that opens a nested statement.
-	head, headAt, opaque, refresh, repair := "", -1, false, false, false
+	head, headAt, opaque, refresh, repair, adding := "", -1, false, false, false, false
 	depth, caseDepth, handlerStart := 0, 0, -1
-	columns, grouped := false, false // inside a CREATE's column definitions
+	columns, grouped, angle := false, false, 0 // inside column definitions; STRUCT<…> depth
+	// whenNext[i]: the next WHEN or THEN after i is a WHEN. A CASE opens an
+	// expression only then; IF case THEN reads a variable named case.
+	whenNext, when := make([]bool, len(stmt)), false
+	for i := len(stmt) - 1; i >= 0; i-- {
+		whenNext[i] = when
+		if stmt[i].is("WHEN") || stmt[i].is("THEN") {
+			when = stmt[i].is("WHEN")
+		}
+	}
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
 		block := prev // the word before this one, past any label
@@ -132,9 +145,9 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 			databricksScriptForms[head] && caseDepth == 0 && databricksStatements[tok.text] &&
 				block.kind == sqlWord && databricksBlockWords[block.text])
 		if atHead {
-			head, headAt, depth, columns, grouped = tok.text, i, 0, false, false
+			head, headAt, depth, columns, grouped, adding, angle = tok.text, i, 0, false, false, false, 0
 		}
-		if depth == 0 && tok.is("AS") {
+		if depth == 0 && tok.is("AS") && !prev.is(".") && !next.is(".") {
 			grouped = true // a CREATE's query follows AS: no column definitions after it
 		}
 		switch {
@@ -146,7 +159,11 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 		case tok.is(")"):
 			depth--
 			columns = columns && depth > 0
-		case tok.is("CASE") && !atHead:
+		case tok.is("<") && (prev.is("STRUCT") || prev.is("ARRAY") || prev.is("MAP")):
+			angle++
+		case tok.is(">") && angle > 0:
+			angle--
+		case tok.is("CASE") && !atHead && whenNext[i]:
 			caseDepth++
 		case tok.is("END") && caseDepth > 0:
 			caseDepth--
@@ -195,10 +212,14 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 				deletes, admin = true, true
 			}
 			refresh = refresh || atHead
-		case "MASK": // SET|DROP MASK, or a column mask in a CREATE's column definitions
+		case "ADD": // ALTER TABLE … ADD COLUMN(S) may define a column mask
+			adding = adding || head == "ALTER" && depth == 0
+		case "MASK": // SET|DROP MASK, or a column mask in a column definition
 			nameNext := next.kind == sqlWord || next.kind == sqlName
+			definesColumn := nameNext && !prev.is("(") && !prev.is(",") && !databricksBeforeColumnName[prev.text]
+			definesColumn = definesColumn && angle == 0 // not a STRUCT field named mask
 			admin = admin || head == "ALTER" && (prev.is("SET") || prev.is("DROP")) ||
-				columns && depth == 1 && nameNext && !prev.is("(") && !prev.is(",")
+				columns && depth == 1 && definesColumn || adding && definesColumn
 		case "FILTER": // SET|DROP|WITH ROW FILTER
 			admin = admin || ddl && prev.is("ROW") && (at(i-2).is("SET") || at(i-2).is("DROP") || at(i-2).is("WITH"))
 		case "TO":
@@ -230,8 +251,11 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 						j += 3
 					case at(j).is("SQLSTATE"):
 						j += 2
-					default: // SQLEXCEPTION, SQLWARNING or a condition name
+					default: // SQLEXCEPTION, SQLWARNING or a condition name, maybe dotted
 						j++
+						for at(j).is(".") {
+							j += 2
+						}
 					}
 					if !at(j).is(",") {
 						break
