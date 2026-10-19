@@ -129,12 +129,16 @@ func databricksMaskIsName(prev, beforePrev, next sqlToken) bool {
 	keyword := func(t sqlToken, words ...string) bool {
 		return t.kind == sqlWord && setOf(words...)[t.text]
 	}
-	return prev.is("(") || prev.is(",") || prev.is(".") || keyword(prev, "AS") ||
+	if keyword(beforePrev, "AFTER") { // ADD COLUMN c t AFTER other MASK f
+		return false
+	}
+	return prev.is("(") || prev.is(",") || prev.is(".") || keyword(prev, "AS", "FROM", "JOIN") ||
 		keyword(prev, "TABLE", "VIEW") && keyword(beforePrev, "CREATE", "ALTER", "REPLACE", "TEMPORARY", "TEMP",
 			"GLOBAL", "MATERIALIZED", "STREAMING", "EXTERNAL", "LIVE") ||
 		keyword(prev, "EXISTS") && keyword(beforePrev, "NOT") ||
 		keyword(prev, "COLUMN", "COLUMNS", "CONSTRAINT") && keyword(beforePrev, "ADD", "ALTER", "DROP", "RENAME") ||
-		keyword(next, "IS", "AND", "OR", "IN", "BETWEEN", "LIKE", "FROM", "WHERE", "THEN", "ELSE", "END", "AS")
+		keyword(next, "IS", "AND", "OR", "IN", "BETWEEN", "LIKE", "FROM", "WHERE", "THEN", "ELSE", "END", "AS",
+			"JOIN", "ON", "USING", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "GROUP", "ORDER", "LIMIT", "UNION")
 }
 
 func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bool) {
@@ -269,13 +273,11 @@ func databricksStatementStart(stmt []sqlToken) int {
 	}
 	for i < len(stmt) {
 		// The CTE name, any column list or MAX RECURSION LEVEL n, an optional
-		// AS, then the body: the group that starts with a query.
+		// AS, then the body: a group not followed by AS, MAX or another group.
 		for i++; i < len(stmt); {
 			if at(i).is("(") {
-				body := at(i + 1)
 				i = skipGroup(i)
-				if body.is("SELECT") || body.is("WITH") || body.is("VALUES") || body.is("FROM") ||
-					body.is("TABLE") || body.is("(") {
+				if !at(i).is("AS") && !at(i).is("MAX") && !at(i).is("(") {
 					break
 				}
 			} else if at(i).is("AS") {
