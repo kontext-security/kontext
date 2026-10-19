@@ -60,6 +60,9 @@ def sql_surfaces(sql):
     return [
         ("mcp connector uuid", CLAUDE, DBX_CONN + "execute_sql", mcp),
         ("mcp claude_ai_Databricks", CLAUDE, "mcp__claude_ai_Databricks__execute_sql", mcp),
+        # Claude Code CLI connector with a neutral name: identified through
+        # the org's connector list in the Desktop session records (#595, F3).
+        ("mcp claude_ai_Warehouse", CLAUDE, "mcp__claude_ai_Warehouse__execute_sql", mcp),
         ("mcp databricks-dbsql", BOTH, "mcp__databricks-dbsql__execute_sql", mcp),
         ("cli aitools query", BOTH, "Bash", f"databricks -p e2e experimental aitools tools query -w {WH} {q(sql)}"),
         ("databricks api", BOTH, "Bash", f"databricks -p e2e api post /api/2.0/sql/statements --json {q(body)}"),
@@ -105,7 +108,7 @@ OTHER = [
     ("ai", "sandbox run_code", BOTH, "mcp__databricks-sandbox__run_code", {"code": "print(1)"}, [RO, XSQL, RUN], ""),
     ("fail-open", "Warehouse connector SELECT", CLAUDE, WH_CONN + "execute_sql", {"query": "SELECT 1", "warehouse_id": WH}, [RO], "neutral name, identified by its URL: classified, not fail-open"),
     ("fail-open", "Warehouse connector DROP", CLAUDE, WH_CONN + "execute_sql", {"query": "DROP TABLE workspace.kontext_e2e.orders", "warehouse_id": WH}, [RO, DEL], "neutral name, identified by its URL"),
-    ("fail-open", "claude_ai_Warehouse DROP", CLAUDE, "mcp__claude_ai_Warehouse__execute_sql", {"query": "DROP TABLE workspace.kontext_e2e.orders", "warehouse_id": WH}, [], "no URL, neutral name: fails open"),
+    ("fail-open", "claude_ai unknown connector DROP", CLAUDE, "mcp__claude_ai_Not_A_Connector__execute_sql", {"query": "DROP TABLE workspace.kontext_e2e.orders", "warehouse_id": WH}, [], "no connector of that name in the org: fails open"),
     ("fail-open", "unconfigured warehouse server DROP", BOTH, "mcp__warehouse__execute_sql", {"query": "DROP TABLE workspace.kontext_e2e.orders", "warehouse_id": WH}, [], "fails open"),
     ("fail-open", "unknown tool, connector", CLAUDE, DBX_CONN + "run_python", {"code": "print(1)"}, [UNR], "only the opt-in guard"),
     ("fail-open", "unknown tool, databricks-dbsql", BOTH, "mcp__databricks-dbsql__list_warehouses", {}, [UNR], "only the opt-in guard"),
@@ -156,7 +159,7 @@ def hook_decision(stdout):
 def ledger_row(con, tool_use_id):
     for _ in range(40):  # the daemon writes the decided row asynchronously
         row = con.execute(
-            "select matched_rules_json, decision_result, applied_mode, evaluation_state, context_json "
+            "select matched_rules_json, decision_result, applied_mode, evaluation_state, context_json, provider, decision_fact_json "
             "from authorization_actions where tool_use_id = ? and canonical_event_type = 'request.decided' "
             "order by created_at desc limit 1", (tool_use_id,)).fetchone()
         if row:
@@ -197,7 +200,7 @@ def main():
             if row is None:
                 r.update(status="FAIL", why="no ledger row")
             else:
-                rules, decision, mode, state, ctx = row
+                rules, decision, mode, state, ctx, provider, fact = row
                 ev = (json.loads(ctx or "{}").get("policy_evidence") or {})
                 matched = json.loads(rules or "[]")
                 got = sorted({p for p in map(preset_of, matched) if p})
@@ -212,6 +215,14 @@ def main():
                     why.append(f"engine_errors={errors} state={state}")
                 if mode == "enforce" and (r["hook"] == "deny") != bool(deny):
                     why.append(f"hook said {r['hook']}")
+                # The ledger row and the exported fact name the provider the
+                # Cedar request classified the call as (#595, F4).
+                want = (req.get("tool") or {}).get("provider") or (
+                    "databricks" if any(f.startswith("databricks/") for p in req.get("shell") or [] for f in p.get("facts") or []) else None)
+                target = json.loads(fact or "{}").get("target_provider")
+                r.update(provider=provider, target_provider=target)
+                if want and (provider != want or target != want):
+                    why.append(f"provider={provider!r} target_provider={target!r}, want {want!r}")
                 r.update(status="FAIL" if why else "PASS", why="; ".join(why))
             results.append(r)
             print(f"{r['status']} {agent:6} {name[:70]:70} {r.get('actual')} {r.get('why', '')}", flush=True)
