@@ -42,7 +42,7 @@ func TestResolveGitHubMCP(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, matched := Resolve(test.tool, "", test.input)
+			got, matched := Resolve(test.tool, "", "", test.input)
 			if got != test.want || matched != test.matched {
 				t.Fatalf("Resolve() = %q, %v; want %q, %v", got, matched, test.want, test.matched)
 			}

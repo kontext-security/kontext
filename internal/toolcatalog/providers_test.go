@@ -43,7 +43,7 @@ func TestResolveProviderMCP(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, matched := Resolve(test.tool, "", test.input)
+			got, matched := Resolve(test.tool, "", "", test.input)
 			if got != test.want || matched != test.matched {
 				t.Fatalf("Resolve() = %q, %v; want %q, %v", got, matched, test.want, test.matched)
 			}
@@ -139,7 +139,7 @@ func TestUnnamedGitHubToolsReportUnrecognizedWithTheirTier(t *testing.T) {
 		{"mcp__github__delete_file", map[string]any{"owner": "o", "repo": "r"}, GitHubUnrecognizedTool, ProviderClassification{Provider: "github", Product: "code", Access: AccessDelete}},
 	}
 	for _, test := range tests {
-		id, ok := Resolve(test.toolName, "", test.input)
+		id, ok := Resolve(test.toolName, "", "", test.input)
 		if !ok || id != test.wantID {
 			t.Errorf("Resolve(%q) = %q, %v; want %q", test.toolName, id, ok, test.wantID)
 		}
@@ -189,7 +189,7 @@ func TestResolveByServerURL(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, matched := Resolve(test.tool, test.url, test.input)
+			got, matched := Resolve(test.tool, test.url, "", test.input)
 			if got != test.want || matched != test.matched {
 				t.Fatalf("Resolve() = %q, %v; want %q, %v", got, matched, test.want, test.matched)
 			}
@@ -200,7 +200,7 @@ func TestResolveByServerURL(t *testing.T) {
 // A server name that hints at a later catalog is held to that catalog
 // before an earlier catalog's distinctive names are tried.
 func TestResolveTriesNameHintedProvidersFirst(t *testing.T) {
-	if got, ok := Resolve("mcp__hubspot__deleteJiraIssue", "", nil); !ok || got != "hubspot-mcp/unrecognized" {
+	if got, ok := Resolve("mcp__hubspot__deleteJiraIssue", "", "", nil); !ok || got != "hubspot-mcp/unrecognized" {
 		t.Fatalf("Resolve() = %q, %v; want hubspot-mcp/unrecognized", got, ok)
 	}
 }
@@ -281,10 +281,10 @@ func TestServerURLPartsResolvesDotSegmentsLikeClients(t *testing.T) {
 		}
 	}
 	// The client requests the resolved path, so that is what decides.
-	if got, _ := Resolve("mcp__work__getTeam", "https://api.githubcopilot.com/mcp/../x", nil); got != "" {
+	if got, _ := Resolve("mcp__work__getTeam", "https://api.githubcopilot.com/mcp/../x", "", nil); got != "" {
 		t.Errorf("a path that leaves /mcp resolved to %q", got)
 	}
-	if got, _ := Resolve("mcp__work__get_me", "https://api.githubcopilot.com/x/../mcp/", map[string]any{}); got != "github-mcp/get_me" {
+	if got, _ := Resolve("mcp__work__get_me", "https://api.githubcopilot.com/x/../mcp/", "", map[string]any{}); got != "github-mcp/get_me" {
 		t.Errorf("a path that resolves into /mcp resolved to %q", got)
 	}
 }

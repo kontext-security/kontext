@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,11 @@ func writeConfig(t *testing.T, path, content string) {
 // closes). Servers that stay unidentified keep their raw name and are
 // allowed.
 func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
+	const (
+		connectorURL    = "c2be245b-9fd0-47e8-9a48-80c63e49e3fb"
+		connectorName   = "7a1d0b3c-2e4f-4a5b-8c6d-0e1f2a3b4c5d"
+		coworkConnector = "219594f1-0962-43db-80ef-5c9151f8459d"
+	)
 	home := useMCPHome(t)
 	project := filepath.Join(home, "src/app")
 	const atlassian = `{"type":"http","url":"https://mcp.atlassian.com/v1/mcp"}`
@@ -83,6 +89,16 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
   "dup-tools@m0": [{"installPath": "`+filepath.Join(home, ".claude/plugins/cache/m0/dup-tools/1.0.0")+`"}],
   "dup-tools@m1": [{"installPath": "`+filepath.Join(home, ".claude/plugins/cache/m1/dup-tools/1.0.0")+`"}]
 }}`)
+	// Claude Desktop names a claude.ai connector's tools by its UUID and
+	// records the connector in the session's record. Another session's
+	// record, with the same UUID elsewhere, must not count.
+	sessions := filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions/acct/org")
+	writeConfig(t, filepath.Join(sessions, "local_other.json"), `{"cliSessionId": "session-2", "remoteMcpServersConfig": [{"uuid": "`+connectorURL+`", "name": "Docs", "url": "https://api.githubcopilot.com/mcp/"}]}`)
+	writeConfig(t, filepath.Join(sessions, "local_this.json"), `{"cliSessionId": "session-1", "title": "x", "remoteMcpServersConfig": [
+  {"uuid": "`+connectorURL+`", "name": "Work", "url": "https://mcp.atlassian.com/v1/mcp", "tools": []},
+  {"uuid": "`+connectorName+`", "name": "Atlassian", "url": "https://connector.example.com/mcp"}
+]}`)
+	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions/acct/org/local_cowork.json"), `{"cliSessionId": "session-1", "remoteMcpServersConfig": [{"uuid": "`+coworkConnector+`", "name": "Atlassian"}]}`)
 	writeConfig(t, filepath.Join(home, ".codex/config.toml"), "[mcp_servers.work]\nurl = \"https://mcp.atlassian.com/v1/mcp\"\n")
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": {"work": `+atlassian+`}}`)
 
@@ -115,6 +131,11 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		{"ancestor project's local entry, hinted name", "claude", filepath.Join(home, "src/outer/repo"), "mcp__atlassian__createTeam", risk.DecisionDeny},
 		{"ancestor project's local entry, neutral name", "claude", filepath.Join(home, "src/outer/repo/pkg"), "mcp__work__createTeam", risk.DecisionAllow},
 		{"plugin installations disagree", "claude", "", "mcp__plugin_dup-tools_cloud__createTeam", risk.DecisionAllow},
+		{"desktop connector by URL", "claude", "", "mcp__" + connectorURL + "__createTeam", risk.DecisionDeny},
+		{"desktop connector by name", "claude", "", "mcp__" + connectorName + "__createTeam", risk.DecisionDeny},
+		{"desktop connector in cowork", "cowork", "", "mcp__" + strings.ToUpper(connectorURL) + "__createTeam", risk.DecisionDeny},
+		{"cowork connector by name only", "cowork", "", "mcp__" + coworkConnector + "__createTeam", risk.DecisionDeny},
+		{"unknown desktop connector", "claude", "", "mcp__0d4c6e3a-1111-4222-8333-944445555666__createTeam", risk.DecisionAllow},
 		{"unlisted server", "claude", project, "mcp__elsewhere__createTeam", risk.DecisionAllow},
 		{"unknown agent", "gemini", project, "mcp__work__createTeam", risk.DecisionAllow},
 	}
@@ -132,6 +153,13 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		})
 	}
 
+	// A session without a record leaves the connector unidentified.
+	event := cedarHookEvent("mcp__"+connectorURL+"__createTeam", write)
+	event.SessionID = "session-3"
+	if decision, err := provider.DecideHook(context.Background(), event); err != nil || decision.Decision != risk.DecisionAllow {
+		t.Fatalf("connector without a session record = %#v, %v; want allow", decision, err)
+	}
+
 	// A server identified before that no longer resolves (its entry was
 	// removed) is unidentified again, and allowed.
 	path := filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json")
@@ -140,7 +168,7 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	if err := os.Chtimes(path, later, later); err != nil {
 		t.Fatal(err)
 	}
-	event := cedarHookEvent("mcp__work__createTeam", write)
+	event = cedarHookEvent("mcp__work__createTeam", write)
 	event.Agent = "cowork"
 	decision, err := provider.DecideHook(context.Background(), event)
 	if err != nil {

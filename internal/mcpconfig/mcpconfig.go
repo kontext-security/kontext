@@ -12,6 +12,11 @@
 //     servers. The project is the deepest directory at or above the hook's
 //     cwd that ~/.claude.json records.
 //   - Claude Cowork: Claude Desktop's claude_desktop_config.json.
+//   - claude.ai connectors in Claude Desktop sessions, whose tools are named
+//     mcp__<connector-uuid>__<tool>: the connector's URL and name in the
+//     Desktop session record (claude-code-sessions/ for Code tab sessions,
+//     local-agent-mode-sessions/ for Cowork) whose cliSessionId is the
+//     hook's session id. Cowork records may carry only the name.
 //   - Codex: config.toml [mcp_servers].
 //
 // The first source that defines a server wins whole, so a stdio entry
@@ -26,6 +31,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -69,12 +76,14 @@ type cachedFile struct {
 	ok      bool
 }
 
-// ServerURL returns the configured URL of the MCP server behind toolName
-// (mcp__<server>__<tool>) for the agent that reported it, or "". A lookup
-// that does not finish within lookupTimeout returns "".
-func (r *Resolver) ServerURL(agent, cwd, toolName string) string {
+// Server returns the configured URL of the MCP server behind toolName
+// (mcp__<server>__<tool>) for the agent that reported it, or "". name is
+// the server's display name when the tool name does not carry it (a Claude
+// Desktop connector), else "". A lookup that does not finish within
+// lookupTimeout returns nothing.
+func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name string) {
 	if !strings.HasPrefix(toolName, "mcp__") {
-		return ""
+		return "", ""
 	}
 	r.once.Do(func() { r.lookups = make(chan struct{}, maxLookups) })
 	timer := time.NewTimer(lookupTimeout)
@@ -82,37 +91,46 @@ func (r *Resolver) ServerURL(agent, cwd, toolName string) string {
 	select {
 	case r.lookups <- struct{}{}:
 	case <-timer.C:
-		return ""
+		return "", ""
 	}
-	result := make(chan string, 1)
+	result := make(chan [2]string, 1)
 	go func() {
 		defer func() { <-r.lookups }()
-		result <- r.lookup(agent, cwd, toolName)
+		url, name := r.lookup(agent, sessionID, cwd, toolName)
+		result <- [2]string{url, name}
 	}()
 	select {
-	case url := <-result:
-		return url
+	case found := <-result:
+		return found[0], found[1]
 	case <-timer.C:
-		return ""
+		return "", ""
 	}
 }
 
-func (r *Resolver) lookup(agent, cwd, toolName string) string {
-	rest, ok := strings.CutPrefix(toolName, "mcp__")
-	if !ok {
-		return ""
-	}
+func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name string) {
+	rest, _ := strings.CutPrefix(toolName, "mcp__")
 	server, _, ok := strings.Cut(rest, "__")
 	if !ok || server == "" {
-		return ""
+		return "", ""
 	}
 	home := r.Home
 	if home == "" {
 		var err error
 		if home, err = os.UserHomeDir(); err != nil {
-			return ""
+			return "", ""
 		}
 	}
+	switch agent {
+	case "claude", "claude-code", "claude_code", "cowork", "claude-cowork", "claude_cowork":
+		// Claude Desktop names a claude.ai connector's tools by its UUID.
+		if uuidPattern.MatchString(server) {
+			return r.desktopConnector(home, sessionID, server)
+		}
+	}
+	return r.configURL(home, agent, cwd, server), ""
+}
+
+func (r *Resolver) configURL(home, agent, cwd, server string) string {
 	switch agent {
 	case "claude", "claude-code", "claude_code":
 		return r.claude(home, cwd, server)
@@ -207,6 +225,52 @@ func projectRoot(root readers.ClaudeRoot, cwd string) string {
 			return ""
 		}
 	}
+}
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// desktopSession is the part of a Claude Desktop session record the lookup
+// reads; the record holds much else, which is never kept.
+type desktopSession struct {
+	CLISessionID string `json:"cliSessionId"`
+	Connectors   []struct {
+		UUID string `json:"uuid"`
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	} `json:"remoteMcpServersConfig"`
+}
+
+// desktopConnector resolves a connector UUID through the Claude Desktop
+// session record whose cliSessionId is the hook's session id. Records are
+// tried newest first, since the calling session is active.
+func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name string) {
+	if sessionID == "" {
+		return "", ""
+	}
+	var paths []string
+	for _, dir := range []string{"claude-code-sessions", "local-agent-mode-sessions"} {
+		found, _ := filepath.Glob(filepath.Join(home, "Library/Application Support/Claude", dir, "*/*/local_*.json"))
+		paths = append(paths, found...)
+	}
+	modTimes := make(map[string]time.Time, len(paths))
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil {
+			modTimes[path] = info.ModTime()
+		}
+	}
+	sort.Slice(paths, func(i, j int) bool { return modTimes[paths[i]].After(modTimes[paths[j]]) })
+	for _, path := range paths {
+		session, ok := load(r, path, parseJSON[desktopSession])
+		if !ok || session.CLISessionID != sessionID {
+			continue
+		}
+		for _, connector := range session.Connectors {
+			if strings.EqualFold(connector.UUID, server) {
+				return strings.TrimSpace(connector.URL), connector.Name
+			}
+		}
+	}
+	return "", ""
 }
 
 // plugin resolves a plugin's MCP server, which Claude Code names

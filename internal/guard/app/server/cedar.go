@@ -334,8 +334,8 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 	if risk.IsShellTool(event.ToolName) || coworkShell {
 		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput))
 	}
-	serverURL := mcpServers.ServerURL(event.Agent, event.CWD, event.ToolName)
-	if toolID, github := toolcatalog.Resolve(event.ToolName, serverURL, event.ToolInput); github {
+	serverURL, serverName := mcpServers.Server(event.Agent, event.SessionID, event.CWD, event.ToolName)
+	if toolID, github := toolcatalog.Resolve(event.ToolName, serverURL, serverName, event.ToolInput); github {
 		return toolID, nil
 	}
 	if legacyUnknown {

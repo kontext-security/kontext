@@ -116,7 +116,9 @@ var githubServerURLHints = []ServerURLHint{{Host: "api.githubcopilot.com", PathP
 
 // Resolve maps an MCP tool call to a catalogued tool id. serverURL is the URL
 // the agent's configuration gives the server, or "" when it has none (a
-// stdio server, a claude.ai connector, an unreadable config).
+// stdio server, a claude.ai connector, an unreadable config). serverName,
+// when set, is the server's display name for the name hints in place of the
+// one in toolName (a Claude Desktop connector's tools carry its UUID).
 //
 // A URL a catalog claims decides the provider whatever the server is called,
 // so naming a Databricks server "github" cannot move it off its presets.
@@ -133,10 +135,13 @@ var githubServerURLHints = []ServerURLHint{{Host: "api.githubcopilot.com", PathP
 // clearly not GitHub. A GitHub server is additionally held to the catalog
 // for tools it does not list, so a new GitHub tool is unrecognized rather
 // than unknown.
-func Resolve(toolName, serverURL string, input map[string]any) (string, bool) {
+func Resolve(toolName, serverURL, serverName string, input map[string]any) (string, bool) {
 	server, tool, ok := splitMCPToolName(toolName)
 	if !ok {
 		return "", false
+	}
+	if serverName != "" {
+		server = serverName
 	}
 	if host, path := serverURLParts(serverURL); host != "" {
 		if matchesURLHints(githubServerURLHints, host, path) {
