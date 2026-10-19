@@ -9,32 +9,33 @@ import (
 // ClassifyDatabricksSQL reports what a Databricks SQL text does beyond the SQL
 // base tier, write, which the caller sets. It only ever adds to that tier.
 //
-//   - deletes: a delete form in any statement (DROP, DELETE, TRUNCATE, INSERT
-//     OVERWRITE, REPLACE WHERE|USING|ON, VACUUM, RESTORE, MERGE … DELETE, …),
-//     found wherever it sits, CTEs and subqueries included.
-//   - admin: an administrative statement form (GRANT, REVOKE, DENY, ALTER …
-//     OWNER TO, tags, column masks, row filters, policies, credentials,
-//     connections, shares, groups, …). Only a recognized form sets it; the
-//     same word as an alias, identifier or string never does.
-//   - Both: CREATE OR REPLACE and CREATE OR REFRESH, which replace data and
-//     drop any mask or filter the new definition leaves out, and DROP POLICY.
+// Each top-level statement is looked up by its leading keywords, after any
+// WITH prefix, in databricksStatementTypes, and a few clauses at its top level
+// add to that: CREATE OR REPLACE|REFRESH, INSERT OVERWRITE, INSERT … REPLACE
+// WHERE|USING|ON and MERGE … THEN DELETE delete; ALTER … OWNER TO, column
+// masks, row filters and tags are admin. Admin comes only from a statement
+// type or one of these clauses, never from a stray keyword. The strictest
+// statement wins.
+//
+//   - deletes, admin: what the statements do; a statement type such as DROP
+//     POLICY can set both.
 //   - touchesSecrets: a secret() call anywhere, recognized or not.
 //   - recognized: false means nothing was proven: both flags are false and the
 //     caller keeps write. A set flag is proven, and recognized is then true
-//     whatever else the text holds. Otherwise it is true only for one
-//     statement of a known write form, lexed to the end, that runs no dynamic
-//     SQL, no user-defined function and no function with outside effects.
+//     whatever else the text holds. Otherwise it needs every statement to be
+//     a listed type, the text lexed to the end, and no dynamic SQL or listed
+//     function with outside effects.
 //
 // Callers (decided in ENG-734): the shell emits databricks/delete=true and
 // databricks/admin=true for each flag set. An MCP call carries a single
 // context.tool.access, so a statement with both flags reports delete there,
 // and protect-databricks-administration does not see its admin side.
 //
-// ponytail: a keyword scan over a lexer that follows Spark's, not a grammar.
-// A false positive only adds a flag, and admin needs a statement form, not a
-// word. A user-defined function called by its bare name reads as a built-in.
-// Upgrade path: a parser generated from Spark's SqlBaseParser.g4 and the
-// function catalog, if the scan ever needs to prove less.
+// ponytail: a statement-type table over a lexer that follows Spark's quoting,
+// not a grammar. SQL scripting (BEGIN … END, IF, loops, handlers), EXECUTE
+// IMMEDIATE, CALL and unlisted types are unrecognized, so a delete or admin
+// change inside them stays write: only the read-only preset catches it.
+// Upgrade path: a parser generated from Spark's SqlBaseParser.g4.
 func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recognized bool) {
 	tokens, complete := lexDatabricksSQL(sql)
 	statements, known := 0, complete
@@ -52,49 +53,64 @@ func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recogniz
 			continue
 		}
 		statements++
-		d, a, secrets, stmtKnown := classifyDatabricksStatement(stmt)
-		deletes, admin = deletes || d, admin || a
+		effect, secrets, stmtKnown := classifyDatabricksStatement(stmt)
+		deletes = deletes || effect&sqlDeletes != 0
+		admin = admin || effect&sqlAdmin != 0
 		touchesSecrets = touchesSecrets || secrets
 		known = known && stmtKnown
 	}
-	return deletes, admin, touchesSecrets, deletes || admin || known && statements == 1
+	return deletes, admin, touchesSecrets, deletes || admin || known && statements > 0
 }
 
-// Statement forms that stay at write when nothing else is found.
-var databricksWriteForms = setOf("SELECT", "WITH", "VALUES", "SHOW", "DESCRIBE", "DESC", "EXPLAIN",
-	"INSERT", "UPDATE", "MERGE", "CREATE", "COPY", "SET", "USE")
-
-// SQL scripting: a statement headed by a script form holds statements of its
-// own. One starts after a block word (or a label after one), outside any CASE
-// expression, and only with a statement keyword, so a variable named do or
-// begin opens nothing. The conditions of DECLARE … HANDLER FOR end one too.
-var (
-	databricksScriptForms = setOf("BEGIN", "IF", "ELSEIF", "ELSE", "CASE", "WHEN", "FOR", "WHILE", "LOOP",
-		"REPEAT", "DECLARE")
-	databricksBlockWords = setOf("BEGIN", "ATOMIC", "THEN", "ELSE", "DO", "LOOP", "REPEAT")
-	databricksStatements = setOf("SELECT", "WITH", "VALUES", "INSERT", "UPDATE", "DELETE", "MERGE", "COPY",
-		"CREATE", "ALTER", "DROP", "TRUNCATE", "VACUUM", "RESTORE", "REFRESH", "MSCK", "REPAIR", "OPTIMIZE",
-		"GRANT", "REVOKE", "DENY", "SET", "UNSET", "USE", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "COMMENT",
-		"CALL", "EXECUTE", "DECLARE", "BEGIN", "IF", "CASE", "FOR", "WHILE", "LOOP", "REPEAT", "ITERATE",
-		"LEAVE", "RETURN", "SIGNAL", "RESIGNAL")
+const (
+	sqlDeletes = 1 << iota
+	sqlAdmin
+	sqlBoth = sqlDeletes | sqlAdmin
 )
 
-// A qualified name before ( is a call unless a table keyword precedes it: a
-// column list. A qualified column before a subquery reads as a call too.
-var databricksTableKeywords = setOf("INTO", "TABLE", "VIEW", "FUNCTION", "EXISTS")
+// databricksStatementTypes maps a statement's leading keywords to what it does
+// beyond write, from the statement list of the Databricks SQL language
+// reference (https://learn.microsoft.com/azure/databricks/sql/language-manual).
+// The longest listed prefix wins; a statement with none is unrecognized.
+var databricksStatementTypes = map[string]int{
+	// Queries, DML and auxiliary statements: write.
+	"SELECT": 0, "VALUES": 0, "FROM": 0, "TABLE": 0, "EXPLAIN": 0, "INSERT": 0, "UPDATE": 0, "MERGE": 0,
+	"COPY INTO": 0, "LOAD DATA": 0, "PUT": 0, "GET": 0, "LIST": 0, "SHOW": 0, "DESCRIBE": 0, "DESC": 0,
+	"USE": 0, "SET": 0, "RESET": 0, "DECLARE": 0, "ANALYZE": 0, "CACHE": 0, "UNCACHE": 0, "CLEAR CACHE": 0,
+	"REFRESH": 0, "OPTIMIZE": 0, "REORG": 0, "CONVERT TO": 0, "GENERATE": 0, "UNDROP": 0, "SYNC": 0,
+	"COMMENT ON": 0, "MSCK REPAIR": 0, "REPAIR": 0,
+	"CREATE TABLE": 0, "CREATE EXTERNAL TABLE": 0, "CREATE VIEW": 0, "CREATE MATERIALIZED VIEW": 0,
+	"CREATE STREAMING TABLE": 0, "CREATE LIVE TABLE": 0, "CREATE SCHEMA": 0, "CREATE DATABASE": 0,
+	"CREATE CATALOG": 0, "CREATE FOREIGN CATALOG": 0, "CREATE FUNCTION": 0, "CREATE VOLUME": 0,
+	"CREATE EXTERNAL VOLUME": 0, "CREATE BLOOMFILTER INDEX": 0,
+	"ALTER TABLE": 0, "ALTER VIEW": 0, "ALTER MATERIALIZED VIEW": 0, "ALTER STREAMING TABLE": 0,
+	"ALTER SCHEMA": 0, "ALTER DATABASE": 0, "ALTER CATALOG": 0, "ALTER VOLUME": 0,
 
-// Objects whose CREATE, ALTER or DROP is administration: access policies,
-// governed tags, credentials, connections, external locations, Delta Sharing,
-// clean rooms and workspace groups.
-var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", "SERVER", "LOCATION",
-	"SHARE", "CLEAN", "RECIPIENT", "PROVIDER", "GROUP", "METASTORE")
+	// Deletes.
+	"DELETE": sqlDeletes, "TRUNCATE": sqlDeletes, "VACUUM": sqlDeletes, "RESTORE": sqlDeletes,
+	"FSCK": sqlDeletes, "REMOVE": sqlDeletes, "DROP": sqlDeletes,
 
-// Words between CREATE, ALTER or DROP and the object kind.
-var databricksObjectModifiers = setOf("OR", "REPLACE", "IF", "NOT", "EXISTS", "TEMPORARY", "TEMP",
-	"GLOBAL", "EXTERNAL", "STORAGE", "SERVICE", "GOVERNED")
+	// Administration: privileges, access policies, governed tags, credentials,
+	// connections, external locations, Delta Sharing, clean rooms and groups.
+	"GRANT": sqlAdmin, "REVOKE": sqlAdmin, "DENY": sqlAdmin, "SET TAG": sqlAdmin, "UNSET TAG": sqlAdmin,
+	"CREATE POLICY": sqlAdmin, "ALTER POLICY": sqlAdmin, "DROP POLICY": sqlBoth,
+	"CREATE GOVERNED TAG": sqlAdmin, "ALTER GOVERNED TAG": sqlAdmin, "DROP GOVERNED TAG": sqlBoth,
+	"CREATE CREDENTIAL": sqlAdmin, "ALTER CREDENTIAL": sqlAdmin, "DROP CREDENTIAL": sqlBoth,
+	"CREATE STORAGE CREDENTIAL": sqlAdmin, "ALTER STORAGE CREDENTIAL": sqlAdmin, "DROP STORAGE CREDENTIAL": sqlBoth,
+	"CREATE SERVICE CREDENTIAL": sqlAdmin, "ALTER SERVICE CREDENTIAL": sqlAdmin, "DROP SERVICE CREDENTIAL": sqlBoth,
+	"CREATE CONNECTION": sqlAdmin, "ALTER CONNECTION": sqlAdmin, "DROP CONNECTION": sqlBoth,
+	"CREATE SERVER": sqlAdmin, "ALTER SERVER": sqlAdmin, "DROP SERVER": sqlBoth,
+	"CREATE EXTERNAL LOCATION": sqlAdmin, "ALTER EXTERNAL LOCATION": sqlAdmin, "DROP EXTERNAL LOCATION": sqlBoth,
+	"CREATE SHARE": sqlAdmin, "ALTER SHARE": sqlAdmin, "DROP SHARE": sqlBoth,
+	"CREATE RECIPIENT": sqlAdmin, "ALTER RECIPIENT": sqlAdmin, "DROP RECIPIENT": sqlBoth,
+	"CREATE PROVIDER": sqlAdmin, "ALTER PROVIDER": sqlAdmin, "DROP PROVIDER": sqlBoth,
+	"CREATE CLEAN ROOM": sqlAdmin, "ALTER CLEAN ROOM": sqlAdmin, "DROP CLEAN ROOM": sqlBoth,
+	"CREATE GROUP": sqlAdmin, "ALTER GROUP": sqlAdmin, "DROP GROUP": sqlBoth, "ALTER METASTORE": sqlAdmin,
+}
 
-// Words a column or constraint name follows: a MASK after them is that name.
-var databricksBeforeColumnName = setOf("COLUMN", "COLUMNS", "CONSTRAINT", "AS")
+// Words skipped when reading a statement's type: CREATE OR REPLACE TEMPORARY
+// VIEW IF NOT EXISTS is a CREATE VIEW.
+var databricksTypeModifiers = setOf("OR", "REPLACE", "REFRESH", "TEMPORARY", "TEMP", "GLOBAL", "IF", "NOT", "EXISTS")
 
 var databricksSecretFunctions = setOf("SECRET", "TRY_SECRET", "LIST_SECRETS")
 
@@ -106,54 +122,61 @@ var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA"
 	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE", "LIST_FILES", "TO_FILE", "TRY_TO_FILE",
 	"READ_STATESTORE", "READ_STATE_METADATA", "CLOUD_FILES_STATE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
 
-func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, known bool) {
+// Words a column or constraint name follows: a MASK after them is that name.
+var databricksBeforeColumnName = setOf("COLUMN", "COLUMNS", "CONSTRAINT", "AS")
+
+func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bool) {
 	at := func(i int) sqlToken {
 		if i < 0 || i >= len(stmt) {
 			return sqlToken{}
 		}
 		return stmt[i]
 	}
-	first := 0
-	for first < len(stmt)-1 && stmt[first].is("(") {
-		first++
-	}
-	// a scripting label, not a parameter marker as in SELECT :id
-	if at(first+1).is(":") && !databricksStatements[at(first).text] && databricksScriptForms[at(first+2).text] {
-		first += 2
-	}
-	// head is the form of the statement being read: the first word, or in a
-	// scripting block the statement keyword that opens a nested statement.
-	head, headAt, opaque, refresh, repair, adding := "", -1, false, false, false, false
-	depth, caseDepth, handlerStart := 0, 0, -1
-	columns, grouped, angle := false, false, 0 // inside column definitions; STRUCT<…> depth
-	// whenNext[i]: the next WHEN or THEN after i is a WHEN. A CASE opens an
-	// expression only then; IF case THEN reads a variable named case.
-	whenNext, when := make([]bool, len(stmt)), false
-	for i := len(stmt) - 1; i >= 0; i-- {
-		whenNext[i] = when
-		if stmt[i].is("WHEN") || stmt[i].is("THEN") {
-			when = stmt[i].is("WHEN")
-		}
-	}
+	opaque := false
 	for i, tok := range stmt {
-		prev, next := at(i-1), at(i+1)
-		block := prev // the word before this one, past any label
-		if prev.is(":") && (at(i-2).kind == sqlWord || at(i-2).kind == sqlName) {
-			block = at(i - 3)
+		// After malformed input a comment may sit between a name and its (,
+		// so a listed name counts as called wherever it appears.
+		if (at(i+1).is("(") || tok.loose) && (tok.kind == sqlWord || tok.kind == sqlName) {
+			name := tok.text[strings.LastIndexByte(tok.text, '.')+1:]
+			switch {
+			case databricksSecretFunctions[name]:
+				secrets = true
+			case databricksOpaqueFunctions[name] || strings.HasPrefix(name, "AI_"):
+				opaque = true
+			}
 		}
-		atHead := tok.kind == sqlWord && (i == first || i == handlerStart ||
-			databricksScriptForms[head] && caseDepth == 0 && databricksStatements[tok.text] &&
-				block.kind == sqlWord && databricksBlockWords[block.text])
-		if atHead {
-			head, headAt, depth, columns, grouped, adding, angle = tok.text, i, 0, false, false, false, 0
+		if tok.is("EXECUTE") || tok.is("CALL") {
+			opaque = true
 		}
-		if depth == 0 && tok.is("AS") && !prev.is(".") && !next.is(".") {
-			grouped = true // a CREATE's query follows AS: no column definitions after it
+	}
+
+	start := databricksStatementStart(stmt)
+	var words []string
+	for i := start; i < len(stmt) && stmt[i].kind == sqlWord && len(words) < 3; i++ {
+		if i == start || !databricksTypeModifiers[stmt[i].text] {
+			words = append(words, stmt[i].text)
 		}
+	}
+	typ := ""
+	for n := len(words); n > 0 && typ == ""; n-- {
+		if _, ok := databricksStatementTypes[strings.Join(words[:n], " ")]; ok {
+			typ = strings.Join(words[:n], " ")
+		}
+	}
+	if typ == "" {
+		return 0, secrets, false
+	}
+	effect = databricksStatementTypes[typ]
+	verb := words[0]
+
+	// Clauses at the statement's top level; a CREATE's column definitions,
+	// its first group before AS, and ALTER … ADD COLUMNS sit one level down.
+	depth, angle, columns, grouped, adding := 0, 0, false, false, false
+	for i := start; i < len(stmt); i++ {
+		tok, prev, next := stmt[i], at(i-1), at(i+1)
 		switch {
 		case tok.is("("):
-			// A CREATE's column definitions are its first top-level group.
-			columns = columns || depth == 0 && head == "CREATE" && !grouped
+			columns = columns || depth == 0 && verb == "CREATE" && !grouped
 			grouped = grouped || depth == 0
 			depth++
 		case tok.is(")"):
@@ -163,125 +186,112 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 			angle++
 		case tok.is(">") && angle > 0:
 			angle--
-		case tok.is("CASE") && !atHead && whenNext[i]:
-			caseDepth++
-		case tok.is("END") && caseDepth > 0:
-			caseDepth--
-		}
-		// After malformed input a comment may sit between a name and its (,
-		// so a listed name counts as called wherever it appears.
-		if (next.is("(") || tok.loose) && (tok.kind == sqlWord || tok.kind == sqlName) {
-			name := tok.text[strings.LastIndexByte(tok.text, '.')+1:]
-			switch {
-			case databricksSecretFunctions[name]:
-				secrets = true
-			case databricksOpaqueFunctions[name] || strings.HasPrefix(name, "AI_"):
-				opaque = true
-			}
-			builtin := at(i-2).text == "BUILTIN" && at(i-3).is(".") && at(i-4).text == "SYSTEM" && !at(i-5).is(".")
-			if next.is("(") && prev.is(".") && !builtin {
-				start := i - 2 // a qualified call is a user-defined function
-				for at(start - 1).is(".") {
-					start -= 2
-				}
-				columnList := at(start-1).kind == sqlWord && databricksTableKeywords[at(start-1).text] &&
-					!(at(start-1).text == "VIEW" && at(start-2).is("LATERAL"))
-				if !columnList {
-					opaque = true
-				}
-			}
 		}
 		if tok.kind != sqlWord {
 			continue
 		}
-		ddl := head == "ALTER" || head == "CREATE"
-		switch tok.text {
-		case "GRANT", "REVOKE", "DENY":
-			admin = admin || atHead
-		case "DELETE", "TRUNCATE", "OVERWRITE", "VACUUM", "RESTORE", "PURGE", "REMOVE":
-			deletes = true
-		case "REPLACE": // CREATE OR REPLACE, INSERT … REPLACE WHERE|USING|ON; not replace()
-			if !next.is("(") {
-				deletes = true
-			}
-			// CREATE OR REPLACE drops any mask or filter the new definition
-			// leaves out.
-			admin = admin || prev.is("OR") && head == "CREATE" && headAt == i-2
-		case "REFRESH":
-			if prev.is("OR") && head == "CREATE" && headAt == i-2 { // as CREATE OR REPLACE
-				deletes, admin = true, true
-			}
-			refresh = refresh || atHead
-		case "ADD": // ALTER TABLE … ADD COLUMN(S) may define a column mask
-			adding = adding || head == "ALTER" && depth == 0
-		case "MASK": // SET|DROP MASK, or a column mask in a column definition
-			nameNext := next.kind == sqlWord || next.kind == sqlName
-			definesColumn := nameNext && !prev.is("(") && !prev.is(",") && !databricksBeforeColumnName[prev.text]
-			definesColumn = definesColumn && angle == 0 // not a STRUCT field named mask
-			admin = admin || head == "ALTER" && (prev.is("SET") || prev.is("DROP")) ||
-				columns && depth == 1 && definesColumn || adding && definesColumn
-		case "FILTER": // SET|DROP|WITH ROW FILTER
-			admin = admin || ddl && prev.is("ROW") && (at(i-2).is("SET") || at(i-2).is("DROP") || at(i-2).is("WITH"))
-		case "TO":
-			if head == "ALTER" && prev.is("OWNER") {
-				start := i - 1 // not RENAME COLUMN [a.]owner TO …
-				for at(start - 1).is(".") {
-					start -= 2
-				}
-				admin = admin || !(at(start-1).is("COLUMN") && at(start-2).is("RENAME"))
-			}
-		case "TAG", "TAGS": // ALTER … SET|UNSET TAGS, SET|UNSET TAG ON
-			admin = admin || (head == "ALTER" || head == "SET" || head == "UNSET") && (prev.is("SET") || prev.is("UNSET"))
-		case "FULL", "WHERE": // REFRESH … FULL truncates; REFRESH … WHERE deletes the rows it matches
-			deletes = deletes || refresh
-		case "REPAIR":
-			repair = repair || atHead || prev.is("MSCK")
-		case "PRIVILEGES": // MSCK REPAIR … PRIVILEGES revokes grants
-			admin = admin || repair && (head == "MSCK" || head == "REPAIR")
-		case "SYNC": // MSCK REPAIR TABLE … SYNC PARTITIONS drops stale partitions
-			deletes = deletes || repair && next.is("PARTITIONS")
-		case "FOR": // DECLARE … HANDLER FOR conditions, then the handler's statement
-			if prev.is("HANDLER") && head == "DECLARE" {
-				j := i + 1
-				for {
-					switch {
-					case at(j).is("NOT") && at(j+1).is("FOUND"):
-						j += 2
-					case at(j).is("SQLSTATE") && at(j+1).is("VALUE"):
-						j += 3
-					case at(j).is("SQLSTATE"):
-						j += 2
-					default: // SQLEXCEPTION, SQLWARNING or a condition name, maybe dotted
-						j++
-						for at(j).is(".") {
-							j += 2
-						}
-					}
-					if !at(j).is(",") {
-						break
-					}
-					j++
-				}
-				if at(j + 1).is(":") { // a labelled handler block
-					j += 2
-				}
-				handlerStart = j
-			}
-		case "EXECUTE", "CALL":
-			opaque = true
-		case "CREATE", "ALTER", "DROP":
-			deletes = deletes || tok.text == "DROP"
-			if atHead {
-				j := i + 1
-				for at(j).kind == sqlWord && databricksObjectModifiers[at(j).text] {
-					j++
-				}
-				admin = admin || at(j).kind == sqlWord && databricksAdminObjects[at(j).text]
+		if depth == 0 && tok.is("AS") && !prev.is(".") && !next.is(".") {
+			grouped = true // a CREATE's query follows AS
+		}
+		if depth == 0 {
+			switch {
+			case verb == "CREATE" && i == start+2 && prev.is("OR") && (tok.is("REPLACE") || tok.is("REFRESH")),
+				(verb == "INSERT" || verb == "LOAD" || verb == "PUT") && tok.is("OVERWRITE"),
+				verb == "INSERT" && tok.is("REPLACE") && (next.is("WHERE") || next.is("USING") || next.is("ON")),
+				verb == "MERGE" && tok.is("DELETE") && prev.is("THEN"),
+				verb == "ALTER" && (tok.is("DROP") || tok.is("REPLACE") && next.is("COLUMNS")),
+				verb == "REFRESH" && (tok.is("FULL") || tok.is("WHERE")),
+				(verb == "MSCK" || verb == "REPAIR") && (tok.is("SYNC") || tok.is("DROP")) && next.is("PARTITIONS"):
+				effect |= sqlDeletes
+			case verb == "ALTER" && tok.is("TO") && prev.is("OWNER") && !databricksRenamesColumn(stmt, i-1),
+				verb == "ALTER" && tok.is("MASK") && (prev.is("SET") || prev.is("DROP")),
+				verb == "ALTER" && tok.is("FILTER") && prev.is("ROW") && (at(i-2).is("SET") || at(i-2).is("DROP")),
+				verb == "ALTER" && (tok.is("TAGS") || tok.is("TAG")) && (prev.is("SET") || prev.is("UNSET")),
+				verb == "CREATE" && tok.is("FILTER") && prev.is("ROW") && at(i-2).is("WITH"),
+				(verb == "MSCK" || verb == "REPAIR") && tok.is("PRIVILEGES"):
+				effect |= sqlAdmin
+			case verb == "ALTER" && tok.is("ADD"):
+				adding = true
+			case verb == "DECLARE" && (tok.is("HANDLER") || tok.is("CONDITION")):
+				opaque = true // SQL scripting, not a session variable
 			}
 		}
+		if verb == "REORG" && tok.is("PURGE") { // REORG TABLE … APPLY (PURGE)
+			effect |= sqlDeletes
+		}
+		// A column mask in a column definition: CREATE … (c t MASK f) or
+		// ALTER … ADD COLUMN(S) c t MASK f.
+		if tok.is("MASK") && angle == 0 && (columns && depth == 1 || adding && depth <= 1) &&
+			(next.kind == sqlWord || next.kind == sqlName) && !prev.is("(") && !prev.is(",") &&
+			!databricksBeforeColumnName[prev.text] {
+			effect |= sqlAdmin
+		}
 	}
-	known = at(first).kind == sqlWord && databricksWriteForms[at(first).text] && !opaque
-	return deletes, admin, secrets, known
+	return effect, secrets, !opaque
+}
+
+// databricksStatementStart returns where the statement proper begins: past
+// any leading parentheses and one WITH [RECURSIVE] name [(cols)] AS (query),
+// … prefix. In Databricks a CTE body is a query, never a write.
+func databricksStatementStart(stmt []sqlToken) int {
+	at := func(i int) sqlToken {
+		if i < len(stmt) {
+			return stmt[i]
+		}
+		return sqlToken{}
+	}
+	skipGroup := func(i int) int { // past the parenthesised group at i
+		for depth := 0; i < len(stmt); i++ {
+			if stmt[i].is("(") {
+				depth++
+			} else if stmt[i].is(")") {
+				if depth--; depth == 0 {
+					return i + 1
+				}
+			}
+		}
+		return i
+	}
+	i := 0
+	for at(i).is("(") {
+		i++
+	}
+	if !at(i).is("WITH") {
+		return i
+	}
+	i++
+	if at(i).is("RECURSIVE") {
+		i++
+	}
+	for i < len(stmt) {
+		i++ // the CTE name
+		if at(i).is("(") {
+			i = skipGroup(i)
+		}
+		if at(i).is("AS") {
+			i++
+		}
+		if at(i).is("(") {
+			i = skipGroup(i)
+		}
+		if !at(i).is(",") {
+			break
+		}
+		i++
+	}
+	for at(i).is("(") {
+		i++
+	}
+	return i
+}
+
+// databricksRenamesColumn reports whether the OWNER at i is the column of a
+// RENAME COLUMN [a.]owner TO …, not an ownership change.
+func databricksRenamesColumn(stmt []sqlToken, i int) bool {
+	for i >= 2 && stmt[i-1].is(".") {
+		i -= 2
+	}
+	return i >= 2 && stmt[i-1].is("COLUMN") && stmt[i-2].is("RENAME")
 }
 
 const (
