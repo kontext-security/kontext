@@ -7,7 +7,8 @@ import (
 )
 
 func TestClassifyDatabricksSQL(t *testing.T) {
-	long := "SELECT " + strings.Repeat("a, ", 1<<17) + "1 FROM t"
+	long := "SELECT " + strings.Repeat("a, ", 1<<14) + "1 FROM t"
+	tooLong := "DROP TABLE t; SELECT '" + strings.Repeat("x", databricksSQLMaxLen) + "'"
 	tests := []struct {
 		name       string
 		sql        string
@@ -337,6 +338,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 
 		{"very long", long, false, false, false, true},
 		{"very long then drop", long + "; DROP TABLE t", true, false, false, true},
+		{"over the cap is unread", tooLong, false, false, false, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -349,17 +351,37 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 	}
 }
 
-// Malformed input must stay linear: each unterminated opener used to rescan
-// the rest of the text.
+// Malformed input must classify in linear time: quadrupling it should about
+// quadruple the time, where a rescan per opener would multiply it by 16. The
+// ratio, not a wall-clock limit, keeps this stable on slow CI runners.
 func TestClassifyDatabricksSQLMalformedIsLinear(t *testing.T) {
-	for _, unit := range []string{"/*", `'\`, "$a$", "r'", "/* /*+ a.", "a."} {
-		sql := strings.Repeat(unit, 1<<17) + "; DROP TABLE t"
-		start := time.Now()
-		if deletes, _, _, _ := ClassifyDatabricksSQL(sql); !deletes {
-			t.Errorf("%q x 2^17: deletes = false, want true", unit)
+	timed := func(sql string) time.Duration {
+		best := time.Duration(1 << 62)
+		for range 5 {
+			start := time.Now()
+			ClassifyDatabricksSQL(sql)
+			best = min(best, time.Since(start))
 		}
-		if elapsed := time.Since(start); elapsed > 2*time.Second {
-			t.Errorf("%q x 2^17 took %v", unit, elapsed)
+		return best
+	}
+	for _, unit := range []string{"/*", `'\`, "$a$", "r'", "/* /*+ a.", "a.", "/*+ a", "\"\\\"", "SELECT 1; "} {
+		repeat := func(size int) string { return strings.Repeat(unit, size/len(unit)) + "; DROP TABLE t" }
+		if deletes, _, _, _ := ClassifyDatabricksSQL(repeat(databricksSQLMaxLen / 2)); !deletes {
+			t.Errorf("%q: deletes = false, want true", unit)
 		}
+		small, large := timed(repeat(databricksSQLMaxLen/8)), timed(repeat(databricksSQLMaxLen/2))
+		if ratio := float64(large) / float64(max(small, time.Microsecond)); ratio > 10 {
+			t.Errorf("%q: 4x the input took %.1fx the time (%v, %v)", unit, ratio, small, large)
+		}
+	}
+}
+
+// The largest text read, at the cap, classifies well inside a hook's budget.
+func TestClassifyDatabricksSQLAtCapIsFast(t *testing.T) {
+	sql := strings.Repeat("/* /*+ a.", databricksSQLMaxLen/9)
+	start := time.Now()
+	ClassifyDatabricksSQL(sql)
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+		t.Errorf("%d bytes took %v", len(sql), elapsed)
 	}
 }

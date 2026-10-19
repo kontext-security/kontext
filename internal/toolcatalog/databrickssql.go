@@ -38,6 +38,9 @@ import (
 // change inside them stays write: only the read-only preset catches it.
 // Upgrade path: a parser generated from Spark's SqlBaseParser.g4.
 func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recognized bool) {
+	if len(sql) > databricksSQLMaxLen {
+		return false, false, false, false
+	}
 	// Spark lexers differ on a /*+ inside a comment (newer ones nest it) and
 	// on "…" (a string with backslash escapes, or with ANSI double-quoted
 	// identifiers a name without them). Where the text can read either way,
@@ -81,6 +84,11 @@ func classifyDatabricksTokens(tokens []sqlToken, complete bool) (deletes, admin,
 	}
 	return deletes, admin, touchesSecrets, known && statements > 0
 }
+
+// ponytail: text over 64 KiB is unrecognized unread, so the caller keeps write
+// and a hostile statement cannot hold a PreToolUse hook past its ~1s budget.
+// Classification is linear below it; raise the cap if real statements hit it.
+const databricksSQLMaxLen = 64 << 10
 
 const (
 	sqlDeletes = 1 << iota
