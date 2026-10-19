@@ -1082,6 +1082,20 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 			riskEvent.ResourceClass = "repo"
 		}
 	}
+	if riskEvent.Provider == "" {
+		// The normalizer does not know catalogued providers (Atlassian,
+		// HubSpot, Databricks); the Cedar request does. The exported
+		// decision fact takes its target_provider from the provider column.
+		if classified := cedarClassification(decision.Cedar); classified != nil {
+			riskEvent.Provider = classified.Provider
+			if classified.Access != "" {
+				riskEvent.OperationClass = classified.Access
+			}
+			if classified.Product != "" {
+				riskEvent.ResourceClass = classified.Product
+			}
+		}
+	}
 	riskEventJSON, err := json.Marshal(riskEvent)
 	if err != nil {
 		return nil, err
@@ -1163,21 +1177,6 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 	if resourceID != "" {
 		provider = "github"
 	}
-	operationClass, resourceClass := riskEvent.OperationClass, riskEvent.ResourceClass
-	if provider == "" {
-		// The normalizer does not know catalogued providers (Atlassian,
-		// HubSpot, Databricks); the Cedar request does. The exported
-		// decision fact takes its target_provider from this column.
-		if classified := cedarClassification(decision.Cedar); classified != nil {
-			provider = classified.Provider
-			if classified.Access != "" {
-				operationClass = classified.Access
-			}
-			if classified.Product != "" {
-				resourceClass = classified.Product
-			}
-		}
-	}
 
 	updatedAt := now.Format(time.RFC3339Nano)
 
@@ -1191,8 +1190,8 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 		"tool_name":                 event.ToolName,
 		"provider":                  provider,
 		"operation":                 riskEvent.Operation,
-		"operation_class":           operationClass,
-		"resource_class":            resourceClass,
+		"operation_class":           riskEvent.OperationClass,
+		"resource_class":            riskEvent.ResourceClass,
 		"resource_id":               nullIfEmpty(resourceID),
 		"parameters_redacted_json":  parametersJSON,
 		"parameters_hash":           parametersHash,

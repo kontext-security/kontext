@@ -133,13 +133,17 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 				return url, name
 			}
 		}
+	}
+	switch agent {
+	case "claude", "claude-code", "claude_code":
 		// The Claude Code CLI names a claude.ai connector's server
-		// "claude.ai <Name>", so its tools carry claude_ai_<Name>.
-		if strings.HasPrefix(server, "claude_ai_") {
-			if url, found := r.claudeAIConnector(home, server); found {
-				return url, ""
-			}
+		// "claude.ai <Name>", so its tools carry claude_ai_<Name>. A server
+		// configured under that name wins, as it would in Claude Code.
+		url, found := r.claude(home, cwd, server)
+		if !found && strings.HasPrefix(server, "claude_ai_") {
+			url, _ = r.claudeAIConnector(home, server)
 		}
+		return url, ""
 	}
 	return r.configURL(home, agent, cwd, server), ""
 }
@@ -147,7 +151,8 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 func (r *Resolver) configURL(home, agent, cwd, server string) string {
 	switch agent {
 	case "claude", "claude-code", "claude_code":
-		return r.claude(home, cwd, server)
+		url, _ := r.claude(home, cwd, server)
+		return url
 	case "cowork", "claude-cowork", "claude_cowork":
 		url, _ := find(r.servers(filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json")), server)
 		return url
@@ -163,7 +168,10 @@ func (r *Resolver) configURL(home, agent, cwd, server string) string {
 	return ""
 }
 
-func (r *Resolver) claude(home, cwd, server string) string {
+// claude returns the URL Claude Code's config gives server, and whether any
+// source defines it (a stdio server, or definitions that disagree, have no
+// URL).
+func (r *Resolver) claude(home, cwd, server string) (string, bool) {
 	managed := r.Managed
 	if managed == "" {
 		managed = ManagedMCPPath
@@ -171,14 +179,14 @@ func (r *Resolver) claude(home, cwd, server string) string {
 	// The first source that defines the server wins whole, as in Claude
 	// Code: a stdio entry shadows a URL in a lower scope.
 	if url, found := find(r.servers(managed), server); found {
-		return url
+		return url, true
 	}
 	configDir, userConfig := claudeConfigPaths(home)
 	root, _ := load(r, userConfig, readers.Claude)
 	project := projectRoot(root, cwd)
 	url, found := r.claudeScopes(root, configDir, project, server)
 	if !filepath.IsAbs(cwd) {
-		return url
+		return url, found
 	}
 	// Local and project scope belong to the session's project, taken as the
 	// deepest directory Claude Code has recorded in ~/.claude.json. Another
@@ -190,14 +198,14 @@ func (r *Resolver) claude(home, cwd, server string) string {
 				break
 			}
 			if otherURL, defines := find(scope, server); defines && (!found || otherURL != url) {
-				return ""
+				return "", true
 			}
 		}
 		if dir == filepath.Dir(dir) {
 			break
 		}
 	}
-	return url
+	return url, found
 }
 
 // claudeScopes resolves server through the session project's local and

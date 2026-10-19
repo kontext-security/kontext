@@ -66,7 +66,7 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	writeConfig(t, filepath.Join(home, ".claude.json"), `{
   "oauthAccount": {"accountUuid": "`+account+`", "organizationUuid": "`+org+`"},
   "mcpServers": {"work": `+atlassian+`, "tickets": {"url": "https://mcp.linear.app/sse"}, "0f6a1c2d-3b4e-4f5a-8b6c-7d8e9f0a1b2c": `+atlassian+`, "bridge": {"command": "npx", "args": ["mcp-remote", "https://mcp.atlassian.com/v1/sse"]},
-    "jira": `+atlassian+`, "atlassian-pending": `+atlassian+`, "jira.prod": `+atlassian+`, "jira_prod": `+hubspot+`},
+    "jira": `+atlassian+`, "atlassian-pending": `+atlassian+`, "claude_ai_Configured": `+atlassian+`, "jira.prod": `+atlassian+`, "jira_prod": `+hubspot+`},
   "projects": {
     "`+project+`": {"mcpServers": {"local.desk": `+atlassian+`}, "enabledMcpjsonServers": ["tickets"], "disabledMcpjsonServers": ["jira"]},
     "`+filepath.Join(home, "src/shadow")+`": {},
@@ -108,7 +108,7 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 ]}`)
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions/acct/org/local_cowork.json"), `{"cliSessionId": "session-1", "remoteMcpServersConfig": [{"uuid": "`+coworkConnector+`", "name": "Atlassian"}]}`)
 	writeConfig(t, filepath.Join(home, ".codex/config.toml"), "[mcp_servers.work]\nurl = \"https://mcp.atlassian.com/v1/mcp\"\n")
-	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": {"work": `+atlassian+`}}`)
+	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": {"work": `+atlassian+`, "claude_ai_Board": {"url": "https://api.githubcopilot.com/mcp/"}}}`)
 	// The Claude Code CLI names claude.ai connectors claude_ai_<Name>; their
 	// URLs come from the newest Desktop record of the signed-in organization.
 	desktop := filepath.Join(home, "Library/Application Support/Claude")
@@ -117,6 +117,7 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	writeConfig(t, older, `{"cliSessionId": "s-old", "remoteMcpServersConfig": [{"uuid": "a", "name": "Board", "url": "https://api.githubcopilot.com/mcp/"}, {"uuid": "b", "name": "Old Only", "url": "https://mcp.atlassian.com/v1/mcp"}]}`)
 	writeConfig(t, filepath.Join(orgRecords, "local_newer.json"), `{"cliSessionId": "s-new", "remoteMcpServersConfig": [
   {"uuid": "a", "name": "Board", "url": "https://mcp.atlassian.com/v1/mcp"},
+  {"uuid": "f", "name": "Configured", "url": "https://api.githubcopilot.com/mcp/"},
   {"uuid": "c", "name": "Dup.Name", "url": "https://mcp.atlassian.com/v1/mcp"},
   {"uuid": "d", "name": "Dup Name", "url": "https://mcp.hubspot.com/anthropic"}
 ]}`)
@@ -172,6 +173,10 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		{"claude.ai connector, newest record", "claude", "", "mcp__claude_ai_Board__createTeam", risk.DecisionDeny},
 		{"claude.ai connector, older record only", "claude", "", "mcp__claude_ai_Old_Only__createTeam", risk.DecisionDeny},
 		{"claude.ai connectors that normalize alike", "claude", "", "mcp__claude_ai_Dup_Name__createTeam", risk.DecisionAllow},
+		// A server configured under the connector's name wins, and Cowork
+		// never takes the CLI's connector alias.
+		{"configured server named like a connector", "claude", "", "mcp__claude_ai_Configured__createTeam", risk.DecisionDeny},
+		{"cowork keeps its configured server", "cowork", "", "mcp__claude_ai_Board__createTeam", risk.DecisionAllow},
 		{"claude.ai connector of another organization", "claude", "", "mcp__claude_ai_Elsewhere__createTeam", risk.DecisionAllow},
 		{"unlisted server", "claude", project, "mcp__elsewhere__createTeam", risk.DecisionAllow},
 		{"unknown agent", "gemini", project, "mcp__work__createTeam", risk.DecisionAllow},

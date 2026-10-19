@@ -59,8 +59,8 @@ func TestSaveDecisionRecordsTheCedarProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var provider, operationClass, resourceClass, factJSON string
-	if err := store.db.QueryRowContext(context.Background(), `select provider, operation_class, resource_class, decision_fact_json from authorization_actions where session_id = 's1' and canonical_event_type = 'request.decided'`).Scan(&provider, &operationClass, &resourceClass, &factJSON); err != nil {
+	var provider, operationClass, resourceClass, factJSON, riskEventJSON string
+	if err := store.db.QueryRowContext(context.Background(), `select provider, operation_class, resource_class, decision_fact_json, risk_event_json from authorization_actions where session_id = 's1' and canonical_event_type = 'request.decided'`).Scan(&provider, &operationClass, &resourceClass, &factJSON, &riskEventJSON); err != nil {
 		t.Fatal(err)
 	}
 	var fact struct {
@@ -69,7 +69,12 @@ func TestSaveDecisionRecordsTheCedarProvider(t *testing.T) {
 	if err := json.Unmarshal([]byte(factJSON), &fact); err != nil {
 		t.Fatal(err)
 	}
-	if provider != "databricks" || operationClass != "delete" || resourceClass != "sql" || fact.TargetProvider == nil || *fact.TargetProvider != "databricks" {
-		t.Fatalf("row = provider %q access %q product %q, fact target_provider %v", provider, operationClass, resourceClass, fact.TargetProvider)
+	var event risk.RiskEvent
+	if err := json.Unmarshal([]byte(riskEventJSON), &event); err != nil {
+		t.Fatal(err)
+	}
+	if provider != "databricks" || operationClass != "delete" || resourceClass != "sql" || fact.TargetProvider == nil || *fact.TargetProvider != "databricks" ||
+		event.Provider != "databricks" || event.OperationClass != "delete" || event.ResourceClass != "sql" {
+		t.Fatalf("row = provider %q access %q product %q, fact target_provider %v, risk event %+v", provider, operationClass, resourceClass, fact.TargetProvider, event)
 	}
 }

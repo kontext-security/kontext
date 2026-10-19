@@ -142,10 +142,18 @@ func TestCedarDatabricksPresets(t *testing.T) {
 	}{
 		{"desktop connector drop", "mcp__" + connector + "__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
 		{"desktop connector select", "mcp__" + connector + "__execute_sql", sql("SELECT 1"), []string{readOnly}},
-		{"claude.ai connector in the CLI, select", "mcp__claude_ai_Warehouse__execute_sql", sql("SELECT 1"), []string{readOnly}},
-		{"claude.ai connector in the CLI, drop", "mcp__claude_ai_Warehouse__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
 		{"desktop sandbox connector", "mcp__" + sandboxConnector + "__run_code", map[string]any{"code": "print(1)"}, []string{readOnly, exceptSQL, runs}},
 		{"desktop web search connector", "mcp__" + searchConnector + "__web_search", map[string]any{"query": "q"}, nil},
+	}
+	// Only the Claude Code CLI names connectors claude_ai_<Name>.
+	cliConnector := []struct {
+		name   string
+		tool   string
+		input  map[string]any
+		denies []string
+	}{
+		{"claude.ai connector in the CLI, select", "mcp__claude_ai_Warehouse__execute_sql", sql("SELECT 1"), []string{readOnly}},
+		{"claude.ai connector in the CLI, drop", "mcp__claude_ai_Warehouse__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
 	}
 	for preset, forbid := range databricksPresets {
 		policy := `@id("allow") permit(principal, action == Kontext::Action::"ToolUse", resource);
@@ -156,6 +164,9 @@ func TestCedarDatabricksPresets(t *testing.T) {
 			agentCalls := calls
 			if agent != "codex" {
 				agentCalls = append(agentCalls, desktop...)
+			}
+			if agent == "claude" {
+				agentCalls = append(agentCalls, cliConnector...)
 			}
 			for _, call := range agentCalls {
 				want := risk.DecisionAllow
