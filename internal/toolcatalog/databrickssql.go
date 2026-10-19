@@ -85,8 +85,8 @@ var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", 
 var databricksObjectModifiers = setOf("OR", "REPLACE", "IF", "NOT", "EXISTS", "TEMPORARY", "TEMP",
 	"GLOBAL", "EXTERNAL", "STORAGE", "SERVICE", "GOVERNED")
 
-// Words that end the column definitions of a CREATE: a MASK after them is a
-// name, not a column mask.
+// Words that, outside parentheses, end the column definitions of a CREATE: a
+// MASK after them is a name, not a column mask.
 var databricksDefinitionEnds = setOf("AS", "SELECT", "VALUES", "RETURN", "RETURNS")
 
 var databricksSecretFunctions = setOf("SECRET", "TRY_SECRET", "LIST_SECRETS")
@@ -113,15 +113,27 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 	if at(first + 1).is(":") { // a scripting label
 		first += 2
 	}
-	script := databricksScriptForms[at(first).text] && at(first).kind == sqlWord
 	// head is the form of the statement being read: the first word, or in a
-	// scripting block the word that opens a nested statement.
+	// scripting block the word that opens a nested statement. A THEN or ELSE
+	// inside a CASE expression opens none.
 	head, opaque, refresh, repair, definition := "", false, false, false, true
+	depth, caseDepth := 0, 0
 	for i, tok := range stmt {
 		prev, next := at(i-1), at(i+1)
-		atHead := tok.kind == sqlWord && (i == first || script && prev.kind == sqlWord && databricksBlockWords[prev.text])
+		atHead := tok.kind == sqlWord && (i == first ||
+			databricksScriptForms[head] && caseDepth == 0 && prev.kind == sqlWord && databricksBlockWords[prev.text])
 		if atHead {
-			head, definition = tok.text, true
+			head, definition, depth = tok.text, true, 0
+		}
+		switch {
+		case tok.is("("):
+			depth++
+		case tok.is(")"):
+			depth--
+		case tok.is("CASE") && !atHead:
+			caseDepth++
+		case tok.is("END") && caseDepth > 0:
+			caseDepth--
 		}
 		// After malformed input a comment may sit between a name and its (,
 		// so a listed name counts as called wherever it appears.
@@ -149,7 +161,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 		if tok.kind != sqlWord {
 			continue
 		}
-		if databricksDefinitionEnds[tok.text] {
+		if depth <= 0 && databricksDefinitionEnds[tok.text] {
 			definition = false
 		}
 		ddl := head == "ALTER" || head == "CREATE"
@@ -164,14 +176,12 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 			}
 			// CREATE OR REPLACE drops any mask or filter the new definition
 			// leaves out.
-			admin = admin || prev.is("OR") && head == "CREATE"
+			admin = admin || prev.is("OR") && at(i-2).is("CREATE")
 		case "REFRESH":
-			if prev.is("OR") { // CREATE OR REFRESH, as CREATE OR REPLACE
-				deletes = true
-				admin = admin || head == "CREATE"
-			} else {
-				refresh = true
+			if prev.is("OR") && at(i-2).is("CREATE") { // as CREATE OR REPLACE
+				deletes, admin = true, true
 			}
+			refresh = refresh || atHead
 		case "MASK": // SET|DROP MASK, or a column mask in a CREATE's column definitions
 			nameNext := next.kind == sqlWord || next.kind == sqlName
 			admin = admin || head == "ALTER" && (prev.is("SET") || prev.is("DROP")) ||
@@ -185,7 +195,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (deletes, admin, secrets, know
 		case "FULL", "WHERE": // REFRESH … FULL truncates; REFRESH … WHERE deletes the rows it matches
 			deletes = deletes || refresh
 		case "REPAIR":
-			repair = true
+			repair = repair || atHead || prev.is("MSCK")
 		case "PRIVILEGES": // MSCK REPAIR … PRIVILEGES revokes grants
 			admin = admin || repair && (head == "MSCK" || head == "REPAIR")
 		case "SYNC": // MSCK REPAIR TABLE … SYNC PARTITIONS drops stale partitions
