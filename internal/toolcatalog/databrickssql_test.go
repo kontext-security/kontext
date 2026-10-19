@@ -339,6 +339,8 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"very long", long, false, false, false, true},
 		{"very long then drop", long + "; DROP TABLE t", true, false, false, true},
 		{"over the cap is unread", tooLong, false, false, false, false},
+		{"over the cap secret fails closed", tooLong + "; SELECT SeCrEt('s', 'k')", false, false, true, false},
+		{"over the cap secret in a comment fails closed", "/* secret */ " + tooLong, false, false, true, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

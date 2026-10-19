@@ -39,7 +39,7 @@ import (
 // Upgrade path: a parser generated from Spark's SqlBaseParser.g4.
 func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recognized bool) {
 	if len(sql) > databricksSQLMaxLen {
-		return false, false, false, false
+		return false, false, mentionsSecret(sql), false
 	}
 	// Spark lexers differ on a /*+ inside a comment (newer ones nest it) and
 	// on "…" (a string with backslash escapes, or with ANSI double-quoted
@@ -87,8 +87,20 @@ func classifyDatabricksTokens(tokens []sqlToken, complete bool) (deletes, admin,
 
 // ponytail: text over 64 KiB is unrecognized unread, so the caller keeps write
 // and a hostile statement cannot hold a PreToolUse hook past its ~1s budget.
+// touchesSecrets fails closed there: any "secret" in the text sets it. A delete
+// or admin change past the cap stays write, like other unrecognized SQL.
 // Classification is linear below it; raise the cap if real statements hit it.
 const databricksSQLMaxLen = 64 << 10
+
+// mentionsSecret reports whether s contains "secret" in any ASCII case.
+func mentionsSecret(s string) bool {
+	for i := 0; i+len("secret") <= len(s); i++ {
+		if strings.EqualFold(s[i:i+len("secret")], "secret") {
+			return true
+		}
+	}
+	return false
+}
 
 const (
 	sqlDeletes = 1 << iota
