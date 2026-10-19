@@ -126,6 +126,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"api write body from a file keeps the tier", "databricks api post /api/2.1/unity-catalog/catalogs --json @c.json", []string{dbCat, dbP("data"), dbW}, true},
 		{"api full url", "databricks api delete https://dbc-1234.cloud.databricks.com/api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"api file body overridden by a literal one", `databricks api post /api/2.0/sql/statements --json @/dev/null --json '{"statement":"DROP TABLE t"}'`, []string{dbCat, dbD, dbP("sql"), dbW}, true},
+		{"api relative path", "databricks api delete api/2.0/repos/12", []string{dbCat, dbD, dbP("workspace"), dbW}, true},
 		{"api unknown route fails open", "databricks api post /api/2.0/not-a-route", []string{dbUnk}, false},
 
 		// Unknown fails open: no tier facts.

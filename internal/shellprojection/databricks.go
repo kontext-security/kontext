@@ -416,6 +416,10 @@ func classifyDatabricksAPI(method string, args []string, complete bool) cedareva
 			bodies = append(bodies, value)
 		}
 	}
+	if target != "" && !strings.Contains(target, "://") && !strings.HasPrefix(target, "/") {
+		// Read a relative path as rooted, in case the client joins it so.
+		target = "/" + target
+	}
 	parsed, err := url.Parse(target)
 	if err != nil || target == "" || !strings.HasPrefix(parsed.Path, "/") {
 		facts := []string{"databricks/command=api/" + strings.ToLower(method), FactDatabricksRouteUnrecognized}
