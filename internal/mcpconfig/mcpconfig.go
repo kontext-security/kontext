@@ -197,21 +197,45 @@ func (r *Resolver) claude(home, cwd, server string) string {
 // claudeScopes resolves server through the session project's local and
 // project scope, then user scope, then plugins.
 func (r *Resolver) claudeScopes(root readers.ClaudeRoot, configDir, project, server string) (string, bool) {
-	if project != "" {
-		for _, scope := range r.projectScopes(root, project) {
-			if url, found := find(scope, server); found {
-				return url, true
-			}
+	lower := func() (string, bool) {
+		if url, found := find(root.MCPServers, server); found {
+			return url, true
 		}
+		return r.plugin(configDir, server)
 	}
-	if url, found := find(root.MCPServers, server); found {
+	if project == "" {
+		return lower()
+	}
+	config := root.Projects[project]
+	if url, found := find(config.MCPServers, server); found {
 		return url, true
 	}
-	return r.plugin(configDir, server)
+	// A .mcp.json server runs only once the user approves it. One they
+	// rejected is skipped; one whose approval the record does not show
+	// (approved in settings, or pending) wins only where it agrees with the
+	// lower scopes, and otherwise leaves the URL unknown.
+	url, found := find(r.servers(filepath.Join(project, ".mcp.json")), server)
+	switch {
+	case !found || listed(config.DisabledMcpjsonServers, server):
+		return lower()
+	case listed(config.EnabledMcpjsonServers, server):
+		return url, true
+	}
+	if lowerURL, lowerFound := lower(); lowerFound && lowerURL != url {
+		return "", true
+	}
+	return url, true
 }
 
-// projectScopes returns dir's local entries in ~/.claude.json and its
-// .mcp.json, in Claude Code's precedence.
+func listed(names []string, server string) bool {
+	for _, name := range names {
+		if normalize(name) == server {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Resolver) projectScopes(root readers.ClaudeRoot, dir string) []map[string]readers.MCP {
 	return []map[string]readers.MCP{root.Projects[dir].MCPServers, r.servers(filepath.Join(dir, ".mcp.json"))}
 }
@@ -342,9 +366,6 @@ func (r *Resolver) servers(path string) map[string]readers.MCP {
 // Claude Code and Codex replace every character outside [A-Za-z0-9_-] with
 // "_" in tool names; two names that normalize alike leave the URL unknown.
 func find(servers map[string]readers.MCP, server string) (string, bool) {
-	if config, ok := servers[server]; ok {
-		return strings.TrimSpace(config.URL), true
-	}
 	url, found := "", false
 	for name, config := range servers {
 		if normalize(name) != server {

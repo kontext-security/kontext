@@ -60,17 +60,21 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	home := useMCPHome(t)
 	project := filepath.Join(home, "src/app")
 	const atlassian = `{"type":"http","url":"https://mcp.atlassian.com/v1/mcp"}`
+	const hubspot = `{"type":"http","url":"https://mcp.hubspot.com/anthropic"}`
 	writeConfig(t, filepath.Join(home, ".claude.json"), `{
-  "mcpServers": {"work": `+atlassian+`, "tickets": {"url": "https://mcp.linear.app/sse"}, "0f6a1c2d-3b4e-4f5a-8b6c-7d8e9f0a1b2c": `+atlassian+`, "bridge": {"command": "npx", "args": ["mcp-remote", "https://mcp.atlassian.com/v1/sse"]}},
+  "mcpServers": {"work": `+atlassian+`, "tickets": {"url": "https://mcp.linear.app/sse"}, "0f6a1c2d-3b4e-4f5a-8b6c-7d8e9f0a1b2c": `+atlassian+`, "bridge": {"command": "npx", "args": ["mcp-remote", "https://mcp.atlassian.com/v1/sse"]},
+    "jira": `+atlassian+`, "atlassian-pending": `+atlassian+`, "jira.prod": `+atlassian+`, "jira_prod": `+hubspot+`},
   "projects": {
-    "`+project+`": {"mcpServers": {"local.desk": `+atlassian+`}},
+    "`+project+`": {"mcpServers": {"local.desk": `+atlassian+`}, "enabledMcpjsonServers": ["tickets"], "disabledMcpjsonServers": ["jira"]},
     "`+filepath.Join(home, "src/shadow")+`": {},
     "`+filepath.Join(home, "src/outer")+`": {"mcpServers": {"atlassian": {"url": "https://api.githubcopilot.com/mcp/"}, "work": {"url": "https://api.githubcopilot.com/mcp/"}}},
     "`+filepath.Join(home, "src/outer/repo")+`": {}
   }
 }`)
-	// The project .mcp.json overrides the user entry of the same name.
-	writeConfig(t, filepath.Join(project, ".mcp.json"), `{"mcpServers": {"tickets": `+atlassian+`}}`)
+	// An approved project .mcp.json entry overrides the user entry of the
+	// same name; a rejected one does not, and one whose approval is unknown
+	// and that disagrees with the user entry leaves the URL unknown.
+	writeConfig(t, filepath.Join(project, ".mcp.json"), `{"mcpServers": {"tickets": `+atlassian+`, "jira": `+hubspot+`, "atlassian-pending": `+hubspot+`}}`)
 	writeConfig(t, filepath.Join(home, "src/broken/.mcp.json"), `{"mcpServers": {`)
 	writeConfig(t, filepath.Join(home, "managed/managed-mcp.json"), `{"mcpServers": {"corp": `+atlassian+`}}`)
 	plugin := filepath.Join(home, ".claude/plugins/cache/market/jira-tools/1.0.0")
@@ -117,6 +121,9 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		{"claude user config", "claude", project, "mcp__work__createTeam", risk.DecisionDeny},
 		{"claude user config, generic read", "claude", project, "mcp__work__getTeam", risk.DecisionAllow},
 		{"claude project overrides user", "claude", project, "mcp__tickets__createTeam", risk.DecisionDeny},
+		{"rejected project entry", "claude", project, "mcp__jira__createTeam", risk.DecisionDeny},
+		{"unapproved project entry that disagrees", "claude", project, "mcp__atlassian-pending__createTeam", risk.DecisionDeny},
+		{"config names that normalize alike", "claude", home, "mcp__jira_prod__createTeam", risk.DecisionDeny},
 		{"claude user entry outside the project", "claude", home, "mcp__tickets__createTeam", risk.DecisionAllow},
 		{"claude local entry, normalized name", "claude", filepath.Join(project, "pkg"), "mcp__local_desk__createTeam", risk.DecisionDeny},
 		{"claude managed config", "claude-code", "", "mcp__corp__createTeam", risk.DecisionDeny},
