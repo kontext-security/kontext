@@ -124,8 +124,9 @@ var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA"
 	"READ_STATESTORE", "READ_STATE_METADATA", "CLOUD_FILES_STATE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
 
 // databricksMaskIsName reports whether a MASK between prev and next is a name
-// (a column, alias, table or field) or sits in an expression, not a mask.
-func databricksMaskIsName(prev, beforePrev, next sqlToken) bool {
+// (a column, alias, table or field) or sits in an expression, not a mask. An
+// expression shows as a reserved word after it; MASK limit.f names a function.
+func databricksMaskIsName(prev, beforePrev, next, afterNext sqlToken) bool {
 	keyword := func(t sqlToken, words ...string) bool {
 		return t.kind == sqlWord && setOf(words...)[t.text]
 	}
@@ -137,8 +138,8 @@ func databricksMaskIsName(prev, beforePrev, next sqlToken) bool {
 			"GLOBAL", "MATERIALIZED", "STREAMING", "EXTERNAL", "LIVE") ||
 		keyword(prev, "EXISTS") && keyword(beforePrev, "NOT") ||
 		keyword(prev, "COLUMN", "COLUMNS", "CONSTRAINT") && keyword(beforePrev, "ADD", "ALTER", "DROP", "RENAME") ||
-		keyword(next, "IS", "AND", "OR", "IN", "BETWEEN", "LIKE", "FROM", "WHERE", "THEN", "ELSE", "END", "AS",
-			"JOIN", "ON", "USING", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "GROUP", "ORDER", "LIMIT", "UNION")
+		!afterNext.is(".") && keyword(next, "IS", "AND", "OR", "IN", "FROM", "WHERE", "THEN", "ELSE", "END", "AS",
+			"JOIN", "ON", "USING", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "GROUP", "ORDER", "UNION")
 }
 
 func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bool) {
@@ -231,7 +232,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 		// ponytail: a STRUCT<mask …> field or a CTAS alias without AS reads as
 		// a mask too, which only over-flags admin.
 		if (verb == "CREATE" || verb == "ALTER") && tok.is("MASK") && (next.kind == sqlWord || next.kind == sqlName) &&
-			!databricksMaskIsName(prev, at(i-2), next) {
+			!databricksMaskIsName(prev, at(i-2), next, at(i+2)) {
 			effect |= sqlAdmin
 		}
 	}
