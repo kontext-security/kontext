@@ -67,24 +67,26 @@ var (
 // column list) or a query follows (a subquery after a column reference).
 var (
 	databricksTableKeywords = setOf("INTO", "TABLE", "VIEW", "FUNCTION", "EXISTS")
-	databricksQueryStarts   = setOf("SELECT", "WITH", "VALUES", "FROM", "TABLE")
+	databricksQueryStarts   = setOf("SELECT", "WITH", "FROM")
 )
 
 // Objects whose CREATE, ALTER or DROP is administration: access policies,
-// credentials, external locations, Delta Sharing and workspace groups.
-var databricksAdminObjects = setOf("POLICY", "CREDENTIAL", "CONNECTION", "LOCATION", "SHARE",
+// governed tags, credentials, external locations, Delta Sharing and workspace
+// groups.
+var databricksAdminObjects = setOf("POLICY", "TAG", "CREDENTIAL", "CONNECTION", "LOCATION", "SHARE",
 	"RECIPIENT", "PROVIDER", "GROUP", "METASTORE")
 
 // Words between CREATE, ALTER or DROP and the object kind.
 var databricksObjectModifiers = setOf("OR", "REPLACE", "IF", "NOT", "EXISTS", "TEMPORARY", "TEMP",
-	"GLOBAL", "EXTERNAL", "STORAGE", "SERVICE")
+	"GLOBAL", "EXTERNAL", "STORAGE", "SERVICE", "GOVERNED")
 
 var databricksSecretFunctions = setOf("SECRET", "TRY_SECRET", "LIST_SECRETS")
 
-// Functions that reach outside the warehouse or name objects at run time.
-// Every AI_ function calls a model endpoint and counts too.
+// Functions that reach outside the warehouse, write files or name objects at
+// run time. Every AI_ function calls a model endpoint and counts too.
 var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA", "READ_KINESIS",
-	"READ_PUBSUB", "READ_PULSAR", "REMOTE_QUERY", "VECTOR_SEARCH", "CLOUD_FILES", "IDENTIFIER")
+	"READ_PUBSUB", "READ_PULSAR", "REMOTE_QUERY", "VECTOR_SEARCH", "CLOUD_FILES", "IDENTIFIER",
+	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE")
 
 func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool) {
 	at := func(i int) sqlToken {
@@ -110,7 +112,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool
 				opaque = true
 			}
 			builtin := at(i-2).text == "BUILTIN" && (!at(i-3).is(".") || at(i-4).text == "SYSTEM" && !at(i-5).is("."))
-			if prev.is(".") && !builtin && !databricksQueryStarts[at(i+2).text] {
+			if prev.is(".") && !builtin && !(at(i+2).kind == sqlWord && databricksQueryStarts[at(i+2).text]) {
 				start := i - 2 // a qualified call is a user-defined function
 				for at(start - 1).is(".") {
 					start -= 2
@@ -232,7 +234,8 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 			if r == '\'' {
 				tokens = append(tokens, sqlToken{kind: sqlString})
 			} else {
-				tokens = append(tokens, sqlToken{kind: sqlName, text: strings.ToUpper(rest[1 : end-1])})
+				q := rest[:1]
+				tokens = append(tokens, sqlToken{kind: sqlName, text: strings.ToUpper(strings.ReplaceAll(rest[1:end-1], q+q, q))})
 			}
 			i += end
 		case sqlDollarTag(rest) != "":
@@ -329,12 +332,11 @@ func sqlCommentEnd(s string) int {
 }
 
 // sqlQuoteEnd returns the length of the quoted token that starts s, or -1 if
-// it never closes. A doubled quote reads as two adjacent tokens, which covers
-// the same text.
+// it never closes. A doubled quote is an escaped quote.
 func sqlQuoteEnd(s string, backslashEscapes bool) int {
 	for i := 1; i < len(s); i++ {
 		switch {
-		case backslashEscapes && s[i] == '\\':
+		case backslashEscapes && s[i] == '\\', s[i] == s[0] && i+1 < len(s) && s[i+1] == s[0]:
 			i++
 		case s[i] == s[0]:
 			return i + 1

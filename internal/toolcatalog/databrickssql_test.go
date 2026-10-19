@@ -75,6 +75,9 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"storage credential", "CREATE STORAGE CREDENTIAL c WITH (AWS_IAM_ROLE = 'arn')", AccessAdmin, false, true},
 		{"external location", "CREATE EXTERNAL LOCATION l URL 's3://b' WITH (CREDENTIAL c)", AccessAdmin, false, true},
 		{"connection", "CREATE CONNECTION c TYPE postgresql OPTIONS (host 'h')", AccessAdmin, false, true},
+		{"create governed tag", "CREATE GOVERNED TAG pii DESCRIPTION 'x'", AccessAdmin, false, true},
+		{"alter governed tag", "ALTER GOVERNED TAG pii SET VALUES ('a', 'b')", AccessAdmin, false, true},
+		{"drop governed tag", "DROP GOVERNED TAG pii", AccessAdmin, false, true},
 		{"alter group", "ALTER GROUP g ADD USER `u`", AccessAdmin, false, true},
 
 		// Keywords in comments, strings and quoted names do not raise.
@@ -130,6 +133,13 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"qualified udf", "SELECT main.default.sign_value('x')", AccessWrite, false, false},
 		{"backticked qualified udf", "SELECT `main`.`default`.`f`(a) FROM t", AccessWrite, false, false},
 		{"table valued udf", "SELECT * FROM main.default.tvf(1)", AccessWrite, false, false},
+		{"udf with quoted keyword argument", "SELECT main.default.f(`from`), main.default.g(\"select\") FROM t", AccessWrite, false, false},
+		{"udtf with table argument", "SELECT * FROM main.default.udtf(TABLE(t))", AccessWrite, false, false},
+		{"udf with quoted select argument", "SELECT main.default.f(`SELECT`) FROM t", AccessWrite, false, false},
+		{"udf with doubled backtick name", "SELECT main.default.`f``g`()", AccessWrite, false, false},
+		{"create_file", "SELECT create_file('x', '/Volumes/main/default/v/file', 'overwrite')", AccessWrite, false, false},
+		{"copy_file overwrite raises", "SELECT copy_file('/Volumes/a', '/Volumes/b', overwrite => true)", AccessDelete, false, false},
+		{"try_copy_file", "SELECT try_copy_file('/Volumes/a', '/Volumes/b')", AccessWrite, false, false},
 		{"udf in a schema named builtin", "SELECT main.builtin.lower(a) FROM t", AccessWrite, false, false},
 		{"builtin qualified", "SELECT system.builtin.lower(a) FROM t", AccessWrite, false, true},
 		{"qualified insert column list", "INSERT INTO main.default.t (a, b) VALUES (1, 2)", AccessWrite, false, true},
