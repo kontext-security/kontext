@@ -194,6 +194,8 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl -T applies to the first URL only", `curl -T f.json --json '{"cluster_id":"x"}' https://example.com/upload ` + dbHost + "/api/2.1/clusters/delete", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
 		{"curl options after -- are URLs", `curl --json '{"cluster_id":"x"}' -- ` + dbHost + "/api/2.1/clusters/delete -G", []string{dbD, dbP("compute"), dbUnk, dbW}, false},
 		{"curl --data-urlencode is encoded before the JSON is read", `curl --data-urlencode '{"warehouse_id":"w","statement":"DROP TABLE t -- =\q' --json '"}' ` + dbHost + "/api/2.0/sql/statements", []string{dbCat, dbD, dbP("sql"), dbW}, true},
+		{"curl empty -T keeps its URL slot", "curl -T '' -T permissions.json https://example.com " + dbHost + "/api/2.0/permissions/jobs/123", []string{dbA, dbP("admin"), dbUnk, dbW}, false},
+		{"curl -T appends its file name to a URL ending in /", "curl -X POST -T delete " + dbHost + "/api/2.1/clusters/", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"docs host is not a workspace", "curl https://docs.databricks.com/api/2.0/clusters/list", nil, true},
 
 		// Wrappers.

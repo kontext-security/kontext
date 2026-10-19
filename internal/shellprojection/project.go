@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -995,8 +994,9 @@ type curlOperation struct {
 	// else is set; otherwise -I, -G, -T and a body imply one.
 	custom                  string
 	head, get, upload, data bool
-	// uploads counts the -T files; a globbed one counts as many.
-	uploads       int
+	// uploads are the -T files in order, one per URL; an empty one is a
+	// slot without an upload.
+	uploads       []string
 	requestTarget string
 	protoDefault  string
 	urls, bodies  []string
@@ -1019,12 +1019,28 @@ func (op curlOperation) method() string {
 	return "GET"
 }
 
-// withUpload returns the operation as curl sends its index-th URL: each -T
-// applies to one URL in turn, so a URL past the uploads goes without one. A
-// globbed -T can upload to any number of URLs.
-func (op curlOperation) withUpload(index int) curlOperation {
-	op.upload = index < op.uploads
-	return op
+// withUpload returns the operation and URL as curl sends its index-th URL:
+// each -T applies to one URL in turn, and a URL ending in / gets the upload
+// file's name appended (each name of a globbed one).
+func (op curlOperation) withUpload(index int, urlText string) (curlOperation, []string) {
+	file := ""
+	if index < len(op.uploads) {
+		file = op.uploads[index]
+	}
+	op.upload = file != ""
+	parsed, err := url.Parse(urlText)
+	if !op.upload || file == "-" || file == "." || err != nil || !strings.HasSuffix("/"+parsed.Path, "/") {
+		return op, []string{urlText}
+	}
+	names, _ := expandCurlGlob(file)
+	urls := make([]string, 0, len(names))
+	for _, name := range names {
+		appended := *parsed
+		appended.Path = strings.TrimSuffix(parsed.Path, "/") + "/" + filepath.Base(name)
+		appended.RawPath = ""
+		urls = append(urls, appended.String())
+	}
+	return op, urls
 }
 
 func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
@@ -1104,13 +1120,10 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 			body, isBody = curlBody(arg, args[i]), true
 		case isBody:
 		case arg == "-T" || arg == "--upload-file" || strings.HasPrefix(arg, "--upload-file="):
-			// An empty file name is no upload.
-			if file, ok := value("--upload-file"); ok && file != "" {
-				op.upload = true
-				op.uploads++
-				if strings.ContainsAny(file, "{[") {
-					op.uploads = math.MaxInt
-				}
+			// An empty file name holds its URL's slot without an upload.
+			if file, ok := value("--upload-file"); ok {
+				op.uploads = append(op.uploads, file)
+				op.upload = op.upload || file != ""
 			}
 		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
 			everyMethod, config = true, true
@@ -1172,8 +1185,11 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 				if op.requestTarget != "" {
 					each = withRequestTarget(each, op.requestTarget)
 				}
-				requests = append(requests, request{each, op.withUpload(index).method(), op.bodies, op.bodyFile})
-				all.urls = append(all.urls, each)
+				sent, urls := op.withUpload(index, each)
+				for _, each := range urls {
+					requests = append(requests, request{each, sent.method(), op.bodies, op.bodyFile})
+					all.urls = append(all.urls, each)
+				}
 			}
 		}
 		all.bodies = append(all.bodies, op.bodies...)
