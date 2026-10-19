@@ -99,6 +99,7 @@ func TestCedarDatabricksPresets(t *testing.T) {
 		{"malformed SQL keeps write", "mcp__wh__execute_sql", sql("SELEC ((("), []string{readOnly}},
 		{"missing query keeps write", "mcp__wh__execute_sql", map[string]any{}, []string{readOnly}},
 		{"read-only SQL", "mcp__wh__execute_sql_read_only", sql("SELECT 1"), nil},
+		{"read-only SQL that drops", "mcp__wh__execute_sql_read_only", sql("DROP TABLE t"), []string{readOnly, deletion}},
 		{"read-only SQL with secret", "mcp__wh__execute_sql_read_only", sql("SELECT secret('s', 'k')"), []string{secrets}},
 		{"poll", "mcp__wh__poll_sql_result", map[string]any{"statement_id": "s"}, nil},
 		{"conflicting name github", "mcp__github__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},

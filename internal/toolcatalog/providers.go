@@ -204,17 +204,22 @@ func (p *providerIndex) resolveURL(tool, path string, input map[string]any) (str
 		}
 	}
 	if p.catalog.Provider == DatabricksProvider {
-		if service, ok := strings.CutPrefix(path, databricksProxyPrefix); ok {
+		if service, ok := strings.CutPrefix(path, databricksGatewayPrefix); ok {
 			service, _, _ = strings.Cut(service, "/")
 			switch service {
-			case "github":
+			case "system.ai.github":
 				return resolveGitHub(tool, input, true)
-			case "atlassian":
+			case "system.ai.atlassian":
 				for i := range providers {
 					if providers[i].catalog.Provider == "atlassian" {
 						return providers[i].resolve(tool, input, true)
 					}
 				}
+			case "system.ai.dbsql":
+			default:
+				// A registered service's tools are its own, whatever they
+				// are called.
+				return p.catalog.ToolIDPrefix + UnrecognizedToolName, true
 			}
 		}
 	}
@@ -224,10 +229,11 @@ func (p *providerIndex) resolveURL(tool, path string, input map[string]any) (str
 // DatabricksProvider is the provider the Databricks MCP catalog carries.
 const DatabricksProvider = "databricks"
 
-// databricksProxyPrefix is where Databricks' AI Gateway serves the external
-// MCP servers it proxies (system.ai.github, system.ai.atlassian). Other
-// registered services there are Databricks' own and unrecognized.
-const databricksProxyPrefix = "/ai-gateway/mcp-services/system.ai."
+// databricksGatewayPrefix is where Databricks' AI Gateway serves MCP
+// services: the proxies for GitHub and Atlassian (system.ai.github,
+// system.ai.atlassian), Databricks SQL (system.ai.dbsql), and services
+// customers register (<catalog>.<schema>.<service>), which are unrecognized.
+const databricksGatewayPrefix = "/ai-gateway/mcp-services/"
 
 // serverURLParts returns a server URL's lowercase host and its path with dot
 // segments resolved the way MCP clients' WHATWG URL parsers resolve them
@@ -350,9 +356,10 @@ const (
 // what its query does (ClassifyDatabricksSQL); it never lowers it. SQL that
 // deletes and changes administration reports delete, since a call carries
 // one access and lost data cannot be restored. SQL that calls secret() is
-// product secrets. execute_sql_read_only keeps read, which Databricks
-// enforces. A missing or non-string query, or SQL the classifier does not
-// recognize, keeps the catalog tier.
+// product secrets. execute_sql_read_only is raised the same way: Databricks
+// rejects such SQL there, so raising it only denies a call that would fail.
+// A missing or non-string query, or SQL the classifier does not recognize,
+// keeps the catalog tier.
 func classifyDatabricksSQLCall(toolID string, input map[string]any) (ProviderClassification, bool) {
 	class, ok := Classify(toolID)
 	query, isString := input["query"].(string)
@@ -363,13 +370,11 @@ func classifyDatabricksSQLCall(toolID string, input map[string]any) (ProviderCla
 	if touchesSecrets {
 		class.Product = "secrets"
 	}
-	if toolID == databricksExecuteSQL {
-		switch {
-		case deletes:
-			class.Access = AccessDelete
-		case admin:
-			class.Access = AccessAdmin
-		}
+	switch {
+	case deletes:
+		class.Access = AccessDelete
+	case admin:
+		class.Access = AccessAdmin
 	}
 	return class, true
 }
