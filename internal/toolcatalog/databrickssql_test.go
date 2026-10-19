@@ -351,37 +351,47 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 	}
 }
 
+// bestOf returns the fastest of five runs, so a GC pause or a busy runner
+// does not fail a timing check.
+func bestOf(sql string) time.Duration {
+	best := time.Duration(1 << 62)
+	for range 5 {
+		start := time.Now()
+		ClassifyDatabricksSQL(sql)
+		best = min(best, time.Since(start))
+	}
+	return best
+}
+
 // Malformed input must classify in linear time: quadrupling it should about
 // quadruple the time, where a rescan per opener would multiply it by 16. The
 // ratio, not a wall-clock limit, keeps this stable on slow CI runners.
 func TestClassifyDatabricksSQLMalformedIsLinear(t *testing.T) {
-	timed := func(sql string) time.Duration {
-		best := time.Duration(1 << 62)
-		for range 5 {
-			start := time.Now()
-			ClassifyDatabricksSQL(sql)
-			best = min(best, time.Since(start))
-		}
-		return best
-	}
 	for _, unit := range []string{"/*", `'\`, "$a$", "r'", "/* /*+ a.", "a.", "/*+ a", "\"\\\"", "SELECT 1; "} {
 		repeat := func(size int) string { return strings.Repeat(unit, size/len(unit)) + "; DROP TABLE t" }
 		if deletes, _, _, _ := ClassifyDatabricksSQL(repeat(databricksSQLMaxLen / 2)); !deletes {
 			t.Errorf("%q: deletes = false, want true", unit)
 		}
-		small, large := timed(repeat(databricksSQLMaxLen/8)), timed(repeat(databricksSQLMaxLen/2))
+		small, large := bestOf(repeat(databricksSQLMaxLen/8)), bestOf(repeat(databricksSQLMaxLen/2))
 		if ratio := float64(large) / float64(max(small, time.Microsecond)); ratio > 10 {
 			t.Errorf("%q: 4x the input took %.1fx the time (%v, %v)", unit, ratio, small, large)
 		}
 	}
 }
 
-// The largest text read, at the cap, classifies well inside a hook's budget.
-func TestClassifyDatabricksSQLAtCapIsFast(t *testing.T) {
-	sql := strings.Repeat("/* /*+ a.", databricksSQLMaxLen/9)
-	start := time.Now()
-	ClassifyDatabricksSQL(sql)
-	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
-		t.Errorf("%d bytes took %v", len(sql), elapsed)
+// Text exactly at the cap is read, and classifies well inside a hook's
+// budget; one byte more is unrecognized unread.
+func TestClassifyDatabricksSQLCap(t *testing.T) {
+	const drop = "DROP TABLE t; "
+	atCap := drop + strings.Repeat("/* /*+ a.", (databricksSQLMaxLen-len(drop))/9)
+	atCap += strings.Repeat(" ", databricksSQLMaxLen-len(atCap))
+	if deletes, _, _, recognized := ClassifyDatabricksSQL(atCap); len(atCap) != databricksSQLMaxLen || !deletes || !recognized {
+		t.Errorf("at the cap (%d bytes): deletes = %v, recognized = %v; want true, true", len(atCap), deletes, recognized)
+	}
+	if elapsed := bestOf(atCap); elapsed > 300*time.Millisecond {
+		t.Errorf("%d bytes took %v", len(atCap), elapsed)
+	}
+	if deletes, admin, secrets, recognized := ClassifyDatabricksSQL(atCap + " "); deletes || admin || secrets || recognized {
+		t.Errorf("one byte over the cap = %v, %v, %v, %v; want all false", deletes, admin, secrets, recognized)
 	}
 }
