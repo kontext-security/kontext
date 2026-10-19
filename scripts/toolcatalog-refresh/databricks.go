@@ -42,10 +42,11 @@ import (
 // write until someone reviews it. Anything that
 // acts on permissions, grants, identities, settings or account provisioning
 // (product admin), whose body can carry an owner or permissions, or that
-// databricksAdminOperations lists, is admin; a delete is delete; everything
-// else is write. Products are assigned per operation from
-// databricksServiceProducts and databricksOperationProducts, and a service
-// neither lists fails generation so a reviewer has to place it.
+// databricksAdminOperations lists, is admin; a delete (by method, name or
+// databricksDeleteOperations) is delete; everything else is write. Products
+// are assigned per operation from databricksServiceProducts and
+// databricksOperationProducts, and a service neither lists fails
+// generation so a reviewer has to place it.
 
 const (
 	databricksCLIVersion = "v1.21.0"
@@ -239,6 +240,11 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 			stale = append(stale, "admin operation "+key)
 		}
 	}
+	for key := range databricksDeleteOperations {
+		if index.operations[key] == nil {
+			stale = append(stale, "delete operation "+key)
+		}
+	}
 	for key := range databricksConsumingGets {
 		if op := index.operations[key]; op == nil || op.method != "GET" {
 			stale = append(stale, "consuming GET "+key)
@@ -422,7 +428,7 @@ func databricksAccess(op *sdkOperation, product string, adminBody bool) string {
 		return "admin"
 	case op.method == "POST" && databricksPostReads[op.id]:
 		return "read"
-	case op.method == "DELETE" || databricksDelete.MatchString(op.name):
+	case op.method == "DELETE" || databricksDelete.MatchString(op.name) || databricksDeleteOperations[op.id]:
 		return "delete"
 	default:
 		return "write"
@@ -1443,8 +1449,9 @@ var databricksOperationProducts = map[string]string{
 // databricksAdminOperations change who can do what without a name, product
 // or body field that says so: database roles (superuser, createrole,
 // bypassrls) and database owners (spec.role), secret ACLs, Unity Catalog
-// storage and service credentials (they map cloud IAM roles), model
-// provider services (an update can retarget the URL and keep the key), the
+// storage and service credentials (they map cloud IAM roles), AI Gateway
+// MCP, model and model provider services (tool selectors, rate limits,
+// payload logging; an update can retarget the URL and keep the key), the
 // workspace-wide warehouse security config and default-warehouse overrides, credentials minted, changed or
 // revoked for another identity (git credentials take a principal_id, a
 // recipient token is another party's), clean-room approvals that let
@@ -1461,7 +1468,11 @@ var databricksAdminOperations = map[string]bool{
 	"catalog.EntityTagAssignments.Delete":                                 true,
 	"catalog.EntityTagAssignments.Update":                                 true,
 	"catalog.ExternalLocations.Create":                                    true,
+	"catalog.AiGateway.CreateMcpService":                                  true,
+	"catalog.AiGateway.CreateModelService":                                true,
 	"catalog.AiGateway.CreateModelProviderService":                        true,
+	"catalog.AiGateway.UpdateMcpService":                                  true,
+	"catalog.AiGateway.UpdateModelService":                                true,
 	"catalog.AiGateway.UpdateModelProviderService":                        true,
 	"catalog.Credentials.CreateCredential":                                true,
 	"catalog.Credentials.DeleteCredential":                                true,
@@ -1516,6 +1527,12 @@ var databricksAdminOperations = map[string]bool{
 	"workspace.GitCredentials.Delete":                                     true,
 	"workspace.GitCredentials.Update":                                     true,
 	"workspace.Secrets.DeleteAcl":                                         true,
+}
+
+// databricksDeleteOperations can destroy data under a name that does not
+// say so: repos update --dangerously-force-discard-all drops uncommitted work.
+var databricksDeleteOperations = map[string]bool{
+	"workspace.Repos.Update": true,
 }
 
 // databricksConsumingGets are GETs that change state: retrieving a

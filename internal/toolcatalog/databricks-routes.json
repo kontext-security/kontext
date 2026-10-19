@@ -10321,7 +10321,7 @@
         "repos update"
       ],
       "product": "workspace",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "sandbox.Sandbox.ExecuteCommandSync",
@@ -13140,7 +13140,7 @@
         "ai-gateway create-mcp-service"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "catalog.Metastores.Summary",
@@ -13286,7 +13286,7 @@
         "ai-gateway create-model-service"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "catalog.RegisteredModels.List",
@@ -14407,7 +14407,7 @@
         "ai-gateway update-mcp-service"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "catalog.AiGateway.UpdateModelProviderService",
@@ -14429,7 +14429,7 @@
         "ai-gateway update-model-service"
       ],
       "product": "ai",
-      "access": "write"
+      "access": "admin"
     },
     {
       "operation": "catalog.AiGateway.UpdateSkill",

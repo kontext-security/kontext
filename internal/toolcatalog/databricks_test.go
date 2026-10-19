@@ -35,6 +35,7 @@ func TestDatabricksRoute(t *testing.T) {
 		{"inference table capture", "PUT", "/api/2.0/serving-endpoints/chat/config", "serving.ServingEndpoints.UpdateConfig", "workspace", "ai", "admin", []string{"auto_capture_config"}},
 		{"installing a library", "POST", "/api/2.0/libraries/install", "compute.Libraries.Install", "workspace", "execution", "write", nil},
 		{"external location with fallback", "POST", "/api/2.1/unity-catalog/external-locations", "catalog.ExternalLocations.Create", "workspace", "data", "admin", nil},
+		{"repo update can discard work", "PATCH", "/api/2.0/repos/42", "workspace.Repos.Update", "workspace", "workspace", "delete", nil},
 		{"running a job", "POST", "/api/2.2/jobs/run-now", "jobs.Jobs.RunNow", "workspace", "execution", "write", nil},
 		{"another API version", "POST", "/api/2.1/jobs/run-now", "jobs.Jobs.RunNow", "workspace", "execution", "write", nil},
 		{"trailing slash", "GET", "/api/2.1/unity-catalog/catalogs/", "catalog.Catalogs.List", "workspace", "data", "read", nil},
@@ -152,6 +153,9 @@ func TestDatabricksCommand(t *testing.T) {
 		{"ai-gateway", "create-model-provider-service", "catalog.AiGateway.CreateModelProviderService", "workspace", "secrets", "admin"},
 		// effective_owner is computed by the server.
 		{"ai-gateway", "update-skill", "catalog.AiGateway.UpdateSkill", "workspace", "ai", "write"},
+		{"ai-gateway", "update-mcp-service", "catalog.AiGateway.UpdateMcpService", "workspace", "ai", "admin"},
+		{"ai-gateway", "update-model-service", "catalog.AiGateway.UpdateModelService", "workspace", "ai", "admin"},
+		{"repos", "update", "workspace.Repos.Update", "workspace", "workspace", "delete"},
 		{"connections", "create", "catalog.Connections.Create", "workspace", "secrets", "write"},
 		{"providers", "create", "sharing.Providers.Create", "workspace", "secrets", "write"},
 		{"providers", "update", "sharing.Providers.Update", "workspace", "secrets", "admin"},
