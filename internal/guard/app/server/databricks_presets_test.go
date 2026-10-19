@@ -197,6 +197,9 @@ func TestCedarDatabricksPresets(t *testing.T) {
 					if decision.Cedar == nil || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateEvaluated || decision.Cedar.EngineErrorCount != 0 {
 						t.Fatalf("Cedar evidence = %#v, want evaluation without errors", decision.Cedar)
 					}
+					if call.name == "stale connector URL, neutral name" && (len(decision.Cedar.AlternateToolIDs) != 1 || decision.Cedar.AlternateToolIDs[0] != "databricks-mcp/execute_sql") {
+						t.Fatalf("alternates = %v, want the in-catalog execute_sql reading", decision.Cedar.AlternateToolIDs)
+					}
 					if decision.Decision != want {
 						t.Fatalf("decision = %q (tool %q, %+v), want %q", decision.Decision, decision.Cedar.ToolID, decision.Cedar.Tool, want)
 					}

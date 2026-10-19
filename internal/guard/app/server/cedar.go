@@ -137,6 +137,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	// policy saw (or would have seen), including in observe mode.
 	toolID, projections, alternates := resolveTool(event, namesUnknownTool(snapshot))
 	evidence.ToolID = toolID
+	evidence.AlternateToolIDs = alternates
 	evidence.Shell = projections
 	evidence.Tool = toolClassification(toolID, event)
 
