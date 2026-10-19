@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.1](https://github.com/kontext-security/kontext/compare/v1.12.0...v1.12.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **hooks:** encode observe results without a permission decision (ENG-743) ([#583](https://github.com/kontext-security/kontext/issues/583)) ([22afd23](https://github.com/kontext-security/kontext/commit/22afd23b067184f6e9814d4fa2841cf66623e95c))
+
 ## [1.12.0](https://github.com/kontext-security/kontext/compare/v1.11.0...v1.12.0) (2026-10-15)
 
 
