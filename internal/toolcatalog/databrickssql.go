@@ -79,11 +79,12 @@ var databricksObjectModifiers = setOf("OR", "REPLACE", "IF", "NOT", "EXISTS", "T
 
 var databricksSecretFunctions = setOf("SECRET", "TRY_SECRET", "LIST_SECRETS")
 
-// Functions that reach outside the warehouse, write files or name objects at
-// run time. Every AI_ function calls a model endpoint and counts too.
+// Functions that reach outside the warehouse, read or write files, run Java
+// or name objects at run time. Every AI_ function calls a model endpoint and counts too.
 var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA", "READ_KINESIS",
 	"READ_PUBSUB", "READ_PULSAR", "REMOTE_QUERY", "VECTOR_SEARCH", "CLOUD_FILES", "IDENTIFIER",
-	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
+	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE", "LIST_FILES", "TO_FILE", "TRY_TO_FILE",
+	"READ_STATESTORE", "READ_STATE_METADATA", "CLOUD_FILES_STATE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
 
 func classifyDatabricksStatement(stmt []sqlToken) (tier int, secrets, known bool) {
 	at := func(i int) sqlToken {
