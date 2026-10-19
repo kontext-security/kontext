@@ -40,6 +40,8 @@ func TestResolveDatabricksMCP(t *testing.T) {
 		{"other registered service, catalogued name", "mcp__gw__execute_sql", proxy + "main.default.crm", nil, "databricks-mcp/unrecognized", true},
 		{"other system service, catalogued name", "mcp__gw__genie_ask", proxy + "system.ai.other", nil, "databricks-mcp/unrecognized", true},
 		{"databricks SQL service", "mcp__gw__execute_sql", proxy + "system.ai.dbsql", nil, "databricks-mcp/execute_sql", true},
+		{"genie one service, write tool", "mcp__genie__genie_cancel_response", proxy + "system.ai.genie_one_mcp", nil, "databricks-mcp/genie_cancel_response", true},
+		{"genie one service, read tool", "mcp__genie__genie_ask", proxy + "system.ai.genie_one_mcp", nil, "databricks-mcp/genie_ask", true},
 		{"databricks SQL service, new tool", "mcp__gw__run", proxy + "system.ai.dbsql", nil, "databricks-mcp/unrecognized", true},
 		{"lookalike proxy service", "mcp__gw__create_issue", proxy + "system.ai.github_enterprise", pr, "databricks-mcp/unrecognized", true},
 		// Conflicting names: the URL decides.

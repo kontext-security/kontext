@@ -58,13 +58,14 @@ func TestCedarDatabricksPresets(t *testing.T) {
 	servers := `{"wh": {"type": "http", "url": "` + workspace + `/api/2.0/mcp/sql"},
 "github": {"url": "` + workspace + `/api/2.0/mcp/sql"},
 "genie": {"url": "` + workspace + `/api/2.0/mcp/genie/01ef"},
+"genieone": {"url": "` + workspace + `/ai-gateway/mcp-services/system.ai.genie_one_mcp"},
 "fns": {"url": "` + workspace + `/api/2.0/mcp/functions/main/default"},
 "vs": {"url": "` + workspace + `/api/2.0/mcp/vector-search/main/docs"},
 "serving": {"url": "` + workspace + `/serving-endpoints/chat/invocations"}}`
 	writeConfig(t, filepath.Join(home, ".claude.json"), `{"mcpServers": `+servers+`}`)
 	writeConfig(t, filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json"), `{"mcpServers": `+servers+`}`)
 	codex := ""
-	for name, path := range map[string]string{"wh": "/api/2.0/mcp/sql", "github": "/api/2.0/mcp/sql", "genie": "/api/2.0/mcp/genie/01ef", "fns": "/api/2.0/mcp/functions/main/default", "vs": "/api/2.0/mcp/vector-search/main/docs", "serving": "/serving-endpoints/chat/invocations"} {
+	for name, path := range map[string]string{"wh": "/api/2.0/mcp/sql", "github": "/api/2.0/mcp/sql", "genie": "/api/2.0/mcp/genie/01ef", "genieone": "/ai-gateway/mcp-services/system.ai.genie_one_mcp", "fns": "/api/2.0/mcp/functions/main/default", "vs": "/api/2.0/mcp/vector-search/main/docs", "serving": "/serving-endpoints/chat/invocations"} {
 		codex += "[mcp_servers." + name + "]\nurl = \"" + workspace + path + "\"\n"
 	}
 	writeConfig(t, filepath.Join(home, ".codex/config.toml"), codex)
@@ -105,6 +106,7 @@ func TestCedarDatabricksPresets(t *testing.T) {
 		{"conflicting name github", "mcp__github__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
 		{"genie ask", "mcp__genie__genie_ask", map[string]any{"question": "q"}, nil},
 		{"genie cancel", "mcp__genie__genie_cancel_response", map[string]any{}, []string{readOnly, exceptSQL}},
+		{"genie one cancel", "mcp__genieone__genie_cancel_response", map[string]any{}, []string{readOnly, exceptSQL}},
 		{"uc function", "mcp__fns__main__default__refund", map[string]any{"id": 1}, []string{readOnly, exceptSQL, runs}},
 		{"ai search", "mcp__vs__main__docs_index", map[string]any{"query": "q"}, nil},
 		{"new tool on a Databricks server", "mcp__wh__run_python", map[string]any{}, []string{unrecogniz}},
