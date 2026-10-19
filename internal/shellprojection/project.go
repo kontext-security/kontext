@@ -52,6 +52,9 @@ func Project(command string) []cedareval.ShellProjectionV2 {
 // walk carries what a nested script inherits from the command around it.
 type walk struct {
 	depth int
+	// stateful is set inside a script whose caller may have changed how
+	// words expand (see project), so no word there is provably one argument.
+	stateful bool
 	// oneArgumentEach is set while classifying a call whose every word
 	// expands to exactly one argument: a computed word is then quoted, so
 	// it cannot split into extra options (see classifyCurl).
@@ -70,10 +73,13 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	calls := make([]*syntax.CallExpr, 0, 4)
 	nodes, nesting := 0, 0
 	tooComplex := false
-	// A nameref (declare -n H='arr[@]') makes a plain quoted "$H" expand to
-	// several arguments, and eval or source can declare one, so with any of
-	// them in the script no word counts as provably one argument.
-	namerefs := false
+	// A statement that can change how a later word expands (a nameref from
+	// declare -n makes a quoted "$H" several arguments; eval, source, trap
+	// and builtin/command dispatch can make one) is recorded by offset. A
+	// call after one is stateful, and with a loop or function every call
+	// is, since a later statement can run first on another pass.
+	var stateChanges []int
+	loops := false
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil {
 			nesting--
@@ -85,14 +91,21 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 			tooComplex = true
 			return false
 		}
-		if call, ok := node.(*syntax.CallExpr); ok && len(call.Args) > 0 {
-			calls = append(calls, call)
-			if first, _ := literalWord(call.Args[0]); first == "eval" || first == "source" || first == "." {
-				namerefs = true
+		switch node := node.(type) {
+		case *syntax.CallExpr:
+			if len(node.Args) > 0 {
+				calls = append(calls, node)
+				if first, ok := literalWord(node.Args[0]); !ok || stateChangingCommands[first] {
+					stateChanges = append(stateChanges, int(node.Pos().Offset()))
+				}
 			}
-		}
-		if decl, ok := node.(*syntax.DeclClause); ok && declaresNameref(decl) {
-			namerefs = true
+		case *syntax.DeclClause:
+			// export and readonly cannot make a nameref.
+			if node.Variant == nil || node.Variant.Value != "export" && node.Variant.Value != "readonly" {
+				stateChanges = append(stateChanges, int(node.Pos().Offset()))
+			}
+		case *syntax.WhileClause, *syntax.ForClause, *syntax.FuncDecl:
+			loops = true
 		}
 		return true
 	})
@@ -111,7 +124,8 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 		// No wrapper either: env, sudo and launchers can rewrite argv.
 		direct := len(words) > 0 && words[0] == "gh"
 		cw := w
-		cw.oneArgumentEach = !namerefs && !slices.ContainsFunc(call.Args, func(word *syntax.Word) bool { return !oneArgument(word) })
+		cw.stateful = w.stateful || len(stateChanges) > 0 && (loops || stateChanges[0] < int(call.Pos().Offset()))
+		cw.oneArgumentEach = !cw.stateful && !slices.ContainsFunc(call.Args, func(word *syntax.Word) bool { return !oneArgument(word) })
 		projections = append(projections, classify(words, complete, cw, helpAllowed && direct)...)
 	}
 	if len(projections) == 0 {
@@ -122,23 +136,10 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 
 // singlePlainCall reports a script that is one simple command with no
 // variable assignments (`BASH_ALIASES[gh]=…` defines an alias too).
-// declaresNameref reports a declare, local or typeset that may make a name a
-// reference (-n, or a flag it cannot read).
-func declaresNameref(decl *syntax.DeclClause) bool {
-	if decl.Variant != nil && decl.Variant.Value == "nameref" {
-		return true
-	}
-	for _, arg := range decl.Args {
-		if !arg.Naked || arg.Value == nil {
-			continue
-		}
-		flag, ok := literalWord(arg.Value)
-		if !ok || strings.HasPrefix(flag, "-") && strings.Contains(flag, "n") || strings.HasPrefix(flag, "+") && strings.Contains(flag, "n") {
-			return true
-		}
-	}
-	return false
-}
+// stateChangingCommands can change how a later word expands: declare and
+// its kin make namerefs, eval and source run code that can, trap runs it
+// before later commands, and builtin, command and enable can reach them.
+var stateChangingCommands = words("declare", "typeset", "local", "eval", "source", ".", "trap", "builtin", "command", "enable")
 
 // oneArgument reports a word the shell provably expands to exactly one
 // argument: outside quotes a literal with no brace expansion ({a,-X,DELETE})
@@ -723,7 +724,7 @@ func nestedScript(program, script string, w walk) []cedareval.ShellProjectionV2 
 	if w.depth >= maxScriptDepth {
 		return single(projection(program, nil, []string{"script-depth-exceeded"}, false))
 	}
-	inner := project(script, walk{depth: w.depth + 1})
+	inner := project(script, walk{depth: w.depth + 1, stateful: w.stateful})
 	for i := range inner {
 		inner[i].Features = sortedUnique(append(inner[i].Features, "nested-script"))
 	}
