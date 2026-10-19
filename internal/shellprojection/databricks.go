@@ -197,9 +197,9 @@ func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV
 		case arg == "--":
 			i = len(args)
 		case arg == "":
-			// A dynamic word: the command cannot be known past it.
+			// Cobra skips an empty word. A dynamic one (already incomplete)
+			// may be a flag, so the command around it still counts.
 			dynamic = true
-			i = len(args)
 		case strings.HasPrefix(arg, "-") && len(arg) > 1:
 			if !strings.Contains(arg, "=") && !databricksBoolFlags[arg] && (strings.HasPrefix(arg, "--") || len(arg) == 2) {
 				i++

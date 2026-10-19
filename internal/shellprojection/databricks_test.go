@@ -110,6 +110,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"unknown group", "databricks frobnicate everything", []string{dbUnk}, false},
 		{"unknown verb", "databricks clusters frobnicate 0123-abc", []string{dbUnk}, false},
 		{"dynamic command", `databricks "$CMD" 0123-abc`, []string{dbUnk}, false},
+		{"dynamic word before the command keeps its tier", `databricks "$FLAGS" clusters delete 0123-abc`, []string{dbD, dbP("compute"), dbUnk, dbW}, false},
 		{"unknown experimental tool", "databricks experimental aitools tools frobnicate", []string{dbUnk}, false},
 
 		// curl.
