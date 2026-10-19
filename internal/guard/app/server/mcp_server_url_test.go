@@ -56,7 +56,12 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 	const atlassian = `{"type":"http","url":"https://mcp.atlassian.com/v1/mcp"}`
 	writeConfig(t, filepath.Join(home, ".claude.json"), `{
   "mcpServers": {"work": `+atlassian+`, "tickets": {"url": "https://mcp.linear.app/sse"}, "bridge": {"command": "npx", "args": ["mcp-remote", "https://mcp.atlassian.com/v1/sse"]}},
-  "projects": {"`+project+`": {"mcpServers": {"local.desk": `+atlassian+`}}}
+  "projects": {
+    "`+project+`": {"mcpServers": {"local.desk": `+atlassian+`}},
+    "`+filepath.Join(home, "src/shadow")+`": {},
+    "`+filepath.Join(home, "src/outer")+`": {"mcpServers": {"atlassian": {"url": "https://api.githubcopilot.com/mcp/"}, "work": {"url": "https://api.githubcopilot.com/mcp/"}}},
+    "`+filepath.Join(home, "src/outer/repo")+`": {}
+  }
 }`)
 	// The project .mcp.json overrides the user entry of the same name.
 	writeConfig(t, filepath.Join(project, ".mcp.json"), `{"mcpServers": {"tickets": `+atlassian+`}}`)
@@ -105,6 +110,10 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		{"stdio bridge", "claude", "", "mcp__bridge__createTeam", risk.DecisionAllow},
 		{"malformed project config", "claude", filepath.Join(home, "src/broken"), "mcp__broken__createTeam", risk.DecisionAllow},
 		{"stdio entry shadows a user URL", "claude", filepath.Join(home, "src/shadow"), "mcp__work__createTeam", risk.DecisionAllow},
+		// Another recorded project's local entry above the session's project
+		// is not active; where it disagrees the server name decides.
+		{"ancestor project's local entry, hinted name", "claude", filepath.Join(home, "src/outer/repo"), "mcp__atlassian__createTeam", risk.DecisionDeny},
+		{"ancestor project's local entry, neutral name", "claude", filepath.Join(home, "src/outer/repo/pkg"), "mcp__work__createTeam", risk.DecisionAllow},
 		{"plugin installations disagree", "claude", "", "mcp__plugin_dup-tools_cloud__createTeam", risk.DecisionAllow},
 		{"unlisted server", "claude", project, "mcp__elsewhere__createTeam", risk.DecisionAllow},
 		{"unknown agent", "gemini", project, "mcp__work__createTeam", risk.DecisionAllow},

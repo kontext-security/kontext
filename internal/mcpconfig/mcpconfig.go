@@ -6,10 +6,11 @@
 // Sources, highest precedence first:
 //
 //   - Claude Code: the managed managed-mcp.json (it takes exclusive control
-//     when deployed), then for the hook's cwd and each parent directory the
-//     local entry in ~/.claude.json (projects[dir].mcpServers) and the
-//     project .mcp.json, nearest directory first, then the user
-//     mcpServers in ~/.claude.json, then installed plugins' MCP servers.
+//     when deployed), then the session project's local entry in
+//     ~/.claude.json (projects[dir].mcpServers) and its .mcp.json, then the
+//     user mcpServers in ~/.claude.json, then installed plugins' MCP
+//     servers. The project is the deepest directory at or above the hook's
+//     cwd that ~/.claude.json records.
 //   - Claude Cowork: Claude Desktop's claude_desktop_config.json.
 //   - Codex: config.toml [mcp_servers].
 //
@@ -144,32 +145,74 @@ func (r *Resolver) claude(home, cwd, server string) string {
 		userConfig = filepath.Join(dir, ".claude.json")
 	}
 	root, _ := load(r, userConfig, readers.Claude)
-	if filepath.IsAbs(cwd) {
-		for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
-			if url, found := find(root.Projects[dir].MCPServers, server); found {
-				return url
-			}
-			if url, found := find(r.servers(filepath.Join(dir, ".mcp.json")), server); found {
-				return url
-			}
-			if dir == filepath.Dir(dir) {
+	project := projectRoot(root, cwd)
+	url, found := r.claudeScopes(root, configDir, project, server)
+	if !filepath.IsAbs(cwd) {
+		return url
+	}
+	// Local and project scope belong to the session's project, taken as the
+	// deepest directory Claude Code has recorded in ~/.claude.json. Another
+	// ancestor that defines the server differently may be the real project
+	// (a launch in a subdirectory), so the URL is then unknown.
+	for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
+		for _, scope := range r.projectScopes(root, dir) {
+			if dir == project {
 				break
+			}
+			if otherURL, defines := find(scope, server); defines && (!found || otherURL != url) {
+				return ""
+			}
+		}
+		if dir == filepath.Dir(dir) {
+			break
+		}
+	}
+	return url
+}
+
+// claudeScopes resolves server through the session project's local and
+// project scope, then user scope, then plugins.
+func (r *Resolver) claudeScopes(root readers.ClaudeRoot, configDir, project, server string) (string, bool) {
+	if project != "" {
+		for _, scope := range r.projectScopes(root, project) {
+			if url, found := find(scope, server); found {
+				return url, true
 			}
 		}
 	}
 	if url, found := find(root.MCPServers, server); found {
-		return url
+		return url, true
 	}
 	return r.plugin(configDir, server)
+}
+
+// projectScopes returns dir's local entries in ~/.claude.json and its
+// .mcp.json, in Claude Code's precedence.
+func (r *Resolver) projectScopes(root readers.ClaudeRoot, dir string) []map[string]readers.MCP {
+	return []map[string]readers.MCP{root.Projects[dir].MCPServers, r.servers(filepath.Join(dir, ".mcp.json"))}
+}
+
+func projectRoot(root readers.ClaudeRoot, cwd string) string {
+	if !filepath.IsAbs(cwd) {
+		return ""
+	}
+	for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
+		if _, ok := root.Projects[dir]; ok {
+			return dir
+		}
+		if dir == filepath.Dir(dir) {
+			return ""
+		}
+	}
 }
 
 // plugin resolves a plugin's MCP server, which Claude Code names
 // plugin_<plugin>_<server>. Installed records do not say which installation
 // of a plugin name is active, so when installations disagree about the
 // server the URL is unknown.
-func (r *Resolver) plugin(configDir, server string) string {
+func (r *Resolver) plugin(configDir, server string) (string, bool) {
 	if !strings.HasPrefix(server, "plugin_") {
-		return ""
+		return "", false
 	}
 	type installed struct {
 		Plugins map[string][]struct {
@@ -208,12 +251,12 @@ func (r *Resolver) plugin(configDir, server string) string {
 		}
 	}
 	if len(urls) != 1 {
-		return ""
+		return "", len(urls) > 1
 	}
 	for url := range urls {
-		return url
+		return url, true
 	}
-	return ""
+	return "", false
 }
 
 func (r *Resolver) servers(path string) map[string]readers.MCP {
