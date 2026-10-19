@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/kontext-security/kontext/internal/hook"
 )
@@ -48,11 +47,9 @@ type claudeHookOutput struct {
 }
 
 type claudeHookSpecificOutput struct {
-	HookEventName            string         `json:"hookEventName"`
-	PermissionDecision       string         `json:"permissionDecision,omitempty"`
-	PermissionDecisionReason string         `json:"permissionDecisionReason,omitempty"`
-	AdditionalContext        string         `json:"additionalContext,omitempty"`
-	UpdatedInput             map[string]any `json:"updatedInput,omitempty"`
+	HookEventName            string `json:"hookEventName"`
+	PermissionDecision       string `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
 }
 
 func DecodeClaudeEvent(input []byte, agentName string) (hook.Event, error) {
@@ -173,31 +170,20 @@ func decodeUseNumber(data []byte, dst any) error {
 }
 
 func EncodeClaudeResult(hookEventName string, result hook.Result) ([]byte, error) {
-	// A fail-open result carries no permission decision. An explicit allow
-	// would skip Claude Code's own permission prompt.
-	if hook.HookName(hookEventName) != hook.HookPreToolUse || result.FailedOpen {
+	// Kontext only blocks; approving stays with Claude Code's own permission
+	// flow. Anything but a PreToolUse deny carries no decision. Unknown
+	// decisions block.
+	if hook.HookName(hookEventName) != hook.HookPreToolUse || result.FailedOpen ||
+		result.Decision == hook.DecisionAllow {
 		return json.Marshal(claudeHookOutput{SuppressOutput: true})
 	}
-
-	permissionDecision := string(result.Decision)
-	if permissionDecision != string(hook.DecisionAllow) &&
-		permissionDecision != string(hook.DecisionDeny) {
-		permissionDecision = string(hook.DecisionDeny)
-	}
-	reason := result.ClaudeReason()
-	if permissionDecision == "allow" && strings.EqualFold(strings.TrimSpace(reason), "allowed") {
-		reason = ""
-	}
-	out := claudeHookOutput{
+	return json.Marshal(claudeHookOutput{
 		HookSpecificOutput: &claudeHookSpecificOutput{
 			HookEventName:            hookEventName,
-			PermissionDecision:       permissionDecision,
-			PermissionDecisionReason: reason,
-			UpdatedInput:             result.UpdatedInput,
+			PermissionDecision:       string(hook.DecisionDeny),
+			PermissionDecisionReason: result.ClaudeReason(),
 		},
-		SuppressOutput: result.UpdatedInput != nil,
-	}
-	return json.Marshal(out)
+	})
 }
 
 func stringPtrValue(value *string) string {

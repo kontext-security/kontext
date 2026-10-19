@@ -32,23 +32,22 @@ func TestAgentAdapterDecodePreservesHookEvent(t *testing.T) {
 	}
 }
 
-func TestAgentAdapterEncodeObserveModeAllowsWouldDeny(t *testing.T) {
+// Results in non-blocking modes carry no permission decision, so Claude Code's
+// own permission flow applies.
+func TestAgentAdapterEncodeNonBlockingModesLeaveDecisionToClaude(t *testing.T) {
 	t.Parallel()
 
-	var out bytes.Buffer
-	err := AgentAdapter{Agent: &claude.Claude{}, AgentName: "claude-code"}.Encode(
-		&out,
-		hook.Event{HookName: hook.HookPreToolUse},
-		hook.Result{Decision: hook.DecisionAllow, Reason: "Kontext observe mode: would deny; blocked", Mode: string(ModeObserve)},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), `"permissionDecision":"allow"`) {
-		t.Fatalf("output = %s", out.String())
-	}
-	if !strings.Contains(out.String(), `would deny; blocked`) {
-		t.Fatalf("output = %s", out.String())
+	event := hook.Event{HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "rm -rf ~"}}
+	wouldDeny := hook.Result{Decision: hook.DecisionDeny, Reason: "blocked"}
+	for _, mode := range []Mode{ModeObserve, ModeRemote} {
+		var out bytes.Buffer
+		err := AgentAdapter{Agent: &claude.Claude{}, AgentName: "claude-code"}.Encode(&out, event, effectiveResult(event, wouldDeny, mode))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out.String(), "permissionDecision") {
+			t.Fatalf("%s output = %s, want no permission decision", mode, out.String())
+		}
 	}
 }
 
