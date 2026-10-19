@@ -156,5 +156,82 @@
         }
       ]
     }
+  },
+  {
+    "version": 2,
+    "name": "claude-code-databricks-sql-raised-tier",
+    "input": {
+      "version": 2,
+      "endpointId": "ins_endpoint_02",
+      "agentId": "anthropic-claude-code",
+      "sessionId": "session_03",
+      "toolId": "databricks-mcp/execute_sql",
+      "toolInput": {
+        "warehouse_id": "wh_01",
+        "query": "DROP TABLE main.sales.orders"
+      },
+      "tool": {
+        "provider": "databricks",
+        "product": "sql",
+        "access": "delete"
+      }
+    },
+    "expected": {
+      "principal": {
+        "type": "Kontext::Endpoint",
+        "id": "ins_endpoint_02"
+      },
+      "action": {
+        "type": "Kontext::Action",
+        "id": "ToolUse"
+      },
+      "resource": {
+        "type": "Kontext::Tool",
+        "id": "databricks-mcp/execute_sql"
+      },
+      "context": {
+        "agent": {
+          "__entity": {
+            "type": "Kontext::Agent",
+            "id": "anthropic-claude-code"
+          }
+        },
+        "inputJson": "{\"query\":\"DROP TABLE main.sales.orders\",\"warehouse_id\":\"wh_01\"}",
+        "session": {
+          "id": "session_03"
+        },
+        "tool": {
+          "provider": "databricks",
+          "product": "sql",
+          "access": "delete"
+        }
+      },
+      "entities": [
+        {
+          "uid": {
+            "type": "Kontext::Endpoint",
+            "id": "ins_endpoint_02"
+          },
+          "attrs": {},
+          "parents": []
+        },
+        {
+          "uid": {
+            "type": "Kontext::Agent",
+            "id": "anthropic-claude-code"
+          },
+          "attrs": {},
+          "parents": []
+        },
+        {
+          "uid": {
+            "type": "Kontext::Tool",
+            "id": "databricks-mcp/execute_sql"
+          },
+          "attrs": {},
+          "parents": []
+        }
+      ]
+    }
   }
 ]

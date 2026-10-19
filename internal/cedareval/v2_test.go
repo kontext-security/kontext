@@ -13,7 +13,7 @@ import (
 	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
-const authorizationV2Digest = "f1fb97c0a803d30f6614cb8d046bcdfabff7f08b3c125c39f6f5f3fa8017fe70"
+const authorizationV2Digest = "78837f4e3d92c8aae6520dc78496d51807712ff8c9ab208bd595cda205aa0979"
 
 type authorizationFixtureV2 struct {
 	Version  int                      `json:"version"`
