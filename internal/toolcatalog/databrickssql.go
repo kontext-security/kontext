@@ -125,12 +125,13 @@ var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA"
 
 // databricksMaskIsName reports whether a MASK between prev and next is a name
 // (a column, alias, table or field) or sits in an expression, not a mask. An
-// expression shows as a reserved word after it; MASK limit.f names a function.
-func databricksMaskIsName(prev, beforePrev, next, afterNext sqlToken) bool {
+// expression shows as a reserved word after it that the expression goes on
+// past; MASK limit.f, MASK end) and MASK from USING … name a function.
+func databricksMaskIsName(verb string, prev, beforePrev, next, afterNext sqlToken) bool {
 	keyword := func(t sqlToken, words ...string) bool {
 		return t.kind == sqlWord && setOf(words...)[t.text]
 	}
-	if keyword(beforePrev, "AFTER") { // ADD COLUMN c t AFTER other MASK f
+	if verb == "ALTER" && keyword(beforePrev, "AFTER") { // ADD COLUMN c t AFTER other MASK f
 		return false
 	}
 	return prev.is("(") || prev.is(",") || prev.is(".") || keyword(prev, "AS", "FROM", "JOIN") ||
@@ -138,8 +139,9 @@ func databricksMaskIsName(prev, beforePrev, next, afterNext sqlToken) bool {
 			"GLOBAL", "MATERIALIZED", "STREAMING", "EXTERNAL", "LIVE") ||
 		keyword(prev, "EXISTS") && keyword(beforePrev, "NOT") ||
 		keyword(prev, "COLUMN", "COLUMNS", "CONSTRAINT") && keyword(beforePrev, "ADD", "ALTER", "DROP", "RENAME") ||
-		!afterNext.is(".") && keyword(next, "IS", "AND", "OR", "IN", "FROM", "WHERE", "THEN", "ELSE", "END", "AS",
-			"JOIN", "ON", "USING", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "GROUP", "ORDER", "UNION")
+		!afterNext.is(".") && !afterNext.is(")") && !afterNext.is(",") && !afterNext.is("USING") && afterNext.kind != 0 &&
+			keyword(next, "IS", "AND", "OR", "IN", "BETWEEN", "LIKE", "FROM", "WHERE", "THEN", "ELSE", "END", "AS",
+				"JOIN", "ON", "USING", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "GROUP", "ORDER", "UNION")
 }
 
 func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bool) {
@@ -169,8 +171,14 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 
 	start := databricksStatementStart(stmt)
 	var words []string
-	for i := start; i < len(stmt) && stmt[i].kind == sqlWord && len(words) < 3; i++ {
-		if i == start || !databricksTypeModifiers[stmt[i].text] {
+	for i := start; i < len(stmt) && len(words) < 3; i++ {
+		if stmt[i].kind == sqlPunct && stmt[i].loose {
+			continue // what may be a comment, read as code after malformed input
+		}
+		if stmt[i].kind != sqlWord {
+			break
+		}
+		if len(words) == 0 || !databricksTypeModifiers[stmt[i].text] {
 			words = append(words, stmt[i].text)
 		}
 	}
@@ -232,7 +240,7 @@ func classifyDatabricksStatement(stmt []sqlToken) (effect int, secrets, known bo
 		// ponytail: a STRUCT<mask …> field or a CTAS alias without AS reads as
 		// a mask too, which only over-flags admin.
 		if (verb == "CREATE" || verb == "ALTER") && tok.is("MASK") && (next.kind == sqlWord || next.kind == sqlName) &&
-			!databricksMaskIsName(prev, at(i-2), next, at(i+2)) {
+			!databricksMaskIsName(verb, prev, at(i-2), next, at(i+2)) {
 			effect |= sqlAdmin
 		}
 	}
@@ -262,7 +270,7 @@ func databricksStatementStart(stmt []sqlToken) int {
 		return i
 	}
 	i := 0
-	for at(i).is("(") {
+	for at(i).is("(") || at(i).kind == sqlPunct && at(i).loose {
 		i++
 	}
 	if !at(i).is("WITH") {
@@ -348,7 +356,7 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 				// Quotes split words but leave no token, so a quoted
 				// `secret`( still reads as a call.
 				if r < utf8.RuneSelf && !unicode.IsSpace(r) && !strings.ContainsRune("'\"`", r) {
-					tokens = append(tokens, sqlToken{kind: sqlPunct, text: rest[:1]})
+					tokens = append(tokens, sqlToken{kind: sqlPunct, text: rest[:1], loose: true})
 				}
 				i += size
 			}
@@ -371,7 +379,10 @@ func lexDatabricksSQL(sql string) (tokens []sqlToken, complete bool) {
 			i += end
 		case r == '\'' || r == '"' || r == '`':
 			end := sqlQuoteEnd(rest, r != '`')
-			if end < 0 {
+			// "…" is a string with backslash escapes, or with ANSI double-quoted
+			// identifiers on, a name without them. A backslash inside could end
+			// it in either place, so read the rest as code.
+			if end < 0 || r == '"' && strings.Contains(rest[:end], `\`) {
 				complete = false
 				continue
 			}
