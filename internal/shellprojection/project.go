@@ -1,10 +1,14 @@
 package shellprojection
 
 import (
+	"cmp"
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -216,6 +220,8 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 		return single(hsCLI.classify(args, complete))
 	case "forge":
 		return single(forgeCLI.classify(args, complete))
+	case "databricks":
+		return single(classifyDatabricks(args, complete))
 	case "bash", "sh", "zsh", "dash", "ksh":
 		return classifyShell(program, args, complete, w)
 	case "eval":
@@ -981,80 +987,150 @@ var ghAPINeutralValueOptions = map[string]bool{"-q": true, "--jq": true, "-t": t
 
 var ghAPINeutralValuePrefixes = []string{"--jq=", "--template=", "--cache=", "--hostname=", "--header=", "--preview="}
 
+// curlOperation is one request of a curl command: --next starts the next one
+// with fresh options.
+type curlOperation struct {
+	// custom is the -X method, which replaces the method string whatever
+	// else is set; otherwise -I, -G, -T and a body imply one.
+	custom                  string
+	head, get, upload, data bool
+	// uploads are the -T files in order, one per URL; an empty one is a
+	// slot without an upload.
+	uploads       []string
+	requestTarget string
+	protoDefault  string
+	urls, bodies  []string
+	bodyFile      bool
+}
+
+func (op curlOperation) method() string {
+	switch {
+	case op.custom != "":
+		return op.custom
+	case op.head:
+		return "HEAD"
+	case op.get:
+		return "GET"
+	case op.upload:
+		return "PUT"
+	case op.data:
+		return "POST"
+	}
+	return "GET"
+}
+
+// withUpload returns the operation and URL as curl sends its index-th URL:
+// each -T applies to one URL in turn, and a URL ending in / gets the upload
+// file's name appended, unless --request-target sets the path. readable is
+// false when that name is a glob or holds a backslash, which the projection
+// does not model.
+func (op curlOperation) withUpload(index int, urlText string) (_ curlOperation, _ string, readable bool) {
+	file := ""
+	if index < len(op.uploads) {
+		file = op.uploads[index]
+	}
+	op.upload = file != ""
+	parsed, err := url.Parse(urlText)
+	if !op.upload || op.requestTarget != "" || file == "-" || file == "." || err != nil || !strings.HasSuffix("/"+parsed.Path, "/") {
+		return op, urlText, true
+	}
+	if strings.ContainsAny(file, "{}[]\\") {
+		return op, urlText, false
+	}
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/") + "/" + path.Base(file)
+	parsed.RawPath = ""
+	return op, parsed.String(), true
+}
+
 func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
-	method := "GET"
-	explicitMethod := false
-	var urls []string
-	bodies := make([]string, 0, 2)
-	// A body read from a file is unknown content. Most routes treat it as an
-	// incomplete parse; a provider's read-over-POST route (Jira search) stays
-	// a read whatever its body says.
-	bodyFile := false
-	valueOptions := map[string]bool{"-H": true, "--header": true, "-A": true, "--user-agent": true, "-u": true, "--user": true, "-o": true, "--output": true, "--connect-timeout": true, "--max-time": true, "--retry": true}
-	safeFlags := map[string]bool{"-s": true, "-S": true, "-sS": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
+	// unclear is set when the request cannot be read exactly: a word the
+	// shell computes where an option, URL or method goes, a config file
+	// (-K), which can set any option, or an option the parser does not know
+	// followed by one that it may have taken as its value. By decision, a
+	// Databricks request that cannot be read exactly is unrecognized with no
+	// tier: it fails open. A computed body or header value does not change
+	// the route, so the route's tier holds.
+	unclear := false
+	computed := !complete
+	args = slices.Clone(args)
+	var operations []curlOperation
+	var op curlOperation
+	safeFlags := map[string]bool{"-s": true, "-S": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
+	unknownBefore := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if expanded, ok := expandCurlShortCluster(arg); ok {
+			// -sX DELETE is -s -X DELETE; -sd@f is -s -d @f.
+			args = slices.Concat(args[:i], expanded, args[i+1:])
+			i--
+			continue
+		}
+		if unknownBefore && strings.HasPrefix(arg, "-") || arg == "" && computed {
+			unclear = true
+		}
+		if arg == "--" && !unknownBefore {
+			// Everything after the option terminator is a URL.
+			op.urls = append(op.urls, args[i+1:]...)
+			break
+		}
+		unknown := false
+		// value returns the option's value: attached after = or the next word.
+		// Every option that reads it shapes the method, target or URL, so a
+		// computed value leaves the request unclear.
+		value := func(name string) (string, bool) {
+			if attached, ok := strings.CutPrefix(arg, name+"="); ok {
+				unclear = unclear || attached == "" && computed
+				return attached, true
+			}
+			if i+1 >= len(args) {
+				complete = false
+				return "", false
+			}
+			i++
+			unclear = unclear || args[i] == "" && computed
+			return args[i], true
+		}
+		body, isBody := curlDataOption(arg)
 		switch {
-		case arg == "-X" || arg == "--request":
-			if i+1 >= len(args) {
-				complete = false
-				continue
+		case arg == "-X" || arg == "--request" || strings.HasPrefix(arg, "--request="):
+			if method, ok := value("--request"); ok {
+				op.custom = strings.ToUpper(method)
 			}
-			i++
-			method, explicitMethod = strings.ToUpper(args[i]), true
-		case strings.HasPrefix(arg, "-X") && len(arg) > 2:
-			method, explicitMethod = strings.ToUpper(arg[2:]), true
-		case strings.HasPrefix(arg, "--request="):
-			method, explicitMethod = strings.ToUpper(strings.TrimPrefix(arg, "--request=")), true
+		case arg == "--request-target" || strings.HasPrefix(arg, "--request-target="):
+			op.requestTarget, _ = value("--request-target")
+		case arg == "--proto-default" || strings.HasPrefix(arg, "--proto-default="):
+			op.protoDefault, _ = value("--proto-default")
 		case arg == "-I" || arg == "--head":
-			method, explicitMethod = "HEAD", true
+			op.head = true
+		case arg == "--no-head":
+			op.head = false
 		case arg == "-G" || arg == "--get":
-			method, explicitMethod = "GET", true
-		case arg == "--url":
-			if i+1 >= len(args) {
-				complete = false
-				continue
+			op.get = true
+		case arg == "--no-get":
+			op.get = false
+		case arg == "--url" || strings.HasPrefix(arg, "--url="):
+			if urlText, ok := value("--url"); ok {
+				op.urls = append(op.urls, urlText)
 			}
-			i++
-			urls = append(urls, args[i])
-		case strings.HasPrefix(arg, "--url="):
-			urls = append(urls, strings.TrimPrefix(arg, "--url="))
 		case isCurlDataFlag(arg):
 			if i+1 >= len(args) {
 				complete = false
 				continue
 			}
 			i++
-			bodies = append(bodies, args[i])
-			if strings.HasPrefix(args[i], "@") {
-				bodyFile = true
+			body, isBody = curlBody(arg, args[i]), true
+		case isBody:
+		case arg == "-T" || arg == "--upload-file" || strings.HasPrefix(arg, "--upload-file="):
+			// An empty file name holds its URL's slot without an upload.
+			if file, ok := value("--upload-file"); ok {
+				op.uploads = append(op.uploads, file)
+				op.upload = op.upload || file != ""
 			}
-			if !explicitMethod {
-				method = "POST"
-			}
-		case curlDataValue(arg) != "":
-			body := curlDataValue(arg)
-			bodies = append(bodies, body)
-			if strings.HasPrefix(body, "@") {
-				bodyFile = true
-			}
-			if !explicitMethod {
-				method = "POST"
-			}
-		case arg == "-T" || arg == "--upload-file":
-			if i+1 >= len(args) {
-				complete = false
-				continue
-			}
-			i++
-			if !explicitMethod {
-				method = "PUT"
-			}
-		case strings.HasPrefix(arg, "--upload-file="):
-			if !explicitMethod {
-				method = "PUT"
-			}
-		case valueOptions[arg]:
+		case arg == "-K" || arg == "--config" || strings.HasPrefix(arg, "--config="):
+			unclear = true
+			complete = false
+			value("--config")
+		case curlValueOption(arg):
 			if i+1 >= len(args) {
 				complete = false
 				continue
@@ -1067,29 +1143,194 @@ func classifyCurl(args []string, complete bool) cedareval.ShellProjectionV2 {
 		case strings.HasPrefix(arg, "--header=") && isMethodOverrideHeader(strings.TrimPrefix(arg, "--header=")):
 			complete = false
 		case safeFlags[arg]:
-		case strings.HasPrefix(arg, "-"):
-			// Unknown curl flags can change request behavior.
+		case arg == "--next" || arg == "-:":
+			unclear = unclear || unknownBefore
 			complete = false
+			operations = append(operations, op)
+			op = curlOperation{}
+		case strings.HasPrefix(arg, "-"):
+			// Unknown curl flags can change request behavior. A known switch
+			// takes no value, so it cannot hide the next word.
+			complete = false
+			unknown = !curlSwitches[arg]
 		default:
-			urls = append(urls, arg)
+			op.urls = append(op.urls, arg)
+		}
+		if isBody {
+			op.bodies = append(op.bodies, body)
+			op.bodyFile = op.bodyFile || strings.HasPrefix(body, "@")
+			op.data = true
+		}
+		unknownBefore = unknown
+	}
+	operations = append(operations, op)
+
+	// Each URL of each operation is judged with that operation's method and
+	// body. A URL glob ({a,b}, [x-y]) is not expanded, so the request cannot
+	// be read exactly: a Databricks URL with one is unrecognized with no
+	// tier, and any other is read as written but never as a catalogued
+	// route (a GitHub force push through a globbed path is not seen).
+	type request struct {
+		urlText, method string
+		bodies          []string
+		bodyFile        bool
+	}
+	var requests []request
+	var unrecognized []string
+	for _, op := range operations {
+		for index, urlText := range op.urls {
+			normalized := normalizeCurlURL(urlText, cmp.Or(op.protoDefault, "http"))
+			// Only a target in origin form (/path) replaces the path the
+			// projection can read; any other form (*, a relative or absolute
+			// URL) leaves the request unreadable.
+			targetReadable := op.requestTarget == "" || strings.HasPrefix(op.requestTarget, "/")
+			complete = complete && targetReadable
+			if op.requestTarget != "" && targetReadable {
+				normalized = withRequestTarget(normalized, op.requestTarget)
+			}
+			sent, sentURL, readable := op.withUpload(index, normalized)
+			readable = readable && targetReadable
+			// The fragment is not sent, so a glob in it changes nothing.
+			beforeFragment, _, _ := strings.Cut(urlText, "#")
+			globbed := strings.ContainsAny(beforeFragment, "{}[]")
+			complete = complete && !globbed
+			if unclear || !readable || globbed {
+				if databricksURL(urlText) {
+					unrecognized = append(unrecognized, FactDatabricksRouteUnrecognized)
+					continue
+				}
+			}
+			requests = append(requests, request{sentURL, sent.method(), op.bodies, op.bodyFile})
 		}
 	}
-	if len(urls) <= 1 {
-		urlText := ""
-		if len(urls) == 1 {
-			urlText = urls[0]
+	if len(requests) <= 1 && len(operations) == 1 && len(unrecognized) == 0 {
+		if len(requests) == 0 {
+			return classifyCurlURL("", op.method(), op.bodies, complete, op.bodyFile)
 		}
-		return classifyCurlURL(urlText, method, bodies, complete, bodyFile)
+		return classifyCurlURL(requests[0].urlText, requests[0].method, requests[0].bodies, complete, requests[0].bodyFile)
 	}
-	// curl requests every URL it is given with the same method and body.
-	// Each is judged, and the whole is never a catalogued route.
-	var facts, features []string
-	for _, urlText := range urls {
-		each := classifyCurlURL(urlText, method, bodies, false, bodyFile)
-		facts = append(facts, each.Facts...)
-		features = append(features, each.Features...)
+	// Several requests, or one that is unrecognized: each is judged, and the
+	// whole is never a catalogued route.
+	facts := unrecognized
+	var features []string
+	otherWrite := false
+	for _, each := range requests {
+		projection := classifyCurlURL(each.urlText, each.method, each.bodies, false, each.bodyFile)
+		facts = append(facts, projection.Facts...)
+		features = append(features, projection.Features...)
+		otherWrite = otherWrite || databricksWritesOutsideSQL(projection.Facts)
+	}
+	if otherWrite {
+		// One request must not lend the SQL exemption to another's write.
+		facts = slices.DeleteFunc(facts, func(fact string) bool { return fact == databricksProductFact(databricksSQLProduct) })
 	}
 	return projection("curl", facts, features, false)
+}
+
+// curlSwitches are common curl options that take no value.
+var curlSwitches = words("-L", "--location", "--location-trusted", "-k", "--insecure", "-v", "--verbose", "-i",
+	"--include", "--show-headers", "-f", "-#", "--progress-bar", "--no-progress-meter", "-N", "--no-buffer", "-O",
+	"--remote-name", "--remote-name-all", "-J", "--remote-header-name", "-g", "--globoff", "-q", "--disable",
+	"-0", "--http1.0", "--http1.1", "--http2", "--http2-prior-knowledge", "--http3", "--http3-only", "-4", "--ipv4",
+	"-6", "--ipv6", "--raw", "-n", "--netrc", "--netrc-optional", "--tcp-nodelay", "-Z", "--parallel",
+	"--parallel-immediate", "--fail-early", "--create-dirs", "--path-as-is", "--retry-all-errors",
+	"--retry-connrefused", "--anyauth", "--basic", "--digest", "--negotiate", "--ntlm", "-l", "--list-only", "-B",
+	"--use-ascii", "-j", "--junk-session-cookies", "-R", "--remote-time", "-p", "--proxytunnel", "-V", "--version",
+	"--styled-output", "--no-keepalive", "--no-sessionid", "--tr-encoding", "--xattr", "--ssl", "--ssl-reqd",
+	"--ssl-no-revoke", "--ssl-allow-beast", "--ssl-revoke-best-effort", "--no-alpn", "--no-npn", "--compressed-ssh",
+	"--suppress-connect-headers", "--disallow-username-in-url", "--ignore-content-length", "--crlf", "--append",
+	"-a", "--proxy-insecure", "--proxy-anyauth", "--proxy-basic", "--proxy-digest", "--proxy-negotiate",
+	"--proxy-ntlm", "--doh-insecure", "--cert-status", "--false-start", "--sasl-ir", "--metalink", "-M", "--manual")
+
+var curlScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*):/+`)
+
+// normalizeCurlURL reads a URL the way curl does: without a scheme it uses
+// --proto-default (http unless set), any number of slashes may follow the
+// scheme (https:/host and https:///host are https://host), percent escapes
+// in the host are decoded, and the fragment, which curl does not send, is
+// dropped.
+func normalizeCurlURL(urlText, protoDefault string) string {
+	urlText, _, _ = strings.Cut(urlText, "#")
+	if urlText == "" {
+		return ""
+	}
+	scheme, rest := protoDefault, urlText
+	if match := curlScheme.FindStringSubmatch(urlText); match != nil {
+		scheme, rest = match[1], urlText[len(match[0]):]
+	}
+	end := strings.IndexAny(rest, "/?#")
+	if end < 0 {
+		end = len(rest)
+	}
+	if authority, err := url.PathUnescape(rest[:end]); err == nil {
+		rest = authority + rest[end:]
+	}
+	return scheme + "://" + rest
+}
+
+// curlLongValueOptions are curl's long options that take a value.
+var curlLongValueOptions = words("--abstract-unix-socket", "--alt-svc", "--aws-sigv4", "--cacert", "--capath", "--cert",
+	"--cert-type", "--ciphers", "--config", "--connect-timeout", "--connect-to", "--continue-at", "--cookie", "--cookie-jar",
+	"--create-file-mode", "--crlfile", "--curves", "--data", "--data-ascii", "--data-binary", "--data-raw",
+	"--data-urlencode", "--delegation", "--dns-interface", "--dns-ipv4-addr", "--dns-ipv6-addr", "--dns-servers",
+	"--doh-url", "--dump-header", "--ech", "--egd-file", "--engine", "--etag-compare", "--etag-save",
+	"--expect100-timeout", "--form", "--form-string", "--ftp-account", "--ftp-alternative-to-user", "--ftp-method",
+	"--ftp-port", "--ftp-ssl-ccc-mode", "--happy-eyeballs-timeout-ms", "--header", "--hostpubmd5", "--hostpubsha256",
+	"--hsts", "--interface", "--ip-tos", "--ipfs-gateway", "--json", "--keepalive-cnt", "--keepalive-time", "--key",
+	"--key-type", "--krb", "--libcurl", "--limit-rate", "--local-port", "--login-options", "--mail-auth", "--mail-from",
+	"--mail-rcpt", "--max-filesize", "--max-redirs", "--max-time", "--netrc-file", "--oauth2-bearer", "--output",
+	"--output-dir", "--parallel-max", "--pass", "--pinnedpubkey", "--preproxy", "--proto", "--proto-default",
+	"--proto-redir", "--proxy", "--proxy-cacert", "--proxy-capath", "--proxy-cert", "--proxy-cert-type",
+	"--proxy-ciphers", "--proxy-crlfile", "--proxy-header", "--proxy-key", "--proxy-key-type", "--proxy-pass",
+	"--proxy-pinnedpubkey", "--proxy-service-name", "--proxy-tls13-ciphers", "--proxy-tlsauthtype",
+	"--proxy-tlspassword", "--proxy-tlsuser", "--proxy-user", "--proxy1.0", "--pubkey", "--quote", "--random-file",
+	"--range", "--rate", "--referer", "--request", "--request-target", "--resolve", "--retry", "--retry-delay",
+	"--retry-max-time", "--sasl-authzid", "--service-name", "--socks4", "--socks4a", "--socks5",
+	"--socks5-gssapi-service", "--socks5-hostname", "--speed-limit", "--speed-time", "--ssl-sessions", "--stderr",
+	"--telnet-option", "--tftp-blksize", "--time-cond", "--tls-max", "--tls13-ciphers", "--tlsauthtype",
+	"--tlspassword", "--tlsuser", "--trace", "--trace-ascii", "--trace-config", "--unix-socket", "--upload-file",
+	"--upload-flags", "--url", "--url-query", "--user", "--user-agent", "--variable", "--write-out")
+
+// curlValueOption reports a curl option that takes the next word as its
+// value.
+func curlValueOption(arg string) bool {
+	if len(arg) == 2 && arg[0] == '-' && arg[1] != '-' {
+		return strings.IndexByte(curlShortValueOptions, arg[1]) >= 0
+	}
+	return curlLongValueOptions[arg]
+}
+
+// curlShortValueOptions are curl's one-letter options that take a value.
+const curlShortValueOptions = "AbcCdDeEFHKmoPQrtTuUwxXyYz"
+
+// expandCurlShortCluster splits a short-option cluster the way curl reads
+// it: each letter is an option, and the first one that takes a value takes
+// the rest of the word (-XPOST, -sd@f) or, at the end, the next word.
+func expandCurlShortCluster(arg string) ([]string, bool) {
+	if len(arg) <= 2 || arg[0] != '-' || arg[1] == '-' {
+		return nil, false
+	}
+	var out []string
+	for j := 1; j < len(arg); j++ {
+		out = append(out, "-"+arg[j:j+1])
+		if strings.IndexByte(curlShortValueOptions, arg[j]) >= 0 {
+			if j+1 < len(arg) {
+				out = append(out, arg[j+1:])
+			}
+			break
+		}
+	}
+	return out, true
+}
+
+// withRequestTarget replaces a URL's path and query with the target curl
+// sends instead (--request-target).
+func withRequestTarget(urlText, target string) string {
+	parsed, err := url.Parse(urlText)
+	if err != nil || parsed.Host == "" {
+		return urlText
+	}
+	return parsed.Scheme + "://" + parsed.Host + target
 }
 
 // classifyCurlURL classifies one request of a curl command.
@@ -1099,13 +1340,19 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		// Plain HTTP to a provider is still that provider's request; it is
 		// judged like HTTPS but never as a catalogued route.
 		host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-		if isAtlassianHost(host) || isHubSpotHost(host) || isJiraServerPath(parsed.Path) {
+		if isAtlassianHost(host) || isHubSpotHost(host) || databricksHost(host) || isJiraServerPath(parsed.Path) {
 			parsed.Scheme = "https"
 			complete = false
 		}
 	}
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return projection("curl", nil, []string{"dynamic-or-invalid-url"}, false)
+		var facts []string
+		if databricksURL(urlText) {
+			// A readable Databricks host with a request the parser cannot
+			// read (an invalid escape in the path).
+			facts = []string{FactDatabricksRouteUnrecognized}
+		}
+		return projection("curl", facts, []string{"dynamic-or-invalid-url"}, false)
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 	switch {
@@ -1113,6 +1360,8 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)
 	case isHubSpotHost(host):
 		return classifyHubSpotCurl(host, parsed, method, complete, bodyFile)
+	case databricksHost(host):
+		return classifyDatabricksCurl(host, parsed, method, bodies, complete)
 	case isJiraServerPath(parsed.Path):
 		return classifyAtlassianCurl(host, parsed, method, complete, bodyFile)
 	}
@@ -1148,16 +1397,53 @@ func isCurlDataFlag(arg string) bool {
 	return curlDataFlags[arg]
 }
 
-func curlDataValue(arg string) string {
+// curlDataOption returns the body of a data option with its value attached
+// (--json=…, -d…); an empty attached value is still a body.
+func curlDataOption(arg string) (string, bool) {
 	for _, prefix := range []string{"--data=", "--data-raw=", "--data-binary=", "--data-urlencode=", "--data-ascii=", "--json=", "--form=", "--form-string="} {
-		if strings.HasPrefix(arg, prefix) {
-			return strings.TrimPrefix(arg, prefix)
+		if value, ok := strings.CutPrefix(arg, prefix); ok {
+			return curlBody(strings.TrimSuffix(prefix, "="), value), true
 		}
 	}
 	if strings.HasPrefix(arg, "-d") && len(arg) > 2 || strings.HasPrefix(arg, "-F") && len(arg) > 2 {
-		return arg[2:]
+		return arg[2:], true
 	}
-	return ""
+	return "", false
+}
+
+// curlBody returns the body piece curl sends for a data option's value:
+// --data-urlencode percent-encodes the content (all of it, after a leading =,
+// or after name=); a piece read from a file stays @name.
+func curlBody(flag, value string) string {
+	if flag != "--data-urlencode" {
+		return value
+	}
+	name, content, hasName := strings.Cut(value, "=")
+	if !hasName {
+		if before, file, ok := strings.Cut(value, "@"); ok && !strings.ContainsAny(before, "=") {
+			return "@" + file
+		}
+		return curlEscape(value)
+	}
+	if name == "" {
+		return curlEscape(content)
+	}
+	return name + "=" + curlEscape(content)
+}
+
+// curlEscape percent-encodes every byte but letters, digits and -._~, as
+// curl_easy_escape does.
+func curlEscape(value string) string {
+	var out strings.Builder
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("-._~", c) >= 0 {
+			out.WriteByte(c)
+		} else {
+			fmt.Fprintf(&out, "%%%02X", c)
+		}
+	}
+	return out.String()
 }
 
 func containsForceBody(bodies []string) bool {
