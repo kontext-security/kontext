@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
+	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
@@ -1016,6 +1017,56 @@ func capturedRecordJSON(payload map[string]any, mode payloadcapture.Mode) any {
 	return string(raw)
 }
 
+// cedarClassification is the provider, product and tier the Cedar request
+// classified a call as: an MCP tool's catalog entry (context.tool), or a
+// shell command's databricks/* facts, the strictest across its
+// projections. It is nil when the request carried neither.
+func cedarClassification(evidence *risk.CedarEvidence) *cedareval.ToolClassificationV2 {
+	if evidence == nil {
+		return nil
+	}
+	if evidence.Tool != nil && evidence.Tool.Provider != "" {
+		return evidence.Tool
+	}
+	rank := map[string]int{"": 0, "read": 1, "write": 2, "delete": 3, "admin": 4}
+	var classified *cedareval.ToolClassificationV2
+	for _, projection := range evidence.Shell {
+		// An unrecognized route has no tier; a catalogued one is a read
+		// unless a tier fact raises it.
+		product, access, databricks := "", "", false
+		for _, fact := range projection.Facts {
+			name, value, ok := strings.Cut(fact, "=")
+			if !ok || !strings.HasPrefix(name, "databricks/") {
+				continue
+			}
+			databricks = true
+			switch {
+			case name == "databricks/product":
+				product = value
+			case fact == "databricks/route=catalogued" && access == "":
+				access = "read"
+			case value == "true" && rank[strings.TrimPrefix(name, "databricks/")] > rank[access]:
+				access = strings.TrimPrefix(name, "databricks/")
+			}
+		}
+		if !databricks {
+			continue
+		}
+		if classified == nil {
+			classified = &cedareval.ToolClassificationV2{Provider: "databricks"}
+		}
+		if rank[access] > rank[classified.Access] {
+			classified.Access = access
+			if product != "" {
+				classified.Product = product
+			}
+		} else if classified.Product == "" {
+			classified.Product = product
+		}
+	}
+	return classified
+}
+
 func actionValues(actionID, sessionID string, event risk.HookEvent, decision risk.RiskDecision, canonicalEvent string, captureConfig payloadcapture.RuntimeConfiguration, now time.Time) (map[string]any, error) {
 	riskEvent := decision.RiskEvent
 	if canonicalEvent != canonicalEventRequestDecided {
@@ -1112,6 +1163,21 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 	if resourceID != "" {
 		provider = "github"
 	}
+	operationClass, resourceClass := riskEvent.OperationClass, riskEvent.ResourceClass
+	if provider == "" {
+		// The normalizer does not know catalogued providers (Atlassian,
+		// HubSpot, Databricks); the Cedar request does. The exported
+		// decision fact takes its target_provider from this column.
+		if classified := cedarClassification(decision.Cedar); classified != nil {
+			provider = classified.Provider
+			if classified.Access != "" {
+				operationClass = classified.Access
+			}
+			if classified.Product != "" {
+				resourceClass = classified.Product
+			}
+		}
+	}
 
 	updatedAt := now.Format(time.RFC3339Nano)
 
@@ -1125,8 +1191,8 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 		"tool_name":                 event.ToolName,
 		"provider":                  provider,
 		"operation":                 riskEvent.Operation,
-		"operation_class":           riskEvent.OperationClass,
-		"resource_class":            riskEvent.ResourceClass,
+		"operation_class":           operationClass,
+		"resource_class":            resourceClass,
 		"resource_id":               nullIfEmpty(resourceID),
 		"parameters_redacted_json":  parametersJSON,
 		"parameters_hash":           parametersHash,
