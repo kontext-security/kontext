@@ -1166,17 +1166,30 @@ func sdkCalls(body *ast.BlockStmt) []sdkCall {
 	// accessors are the X() in w.Field.X().Method(...); Inspect reaches the
 	// outer call first.
 	accessors := map[*ast.CallExpr]bool{}
+	bind := func(name string, value ast.Expr) {
+		if name == "_" {
+			return
+		}
+		if kind := client(value); kind != "" {
+			clients[name] = kind
+		} else if field, ok := value.(*ast.SelectorExpr); ok && client(field.X) != "" {
+			services[name] = sdkCall{client: client(field.X), field: field.Sel.Name}
+		}
+	}
 	ast.Inspect(body, func(node ast.Node) bool {
-		if assign, ok := node.(*ast.AssignStmt); ok && len(assign.Lhs) == len(assign.Rhs) {
-			for i, lhs := range assign.Lhs {
-				ident, ok := lhs.(*ast.Ident)
-				if !ok || ident.Name == "_" {
-					continue
+		switch node := node.(type) {
+		case *ast.AssignStmt:
+			if len(node.Lhs) == len(node.Rhs) {
+				for i, lhs := range node.Lhs {
+					if ident, ok := lhs.(*ast.Ident); ok {
+						bind(ident.Name, node.Rhs[i])
+					}
 				}
-				if name := client(assign.Rhs[i]); name != "" {
-					clients[ident.Name] = name
-				} else if field, ok := assign.Rhs[i].(*ast.SelectorExpr); ok && client(field.X) != "" {
-					services[ident.Name] = sdkCall{client: client(field.X), field: field.Sel.Name}
+			}
+		case *ast.ValueSpec:
+			if len(node.Names) == len(node.Values) {
+				for i, name := range node.Names {
+					bind(name.Name, node.Values[i])
 				}
 			}
 		}
@@ -1606,9 +1619,11 @@ var databricksAdminOperations = map[string]bool{
 }
 
 // databricksDeleteOperations can destroy data under a name that does not
-// say so: repos update --dangerously-force-discard-all drops uncommitted work.
+// say so: repos update --dangerously-force-discard-all drops uncommitted
+// work, and uninstalling a library removes it at the next restart.
 var databricksDeleteOperations = map[string]bool{
-	"workspace.Repos.Update": true,
+	"compute.Libraries.Uninstall": true,
+	"workspace.Repos.Update":      true,
 }
 
 // databricksConsumingGets are GETs that change state: retrieving a

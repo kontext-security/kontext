@@ -360,7 +360,7 @@ func newAliased() *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Use = "aliased"
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		svc := cmdctx.WorkspaceClient(ctx).Clusters
+		var svc = cmdctx.WorkspaceClient(ctx).Clusters
 		_, err := svc.Delete(ctx, deleteReq)
 		ws := w
 		response := ws.Clusters.List(ctx, listReq)

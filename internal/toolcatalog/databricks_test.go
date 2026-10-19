@@ -1,6 +1,7 @@
 package toolcatalog
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -161,6 +162,7 @@ func TestDatabricksCommand(t *testing.T) {
 		{"postgres", "create-branch", "postgres.Postgres.CreateBranch", "workspace", "data", "admin"},
 		{"feature-engineering", "update-kafka-config", "ml.FeatureEngineering.UpdateKafkaConfig", "workspace", "ai", "admin"},
 		{"feature-engineering", "create-stream", "ml.FeatureEngineering.CreateStream", "workspace", "ai", "admin"},
+		{"libraries", "uninstall", "compute.Libraries.Uninstall", "workspace", "compute", "delete"},
 		{"repos", "update", "workspace.Repos.Update", "workspace", "workspace", "delete"},
 		{"connections", "create", "catalog.Connections.Create", "workspace", "secrets", "write"},
 		{"providers", "create", "sharing.Providers.Create", "workspace", "secrets", "write"},
@@ -253,6 +255,27 @@ func TestDatabricksRouteOverlapOrder(t *testing.T) {
 		got, ok := newDatabricksIndex(databricksTable{Routes: routes}).route("POST", "/api/2.0/x/1")
 		if !ok || got.Operation != "ai.Admin" {
 			t.Errorf("order %v: got %q, %v; want ai.Admin", order, got.Operation, ok)
+		}
+	}
+}
+
+// Every raw row, command-only and catch-all ones included, keeps the
+// contract: one of the nine products, one of the four tiers.
+func TestDatabricksTableContract(t *testing.T) {
+	var table databricksTable
+	if err := json.Unmarshal(databricksRoutesJSON, &table); err != nil {
+		t.Fatal(err)
+	}
+	products := map[string]bool{"sql": true, "data": true, "compute": true, "workloads": true, "ai": true, "workspace": true, "secrets": true, "admin": true, "execution": true}
+	for _, row := range table.Routes {
+		if !products[row.Product] {
+			t.Errorf("%s has product %q", row.Operation, row.Product)
+		}
+		if _, ok := databricksAccessRank[row.Access]; !ok {
+			t.Errorf("%s has tier %q", row.Operation, row.Access)
+		}
+		if row.Path == "" && len(row.Commands) == 0 {
+			t.Errorf("%s has neither a route nor a command", row.Operation)
 		}
 	}
 }

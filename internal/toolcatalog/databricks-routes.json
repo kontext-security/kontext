@@ -1,7 +1,7 @@
 {
   "cli": "v1.21.0",
   "sdk": "v0.188.0",
-  "rules": "8762e7f4db352f3f6d0b0bed33c01f4b2654671ed11c3fc0c523ca5efd458b9e",
+  "rules": "4c61e6dcb439c5b48b8d9a0543a45f0ba88164caa921a9c7fbcabdb4159f9bcc",
   "routes": [
     {
       "operation": "cli.apps.delete",
@@ -6223,7 +6223,7 @@
         "libraries uninstall"
       ],
       "product": "compute",
-      "access": "write"
+      "access": "delete"
     },
     {
       "operation": "catalog.ExternalLineage.DeleteExternalLineageRelationship",
