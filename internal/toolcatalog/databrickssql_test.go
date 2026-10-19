@@ -353,30 +353,38 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 	}
 }
 
-// bestOf returns the fastest of five runs, so a GC pause or a busy runner
+// bestOf returns the fastest classification of each text over 9 rounds
+// that interleave them, so a GC pause or a busy runner hits both alike and
 // does not fail a timing check.
-func bestOf(sql string) time.Duration {
-	best := time.Duration(1 << 62)
-	for range 5 {
-		start := time.Now()
-		ClassifyDatabricksSQL(sql)
-		best = min(best, time.Since(start))
+func bestOf(sqls ...string) []time.Duration {
+	best := make([]time.Duration, len(sqls))
+	for i := range best {
+		best[i] = time.Duration(1 << 62)
+	}
+	for range 9 {
+		for i, sql := range sqls {
+			start := time.Now()
+			ClassifyDatabricksSQL(sql)
+			best[i] = min(best[i], time.Since(start))
+		}
 	}
 	return best
 }
 
-// Malformed input must classify in linear time: quadrupling it should about
-// quadruple the time, where a rescan per opener would multiply it by 16. The
-// ratio, not a wall-clock limit, keeps this stable on slow CI runners.
+// Malformed input must classify in linear time: 8x the input should take
+// about 8x the time, where a rescan per opener would take 64x. The ratio, not
+// a wall-clock limit, keeps this stable on slow CI runners, and the 24x bound
+// leaves room for their noise.
 func TestClassifyDatabricksSQLMalformedIsLinear(t *testing.T) {
 	for _, unit := range []string{"/*", `'\`, "$a$", "r'", "/* /*+ a.", "a.", "/*+ a", "\"\\\"", "SELECT 1; "} {
 		repeat := func(size int) string { return strings.Repeat(unit, size/len(unit)) + "; DROP TABLE t" }
 		if deletes, _, _, _ := ClassifyDatabricksSQL(repeat(databricksSQLMaxLen / 2)); !deletes {
 			t.Errorf("%q: deletes = false, want true", unit)
 		}
-		small, large := bestOf(repeat(databricksSQLMaxLen/8)), bestOf(repeat(databricksSQLMaxLen/2))
-		if ratio := float64(large) / float64(max(small, time.Microsecond)); ratio > 10 {
-			t.Errorf("%q: 4x the input took %.1fx the time (%v, %v)", unit, ratio, small, large)
+		times := bestOf(repeat(databricksSQLMaxLen/8), repeat(databricksSQLMaxLen-64))
+		small, large := times[0], times[1]
+		if ratio := float64(large) / float64(max(small, time.Microsecond)); ratio > 24 {
+			t.Errorf("%q: 8x the input took %.1fx the time (%v, %v)", unit, ratio, small, large)
 		}
 	}
 }
@@ -390,7 +398,7 @@ func TestClassifyDatabricksSQLCap(t *testing.T) {
 	if deletes, _, _, recognized := ClassifyDatabricksSQL(atCap); len(atCap) != databricksSQLMaxLen || !deletes || !recognized {
 		t.Errorf("at the cap (%d bytes): deletes = %v, recognized = %v; want true, true", len(atCap), deletes, recognized)
 	}
-	if elapsed := bestOf(atCap); elapsed > 300*time.Millisecond {
+	if elapsed := bestOf(atCap)[0]; elapsed > 300*time.Millisecond {
 		t.Errorf("%d bytes took %v", len(atCap), elapsed)
 	}
 	if deletes, admin, secrets, recognized := ClassifyDatabricksSQL(atCap + " "); deletes || admin || secrets || recognized {
