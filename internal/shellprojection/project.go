@@ -112,17 +112,35 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 
 // singlePlainCall reports a script that is one simple command with no
 // variable assignments (`BASH_ALIASES[gh]=…` defines an alias too).
-// oneArgument reports a word the shell expands to exactly one argument: its
-// expansions are inside double quotes and none is a list ("$@", an array, a
-// ${!prefix@} name list). An unquoted expansion can split into several words.
+// oneArgument reports a word the shell provably expands to exactly one
+// argument. Only plain forms count: inside double quotes a $NAME or ${NAME}
+// with no operator, index or indirection ("$@", "${A:-"$@"}" and "${!ref}"
+// can be several words), or a command substitution; outside quotes a literal
+// with no brace expansion ({a,-X,DELETE}) and no glob, except the ? of a URL
+// query.
 func oneArgument(word *syntax.Word) bool {
 	for _, part := range word.Parts {
 		switch part := part.(type) {
-		case *syntax.Lit, *syntax.SglQuoted:
+		case *syntax.SglQuoted:
+		case *syntax.Lit:
+			text := part.Value
+			if _, query, ok := strings.Cut(text, "://"); ok {
+				text = strings.ReplaceAll(query, "?", "")
+			}
+			if strings.ContainsAny(text, "{}*?[") {
+				return false
+			}
 		case *syntax.DblQuoted:
 			for _, inner := range part.Parts {
-				if param, ok := inner.(*syntax.ParamExp); ok &&
-					(param.Param != nil && (param.Param.Value == "@" || param.Param.Value == "*") || param.Index != nil || param.Names != 0 || param.NestedParam != nil) {
+				switch inner := inner.(type) {
+				case *syntax.Lit, *syntax.CmdSubst, *syntax.ArithmExp:
+				case *syntax.ParamExp:
+					if inner.Param == nil || inner.Param.Value == "@" || inner.Param.Value == "*" || inner.Excl ||
+						inner.Index != nil || inner.Names != 0 || inner.NestedParam != nil || inner.Exp != nil ||
+						inner.Repl != nil || inner.Slice != nil {
+						return false
+					}
+				default:
 					return false
 				}
 			}
