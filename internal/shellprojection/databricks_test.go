@@ -250,6 +250,8 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl after a braced declare flag", `declare {-r,-n} H='headers[@]'; curl -H "$H" ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
 		{"curl in eval after a nameref", `declare -n H='headers[@]'; eval 'curl -H "$H" ` + dbHost + `/api/2.0/repos/12'`, []string{dbP("workspace"), dbUnk}, false},
 		{"curl in a loop with a later nameref", `for i in 1 2; do curl -H "$H" ` + dbHost + `/api/2.0/repos/12; declare -n H='headers[@]'; done`, []string{dbP("workspace"), dbUnk}, false},
+		{"curl after a declare in a leading redirection", `< <(declare -n H='headers[@]'; curl -H "$H" ` + dbHost + `/api/2.0/repos/12) source /dev/null`, []string{dbP("workspace"), dbUnk}, false},
+		{"curl with a declare inside its own word", `curl -H "${ declare -gn H='headers[@]'; }$H" ` + dbHost + "/api/2.0/repos/12", []string{dbA, dbD, dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
 		{"curl through bash -lc keeps a computed header opaque", `bash -lc 'curl -H "Authorization: Bearer $T" ` + dbHost + `/api/2.2/jobs/get'`, []string{dbCat, dbP("workloads")}, true},
 		{"xargs keeps curl incomplete", `xargs curl -H "Authorization: Bearer $T" ` + dbHost + "/api/2.2/jobs/get", []string{dbP("workloads"), dbUnk}, false},
 		{"curl computed URL is unrecognized", `curl -X DELETE "$URL"`, nil, false},

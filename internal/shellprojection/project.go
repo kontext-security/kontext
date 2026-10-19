@@ -76,8 +76,9 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	// A statement that can change how a later word expands (a nameref from
 	// declare -n makes a quoted "$H" several arguments; eval, source, trap
 	// and builtin/command dispatch can make one) is recorded by offset. A
-	// call after one is stateful, and with a loop or function every call
-	// is, since a later statement can run first on another pass.
+	// call that one starts before the end of is stateful, and with a loop
+	// or function every call is, since a later statement can run first on
+	// another pass.
 	var stateChanges []int
 	loops := false
 	syntax.Walk(file, func(node syntax.Node) bool {
@@ -124,7 +125,10 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 		// No wrapper either: env, sudo and launchers can rewrite argv.
 		direct := len(words) > 0 && words[0] == "gh"
 		cw := w
-		cw.stateful = w.stateful || len(stateChanges) > 0 && (loops || stateChanges[0] < int(call.Pos().Offset()))
+		// The earliest change by offset (Walk visits redirections after the
+		// command), up to the call's end: a ${ cmd; } inside its own words
+		// runs before they expand.
+		cw.stateful = w.stateful || len(stateChanges) > 0 && (loops || slices.Min(stateChanges) < int(call.End().Offset()))
 		cw.oneArgumentEach = !cw.stateful && !slices.ContainsFunc(call.Args, func(word *syntax.Word) bool { return !oneArgument(word) })
 		projections = append(projections, classify(words, complete, cw, helpAllowed && direct)...)
 	}
