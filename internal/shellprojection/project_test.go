@@ -40,6 +40,7 @@ func TestGitHubShellCorpus(t *testing.T) {
 		{name: "curl --next keeps the first request's method", command: `curl -X PATCH -d '{"force":true}' https://api.github.com/repos/acme/api/git/refs/heads/main --next -X GET https://example.com`, programs: []string{"curl"}, facts: []string{forcePush, write, unrecognized}, complete: false},
 		{name: "curl globbed url is not a catalogued route", command: `curl -X PATCH --json '{"force":true,"sha":"0123456789012345678901234567890123456789"}' 'https://api.github.com/repos/acme/api/git/re{f,f}s/heads/main'`, programs: []string{"curl"}, facts: []string{unrecognized, write}, absentFacts: []string{catalogued}, complete: false},
 		{name: "curl request target not in origin form is not a catalogued route", command: "curl -X OPTIONS --request-target '*' https://api.github.com/repos/acme/api", programs: []string{"curl"}, facts: []string{unrecognized}, absentFacts: []string{catalogued}, complete: false},
+		{name: "curl computed body stays incomplete for github", command: `curl -X PATCH --json "{\"sha\":\"$SHA\",\"force\":true}" https://api.github.com/repos/acme/api/git/refs/heads/main`, programs: []string{"curl"}, facts: []string{unrecognized, write}, absentFacts: []string{catalogued}, complete: false},
 		{name: "curl compact json", command: `curl --request=PATCH --json='{"force":true}' https://api.github.com/repos/acme/api/git/refs/heads/main`, programs: []string{"curl"}, facts: []string{forcePush, write}, complete: true},
 		{name: "curl upload", command: "curl -sS -T asset.zip https://uploads.github.com/repos/acme/api/releases/1/assets", programs: []string{"curl"}, facts: []string{write, "http/method=PUT"}, complete: true},
 		{name: "curl read", command: "curl https://api.github.com/repos/acme/api", programs: []string{"curl"}, facts: []string{catalogued, "http/method=GET"}, absentFacts: []string{write}, complete: true},
@@ -147,9 +148,10 @@ func TestUnrecognizedRouteOnlyForGitHubPrograms(t *testing.T) {
 
 func TestParseFailuresBecomeProjections(t *testing.T) {
 	runCorpus(t, []corpusCase{
-		{name: "syntax error", command: "git push -f origin main; (", programs: []string{"unknown"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-error"}, complete: false},
-		{name: "unrelated syntax error", command: `echo "unterminated`, programs: []string{"unknown"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-error"}, complete: false},
+		{name: "syntax error", command: "git push -f origin main; (", programs: []string{"git"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-error"}, complete: false},
+		{name: "unrelated syntax error", command: `echo "unterminated`, programs: []string{"echo"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-error"}, complete: false},
 		{name: "oversized", command: strings.Repeat("x", maxCommandBytes+1), programs: []string{"unknown"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "command-too-large"}, complete: false},
+		{name: "oversized databricks keeps its program", command: "databricks clusters delete " + strings.Repeat("x", maxCommandBytes), programs: []string{"databricks"}, facts: []string{incomplete, FactDatabricksRouteUnrecognized, "databricks/delete=true"}, features: []string{FeatureParseError, "command-too-large"}, complete: false},
 		{name: "too complex", command: strings.Repeat("(", maxSyntaxDepth+1) + "true" + strings.Repeat(")", maxSyntaxDepth+1), programs: []string{"unknown"}, facts: []string{incomplete}, absentFacts: []string{unrecognized}, features: []string{FeatureParseError, "syntax-too-complex"}, complete: false},
 		{name: "empty", command: "# nothing", programs: []string{"unknown"}, facts: []string{incomplete}, features: []string{"empty-command"}, complete: false},
 	})

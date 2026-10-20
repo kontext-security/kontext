@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -589,4 +590,14 @@ func databricksURL(urlText string) bool {
 	}
 	parsed, err := url.Parse(scheme + "://" + rest)
 	return err == nil && parsed.Host != "" && databricksHost(strings.TrimSuffix(strings.ToLower(parsed.Hostname()), "."))
+}
+
+var mentionsDatabricks = regexp.MustCompile(`(?i)databricks`)
+
+// databricksWorstFacts are the facts of a Databricks call the projection
+// cannot read at all: every tier, and the products the secrets and
+// runs-and-deploys presets single out.
+func databricksWorstFacts() []string {
+	return []string{FactDatabricksRouteUnrecognized, databricksProductFact("secrets"), databricksProductFact("execution"),
+		writeFact(productDatabricks), deleteFact(productDatabricks), adminFact(productDatabricks)}
 }
