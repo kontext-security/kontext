@@ -135,8 +135,11 @@ for a completed turn; it does not implement stopping or limiting an agent.
    Codex sub-agent rollouts) start no turns: their usage falls into the
    session's turn at that time, using boundaries kept per session in SQLite.
    A request whose turn changes on a later read is re-emitted with a new
-   revision. Exported turns are pruned once no transcript of their session is
-   still revisited (seven days).
+   revision. A new turn, or a boundary found in one transcript, marks the
+   session's other transcripts for another read, so usage read before them
+   moves too. An acknowledged turn drops its excerpt at once; its id and time
+   stay as long as the session has usage to stamp, since a session can resume
+   after any idle time.
 
    `kontext doctor` reports `prompt hook missing: turns and type of work
    unavailable` when an installed Claude Code or Codex hook set lacks

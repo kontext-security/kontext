@@ -416,6 +416,29 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 			}
 		}
 	}
+	// A new turn boundary can move usage already stamped from the session's
+	// other transcripts, such as a subagent's file read in an earlier pass.
+	// Those were not read in this pass, so they are read again in the next.
+	read, changed := map[string][]string{}, map[string]bool{}
+	var sessions []string
+	for _, update := range updates {
+		if !update.read {
+			continue
+		}
+		session := update.source.session
+		if _, ok := read[session]; !ok {
+			sessions = append(sessions, session)
+		}
+		read[session] = append(read[session], update.source.path)
+		changed[session] = changed[session] || len(update.newPrompts) > 0
+	}
+	for _, session := range sessions {
+		if changed[session] {
+			if err := markToolUsageSourcesForRestamp(ctx, tx, session, read[session]); err != nil {
+				return err
+			}
+		}
+	}
 	return tx.Commit()
 }
 

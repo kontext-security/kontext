@@ -101,7 +101,9 @@ func FormatTurnTime(at time.Time) string {
 
 // SaveTurn stores a minted turn once; saving the same id again does nothing.
 // The sequence is the session's next, taken in the same statement, so it
-// needs no read on the hook path and survives a daemon restart.
+// needs no read on the hook path and survives a daemon restart. The
+// session's transcripts are marked for another read: usage read before the
+// turn existed is stamped again even if no transcript changes after it.
 func (s *Store) SaveTurn(ctx context.Context, turn TurnRecord) error {
 	if turn.ID == "" || turn.SessionID == "" || turn.StartedAt == "" {
 		return errors.New("turn requires id, session and start time")
@@ -114,9 +116,45 @@ func (s *Store) SaveTurn(ctx context.Context, turn TurnRecord) error {
 		}
 		text, sha256, truncated = *turn.Prompt.Text, *turn.Prompt.SHA256, *turn.Prompt.Truncated
 	}
-	_, err := s.db.ExecContext(ctx, `insert or ignore into turns(id, session_id, sequence, agent, started_at, source, prompt_mode, prompt_text, prompt_chars, prompt_sha256, prompt_truncated)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `insert or ignore into turns(id, session_id, sequence, agent, started_at, source, prompt_mode, prompt_text, prompt_chars, prompt_sha256, prompt_truncated)
  select ?, ?, coalesce(max(sequence), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ? from turns where session_id = ?`,
 		turn.ID, turn.SessionID, turn.Agent, turn.StartedAt, turn.Source, turn.Prompt.Mode, text, turn.Prompt.Chars, sha256, truncated, turn.SessionID)
+	if err != nil {
+		return err
+	}
+	if inserted, err := result.RowsAffected(); err != nil || inserted == 0 {
+		return err
+	}
+	if err := markToolUsageSourcesForRestamp(ctx, tx, turn.SessionID, nil); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// restampFingerprintPrefix marks a source's stored fingerprint so the next
+// reconcile pass reads it again although the file did not change. A resumed
+// cursor makes that read cost nothing beyond stamping its records.
+const restampFingerprintPrefix = "restamp:"
+
+// markToolUsageSourcesForRestamp schedules the session's transcripts, except
+// those named in skip, for another read: its turns or turn boundaries changed
+// and their usage may now belong to a different turn. Sources never read
+// successfully are read anyway.
+func markToolUsageSourcesForRestamp(ctx context.Context, db execer, sessionID string, skip []string) error {
+	query := `update tool_usage_sources set fingerprint = ? || fingerprint where session_id = ? and fingerprint <> '' and substr(fingerprint, 1, ?) <> ?`
+	args := []any{restampFingerprintPrefix, sessionID, len(restampFingerprintPrefix), restampFingerprintPrefix}
+	if len(skip) > 0 {
+		query += ` and transcript_path not in (` + strings.TrimRight(strings.Repeat("?,", len(skip)), ",") + `)`
+		for _, path := range skip {
+			args = append(args, path)
+		}
+	}
+	_, err := db.ExecContext(ctx, query, args...)
 	return err
 }
 
@@ -184,14 +222,16 @@ func (s *Store) PendingTurns(ctx context.Context, limit int) ([]TurnRecord, erro
 	return turns, rows.Err()
 }
 
-// AcknowledgeTurns marks turns the hosted ledger has answered for.
+// AcknowledgeTurns marks turns the hosted ledger has answered for, and drops
+// their prompt excerpts: a turn is never sent again, so only its id and time
+// are still needed here.
 func (s *Store) AcknowledgeTurns(ctx context.Context, ids []string) error {
 	for _, chunk := range stringChunks(uniqueStrings(ids)) {
 		args := make([]any, len(chunk))
 		for i, id := range chunk {
 			args[i] = id
 		}
-		if _, err := s.db.ExecContext(ctx, `update turns set exported = 1 where id in (`+strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")+`)`, args...); err != nil {
+		if _, err := s.db.ExecContext(ctx, `update turns set exported = 1, prompt_text = null where id in (`+strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")+`)`, args...); err != nil {
 			return err
 		}
 	}
@@ -199,13 +239,15 @@ func (s *Store) AcknowledgeTurns(ctx context.Context, ids []string) error {
 }
 
 // UsageRevisitWindow is how long after its last hook a transcript is read
-// again for late usage. A turn is kept while any transcript of its session
-// may still be read, since every read stamps the session's usage again.
+// again for late usage.
 const UsageRevisitWindow = 7 * 24 * time.Hour
 
 // PruneExportedTurns deletes up to limit exported turns, and transcript turn
-// boundaries, older than olderThan whose session has no transcript the usage
-// reader may still revisit. It never deletes an unexported turn.
+// boundaries, older than olderThan whose session has no stored usage and no
+// transcript the usage reader may still revisit. Every read stamps the
+// session's usage from them again, and a session can resume after any idle
+// time, so they live as long as its usage records. Their excerpts are
+// already gone (AcknowledgeTurns). It never deletes an unexported turn.
 func (s *Store) PruneExportedTurns(ctx context.Context, olderThan time.Time, limit int) (int, error) {
 	if limit <= 0 || olderThan.IsZero() {
 		return 0, nil
@@ -214,7 +256,8 @@ func (s *Store) PruneExportedTurns(ctx context.Context, olderThan time.Time, lim
 	revisitFrom := time.Now().UTC().Add(-UsageRevisitWindow).Format(time.RFC3339Nano)
 	// Mirrors toolUsageSources: a source is revisited while last_seen is
 	// recent, or until its first successful read.
-	const revisited = `exists(select 1 from tool_usage_sources s where s.session_id = %s.session_id and (s.last_seen >= ? or s.fingerprint = ''))`
+	const revisited = `(exists(select 1 from tool_usage_records u where u.session_id = %[1]s.session_id) or
+ exists(select 1 from tool_usage_sources s where s.session_id = %[1]s.session_id and (s.last_seen >= ? or s.fingerprint = '')))`
 	result, err := s.db.ExecContext(ctx, `delete from turns where rowid in (select t.rowid from turns t where t.exported = 1 and t.started_at < ? and not `+fmt.Sprintf(revisited, "t")+` order by t.started_at limit ?)`,
 		cutoff, revisitFrom, limit)
 	if err != nil {

@@ -107,8 +107,9 @@ func TestCurrentTurnAt(t *testing.T) {
 	}
 }
 
-// Exported turns are pruned only past the revisit window of every transcript
-// of their session: the reader stamps a session's usage again on each read.
+// Exported turns are pruned only once their session has no usage left to
+// stamp and no transcript the reader may still revisit: each read stamps the
+// session's usage again, and a session can resume after any idle time.
 func TestPruneExportedTurnsWaitsForTheRevisitWindow(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -130,7 +131,19 @@ func TestPruneExportedTurnsWaitsForTheRevisitWindow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.AcknowledgeTurns(ctx, []string{"turn_live", "turn_done", "turn_recent", "turn_unread"}); err != nil {
+	// "resumed" has gone quiet for longer than the window but keeps usage the
+	// next read of a resumed session stamps again.
+	if err := store.SaveTurn(ctx, testTurn("turn_resumed", "resumed", old, ExcerptTurnPrompt("fix it", 6, false, strings.Repeat("a", 64)))); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcknowledgeTurns(ctx, []string{"turn_live", "turn_done", "turn_recent", "turn_unread", "turn_resumed"}); err != nil {
+		t.Fatal(err)
+	}
+	var excerpts int
+	if err := store.db.QueryRow(`select count(*) from turns where prompt_text is not null`).Scan(&excerpts); err != nil || excerpts != 0 {
+		t.Fatalf("acknowledged excerpts kept: %d, %v", excerpts, err)
+	}
+	if _, err := store.db.Exec(`insert into tool_usage_records(session_id, message_id, agent, payload) values ('resumed', 'm', 'claude', '{}')`); err != nil {
 		t.Fatal(err)
 	}
 	// "live" still has a transcript within the revisit window; "done" has one
@@ -139,11 +152,12 @@ func TestPruneExportedTurnsWaitsForTheRevisitWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(`insert into tool_usage_sources(session_id, transcript_path, agent, last_seen, fingerprint) values
- ('done', ?, 'claude', ?, 'tool-metadata-v4:1:1'), ('unread', ?, 'claude', ?, '')`,
-		filepath.Join(dir, "done.jsonl"), old.Format(time.RFC3339Nano), filepath.Join(dir, "unread.jsonl"), old.Format(time.RFC3339Nano)); err != nil {
+ ('done', ?, 'claude', ?, 'tool-metadata-v4:1:1'), ('unread', ?, 'claude', ?, ''), ('resumed', ?, 'claude', ?, 'tool-metadata-v4:1:1')`,
+		filepath.Join(dir, "done.jsonl"), old.Format(time.RFC3339Nano), filepath.Join(dir, "unread.jsonl"), old.Format(time.RFC3339Nano),
+		filepath.Join(dir, "resumed.jsonl"), old.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	for _, session := range []string{"live", "done"} {
+	for _, session := range []string{"live", "done", "resumed"} {
 		if _, err := store.db.Exec(`insert into tool_usage_prompts(session_id, started_at) values(?, ?)`, session, FormatTurnTime(old)); err != nil {
 			t.Fatal(err)
 		}
@@ -167,7 +181,7 @@ func TestPruneExportedTurnsWaitsForTheRevisitWindow(t *testing.T) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(left, ",") != "turn_live,turn_recent,turn_unread,turn_unsent" {
+	if strings.Join(left, ",") != "turn_live,turn_recent,turn_resumed,turn_unread,turn_unsent" {
 		t.Fatalf("kept turns = %v", left)
 	}
 	var prompts []string
@@ -185,7 +199,7 @@ func TestPruneExportedTurnsWaitsForTheRevisitWindow(t *testing.T) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(prompts, ",") != "live" {
+	if strings.Join(prompts, ",") != "live,resumed" {
 		t.Fatalf("kept prompts = %v", prompts)
 	}
 }
@@ -324,8 +338,9 @@ func TestReconcileStampsUsageWithMintedTurns(t *testing.T) {
 		}
 	}
 
-	// Usage read before its turn's deferred write lands carries no turn, and
-	// is re-emitted with it on the next read.
+	// Usage read before its turn's deferred write lands carries no turn. The
+	// write marks the session's transcripts for another read, so it is
+	// re-emitted with the turn although no transcript changes again.
 	appendLines(t, parent, claudePromptLine(ts(20*time.Second), "and the tests?"))
 	appendLines(t, parent, claudeToolLines(ts(21*time.Second), "m3", "t3", false)...)
 	reconcile()
@@ -333,7 +348,6 @@ func TestReconcileStampsUsageWithMintedTurns(t *testing.T) {
 		t.Fatalf("usage stamped before its turn existed: %v", got)
 	}
 	mint("turn_3", 20*time.Second+10*time.Millisecond)
-	appendLines(t, parent, `{"type":"progress","message":"later"}`)
 	reconcile()
 	page, err = store.PendingToolUsage(ctx, 100)
 	if err != nil {
@@ -341,5 +355,67 @@ func TestReconcileStampsUsageWithMintedTurns(t *testing.T) {
 	}
 	if len(page) != 1 || page[0].MessageID != "m3" || page[0].TurnID != "turn_3" {
 		t.Fatalf("restamped usage = %+v", page)
+	}
+}
+
+// A subagent transcript stamped before its session learns a newer turn
+// boundary, such as a background subagent read in a pass that did not read
+// its parent, is read again once the parent's boundary arrives.
+func TestNewBoundaryRestampsOtherTranscripts(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	parent := filepath.Join(dir, "s.jsonl")
+	agent := filepath.Join(dir, "s", "subagents", "agent-b.jsonl")
+	if err := os.MkdirAll(filepath.Dir(agent), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		transcriptCursors.take(transcriptKey{path: parent})
+		transcriptCursors.take(transcriptKey{path: agent})
+	})
+	base := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	ts := func(offset time.Duration) string { return base.Add(offset).Format(time.RFC3339Nano) }
+	for _, turn := range []TurnRecord{
+		testTurn("turn_1", "s", base.Add(10*time.Millisecond), SizeOnlyTurnPrompt(TurnPromptSkipped, 1)),
+		testTurn("turn_2", "s", base.Add(10*time.Second+10*time.Millisecond), SizeOnlyTurnPrompt(TurnPromptSkipped, 1)),
+	} {
+		if err := store.SaveTurn(ctx, turn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendLines(t, parent, claudePromptLine(ts(0), "start the background agent"))
+	appendLines(t, parent, claudeToolLines(ts(time.Second), "m1", "t1", false)...)
+	appendLines(t, agent, claudeToolLines(ts(15*time.Second), "bg", "tb", true)...)
+	if err := store.TrackToolTranscript(ctx, hook.Event{SessionID: "s", Agent: "claude", HookName: hook.HookSubagentStop, TranscriptPath: parent, AgentTranscriptPath: agent}); err != nil {
+		t.Fatal(err)
+	}
+	reconcile := func() {
+		t.Helper()
+		if err := store.ReconcileToolUsage(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile()
+	if got := pendingTurnIDs(t, store); got["bg"] != "turn_1" {
+		t.Fatalf("before the parent's second prompt is read: %v", got)
+	}
+	// The parent's next prompt is read in a later pass; the subagent file
+	// does not change again.
+	appendLines(t, parent, claudePromptLine(ts(10*time.Second), "now the tests"))
+	reconcile()
+	reconcile()
+	if got := pendingTurnIDs(t, store); got["bg"] != "turn_2" || got["m1"] != "turn_1" {
+		t.Fatalf("after the new boundary: %v", got)
+	}
+	// Nothing changes any more: an unchanged pass writes nothing.
+	before := totalChanges(t, store)
+	reconcile()
+	if after := totalChanges(t, store); after != before {
+		t.Fatalf("a settled session rewrote %d rows", after-before)
 	}
 }

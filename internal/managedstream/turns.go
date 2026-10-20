@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
 
@@ -43,7 +44,7 @@ func flushTurns(ctx context.Context, opts Options) error {
 			// The hosted ledger refuses a whole batch over a turn without its
 			// session. The session row is written before the turn, so one
 			// missing now never arrives.
-			opts.Diagnostic.Printf("dropping %d turns without an exportable session\n", len(orphans))
+			diagnostic.LogAlways(opts.Diagnostic, "dropping %d turns without an exportable session\n", len(orphans))
 			if err := store.AcknowledgeTurns(ctx, orphans); err != nil {
 				return err
 			}
@@ -71,7 +72,7 @@ func flushTurns(ctx context.Context, opts Options) error {
 		}
 		for _, row := range result.Quarantined {
 			if row.Kind == "turn" {
-				opts.Diagnostic.Printf("hosted ledger quarantined turn %s\n", row.ID)
+				diagnostic.LogAlways(opts.Diagnostic, "hosted ledger quarantined turn %s\n", row.ID)
 			}
 		}
 		ids := make([]string, len(turns))

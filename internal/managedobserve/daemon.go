@@ -731,8 +731,8 @@ func pruneExportedLedger(ctx context.Context, opts DaemonOptions, dbPath string)
 	}
 	defer store.Close()
 	// Turns carry their own export flag. The usage reader stamps a session's
-	// usage from its turns on every read, so they outlive the revisit window
-	// of the session's transcripts, never less.
+	// usage from its turns on every read, so they go only with the session's
+	// usage and after its transcripts' revisit window.
 	if prunedTurns, err := store.PruneExportedTurns(ctx, time.Now().UTC().Add(-sqlite.UsageRevisitWindow), ledgerPruneBatch); err != nil {
 		opts.Diagnostic.Printf("managed observe turn prune: %v\n", err)
 	} else if prunedTurns > 0 {
