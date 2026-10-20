@@ -76,17 +76,18 @@ for a completed turn; it does not implement stopping or limiting an agent.
    transcript path. The prompt itself travels only in the turn record (step 7),
    as the workspace's configuration allows:
 
-   | Payload capture mode | Work-type classification switch | Turn record's `prompt.mode` |
-   | --- | --- | --- |
-   | Omitted | any | `omitted`: size only |
-   | Summaries | off | `skipped`: size only |
-   | Summaries | on | `excerpt`: redacted, at most 4,000 characters |
-   | Full payloads | off | `skipped`: size only |
-   | Full payloads | on | `excerpt`: redacted, at most 64,000 characters |
+   | Payload capture mode | Work-type classification switch | Turn record's `prompt.mode` | Cloud keeps the text |
+   | --- | --- | --- | --- |
+   | Omitted | any | `omitted`: size only | never |
+   | Summaries | off | `skipped`: size only | never |
+   | Summaries | on | `excerpt`: redacted, at most 4,000 characters | yes, redacted, with the turn |
+   | Full payloads | off | `skipped`: size only | never |
+   | Full payloads | on | `excerpt`: redacted, at most 64,000 characters | yes, redacted, with the turn |
 
-   Until the daemon has confirmed its endpoint configuration it sends
-   `skipped`. A prompt over 1 MiB is never redacted and also goes as
-   `skipped`, with its true size.
+   The cloud deletes stored excerpts when the workspace turns the switch off
+   or moves to Omitted. Until the daemon has confirmed its endpoint
+   configuration it sends `skipped`. A prompt over 1 MiB is never redacted
+   and also goes as `skipped`, with its true size.
 3. SQLite stores changed records with increasing revisions. The stream worker
    captures before network I/O, retries partial/delayed writes, resumes after
    restart, and acknowledges only the revision successfully uploaded. It
@@ -137,9 +138,9 @@ for a completed turn; it does not implement stopping or limiting an agent.
    A request whose turn changes on a later read is re-emitted with a new
    revision. A new turn, or a boundary found in one transcript, marks the
    session's other transcripts for another read, so usage read before them
-   moves too. An acknowledged turn drops its excerpt at once; its id and time
-   stay as long as the session has usage to stamp, since a session can resume
-   after any idle time.
+   moves too. Once the cloud acknowledges a turn, the daemon drops its local
+   copy of the excerpt; the turn's id and time stay in guard.db as long as the
+   session has usage to stamp, since a session can resume after any idle time.
 
    `kontext doctor` reports `prompt hook missing: turns and type of work
    unavailable` when an installed Claude Code or Codex hook set lacks
