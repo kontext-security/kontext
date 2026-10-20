@@ -381,23 +381,50 @@ type desktopSession struct {
 
 // desktopConnector resolves a connector UUID through the Claude Desktop
 // session record whose cliSessionId is the hook's session id. Records are
-// tried newest first, since the calling session is active.
+// tried newest first, since the calling session is active. Every active
+// Desktop session rewrites its record, so re-reading each changed record
+// would blow the lookup's deadline under load; a record last parsed under
+// another session is re-read only after the rest found nothing.
 func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name string, found bool) {
 	if sessionID == "" {
 		return "", "", false
 	}
-	for _, path := range newestFirst(desktopRecords(home)) {
+	var others []string
+	try := func(path string) bool {
 		session, ok := load(r, path, parseJSON[desktopSession])
 		if !ok || session.CLISessionID != sessionID {
-			continue
+			return false
 		}
 		for _, connector := range session.Connectors {
 			if strings.EqualFold(connector.UUID, server) {
-				return strings.TrimSpace(connector.URL), connector.Name, true
+				url, name, found = strings.TrimSpace(connector.URL), connector.Name, true
+				return true
 			}
+		}
+		return false
+	}
+	for _, path := range newestFirst(desktopRecords(home)) {
+		if id := r.parsedSession(path); id != "" && id != sessionID {
+			others = append(others, path)
+		} else if try(path) {
+			return url, name, found
+		}
+	}
+	for _, path := range others {
+		if try(path) {
+			return url, name, found
 		}
 	}
 	return "", "", false
+}
+
+// parsedSession returns the cliSessionId the record at path held when the
+// cache last parsed it, or "".
+func (r *Resolver) parsedSession(path string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	session, _ := r.cache[cacheKey[desktopSession](path)].value.(desktopSession)
+	return session.CLISessionID
 }
 
 // plugin resolves a plugin's MCP server, which Claude Code names
@@ -493,8 +520,7 @@ func normalize(name string) string {
 // cannot read leaves the server unidentified, never fails the hook.
 func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bool) {
 	var zero T
-	// One file can be read as two shapes (plugin.json), so the key has both.
-	key := fmt.Sprintf("%s\x00%T", path, zero)
+	key := cacheKey[T](path)
 	info, err := os.Stat(path)
 	r.mu.Lock()
 	if r.cache == nil {
@@ -525,6 +551,13 @@ func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bo
 	defer r.mu.Unlock()
 	r.cache[key] = cachedFile{modTime: info.ModTime(), size: info.Size(), value: parsed, ok: ok}
 	return parsed, ok
+}
+
+// cacheKey has both the path and the shape, since one file can be read as
+// two shapes (plugin.json).
+func cacheKey[T any](path string) string {
+	var zero T
+	return fmt.Sprintf("%s\x00%T", path, zero)
 }
 
 // readFile opens without blocking, so a FIFO planted as .mcp.json in a
