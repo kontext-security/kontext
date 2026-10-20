@@ -327,7 +327,7 @@ func (r *Resolver) claudeAIConnector(home, server string) (url string, found boo
 	return "", false
 }
 
-// Warm reads the Claude Desktop session records' ids into the cache, so the
+// Warm parses the Claude Desktop session records into the cache, so the
 // first connector lookup after the daemon starts, for a session without a
 // record, costs one stat per record instead of a full scan that times out.
 func (r *Resolver) Warm() {
@@ -340,6 +340,7 @@ func (r *Resolver) Warm() {
 	}
 	for _, path := range desktopRecords(home) {
 		load(r, path, parseSessionID)
+		load(r, path, parseJSON[desktopSession])
 	}
 }
 
@@ -383,10 +384,12 @@ type desktopSession struct {
 // recordSession is a session record's cliSessionId.
 type recordSession string
 
-// parseSessionID reads a record's cliSessionId (the first, if repeated) and
-// stops. Every active Desktop session rewrites its record, and its
-// connector list is most of a record's few hundred KB, so decoding every
-// changed record whole missed the lookup's deadline under load.
+// parseSessionID reads a record's cliSessionId and stops. Every active
+// Desktop session rewrites its record, and its connector list is most of a
+// record's few hundred KB, so decoding every changed record whole missed
+// the lookup's deadline under load. A repeated key keeps its first value,
+// where json.Unmarshal keeps the last; Desktop writes records with
+// JSON.stringify, which never repeats one.
 func parseSessionID(data []byte) (recordSession, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
