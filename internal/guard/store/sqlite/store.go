@@ -19,6 +19,7 @@ import (
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 type Store struct {
@@ -1633,7 +1634,12 @@ func currentGitBranch(cwd string) string {
 	return branch
 }
 
+// gitOutput runs git in cwd. Not in a macOS privacy-guarded folder: git
+// runs as the daemon's child, so macOS would ask the user to let kontext in.
 func gitOutput(cwd string, args ...string) string {
+	if privacyfolder.Guarded("", cwd) {
+		return ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
