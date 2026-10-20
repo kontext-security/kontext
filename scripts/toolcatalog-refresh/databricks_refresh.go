@@ -160,10 +160,10 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 			products = append(products, fmt.Sprintf("%s (%s to %s)", label, before.Product, after.Product))
 		}
 	}
-	oldOperations := map[string]bool{}
+	oldOperations := map[string]*databricksEntry{}
 	var kept []databricksEntry
-	for _, before := range old.Routes {
-		oldOperations[before.Operation] = true
+	for i, before := range old.Routes {
+		oldOperations[before.Operation] = &old.Routes[i]
 		after := byOperation[before.Operation]
 		switch {
 		case after != nil:
@@ -186,6 +186,7 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 			for _, command := range before.Commands {
 				if now := byCommand[command]; now == nil {
 					entry.Commands = append(entry.Commands, command)
+					commandsKept = append(commandsKept, fmt.Sprintf("`%s` (on `%s`)", command, before.Operation))
 				} else {
 					commandsMoved = append(commandsMoved, fmt.Sprintf("`%s` (`%s` to `%s`)", command, before.Operation, now.Operation))
 					compare("`"+command+"`", before, now)
@@ -210,19 +211,22 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 	}
 	var reads, shadows []string
 	for _, entry := range fresh.Routes {
-		if oldOperations[entry.Operation] {
+		was := oldOperations[entry.Operation]
+		if was == nil {
+			added = append(added, fmt.Sprintf("`%s %s` %s (%s, %s)", entry.Method, entry.Path, entry.Operation, entry.Product, entry.Access))
+			if entry.Access == "read" {
+				reads = append(reads, entry.Operation)
+			}
+		} else if was.Method == entry.Method && was.Path == entry.Path && was.Access == entry.Access && was.Product == entry.Product {
 			continue
 		}
-		added = append(added, fmt.Sprintf("`%s %s` %s (%s, %s)", entry.Method, entry.Path, entry.Operation, entry.Product, entry.Access))
-		if entry.Access == "read" {
-			reads = append(reads, entry.Operation)
-		}
-		// A new route can take over requests an old route matched (it is
-		// more literal, names the exact API version, or ties), so it must
-		// not be looser than, or differ in product from, any old route
-		// whose template some request matches along with its own.
+		// A new or changed route can take over requests an old route
+		// matched (it is more literal, names the exact API version, or
+		// ties), so it must not be looser than, or differ in product from,
+		// any other old route whose template some request matches along
+		// with its own.
 		for _, before := range old.Routes {
-			if before.Method != entry.Method || before.Path == "" || entry.Path == "" || !routesOverlap(before.Path, entry.Path) {
+			if before.Operation == entry.Operation || before.Method != entry.Method || before.Path == "" || entry.Path == "" || !routesOverlap(before.Path, entry.Path) {
 				continue
 			}
 			if looserAccess(before.Access, entry.Access) || entry.Product != before.Product {
@@ -256,6 +260,11 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 	}
 	if len(shadows) > 0 {
 		r.needsReview("a new route takes over an old route's requests with a looser tier or another product")
+	}
+	if len(commandsKept) > 0 {
+		// The command may still exist but call something the generator
+		// cannot place, which its old mapping would hide.
+		r.needsReview("the route table keeps commands upstream no longer maps")
 	}
 	if len(moved)+len(commandsMoved) > 0 {
 		r.needsReview("the route table moves an operation or a command")

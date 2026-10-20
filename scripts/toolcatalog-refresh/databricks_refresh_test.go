@@ -57,8 +57,8 @@ func TestKeepDatabricksRoutes(t *testing.T) {
 		}
 	}
 	// svc.New.Get is a new read on svc.Old.Get's route with another
-	// product, a tier was lowered and an operation renamed.
-	if len(r.review) != 5 {
+	// product, a tier was lowered, an operation renamed and a command kept.
+	if len(r.review) != 6 {
 		t.Fatalf("review = %q", r.review)
 	}
 }
@@ -335,6 +335,7 @@ func TestKeepDatabricksRoutesKeepsAMovedRoute(t *testing.T) {
 		t.Fatalf("routes = %+v", fresh.Routes)
 	}
 	// The next refresh keeps the copy and reports nothing new about it.
+	// (The copy has no commands, so keeping it needs no review.)
 	next := &databricksTable{Routes: fresh.Routes[1:2:2]}
 	r = &refresher{routes: next}
 	r.keepDatabricksRoutes(&databricksTable{CLI: "v1.1.0", Routes: fresh.Routes}, next)
@@ -354,5 +355,23 @@ func TestLooserAccess(t *testing.T) {
 		if got := looserAccess(c.before, c.after); got != c.want {
 			t.Errorf("looserAccess(%s, %s) = %v", c.before, c.after, got)
 		}
+	}
+}
+
+// An existing operation whose tier changes can win requests another old
+// route classified; a delete must not lose out to an admin route.
+func TestKeepDatabricksRoutesChecksChangedRoutesForOverlap(t *testing.T) {
+	old := &databricksTable{Routes: []databricksEntry{
+		{Operation: "svc.A.Update", Method: "POST", Path: "/api/2.0/a/{id}", Product: "compute", Access: "write"},
+		{Operation: "svc.A.Purge", Method: "POST", Path: "/api/2.0/a/purge", Product: "compute", Access: "delete"},
+	}}
+	fresh := &databricksTable{Routes: []databricksEntry{
+		{Operation: "svc.A.Update", Method: "POST", Path: "/api/2.0/a/{id}", Product: "compute", Access: "admin"},
+		{Operation: "svc.A.Purge", Method: "POST", Path: "/api/2.0/a/purge", Product: "compute", Access: "delete"},
+	}}
+	r := &refresher{routes: fresh}
+	r.keepDatabricksRoutes(old, fresh)
+	if r.kind() != "review" {
+		t.Fatalf("kind = %s\n%s", r.kind(), strings.Join(r.report, "\n"))
 	}
 }
