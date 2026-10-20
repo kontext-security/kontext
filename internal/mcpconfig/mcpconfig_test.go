@@ -44,13 +44,14 @@ func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 	own := filepath.Join(dir, "local_own.json")
 	write := func(path, session, pad string) {
 		t.Helper()
-		record := `{"cliSessionId": "` + session + `", "remoteMcpServersConfig": [{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `", "tools": "` + pad + `"}]}`
+		record := `{"cliSessionId": "` + session + `", "remoteMcpServersConfig": [` + pad + `{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `"}]}`
 		if err := os.WriteFile(path, []byte(record), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// 60 newer 2 MiB records take well over the 250 ms deadline to parse.
-	pad := strings.Repeat("x", 2<<20)
+	// Decoding 30 newer records of 150k connectors each takes well over the
+	// 250 ms deadline; reading them takes a few ms.
+	pad := strings.Repeat(`{"uuid": "x"},`, 150_000)
 	age := func(minutes int) {
 		t.Helper()
 		at := time.Now().Add(-time.Duration(minutes) * time.Minute)
@@ -60,7 +61,7 @@ func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 	}
 	write(own, "session-own", "")
 	age(60)
-	others := make([]string, 60)
+	others := make([]string, 30)
 	for i := range others {
 		others[i] = filepath.Join(dir, fmt.Sprintf("local_%d.json", i))
 		write(others[i], fmt.Sprintf("session-%d", i), pad)
@@ -72,10 +73,10 @@ func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 		t.Fatalf("warm Server() = %q", got)
 	}
 	for i, path := range others {
-		write(path, fmt.Sprintf("session-%d", i), pad+"y")
+		write(path, fmt.Sprintf("session-%d", i), pad+`{},`)
 	}
 	// The caller's record changed too, before the others.
-	write(own, "session-own", "turn")
+	write(own, "session-own", `{},`)
 	age(30)
 	if got, _, _ := r.Server("claude", "session-own", "/", tool); got != url {
 		t.Fatalf("Server() after other sessions rewrote their records = %q", got)
