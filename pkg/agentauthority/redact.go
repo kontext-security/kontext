@@ -159,6 +159,7 @@ func (r *Report) finish() {
 		a := &r.Agents[i]
 		trimSlice(&a.MCPServers, 64, &r.Coverage.SkippedFiles)
 		trimSlice(&a.Plugins, 64, &r.Coverage.SkippedFiles)
+		trimSlice(&a.Connectors, 64, &r.Coverage.SkippedFiles)
 		trimSlice(&a.Permissions.Allow, 64, &r.Coverage.SkippedFiles)
 	}
 	trimSlice(&r.Agents, 25, &r.Coverage.SkippedFiles)
@@ -174,7 +175,7 @@ func (r *Report) finish() {
 		}
 		r.Truncated = true
 		dropped := false
-		for kind := 0; kind < 3 && !dropped; kind++ {
+		for kind := 0; kind < 4 && !dropped; kind++ {
 			for i := len(r.Agents) - 1; i >= 0 && !dropped; i-- {
 				a := &r.Agents[i]
 				switch kind {
@@ -183,6 +184,8 @@ func (r *Report) finish() {
 				case 1:
 					dropped = dropLast(&a.MCPServers)
 				case 2:
+					dropped = dropLast(&a.Connectors)
+				case 3:
 					dropped = dropLast(&a.Permissions.Allow)
 				}
 			}

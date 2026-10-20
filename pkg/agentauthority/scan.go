@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -85,6 +86,7 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 		switch id {
 		case "claude_code":
 			g.claude(a, base, root, projects)
+			g.connectors(a, filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions"))
 		case "codex":
 			if c, ok := readConfig(&g, id, filepath.Join(base, "config.toml"), readers.Codex); ok {
 				g.servers(a, c.MCPServers, filepath.Join(base, "config.toml"), "user", nil)
@@ -96,6 +98,7 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 			}
 		case "claude_cowork":
 			g.desktop(a)
+			g.connectors(a, filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions"))
 		case "cursor":
 			g.generic(a, filepath.Join(base, "mcp.json"), "mcpServers")
 			path := filepath.Join(home, "Library/Application Support/Cursor/User/globalStorage/state.vscdb")
@@ -418,6 +421,51 @@ func (g *guard) desktop(a *Agent) {
 		}
 		if name := safe(e.Name, 128); name != "" {
 			a.Plugins = append(a.Plugins, Plugin{Name: name, Enabled: true})
+		}
+	}
+}
+
+var connectorUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// connectors names claude.ai connectors from Claude desktop session files
+// (root/<account>/<org>/local_*.json). Tool calls name them only by UUID.
+// ponytail: newest 8 files per root; older sessions only add stale connectors.
+func (g *guard) connectors(a *Agent, root string) {
+	type session struct {
+		path     string
+		modified time.Time
+	}
+	var sessions []session
+	for _, account := range g.entries(root) {
+		for _, org := range g.entries(filepath.Join(root, account.Name())) {
+			dir := filepath.Join(root, account.Name(), org.Name())
+			for _, entry := range g.sessionEntries(dir) {
+				info, err := entry.Info()
+				if err == nil && info.Mode().IsRegular() && strings.HasPrefix(entry.Name(), "local_") && filepath.Ext(entry.Name()) == ".json" {
+					sessions = append(sessions, session{filepath.Join(dir, entry.Name()), info.ModTime()})
+				}
+			}
+		}
+	}
+	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].modified.After(sessions[j].modified) })
+	seen := map[string]bool{}
+	for _, s := range sessions[:min(8, len(sessions))] {
+		list, ok := readConfig(g, a.ID, s.path, readers.ClaudeSession)
+		if !ok {
+			continue
+		}
+		for _, c := range list {
+			id, name := strings.ToLower(c.UUID), safe(c.Name, 128)
+			if !connectorUUID.MatchString(id) || name == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			connector := Connector{UUID: id, Name: name, LastSeen: pointer(s.modified.UTC().Format(time.RFC3339))}
+			// Host only: the path and query can carry tenant ids.
+			if u, err := url.Parse(c.URL); err == nil && u.Hostname() != "" {
+				connector.URLHost = pointer(safe(u.Hostname(), 128))
+			}
+			a.Connectors = append(a.Connectors, connector)
 		}
 	}
 }
