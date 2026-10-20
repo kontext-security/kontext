@@ -29,11 +29,11 @@ func TestServerURLSkipsNonRegularFiles(t *testing.T) {
 	}
 }
 
-// Every active Claude Desktop session rewrites its record, so between two
-// hooks many records newer than the caller's change. The lookup must not
-// decode their connector lists, or it misses its deadline and the connector
-// stays unclassified (ENG-758 F5).
-func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
+// Every active Claude Desktop session rewrites its record, and a record is
+// mostly its connector list, so a lookup that decodes other sessions'
+// records whole misses its deadline under load and the connector stays
+// unclassified (ENG-758 F5). Only the caller's record may be decoded whole.
+func TestDesktopConnectorDecodesOnlyTheCallersRecord(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions/acct/org")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -41,49 +41,43 @@ func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 	}
 	const connector = "c2be245b-9fd0-47e8-9a48-80c63e49e3fb"
 	const url = "https://dbc.cloud.databricks.com/ai-gateway/mcp-services/system.ai.dbsql"
-	own := filepath.Join(dir, "local_own.json")
-	write := func(path, head, session, pad string) {
+	write := func(path, head, session string, modTime time.Time) {
 		t.Helper()
-		record := `{` + head + `"cliSessionId": "` + session + `", "remoteMcpServersConfig": [` + pad + `{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `"}]}`
+		record := `{` + head + `"cliSessionId": "` + session + `", "remoteMcpServersConfig": [{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `"}]}`
 		if err := os.WriteFile(path, []byte(record), 0o644); err != nil {
 			t.Fatal(err)
 		}
-	}
-	// Decoding 30 newer records of 150k connectors each takes well over the
-	// 250 ms deadline; their heads take microseconds.
-	pad := strings.Repeat(`{"uuid": "x"},`, 150_000)
-	age := func(minutes int) {
-		t.Helper()
-		at := time.Now().Add(-time.Duration(minutes) * time.Minute)
-		if err := os.Chtimes(own, at, at); err != nil {
+		if err := os.Chtimes(path, modTime, modTime); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write(own, "", "session-own", "")
-	age(60)
-	others := make([]string, 30)
+	// The caller's record is the oldest, so a newest-first scan meets the
+	// others first.
+	own := filepath.Join(dir, "local_own.json")
+	write(own, "", "session-own", time.Now().Add(-time.Hour))
+	others := make([]string, 3)
 	for i := range others {
 		others[i] = filepath.Join(dir, fmt.Sprintf("local_%d.json", i))
-		write(others[i], "", fmt.Sprintf("session-%d", i), pad)
+		write(others[i], "", fmt.Sprintf("session-%d", i), time.Now())
 	}
-	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json")}
-	tool := "mcp__" + connector + "__execute_sql"
-	if got, _, _ := r.Server("claude", "session-own", "/", tool); got != url {
-		t.Fatalf("Server() = %q", got)
+	r := &Resolver{Home: home}
+	decoded := func(path string) bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		_, ok := r.cache[cacheKey[desktopSession](path, maxConfigBytes)]
+		return ok
 	}
-	for i, path := range others {
-		write(path, "", fmt.Sprintf("session-%d", i), pad+`{},`)
+	if got, _, _ := r.desktopConnector(home, "session-own", connector); got != url {
+		t.Fatalf("desktopConnector() = %q", got)
 	}
-	// The caller's record changed too, before the others.
-	write(own, "", "session-own", `{},`)
-	age(30)
-	if got, _, _ := r.Server("claude", "session-own", "/", tool); got != url {
-		t.Fatalf("Server() after other sessions rewrote their records = %q", got)
+	for _, path := range others {
+		if decoded(path) {
+			t.Fatalf("desktopConnector() decoded another session's record %s", filepath.Base(path))
+		}
 	}
 	// A record whose cliSessionId lies past its head is decoded whole.
-	write(own, `"title": "`+strings.Repeat("t", 2*recordHeadBytes)+`", `, "session-own", "")
-	age(30)
-	if got, _, _ := r.Server("claude", "session-own", "/", tool); got != url {
-		t.Fatalf("Server() for a cliSessionId past the head = %q", got)
+	write(own, `"title": "`+strings.Repeat("t", 2*recordHeadBytes)+`", `, "session-own", time.Now().Add(-time.Hour))
+	if got, _, _ := r.desktopConnector(home, "session-own", connector); got != url {
+		t.Fatalf("desktopConnector() for a cliSessionId past the head = %q", got)
 	}
 }

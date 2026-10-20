@@ -543,8 +543,7 @@ func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bo
 // loadHead is load that parses only the first limit bytes of path.
 func loadHead[T any](r *Resolver, path string, limit int64, parse func([]byte) (T, error)) (T, bool) {
 	var zero T
-	// One file can be read as two shapes (plugin.json), so the key has both.
-	key := fmt.Sprintf("%s\x00%T", path, zero)
+	key := cacheKey[T](path, limit)
 	info, err := os.Stat(path)
 	r.mu.Lock()
 	if r.cache == nil {
@@ -575,6 +574,13 @@ func loadHead[T any](r *Resolver, path string, limit int64, parse func([]byte) (
 	defer r.mu.Unlock()
 	r.cache[key] = cachedFile{modTime: info.ModTime(), size: info.Size(), value: parsed, ok: ok}
 	return parsed, ok
+}
+
+// cacheKey has the path, the shape and the read limit: one file can be read
+// as two shapes (plugin.json), or whole and by its head.
+func cacheKey[T any](path string, limit int64) string {
+	var zero T
+	return fmt.Sprintf("%s\x00%T\x00%d", path, zero, limit)
 }
 
 // readFile opens without blocking, so a FIFO planted as .mcp.json in a
