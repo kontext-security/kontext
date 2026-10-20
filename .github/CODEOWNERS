@@ -1,0 +1,3 @@
+# The tool catalogs and their refresh decide how agent tool calls are tiered.
+internal/toolcatalog/** @michiosw
+scripts/toolcatalog-refresh/** @michiosw

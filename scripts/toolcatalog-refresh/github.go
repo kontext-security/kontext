@@ -171,6 +171,9 @@ func (r *refresher) refreshGitHub(catalogPath, sourcePath string) error {
 	if removed = markRemoved(catalog.Tools, upstream); len(removed) > 0 {
 		r.githubChanged = true
 	}
+	if seeding || len(changed) > 0 {
+		r.needsReview("GitHub tool definitions changed")
+	}
 
 	r.note("- github/github-mcp-server: pinned %s, upstream HEAD %s; %d upstream tools, %d catalogued", pinned[:12], head[:12], len(upstream), len(catalog.Tools))
 	if seeding {

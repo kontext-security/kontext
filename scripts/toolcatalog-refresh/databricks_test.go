@@ -705,8 +705,8 @@ func TestCommittedDatabricksTableMatchesRules(t *testing.T) {
 	if table.Rules != databricksRulesFingerprint() {
 		t.Fatal("the Databricks rules changed since the table was generated; run go run ./scripts/toolcatalog-refresh -databricks internal/toolcatalog/databricks-routes.json -write")
 	}
-	if table.CLI != databricksCLIVersion {
-		t.Fatalf("table built from databricks/cli %s, generator pins %s", table.CLI, databricksCLIVersion)
+	if !goModVersion.MatchString(table.CLI) || !goModVersion.MatchString(table.SDK) {
+		t.Fatalf("table pins databricks/cli %q and databricks-sdk-go %q", table.CLI, table.SDK)
 	}
 }
 

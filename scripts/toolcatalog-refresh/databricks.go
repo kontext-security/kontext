@@ -27,8 +27,9 @@ import (
 // every generated CLI command to the operation it calls. The Databricks CLI,
 // `databricks api` and curl are classified from the same table.
 //
-// The generator reads two pinned upstream sources as Go source and never
-// executes them: the databricks/cli release in databricksCLIVersion and the
+// The generator reads two upstream sources as Go source and never executes
+// them: the databricks/cli release the table's cli field pins (the weekly
+// refresh moves it to the latest release, see databricks_refresh.go) and the
 // databricks-sdk-go version that release's go.mod requires.
 //
 //   - SDK service/*/impl.go gives each operation's HTTP method and path.
@@ -50,9 +51,8 @@ import (
 // generation so a reviewer has to place it.
 
 const (
-	databricksCLIVersion = "v1.21.0"
-	databricksCLIModule  = "github.com/databricks/cli"
-	databricksSDKModule  = "github.com/databricks/databricks-sdk-go"
+	databricksCLIModule = "github.com/databricks/cli"
+	databricksSDKModule = "github.com/databricks/databricks-sdk-go"
 )
 
 type databricksTable struct {
@@ -127,32 +127,14 @@ var (
 	accessRankDatabricks  = map[string]int{"read": 0, "write": 1, "delete": 2, "admin": 3}
 )
 
+// refreshDatabricks regenerates the route table at the databricks/cli
+// release it pins (-databricks), after a rule change.
 func (r *refresher) refreshDatabricks(outputPath string, write bool) error {
-	cliTarball, err := r.get("https://codeload.github.com/databricks/cli/tar.gz/refs/tags/" + databricksCLIVersion)
+	old, err := readDatabricksTable(outputPath)
 	if err != nil {
 		return err
 	}
-	cli, err := readGoTarball(cliTarball, func(name string) bool {
-		return name == "go.mod" || strings.HasPrefix(name, "cmd/workspace/") || strings.HasPrefix(name, "cmd/account/")
-	})
-	if err != nil {
-		return fmt.Errorf("databricks/cli: %w", err)
-	}
-	sdkVersion, err := goModRequire(cli["go.mod"], databricksSDKModule)
-	if err != nil {
-		return err
-	}
-	sdkTarball, err := r.get("https://codeload.github.com/databricks/databricks-sdk-go/tar.gz/refs/tags/" + sdkVersion)
-	if err != nil {
-		return err
-	}
-	sdk, err := readGoTarball(sdkTarball, func(name string) bool {
-		return strings.HasPrefix(name, "service/") || name == "workspace_client.go" || name == "account_client.go"
-	})
-	if err != nil {
-		return fmt.Errorf("databricks-sdk-go: %w", err)
-	}
-	table, report, err := buildDatabricksTable(cli, sdk, databricksCLIVersion, sdkVersion)
+	table, err := r.regenerateDatabricks(old, old.CLI)
 	if err != nil {
 		return err
 	}
@@ -160,7 +142,6 @@ func (r *refresher) refreshDatabricks(outputPath string, write bool) error {
 	if err != nil {
 		return err
 	}
-	r.report = append(r.report, report...)
 	current, _ := os.ReadFile(outputPath)
 	switch {
 	case bytes.Equal(current, encoded):
@@ -175,6 +156,62 @@ func (r *refresher) refreshDatabricks(outputPath string, write bool) error {
 		r.note("\nThe route table is out of date. Run with -write to apply.")
 	}
 	return nil
+}
+
+// databricksCLISource returns the generator's view of a databricks/cli
+// release (go.mod and the generated command packages) and its hand-written
+// commands.
+func (r *refresher) databricksCLISource(version string) (sourceTree, map[string]bool, error) {
+	if !goModVersion.MatchString(version) {
+		return nil, nil, fmt.Errorf("databricks/cli: bad release %q", version)
+	}
+	tarball, err := r.get("https://codeload.github.com/databricks/cli/tar.gz/refs/tags/" + version)
+	if err != nil {
+		return nil, nil, err
+	}
+	cli, err := readGoTarball(tarball, func(name string) bool {
+		return name == "go.mod" || strings.HasPrefix(name, "cmd/workspace/") || strings.HasPrefix(name, "cmd/account/")
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("databricks/cli: %w", err)
+	}
+	all, err := readGoTarball(tarball, func(name string) bool { return strings.HasPrefix(name, "cmd/") })
+	if err != nil {
+		return nil, nil, fmt.Errorf("databricks/cli: %w", err)
+	}
+	return cli, handWrittenCommands(all), nil
+}
+
+func (r *refresher) databricksSDKSource(cli sourceTree) (sourceTree, string, error) {
+	version, err := goModRequire(cli["go.mod"], databricksSDKModule)
+	if err != nil {
+		return nil, "", err
+	}
+	tarball, err := r.get("https://codeload.github.com/databricks/databricks-sdk-go/tar.gz/refs/tags/" + version)
+	if err != nil {
+		return nil, "", err
+	}
+	sdk, err := readGoTarball(tarball, func(name string) bool {
+		return strings.HasPrefix(name, "service/") || name == "workspace_client.go" || name == "account_client.go"
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("databricks-sdk-go: %w", err)
+	}
+	return sdk, version, nil
+}
+
+func readDatabricksTable(path string) (*databricksTable, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var table databricksTable
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&table); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &table, nil
 }
 
 func encodeDatabricksTable(table *databricksTable) ([]byte, error) {
@@ -367,16 +404,7 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 		table.Routes = append(table.Routes, *entry)
 	}
 	table.Routes = append(table.Routes, databricksHandCommands...)
-	sort.Slice(table.Routes, func(i, j int) bool {
-		a, b := table.Routes[i], table.Routes[j]
-		if a.Path != b.Path {
-			return a.Path < b.Path
-		}
-		if a.Method != b.Method {
-			return a.Method < b.Method
-		}
-		return a.Operation < b.Operation
-	})
+	sortDatabricksRoutes(table.Routes)
 
 	tiers, products := map[string]int{}, map[string]int{}
 	for _, entry := range table.Routes {
@@ -409,6 +437,19 @@ func buildDatabricksTable(cli, sdk sourceTree, cliVersion, sdkVersion string) (*
 		}
 	}
 	return table, report, nil
+}
+
+func sortDatabricksRoutes(routes []databricksEntry) {
+	sort.Slice(routes, func(i, j int) bool {
+		a, b := routes[i], routes[j]
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		if a.Method != b.Method {
+			return a.Method < b.Method
+		}
+		return a.Operation < b.Operation
+	})
 }
 
 // databricksClient says whether an operation runs against the account or a

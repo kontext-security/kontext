@@ -1,14 +1,24 @@
 name: Tool Catalog Refresh
 
-# Checks the Jira/Atlassian, HubSpot and GitHub MCP servers against upstream
-# every week and opens a pull request when a source adds a tool, changes a
-# tool's definition, or annotates a tool as stricter than its tier. New
-# tools land as write (delete when annotated destructive); annotations never
-# loosen a tier. A GitHub change re-pins the GitHub catalog to upstream HEAD.
-# The PR body lists every change for review. Without the
-# ATLASSIAN_MCP_AUTHORIZATION secret, or the HUBSPOT_MCP_CLIENT_ID,
-# HUBSPOT_MCP_CLIENT_SECRET and HUBSPOT_MCP_REFRESH_TOKEN secrets, the hosted
-# servers are skipped and reported as such; the other sources still refresh.
+# Checks the Jira/Atlassian, HubSpot, GitHub and Databricks MCP servers
+# against upstream every week and opens a pull request when a source adds a
+# tool, changes a tool's definition, or annotates a tool as stricter than its
+# tier. New tools land as write (delete when annotated destructive);
+# annotations never loosen a tier. A GitHub change re-pins the GitHub catalog
+# to upstream HEAD. A new databricks/cli release regenerates the Databricks
+# route table; operations upstream dropped are kept.
+#
+# The PR body lists every change and the refresh kind. A strict-only refresh
+# (it only adds write-tier entries or raises tiers) is labelled
+# catalog-strict-only and merges through the merge queue on its own; any
+# other refresh asks @michiosw for review.
+#
+# Without the ATLASSIAN_MCP_AUTHORIZATION secret; the HUBSPOT_MCP_CLIENT_ID,
+# HUBSPOT_MCP_CLIENT_SECRET and HUBSPOT_MCP_REFRESH_TOKEN secrets; or the
+# DATABRICKS_HOST, DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET secrets
+# and the DATABRICKS_MCP_ENDPOINTS variable, the hosted servers are skipped
+# and reported as such; the other sources still refresh. A dispatch on any
+# branch but the default one only reports.
 
 on:
   schedule:
@@ -20,6 +30,7 @@ on:
     paths:
       - internal/toolcatalog/providers/**
       - internal/toolcatalog/github-mcp.json
+      - internal/toolcatalog/databricks-routes.json
       - scripts/toolcatalog-refresh/**
       - .github/workflows/tool-catalog-refresh.yml
 
@@ -103,6 +114,7 @@ jobs:
 
       - name: Continue the open refresh PR
         id: branch
+        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
@@ -127,9 +139,17 @@ jobs:
           HUBSPOT_MCP_CLIENT_ID: ${{ secrets.HUBSPOT_MCP_CLIENT_ID }}
           HUBSPOT_MCP_CLIENT_SECRET: ${{ secrets.HUBSPOT_MCP_CLIENT_SECRET }}
           HUBSPOT_MCP_REFRESH_TOKEN: ${{ secrets.HUBSPOT_MCP_REFRESH_TOKEN }}
-        run: go run ./scripts/toolcatalog-refresh -write -report "$RUNNER_TEMP/report.md"
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_MCP_ENDPOINTS: ${{ vars.DATABRICKS_MCP_ENDPOINTS }}
+        run: |
+          set -euo pipefail
+          go run ./scripts/toolcatalog-refresh -write -report "$RUNNER_TEMP/report.md" -kind "$RUNNER_TEMP/kind"
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open or update pull request
+        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR: ${{ steps.branch.outputs.pr }}
@@ -150,9 +170,34 @@ jobs:
           fi
           # Run the catalog's own checks before pushing, so a refresh that
           # breaks them never opens a PR.
-          go test ./internal/toolcatalog/... ./internal/cedarpolicy/... ./internal/guard/app/server/... ./internal/managedobserve/...
+          go test ./internal/toolcatalog/... ./internal/shellprojection/... ./internal/cedarpolicy/... ./internal/guard/app/server/... ./internal/managedobserve/... ./scripts/toolcatalog-refresh/...
           git add internal
-          git commit -m "chore(toolcatalog): refresh provider MCP catalogs"
+          git commit -m "chore(toolcatalog): refresh tool catalogs"
+          # A PR stays strict-only only while every run on it was: an
+          # earlier run's change may still be waiting for review. Before
+          # commits that need review land on a strict-only PR, stop it
+          # merging; any failure here aborts before the push.
+          kind="$(cat "$RUNNER_TEMP/kind")"
+          if [[ -n "$PR" ]]; then
+            # shellcheck disable=SC2016 # $o, $r and $n are GraphQL variables
+            state="$(gh api graphql -F n="$PR" -f o="${GITHUB_REPOSITORY%/*}" -f r="${GITHUB_REPOSITORY#*/}" \
+              -f query='query($o: String!, $r: String!, $n: Int!) { repository(owner: $o, name: $r) { pullRequest(number: $n) { id isInMergeQueue autoMergeRequest { enabledAt } labels(first: 100) { nodes { name } } } } }' \
+              --jq .data.repository.pullRequest)"
+            labelled="$(jq '.labels.nodes | map(.name) | index("catalog-strict-only") != null' <<<"$state")"
+            [[ "$labelled" == true ]] || kind=review
+            if [[ "$kind" != strict-only ]]; then
+              if [[ "$(jq .isInMergeQueue <<<"$state")" == true ]]; then
+                # shellcheck disable=SC2016 # $id is a GraphQL variable
+                gh api graphql -f query='mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }' -f id="$(jq -r .id <<<"$state")"
+              fi
+              if [[ "$(jq '.autoMergeRequest != null' <<<"$state")" == true ]]; then
+                gh pr merge "$BRANCH" --disable-auto
+              fi
+              if [[ "$labelled" == true ]]; then
+                gh pr edit "$BRANCH" --remove-label catalog-strict-only
+              fi
+            fi
+          fi
           if [[ -n "$PR" ]]; then
             git push origin "$BRANCH"
             # Each run reports only what it changed, so keep every earlier
@@ -166,6 +211,25 @@ jobs:
           else
             # No open PR: any branch left over from a closed one is stale.
             git push --force-with-lease origin "$BRANCH"
-            gh pr create --draft --head "$BRANCH" --title "chore(toolcatalog): refresh provider MCP catalogs" \
+            gh pr create --head "$BRANCH" --title "chore(toolcatalog): refresh tool catalogs" \
               --body-file "$RUNNER_TEMP/report.md"
+          fi
+          if [[ "$(gh pr view "$BRANCH" --json isDraft --jq .isDraft)" == true ]]; then
+            gh pr ready "$BRANCH"
+          fi
+          if [[ "$kind" == strict-only ]]; then
+            gh pr edit "$BRANCH" --add-label catalog-strict-only
+            gh pr merge "$BRANCH" --squash --auto
+          else
+            gh pr edit "$BRANCH" --add-reviewer michiosw
+          fi
+
+      # A Databricks check that failed (an SDK service with no product, a
+      # server path with no product, an expired secret) fails the run, so it
+      # is seen even when nothing else changed.
+      - name: Fail on a failed Databricks check
+        run: |
+          if grep -E '^- Databricks.*check failed' "$RUNNER_TEMP/report.md"; then
+            echo "::error::A Databricks check failed; see the job summary."
+            exit 1
           fi

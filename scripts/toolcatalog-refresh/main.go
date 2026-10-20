@@ -29,8 +29,17 @@
 // GitHub's MCP server follows the same rules (see github.go); its catalog is
 // re-pinned to upstream HEAD whenever a tool changes.
 //
-// With -databricks it instead regenerates the Databricks route table from
-// the pinned databricks/cli release and its Go SDK (see databricks.go).
+// Databricks (see databricks_refresh.go): a live tools/list of the managed MCP
+// servers on the test workspace, when DATABRICKS_HOST, DATABRICKS_CLIENT_ID,
+// DATABRICKS_CLIENT_SECRET and DATABRICKS_MCP_ENDPOINTS are set, and the
+// route table, regenerated when databricks/cli publishes a release. With
+// -databricks it only regenerates the route table at its pinned release
+// (see databricks.go).
+//
+// The report ends with the refresh kind, which -kind also writes to a file:
+// strict-only when the run only adds write-tier entries or raises tiers,
+// review when it could loosen a classification (a new read, a lowered tier,
+// a changed product, a changed definition), none without changes.
 package main
 
 import (
@@ -51,6 +60,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -99,6 +109,9 @@ type upstreamTool struct {
 	// hint is the tier the source's own annotations or tags claim: read,
 	// write or delete, or empty when it says nothing.
 	hint string
+	// product places a new tool when the source knows it (the Databricks
+	// server it came from); otherwise productFor does.
+	product string
 	// definition fingerprints everything the source says about the tool.
 	definition string
 }
@@ -119,6 +132,15 @@ type refresher struct {
 	githubChanged bool
 	githubCatalog *githubCatalog
 	githubHead    string
+	// dirty holds the provider catalogs this run changed; only they are
+	// rewritten and re-versioned.
+	dirty map[*catalog]bool
+	// routes is the regenerated Databricks route table, when it changed.
+	routes     *databricksTable
+	routesPath string
+	// review lists why the run needs a human review; empty means every
+	// change only adds write-tier entries or raises tiers.
+	review []string
 }
 
 var (
@@ -143,7 +165,8 @@ func main() {
 	dir := flag.String("dir", "internal/toolcatalog/providers", "provider catalog directory")
 	write := flag.Bool("write", false, "write additions to the catalogs")
 	reportPath := flag.String("report", "", "also write the markdown report to this file")
-	databricks := flag.String("databricks", "", "instead, regenerate this Databricks route table (internal/toolcatalog/databricks-routes.json)")
+	databricks := flag.String("databricks", "", "instead, regenerate this Databricks route table (internal/toolcatalog/databricks-routes.json) at its pinned release")
+	kindPath := flag.String("kind", "", "also write the refresh kind (strict-only, review or none) to this file")
 	flag.Parse()
 
 	r := &refresher{client: &http.Client{Timeout: 60 * time.Second}}
@@ -157,8 +180,11 @@ func main() {
 	}
 	body := strings.Join(r.report, "\n") + "\n"
 	fmt.Print(body)
-	if *reportPath != "" {
-		if err := os.WriteFile(*reportPath, []byte(body), 0o644); err != nil {
+	for _, out := range []struct{ path, content string }{{*reportPath, body}, {*kindPath, r.kind() + "\n"}} {
+		if out.path == "" {
+			continue
+		}
+		if err := os.WriteFile(out.path, []byte(out.content), 0o644); err != nil {
 			fmt.Fprintln(os.Stderr, "toolcatalog-refresh:", err)
 			os.Exit(1)
 		}
@@ -166,16 +192,20 @@ func main() {
 }
 
 func (r *refresher) run(dir string, write bool) error {
-	atlassianPath := filepath.Join(dir, "atlassian-mcp.json")
-	hubspotPath := filepath.Join(dir, "hubspot-mcp.json")
-	atlassian, err := readCatalog(atlassianPath)
-	if err != nil {
-		return err
+	var catalogs []*catalog
+	paths := map[*catalog]string{}
+	for _, name := range []string{"atlassian-mcp.json", "hubspot-mcp.json", "databricks-mcp.json"} {
+		c, err := readCatalog(filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		catalogs = append(catalogs, c)
+		paths[c] = filepath.Join(dir, name)
 	}
-	hubspot, err := readCatalog(hubspotPath)
-	if err != nil {
-		return err
-	}
+	atlassian, hubspot, databricks := catalogs[0], catalogs[1], catalogs[2]
+	githubCatalogPath := filepath.Join(filepath.Dir(dir), "github-mcp.json")
+	githubSourcePath := filepath.Join(filepath.Dir(dir), "github.go")
+	routesPath := filepath.Join(filepath.Dir(dir), "databricks-routes.json")
 	r.note("# Tool catalog refresh")
 
 	if err := r.refreshHubSpotNPM(hubspot); err != nil {
@@ -197,13 +227,17 @@ func (r *refresher) run(dir string, write bool) error {
 	default:
 		r.note("- HubSpot remote MCP: skipped (HUBSPOT_MCP_REFRESH_TOKEN with its client id and secret, or HUBSPOT_MCP_TOKEN, not set)")
 	}
-	githubCatalogPath := filepath.Join(filepath.Dir(dir), "github-mcp.json")
-	githubSourcePath := filepath.Join(filepath.Dir(dir), "github.go")
+	r.refreshDatabricksMCP(databricks, atlassian, githubCatalogPath)
 	if err := r.refreshGitHub(githubCatalogPath, githubSourcePath); err != nil {
 		r.note("- github/github-mcp-server: check failed: %v", err)
 	}
+	// The route table section is long, so it comes last.
+	if err := r.refreshDatabricksRoutes(routesPath); err != nil {
+		r.databricksFailed("- Databricks route table: check failed: %v", err)
+	}
+	defer r.noteKind()
 
-	if !r.changed && !r.githubChanged {
+	if !r.changed && !r.githubChanged && r.routes == nil {
 		r.note("\nNo catalog changes.")
 		return nil
 	}
@@ -217,22 +251,67 @@ func (r *refresher) run(dir string, write bool) error {
 		}
 		r.note("\nGitHub catalog re-pinned to %s. Review every added tier above, then sync kontext-cloud.", r.githubHead[:12])
 	}
+	if r.routes != nil {
+		encoded, err := encodeDatabricksTable(r.routes)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(r.routesPath, encoded, 0o644); err != nil {
+			return err
+		}
+		r.note("\nDatabricks route table moved to databricks/cli %s.", r.routes.CLI)
+	}
 	if !r.changed {
 		return nil
 	}
 	today := time.Now().UTC().Format("2006-01-02")
-	for _, item := range []struct {
-		path    string
-		catalog *catalog
-	}{{atlassianPath, atlassian}, {hubspotPath, hubspot}} {
-		item.catalog.Version = today
-		sort.Slice(item.catalog.Tools, func(i, j int) bool { return item.catalog.Tools[i].Name < item.catalog.Tools[j].Name })
-		if err := writeCatalog(item.path, item.catalog); err != nil {
+	for _, c := range catalogs {
+		if !r.dirty[c] {
+			continue
+		}
+		c.Version = today
+		sort.Slice(c.Tools, func(i, j int) bool { return c.Tools[i].Name < c.Tools[j].Name })
+		if err := writeCatalog(paths[c], c); err != nil {
 			return err
 		}
 	}
 	r.note("\nCatalog version set to %s. Review every added tier above, then sync kontext-cloud.", today)
 	return nil
+}
+
+// markChanged records that a run changed a provider catalog.
+func (r *refresher) markChanged(c *catalog) {
+	if r.dirty == nil {
+		r.dirty = map[*catalog]bool{}
+	}
+	r.dirty[c] = true
+	r.changed = true
+}
+
+func (r *refresher) needsReview(reason string) {
+	if !slices.Contains(r.review, reason) {
+		r.review = append(r.review, reason)
+	}
+}
+
+func (r *refresher) kind() string {
+	switch {
+	case !r.changed && !r.githubChanged && r.routes == nil:
+		return "none"
+	case len(r.review) > 0:
+		return "review"
+	default:
+		return "strict-only"
+	}
+}
+
+func (r *refresher) noteKind() {
+	switch r.kind() {
+	case "review":
+		r.note("\n**Refresh kind: review.** A reviewer must confirm: %s.", strings.Join(r.review, "; "))
+	case "strict-only":
+		r.note("\n**Refresh kind: strict-only.** Every change adds write-tier entries or raises tiers.")
+	}
 }
 
 func (r *refresher) note(format string, args ...any) {
@@ -265,11 +344,22 @@ func (r *refresher) merge(c *catalog, source string, upstream []upstreamTool, ow
 			if u.hint == "delete" {
 				access = "delete"
 			}
-			entry := tool{Name: u.name, Product: productFor(c.Provider, u.name), Access: access, Definition: u.definition}
-			if c.Provider == "atlassian" {
+			product := u.product
+			if product == "" {
+				product = productFor(c.Provider, u.name)
+			}
+			if product == "" {
+				r.note("- %s: `%s` has no product and was not added", source, u.name)
+				continue
+			}
+			entry := tool{Name: u.name, Product: product, Access: access, Definition: u.definition}
+			switch c.Provider {
+			case "atlassian":
 				entry.Distinctive = atlassianDistinctive.MatchString(u.name)
-			} else {
+			case "hubspot":
 				entry.Distinctive = hubspotDistinctive.MatchString(u.name)
+			case "databricks":
+				entry.Distinctive = databricksDistinctive.MatchString(u.name)
 			}
 			c.Tools = append(c.Tools, entry)
 			index[u.name] = len(c.Tools) - 1
@@ -305,7 +395,10 @@ func (r *refresher) merge(c *catalog, source string, upstream []upstreamTool, ow
 		return
 	}
 	if len(added)+len(tightened)+len(redefined)+baselined > 0 {
-		r.changed = true
+		r.markChanged(c)
+	}
+	if len(redefined) > 0 {
+		r.needsReview(source + " changed tool definitions")
 	}
 	if len(added) > 0 {
 		r.note("- %s: **added %d**, review the tier of each: %s", source, len(added), strings.Join(added, ", "))
@@ -327,16 +420,21 @@ func (r *refresher) merge(c *catalog, source string, upstream []upstreamTool, ow
 	}
 }
 
+// productFor places a new tool by name. Databricks tools are placed by the
+// server that serves them (upstreamTool.product), never by name.
 func productFor(provider, name string) string {
-	if provider == "hubspot" {
+	switch provider {
+	case "hubspot":
 		return "crm"
-	}
-	for _, candidate := range atlassianProducts {
-		if candidate.pattern.MatchString(name) {
-			return candidate.product
+	case "atlassian":
+		for _, candidate := range atlassianProducts {
+			if candidate.pattern.MatchString(name) {
+				return candidate.product
+			}
 		}
+		return "platform"
 	}
-	return "platform"
+	return ""
 }
 
 var (
@@ -377,7 +475,7 @@ func (r *refresher) refreshHubSpotNPM(c *catalog) error {
 		label += " (was " + pinned + ")"
 		if sourceIndex >= 0 {
 			c.Sources[sourceIndex] = npmPinned.ReplaceAllString(c.Sources[sourceIndex], "@hubspot/mcp-server@"+latest)
-			r.changed = true
+			r.markChanged(c)
 		}
 	}
 	r.merge(c, label, upstream, func(name string) bool { return strings.HasPrefix(name, "hubspot-") })
@@ -471,7 +569,7 @@ func (r *refresher) refreshSooperset(c *catalog) error {
 	for i, source := range c.Sources {
 		if match := soopersetPinned.FindStringSubmatch(source); match != nil && match[1] != head {
 			c.Sources[i] = soopersetPinned.ReplaceAllString(source, "sooperset/mcp-atlassian@"+head)
-			r.changed = true
+			r.markChanged(c)
 		}
 	}
 	r.merge(c, "sooperset/mcp-atlassian@"+head[:12], upstream, func(name string) bool {
