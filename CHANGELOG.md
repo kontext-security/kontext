@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.1](https://github.com/kontext-security/kontext/compare/v1.13.0...v1.13.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **mcpconfig:** never touch macOS privacy-guarded folders from the daemon ([#601](https://github.com/kontext-security/kontext/issues/601)) ([35254fa](https://github.com/kontext-security/kontext/commit/35254fa69fa571ca80b3a19d266c9798ae27d664))
+
 ## [1.13.0](https://github.com/kontext-security/kontext/compare/v1.12.1...v1.13.0) (2026-10-20)
 
 
