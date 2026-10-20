@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log"
-	"regexp"
 	"strings"
 	"sync"
 	"unicode"
@@ -16,6 +15,7 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/modelusage"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
@@ -98,7 +98,10 @@ func (r guardHookRuntime) trackTurn(event risk.HookEvent) (stamped risk.HookEven
 	}
 	session := sqlite.NormalizeSessionID(event.SessionID)
 	prompt, _ := event.ToolInput["prompt"].(string)
-	if agent := turnAgent(event.Agent); event.HookEventName == hook.HookUserPromptSubmit.String() && prompt != "" && agent != "" {
+	// A harness message (a task notification, a session event) arrives as a
+	// prompt but starts no turn: the work after it stays with the person's
+	// prompt before, and nothing is classified for it.
+	if agent := turnAgent(event.Agent); event.HookEventName == hook.HookUserPromptSubmit.String() && !modelusage.IsHarnessEnvelope(prompt) && agent != "" {
 		event.TurnID = r.turns.mint(session)
 		return event, &mintedTurn{
 			record: sqlite.TurnRecord{
@@ -174,10 +177,6 @@ func turnSource(prompt string, isInterrupt *bool) string {
 	}
 }
 
-// turnPromptBlocks are what the agent harness wraps around or pastes into a
-// prompt: reminders, command expansions and pasted content.
-var turnPromptBlocks = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>|<command-message>.*?</command-message>|<pasted_content\b[^>]*>.*?</pasted_content>`)
-
 // turnPrompt decides what a turn says about its prompt. Omitted capture sends
 // size only; so does a workspace with the work-type switch off, or without a
 // confirmed directive, which clears the switch. Otherwise the excerpt is the
@@ -201,7 +200,7 @@ func turnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) sqli
 	digest := sha256.Sum256([]byte(collapseWhitespace(prompt)))
 	// Redact before collapsing whitespace, on text shaped as the rules expect,
 	// and before bounding, so a secret across the bound leaves no prefix.
-	text := redactMerlinReviewText(turnPromptBlocks.ReplaceAllString(prompt, " "))
+	text := redactMerlinReviewText(modelusage.HarnessBlocks.ReplaceAllString(prompt, " "))
 	// Control characters would expand sixfold in the JSON upload.
 	text = collapseWhitespace(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {

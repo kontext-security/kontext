@@ -2,6 +2,7 @@ package modelusage
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -244,5 +245,75 @@ func TestClaudeRowsThatStartNoTurn(t *testing.T) {
 	// its own user row, and a row without a valid time cannot be placed.
 	if prompts := transcript.Prompts(); len(prompts) != 1 || !prompts[0].Timestamp.Equal(at(t, "2026-10-19T10:00:04Z")) {
 		t.Fatalf("prompts = %+v", prompts)
+	}
+}
+
+// Harness messages delivered as prompts start no turn: a task notification
+// mid-turn (as a user row and as an absorbed queued message) and a session
+// event after the turn ended. The usage after them keeps the person's turn.
+// A prompt that only begins with a reminder block still starts one.
+func TestClaudeHarnessMessagesStartNoTurn(t *testing.T) {
+	data, err := os.ReadFile("testdata/claude-envelopes.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := NewClaudeTranscript()
+	records, err := transcript.Read(strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompts []time.Time
+	for _, prompt := range transcript.Prompts() {
+		prompts = append(prompts, prompt.Timestamp)
+	}
+	if len(prompts) != 2 || !prompts[0].Equal(at(t, "2026-10-20T10:00:00Z")) || !prompts[1].Equal(at(t, "2026-10-20T10:00:30Z")) {
+		t.Fatalf("prompts = %v, want the two typed prompts", prompts)
+	}
+	// The daemon minted turns for the two typed prompts only.
+	AssignTurns(records, prompts, []Turn{
+		{ID: "turn_background", StartedAt: at(t, "2026-10-20T10:00:00.020Z")},
+		{ID: "turn_fix", StartedAt: at(t, "2026-10-20T10:00:30.020Z")},
+	})
+	got := turnsByMessage(records)
+	for message, turn := range map[string]string{
+		"m1": "turn_background", "m2": "turn_background", "m3": "turn_background", "m4": "turn_background",
+		"m5": "turn_background", // after the session event, which minted nothing
+		"m6": "turn_fix", "m7": "turn_fix",
+	} {
+		if got[message] != turn {
+			t.Errorf("%s turn = %q, want %q (all: %v)", message, got[message], turn, got)
+		}
+	}
+}
+
+// Codex writes injected context as user messages, mid-task too; it starts no
+// turn, while a person's message after model output does.
+func TestCodexInjectedContextStartsNoTurn(t *testing.T) {
+	message := func(ts, text string) string {
+		return `{"timestamp":"` + ts + `","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":` + strconv.Quote(text) + `}]}}`
+	}
+	rollout := strings.Join([]string{
+		`{"timestamp":"2026-10-20T10:00:00Z","type":"session_meta","payload":{"id":"th","model_provider":"openai"}}`,
+		`{"timestamp":"2026-10-20T10:00:00Z","type":"turn_context","payload":{"model":"gpt-5.6-luna"}}`,
+		`{"timestamp":"2026-10-20T10:00:00.100Z","type":"event_msg","payload":{"type":"task_started"}}`,
+		message("2026-10-20T10:00:00.200Z", "fix the spec"),
+		`{"timestamp":"2026-10-20T10:00:01Z","type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"exec_command"}}`,
+		message("2026-10-20T10:00:02Z", `<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>`),
+		message("2026-10-20T10:00:02.100Z", "<environment_context>\n  <cwd>/tmp</cwd>\n</environment_context>"),
+		`{"timestamp":"2026-10-20T10:00:03Z","type":"response_item","payload":{"type":"function_call","call_id":"c2","name":"exec_command"}}`,
+		message("2026-10-20T10:00:04Z", "also update the docs"),
+		`{"timestamp":"2026-10-20T10:00:05Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:"}]}}`,
+	}, "\n") + "\n"
+	transcript := NewCodexTranscript()
+	if _, err := transcript.Read(strings.NewReader(rollout)); err != nil {
+		t.Fatal(err)
+	}
+	var got []time.Time
+	for _, prompt := range transcript.Prompts() {
+		got = append(got, prompt.Timestamp)
+	}
+	want := []time.Time{at(t, "2026-10-20T10:00:00.1Z"), at(t, "2026-10-20T10:00:04Z")}
+	if len(got) != len(want) || !got[0].Equal(want[0]) || !got[1].Equal(want[1]) {
+		t.Fatalf("prompts = %v, want %v (the image-only message joins the open turn)", got, want)
 	}
 }

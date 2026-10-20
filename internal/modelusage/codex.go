@@ -100,6 +100,8 @@ func (s *codexState) parseLine(text []byte) error {
 			ThreadID      string      `json:"thread_id"`
 			ResponseID    string      `json:"response_id"`
 			Usage         *codexUsage `json:"usage"`
+			// A message's content; read only for a user message.
+			Content json.RawMessage `json:"content"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(text, &row); err != nil {
@@ -143,7 +145,9 @@ func (s *codexState) parseLine(text []byte) error {
 		case "message":
 			if p.Role == "user" {
 				s.pending = nil
-				s.addPrompt(row.Timestamp)
+				if !codexHarnessMessage(p.Content) {
+					s.addPrompt(row.Timestamp)
+				}
 			}
 			if p.Role != "assistant" {
 				return nil
@@ -215,6 +219,25 @@ func (s *codexState) finish() ([]Record, error) {
 		}
 	}
 	return records, nil
+}
+
+// codexHarnessMessage reports a user message that is injected context, not
+// a prompt: Codex writes environment and app context as user messages, in
+// the middle of a task too. Content without text is a prompt.
+func codexHarnessMessage(content json.RawMessage) bool {
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &parts) != nil {
+		return false
+	}
+	var texts []string
+	for _, part := range parts {
+		if part.Text != "" {
+			texts = append(texts, part.Text)
+		}
+	}
+	return len(texts) > 0 && IsHarnessEnvelope(strings.Join(texts, "\n"))
 }
 
 // addPrompt records a turn boundary unless one is already open. A sub-agent

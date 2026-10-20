@@ -358,3 +358,56 @@ func TestPromptsThatMintNoTurn(t *testing.T) {
 		t.Fatalf("codex turns = %+v, %v", turns, err)
 	}
 }
+
+// A harness message delivered as a prompt (a background task's notification,
+// a session event) mints no turn and takes no sequence: its own action and
+// the work after it stay with the person's turn before, and nothing is
+// classified for it. A prompt that only begins with reminders still mints.
+func TestHarnessMessagesMintNoTurn(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	store.SetPayloadCaptureConfiguration(confirmedCapture(payloadcapture.ModeSummary, true))
+	h := newTurnHarness(t, store)
+	h.hook(prompt("s", "run the probe in the background"))
+	h.hook(toolUse("s", "t1"))
+	h.hook(prompt("s", "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>"))
+	h.hook(toolUse("s", "t2"))
+	h.hook(prompt("s", "<system-reminder>\nThe user opened report.md\n</system-reminder>"))
+	h.hook(prompt("s", "<side-sessions-event>\nThe session ended a turn.\n</side-sessions-event>"))
+	h.hook(toolUse("s", "t3"))
+	h.hook(prompt("s", "<system-reminder>\nThe user opened report.md\n</system-reminder>\nnow fix the failing spec"))
+	h.hook(toolUse("s", "t4"))
+	h.runJobs()
+
+	turns, err := store.PendingTurns(ctx, 10)
+	if err != nil || len(turns) != 2 {
+		t.Fatalf("turns = %+v, %v; want the two typed prompts", turns, err)
+	}
+	if turns[0].Sequence != 1 || turns[1].Sequence != 2 || *turns[1].Prompt.Text != "now fix the failing spec" {
+		t.Fatalf("turns = %+v / %+v", turns[0], turns[1])
+	}
+	got := actionTurns(t, store)
+	for key, want := range map[string]string{"PreToolUse:t1": turns[0].ID, "PreToolUse:t2": turns[0].ID, "PreToolUse:t3": turns[0].ID, "PreToolUse:t4": turns[1].ID} {
+		for _, turn := range got[key] {
+			if turn != want {
+				t.Errorf("%s turn = %q, want %q", key, turn, want)
+			}
+		}
+	}
+	// Each prompt event's own row: the two typed ones carry their new turn,
+	// the three harness messages the turn already current.
+	prompts := got["UserPromptSubmit"]
+	want := []string{turns[0].ID, turns[0].ID, turns[0].ID, turns[0].ID, turns[1].ID}
+	if len(prompts) != len(want) {
+		t.Fatalf("prompt rows = %v", prompts)
+	}
+	for i := range want {
+		if prompts[i] != want[i] {
+			t.Fatalf("prompt row %d turn = %q, want %q (all: %v)", i, prompts[i], want[i], prompts)
+		}
+	}
+}

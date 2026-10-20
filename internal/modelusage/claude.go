@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -143,15 +144,21 @@ func (s *claudeState) parseLine(text []byte) error {
 		IsVisibleInTranscriptOnly bool   `json:"isVisibleInTranscriptOnly"`
 		Operation                 string `json:"operation"`
 		Reason                    string `json:"reason"`
+		// A queue operation's prompt text.
+		Content json.RawMessage `json:"content"`
 	}
 	if err := json.Unmarshal(text, &envelope); err != nil {
 		return fmt.Errorf("claude transcript line %d: %w", s.line, err)
 	}
 	// A prompt submitted while the agent was working is absorbed into the
 	// running turn without a user row. Its prompt hook fires at absorption,
-	// so it starts a turn as a typed prompt does.
+	// so it starts a turn as a typed prompt does, unless it is a harness
+	// message such as a background task's notification.
 	if envelope.Type == "queue-operation" && envelope.Operation == "remove" && envelope.Reason == "absorbed_mid_turn" && !envelope.IsSidechain {
-		s.addPrompt(envelope.SessionID, envelope.Timestamp)
+		var prompt string
+		if json.Unmarshal(envelope.Content, &prompt) != nil || !IsHarnessEnvelope(prompt) {
+			s.addPrompt(envelope.SessionID, envelope.Timestamp)
+		}
 		return nil
 	}
 	if envelope.Type == "user" {
@@ -164,6 +171,7 @@ func (s *claudeState) parseLine(text []byte) error {
 		var blocks []struct {
 			Type      string `json:"type"`
 			ToolUseID string `json:"tool_use_id"`
+			Text      string `json:"text"`
 		}
 		_ = json.Unmarshal(message.Content, &blocks)
 		var ids []string
@@ -177,9 +185,27 @@ func (s *claudeState) parseLine(text []byte) error {
 		if len(ids) == 0 {
 			delete(s.pendingResults, envelope.SessionID)
 			// A prompt is a non-empty string or content blocks without a tool
-			// result; the string itself is not decoded.
-			content := bytes.TrimSpace(message.Content)
-			isPrompt := (len(blocks) > 0 && !toolResult) || (len(content) > 2 && content[0] == '"')
+			// result. One whose text is a harness message (a task
+			// notification, a session event) starts no turn; image-only
+			// content has no text to judge and is a prompt.
+			var prompt string
+			isPrompt, hasText := false, false
+			switch {
+			case len(blocks) > 0 && !toolResult:
+				isPrompt = true
+				var texts []string
+				for _, block := range blocks {
+					if block.Type == "text" {
+						texts, hasText = append(texts, block.Text), true
+					}
+				}
+				prompt = strings.Join(texts, "\n")
+			case json.Unmarshal(message.Content, &prompt) == nil && prompt != "":
+				isPrompt, hasText = true, true
+			}
+			if hasText && IsHarnessEnvelope(prompt) {
+				isPrompt = false
+			}
 			if isPrompt && !envelope.IsSidechain && !envelope.IsMeta && !envelope.IsCompactSummary && !envelope.IsVisibleInTranscriptOnly {
 				s.addPrompt(envelope.SessionID, envelope.Timestamp)
 			}
