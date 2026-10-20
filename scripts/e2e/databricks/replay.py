@@ -37,7 +37,8 @@ PRESETS = [RO, XSQL, DEL, ADM, SEC, RUN, UNR]
 BOTH, CLAUDE = ("claude", "codex"), ("claude",)
 q = shlex.quote
 
-# SQL forms × every SQL surface. DENY is the same on every surface (parity).
+# SQL forms × every SQL surface. DENY is the same on every surface (parity),
+# except where a fourth item gives the shell surfaces their own DENY.
 BIG = "SELECT 1 /* " + "x" * (65 << 10) + " */"
 SQL = [
     ("select", "SELECT * FROM workspace.kontext_e2e.orders", [RO]),
@@ -49,7 +50,9 @@ SQL = [
     ("revoke", "REVOKE SELECT ON TABLE workspace.kontext_e2e.orders FROM `account users`", [RO, ADM]),
     ("alter owner", "ALTER TABLE workspace.kontext_e2e.orders OWNER TO `someone@example.com`", [RO, ADM]),
     ("secret()", "SELECT secret('kontext-e2e', 'demo-token')", [RO, XSQL, SEC]),
-    ("over 64 KiB", BIG, [RO]),
+    # MCP keeps write; an oversized shell command that mentions Databricks
+    # gets the worst-case facts (every tier, secrets, execution, unrecognized).
+    ("over 64 KiB", BIG, [RO], PRESETS),
     ("malformed", "SELEC nonsense FRM (((", [RO]),
 ]
 
@@ -128,9 +131,10 @@ OTHER = [
 
 def cases():
     out = []
-    for name, sql, deny in SQL:
+    for name, sql, deny, *shell_deny in SQL:
         for surface, agents, tool, inp in sql_surfaces(sql):
-            out.append(("sql", f"{name} · {surface}", agents, tool, inp, deny, ""))
+            d = shell_deny[0] if shell_deny and tool == "Bash" else deny
+            out.append(("sql", f"{name} · {surface}", agents, tool, inp, d, ""))
     return out + OTHER
 
 
