@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.13.0](https://github.com/kontext-security/kontext/compare/v1.12.1...v1.13.0) (2026-10-20)
+
+
+### Features
+
+* **authority:** name claude.ai connectors from Claude desktop session files ([#590](https://github.com/kontext-security/kontext/issues/590)) ([3df9cb3](https://github.com/kontext-security/kontext/commit/3df9cb31d4dec1734cfbaf38d7f28f3d38014b44))
+* **shellprojection:** classify the databricks CLI, databricks api and curl to Databricks hosts (ENG-737) ([#589](https://github.com/kontext-security/kontext/issues/589)) ([dd99f3c](https://github.com/kontext-security/kontext/commit/dd99f3c320ae112b81309a42edf6eba939cbda1d))
+* **toolcatalog:** classify Databricks SQL by the tier it raises (ENG-734) ([#585](https://github.com/kontext-security/kontext/issues/585)) ([c74cf21](https://github.com/kontext-security/kontext/commit/c74cf21527ea1b1772408353f348719f72f304f7))
+* **toolcatalog:** classify the Databricks sandbox and web search tools (ENG-735) ([#592](https://github.com/kontext-security/kontext/issues/592)) ([da68a75](https://github.com/kontext-security/kontext/commit/da68a755f7a58c1ce4e40fd12b065c8186f40385))
+* **toolcatalog:** Databricks MCP catalog with server kinds and SQL-aware tiers (ENG-735) ([#591](https://github.com/kontext-security/kontext/issues/591)) ([9d78b7b](https://github.com/kontext-security/kontext/commit/9d78b7bde11186551ae33354df303b7b2b55fe33))
+* **toolcatalog:** generated Databricks route table from databricks/cli and the Go SDK (ENG-736) ([#586](https://github.com/kontext-security/kontext/issues/586)) ([8c4928e](https://github.com/kontext-security/kontext/commit/8c4928e11da2dc08cc56c5f53b88f0c86d11b6bc))
+* **toolcatalog:** refresh Databricks weekly: live managed MCP tools/list and route table regen (ENG-738) ([#598](https://github.com/kontext-security/kontext/issues/598)) ([f9c79e3](https://github.com/kontext-security/kontext/commit/f9c79e3b1701b763f8f2c5ea7b5257fec75353f5))
+* **toolcatalog:** resolve MCP servers by URL from agent configs (ENG-733) ([#588](https://github.com/kontext-security/kontext/issues/588)) ([58dcfc7](https://github.com/kontext-security/kontext/commit/58dcfc7edb482ba2228adf9cad6a4051d78b77a1))
+
+
+### Bug Fixes
+
+* **guard:** resolve claude.ai connectors in the CLI and record the Cedar provider (ENG-758) ([#595](https://github.com/kontext-security/kontext/issues/595)) ([93f7186](https://github.com/kontext-security/kontext/commit/93f71864e62c828cf80e76f95ee58c6b6db6768b))
+* **mcpconfig:** read only a Desktop record's first 4 KiB for its cliSessionId; stabilize timing tests (ENG-759) ([#599](https://github.com/kontext-security/kontext/issues/599)) ([4c7be70](https://github.com/kontext-security/kontext/commit/4c7be70496552f9e6796040d29dcde66d3f72b0b))
+* **mcpconfig:** read only the cliSessionId of other sessions' Desktop records on a connector lookup (ENG-759) ([#597](https://github.com/kontext-security/kontext/issues/597)) ([3ffffee](https://github.com/kontext-security/kontext/commit/3ffffeecad372601810090d41f237ca7e0a8fc1b))
+* **shellprojection:** keep Databricks facts on oversized commands, read computed curl headers and bodies as opaque (ENG-758) ([#596](https://github.com/kontext-security/kontext/issues/596)) ([97ef9d3](https://github.com/kontext-security/kontext/commit/97ef9d30fb4a5ebb9d96c04a4c53464492009e19))
+
 ## [1.12.1](https://github.com/kontext-security/kontext/compare/v1.12.0...v1.12.1) (2026-10-19)
 
 
