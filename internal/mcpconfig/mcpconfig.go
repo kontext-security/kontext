@@ -27,6 +27,10 @@
 // shadows a URL in a lower scope. A server that no source lists, a stdio
 // server, a URL that does not parse and a lookup that stalls all return "",
 // and the catalog falls back to the server name.
+//
+// On macOS a config inside a folder the system guards with a privacy prompt
+// is never read (see package privacyfolder), and a session working in one
+// resolves only connectors.
 package mcpconfig
 
 import (
@@ -37,12 +41,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
@@ -150,7 +156,15 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 		// The Claude Code CLI names a claude.ai connector's server
 		// "claude.ai <Name>", so its tools carry claude_ai_<Name>. A server
 		// configured under that name wins, as it would in Claude Code.
-		url, found := r.claude(home, cwd, server)
+		//
+		// A session in a guarded folder has project scopes the daemon may
+		// not read, so a lower scope that names the server differently could
+		// win by mistake; only the connector lookup, which reads no project
+		// file, is trusted there.
+		url, found := "", false
+		if !privacyfolder.Guarded(home, cwd) {
+			url, found = r.claude(home, cwd, server)
+		}
 		if !found && strings.HasPrefix(server, "claude_ai_") {
 			url, _ = r.claudeAIConnector(home, server)
 			return url, "", url != ""
@@ -189,11 +203,19 @@ func (r *Resolver) claude(home, cwd, server string) (string, bool) {
 		managed = ManagedMCPPath
 	}
 	// The first source that defines the server wins whole, as in Claude
-	// Code: a stdio entry shadows a URL in a lower scope.
+	// Code: a stdio entry shadows a URL in a lower scope. A scope that links
+	// into a guarded folder cannot be read and may define the server, so no
+	// lower scope may stand in for it.
+	if privacyfolder.Guarded(r.Home, managed) {
+		return "", true
+	}
 	if url, found := find(r.servers(managed), server); found {
 		return url, true
 	}
 	configDir, userConfig := claudeConfigPaths(home)
+	if privacyfolder.Guarded(r.Home, userConfig) {
+		return "", true
+	}
 	root, _ := load(r, userConfig, readers.Claude)
 	project := projectRoot(root, cwd)
 	url, found := r.claudeScopes(root, configDir, project, server)
@@ -205,6 +227,11 @@ func (r *Resolver) claude(home, cwd, server string) (string, bool) {
 	// ancestor that defines the server differently may be the real project
 	// (a launch in a subdirectory), so the URL is then unknown.
 	for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
+		// An ancestor config that links into a guarded folder cannot be read
+		// and may define the server differently.
+		if dir != project && privacyfolder.Guarded(r.Home, filepath.Join(dir, ".mcp.json")) {
+			return "", true
+		}
 		for _, scope := range r.projectScopes(root, dir) {
 			if dir == project {
 				break
@@ -239,8 +266,14 @@ func (r *Resolver) claudeScopes(root readers.ClaudeRoot, configDir, project, ser
 	// A .mcp.json server runs only once the user approves it. One they
 	// rejected is skipped; one whose approval the record does not show
 	// (approved in settings, or pending) wins only where it agrees with the
-	// lower scopes, and otherwise leaves the URL unknown.
-	url, found := find(r.servers(filepath.Join(project, ".mcp.json")), server)
+	// lower scopes, and otherwise leaves the URL unknown. One that links
+	// into a guarded folder cannot be read, so the URL is unknown too rather
+	// than a lower scope's.
+	projectConfig := filepath.Join(project, ".mcp.json")
+	if !listed(config.DisabledMcpjsonServers, server) && privacyfolder.Guarded(r.Home, projectConfig) {
+		return "", true
+	}
+	url, found := find(r.servers(projectConfig), server)
 	switch {
 	case !found || listed(config.DisabledMcpjsonServers, server):
 		return lower()
@@ -303,7 +336,7 @@ func (r *Resolver) claudeAIConnector(home, server string) (url string, found boo
 	}
 	var paths []string
 	for _, dir := range desktopRecordDirs {
-		matches, _ := filepath.Glob(filepath.Join(home, "Library/Application Support/Claude", dir, account, org, "local_*.json"))
+		matches := desktopGlob(home, dir, filepath.Join(account, org, "local_*.json"))
 		paths = append(paths, matches...)
 	}
 	for _, path := range newestFirst(paths) {
@@ -366,10 +399,22 @@ func newestFirst(paths []string) []string {
 func desktopRecords(home string) []string {
 	var paths []string
 	for _, dir := range desktopRecordDirs {
-		found, _ := filepath.Glob(filepath.Join(home, "Library/Application Support/Claude", dir, "*/*/local_*.json"))
+		found := desktopGlob(home, dir, "*/*/local_*.json")
 		paths = append(paths, found...)
 	}
 	return paths
+}
+
+// desktopGlob globs Claude Desktop session records under dir, skipping a
+// records folder or record that links into a guarded folder. Desktop writes
+// these itself, so such a link is unusual, but the daemon must not follow it.
+func desktopGlob(home, dir, pattern string) []string {
+	base := filepath.Join(home, "Library/Application Support/Claude", dir)
+	if privacyfolder.Guarded(home, base) {
+		return nil
+	}
+	found, _ := filepath.Glob(filepath.Join(base, pattern))
+	return slices.DeleteFunc(found, func(path string) bool { return privacyfolder.Guarded(home, path) })
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -543,6 +588,9 @@ func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bo
 // loadHead is load that parses only the first limit bytes of path.
 func loadHead[T any](r *Resolver, path string, limit int64, parse func([]byte) (T, error)) (T, bool) {
 	var zero T
+	if privacyfolder.Guarded(r.Home, path) {
+		return zero, false
+	}
 	key := cacheKey[T](path, limit)
 	info, err := os.Stat(path)
 	r.mu.Lock()

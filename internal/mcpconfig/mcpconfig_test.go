@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 // A FIFO planted as a project's .mcp.json must not stall the hook.
@@ -26,6 +28,91 @@ func TestServerURLSkipsNonRegularFiles(t *testing.T) {
 	}
 	if _, err := readFile(filepath.Join(project, ".mcp.json"), maxConfigBytes); err == nil {
 		t.Fatal("readFile read a FIFO")
+	}
+}
+
+// On macOS a lookup must not touch a project in a privacy-guarded folder:
+// the daemon would ask the user to let kontext into ~/Documents. There the
+// server falls back to its name, even when a lower scope defines the same
+// name with another URL. The same project outside such a folder resolves.
+func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	const url = "https://work.example/mcp"
+	guarded, open := filepath.Join(home, "Documents", "app"), filepath.Join(home, "code", "app")
+	for _, project := range []string{guarded, open} {
+		if err := os.MkdirAll(project, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(project, ".mcp.json"), []byte(`{"mcpServers": {"work": {"type": "http", "url": "`+url+`"}}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	userConfig := fmt.Sprintf(`{"mcpServers": {"work": {"type": "http", "url": "https://other.example/mcp"}}, "projects": {%q: {"enabledMcpjsonServers": ["work"]}, %q: {"enabledMcpjsonServers": ["work"]}}}`, guarded, open)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(userConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json")}
+	if got, _, _ := r.Server("claude", "s", open, "mcp__work__search"); got != url {
+		t.Fatalf("Server() outside a guarded folder = %q, want %q", got, url)
+	}
+	if got, _, _ := r.Server("claude", "s", guarded, "mcp__work__search"); got != "" {
+		t.Fatalf("Server() in ~/Documents = %q, want the name fallback", got)
+	}
+	// A project outside guarded folders whose .mcp.json links into one: the
+	// user-scope URL must not stand in for the unreadable project entry.
+	linked := filepath.Join(home, "code", "linked")
+	if err := os.MkdirAll(linked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(guarded, ".mcp.json"), filepath.Join(linked, ".mcp.json")); err != nil {
+		t.Fatal(err)
+	}
+	userConfig = fmt.Sprintf(`{"mcpServers": {"work": {"type": "http", "url": "https://other.example/mcp"}}, "projects": {%q: {"enabledMcpjsonServers": ["work"]}}}`, linked)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(userConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := r.Server("claude", "s", linked, "mcp__work__search"); got != "" {
+		t.Fatalf("Server() with .mcp.json linked into ~/Documents = %q, want the name fallback", got)
+	}
+	// A managed config that links into a guarded folder outranks every other
+	// scope, so the user-scope URL must not stand in for it either.
+	if err := os.Symlink(filepath.Join(guarded, ".mcp.json"), r.Managed); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := r.Server("claude", "s", filepath.Join(home, "elsewhere"), "mcp__work__search"); got != "" {
+		t.Fatalf("Server() with managed-mcp.json linked into ~/Documents = %q, want the name fallback", got)
+	}
+	// A readable managed config still wins when ~/.claude.json links into a
+	// guarded folder: managed outranks the scope that cannot be read.
+	const managedURL = "https://managed.example/mcp"
+	if err := os.Remove(r.Managed); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.Managed, []byte(`{"mcpServers": {"work": {"type": "http", "url": "`+managedURL+`"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(home, ".claude.json"), filepath.Join(guarded, "claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(guarded, "claude.json"), filepath.Join(home, ".claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := r.Server("claude", "s", filepath.Join(home, "elsewhere"), "mcp__work__search"); got != managedURL {
+		t.Fatalf("Server() with ~/.claude.json linked into ~/Documents = %q, want the managed %q", got, managedURL)
+	}
+	if got, _, _ := r.Server("claude", "s", filepath.Join(home, "elsewhere"), "mcp__other__search"); got != "" {
+		t.Fatalf("Server() for a server only ~/.claude.json could define = %q, want the name fallback", got)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key := range r.cache {
+		if strings.Contains(key, "Documents") {
+			t.Errorf("lookup read %s", strings.SplitN(key, "\x00", 2)[0])
+		}
 	}
 }
 
