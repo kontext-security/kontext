@@ -80,4 +80,10 @@ func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 	if got, _, _ := r.Server("claude", "session-own", "/", tool); got != url {
 		t.Fatalf("Server() after other sessions rewrote their records = %q", got)
 	}
+	// A record last parsed under another session is still read when no
+	// other record matches.
+	write(others[0], "session-late", "")
+	if got, _, _ := r.Server("claude", "session-late", "/", tool); got != url {
+		t.Fatalf("Server() for a record last parsed under another session = %q", got)
+	}
 }
