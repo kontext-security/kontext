@@ -86,6 +86,27 @@ func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
 	if got, _, _ := r.Server("claude", "s", filepath.Join(home, "elsewhere"), "mcp__work__search"); got != "" {
 		t.Fatalf("Server() with managed-mcp.json linked into ~/Documents = %q, want the name fallback", got)
 	}
+	// A readable managed config still wins when ~/.claude.json links into a
+	// guarded folder: managed outranks the scope that cannot be read.
+	const managedURL = "https://managed.example/mcp"
+	if err := os.Remove(r.Managed); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.Managed, []byte(`{"mcpServers": {"work": {"type": "http", "url": "`+managedURL+`"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(home, ".claude.json"), filepath.Join(guarded, "claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(guarded, "claude.json"), filepath.Join(home, ".claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := r.Server("claude", "s", filepath.Join(home, "elsewhere"), "mcp__work__search"); got != managedURL {
+		t.Fatalf("Server() with ~/.claude.json linked into ~/Documents = %q, want the managed %q", got, managedURL)
+	}
+	if got, _, _ := r.Server("claude", "s", filepath.Join(home, "elsewhere"), "mcp__other__search"); got != "" {
+		t.Fatalf("Server() for a server only ~/.claude.json could define = %q, want the name fallback", got)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for key := range r.cache {

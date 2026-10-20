@@ -202,16 +202,19 @@ func (r *Resolver) claude(home, cwd, server string) (string, bool) {
 	if managed == "" {
 		managed = ManagedMCPPath
 	}
-	configDir, userConfig := claudeConfigPaths(home)
-	// A higher scope that links into a guarded folder cannot be read and
-	// may define the server, so no lower scope may stand in for it.
-	if privacyfolder.Guarded(r.Home, managed) || privacyfolder.Guarded(r.Home, userConfig) {
+	// The first source that defines the server wins whole, as in Claude
+	// Code: a stdio entry shadows a URL in a lower scope. A scope that links
+	// into a guarded folder cannot be read and may define the server, so no
+	// lower scope may stand in for it.
+	if privacyfolder.Guarded(r.Home, managed) {
 		return "", true
 	}
-	// The first source that defines the server wins whole, as in Claude
-	// Code: a stdio entry shadows a URL in a lower scope.
 	if url, found := find(r.servers(managed), server); found {
 		return url, true
+	}
+	configDir, userConfig := claudeConfigPaths(home)
+	if privacyfolder.Guarded(r.Home, userConfig) {
+		return "", true
 	}
 	root, _ := load(r, userConfig, readers.Claude)
 	project := projectRoot(root, cwd)
