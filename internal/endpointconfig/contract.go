@@ -14,12 +14,13 @@ import (
 )
 
 const (
-	// ResponseVersion is the contract this build negotiates. The server serves v1
-	// and v2 side by side and keys the response off the requested version, so
-	// moving here changes only what this build asks for; released binaries keep
-	// getting the v1 shape and the v1 identity hashes.
-	ResponseVersion  = 2
-	identityDomain   = "kontext:endpoint-config:v2"
+	// ResponseVersion is the contract this build negotiates. The server serves
+	// every version side by side and keys the response off the requested one,
+	// so moving here changes only what this build asks for; released binaries
+	// keep getting their shape and identity hashes. v3 drops the retired
+	// guardrail LLM flag and adds the workspace's work-type switch.
+	ResponseVersion  = 3
+	identityDomain   = "kontext:endpoint-config:v3"
 	MaxResponseBytes = 64 * 1024
 )
 
@@ -27,9 +28,15 @@ var sha256HexPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type Config struct {
 	PayloadCaptureMode payloadcapture.Mode `json:"payloadCaptureMode"`
-	// GuardrailLLMEnabled remains part of the strict, hashed cloud contract.
-	// The CLI no longer runs a guardrail LLM.
-	GuardrailLLMEnabled *bool `json:"guardrailLlmEnabled"`
+	// WorkTypeClassification is the workspace switch for type-of-work
+	// classification: when set and capture is not omitted, each turn record
+	// carries a redacted, bounded prompt excerpt. Part of the hashed contract.
+	WorkTypeClassification *bool `json:"workTypeClassification"`
+}
+
+// WorkTypeClassificationEnabled reports the switch; absent reads as off.
+func (c Config) WorkTypeClassificationEnabled() bool {
+	return c.WorkTypeClassification != nil && *c.WorkTypeClassification
 }
 
 func (c Config) Validate() error {
@@ -38,11 +45,11 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("endpoint configuration: unsupported payload capture mode %q", c.PayloadCaptureMode)
 	}
-	// v2 always emits the flag. Guessing a value for a missing one would put this
-	// side's identity out of step with the server's and fail every response, so
-	// reject it as the contract violation it is.
-	if c.GuardrailLLMEnabled == nil {
-		return errors.New("endpoint configuration: guardrailLlmEnabled is required")
+	// v3 always emits the switch. Guessing a value for a missing one would put
+	// this side's identity out of step with the server's and fail every
+	// response, so reject it as the contract violation it is.
+	if c.WorkTypeClassification == nil {
+		return errors.New("endpoint configuration: workTypeClassification is required")
 	}
 	return nil
 }
@@ -85,7 +92,7 @@ func ComputeIdentity(config Config) (string, error) {
 		identityDomain,
 		ResponseVersion,
 		string(config.PayloadCaptureMode),
-		*config.GuardrailLLMEnabled,
+		*config.WorkTypeClassification,
 	})
 	if err != nil {
 		return "", fmt.Errorf("endpoint configuration: encode identity preimage: %w", err)

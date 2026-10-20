@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Codex's current rollout format emits a token_usage_record per OpenAI
@@ -68,6 +69,11 @@ type codexState struct {
 	tools                                 map[string]Tool
 	seen                                  map[string]bool
 	sawLegacy, sawResponse                bool
+	prompts                               []Prompt
+	// opened is set from a turn boundary until the turn's first model output
+	// or its end, so a task_started and the user messages that follow it
+	// (environment context, then the prompt) start one turn.
+	opened bool
 }
 
 func (s *codexState) parseLine(text []byte) error {
@@ -122,6 +128,11 @@ func (s *codexState) parseLine(text []byte) error {
 			s.sawLegacy = true
 		case "task_started", "task_complete", "turn_aborted":
 			s.current, s.pending = nil, nil
+			if p.Type == "task_started" {
+				s.addPrompt(row.Timestamp)
+			} else {
+				s.opened = false
+			}
 		}
 	case "response_item":
 		switch p.Type {
@@ -132,12 +143,14 @@ func (s *codexState) parseLine(text []byte) error {
 		case "message":
 			if p.Role == "user" {
 				s.pending = nil
+				s.addPrompt(row.Timestamp)
 			}
 			if p.Role != "assistant" {
 				return nil
 			}
 			fallthrough
 		case "reasoning", "function_call", "custom_tool_call":
+			s.opened = false
 			if s.current == nil {
 				s.current = &Record{Model: s.model, ServiceTier: s.serviceTier, Timestamp: row.Timestamp, ConsumedToolUseIDs: s.pending}
 				s.pending = nil
@@ -204,9 +217,30 @@ func (s *codexState) finish() ([]Record, error) {
 	return records, nil
 }
 
+// addPrompt records a turn boundary unless one is already open. A sub-agent
+// rollout records none: it begins with its parent's history copied under the
+// copy's timestamp, and its own tasks come from the parent agent, inside the
+// root session's turns.
+func (s *codexState) addPrompt(timestamp string) {
+	if s.opened || s.thread == "" || strings.TrimPrefix(s.session, "codex-") != s.thread {
+		return
+	}
+	at, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return
+	}
+	s.opened = true
+	s.prompts = append(s.prompts, Prompt{SessionID: "codex-" + s.thread, Timestamp: at})
+}
+
+func (s *codexState) promptsSoFar() []Prompt {
+	return slices.Clone(s.prompts)
+}
+
 func (s *codexState) clone() transcriptState {
 	c := *s
 	c.records, c.pending = slices.Clone(s.records), slices.Clone(s.pending)
+	c.prompts = slices.Clone(s.prompts)
 	c.tools, c.seen = maps.Clone(s.tools), maps.Clone(s.seen)
 	if s.current != nil {
 		current := *s.current

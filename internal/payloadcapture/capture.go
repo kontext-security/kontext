@@ -31,6 +31,11 @@ type RuntimeConfiguration struct {
 	ConfigIdentity string `json:"config_identity,omitempty"`
 	Confirmed      bool   `json:"confirmed"`
 	FallbackReason string `json:"fallback_reason,omitempty"`
+	// WorkTypeClassification is the workspace's work-type switch from the
+	// same directive, deciding whether turn records carry prompt excerpts.
+	// It travels with the capture mode so each turn snapshots both at once,
+	// and stays out of the serialized evidence recorded on every action.
+	WorkTypeClassification bool `json:"-"`
 }
 
 func DefaultRuntimeConfiguration() RuntimeConfiguration {
@@ -50,6 +55,7 @@ func SafeRuntimeConfiguration(config RuntimeConfiguration) RuntimeConfiguration 
 	if !config.Confirmed || config.ConfigIdentity == "" {
 		config.Confirmed = false
 		config.EffectiveMode = ModeSummary
+		config.WorkTypeClassification = false
 		if config.FallbackReason == "" {
 			config.FallbackReason = "unconfirmed"
 		}

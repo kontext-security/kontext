@@ -38,6 +38,12 @@ func (s *Store) SetPayloadCaptureConfiguration(config payloadcapture.RuntimeConf
 	s.captureConfig = payloadcapture.SafeRuntimeConfiguration(config)
 }
 
+// PayloadCaptureConfiguration is the capture snapshot a decision recorded
+// now would use.
+func (s *Store) PayloadCaptureConfiguration() payloadcapture.RuntimeConfiguration {
+	return s.payloadCaptureConfiguration()
+}
+
 func (s *Store) payloadCaptureConfiguration() payloadcapture.RuntimeConfiguration {
 	s.captureMu.RLock()
 	defer s.captureMu.RUnlock()
@@ -384,6 +390,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, toolUsageDDL); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, turnsDDL); err != nil {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "tool_usage_sources", "error_fingerprint", "text not null default ''"); err != nil {
@@ -949,7 +958,7 @@ func (s *Store) insertActionRecord(ctx context.Context, tx *sql.Tx, action map[s
 	// business timestamp used for the receipt appended below.
 	action["updated_at_cursor_key"] = ledgerTimestampCursorKeyFromTime(time.Now().UTC())
 	columns := []string{
-		"id", "session_id", "tool_use_id", "canonical_event_type", "adapter_event_name", "correlation_key",
+		"id", "session_id", "turn_id", "tool_use_id", "canonical_event_type", "adapter_event_name", "correlation_key",
 		"tool_name", "provider", "operation", "operation_class", "resource_class", "resource_id", "parameters_redacted_json", "parameters_hash",
 		"identity_context_json", "identity_hash", "context_json", "context_hash",
 		"policy_id", "policy_version", "policy_hash", "default_posture",
@@ -962,7 +971,7 @@ func (s *Store) insertActionRecord(ctx context.Context, tx *sql.Tx, action map[s
 		"proposed_at", "decision_at", "completed_at", "created_at", "updated_at", "updated_at_cursor_key",
 	}
 	values := []any{
-		action["id"], action["session_id"], action["tool_use_id"], action["canonical_event_type"], action["adapter_event_name"], action["correlation_key"],
+		action["id"], action["session_id"], action["turn_id"], action["tool_use_id"], action["canonical_event_type"], action["adapter_event_name"], action["correlation_key"],
 		action["tool_name"], action["provider"], action["operation"], action["operation_class"], action["resource_class"], action["resource_id"], action["parameters_redacted_json"], action["parameters_hash"],
 		action["identity_context_json"], action["identity_hash"], action["context_json"], action["context_hash"],
 		action["policy_id"], action["policy_version"], action["policy_hash"], action["default_posture"],
@@ -1184,6 +1193,7 @@ func actionValues(actionID, sessionID string, event risk.HookEvent, decision ris
 	return map[string]any{
 		"id":                        actionID,
 		"session_id":                sessionID,
+		"turn_id":                   nullIfEmpty(event.TurnID),
 		"tool_use_id":               event.ToolUseID,
 		"canonical_event_type":      canonicalEvent,
 		"adapter_event_name":        event.HookEventName,

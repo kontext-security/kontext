@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"time"
 )
 
 // Tokens contains disjoint input buckets and total model output. Missing values
@@ -40,6 +41,9 @@ type Record struct {
 	ServiceTier        string   `json:"service_tier,omitempty"`
 	InferenceGeo       string   `json:"inference_geo,omitempty"`
 	Speed              string   `json:"speed,omitempty"`
+	// TurnID is the daemon-minted turn the message belongs to, set by
+	// AssignTurns. Transcript readers never set it.
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 type Tool struct {
@@ -116,6 +120,7 @@ type claudeState struct {
 	// A later ordinary user prompt clears the association.
 	pendingResults map[string][]string
 	tools          map[[2]string]Tool
+	prompts        []Prompt
 }
 
 func (s *claudeState) parseLine(text []byte) error {
@@ -126,10 +131,28 @@ func (s *claudeState) parseLine(text []byte) error {
 	var envelope struct {
 		Type      string          `json:"type"`
 		SessionID string          `json:"sessionId"`
+		Timestamp string          `json:"timestamp"`
 		Message   json.RawMessage `json:"message"`
+		// A subagent's transcript is its own file of sidechain rows under the
+		// parent's sessionId; its first row reads like a prompt but is the
+		// subagent's task. Meta, compact-summary and transcript-only rows are
+		// written by Claude Code itself, an auto-compact even mid-turn.
+		IsSidechain               bool   `json:"isSidechain"`
+		IsMeta                    bool   `json:"isMeta"`
+		IsCompactSummary          bool   `json:"isCompactSummary"`
+		IsVisibleInTranscriptOnly bool   `json:"isVisibleInTranscriptOnly"`
+		Operation                 string `json:"operation"`
+		Reason                    string `json:"reason"`
 	}
 	if err := json.Unmarshal(text, &envelope); err != nil {
 		return fmt.Errorf("claude transcript line %d: %w", s.line, err)
+	}
+	// A prompt submitted while the agent was working is absorbed into the
+	// running turn without a user row. Its prompt hook fires at absorption,
+	// so it starts a turn as a typed prompt does.
+	if envelope.Type == "queue-operation" && envelope.Operation == "remove" && envelope.Reason == "absorbed_mid_turn" && !envelope.IsSidechain {
+		s.addPrompt(envelope.SessionID, envelope.Timestamp)
+		return nil
 	}
 	if envelope.Type == "user" {
 		var message struct {
@@ -144,13 +167,22 @@ func (s *claudeState) parseLine(text []byte) error {
 		}
 		_ = json.Unmarshal(message.Content, &blocks)
 		var ids []string
+		toolResult := false
 		for _, block := range blocks {
+			toolResult = toolResult || block.Type == "tool_result"
 			if block.Type == "tool_result" && block.ToolUseID != "" {
 				ids = append(ids, block.ToolUseID)
 			}
 		}
 		if len(ids) == 0 {
 			delete(s.pendingResults, envelope.SessionID)
+			// A prompt is a non-empty string or content blocks without a tool
+			// result; the string itself is not decoded.
+			content := bytes.TrimSpace(message.Content)
+			isPrompt := (len(blocks) > 0 && !toolResult) || (len(content) > 2 && content[0] == '"')
+			if isPrompt && !envelope.IsSidechain && !envelope.IsMeta && !envelope.IsCompactSummary && !envelope.IsVisibleInTranscriptOnly {
+				s.addPrompt(envelope.SessionID, envelope.Timestamp)
+			}
 		} else {
 			for _, id := range ids {
 				if !slices.Contains(s.pendingResults[envelope.SessionID], id) {
@@ -260,9 +292,23 @@ func (s *claudeState) finish() ([]Record, error) {
 	return records, nil
 }
 
+// addPrompt records a turn boundary. A row without a valid timestamp cannot
+// be placed in time and is skipped.
+func (s *claudeState) addPrompt(sessionID, timestamp string) {
+	at, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil || sessionID == "" {
+		return
+	}
+	s.prompts = append(s.prompts, Prompt{SessionID: sessionID, Timestamp: at})
+}
+
+func (s *claudeState) promptsSoFar() []Prompt {
+	return slices.Clone(s.prompts)
+}
+
 func (s *claudeState) clone() transcriptState {
 	c := &claudeState{line: s.line, records: slices.Clone(s.records), indices: maps.Clone(s.indices),
-		pendingResults: make(map[string][]string, len(s.pendingResults)), tools: maps.Clone(s.tools)}
+		pendingResults: make(map[string][]string, len(s.pendingResults)), tools: maps.Clone(s.tools), prompts: slices.Clone(s.prompts)}
 	for i := range c.records {
 		c.records[i].ToolUseIDs = slices.Clone(c.records[i].ToolUseIDs)
 	}

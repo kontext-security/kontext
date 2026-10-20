@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 )
 
 // Transcript parses an append-only JSONL transcript across reads, so a caller
@@ -13,10 +14,11 @@ import (
 // it returns the same records and errors as a full read of the same bytes:
 // rows whose meaning depends on earlier rows see the carried parser state.
 type Transcript struct {
-	kind   string
-	state  transcriptState
-	offset int64
-	err    error
+	kind    string
+	state   transcriptState
+	offset  int64
+	err     error
+	prompts []Prompt
 }
 
 // transcriptState is a provider parser's state after its last parsed line.
@@ -24,6 +26,9 @@ type transcriptState interface {
 	parseLine(line []byte) error
 	// finish returns the records so far without changing the state.
 	finish() ([]Record, error)
+	// promptsSoFar returns the turn boundaries so far without changing the
+	// state.
+	promptsSoFar() []Prompt
 	// clone copies everything a later line can change.
 	clone() transcriptState
 }
@@ -79,5 +84,15 @@ func (t *Transcript) Read(reader io.Reader) ([]Record, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read %s transcript: %w", t.kind, err)
 	}
-	return state.finish()
+	records, err := state.finish()
+	if err == nil {
+		t.prompts = state.promptsSoFar()
+	}
+	return records, err
+}
+
+// Prompts returns where the transcript's turns began, in file order, as of
+// the last successful Read, which a full read of the same bytes also returns.
+func (t *Transcript) Prompts() []Prompt {
+	return slices.Clone(t.prompts)
 }

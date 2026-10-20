@@ -25,6 +25,9 @@ type guardHookRuntime struct {
 	classifier       *riskclassifier.Classifier
 	stepSafety       *stepsafety.Evaluator
 	stepContext      *stepsafety.ContextStore
+	// turns caches each session's current turn. Like stepContext, mutable
+	// state sits behind a pointer: the runtime is copied by value.
+	turns *turnTracker
 	// deferRecord, when non-nil, runs every store write for decision-gating
 	// hooks — session upsert, annotation, decision row — off the hook
 	// response path. Transports defer submission until after writing the
@@ -45,6 +48,7 @@ func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider, currentSess
 		mode:             mode,
 		classifier:       classifier,
 		stepSafety:       stepSafety,
+		turns:            newTurnTracker(),
 		deferRecord:      deferRecord,
 	}
 	if stepSafety != nil {
@@ -74,6 +78,9 @@ func (r guardHookRuntime) OpenSession(ctx context.Context, session runtimecore.S
 func (r guardHookRuntime) CloseSession(ctx context.Context, sessionID string) error {
 	if r.stepContext != nil {
 		r.stepContext.CloseSession(sessionID)
+	}
+	if r.turns != nil {
+		r.turns.forget(sqlite.NormalizeSessionID(sessionID))
 	}
 	return r.store.CloseSession(ctx, sessionID)
 }
@@ -153,6 +160,9 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		event.Timestamp = time.Now().UTC()
 	}
 	r.observePrompt(event)
+	// Mint before the decision is answered: the turn's first PreToolUse
+	// arrives as soon as this hook returns and must find the id.
+	event, mintedTurn, unresolvedTurn := r.trackTurn(event)
 	decision, err := r.policy.DecideHook(ctx, event)
 	if err != nil {
 		return risk.RiskDecision{}, err
@@ -184,6 +194,9 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 			if sessionErr == nil && deferredEvent.Agent == "" {
 				deferredEvent.Agent = session.Agent
 			}
+			// The turn lands before the action, so the prompt event's own
+			// row carries it.
+			r.recordTurn(recordCtx, &deferredEvent, mintedTurn, unresolvedTurn)
 			r.annotateStepSafety(recordCtx, stepInput, &deferredDecision)
 			r.annotate(recordCtx, deferredEvent, &deferredDecision)
 			record, err := r.store.SaveDecision(recordCtx, deferredEvent, deferredDecision)
@@ -207,6 +220,7 @@ func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEv
 		}
 		return decision, nil
 	}
+	r.recordTurn(ctx, &event, mintedTurn, unresolvedTurn)
 	r.annotateStepSafety(ctx, stepInput, &decision)
 	r.annotate(ctx, event, &decision)
 	record, err := r.store.SaveDecision(ctx, event, decision)

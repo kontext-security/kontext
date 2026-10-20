@@ -195,7 +195,11 @@ A record can include:
 - redacted evidence for later review.
 
 Kontext records tool activity and decision evidence. It does not capture model
-reasoning or reconstruct full conversation history.
+reasoning or reconstruct full conversation history. Each prompt starts a turn
+that groups the actions and tool-related model usage after it; the turn record
+carries a redacted, bounded prompt excerpt only when the workspace captures
+Summaries or Full payloads and has work-type classification on, and the
+prompt's size alone otherwise.
 
 Managed deployments can export redacted records to the Kontext dashboard for
 organization-wide review, retention, and investigation.

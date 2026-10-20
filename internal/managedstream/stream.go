@@ -130,6 +130,7 @@ type Payload struct {
 	RiskTypeAnnotations []sqlite.RiskTypeAnnotationRecord `json:"risk_type_annotations,omitempty"`
 	ReceiptChainAnchor  *sqlite.LedgerReceiptChainAnchor  `json:"receipt_chain_anchor,omitempty"`
 	ToolUsage           []sqlite.ToolUsageRecord          `json:"tool_usage,omitempty"`
+	Turns               []sqlite.TurnRecord               `json:"turns,omitempty"`
 }
 
 type Device struct {
@@ -245,7 +246,11 @@ func Flush(ctx context.Context, opts Options) error {
 	if err := flushLedger(ctx, opts); err != nil {
 		return err
 	}
-	return flushToolUsage(ctx, opts)
+	// Turns go before the usage that references them. The hosted side joins
+	// them at read time either way; the order only keeps ingest quiet, so a
+	// failed turn upload does not hold usage back.
+	turnsErr := flushTurns(ctx, opts)
+	return errors.Join(turnsErr, flushToolUsage(ctx, opts))
 }
 
 func flushLedger(ctx context.Context, opts Options) error {

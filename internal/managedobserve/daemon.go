@@ -386,6 +386,9 @@ func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.Runti
 		ConfigIdentity: snapshot.ConfigIdentity,
 		Confirmed:      snapshot.Confirmed,
 		FallbackReason: snapshot.FallbackReason,
+		// Off until a directive is confirmed: SafeRuntimeConfiguration also
+		// clears it for an unconfirmed snapshot.
+		WorkTypeClassification: snapshot.Config.WorkTypeClassificationEnabled(),
 	})
 }
 
@@ -710,16 +713,16 @@ const (
 	ledgerPruneBatch = 1000
 )
 
-// pruneExportedLedger deletes old ledger rows the hosted ledger has accepted.
-// Without it guard.db only grows. Nothing is pruned until the managed stream
-// has persisted an export cursor.
+// pruneExportedLedger deletes old ledger rows and turns the hosted ledger has
+// accepted. Without it guard.db only grows. No action is pruned until the
+// managed stream has persisted an export cursor.
 func pruneExportedLedger(ctx context.Context, opts DaemonOptions, dbPath string) error {
 	statePath := opts.StreamStatePath
 	if statePath == "" {
 		statePath = managedstream.DefaultStatePathForDB(dbPath)
 	}
 	state, err := managedstream.LoadState(statePath)
-	if err != nil || state.UpdatedAfter == nil {
+	if err != nil {
 		return err
 	}
 	store, err := sqlite.OpenStore(dbPath)
@@ -727,6 +730,17 @@ func pruneExportedLedger(ctx context.Context, opts DaemonOptions, dbPath string)
 		return err
 	}
 	defer store.Close()
+	// Turns carry their own export flag. The usage reader stamps a session's
+	// usage from its turns on every read, so they outlive the revisit window
+	// of the session's transcripts, never less.
+	if prunedTurns, err := store.PruneExportedTurns(ctx, time.Now().UTC().Add(-sqlite.UsageRevisitWindow), ledgerPruneBatch); err != nil {
+		opts.Diagnostic.Printf("managed observe turn prune: %v\n", err)
+	} else if prunedTurns > 0 {
+		opts.Diagnostic.Printf("managed observe pruned %d exported turns\n", prunedTurns)
+	}
+	if state.UpdatedAfter == nil {
+		return nil
+	}
 	pruned, err := store.PruneExportedLedger(ctx, sqlite.LedgerPruneOptions{
 		ActionsExportedBefore: *state.UpdatedAfter,
 		RiskTypeCreatedAfter:  state.RiskTypeCreatedAfter,

@@ -27,6 +27,9 @@ type HookEvent struct {
 	IsInterrupt          *bool  `json:"is_interrupt,omitempty"`
 	UserRequest          string `json:"user_request,omitempty"`
 	AvailableToolSchemas any    `json:"available_tool_schemas,omitempty"`
+	// TurnID is the daemon-minted turn in progress when the event arrived.
+	// Annotation only: it is stored on the action, never in its receipt.
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 type EventType string

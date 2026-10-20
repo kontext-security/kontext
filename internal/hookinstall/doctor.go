@@ -6,12 +6,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/hook"
 )
+
+// promptHookMissing explains what an installed hook set without
+// UserPromptSubmit costs: no turn is minted, so nothing is attributed to one.
+const promptHookMissing = "prompt hook missing: turns and type of work unavailable"
 
 // Diagnose uses the same definitions for both installation channels. Agent
 // presence comes from executables/apps, never the inert files we install.
@@ -75,6 +81,9 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 							prefix = "sudo "
 						}
 						fmt.Fprintf(out, "%s hooks: out of date (missing %s). Run `%s%s hooks install --scope %s --binary %s`.\n", def.Name, strings.Join(missing, ", "), prefix, agenthooks.ShellQuote(binary), scope, agenthooks.ShellQuote(binary))
+						if slices.Contains(missing, hook.HookUserPromptSubmit.String()) {
+							fmt.Fprintf(out, "%s hooks: %s\n", def.Name, promptHookMissing)
+						}
 						continue
 					}
 				}
@@ -96,6 +105,11 @@ func diagnoseCodexHooks(out io.Writer, preferred, other string) bool {
 	healthy := err == nil
 	if err != nil {
 		fmt.Fprintf(out, "Codex hooks: %v\n", err)
+	}
+	for _, path := range []string{preferred, other} {
+		if raw, readErr := os.ReadFile(path); path != "" && readErr == nil && codexmanaged.LacksPromptHook(raw) {
+			fmt.Fprintf(out, "Codex hooks: %s (%s)\n", promptHookMissing, path)
+		}
 	}
 	var binary string
 	for _, layer := range installation.Layers {

@@ -115,6 +115,9 @@ type toolUsageUpdate struct {
 	attempted        string
 	errorFingerprint string
 	records          []modelusage.Record
+	// prompts are the transcript's turn boundaries for the source's session;
+	// newPrompts are those not yet stored.
+	prompts, newPrompts []time.Time
 }
 
 // ReconcileToolUsage retries delayed/incomplete transcript writes and resumes
@@ -162,15 +165,18 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 			return err
 		}
 		update.read = true
-		fingerprint, records, readErr := readToolTranscript(update.source, now)
+		fingerprint, records, prompts, readErr := readToolTranscript(update.source, now)
 		if readErr != nil {
 			update.fingerprint, update.message, update.errorFingerprint = update.source.fingerprint, readErr.Error(), update.attempted
 		} else {
-			update.fingerprint, update.records = fingerprint, records
+			update.fingerprint, update.records, update.prompts = fingerprint, records, prompts
 		}
 		updates = append(updates, update)
 	}
 	transcriptCursors.evict(now)
+	if err := s.assignToolUsageTurns(ctx, updates); err != nil {
+		return err
+	}
 	return s.applyToolUsageUpdates(ctx, updates, now)
 }
 
@@ -230,22 +236,22 @@ func fingerprintTranscript(info fs.FileInfo) (string, error) {
 
 // readToolTranscript parses a transcript without touching the database, so
 // no write lock is held during file I/O. The returned fingerprint describes
-// the file that was actually read. Every record a full read would return is
-// returned, so unchanged ones keep their revision through
+// the file that was actually read. Every record and turn boundary a full read
+// would return is returned, so unchanged records keep their revision through
 // saveChangedToolUsage.
-func readToolTranscript(src toolUsageSource, now time.Time) (string, []modelusage.Record, error) {
+func readToolTranscript(src toolUsageSource, now time.Time) (string, []modelusage.Record, []time.Time, error) {
 	f, err := os.Open(src.path)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	defer f.Close()
 	stat, err := f.Stat()
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	fingerprint, err := fingerprintTranscript(stat)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	key := transcriptKey{codex: src.agent == "codex", path: src.path}
 	cursor := transcriptCursors.take(key)
@@ -258,7 +264,7 @@ func readToolTranscript(src toolUsageSource, now time.Time) (string, []modelusag
 	records, err := cursor.read(f, stat, now)
 	transcriptCursors.put(key, cursor)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	var kept []modelusage.Record
 	for _, record := range records {
@@ -268,11 +274,17 @@ func readToolTranscript(src toolUsageSource, now time.Time) (string, []modelusag
 			continue
 		}
 		if _, err := time.Parse(time.RFC3339Nano, record.Timestamp); err != nil {
-			return "", nil, fmt.Errorf("usage message missing valid timestamp")
+			return "", nil, nil, fmt.Errorf("usage message missing valid timestamp")
 		}
 		kept = append(kept, record)
 	}
-	return fingerprint, kept, nil
+	var prompts []time.Time
+	for _, prompt := range cursor.transcript.Prompts() {
+		if prompt.SessionID == src.session {
+			prompts = append(prompts, prompt.Timestamp)
+		}
+	}
+	return fingerprint, kept, prompts, nil
 }
 
 // transcriptCursors keeps recently changed transcripts' parser state between
@@ -397,6 +409,11 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 		}
 		if err := saveChangedToolUsage(ctx, tx, src, update.records); err != nil {
 			return err
+		}
+		for _, at := range update.newPrompts {
+			if _, err := tx.ExecContext(ctx, `insert or ignore into tool_usage_prompts(session_id, started_at) values(?,?)`, src.session, FormatTurnTime(at)); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

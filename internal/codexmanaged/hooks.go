@@ -201,6 +201,27 @@ func IsManagedHookCommand(command string) bool {
 	return false
 }
 
+// LacksPromptHook reports a hooks file carrying Kontext's managed Codex hooks
+// but none for UserPromptSubmit, so its sessions mint no turns.
+func LacksPromptHook(data []byte) bool {
+	var settings Settings
+	if json.Unmarshal(data, &settings) != nil {
+		return false
+	}
+	managed, prompt := false, false
+	for name, groups := range settings.Hooks {
+		for _, group := range groups {
+			for _, handler := range group.Hooks {
+				if IsManagedHookCommand(handler.Command) {
+					managed = true
+					prompt = prompt || name == hook.HookUserPromptSubmit.String()
+				}
+			}
+		}
+	}
+	return managed && !prompt
+}
+
 func isManagedHookHandler(handler agenthooks.CommandHandler) bool {
 	if len(handler.Args) > 0 {
 		return false
