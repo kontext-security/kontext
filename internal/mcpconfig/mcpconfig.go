@@ -30,6 +30,7 @@
 package mcpconfig
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -338,6 +339,7 @@ func (r *Resolver) Warm() {
 		}
 	}
 	for _, path := range desktopRecords(home) {
+		load(r, path, parseSessionID)
 		load(r, path, parseJSON[desktopSession])
 	}
 }
@@ -379,6 +381,39 @@ type desktopSession struct {
 	} `json:"remoteMcpServersConfig"`
 }
 
+// recordSession is a session record's cliSessionId.
+type recordSession string
+
+// parseSessionID reads a record's cliSessionId and stops. Every active
+// Desktop session rewrites its record, and its connector list is most of a
+// record's few hundred KB, so decoding every changed record whole missed
+// the lookup's deadline under load. A repeated key keeps its first value,
+// where json.Unmarshal keeps the last; Desktop writes records with
+// JSON.stringify, which never repeats one.
+func parseSessionID(data []byte) (recordSession, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return "", fmt.Errorf("session record is not an object")
+	}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return "", err
+		}
+		// Keys match case-insensitively, as in json.Unmarshal.
+		if key, _ := token.(string); strings.EqualFold(key, "cliSessionId") {
+			var id string
+			err := decoder.Decode(&id)
+			return recordSession(id), err
+		}
+		var skip json.RawMessage
+		if err := decoder.Decode(&skip); err != nil {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
 // desktopConnector resolves a connector UUID through the Claude Desktop
 // session record whose cliSessionId is the hook's session id. Records are
 // tried newest first, since the calling session is active.
@@ -387,6 +422,9 @@ func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name s
 		return "", "", false
 	}
 	for _, path := range newestFirst(desktopRecords(home)) {
+		if id, _ := load(r, path, parseSessionID); string(id) != sessionID {
+			continue
+		}
 		session, ok := load(r, path, parseJSON[desktopSession])
 		if !ok || session.CLISessionID != sessionID {
 			continue
@@ -542,7 +580,11 @@ func readFile(path string) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, os.ErrInvalid
 	}
-	return io.ReadAll(io.LimitReader(file, maxConfigBytes))
+	// Sized up front: growing the buffer costs more than parsing a session
+	// record.
+	data := bytes.NewBuffer(make([]byte, 0, min(info.Size(), maxConfigBytes)+bytes.MinRead))
+	_, err = data.ReadFrom(io.LimitReader(file, maxConfigBytes))
+	return data.Bytes(), err
 }
 
 func parseJSON[T any](data []byte) (T, error) {
