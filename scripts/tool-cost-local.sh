@@ -26,10 +26,21 @@ def local_url(value):
     return url.scheme in ('http', 'https') and url.hostname in ('localhost', '127.0.0.1', '::1') and not url.username and not url.password
 if not local_url(cloud):
     raise SystemExit('KONTEXT_COST_CLOUD_URL must point to a local API.')
-profiles = json.loads(subprocess.check_output(['kontext', 'profile', 'ls', '--json']))
-active = next((p for p in profiles['profiles'] if p.get('active')), None)
-if not active or not local_url(active.get('cloud_url', '')):
-    raise SystemExit('Select an enrolled local Kontext profile before running this local test.')
+# KONTEXT_COST_TOKEN_ENV names an environment variable holding an install
+# token for the local API, for an isolated workspace without an enrolled
+# profile. Otherwise KONTEXT_COST_PROFILE names an enrolled local profile
+# without switching the machine's active one.
+token_env = os.environ.get('KONTEXT_COST_TOKEN_ENV', '').strip()
+if token_env:
+    if not token_env.isidentifier() or not os.environ.get(token_env, '').strip():
+        raise SystemExit('KONTEXT_COST_TOKEN_ENV must name a set environment variable.')
+    active = {'name': '$' + token_env, 'install_token_ref': 'env:' + token_env}
+else:
+    profiles = json.loads(subprocess.check_output(['kontext', 'profile', 'ls', '--json']))
+    wanted = os.environ.get('KONTEXT_COST_PROFILE', '').strip()
+    active = next((p for p in profiles['profiles'] if (p.get('name') == wanted if wanted else p.get('active'))), None)
+    if not active or not local_url(active.get('cloud_url', '')):
+        raise SystemExit('Select an enrolled local Kontext profile (or set KONTEXT_COST_PROFILE) before running this local test.')
 existing_path = state / 'managed.json'
 existing = json.loads(existing_path.read_text()) if existing_path.exists() else {}
 user_email = os.environ.get('KONTEXT_COST_USER_EMAIL', '').strip() or existing.get('device', {}).get('user_email', '')
@@ -42,8 +53,9 @@ config = {
     'device': {'label': 'Tool cost local test', **({'user_email': user_email} if user_email else {})},
 }
 (state / 'managed.json').write_text(json.dumps(config, indent=2) + '\n')
-events = {'SessionStart':'session-start', 'PreToolUse':'pre-tool-use',
-          'PostToolUse':'post-tool-use', 'PostToolUseFailure':'post-tool-use-failure',
+events = {'SessionStart':'session-start', 'UserPromptSubmit':'user-prompt-submit',
+          'PreToolUse':'pre-tool-use', 'PostToolUse':'post-tool-use',
+          'PostToolUseFailure':'post-tool-use-failure',
           'Stop':'stop', 'SubagentStop':'subagent-stop', 'SessionEnd':'session-end'}
 hooks = {}
 for name, alias in events.items():
@@ -79,7 +91,10 @@ path = (Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))) / 'hooks.j
 original = path.read_bytes() if path.exists() else None
 settings = json.loads(original) if original is not None else {}
 hooks = settings.setdefault('hooks', {})
-events = {'PostToolUse':'post-tool-use', 'Stop':'stop'} if agent == 'codex' else {'Stop':'stop', 'SubagentStop':'subagent-stop', 'SessionEnd':'session-end'}
+# UserPromptSubmit mints each turn. Like the completion observers it runs
+# async here: these global hooks only observe, and never hold a prompt.
+events = ({'UserPromptSubmit':'user-prompt-submit', 'PostToolUse':'post-tool-use', 'Stop':'stop'} if agent == 'codex'
+          else {'UserPromptSubmit':'user-prompt-submit', 'Stop':'stop', 'SubagentStop':'subagent-stop', 'SessionEnd':'session-end'})
 for event, alias in events.items():
     command = 'if [ -S ' + shlex.quote(socket) + ' ]; then ' + shlex.join([
         str(state/'kontext'), 'hook', alias, '--agent', agent, '--mode', 'observe', '--socket', socket,
@@ -121,7 +136,119 @@ print('Settings:', path)
 if action == 'observe-all':
     print('Start a new agent session, finish a tool-using turn, then refresh http://localhost:3107/cost.')
     if agent == 'codex':
-        print('Review and trust the two local cost hooks in Codex /hooks before testing.')
+        print('Review and trust the three local cost hooks in Codex /hooks before testing.')
+PY
+}
+
+# report_turns waits for the collector to upload a session's turns and usage,
+# then reads back what the local cloud stored and writes
+# .tmp/tool-cost-local/turns-<date>.json. KONTEXT_COST_DATABASE_URL is the local
+# API's DATABASE_URL; without psql on PATH the query runs inside the compose
+# Postgres container (KONTEXT_COST_POSTGRES_CONTAINER, default kontext-postgres-1).
+# KONTEXT_COST_COOKIE, a signed-in browser session's Cookie header, adds the Cost
+# summary from the API itself.
+report_turns() {
+  python3 - "$COST_STATE" "$COST_URL" "$1" <<'PY'
+import datetime
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import time
+import urllib.request
+
+state, cloud, session = Path(sys.argv[1]), sys.argv[2].rstrip('/'), sys.argv[3]
+if not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', session):
+    raise SystemExit('Expected a Claude session ID.')
+database = os.environ.get('KONTEXT_COST_DATABASE_URL', '').strip()
+if not database:
+    raise SystemExit('Set KONTEXT_COST_DATABASE_URL to the local API database URL to read back turns.')
+
+# The collector flushes every 2 s; wait until nothing for the session is pending.
+local = sqlite3.connect('file:' + str(state / 'state/guard.db') + '?mode=ro', uri=True)
+pending = None
+for _ in range(60):
+    pending = local.execute(
+        'select (select count(*) from turns where session_id = ? and exported = 0),'
+        ' (select count(*) from tool_usage_records where session_id = ? and exported = 0)',
+        (session, session)).fetchone()
+    minted = local.execute('select count(*) from turns where session_id = ?', (session,)).fetchone()[0]
+    if minted and pending == (0, 0):
+        break
+    time.sleep(1)
+local_turns = [dict(zip(('id', 'sequence', 'started_at', 'source', 'prompt_mode', 'prompt_chars'), row)) for row in local.execute(
+    'select id, sequence, started_at, source, prompt_mode, prompt_chars from turns where session_id = ? order by sequence', (session,))]
+
+def query(sql):
+    if shutil.which('psql'):
+        command = ['psql', database]
+    else:
+        command = ['docker', 'exec', '-i', os.environ.get('KONTEXT_COST_POSTGRES_CONTAINER', 'kontext-postgres-1'), 'psql', database]
+    out = subprocess.run(command + ['-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1', '-f', '-'],
+                         input=sql, text=True, capture_output=True, check=True).stdout.strip()
+    return json.loads(out or 'null') or []
+
+# The session ID is validated above, so it is safe to inline.
+turns = query(f"""select json_agg(t order by t.sequence) from (
+  select local_id as id, sequence, agent, started_at, source, prompt_mode, prompt_chars,
+    prompt_truncated, work_type, work_type_confidence, classifier_version
+  from hosted_ledger_turns where session_id = '{session}') t;""")
+usage = query(f"""select json_agg(u order by u.timestamp) from (
+  select usage->>'message_id' as message_id, usage->>'timestamp' as timestamp,
+    usage->>'model' as model, usage->>'turn_id' as turn_id
+  from hosted_tool_usage where session_id = '{session}') u;""")
+summary = None
+cookie = os.environ.get('KONTEXT_COST_COOKIE', '').strip()
+if cookie:
+    request = urllib.request.Request(cloud + '/api/v1/enterprise/dashboard/cost/summary', headers={'Cookie': cookie})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        summary = json.load(response)
+
+def instant(value):
+    return datetime.datetime.fromisoformat(re.sub(r'(\.\d{6})\d*', r'\1', value.replace('Z', '+00:00')))
+
+ids = {turn['id'] for turn in turns}
+labels = {turn['id']: turn['work_type'] for turn in turns}
+# Usage before the first minted prompt (a resumed session's earlier turns)
+# has no turn; everything after it must carry one of the session's turns.
+first = min((instant(t['started_at']) for t in local_turns), default=None)
+before = [row for row in usage if first and instant(row['timestamp']) < first - datetime.timedelta(seconds=1)]
+after = [row for row in usage if row not in before]
+by_work_type = {}
+for row in after:
+    label = labels.get(row['turn_id']) or 'unclassified'
+    by_work_type[label] = by_work_type.get(label, 0) + 1
+checks = {
+    'two_turns_minted_locally': [t['sequence'] for t in local_turns] == [1, 2],
+    'both_turns_stored': len(turns) == 2 and ids == {t['id'] for t in local_turns},
+    'usage_after_first_prompt_stamped': bool(after) and all(row['turn_id'] in ids for row in after),
+    'usage_before_first_prompt_unstamped': all(not row['turn_id'] for row in before),
+    'probe_usage_classified': bool(after) and 'unclassified' not in by_work_type,
+}
+artifact = {
+    'generated_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    'cloud_url': cloud, 'session_id': session, 'pending_after_wait': pending,
+    'local_turns': local_turns, 'turns': turns, 'usage': usage,
+    'usage_by_work_type': by_work_type, 'checks': checks,
+    'cost_summary_by_work_type': summary.get('byWorkType') if summary else None,
+    'cost_summary_work_type': summary.get('workType') if summary else None,
+}
+path = state / ('turns-' + datetime.date.today().isoformat() + '.json')
+path.write_text(json.dumps(artifact, indent=2, default=str) + '\n')
+print(json.dumps(checks, indent=2))
+print('Artifact:', path)
+if not all(passed for name, passed in checks.items() if name != 'probe_usage_classified'):
+    raise SystemExit('Turn probe failed; see the artifact.')
+if not checks['probe_usage_classified']:
+    modes = {turn['id']: turn['prompt_mode'] for turn in turns}
+    if all(modes.get(row['turn_id']) != 'excerpt' for row in after if not labels.get(row['turn_id'])):
+        print('The unlabeled turns carry no excerpt (capture Omitted or the work-type switch off), so they stay Unclassified.')
+    else:
+        print('Turns are stored but not classified yet: the classification worker needs WORK_TYPE_CLASSIFICATION_ENABLED=true and an OpenAI key.')
 PY
 }
 
@@ -195,13 +322,38 @@ PY
       exit 1
     fi
     cd "$COST_STATE/project"
-    exec claude -p --output-format json --max-turns 3 \
+    # Two prompts in one session, each its own turn with its own tool call.
+    if ! COST_FIRST="$(claude -p --output-format json --max-turns 3 \
       --allowedTools 'Bash(printf kontext-cost-local-probe)' \
       -- \
-      'Use Bash exactly once to execute: printf kontext-cost-local-probe. Do not read files or run other commands. After seeing the output, reply only OK.'
+      'Use Bash exactly once to execute: printf kontext-cost-local-probe. Do not read files or run other commands. After seeing the output, reply only OK.')"; then
+      printf '%s\n' "$COST_FIRST" >&2
+      printf 'The first probe prompt failed; is the terminal claude client signed in? probe-replay needs no agent.\n' >&2
+      exit 1
+    fi
+    printf '%s\n' "$COST_FIRST"
+    COST_SESSION="$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["session_id"])' "$COST_FIRST")"
+    claude -p --output-format json --max-turns 3 --resume "$COST_SESSION" \
+      --allowedTools 'Bash(printf kontext-cost-local-probe-2)' \
+      -- \
+      'Now use Bash exactly once to execute: printf kontext-cost-local-probe-2. Do not read files or run other commands. Then explain in one sentence what the first output means.'
+    report_turns "$COST_SESSION"
+    ;;
+  probe-replay)
+    if [[ ! -S "$COST_SOCKET" ]]; then
+      printf 'Start the collector first: bash scripts/tool-cost-local.sh start\n' >&2
+      exit 1
+    fi
+    # The same two-turn check without a signed-in agent: Claude Code's hook
+    # calls and transcript rows, replayed through the built hook binary.
+    COST_SESSION="$(python3 "$COST_ROOT/scripts/tool-cost-replay.py" "$COST_STATE")"
+    report_turns "$COST_SESSION"
+    ;;
+  report-turns)
+    report_turns "${2:?Pass the probe session ID.}"
     ;;
   *)
-    printf 'Usage: bash scripts/tool-cost-local.sh [prepare|start|probe|observe-all|unobserve-all|observe-codex|unobserve-codex|probe-codex|register-codex [SESSION_ID]]\n' >&2
+    printf 'Usage: bash scripts/tool-cost-local.sh [prepare|start|probe|probe-replay|report-turns SESSION_ID|observe-all|unobserve-all|observe-codex|unobserve-codex|probe-codex|register-codex [SESSION_ID]]\n' >&2
     exit 1
     ;;
 esac

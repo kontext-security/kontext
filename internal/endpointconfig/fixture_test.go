@@ -8,10 +8,11 @@ import (
 	"testing"
 )
 
-const identityFixturePath = "testdata/portable/v2/identity-v2.json"
+const identityFixturePath = "testdata/portable/v3/identity-v3.json"
 
-// Update only when deliberately revising the portable fixture bytes.
-const identityFixtureSHA256 = "7dc694e9ecf0ef755ffeef6a49fe59a24d59db7451fc88bba55538d4f3898494"
+// Update only when deliberately revising the portable fixture bytes. The cloud
+// pins the same digest (FIXTURE_V3_DIGEST in packages/shared endpoint-config).
+const identityFixtureSHA256 = "3da75190da4298b16ff781017d06cb82ff342924e57da20b0b6600ae02bcc785"
 
 type identityFixture struct {
 	SchemaVersion  string                  `json:"schemaVersion"`
@@ -40,11 +41,11 @@ func TestPortableIdentityFixture(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.SchemaVersion != "endpoint-config-identity-fixture-v2" || fixture.IdentityDomain != identityDomain {
+	if fixture.SchemaVersion != "endpoint-config-identity-fixture-v3" || fixture.IdentityDomain != identityDomain {
 		t.Fatalf("fixture metadata = %#v", fixture)
 	}
-	// Six: three capture modes crossed with the guardrail flag, which is what
-	// makes the flag observably part of the identity.
+	// Six: three capture modes crossed with the work-type switch, which is
+	// what makes the switch observably part of the identity.
 	if len(fixture.Vectors) != 6 {
 		t.Fatalf("fixture vector count = %d, want 6", len(fixture.Vectors))
 	}
@@ -64,7 +65,7 @@ func TestPortableIdentityFixture(t *testing.T) {
 				identityDomain,
 				ResponseVersion,
 				string(vector.Config.PayloadCaptureMode),
-				*vector.Config.GuardrailLLMEnabled,
+				*vector.Config.WorkTypeClassification,
 			})
 			if err != nil {
 				t.Fatal(err)

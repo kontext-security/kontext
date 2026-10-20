@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Codex's current rollout format emits a token_usage_record per OpenAI
@@ -68,6 +69,11 @@ type codexState struct {
 	tools                                 map[string]Tool
 	seen                                  map[string]bool
 	sawLegacy, sawResponse                bool
+	prompts                               []Prompt
+	// opened is set from a turn boundary until the turn's first model output
+	// or its end, so a task_started and the user messages that follow it
+	// (environment context, then the prompt) start one turn.
+	opened bool
 }
 
 func (s *codexState) parseLine(text []byte) error {
@@ -94,6 +100,8 @@ func (s *codexState) parseLine(text []byte) error {
 			ThreadID      string      `json:"thread_id"`
 			ResponseID    string      `json:"response_id"`
 			Usage         *codexUsage `json:"usage"`
+			// A message's content; read only for a user message.
+			Content json.RawMessage `json:"content"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(text, &row); err != nil {
@@ -122,6 +130,11 @@ func (s *codexState) parseLine(text []byte) error {
 			s.sawLegacy = true
 		case "task_started", "task_complete", "turn_aborted":
 			s.current, s.pending = nil, nil
+			if p.Type == "task_started" {
+				s.addPrompt(row.Timestamp)
+			} else {
+				s.opened = false
+			}
 		}
 	case "response_item":
 		switch p.Type {
@@ -132,12 +145,16 @@ func (s *codexState) parseLine(text []byte) error {
 		case "message":
 			if p.Role == "user" {
 				s.pending = nil
+				if !codexHarnessMessage(p.Content) {
+					s.addPrompt(row.Timestamp)
+				}
 			}
 			if p.Role != "assistant" {
 				return nil
 			}
 			fallthrough
 		case "reasoning", "function_call", "custom_tool_call":
+			s.opened = false
 			if s.current == nil {
 				s.current = &Record{Model: s.model, ServiceTier: s.serviceTier, Timestamp: row.Timestamp, ConsumedToolUseIDs: s.pending}
 				s.pending = nil
@@ -204,9 +221,49 @@ func (s *codexState) finish() ([]Record, error) {
 	return records, nil
 }
 
+// codexHarnessMessage reports a user message that is injected context, not
+// a prompt: Codex writes environment and app context as user messages, in
+// the middle of a task too. Content without text is a prompt.
+func codexHarnessMessage(content json.RawMessage) bool {
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &parts) != nil {
+		return false
+	}
+	var texts []string
+	for _, part := range parts {
+		if part.Text != "" {
+			texts = append(texts, part.Text)
+		}
+	}
+	return len(texts) > 0 && IsHarnessEnvelope(strings.Join(texts, "\n"))
+}
+
+// addPrompt records a turn boundary unless one is already open. A sub-agent
+// rollout records none: it begins with its parent's history copied under the
+// copy's timestamp, and its own tasks come from the parent agent, inside the
+// root session's turns.
+func (s *codexState) addPrompt(timestamp string) {
+	if s.opened || s.thread == "" || strings.TrimPrefix(s.session, "codex-") != s.thread {
+		return
+	}
+	at, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return
+	}
+	s.opened = true
+	s.prompts = append(s.prompts, Prompt{SessionID: "codex-" + s.thread, Timestamp: at})
+}
+
+func (s *codexState) promptsSoFar() []Prompt {
+	return slices.Clone(s.prompts)
+}
+
 func (s *codexState) clone() transcriptState {
 	c := *s
 	c.records, c.pending = slices.Clone(s.records), slices.Clone(s.pending)
+	c.prompts = slices.Clone(s.prompts)
 	c.tools, c.seen = maps.Clone(s.tools), maps.Clone(s.seen)
 	if s.current != nil {
 		current := *s.current

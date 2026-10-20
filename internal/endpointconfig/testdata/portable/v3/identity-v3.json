@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "endpoint-config-identity-fixture-v3",
+  "identityDomain": "kontext:endpoint-config:v3",
+  "vectors": [
+    {
+      "name": "omitted-work-type-on",
+      "responseVersion": 3,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v3\",3,\"omitted\",true]",
+      "configIdentity": "cafdfd6dba58b63a27426db8ec28637f032c454cdd248f1c93718d845ad0b919"
+    },
+    {
+      "name": "omitted-work-type-off",
+      "responseVersion": 3,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v3\",3,\"omitted\",false]",
+      "configIdentity": "d19a67fd99c888ac7b3b02dc94357359d959a9242b8154c57f0582da98cc0092"
+    },
+    {
+      "name": "summary-work-type-on",
+      "responseVersion": 3,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v3\",3,\"summary\",true]",
+      "configIdentity": "829ff4132b3efbef3b3bc9b75ea9a5322ffae9ed92608cbb0b09ec1e3f2f3c8d"
+    },
+    {
+      "name": "summary-work-type-off",
+      "responseVersion": 3,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v3\",3,\"summary\",false]",
+      "configIdentity": "7c865ebd5a09130d4c61c9b80e528626a96fcb6f19a9b9131ea0eaae1132d4c3"
+    },
+    {
+      "name": "full-work-type-on",
+      "responseVersion": 3,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v3\",3,\"full\",true]",
+      "configIdentity": "15b3f28e8e66a2452ad8df70f52f30d855d45cdc6566bd0aa887cd82432a5ebd"
+    },
+    {
+      "name": "full-work-type-off",
+      "responseVersion": 3,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v3\",3,\"full\",false]",
+      "configIdentity": "8ac648aaf1b902951bbb6e6c04e56f89b45ce9b10293daef0a7e1a167cfb4f50"
+    }
+  ]
+}

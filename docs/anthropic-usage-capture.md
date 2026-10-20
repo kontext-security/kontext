@@ -70,9 +70,24 @@ for a completed turn; it does not implement stopping or limiting an agent.
    happens in the managed stream worker, outside the policy decision path.
 2. The reader merges cumulative usage snapshots by session and message ID.
    Tool-result blocks associate only the next model request with the tools
-   it consumes. Requests shared by multiple tools are counted once. The
-   uploaded records contain counters, identifiers, tool names and pricing
-   metadata; no prompt, tool arguments, response text or local transcript path.
+   it consumes. Requests shared by multiple tools are counted once. Usage
+   records contain counters, identifiers, tool names, pricing metadata and
+   the request's `turn_id`; no prompt, tool arguments, response text or local
+   transcript path. The prompt itself travels only in the turn record (step 7),
+   as the workspace's configuration allows:
+
+   | Payload capture mode | Work-type classification switch | Turn record's `prompt.mode` | Cloud keeps the text |
+   | --- | --- | --- | --- |
+   | Omitted | any | `omitted`: size only | never |
+   | Summaries | off | `skipped`: size only | never |
+   | Summaries | on | `excerpt`: redacted, at most 4,000 characters | yes, redacted, with the turn |
+   | Full payloads | off | `skipped`: size only | never |
+   | Full payloads | on | `excerpt`: redacted, at most 64,000 characters | yes, redacted, with the turn |
+
+   The cloud deletes stored excerpts when the workspace turns the switch off
+   or moves to Omitted. Until the daemon has confirmed its endpoint
+   configuration it sends `skipped`. A prompt over 1 MiB is never redacted
+   and also goes as `skipped`, with its true size.
 3. SQLite stores changed records with increasing revisions. The stream worker
    captures before network I/O, retries partial/delayed writes, resumes after
    restart, and acknowledges only the revision successfully uploaded. It
@@ -93,6 +108,51 @@ for a completed turn; it does not implement stopping or limiting an agent.
    buckets, pricing coverage and a request detail drawer with related tools.
    The baseline excludes subscription charges and separate tool-service fees;
    geography, batch and speed surcharges/discounts are not applied.
+7. Turns give the Cost tab its "Type of work" cut. On every
+   `UserPromptSubmit` with a prompt the daemon mints `turn_<uuid>` before
+   answering the hook, stamps it on every action recorded after the prompt
+   (the prompt's own `request.observed` row included; never on the signed
+   receipt) and stores one turn row per prompt: session, 1-based sequence,
+   agent, start time, source (`user_prompt`, `slash_command`, `interrupt`) and
+   the prompt as the table in step 2 allows. The excerpt drops system
+   reminders, command messages and pasted blocks, is redacted with the Merlin
+   review redactor, whitespace-collapsed and bounded around a
+   `[Context omitted]` marker; `chars` is the original's length and `sha256`
+   is over the trimmed, collapsed original. Each turn keeps the configuration
+   in force when it was minted. The stream uploads turns (batch `turns`,
+   schema `turn/v1`) before usage and acknowledges them by id; the server
+   ignores a resent id.
+
+   A harness message delivered as a prompt is not a turn: when, with system
+   reminders removed, it is empty or opens with `<task-notification>`,
+   `<side-sessions-event>`, `<ci-monitor-event>`, `<cross-session-message`,
+   `[Cross-session` or Codex's injected context (`<environment_context>`,
+   `<external_codex_apps_…`, `<codex_internal_context`), no turn is minted,
+   the transcript starts none, and the work after it stays with the prompt
+   before (`modelusage.IsHarnessEnvelope`).
+
+   The reader matches usage to turns by time, not by text or ordinal. Every
+   real prompt line starts a transcript turn: a `user` row that is not a tool
+   result, meta, sidechain or compact summary, or a queued prompt absorbed
+   mid-turn (`queue-operation` remove, `absorbed_mid_turn`); for Codex a
+   `task_started` or a user message after model output. Prompt *k* owns
+   minted turns started from 1 s before it to 1 s before the next prompt and
+   takes the earliest; usage between two prompts carries that turn's id. A
+   prompt whose hook was missed (hook not installed, daemon down, a session
+   resumed from before the install) leaves its usage without a turn, and never
+   takes the next prompt's. Subagent transcripts (Claude `subagents/*.jsonl`,
+   Codex sub-agent rollouts) start no turns: their usage falls into the
+   session's turn at that time, using boundaries kept per session in SQLite.
+   A request whose turn changes on a later read is re-emitted with a new
+   revision. A new turn, or a boundary found in one transcript, marks the
+   session's other transcripts for another read, so usage read before them
+   moves too. Once the cloud acknowledges a turn, the daemon drops its local
+   copy of the excerpt; the turn's id and time stay in guard.db as long as the
+   session has usage to stamp, since a session can resume after any idle time.
+
+   `kontext doctor` reports `prompt hook missing: turns and type of work
+   unavailable` when an installed Claude Code or Codex hook set lacks
+   `UserPromptSubmit`.
 
 The sanitized live fixture includes both assistant usage records and the
 intervening tool result. The matching PostToolUse payload is under
@@ -137,8 +197,50 @@ the API with `KONTEXT_COST_CLOUD_URL` if needed. Ctrl-C stops this collector.
 With an authenticated terminal Claude client, run in another terminal:
 
 ```sh
-bash scripts/tool-cost-local.sh probe
+KONTEXT_COST_DATABASE_URL='postgresql://…/kontext_spaces' bash scripts/tool-cost-local.sh probe
 ```
+
+The probe sends two prompts in one session, each running one `printf`, waits
+for the collector to upload, then reads the session's turns and usage back
+from the local database and writes `.tmp/tool-cost-local/turns-<date>.json`.
+It passes when both turns are stored with sequences 1 and 2 and every usage
+row carries one of their ids. Labels appear only when the cloud runs the
+classification worker (`WORK_TYPE_CLASSIFICATION_ENABLED=true` and an OpenAI
+key); `KONTEXT_COST_COOKIE` (a signed-in browser Cookie header) adds the Cost
+summary's `byWorkType`. Without `psql` on PATH the queries run in the compose
+Postgres container (`KONTEXT_COST_POSTGRES_CONTAINER`, default
+`kontext-postgres-1`). `KONTEXT_COST_PROFILE` selects an enrolled local
+profile other than the active one. `report-turns SESSION_ID` repeats only the
+read-back.
+
+Without a signed-in terminal client, `probe-replay` runs the same check by
+replaying a Claude Code session through the built hook binary
+(`scripts/tool-cost-replay.py`): transcript rows in Claude Code's format with
+real-time timestamps and the hook calls in Claude Code's order, including a turn
+from before the install and a subagent with its own sidechain transcript.
+
+To keep the test off the shared development database, give the API a fresh one
+and seed a workspace the way the cloud e2e suite does; `KONTEXT_COST_TOKEN_ENV`
+then names the variable holding the install token, so no profile is enrolled:
+
+```sh
+docker exec kontext-postgres-1 psql -U postgres -c 'create database kontext_cli_turns_e2e'
+# In the cloud checkout's apps/api, with DATABASE_URL pointing at that database:
+node dist/apps/api/src/db/migrate.js
+NODE_ENV=development WORK_TYPE_CLASSIFICATION_ENABLED=true PORT=4117 RESEND_API_KEY='' \
+  AUTHENTICATED_CALL_METERING_WORKER_ENABLED=false node dist/apps/api/src/main.js
+# Seed: an organizations row (payload_capture_mode, work_type_classification)
+# and an install_tokens row holding sha256(token) for it. Then, here:
+KONTEXT_COST_CLOUD_URL=http://localhost:4117 KONTEXT_COST_TOKEN_ENV=TOKEN_VAR \
+  bash scripts/tool-cost-local.sh start
+KONTEXT_COST_CLOUD_URL=http://localhost:4117 KONTEXT_COST_DATABASE_URL=… \
+  bash scripts/tool-cost-local.sh probe-replay
+```
+
+`NODE_ENV=development` runs the classification worker, which the shared-database
+recipe keeps off with `NODE_ENV=test`; on a database of its own nothing else is
+processed. Changing the seeded row's capture mode or switch reaches the
+collector on its next configuration refresh (about a minute).
 
 Alternatively, select `.tmp/tool-cost-local/project` as the folder in Claude
 Code desktop, keep worktree creation off, and send:
@@ -167,7 +269,7 @@ With the isolated collector running, enable its observer in user settings:
 bash scripts/tool-cost-local.sh observe-all
 ```
 
-This adds async Stop, SubagentStop and SessionEnd observers to
+This adds async UserPromptSubmit, Stop, SubagentStop and SessionEnd observers to
 `~/.claude/settings.json` (or `CLAUDE_CONFIG_DIR/settings.json`). Other settings
 and hooks are preserved, with a backup saved under `.tmp/tool-cost-local`.
 It does not replace the regular managed daemon or its policy hooks. Usage is

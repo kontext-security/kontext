@@ -86,6 +86,18 @@ func (c *Cache) Load() error {
 		}
 		return fmt.Errorf("endpoint configuration cache: read: %w", err)
 	}
+	// A response persisted by a build that negotiated another version has a
+	// different config shape, which the strict decoder below rejects. Read
+	// its version alone first so an upgrade discards it instead.
+	var peek struct {
+		Response *struct {
+			ResponseVersion int `json:"responseVersion"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(data, &peek); err == nil && peek.Response != nil && peek.Response.ResponseVersion != ResponseVersion {
+		c.discardOlderVersion()
+		return nil
+	}
 	var file cacheFile
 	if err := decodeStrict(strings.NewReader(string(data)), &file); err != nil {
 		return fmt.Errorf("endpoint configuration cache: %w", err)
@@ -99,9 +111,7 @@ func (c *Cache) Load() error {
 		// over a different preimage. Discard it and start unconfirmed rather than
 		// failing startup. The next refresh repopulates it.
 		if file.Response.ResponseVersion != ResponseVersion {
-			c.mu.Lock()
-			c.status = Status{Stale: true, LastError: "persisted configuration predates the current response version"}
-			c.mu.Unlock()
+			c.discardOlderVersion()
 			return nil
 		}
 		return fmt.Errorf("endpoint configuration cache: %w", err)
@@ -117,6 +127,12 @@ func (c *Cache) Load() error {
 	c.status = Status{FetchedAt: fetchedAt, Stale: true, LastError: "persisted configuration not yet confirmed"}
 	c.mu.Unlock()
 	return nil
+}
+
+func (c *Cache) discardOlderVersion() {
+	c.mu.Lock()
+	c.status = Status{Stale: true, LastError: "persisted configuration predates the current response version"}
+	c.mu.Unlock()
 }
 
 func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {

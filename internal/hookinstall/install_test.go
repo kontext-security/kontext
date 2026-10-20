@@ -276,7 +276,8 @@ func TestDoctorNamesStaleClaudeEventsAndScopeRepair(t *testing.T) {
 			if scope == System {
 				prefix = "sudo "
 			}
-			want := "Claude Code hooks: out of date (missing UserPromptSubmit, Stop, SubagentStop). Run `" + prefix + agenthooks.ShellQuote(opts.Binary) + " hooks install --scope " + string(scope) + " --binary " + agenthooks.ShellQuote(opts.Binary) + "`.\n"
+			want := "Claude Code hooks: out of date (missing UserPromptSubmit, Stop, SubagentStop). Run `" + prefix + agenthooks.ShellQuote(opts.Binary) + " hooks install --scope " + string(scope) + " --binary " + agenthooks.ShellQuote(opts.Binary) + "`.\n" +
+				"Claude Code hooks: prompt hook missing: turns and type of work unavailable\n"
 			if out.String() != want {
 				t.Fatalf("doctor = %q, want %q", out.String(), want)
 			}
@@ -633,5 +634,41 @@ func TestDoctorCodexLayers(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// An installed Codex set without UserPromptSubmit mints no turns; doctor says
+// what that costs next to the hook-health line.
+func TestDoctorNamesMissingCodexPromptHook(t *testing.T) {
+	opts, defs := fixture(t, User)
+	if err := runDefinitions(opts, defs, false); err != nil {
+		t.Fatal(err)
+	}
+	owned := defs[1].Files[0].Path
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(read(t, owned)), &settings); err != nil {
+		t.Fatal(err)
+	}
+	delete(settings["hooks"].(map[string]any), "UserPromptSubmit")
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, owned, string(raw), 0600)
+	var out bytes.Buffer
+	if diagnose(&out, opts.Scope, defs[1:], func(id string) bool { return id == "codex" }, defs[1].Files[1].Path, "") {
+		t.Fatalf("a set without the prompt hook reported healthy: %s", &out)
+	}
+	want := "Codex hooks: prompt hook missing: turns and type of work unavailable (" + owned + ")\n"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("doctor = %q, want line %q", out.String(), want)
+	}
+	if err := runDefinitions(opts, defs, false); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	diagnose(&out, opts.Scope, defs[1:], func(id string) bool { return id == "codex" }, defs[1].Files[1].Path, "")
+	if strings.Contains(out.String(), "prompt hook missing") {
+		t.Fatalf("complete set still reported the prompt hook missing: %s", &out)
 	}
 }

@@ -58,6 +58,13 @@ tool calls under its root thread's session (`session_meta.session_id`) with the
 sub-agent's own rollout as `transcript_path`, so its usage carries that session.
 Parent usage is not used to guess a sub-agent's cost.
 
+Turns (see `anthropic-usage-capture.md`, step 7) work the same way for Codex:
+the managed `UserPromptSubmit` hook mints the turn, and the reader starts a
+transcript turn at each `task_started`, or at a user message after model
+output. A sub-agent rollout starts none of its own: it opens with its parent's
+history copied under the copy's timestamp, and its usage falls into the root
+session's turn at that time.
+
 ## Local end-to-end verification
 
 Use the existing enrolled local profile and run:
@@ -65,13 +72,13 @@ Use the existing enrolled local profile and run:
 ```sh
 bash scripts/tool-cost-local.sh start
 bash scripts/tool-cost-local.sh observe-codex
-# Review the PostToolUse and Stop local cost observer definitions in Codex /hooks.
+# Review the UserPromptSubmit, PostToolUse and Stop local cost observer definitions in Codex /hooks.
 bash scripts/tool-cost-local.sh probe-codex
 ```
 
 The observer is asynchronous, uses a dedicated socket, and only runs while that
 socket exists. Settings are backed up, unrelated managed/user hooks are preserved,
-and `unobserve-codex` removes only these two definitions. Normal installations
+and `unobserve-codex` removes only these three definitions. Normal installations
 already include Codex PostToolUse/Stop hooks; they require the rebuilt CLI and
 cloud code for this capture path. The installed regular daemon was not replaced.
 
