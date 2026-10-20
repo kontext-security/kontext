@@ -52,6 +52,10 @@ const ManagedMCPPath = "/Library/Application Support/ClaudeCode/managed-mcp.json
 // maxConfigBytes bounds one config read. ~/.claude.json grows with history.
 const maxConfigBytes = 64 << 20
 
+// recordHeadBytes bounds the read of a Desktop session record for its
+// cliSessionId, which Desktop writes second, ahead of the connector list.
+const recordHeadBytes = 4 << 10
+
 // lookupTimeout bounds one lookup, so a config on a stalled mount (a
 // network drive, an evicted cloud file) costs a hook this long at most.
 // maxLookups bounds the lookups still blocked on such a file.
@@ -339,7 +343,7 @@ func (r *Resolver) Warm() {
 		}
 	}
 	for _, path := range desktopRecords(home) {
-		load(r, path, parseSessionID)
+		loadHead(r, path, recordHeadBytes, parseSessionID)
 		load(r, path, parseJSON[desktopSession])
 	}
 }
@@ -386,8 +390,9 @@ type recordSession string
 
 // parseSessionID reads a record's cliSessionId and stops. Every active
 // Desktop session rewrites its record, and its connector list is most of a
-// record's few hundred KB, so decoding every changed record whole missed
-// the lookup's deadline under load. A repeated key keeps its first value,
+// record's few hundred KB, so reading every changed record whole missed
+// the lookup's deadline under load. A record cut off before the key is an
+// error, never a record without one. A repeated key keeps its first value,
 // where json.Unmarshal keeps the last; Desktop writes records with
 // JSON.stringify, which never repeats one.
 func parseSessionID(data []byte) (recordSession, error) {
@@ -411,7 +416,8 @@ func parseSessionID(data []byte) (recordSession, error) {
 			return "", err
 		}
 	}
-	return "", nil
+	_, err := decoder.Token()
+	return "", err
 }
 
 // desktopConnector resolves a connector UUID through the Claude Desktop
@@ -422,7 +428,8 @@ func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name s
 		return "", "", false
 	}
 	for _, path := range newestFirst(desktopRecords(home)) {
-		if id, _ := load(r, path, parseSessionID); string(id) != sessionID {
+		// A record whose head does not hold its cliSessionId is decoded whole.
+		if id, ok := loadHead(r, path, recordHeadBytes, parseSessionID); ok && string(id) != sessionID {
 			continue
 		}
 		session, ok := load(r, path, parseJSON[desktopSession])
@@ -530,9 +537,13 @@ func normalize(name string) string {
 // oversized and malformed files yield the zero value: a config the daemon
 // cannot read leaves the server unidentified, never fails the hook.
 func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bool) {
+	return loadHead(r, path, maxConfigBytes, parse)
+}
+
+// loadHead is load that parses only the first limit bytes of path.
+func loadHead[T any](r *Resolver, path string, limit int64, parse func([]byte) (T, error)) (T, bool) {
 	var zero T
-	// One file can be read as two shapes (plugin.json), so the key has both.
-	key := fmt.Sprintf("%s\x00%T", path, zero)
+	key := cacheKey[T](path, limit)
 	info, err := os.Stat(path)
 	r.mu.Lock()
 	if r.cache == nil {
@@ -549,7 +560,7 @@ func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bo
 		value, _ := cached.value.(T)
 		return value, cached.ok
 	}
-	value, err := readFile(path)
+	value, err := readFile(path, limit)
 	var parsed T
 	ok := err == nil
 	if ok {
@@ -565,9 +576,17 @@ func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bo
 	return parsed, ok
 }
 
+// cacheKey has the path, the shape and the read limit: one file can be read
+// as two shapes (plugin.json), or whole and by its head.
+func cacheKey[T any](path string, limit int64) string {
+	var zero T
+	return fmt.Sprintf("%s\x00%T\x00%d", path, zero, limit)
+}
+
 // readFile opens without blocking, so a FIFO planted as .mcp.json in a
-// project cannot stall the hook, and reads only regular files.
-func readFile(path string) ([]byte, error) {
+// project cannot stall the hook, and reads only regular files, up to limit
+// bytes.
+func readFile(path string, limit int64) ([]byte, error) {
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
@@ -582,8 +601,8 @@ func readFile(path string) ([]byte, error) {
 	}
 	// Sized up front: growing the buffer costs more than parsing a session
 	// record.
-	data := bytes.NewBuffer(make([]byte, 0, min(info.Size(), maxConfigBytes)+bytes.MinRead))
-	_, err = data.ReadFrom(io.LimitReader(file, maxConfigBytes))
+	data := bytes.NewBuffer(make([]byte, 0, min(info.Size(), limit)+bytes.MinRead))
+	_, err = data.ReadFrom(io.LimitReader(file, limit))
 	return data.Bytes(), err
 }
 
