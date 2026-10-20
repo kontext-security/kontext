@@ -179,8 +179,11 @@ jobs:
           # merging; any failure here aborts before the push.
           kind="$(cat "$RUNNER_TEMP/kind")"
           if [[ -n "$PR" ]]; then
-            state="$(gh pr view "$BRANCH" --json id,labels,autoMergeRequest,isInMergeQueue)"
-            labelled="$(jq '.labels | map(.name) | index("catalog-strict-only") != null' <<<"$state")"
+            # shellcheck disable=SC2016 # $o, $r and $n are GraphQL variables
+            state="$(gh api graphql -F n="$PR" -f o="${GITHUB_REPOSITORY%/*}" -f r="${GITHUB_REPOSITORY#*/}" \
+              -f query='query($o: String!, $r: String!, $n: Int!) { repository(owner: $o, name: $r) { pullRequest(number: $n) { id isInMergeQueue autoMergeRequest { enabledAt } labels(first: 100) { nodes { name } } } } }' \
+              --jq .data.repository.pullRequest)"
+            labelled="$(jq '.labels.nodes | map(.name) | index("catalog-strict-only") != null' <<<"$state")"
             [[ "$labelled" == true ]] || kind=review
             if [[ "$kind" != strict-only ]]; then
               if [[ "$(jq .isInMergeQueue <<<"$state")" == true ]]; then

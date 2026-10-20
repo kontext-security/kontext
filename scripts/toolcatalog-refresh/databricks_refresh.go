@@ -217,11 +217,12 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 		if entry.Access == "read" {
 			reads = append(reads, entry.Operation)
 		}
-		// A new route takes over requests an old template matched when it
-		// is more literal or names the exact API version, so it must not be
-		// looser than any old route that matches its path.
+		// A new route can take over requests an old route matched (it is
+		// more literal, names the exact API version, or ties), so it must
+		// not be looser than, or differ in product from, any old route
+		// whose template some request matches along with its own.
 		for _, before := range old.Routes {
-			if before.Method != entry.Method || before.Path == "" || entry.Path == "" || before.Path == entry.Path || !routeTemplate(before.Path).MatchString(entry.Path) {
+			if before.Method != entry.Method || before.Path == "" || entry.Path == "" || !routesOverlap(before.Path, entry.Path) {
 				continue
 			}
 			if accessRankDatabricks[entry.Access] < accessRankDatabricks[before.Access] || entry.Product != before.Product {
@@ -262,25 +263,42 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 }
 
 var (
-	routeVersion   = regexp.MustCompile(`^/api/\d+\.\d+/`)
-	routeParameter = regexp.MustCompile(`\\\{[a-z0-9_]+(\\\+)?\\\}`)
+	routeVersion  = regexp.MustCompile(`^/api/\d+\.\d+/`)
+	routeCatchAll = regexp.MustCompile(`^(/api/\d+\.\d+)?/\{`)
 )
 
-// routeTemplate matches the paths, templates included, that a route
-// template matches under any API version. {param} spans one segment and
-// {param+} several, as in internal/toolcatalog.
-func routeTemplate(template string) *regexp.Regexp {
-	rest := routeVersion.ReplaceAllString(template, "")
-	pattern := routeParameter.ReplaceAllStringFunc(regexp.QuoteMeta(rest), func(parameter string) string {
-		if strings.Contains(parameter, "+") {
-			return `.+`
-		}
-		return `[^/]+`
-	})
-	if rest != template {
-		pattern = `/api/\d+\.\d+/` + pattern
+// routesOverlap says whether some request path matches both route
+// templates, under any API version, as internal/toolcatalog matches them:
+// {param} spans one segment, {param+} one or more. A segment that mixes a
+// parameter with literal text counts as a parameter, so an overlap is never
+// missed. Templates that start with a parameter are never matched by path
+// at runtime (databricksCatchAll) and overlap nothing.
+func routesOverlap(a, b string) bool {
+	segments := func(template string) []string {
+		return strings.Split(strings.TrimPrefix(routeVersion.ReplaceAllString(template, "/api/{v}/"), "/"), "/")
 	}
-	return regexp.MustCompile("^" + pattern + "$")
+	if routeCatchAll.MatchString(a) || routeCatchAll.MatchString(b) {
+		return false
+	}
+	return segmentsOverlap(segments(a), segments(b))
+}
+
+func segmentsOverlap(a, b []string) bool {
+	multi := func(segment string) bool { return strings.Contains(segment, "+}") }
+	param := func(segment string) bool { return strings.Contains(segment, "{") }
+	switch {
+	case len(a) == 0 || len(b) == 0:
+		return len(a) == 0 && len(b) == 0
+	case multi(a[0]):
+		// It takes b[0] and stops, or takes b[0] and goes on; when b[0]
+		// spans several too, b's goes on instead.
+		return segmentsOverlap(a[1:], b[1:]) || segmentsOverlap(a, b[1:]) || multi(b[0]) && segmentsOverlap(a[1:], b)
+	case multi(b[0]):
+		return segmentsOverlap(b, a)
+	case param(a[0]) || param(b[0]) || a[0] == b[0]:
+		return segmentsOverlap(a[1:], b[1:])
+	}
+	return false
 }
 
 // handWrittenCommands lists `<group> <verb>` for every cobra command outside
@@ -350,6 +368,21 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 		servers     []string
 	}
 	byName := map[string]*served{}
+	add := func(t upstreamTool, server string) {
+		entry := byName[t.name]
+		if entry == nil {
+			entry = &served{tool: t, definitions: map[string]bool{}}
+			byName[t.name] = entry
+		}
+		entry.definitions[t.definition] = true
+		entry.servers = append(entry.servers, server)
+		if accessRank[t.hint] > accessRank[entry.tool.hint] {
+			entry.tool.hint = t.hint
+		}
+		if entry.tool.product != t.product {
+			r.note("- Databricks managed MCP: `%s` is served by %s with different products; a new entry takes %s", t.name, strings.Join(entry.servers, ", "), entry.tool.product)
+		}
+	}
 	complete := true
 	for _, endpoint := range endpoints {
 		label := "Databricks MCP " + endpoint
@@ -375,13 +408,32 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 			r.merge(atlassian, label, tools, func(string) bool { return false })
 			continue
 		}
-		if kind := urlKindFor(databricks, endpoint); kind != nil && databricksPerWorkspace[strings.TrimPrefix(kind.ToolID, databricks.ToolIDPrefix)] {
+		// Every tool on a urlKinds server resolves by URL to the kind's
+		// tool, so that entry takes the strictest hint any of them carries
+		// and a fingerprint over all their definitions.
+		if kind := urlKindFor(databricks, endpoint); kind != nil {
+			name := strings.TrimPrefix(kind.ToolID, databricks.ToolIDPrefix)
+			effective := upstreamTool{name: name}
+			parts := make([]string, len(tools))
 			names := make([]string, len(tools))
 			for i, t := range tools {
-				names[i] = "`" + t.name + "`"
+				parts[i], names[i] = t.name+"\t"+t.definition, "`"+t.name+"`"
+				if accessRank[t.hint] > accessRank[effective.hint] {
+					effective.hint = t.hint
+				}
 			}
-			r.noteList(fmt.Sprintf("%s: per-workspace tool names, classified by URL as %s", label, kind.ToolID), names)
-			continue
+			sort.Strings(parts)
+			effective.definition = fingerprint([]byte(strings.Join(parts, "\n")))
+			for _, t := range databricks.Tools {
+				if t.Name == name {
+					effective.product = t.Product
+				}
+			}
+			add(effective, server)
+			if databricksPerWorkspace[name] {
+				r.noteList(fmt.Sprintf("%s: per-workspace tool names, classified by URL as %s", label, kind.ToolID), names)
+				continue
+			}
 		}
 		product := databricksMCPProducts[server]
 		if product == "" {
@@ -391,19 +443,7 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 		}
 		for _, t := range tools {
 			t.product = product
-			entry := byName[t.name]
-			if entry == nil {
-				entry = &served{tool: t, definitions: map[string]bool{}}
-				byName[t.name] = entry
-			}
-			entry.definitions[t.definition] = true
-			entry.servers = append(entry.servers, server)
-			if accessRank[t.hint] > accessRank[entry.tool.hint] {
-				entry.tool.hint = t.hint
-			}
-			if entry.tool.product != product {
-				r.note("- Databricks managed MCP: `%s` is served by %s with different products; a new entry takes %s", t.name, strings.Join(entry.servers, ", "), entry.tool.product)
-			}
+			add(t, server)
 		}
 	}
 	if len(byName) == 0 {

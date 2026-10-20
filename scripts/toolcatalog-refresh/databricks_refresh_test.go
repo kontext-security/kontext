@@ -56,8 +56,9 @@ func TestKeepDatabricksRoutes(t *testing.T) {
 			t.Errorf("report lacks %q:\n%s", want, report)
 		}
 	}
-	// svc.New.Get is a new read, and a tier and a product moved.
-	if len(r.review) != 4 {
+	// svc.New.Get is a new read on svc.Old.Get's route with another
+	// product, a tier was lowered and an operation renamed.
+	if len(r.review) != 5 {
 		t.Fatalf("review = %q", r.review)
 	}
 }
@@ -256,21 +257,55 @@ func TestKeepDatabricksRoutesCatchesIndirectLoosening(t *testing.T) {
 	}
 }
 
-func TestRouteTemplate(t *testing.T) {
+func TestRoutesOverlap(t *testing.T) {
 	for _, c := range []struct {
-		template, path string
-		want           bool
+		a, b string
+		want bool
 	}{
 		{"/api/2.0/agents/{name}", "/api/2.1/agents/config", true},
 		{"/api/2.0/agents/{name}", "/api/2.0/agents/{other}", true},
 		{"/api/2.0/agents/{name}", "/api/2.0/agents/a/b", false},
+		{"/api/2.0/serving-endpoints/{name}/config", "/api/2.0/serving-endpoints/configurations/{name}", true},
+		{"/api/2.0/serving-endpoints/{name}/config", "/api/2.0/serving-endpoints/{name}/logs", false},
 		{"/api/2.0/fs/files{file_path+}", "/api/2.0/fs/files/a/b", true},
-		{"/oidc/{x}", "/oidc/v1", true},
-		{"/oidc/{x}", "/api/2.0/oidc/v1", false},
+		{"/api/2.0/fs/files/{path+}", "/api/2.0/fs/{dir}/x/{rest+}", true},
+		{"/api/2.0/fs/files/{path+}", "/api/2.0/fs/files", false},
+		{"/api/2.0/{name}", "/api/2.0/agents", false},
+		{"/oidc/{x}", "/api/2.0/oidc", false},
 	} {
-		if got := routeTemplate(c.template).MatchString(c.path); got != c.want {
-			t.Errorf("routeTemplate(%q).Match(%q) = %v", c.template, c.path, got)
+		if got := routesOverlap(c.a, c.b); got != c.want {
+			t.Errorf("routesOverlap(%q, %q) = %v", c.a, c.b, got)
 		}
+		if got := routesOverlap(c.b, c.a); got != c.want {
+			t.Errorf("routesOverlap(%q, %q) = %v", c.b, c.a, got)
+		}
+	}
+}
+
+// Every tool on a urlKinds server resolves by URL to the kind's entry, so
+// that entry takes their strictest hint.
+func TestRefreshDatabricksMCPRaisesTheURLKindEntry(t *testing.T) {
+	server := fakeDatabricks(t, map[string][]map[string]any{
+		"/ai-gateway/mcp-services/system.ai.sandbox": {{"name": "run_code"}, {"name": "delete_file", "annotations": map[string]any{"destructiveHint": true}}},
+		"/api/2.0/mcp/functions/main/default":        {{"name": "main__default__drop", "annotations": map[string]any{"destructiveHint": true}}},
+	})
+	defer server.Close()
+	t.Setenv("DATABRICKS_HOST", server.URL)
+	t.Setenv("DATABRICKS_CLIENT_ID", "client")
+	t.Setenv("DATABRICKS_CLIENT_SECRET", "s3cret")
+	t.Setenv("DATABRICKS_MCP_ENDPOINTS", "/ai-gateway/mcp-services/system.ai.sandbox /api/2.0/mcp/functions/main/default")
+	databricks, err := readCatalog("../../internal/toolcatalog/providers/databricks-mcp.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &refresher{client: server.Client()}
+	r.refreshDatabricksMCP(databricks, &catalog{}, "")
+	access := map[string]string{}
+	for _, item := range databricks.Tools {
+		access[item.Name] = item.Access
+	}
+	if access["run_code"] != "delete" || access["uc-function"] != "delete" || access["delete_file"] != "delete" || access["main__default__drop"] != "" {
+		t.Fatalf("access = %v\n%s", access, strings.Join(r.report, "\n"))
 	}
 }
 
