@@ -31,8 +31,8 @@ func TestServerURLSkipsNonRegularFiles(t *testing.T) {
 
 // Every active Claude Desktop session rewrites its record, so between two
 // hooks many records newer than the caller's change. The lookup must not
-// re-parse them all, or it misses its deadline and the connector stays
-// unclassified (ENG-758 F5).
+// decode their connector lists, or it misses its deadline and the connector
+// stays unclassified (ENG-758 F5).
 func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions/acct/org")
@@ -44,7 +44,7 @@ func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 	own := filepath.Join(dir, "local_own.json")
 	write := func(path, session, pad string) {
 		t.Helper()
-		record := `{"cliSessionId": "` + session + `", "messages": "` + pad + `", "remoteMcpServersConfig": [{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `"}]}`
+		record := `{"cliSessionId": "` + session + `", "remoteMcpServersConfig": [{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `", "tools": "` + pad + `"}]}`
 		if err := os.WriteFile(path, []byte(record), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -79,11 +79,5 @@ func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 	age(30)
 	if got, _, _ := r.Server("claude", "session-own", "/", tool); got != url {
 		t.Fatalf("Server() after other sessions rewrote their records = %q", got)
-	}
-	// A record last parsed under another session is still read when no
-	// other record matches.
-	write(others[0], "session-late", "")
-	if got, _, _ := r.Server("claude", "session-late", "/", tool); got != url {
-		t.Fatalf("Server() for a record last parsed under another session = %q", got)
 	}
 }

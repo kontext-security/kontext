@@ -30,6 +30,7 @@
 package mcpconfig
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -326,7 +327,7 @@ func (r *Resolver) claudeAIConnector(home, server string) (url string, found boo
 	return "", false
 }
 
-// Warm parses the Claude Desktop session records into the cache, so the
+// Warm reads the Claude Desktop session records' ids into the cache, so the
 // first connector lookup after the daemon starts, for a session without a
 // record, costs one stat per record instead of a full scan that times out.
 func (r *Resolver) Warm() {
@@ -338,7 +339,7 @@ func (r *Resolver) Warm() {
 		}
 	}
 	for _, path := range desktopRecords(home) {
-		load(r, path, parseJSON[desktopSession])
+		load(r, path, parseSessionID)
 	}
 }
 
@@ -379,52 +380,59 @@ type desktopSession struct {
 	} `json:"remoteMcpServersConfig"`
 }
 
+// recordSession is a session record's cliSessionId.
+type recordSession string
+
+// parseSessionID reads a record's cliSessionId (the first, if repeated) and
+// stops. Every active Desktop session rewrites its record, and its
+// connector list is most of a record's few hundred KB, so decoding every
+// changed record whole missed the lookup's deadline under load.
+func parseSessionID(data []byte) (recordSession, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return "", fmt.Errorf("session record is not an object")
+	}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return "", err
+		}
+		// Keys match case-insensitively, as in json.Unmarshal.
+		if key, _ := token.(string); strings.EqualFold(key, "cliSessionId") {
+			var id string
+			err := decoder.Decode(&id)
+			return recordSession(id), err
+		}
+		var skip json.RawMessage
+		if err := decoder.Decode(&skip); err != nil {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
 // desktopConnector resolves a connector UUID through the Claude Desktop
 // session record whose cliSessionId is the hook's session id. Records are
-// tried newest first, since the calling session is active. Every active
-// Desktop session rewrites its record, so re-reading each changed record
-// would blow the lookup's deadline under load; a record last parsed under
-// another session is re-read only after the rest found nothing.
+// tried newest first, since the calling session is active.
 func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name string, found bool) {
 	if sessionID == "" {
 		return "", "", false
 	}
-	var others []string
-	try := func(path string) bool {
+	for _, path := range newestFirst(desktopRecords(home)) {
+		if id, _ := load(r, path, parseSessionID); string(id) != sessionID {
+			continue
+		}
 		session, ok := load(r, path, parseJSON[desktopSession])
 		if !ok || session.CLISessionID != sessionID {
-			return false
+			continue
 		}
 		for _, connector := range session.Connectors {
 			if strings.EqualFold(connector.UUID, server) {
-				url, name, found = strings.TrimSpace(connector.URL), connector.Name, true
-				return true
+				return strings.TrimSpace(connector.URL), connector.Name, true
 			}
-		}
-		return false
-	}
-	for _, path := range newestFirst(desktopRecords(home)) {
-		if id := r.parsedSession(path); id != "" && id != sessionID {
-			others = append(others, path)
-		} else if try(path) {
-			return url, name, found
-		}
-	}
-	for _, path := range others {
-		if try(path) {
-			return url, name, found
 		}
 	}
 	return "", "", false
-}
-
-// parsedSession returns the cliSessionId the record at path held when the
-// cache last parsed it, or "".
-func (r *Resolver) parsedSession(path string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	session, _ := r.cache[cacheKey[desktopSession](path)].value.(desktopSession)
-	return session.CLISessionID
 }
 
 // plugin resolves a plugin's MCP server, which Claude Code names
@@ -520,7 +528,8 @@ func normalize(name string) string {
 // cannot read leaves the server unidentified, never fails the hook.
 func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bool) {
 	var zero T
-	key := cacheKey[T](path)
+	// One file can be read as two shapes (plugin.json), so the key has both.
+	key := fmt.Sprintf("%s\x00%T", path, zero)
 	info, err := os.Stat(path)
 	r.mu.Lock()
 	if r.cache == nil {
@@ -553,13 +562,6 @@ func load[T any](r *Resolver, path string, parse func([]byte) (T, error)) (T, bo
 	return parsed, ok
 }
 
-// cacheKey has both the path and the shape, since one file can be read as
-// two shapes (plugin.json).
-func cacheKey[T any](path string) string {
-	var zero T
-	return fmt.Sprintf("%s\x00%T", path, zero)
-}
-
 // readFile opens without blocking, so a FIFO planted as .mcp.json in a
 // project cannot stall the hook, and reads only regular files.
 func readFile(path string) ([]byte, error) {
@@ -575,7 +577,11 @@ func readFile(path string) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, os.ErrInvalid
 	}
-	return io.ReadAll(io.LimitReader(file, maxConfigBytes))
+	// Sized up front: growing the buffer costs more than parsing a session
+	// record.
+	data := bytes.NewBuffer(make([]byte, 0, min(info.Size(), maxConfigBytes)+bytes.MinRead))
+	_, err = data.ReadFrom(io.LimitReader(file, maxConfigBytes))
+	return data.Bytes(), err
 }
 
 func parseJSON[T any](data []byte) (T, error) {
