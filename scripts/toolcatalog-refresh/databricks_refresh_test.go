@@ -375,3 +375,16 @@ func TestKeepDatabricksRoutesChecksChangedRoutesForOverlap(t *testing.T) {
 		t.Fatalf("kind = %s\n%s", r.kind(), strings.Join(r.report, "\n"))
 	}
 }
+
+// A DNS failure names the host without its port; neither form is reported.
+func TestRefreshDatabricksMCPRedactsTheHostName(t *testing.T) {
+	t.Setenv("DATABRICKS_HOST", "https://private-workspace.invalid:443")
+	t.Setenv("DATABRICKS_CLIENT_ID", "client")
+	t.Setenv("DATABRICKS_CLIENT_SECRET", "s3cret")
+	t.Setenv("DATABRICKS_MCP_ENDPOINTS", "/api/2.0/mcp/sql")
+	r := &refresher{client: &http.Client{}}
+	r.refreshDatabricksMCP(&catalog{Provider: "databricks"}, &catalog{}, "")
+	if report := strings.Join(r.report, "\n"); strings.Contains(report, "private-workspace") || !strings.Contains(report, "check failed") {
+		t.Fatalf("report:\n%s", report)
+	}
+}

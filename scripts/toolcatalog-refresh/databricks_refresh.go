@@ -360,18 +360,21 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 		r.note("- Databricks managed MCP: skipped (DATABRICKS_MCP_ENDPOINTS not set)")
 		return
 	}
-	if parsed, err := url.Parse("https://" + host); err != nil || parsed.Host != host || parsed.User != nil {
+	parsedHost, err := url.Parse("https://" + host)
+	if err != nil || parsedHost.Host != host || parsedHost.User != nil || parsedHost.Hostname() == "" {
 		r.databricksFailed("- Databricks managed MCP: check failed: DATABRICKS_HOST is not a host name")
 		return
 	}
 	// A transport error names the URL; the host is a secret and the report
 	// lands in a PR body. Every line this check adds is scrubbed again on
 	// the way out.
-	scrub := func(err error) string { return strings.ReplaceAll(err.Error(), host, "$DATABRICKS_HOST") }
+	// A DNS error names the bare host name, without the port.
+	redact := strings.NewReplacer(host, "$DATABRICKS_HOST", parsedHost.Hostname(), "$DATABRICKS_HOST")
+	scrub := func(err error) string { return redact.Replace(err.Error()) }
 	start := len(r.report)
 	defer func() {
 		for i := start; i < len(r.report); i++ {
-			r.report[i] = strings.ReplaceAll(r.report[i], host, "$DATABRICKS_HOST")
+			r.report[i] = redact.Replace(r.report[i])
 		}
 	}()
 	token, err := r.databricksToken("https://"+host, clientID, clientSecret)
