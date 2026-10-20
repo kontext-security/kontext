@@ -173,6 +173,28 @@ jobs:
           go test ./internal/toolcatalog/... ./internal/shellprojection/... ./internal/cedarpolicy/... ./internal/guard/app/server/... ./internal/managedobserve/... ./scripts/toolcatalog-refresh/...
           git add internal
           git commit -m "chore(toolcatalog): refresh tool catalogs"
+          # A PR stays strict-only only while every run on it was: an
+          # earlier run's change may still be waiting for review. Before
+          # commits that need review land on a strict-only PR, stop it
+          # merging; any failure here aborts before the push.
+          kind="$(cat "$RUNNER_TEMP/kind")"
+          if [[ -n "$PR" ]]; then
+            state="$(gh pr view "$BRANCH" --json id,labels,autoMergeRequest,isInMergeQueue)"
+            labelled="$(jq '.labels | map(.name) | index("catalog-strict-only") != null' <<<"$state")"
+            [[ "$labelled" == true ]] || kind=review
+            if [[ "$kind" != strict-only ]]; then
+              if [[ "$(jq .isInMergeQueue <<<"$state")" == true ]]; then
+                # shellcheck disable=SC2016 # $id is a GraphQL variable
+                gh api graphql -f query='mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }' -f id="$(jq -r .id <<<"$state")"
+              fi
+              if [[ "$(jq '.autoMergeRequest != null' <<<"$state")" == true ]]; then
+                gh pr merge "$BRANCH" --disable-auto
+              fi
+              if [[ "$labelled" == true ]]; then
+                gh pr edit "$BRANCH" --remove-label catalog-strict-only
+              fi
+            fi
+          fi
           if [[ -n "$PR" ]]; then
             git push origin "$BRANCH"
             # Each run reports only what it changed, so keep every earlier
@@ -192,20 +214,10 @@ jobs:
           if [[ "$(gh pr view "$BRANCH" --json isDraft --jq .isDraft)" == true ]]; then
             gh pr ready "$BRANCH"
           fi
-          # A PR stays strict-only only while every run on it was: an
-          # earlier run's change may still be waiting for review.
-          kind="$(cat "$RUNNER_TEMP/kind")"
-          if [[ -n "$PR" ]] && ! gh pr view "$BRANCH" --json labels --jq '.labels[].name' | grep -qx catalog-strict-only; then
-            kind=review
-          fi
           if [[ "$kind" == strict-only ]]; then
             gh pr edit "$BRANCH" --add-label catalog-strict-only
             gh pr merge "$BRANCH" --squash --auto
           else
-            if [[ -n "$PR" ]]; then
-              gh pr merge "$BRANCH" --disable-auto || true
-              gh pr edit "$BRANCH" --remove-label catalog-strict-only || true
-            fi
             gh pr edit "$BRANCH" --add-reviewer michiosw
           fi
 

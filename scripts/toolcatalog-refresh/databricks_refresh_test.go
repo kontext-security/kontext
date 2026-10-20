@@ -227,3 +227,63 @@ func TestProductForHasNoDatabricksNameRule(t *testing.T) {
 		t.Fatalf("a Databricks tool without a server product was added: %+v", c.Tools)
 	}
 }
+
+// A dropped admin operation whose command moved to a write operation, and a
+// new literal route that takes over an admin template's requests, both
+// loosen a classification without changing any operation's own tier.
+func TestKeepDatabricksRoutesCatchesIndirectLoosening(t *testing.T) {
+	old := &databricksTable{Routes: []databricksEntry{
+		{Operation: "svc.A.SetOwner", Method: "POST", Path: "/api/2.0/a/owner", Commands: []string{"a set-owner"}, Product: "admin", Access: "admin"},
+		{Operation: "svc.Agents.Update", Method: "PATCH", Path: "/api/2.0/agents/{name}", Product: "ai", Access: "admin"},
+	}}
+	for _, fresh := range []*databricksTable{
+		{Routes: []databricksEntry{
+			{Operation: "svc.A.Edit", Method: "POST", Path: "/api/2.0/a/edit", Commands: []string{"a set-owner"}, Product: "admin", Access: "write"},
+			{Operation: "svc.Agents.Update", Method: "PATCH", Path: "/api/2.0/agents/{name}", Product: "ai", Access: "admin"},
+		}},
+		{Routes: []databricksEntry{
+			{Operation: "svc.A.SetOwner", Method: "POST", Path: "/api/2.0/a/owner", Commands: []string{"a set-owner"}, Product: "admin", Access: "admin"},
+			{Operation: "svc.Agents.Update", Method: "PATCH", Path: "/api/2.0/agents/{name}", Product: "ai", Access: "admin"},
+			{Operation: "svc.Agents.UpdateConfig", Method: "PATCH", Path: "/api/2.1/agents/config", Product: "ai", Access: "write"},
+		}},
+	} {
+		r := &refresher{routes: fresh}
+		r.keepDatabricksRoutes(old, fresh)
+		if r.kind() != "review" {
+			t.Errorf("kind = %s for %+v\n%s", r.kind(), fresh.Routes, strings.Join(r.report, "\n"))
+		}
+	}
+}
+
+func TestRouteTemplate(t *testing.T) {
+	for _, c := range []struct {
+		template, path string
+		want           bool
+	}{
+		{"/api/2.0/agents/{name}", "/api/2.1/agents/config", true},
+		{"/api/2.0/agents/{name}", "/api/2.0/agents/{other}", true},
+		{"/api/2.0/agents/{name}", "/api/2.0/agents/a/b", false},
+		{"/api/2.0/fs/files{file_path+}", "/api/2.0/fs/files/a/b", true},
+		{"/oidc/{x}", "/oidc/v1", true},
+		{"/oidc/{x}", "/api/2.0/oidc/v1", false},
+	} {
+		if got := routeTemplate(c.template).MatchString(c.path); got != c.want {
+			t.Errorf("routeTemplate(%q).Match(%q) = %v", c.template, c.path, got)
+		}
+	}
+}
+
+func TestRefreshDatabricksMCPNeverEchoesAFullURL(t *testing.T) {
+	server := fakeDatabricks(t, nil)
+	defer server.Close()
+	host := strings.TrimPrefix(server.URL, "https://")
+	t.Setenv("DATABRICKS_HOST", host)
+	t.Setenv("DATABRICKS_CLIENT_ID", "client")
+	t.Setenv("DATABRICKS_CLIENT_SECRET", "s3cret")
+	t.Setenv("DATABRICKS_MCP_ENDPOINTS", server.URL+"/api/2.0/mcp/sql")
+	r := &refresher{client: server.Client()}
+	r.refreshDatabricksMCP(&catalog{Provider: "databricks"}, &catalog{}, "")
+	if report := strings.Join(r.report, "\n"); strings.Contains(report, host) || !strings.Contains(report, "not a server path") {
+		t.Fatalf("report:\n%s", report)
+	}
+}

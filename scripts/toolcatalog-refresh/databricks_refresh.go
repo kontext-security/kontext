@@ -119,6 +119,10 @@ func (r *refresher) regenerateDatabricks(old *databricksTable, version string) (
 			}
 		}
 		r.noteList("new hand-written subcommands, unclassified until added to databricksHandCommands", added)
+		if len(added) > 0 {
+			// Merging on its own would bury the notice.
+			r.needsReview("databricks/cli adds hand-written subcommands")
+		}
 	}
 	return table, nil
 }
@@ -167,8 +171,11 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 			entry := before
 			entry.Commands = nil
 			for _, command := range before.Commands {
-				if byCommand[command] == nil {
+				if now := byCommand[command]; now == nil {
 					entry.Commands = append(entry.Commands, command)
+				} else {
+					commandsMoved = append(commandsMoved, fmt.Sprintf("`%s` (`%s` to `%s`)", command, before.Operation, now.Operation))
+					compare("`"+command+"`", before, now)
 				}
 			}
 			kept = append(kept, entry)
@@ -188,12 +195,24 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 			}
 		}
 	}
-	var reads []string
+	var reads, shadows []string
 	for _, entry := range fresh.Routes {
-		if !oldOperations[entry.Operation] {
-			added = append(added, fmt.Sprintf("`%s %s` %s (%s, %s)", entry.Method, entry.Path, entry.Operation, entry.Product, entry.Access))
-			if entry.Access == "read" {
-				reads = append(reads, entry.Operation)
+		if oldOperations[entry.Operation] {
+			continue
+		}
+		added = append(added, fmt.Sprintf("`%s %s` %s (%s, %s)", entry.Method, entry.Path, entry.Operation, entry.Product, entry.Access))
+		if entry.Access == "read" {
+			reads = append(reads, entry.Operation)
+		}
+		// A new route takes over requests an old template matched when it
+		// is more literal or names the exact API version, so it must not be
+		// looser than any old route that matches its path.
+		for _, before := range old.Routes {
+			if before.Method != entry.Method || before.Path == "" || entry.Path == "" || before.Path == entry.Path || !routeTemplate(before.Path).MatchString(entry.Path) {
+				continue
+			}
+			if accessRankDatabricks[entry.Access] < accessRankDatabricks[before.Access] || entry.Product != before.Product {
+				shadows = append(shadows, fmt.Sprintf("`%s %s` %s (%s, %s) over `%s` %s (%s, %s)", entry.Method, entry.Path, entry.Operation, entry.Product, entry.Access, before.Path, before.Operation, before.Product, before.Access))
 			}
 		}
 	}
@@ -211,6 +230,7 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 	r.noteList("**tier lowered**", lowered)
 	r.noteList("tier raised", raised)
 	r.noteList("**product changed**", products)
+	r.noteList("**new route over an old template with a different tier or product**", shadows)
 	if len(reads) > 0 {
 		r.needsReview(fmt.Sprintf("the route table adds %d read operations", len(reads)))
 	}
@@ -220,9 +240,34 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 	if len(products) > 0 {
 		r.needsReview("the route table changes a product")
 	}
+	if len(shadows) > 0 {
+		r.needsReview("a new route takes over an old route's requests with a looser tier or another product")
+	}
 	if len(moved)+len(commandsMoved) > 0 {
 		r.needsReview("the route table moves an operation or a command")
 	}
+}
+
+var (
+	routeVersion   = regexp.MustCompile(`^/api/\d+\.\d+/`)
+	routeParameter = regexp.MustCompile(`\\\{[a-z0-9_]+(\\\+)?\\\}`)
+)
+
+// routeTemplate matches the paths, templates included, that a route
+// template matches under any API version. {param} spans one segment and
+// {param+} several, as in internal/toolcatalog.
+func routeTemplate(template string) *regexp.Regexp {
+	rest := routeVersion.ReplaceAllString(template, "")
+	pattern := routeParameter.ReplaceAllStringFunc(regexp.QuoteMeta(rest), func(parameter string) string {
+		if strings.Contains(parameter, "+") {
+			return `.+`
+		}
+		return `[^/]+`
+	})
+	if rest != template {
+		pattern = `/api/\d+\.\d+/` + pattern
+	}
+	return regexp.MustCompile("^" + pattern + "$")
 }
 
 // handWrittenCommands lists `<group> <verb>` for every cobra command outside
@@ -271,8 +316,15 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 		return
 	}
 	// A transport error names the URL; the host is a secret and the report
-	// lands in a PR body.
+	// lands in a PR body. Every line this check adds is scrubbed again on
+	// the way out.
 	scrub := func(err error) string { return strings.ReplaceAll(err.Error(), host, "$DATABRICKS_HOST") }
+	start := len(r.report)
+	defer func() {
+		for i := start; i < len(r.report); i++ {
+			r.report[i] = strings.ReplaceAll(r.report[i], host, "$DATABRICKS_HOST")
+		}
+	}()
 	token, err := r.databricksToken("https://"+host, clientID, clientSecret)
 	if err != nil {
 		r.note("- Databricks managed MCP: check failed: %s", scrub(err))
@@ -290,7 +342,8 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 		label := "Databricks MCP " + endpoint
 		parsed, err := url.Parse("https://" + host + endpoint)
 		if err != nil || !strings.HasPrefix(endpoint, "/") || parsed.Host != host {
-			r.note("- %s: check failed: not a server path", label)
+			// The entry may be a full URL, which names the host.
+			r.note("- Databricks MCP: check failed: a DATABRICKS_MCP_ENDPOINTS entry is not a server path")
 			complete = false
 			continue
 		}
