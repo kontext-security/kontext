@@ -24,7 +24,7 @@ func TestServerURLSkipsNonRegularFiles(t *testing.T) {
 	if got, _, _ := r.Server("claude", "s", project, "mcp__work__search"); got != "" {
 		t.Fatalf("ServerURL() = %q", got)
 	}
-	if _, err := readFile(filepath.Join(project, ".mcp.json")); err == nil {
+	if _, err := readFile(filepath.Join(project, ".mcp.json"), maxConfigBytes); err == nil {
 		t.Fatal("readFile read a FIFO")
 	}
 }
@@ -42,15 +42,15 @@ func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 	const connector = "c2be245b-9fd0-47e8-9a48-80c63e49e3fb"
 	const url = "https://dbc.cloud.databricks.com/ai-gateway/mcp-services/system.ai.dbsql"
 	own := filepath.Join(dir, "local_own.json")
-	write := func(path, session, pad string) {
+	write := func(path, head, session, pad string) {
 		t.Helper()
-		record := `{"cliSessionId": "` + session + `", "remoteMcpServersConfig": [` + pad + `{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `"}]}`
+		record := `{` + head + `"cliSessionId": "` + session + `", "remoteMcpServersConfig": [` + pad + `{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `"}]}`
 		if err := os.WriteFile(path, []byte(record), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Decoding 30 newer records of 150k connectors each takes well over the
-	// 250 ms deadline; reading them takes a few ms.
+	// 250 ms deadline; their heads take microseconds.
 	pad := strings.Repeat(`{"uuid": "x"},`, 150_000)
 	age := func(minutes int) {
 		t.Helper()
@@ -59,26 +59,31 @@ func TestDesktopConnectorIgnoresOtherSessionsRewritingRecords(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(own, "session-own", "")
+	write(own, "", "session-own", "")
 	age(60)
 	others := make([]string, 30)
 	for i := range others {
 		others[i] = filepath.Join(dir, fmt.Sprintf("local_%d.json", i))
-		write(others[i], fmt.Sprintf("session-%d", i), pad)
+		write(others[i], "", fmt.Sprintf("session-%d", i), pad)
 	}
 	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json")}
-	r.Warm()
 	tool := "mcp__" + connector + "__execute_sql"
 	if got, _, _ := r.Server("claude", "session-own", "/", tool); got != url {
-		t.Fatalf("warm Server() = %q", got)
+		t.Fatalf("Server() = %q", got)
 	}
 	for i, path := range others {
-		write(path, fmt.Sprintf("session-%d", i), pad+`{},`)
+		write(path, "", fmt.Sprintf("session-%d", i), pad+`{},`)
 	}
 	// The caller's record changed too, before the others.
-	write(own, "session-own", `{},`)
+	write(own, "", "session-own", `{},`)
 	age(30)
 	if got, _, _ := r.Server("claude", "session-own", "/", tool); got != url {
 		t.Fatalf("Server() after other sessions rewrote their records = %q", got)
+	}
+	// A record whose cliSessionId lies past its head is decoded whole.
+	write(own, `"title": "`+strings.Repeat("t", 2*recordHeadBytes)+`", `, "session-own", "")
+	age(30)
+	if got, _, _ := r.Server("claude", "session-own", "/", tool); got != url {
+		t.Fatalf("Server() for a cliSessionId past the head = %q", got)
 	}
 }
