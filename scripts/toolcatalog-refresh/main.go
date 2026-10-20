@@ -60,6 +60,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -232,7 +233,7 @@ func (r *refresher) run(dir string, write bool) error {
 	}
 	// The route table section is long, so it comes last.
 	if err := r.refreshDatabricksRoutes(routesPath); err != nil {
-		r.note("- Databricks route table: check failed: %v", err)
+		r.databricksFailed("- Databricks route table: check failed: %v", err)
 	}
 	defer r.noteKind()
 
@@ -288,7 +289,9 @@ func (r *refresher) markChanged(c *catalog) {
 }
 
 func (r *refresher) needsReview(reason string) {
-	r.review = append(r.review, reason)
+	if !slices.Contains(r.review, reason) {
+		r.review = append(r.review, reason)
+	}
 }
 
 func (r *refresher) kind() string {

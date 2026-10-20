@@ -46,6 +46,12 @@ var databricksMCPProducts = map[string]string{
 	"system.ai.web_search":    "ai",
 }
 
+// databricksPerWorkspace are the catalog's synthetic tool ids for servers
+// whose tool names are per workspace (a Unity Catalog function's name, an
+// AI Search index's), so they are only reported. The sandbox's urlKinds
+// entry names its real tool, run_code, and is listed like any server.
+var databricksPerWorkspace = map[string]bool{"uc-function": true, "ai-search": true}
+
 var (
 	databricksDistinctive = regexp.MustCompile(`^genie_|databricks`)
 	cobraUseLiteral       = regexp.MustCompile(`Use:\s*"([^"\s]+)|\.Use\s*=\s*"([^"\s]+)`)
@@ -163,6 +169,13 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 		case after != nil:
 			if after.Method != before.Method || after.Path != before.Path {
 				moved = append(moved, fmt.Sprintf("`%s` (`%s %s` to `%s %s`)", before.Operation, before.Method, before.Path, after.Method, after.Path))
+				// Older clients and `databricks api` calls still use the old
+				// route, so it stays classified under its own name.
+				if before.Path != "" && byRoute[before.Method+" "+before.Path] == nil {
+					route := before
+					route.Operation, route.Commands = before.Operation+"@"+old.CLI, nil
+					kept = append(kept, route)
+				}
 			}
 		case before.Path != "" && byRoute[before.Method+" "+before.Path] != nil:
 			after = byRoute[before.Method+" "+before.Path]
@@ -312,7 +325,7 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 		return
 	}
 	if parsed, err := url.Parse("https://" + host); err != nil || parsed.Host != host || parsed.User != nil {
-		r.note("- Databricks managed MCP: check failed: DATABRICKS_HOST is not a host name")
+		r.databricksFailed("- Databricks managed MCP: check failed: DATABRICKS_HOST is not a host name")
 		return
 	}
 	// A transport error names the URL; the host is a secret and the report
@@ -327,7 +340,7 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 	}()
 	token, err := r.databricksToken("https://"+host, clientID, clientSecret)
 	if err != nil {
-		r.note("- Databricks managed MCP: check failed: %s", scrub(err))
+		r.databricksFailed("- Databricks managed MCP: check failed: %s", scrub(err))
 		return
 	}
 
@@ -343,13 +356,13 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 		parsed, err := url.Parse("https://" + host + endpoint)
 		if err != nil || !strings.HasPrefix(endpoint, "/") || parsed.Host != host {
 			// The entry may be a full URL, which names the host.
-			r.note("- Databricks MCP: check failed: a DATABRICKS_MCP_ENDPOINTS entry is not a server path")
+			r.databricksFailed("- Databricks MCP: check failed: a DATABRICKS_MCP_ENDPOINTS entry is not a server path")
 			complete = false
 			continue
 		}
 		tools, err := r.listTools(parsed.String(), "Bearer "+token)
 		if err != nil {
-			r.note("- %s: check failed: %s", label, scrub(err))
+			r.databricksFailed("- %s: check failed: %s", label, scrub(err))
 			complete = false
 			continue
 		}
@@ -362,7 +375,7 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 			r.merge(atlassian, label, tools, func(string) bool { return false })
 			continue
 		}
-		if kind := urlKindFor(databricks, endpoint); kind != nil && !servesName(tools, strings.TrimPrefix(kind.ToolID, databricks.ToolIDPrefix)) {
+		if kind := urlKindFor(databricks, endpoint); kind != nil && databricksPerWorkspace[strings.TrimPrefix(kind.ToolID, databricks.ToolIDPrefix)] {
 			names := make([]string, len(tools))
 			for i, t := range tools {
 				names[i] = "`" + t.name + "`"
@@ -372,7 +385,7 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 		}
 		product := databricksMCPProducts[server]
 		if product == "" {
-			r.note("- %s: check failed: no product for server %q; add it to databricksMCPProducts", label, server)
+			r.databricksFailed("- %s: check failed: no product for server %q; add it to databricksMCPProducts", label, server)
 			complete = false
 			continue
 		}
@@ -406,13 +419,9 @@ func (r *refresher) refreshDatabricksMCP(databricks, atlassian *catalog, githubC
 		}
 		upstream = append(upstream, entry.tool)
 	}
-	synthetic := map[string]bool{}
-	for _, kind := range databricks.URLKinds {
-		synthetic[strings.TrimPrefix(kind.ToolID, databricks.ToolIDPrefix)] = true
-	}
 	r.merge(databricks, "Databricks managed MCP", upstream, func(name string) bool {
 		// Only a full listing can say a tool is gone.
-		return complete && !synthetic[name]
+		return complete && !databricksPerWorkspace[name]
 	})
 }
 
@@ -450,13 +459,11 @@ func urlKindFor(c *catalog, endpoint string) *urlKind {
 	return nil
 }
 
-func servesName(tools []upstreamTool, name string) bool {
-	for _, t := range tools {
-		if t.name == name {
-			return true
-		}
-	}
-	return false
+// databricksFailed reports a failed Databricks check. A human looks at the
+// refresh, so it never merges on its own, and the workflow fails the run.
+func (r *refresher) databricksFailed(format string, args ...any) {
+	r.note(format, args...)
+	r.needsReview("a Databricks check failed")
 }
 
 // noteGitHubGateway reports gateway GitHub tools the GitHub catalog does not
@@ -468,7 +475,7 @@ func (r *refresher) noteGitHubGateway(label, githubCatalogPath string, tools []u
 		err = json.Unmarshal(raw, &catalog)
 	}
 	if err != nil {
-		r.note("- %s: check failed: %v", label, err)
+		r.databricksFailed("- %s: check failed: %v", label, err)
 		return
 	}
 	known := map[string]bool{}

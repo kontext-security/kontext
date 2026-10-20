@@ -199,7 +199,8 @@ func TestRefreshDatabricksMCP(t *testing.T) {
 	if strings.Contains(report, "no longer listed") || strings.Contains(report, host) || strings.Contains(report, "s3cret") {
 		t.Errorf("report:\n%s", report)
 	}
-	if r.kind() != "strict-only" || !r.dirty[databricks] || r.dirty[atlassian] {
+	// The failed servers keep the refresh from merging on its own.
+	if r.kind() != "review" || !reflect.DeepEqual(r.review, []string{"a Databricks check failed"}) || !r.dirty[databricks] || r.dirty[atlassian] {
 		t.Fatalf("kind %s, review %q, dirty %v", r.kind(), r.review, r.dirty)
 	}
 }
@@ -285,5 +286,24 @@ func TestRefreshDatabricksMCPNeverEchoesAFullURL(t *testing.T) {
 	r.refreshDatabricksMCP(&catalog{Provider: "databricks"}, &catalog{}, "")
 	if report := strings.Join(r.report, "\n"); strings.Contains(report, host) || !strings.Contains(report, "not a server path") {
 		t.Fatalf("report:\n%s", report)
+	}
+}
+
+// An operation whose route moved keeps its old route for older clients.
+func TestKeepDatabricksRoutesKeepsAMovedRoute(t *testing.T) {
+	old := &databricksTable{CLI: "v1.0.0", Routes: []databricksEntry{{Operation: "svc.A.Delete", Method: "POST", Path: "/api/2.0/a/delete", Commands: []string{"a delete"}, Product: "compute", Access: "delete"}}}
+	fresh := &databricksTable{Routes: []databricksEntry{{Operation: "svc.A.Delete", Method: "DELETE", Path: "/api/2.0/a/{id}", Commands: []string{"a delete"}, Product: "compute", Access: "delete"}}}
+	r := &refresher{routes: fresh}
+	r.keepDatabricksRoutes(old, fresh)
+	want := databricksEntry{Operation: "svc.A.Delete@v1.0.0", Method: "POST", Path: "/api/2.0/a/delete", Product: "compute", Access: "delete"}
+	if len(fresh.Routes) != 2 || !reflect.DeepEqual(fresh.Routes[0], want) {
+		t.Fatalf("routes = %+v", fresh.Routes)
+	}
+	// The next refresh keeps the copy and reports nothing new about it.
+	next := &databricksTable{Routes: fresh.Routes[1:2:2]}
+	r = &refresher{routes: next}
+	r.keepDatabricksRoutes(&databricksTable{CLI: "v1.1.0", Routes: fresh.Routes}, next)
+	if len(next.Routes) != 2 || r.kind() != "strict-only" {
+		t.Fatalf("routes %+v, kind %s %q", next.Routes, r.kind(), r.review)
 	}
 }
