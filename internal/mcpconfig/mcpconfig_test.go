@@ -78,6 +78,14 @@ func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
 	if got, _, _ := r.Server("claude", "s", linked, "mcp__work__search"); got != "" {
 		t.Fatalf("Server() with .mcp.json linked into ~/Documents = %q, want the name fallback", got)
 	}
+	// A managed config that links into a guarded folder outranks every other
+	// scope, so the user-scope URL must not stand in for it either.
+	if err := os.Symlink(filepath.Join(guarded, ".mcp.json"), r.Managed); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := r.Server("claude", "s", filepath.Join(home, "elsewhere"), "mcp__work__search"); got != "" {
+		t.Fatalf("Server() with managed-mcp.json linked into ~/Documents = %q, want the name fallback", got)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for key := range r.cache {
