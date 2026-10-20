@@ -150,10 +150,10 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 	}
 	var added, removed, moved, lowered, raised, products, commandsMoved, commandsKept []string
 	compare := func(label string, before databricksEntry, after *databricksEntry) {
-		switch rank, was := accessRankDatabricks[after.Access], accessRankDatabricks[before.Access]; {
-		case rank < was:
+		switch {
+		case looserAccess(before.Access, after.Access):
 			lowered = append(lowered, fmt.Sprintf("%s (%s to %s)", label, before.Access, after.Access))
-		case rank > was:
+		case after.Access != before.Access:
 			raised = append(raised, fmt.Sprintf("%s (%s to %s)", label, before.Access, after.Access))
 		}
 		if after.Product != before.Product {
@@ -225,7 +225,7 @@ func (r *refresher) keepDatabricksRoutes(old, fresh *databricksTable) {
 			if before.Method != entry.Method || before.Path == "" || entry.Path == "" || !routesOverlap(before.Path, entry.Path) {
 				continue
 			}
-			if accessRankDatabricks[entry.Access] < accessRankDatabricks[before.Access] || entry.Product != before.Product {
+			if looserAccess(before.Access, entry.Access) || entry.Product != before.Product {
 				shadows = append(shadows, fmt.Sprintf("`%s %s` %s (%s, %s) over `%s` %s (%s, %s)", entry.Method, entry.Path, entry.Operation, entry.Product, entry.Access, before.Path, before.Operation, before.Product, before.Access))
 			}
 		}
@@ -299,6 +299,15 @@ func segmentsOverlap(a, b []string) bool {
 		return segmentsOverlap(a[1:], b[1:])
 	}
 	return false
+}
+
+// looserAccess says whether moving an operation from one tier to another
+// drops a fact a preset matches on. A delete emits databricks/delete and an
+// admin operation databricks/admin, and neither implies the other, so
+// delete to admin loosens the deletion presets even though admin ranks
+// higher.
+func looserAccess(before, after string) bool {
+	return accessRankDatabricks[after] < accessRankDatabricks[before] || before == "delete" && after == "admin"
 }
 
 // handWrittenCommands lists `<group> <verb>` for every cobra command outside

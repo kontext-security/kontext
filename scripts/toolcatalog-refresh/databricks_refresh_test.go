@@ -342,3 +342,17 @@ func TestKeepDatabricksRoutesKeepsAMovedRoute(t *testing.T) {
 		t.Fatalf("routes %+v, kind %s %q", next.Routes, r.kind(), r.review)
 	}
 }
+
+func TestLooserAccess(t *testing.T) {
+	for _, c := range []struct {
+		before, after string
+		want          bool
+	}{
+		{"read", "write", false}, {"write", "delete", false}, {"write", "admin", false}, {"read", "admin", false},
+		{"write", "read", true}, {"admin", "delete", true}, {"delete", "admin", true}, {"delete", "write", true},
+	} {
+		if got := looserAccess(c.before, c.after); got != c.want {
+			t.Errorf("looserAccess(%s, %s) = %v", c.before, c.after, got)
+		}
+	}
+}
