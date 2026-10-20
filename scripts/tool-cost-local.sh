@@ -26,13 +26,21 @@ def local_url(value):
     return url.scheme in ('http', 'https') and url.hostname in ('localhost', '127.0.0.1', '::1') and not url.username and not url.password
 if not local_url(cloud):
     raise SystemExit('KONTEXT_COST_CLOUD_URL must point to a local API.')
-profiles = json.loads(subprocess.check_output(['kontext', 'profile', 'ls', '--json']))
-# KONTEXT_COST_PROFILE names an enrolled local profile without switching the
-# machine's active one.
-wanted = os.environ.get('KONTEXT_COST_PROFILE', '').strip()
-active = next((p for p in profiles['profiles'] if (p.get('name') == wanted if wanted else p.get('active'))), None)
-if not active or not local_url(active.get('cloud_url', '')):
-    raise SystemExit('Select an enrolled local Kontext profile (or set KONTEXT_COST_PROFILE) before running this local test.')
+# KONTEXT_COST_TOKEN_ENV names an environment variable holding an install
+# token for the local API, for an isolated workspace without an enrolled
+# profile. Otherwise KONTEXT_COST_PROFILE names an enrolled local profile
+# without switching the machine's active one.
+token_env = os.environ.get('KONTEXT_COST_TOKEN_ENV', '').strip()
+if token_env:
+    if not token_env.isidentifier() or not os.environ.get(token_env, '').strip():
+        raise SystemExit('KONTEXT_COST_TOKEN_ENV must name a set environment variable.')
+    active = {'name': '$' + token_env, 'install_token_ref': 'env:' + token_env}
+else:
+    profiles = json.loads(subprocess.check_output(['kontext', 'profile', 'ls', '--json']))
+    wanted = os.environ.get('KONTEXT_COST_PROFILE', '').strip()
+    active = next((p for p in profiles['profiles'] if (p.get('name') == wanted if wanted else p.get('active'))), None)
+    if not active or not local_url(active.get('cloud_url', '')):
+        raise SystemExit('Select an enrolled local Kontext profile (or set KONTEXT_COST_PROFILE) before running this local test.')
 existing_path = state / 'managed.json'
 existing = json.loads(existing_path.read_text()) if existing_path.exists() else {}
 user_email = os.environ.get('KONTEXT_COST_USER_EMAIL', '').strip() or existing.get('device', {}).get('user_email', '')
@@ -200,17 +208,26 @@ if cookie:
     with urllib.request.urlopen(request, timeout=30) as response:
         summary = json.load(response)
 
+def instant(value):
+    return datetime.datetime.fromisoformat(re.sub(r'(\.\d{6})\d*', r'\1', value.replace('Z', '+00:00')))
+
 ids = {turn['id'] for turn in turns}
 labels = {turn['id']: turn['work_type'] for turn in turns}
+# Usage before the first minted prompt (a resumed session's earlier turns)
+# has no turn; everything after it must carry one of the session's turns.
+first = min((instant(t['started_at']) for t in local_turns), default=None)
+before = [row for row in usage if first and instant(row['timestamp']) < first - datetime.timedelta(seconds=1)]
+after = [row for row in usage if row not in before]
 by_work_type = {}
-for row in usage:
+for row in after:
     label = labels.get(row['turn_id']) or 'unclassified'
     by_work_type[label] = by_work_type.get(label, 0) + 1
 checks = {
     'two_turns_minted_locally': [t['sequence'] for t in local_turns] == [1, 2],
     'both_turns_stored': len(turns) == 2 and ids == {t['id'] for t in local_turns},
-    'usage_after_first_prompt_stamped': bool(usage) and all(row['turn_id'] in ids for row in usage),
-    'probe_usage_classified': bool(usage) and 'unclassified' not in by_work_type,
+    'usage_after_first_prompt_stamped': bool(after) and all(row['turn_id'] in ids for row in after),
+    'usage_before_first_prompt_unstamped': all(not row['turn_id'] for row in before),
+    'probe_usage_classified': bool(after) and 'unclassified' not in by_work_type,
 }
 artifact = {
     'generated_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -224,10 +241,14 @@ path = state / ('turns-' + datetime.date.today().isoformat() + '.json')
 path.write_text(json.dumps(artifact, indent=2, default=str) + '\n')
 print(json.dumps(checks, indent=2))
 print('Artifact:', path)
-if not (checks['two_turns_minted_locally'] and checks['both_turns_stored'] and checks['usage_after_first_prompt_stamped']):
+if not all(passed for name, passed in checks.items() if name != 'probe_usage_classified'):
     raise SystemExit('Turn probe failed; see the artifact.')
 if not checks['probe_usage_classified']:
-    print('Turns are stored but not classified yet: the classification worker needs WORK_TYPE_CLASSIFICATION_ENABLED=true and an OpenAI key.')
+    modes = {turn['id']: turn['prompt_mode'] for turn in turns}
+    if all(modes.get(row['turn_id']) != 'excerpt' for row in after if not labels.get(row['turn_id'])):
+        print('The unlabeled turns carry no excerpt (capture Omitted or the work-type switch off), so they stay Unclassified.')
+    else:
+        print('Turns are stored but not classified yet: the classification worker needs WORK_TYPE_CLASSIFICATION_ENABLED=true and an OpenAI key.')
 PY
 }
 
@@ -302,10 +323,14 @@ PY
     fi
     cd "$COST_STATE/project"
     # Two prompts in one session, each its own turn with its own tool call.
-    COST_FIRST="$(claude -p --output-format json --max-turns 3 \
+    if ! COST_FIRST="$(claude -p --output-format json --max-turns 3 \
       --allowedTools 'Bash(printf kontext-cost-local-probe)' \
       -- \
-      'Use Bash exactly once to execute: printf kontext-cost-local-probe. Do not read files or run other commands. After seeing the output, reply only OK.')"
+      'Use Bash exactly once to execute: printf kontext-cost-local-probe. Do not read files or run other commands. After seeing the output, reply only OK.')"; then
+      printf '%s\n' "$COST_FIRST" >&2
+      printf 'The first probe prompt failed; is the terminal claude client signed in? probe-replay needs no agent.\n' >&2
+      exit 1
+    fi
     printf '%s\n' "$COST_FIRST"
     COST_SESSION="$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["session_id"])' "$COST_FIRST")"
     claude -p --output-format json --max-turns 3 --resume "$COST_SESSION" \
@@ -314,11 +339,21 @@ PY
       'Now use Bash exactly once to execute: printf kontext-cost-local-probe-2. Do not read files or run other commands. Then explain in one sentence what the first output means.'
     report_turns "$COST_SESSION"
     ;;
+  probe-replay)
+    if [[ ! -S "$COST_SOCKET" ]]; then
+      printf 'Start the collector first: bash scripts/tool-cost-local.sh start\n' >&2
+      exit 1
+    fi
+    # The same two-turn check without a signed-in agent: Claude Code's hook
+    # calls and transcript rows, replayed through the built hook binary.
+    COST_SESSION="$(python3 "$COST_ROOT/scripts/tool-cost-replay.py" "$COST_STATE")"
+    report_turns "$COST_SESSION"
+    ;;
   report-turns)
     report_turns "${2:?Pass the probe session ID.}"
     ;;
   *)
-    printf 'Usage: bash scripts/tool-cost-local.sh [prepare|start|probe|report-turns SESSION_ID|observe-all|unobserve-all|observe-codex|unobserve-codex|probe-codex|register-codex [SESSION_ID]]\n' >&2
+    printf 'Usage: bash scripts/tool-cost-local.sh [prepare|start|probe|probe-replay|report-turns SESSION_ID|observe-all|unobserve-all|observe-codex|unobserve-codex|probe-codex|register-codex [SESSION_ID]]\n' >&2
     exit 1
     ;;
 esac

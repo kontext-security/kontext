@@ -201,6 +201,35 @@ Postgres container (`KONTEXT_COST_POSTGRES_CONTAINER`, default
 profile other than the active one. `report-turns SESSION_ID` repeats only the
 read-back.
 
+Without a signed-in terminal client, `probe-replay` runs the same check by
+replaying a Claude Code session through the built hook binary
+(`scripts/tool-cost-replay.py`): transcript rows in Claude Code's format with
+real-time timestamps and the hook calls in Claude Code's order, including a turn
+from before the install and a subagent with its own sidechain transcript.
+
+To keep the test off the shared development database, give the API a fresh one
+and seed a workspace the way the cloud e2e suite does; `KONTEXT_COST_TOKEN_ENV`
+then names the variable holding the install token, so no profile is enrolled:
+
+```sh
+docker exec kontext-postgres-1 psql -U postgres -c 'create database kontext_cli_turns_e2e'
+# In the cloud checkout's apps/api, with DATABASE_URL pointing at that database:
+node dist/apps/api/src/db/migrate.js
+NODE_ENV=development WORK_TYPE_CLASSIFICATION_ENABLED=true PORT=4117 RESEND_API_KEY='' \
+  AUTHENTICATED_CALL_METERING_WORKER_ENABLED=false node dist/apps/api/src/main.js
+# Seed: an organizations row (payload_capture_mode, work_type_classification)
+# and an install_tokens row holding sha256(token) for it. Then, here:
+KONTEXT_COST_CLOUD_URL=http://localhost:4117 KONTEXT_COST_TOKEN_ENV=TOKEN_VAR \
+  bash scripts/tool-cost-local.sh start
+KONTEXT_COST_CLOUD_URL=http://localhost:4117 KONTEXT_COST_DATABASE_URL=… \
+  bash scripts/tool-cost-local.sh probe-replay
+```
+
+`NODE_ENV=development` runs the classification worker, which the shared-database
+recipe keeps off with `NODE_ENV=test`; on a database of its own nothing else is
+processed. Changing the seeded row's capture mode or switch reaches the
+collector on its next configuration refresh (about a minute).
+
 Alternatively, select `.tmp/tool-cost-local/project` as the folder in Claude
 Code desktop, keep worktree creation off, and send:
 
