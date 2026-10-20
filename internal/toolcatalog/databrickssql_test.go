@@ -353,9 +353,11 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 	}
 }
 
-// bestOf returns the fastest classification of each text over 9 rounds
-// that interleave them, so a GC pause or a busy runner hits both alike and
-// does not fail a timing check.
+// bestOf returns the fastest time per classification of each text over 9
+// rounds that interleave them, so a GC pause or a busy runner hits both
+// alike and does not fail a timing check. A round repeats a text until
+// 20 ms have passed: a single call can take 1 ms, which one preemption on
+// a loaded runner multiplies.
 func bestOf(sqls ...string) []time.Duration {
 	best := make([]time.Duration, len(sqls))
 	for i := range best {
@@ -363,9 +365,14 @@ func bestOf(sqls ...string) []time.Duration {
 	}
 	for range 9 {
 		for i, sql := range sqls {
-			start := time.Now()
-			ClassifyDatabricksSQL(sql)
-			best[i] = min(best[i], time.Since(start))
+			start, calls := time.Now(), 0
+			var elapsed time.Duration
+			for elapsed < 20*time.Millisecond {
+				ClassifyDatabricksSQL(sql)
+				calls++
+				elapsed = time.Since(start)
+			}
+			best[i] = min(best[i], elapsed/time.Duration(calls))
 		}
 	}
 	return best
