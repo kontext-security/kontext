@@ -308,6 +308,18 @@
       "mustNotSurvive": ["FAKEdq1", "FAKEdq2", "FAKEansi3", "FAKEansi4"]
     },
     {
+      "name": "userinfo-quoted-username",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u 'alice':FAKEqu1 x && curl -u \"$USER\":'FAKEqu2' x",
+      "mustNotSurvive": ["FAKEqu1", "FAKEqu2"]
+    },
+    {
+      "name": "userinfo-concatenated-quotes",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u 'app:FAKEcq1'\\''FAKEcq2' https://example.test",
+      "mustNotSurvive": ["FAKEcq1", "FAKEcq2"]
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
