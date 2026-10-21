@@ -296,6 +296,18 @@
       "mustNotSurvive": ["FAKEansi1", "FAKEansi2"]
     },
     {
+      "name": "userinfo-escaped-colon",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u app\\:FAKEcolonpw https://example.test",
+      "mustNotSurvive": ["FAKEcolonpw"]
+    },
+    {
+      "name": "userinfo-quoted-escapes",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u \"app:FAKEdq1\\\"FAKEdq2\" x && curl -u $'app:FAKEansi3\\'FAKEansi4' x",
+      "mustNotSurvive": ["FAKEdq1", "FAKEdq2", "FAKEansi3", "FAKEansi4"]
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
