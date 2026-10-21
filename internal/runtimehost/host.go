@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -136,7 +137,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		return nil, fmt.Errorf("secure runtime database: %w", err)
 	}
 
-	sessionDir := filepath.Join("/tmp", "kontext", sessionID)
+	sessionDir := filepath.Join(sessionRootDir(), sessionID)
 	if err := createSessionDir(sessionDir); err != nil {
 		_ = closeStore()
 		_ = closeStepSafety()
@@ -299,6 +300,18 @@ func DefaultDBPath() string {
 		return filepath.Join(home, ".kontext", "guard.db")
 	}
 	return "kontext-guard.db"
+}
+
+// sessionRootDir returns the per-user parent of runtime session directories.
+// On Unix it stays under /tmp with the uid as suffix, so socket paths stay
+// short (sun_path is 104 bytes on macOS) and one user's directory cannot
+// block another's. Windows has no /tmp and os.Getuid returns -1 there, so it
+// uses os.TempDir, which is already per user (%LOCALAPPDATA%\Temp).
+func sessionRootDir() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.TempDir(), "kontext")
+	}
+	return filepath.Join("/tmp", fmt.Sprintf("kontext-%d", os.Getuid()))
 }
 
 func createSessionDir(sessionDir string) error {
