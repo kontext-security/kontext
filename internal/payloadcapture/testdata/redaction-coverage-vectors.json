@@ -374,6 +374,12 @@
       "mustNotSurvive": ["FAKEsubst1", "FAKEsubst2"]
     },
     {
+      "name": "url-userinfo-quoted-password",
+      "ruleId": "url-userinfo",
+      "input": "curl https://app:\"FAKEurlq1!\"@example.test/x && curl 'https://app:'\"FAKEurlq2\"'@example.test'",
+      "mustNotSurvive": ["FAKEurlq1", "FAKEurlq2"]
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
