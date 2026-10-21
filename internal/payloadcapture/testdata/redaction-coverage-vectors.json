@@ -380,6 +380,36 @@
       "mustNotSurvive": ["FAKEurlq1", "FAKEurlq2"]
     },
     {
+      "name": "url-userinfo-substitution-and-escaped-quote",
+      "ruleId": "url-userinfo",
+      "input": "curl https://$(id -un):FAKEurls1@api.example.test/ && curl https://user:\"FAKEurls2\\\"rest\"@api.example.test/",
+      "mustNotSurvive": ["FAKEurls1", "FAKEurls2"]
+    },
+    {
+      "name": "substitution-with-quoted-paren",
+      "ruleId": "sensitive-assignment",
+      "input": "TOKEN=$(printf ')') PASSWORD='FAKEparen1 FAKEparen2' ./login",
+      "mustNotSurvive": ["FAKEparen1", "FAKEparen2"]
+    },
+    {
+      "name": "ansi-c-quoted-header",
+      "ruleId": "authorization-header-ansi-c-quoted",
+      "input": "curl -H $'Authorization: Bearer FAKEansih1\\' FAKEansih2' https://example.test",
+      "mustNotSurvive": ["FAKEansih1", "FAKEansih2"]
+    },
+    {
+      "name": "userinfo-unfinished-quoted-argument",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u \"app:FAKEunf1",
+      "mustNotSurvive": ["FAKEunf1"]
+    },
+    {
+      "name": "userinfo-unfinished-single-quoted-argument",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u 'app:FAKEunf2",
+      "mustNotSurvive": ["FAKEunf2"]
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
