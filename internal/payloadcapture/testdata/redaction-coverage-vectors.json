@@ -141,6 +141,13 @@
       "expected": "psql \"postgres://[REDACTED_SECRET]@db.example.test/app\""
     },
     {
+      "name": "url-userinfo-after-word-character",
+      "ruleId": "url-userinfo",
+      "input": "see _https://alice:FAKEunderscore1@db.example.test/path_ and x_postgres://app:FAKEunderscore2@db.example.test/app",
+      "mustNotSurvive": ["FAKEunderscore1", "FAKEunderscore2"],
+      "expected": "see _https://[REDACTED_SECRET]@db.example.test/path_ and x_postgres://[REDACTED_SECRET]@db.example.test/app"
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",

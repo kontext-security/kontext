@@ -15,7 +15,9 @@ import (
 //
 //  1. scheme://user:pass@ for a non-HTTP scheme survives into the stored
 //     action and so into the ledger batch the uploader sends;
-//  2. a password with a literal @ leaks the part after its first @;
+//  2. a password with a literal @ leaks the part after its first @, a
+//     password with an apostrophe is not matched, or a URL right after "_"
+//     is skipped;
 //  3. redaction drops the scheme or host, so the admin cannot see what the
 //     agent connected to.
 func TestURLCredentialsNeverLeaveTheEndpoint(t *testing.T) {
@@ -31,8 +33,9 @@ func TestURLCredentialsNeverLeaveTheEndpoint(t *testing.T) {
 		// 2
 		"at-sign":    "psql postgres://app:FAKE-at@sign-tail@db.example.test/app",
 		"apostrophe": `psql "postgres://app:FAKE-quote'pw@db.example.test/app"`,
+		"underscore": "echo _postgres://app:FAKE-underscore-pw@db.example.test/app_",
 	}
-	passwords := []string{"FAKE-at", "sign-tail", "FAKE-quote'pw"}
+	passwords := []string{"FAKE-at", "sign-tail", "FAKE-quote'pw", "FAKE-underscore-pw"}
 	for _, scheme := range schemes {
 		password := "FAKE-" + scheme + "-pw"
 		passwords = append(passwords, password)
