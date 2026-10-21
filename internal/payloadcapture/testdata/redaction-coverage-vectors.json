@@ -338,6 +338,12 @@
       "mustNotSurvive": ["FAKEflagcont"]
     },
     {
+      "name": "userinfo-command-substitution",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u $(whoami):FAKEsub1 x && curl --user=$(id -un):FAKEsub2 x && curl -u ${USER}:FAKEsub3 x && curl -u `whoami`:FAKEsub4 x",
+      "mustNotSurvive": ["FAKEsub1", "FAKEsub2", "FAKEsub3", "FAKEsub4"]
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
