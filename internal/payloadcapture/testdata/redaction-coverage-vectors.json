@@ -266,6 +266,24 @@
       "mustNotSurvive": ["FAKEtail2"]
     },
     {
+      "name": "assignment-escaped-space",
+      "ruleId": "sensitive-assignment",
+      "input": "PGPASSWORD=FAKEdemo\\ FAKEsword psql",
+      "mustNotSurvive": ["FAKEdemo", "FAKEsword"]
+    },
+    {
+      "name": "userinfo-escaped-space",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u app:FAKEdemo2\\ FAKEsword2 https://example.test",
+      "mustNotSurvive": ["FAKEdemo2", "FAKEsword2"]
+    },
+    {
+      "name": "flag-escaped-space",
+      "ruleId": "sensitive-cli-flag",
+      "input": "tool --password FAKEdemo3\\ FAKEsword3 x",
+      "mustNotSurvive": ["FAKEdemo3", "FAKEsword3"]
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
