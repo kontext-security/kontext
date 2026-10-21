@@ -13,6 +13,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/fsperm"
 )
 
 const (
@@ -400,7 +401,7 @@ func (c *Cache) persist(file cacheFile) error {
 			_ = os.Remove(tempPath)
 		}
 	}()
-	if err := temp.Chmod(0o600); err != nil {
+	if err := fsperm.RestrictFile(temp); err != nil {
 		_ = temp.Close()
 		return fmt.Errorf("cedar policy cache: set permissions: %w", err)
 	}
@@ -419,12 +420,7 @@ func (c *Cache) persist(file cacheFile) error {
 		return fmt.Errorf("cedar policy cache: replace: %w", err)
 	}
 	cleanup = false
-	directory, err := os.Open(filepath.Dir(c.path))
-	if err != nil {
-		return fmt.Errorf("cedar policy cache: open directory: %w", err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
+	if err := fsperm.SyncDir(filepath.Dir(c.path)); err != nil {
 		return fmt.Errorf("cedar policy cache: sync directory: %w", err)
 	}
 	return nil

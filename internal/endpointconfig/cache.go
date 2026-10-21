@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/fsperm"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
@@ -275,7 +276,7 @@ func (c *Cache) persist(file cacheFile) error {
 			_ = os.Remove(temporaryPath)
 		}
 	}()
-	if err := temporary.Chmod(0o600); err != nil {
+	if err := fsperm.RestrictFile(temporary); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("endpoint configuration cache: set permissions: %w", err)
 	}
@@ -298,12 +299,7 @@ func (c *Cache) persist(file cacheFile) error {
 	// not crash-durable until the containing directory is synced. If that sync
 	// fails, Apply deliberately leaves the in-memory value unconfirmed and the
 	// next refresh heals the cache (possibly after one extra 200 response).
-	directory, err := os.Open(filepath.Dir(c.path))
-	if err != nil {
-		return fmt.Errorf("endpoint configuration cache: open directory: %w", err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
+	if err := fsperm.SyncDir(filepath.Dir(c.path)); err != nil {
 		return fmt.Errorf("endpoint configuration cache: sync directory: %w", err)
 	}
 	return nil
