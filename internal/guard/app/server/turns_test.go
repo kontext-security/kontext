@@ -52,7 +52,7 @@ func TestTurnSourceAndPromptMode(t *testing.T) {
 		{name: "omitted, switch off", capture: confirmedCapture(payloadcapture.ModeOmitted, false), prompt: prompt, mode: sqlite.TurnPromptOmitted},
 		{name: "summaries, switch off", capture: confirmedCapture(payloadcapture.ModeSummary, false), prompt: prompt, mode: sqlite.TurnPromptSkipped},
 		{name: "full, switch off", capture: confirmedCapture(payloadcapture.ModeFull, false), prompt: prompt, mode: sqlite.TurnPromptSkipped},
-		{name: "summaries, switch on", capture: confirmedCapture(payloadcapture.ModeSummary, true), prompt: prompt, mode: sqlite.TurnPromptExcerpt, limit: 4_000},
+		{name: "summaries, switch on", capture: confirmedCapture(payloadcapture.ModeSummary, true), prompt: prompt, mode: sqlite.TurnPromptExcerpt, limit: 64_000},
 		{name: "full, switch on", capture: confirmedCapture(payloadcapture.ModeFull, true), prompt: prompt, mode: sqlite.TurnPromptExcerpt, limit: 64_000},
 		{name: "2 MB paste", capture: confirmedCapture(payloadcapture.ModeFull, true), prompt: paste, mode: sqlite.TurnPromptSkipped},
 		{name: "2 MB paste, omitted", capture: confirmedCapture(payloadcapture.ModeOmitted, true), prompt: paste, mode: sqlite.TurnPromptOmitted},
@@ -95,16 +95,23 @@ func TestTurnPromptExcerpt(t *testing.T) {
 	}
 
 	long := strings.Repeat("word ", 20_000) + "the end"
-	for capture, limit := range map[*payloadcapture.RuntimeConfiguration]int{&summaries: 4_000, &full: 64_000} {
-		got := turnPrompt(long, *capture)
-		if !*got.Truncated || len(*got.Text) > limit || !strings.Contains(*got.Text, "[Context omitted]") || !strings.HasSuffix(*got.Text, "the end") {
-			t.Fatalf("bounded excerpt: %d bytes, truncated %v", len(*got.Text), *got.Truncated)
+	// One bound under Summaries and Full alike: the captured-payload cap.
+	for _, capture := range []payloadcapture.RuntimeConfiguration{summaries, full} {
+		got := turnPrompt(long, capture)
+		if !*got.Truncated || len(*got.Text) > 64_000 || len(*got.Text) < 63_000 || !strings.Contains(*got.Text, "[Context omitted]") || !strings.HasSuffix(*got.Text, "the end") {
+			t.Fatalf("%s excerpt: %d bytes, truncated %v", capture.EffectiveMode, len(*got.Text), *got.Truncated)
 		}
 	}
-	// A secret across the bound leaves no prefix: redaction runs first.
-	crossing := strings.Repeat("a ", 999) + secret + strings.Repeat(" b", 2_000)
-	if text := *turnPrompt(crossing, summaries).Text; strings.Contains(text, "sk-proj-") || strings.Contains(text, "A1b2A1b2") {
-		t.Fatalf("secret prefix survived bounding: %q", text)
+	under := strings.Repeat("word ", 2_000) + "the end"
+	if got := turnPrompt(under, summaries); *got.Truncated || *got.Text != strings.TrimSpace(under) {
+		t.Fatalf("a 10,000-byte prompt under Summaries was bounded: %d bytes, truncated %v", len(*got.Text), *got.Truncated)
+	}
+	// A secret across the bound leaves no prefix: redaction runs first. The
+	// secret starts eight bytes before the head cut, (64,000 − marker) / 2,
+	// so bounding first would keep "sk-proj-".
+	crossing := strings.Repeat("a ", 15_991) + secret + strings.Repeat(" b", 20_000)
+	if got := turnPrompt(crossing, summaries); !*got.Truncated || strings.Contains(*got.Text, "sk-proj-") || strings.Contains(*got.Text, "A1b2A1b2") {
+		t.Fatalf("secret prefix survived bounding (truncated %v)", *got.Truncated)
 	}
 }
 

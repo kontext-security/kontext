@@ -23,11 +23,10 @@ const (
 	// maxTurnPromptBytes is the hook-metadata redaction guard: a longer prompt
 	// is not redacted at all and its turn carries its size only.
 	maxTurnPromptBytes = 1 << 20
-	// The excerpt bounds, in bytes, which keeps them within the wire's
-	// character bounds. Under Summaries the classifier reads only this much;
-	// under Full payloads it is the captured-payload cap.
-	summaryTurnExcerptBytes = 4_000
-	fullTurnExcerptBytes    = 64_000
+	// turnExcerptBytes bounds the excerpt under Summaries and Full payloads
+	// alike: the captured-payload cap. Bytes, so the wire's character bound
+	// holds too.
+	turnExcerptBytes = 64_000
 	// maxTrackedTurnSessions bounds the cache; dropped sessions are rebuilt
 	// from SQLite on their next event.
 	maxTrackedTurnSessions = 4096
@@ -181,8 +180,8 @@ func turnSource(prompt string, isInterrupt *bool) string {
 // size only; so does a workspace with the work-type switch off, or without a
 // confirmed directive, which clears the switch. Otherwise the excerpt is the
 // prompt without harness blocks, redacted with the Merlin review redactor,
-// whitespace-collapsed, and bounded to 4,000 bytes under Summaries or 64,000
-// under Full payloads. Chars is the original's length in runes; the hash is
+// whitespace-collapsed, and bounded to 64,000 bytes whatever the capture
+// mode. Chars is the original's length in runes; the hash is
 // over the trimmed, whitespace-collapsed original, so prompts differing only
 // in spacing share a label.
 func turnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) sqlite.TurnPrompt {
@@ -192,10 +191,6 @@ func turnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) sqli
 		return sqlite.SizeOnlyTurnPrompt(sqlite.TurnPromptOmitted, chars)
 	case !capture.WorkTypeClassification || len(prompt) > maxTurnPromptBytes:
 		return sqlite.SizeOnlyTurnPrompt(sqlite.TurnPromptSkipped, chars)
-	}
-	limit := summaryTurnExcerptBytes
-	if capture.EffectiveMode == payloadcapture.ModeFull {
-		limit = fullTurnExcerptBytes
 	}
 	digest := sha256.Sum256([]byte(collapseWhitespace(prompt)))
 	// Redact before collapsing whitespace, on text shaped as the rules expect,
@@ -208,7 +203,7 @@ func turnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) sqli
 		}
 		return r
 	}, text))
-	text, truncated := boundedReviewText(text, limit)
+	text, truncated := boundedReviewText(text, turnExcerptBytes)
 	return sqlite.ExcerptTurnPrompt(text, chars, truncated, hex.EncodeToString(digest[:]))
 }
 

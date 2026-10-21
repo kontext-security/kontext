@@ -80,14 +80,15 @@ for a completed turn; it does not implement stopping or limiting an agent.
    | --- | --- | --- | --- |
    | Omitted | any | `omitted`: size only | never |
    | Summaries | off | `skipped`: size only | never |
-   | Summaries | on | `excerpt`: redacted, at most 4,000 characters | yes, redacted, with the turn |
+   | Summaries | on | `excerpt`: redacted, at most 64,000 characters | yes, redacted, with the turn |
    | Full payloads | off | `skipped`: size only | never |
    | Full payloads | on | `excerpt`: redacted, at most 64,000 characters | yes, redacted, with the turn |
 
-   The cloud deletes stored excerpts when the workspace turns the switch off
-   or moves to Omitted. Until the daemon has confirmed its endpoint
-   configuration it sends `skipped`. A prompt over 1 MiB is never redacted
-   and also goes as `skipped`, with its true size.
+   Summaries and Full payloads send the same excerpt, bounded to the
+   captured-payload cap. The cloud deletes stored excerpts when the workspace
+   turns the switch off or moves to Omitted. Until the daemon has confirmed
+   its endpoint configuration it sends `skipped`. A prompt over 1 MiB is never
+   redacted and also goes as `skipped`, with its true size.
 3. SQLite stores changed records with increasing revisions. The stream worker
    captures before network I/O, retries partial/delayed writes, resumes after
    restart, and acknowledges only the revision successfully uploaded. It
