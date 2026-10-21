@@ -22,14 +22,14 @@
     },
     {
       "name": "plain-authorization-header",
-      "ruleId": "authorization-header",
+      "ruleId": "authorization-header-double-quoted",
       "input": "curl -H \"Authorization: header-secret-FAKE\" https://api.example.test",
       "mustNotSurvive": ["header-secret-FAKE"],
       "expected": "curl -H \"Authorization: [REDACTED_SECRET]\" https://api.example.test"
     },
     {
       "name": "short-bearer-value-in-header-context",
-      "ruleId": "authorization-header",
+      "ruleId": "authorization-header-single-quoted",
       "input": "curl -H 'Authorization: Bearer ab12' https://api.example.test",
       "mustNotSurvive": ["ab12"],
       "expected": "curl -H 'Authorization: Bearer [REDACTED_SECRET]' https://api.example.test"
@@ -42,11 +42,11 @@
       "expected": "set-header Authorization: Bearer [REDACTED_SECRET]"
     },
     {
-      "name": "header-swallows-following-quoted-args",
-      "ruleId": "authorization-header",
+      "name": "header-keeps-following-quoted-args",
+      "ruleId": "authorization-header-double-quoted",
       "input": "curl -H \"Authorization: Bearer tok-FAKE\" -d '{\"k\":\"v\"}' https://api.example.test",
       "mustNotSurvive": ["tok-FAKE"],
-      "expected": "curl -H \"Authorization: Bearer [REDACTED_SECRET]"
+      "expected": "curl -H \"Authorization: Bearer [REDACTED_SECRET]\" -d '{\"k\":\"v\"}' https://api.example.test"
     },
     {
       "name": "github-classic-token",
@@ -146,6 +146,106 @@
       "input": "see _https://alice:FAKEunderscore1@db.example.test/path_ and x_postgres://app:FAKEunderscore2@db.example.test/app",
       "mustNotSurvive": ["FAKEunderscore1", "FAKEunderscore2"],
       "expected": "see _https://[REDACTED_SECRET]@db.example.test/path_ and x_postgres://[REDACTED_SECRET]@db.example.test/app"
+    },
+    {
+      "name": "auth-assignment",
+      "ruleId": "auth-assignment",
+      "input": "AUTH=FAKEauth1 run && x auth:'FAKEauth2' && y Authorization=FAKEauth3",
+      "mustNotSurvive": ["FAKEauth1", "FAKEauth2", "FAKEauth3"],
+      "expected": "AUTH=[REDACTED_SECRET] run && x auth:[REDACTED_SECRET] && y Authorization=[REDACTED_SECRET]"
+    },
+    {
+      "name": "auth-assignment-short-basic",
+      "ruleId": "auth-assignment",
+      "input": "auth=Basic dTpw run",
+      "mustNotSurvive": ["dTpw"],
+      "expected": "auth=Basic [REDACTED_SECRET] run"
+    },
+    {
+      "name": "cli-flag-extra-whitespace",
+      "ruleId": "sensitive-cli-flag",
+      "input": "curl --token  FAKEflag1 --password\tFAKEflag2 x",
+      "mustNotSurvive": ["FAKEflag1", "FAKEflag2"]
+    },
+    {
+      "name": "query-param-apostrophe",
+      "ruleId": "sensitive-query-param",
+      "input": "curl https://api.example.test/?key=FAKEq'uotetail x",
+      "mustNotSurvive": ["FAKEq", "uotetail"]
+    },
+    {
+      "name": "assignment-escaped-newline",
+      "ruleId": "sensitive-assignment",
+      "input": "PASSWORD=\"FAKEnl\\\nnltail\" run",
+      "mustNotSurvive": ["FAKEnl", "nltail"]
+    },
+    {
+      "name": "assignment-unterminated-with-escape",
+      "ruleId": "sensitive-assignment",
+      "input": "PASSWORD=\"FAKEun\\\"untail",
+      "mustNotSurvive": ["FAKEun", "untail"]
+    },
+    {
+      "name": "assignment-concatenated-empty-quotes",
+      "ruleId": "sensitive-assignment",
+      "input": "PASSWORD=FAKEcat''cattail run",
+      "mustNotSurvive": ["FAKEcat", "cattail"]
+    },
+    {
+      "name": "assignment-concatenated-space-quote",
+      "ruleId": "sensitive-assignment",
+      "input": "PASSWORD=FAKEsq' sq tail' run",
+      "mustNotSurvive": ["FAKEsq", "sq tail"]
+    },
+    {
+      "name": "single-quoted-header-then-quoted-password",
+      "ruleId": "authorization-header-single-quoted",
+      "input": "curl -H 'Authorization: Bearer FAKEhdr1' PASSWORD='FAKEpw1 FAKEpw2' x",
+      "mustNotSurvive": ["FAKEhdr1", "FAKEpw1", "FAKEpw2"],
+      "expected": "curl -H 'Authorization: Bearer [REDACTED_SECRET]' PASSWORD=[REDACTED_SECRET] x"
+    },
+    {
+      "name": "double-quoted-header-then-quoted-password",
+      "ruleId": "authorization-header-double-quoted",
+      "input": "curl -H \"Authorization: Bearer FAKEhdr2\" PASSWORD=\"FAKEpw3 FAKEpw4\" x",
+      "mustNotSurvive": ["FAKEhdr2", "FAKEpw3", "FAKEpw4"],
+      "expected": "curl -H \"Authorization: Bearer [REDACTED_SECRET]\" PASSWORD=[REDACTED_SECRET] x"
+    },
+    {
+      "name": "json-authorization-property",
+      "ruleId": "json-sensitive-property",
+      "input": "echo '{\"Authorization\":\"Bearer x\",\"auth\":\"FAKEjsonauth\"}'",
+      "mustNotSurvive": ["Bearer x", "FAKEjsonauth"]
+    },
+    {
+      "name": "quoted-header-adjacent-segment",
+      "ruleId": "authorization-header-double-quoted",
+      "input": "curl -H \"Authorization: Bearer \"\"FAKEadjacent1\" -H 'Authorization: Bearer '\"FAKEadjacent2\" x",
+      "mustNotSurvive": ["FAKEadjacent1", "FAKEadjacent2"]
+    },
+    {
+      "name": "query-param-double-quote",
+      "ruleId": "sensitive-query-param",
+      "input": "curl 'https://api.example.test/?key=FAKEdq\"dqtail' x",
+      "mustNotSurvive": ["FAKEdq", "dqtail"]
+    },
+    {
+      "name": "nbsp-after-flag-and-header",
+      "ruleId": "sensitive-cli-flag",
+      "input": "curl --token FAKEnbsp1 -H 'Authorization: Bearer FAKEnbsp2' x",
+      "mustNotSurvive": ["FAKEnbsp1", "FAKEnbsp2"]
+    },
+    {
+      "name": "quoted-header-mixed-quote-segments",
+      "ruleId": "authorization-header-double-quoted",
+      "input": "curl -H \"Authorization: \"'Bearer FAKEmixed1 FAKEmixed2' x",
+      "mustNotSurvive": ["FAKEmixed1", "FAKEmixed2"]
+    },
+    {
+      "name": "quoted-header-then-semicolon-assignment",
+      "ruleId": "authorization-header-single-quoted",
+      "input": "curl -H 'Authorization: Bearer FAKEsemi0';PASSWORD='FAKEsemi1 FAKEsemi2' ./login",
+      "mustNotSurvive": ["FAKEsemi0", "FAKEsemi1", "FAKEsemi2"]
     },
     {
       "name": "env-assignment",

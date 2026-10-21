@@ -1,5 +1,5 @@
 {
-  "version": "rules/3",
+  "version": "rules/4",
   "keyNormalization": "camel_to_snake",
   "keyPatterns": [
     {
@@ -14,22 +14,38 @@
     {
       "id": "private-key-block",
       "description": "PEM private key blocks.",
-      "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+      "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\xA0\\x0B\\S]*?-----END [A-Z ]*PRIVATE KEY-----",
       "caseInsensitive": false,
       "provenance": "gitleaks:private-key"
     },
     {
-      "id": "authorization-header",
-      "description": "Authorization header values, with or without an authentication scheme.",
-      "pattern": "\\b(Authorization\\s*:\\s*(?:(?:Bearer|Basic)\\s+)?)(?:\"(?:\\\\.|[^\"\\\\])*\"|'[^']*'|`(?:\\\\.|[^`\\\\])*`|[^\\s&;|)\"'`]+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\"(?:\\\\.|[^\"\\\\])*\"|'[^']*'|`(?:\\\\.|[^`\\\\])*`|[^\\s&;|)\"'`]+|\"[^\\s\"][^\"]*$|'[^\\s'][^']*$|`[^\\s`][^`]*$)*",
+      "id": "authorization-header-single-quoted",
+      "description": "An Authorization header inside a single-quoted argument: the value ends at the closing quote.",
+      "pattern": "('Authorization[\\s\\xA0\\x0B]*:[\\s\\xA0\\x0B]*(?:(?:Bearer|Basic)[\\s\\xA0\\x0B]+)?)[^']*(?:'(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:[^\\s\\xA0\\x0B\"\\\\]|\\\\[\\s\\xA0\\x0B\\S])(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^\\s\\xA0\\x0B'][^']*$|`[^\\s\\xA0\\x0B`][^`]*$)+)?",
       "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": true,
+      "provenance": "structural"
+    },
+    {
+      "id": "authorization-header-double-quoted",
+      "description": "An Authorization header inside a double-quoted argument: the value ends at the closing unescaped quote.",
+      "pattern": "(\"Authorization[\\s\\xA0\\x0B]*:[\\s\\xA0\\x0B]*(?:(?:Bearer|Basic)[\\s\\xA0\\x0B]+)?)(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*(?:\"(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:[^\\s\\xA0\\x0B\"\\\\]|\\\\[\\s\\xA0\\x0B\\S])(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^\\s\\xA0\\x0B'][^']*$|`[^\\s\\xA0\\x0B`][^`]*$)+)?",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": true,
+      "provenance": "structural"
+    },
+    {
+      "id": "authorization-header",
+      "description": "Authorization header values outside an enclosing quote, with or without an authentication scheme.",
+      "pattern": "(^|[^'\"A-Za-z0-9_])(Authorization[\\s\\xA0\\x0B]*:[\\s\\xA0\\x0B]*(?:(?:Bearer|Basic)[\\s\\xA0\\x0B]+)?)(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^']*$|`[^`]*$)(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:[^\\s\\xA0\\x0B\"\\\\]|\\\\[\\s\\xA0\\x0B\\S])(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^\\s\\xA0\\x0B'][^']*$|`[^\\s\\xA0\\x0B`][^`]*$)*",
+      "replacement": "$1$2[REDACTED_SECRET]",
       "caseInsensitive": true,
       "provenance": "structural"
     },
     {
       "id": "bearer-auth",
       "description": "Bare Bearer authorization values shaped like credentials (8+ token characters); header context of any length is covered by authorization-header.",
-      "pattern": "\\b(Bearer\\s+)[A-Za-z0-9._~+/=-]{8,}",
+      "pattern": "\\b(Bearer[\\s\\xA0\\x0B]+)[A-Za-z0-9._~+/=-]{8,}",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": true,
       "provenance": "structural"
@@ -37,7 +53,7 @@
     {
       "id": "basic-auth",
       "description": "Bare Basic authorization values shaped like credentials (8+ token characters); header context of any length is covered by authorization-header.",
-      "pattern": "\\b(Basic\\s+)[A-Za-z0-9._~+/=-]{8,}",
+      "pattern": "\\b(Basic[\\s\\xA0\\x0B]+)[A-Za-z0-9._~+/=-]{8,}",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": true,
       "provenance": "structural"
@@ -101,7 +117,7 @@
     {
       "id": "url-userinfo",
       "description": "Credentials embedded in URLs of any scheme (postgres, mysql, mongodb+srv, redis, amqp, https, ...): the whole userinfo through the last @ before the host, keeping the scheme.",
-      "pattern": "([a-z][a-z0-9+.-]{0,31}://)[^/?#\\s\"<>]+@",
+      "pattern": "([a-z][a-z0-9+.-]{0,31}://)[^/?#\\s\\xA0\\x0B\"<>]+@",
       "replacement": "$1[REDACTED_SECRET]@",
       "caseInsensitive": true,
       "provenance": "structural"
@@ -109,7 +125,7 @@
     {
       "id": "json-sensitive-property",
       "description": "String values of credential-bearing properties in JSON embedded in flat text.",
-      "pattern": "(\"(?:[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|credential|private[_-]?key)[A-Za-z0-9_-]*|(?:[A-Za-z0-9]+[_-])*(?:pwd|pass)(?:[_-][A-Za-z0-9]+)*)\"\\s*:\\s*)\"(?:\\\\.|[^\"\\\\])*\"",
+      "pattern": "(\"(?:[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|credential|private[_-]?key)[A-Za-z0-9_-]*|(?:[A-Za-z0-9]+[_-])*(?:pwd|pass)(?:[_-][A-Za-z0-9]+)*|auth|authorization)\"[\\s\\xA0\\x0B]*:[\\s\\xA0\\x0B]*)\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"",
       "replacement": "$1\"[REDACTED_SECRET]\"",
       "caseInsensitive": true,
       "provenance": "structural"
@@ -117,15 +133,23 @@
     {
       "id": "sensitive-assignment",
       "description": "key=value / key: value assignments where the key names a credential.",
-      "pattern": "\\b((?:[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|credential|private[_-]?key)[A-Za-z0-9_-]*|(?:[A-Za-z0-9]+[_-])*(?:pwd|pass)(?:[_-][A-Za-z0-9]+)*)\\s*[:=]\\s*)(?:\"(?:\\\\.|[^\"\\\\])*\"|'[^']*'|`(?:\\\\.|[^`\\\\])*`|[^\\s&;|)\"'`]+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\"(?:\\\\.|[^\"\\\\])*\"|'[^']*'|`(?:\\\\.|[^`\\\\])*`|[^\\s&;|)\"'`]+|\"[^\\s\"][^\"]*$|'[^\\s'][^']*$|`[^\\s`][^`]*$)*",
+      "pattern": "\\b((?:[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|credential|private[_-]?key)[A-Za-z0-9_-]*|(?:[A-Za-z0-9]+[_-])*(?:pwd|pass)(?:[_-][A-Za-z0-9]+)*)[\\s\\xA0\\x0B]*[:=][\\s\\xA0\\x0B]*)(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^']*$|`[^`]*$)(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:[^\\s\\xA0\\x0B\"\\\\]|\\\\[\\s\\xA0\\x0B\\S])(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^\\s\\xA0\\x0B'][^']*$|`[^\\s\\xA0\\x0B`][^`]*$)*",
       "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": true,
+      "provenance": "structural"
+    },
+    {
+      "id": "auth-assignment",
+      "description": "auth= / auth: and Authorization= assignments (the header form Authorization: is authorization-header).",
+      "pattern": "(^|[\\s\\xA0\\x0B\"'`;&|()])((?:auth[\\s\\xA0\\x0B]*[:=]|authorization[\\s\\xA0\\x0B]*=)[\\s\\xA0\\x0B]*(?:(?:Bearer|Basic)[\\s\\xA0\\x0B]+)?)(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^']*$|`[^`]*$)(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:[^\\s\\xA0\\x0B\"\\\\]|\\\\[\\s\\xA0\\x0B\\S])(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^\\s\\xA0\\x0B'][^']*$|`[^\\s\\xA0\\x0B`][^`]*$)*",
+      "replacement": "$1$2[REDACTED_SECRET]",
       "caseInsensitive": true,
       "provenance": "structural"
     },
     {
       "id": "sensitive-cli-flag",
       "description": "CLI flags carrying credentials (--token x, --token=x).",
-      "pattern": "(--(?:api[-_]?key|access[-_]?(?:key|token)|refresh[-_]?token|client[-_]?secret|token|secret|password|passwd|pwd|pass|credential|private[-_]?key)[= ])(?:\"(?:\\\\.|[^\"\\\\])*\"|'[^']*'|`(?:\\\\.|[^`\\\\])*`|[^\\s&;|)\"'`]+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\"(?:\\\\.|[^\"\\\\])*\"|'[^']*'|`(?:\\\\.|[^`\\\\])*`|[^\\s&;|)\"'`]+|\"[^\\s\"][^\"]*$|'[^\\s'][^']*$|`[^\\s`][^`]*$)*",
+      "pattern": "(--(?:api[-_]?key|access[-_]?(?:key|token)|refresh[-_]?token|client[-_]?secret|token|secret|password|passwd|pwd|pass|credential|private[-_]?key)(?:=|[\\s\\xA0\\x0B]+))(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^']*$|`[^`]*$)(?:\"(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\xA0\\x0B\\S]|[^`\\\\])*`|[^\\s\\xA0\\x0B&;|)\"'`]+|\"(?:[^\\s\\xA0\\x0B\"\\\\]|\\\\[\\s\\xA0\\x0B\\S])(?:\\\\[\\s\\xA0\\x0B\\S]|[^\"\\\\])*$|'[^\\s\\xA0\\x0B'][^']*$|`[^\\s\\xA0\\x0B`][^`]*$)*",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": true,
       "provenance": "structural"
@@ -133,7 +157,7 @@
     {
       "id": "basic-auth-userinfo",
       "description": "user:password credentials passed to command-line -u/--user flags, including attached (-uuser:pass) and empty-username (-u :pass) forms.",
-      "pattern": "((?:^|\\s)(?:--user(?:=|\\s+)|-u(?:=|\\s+)?))(?:\"(?:\\\\.|[^\"\\\\])*:[^\"]*\"|'[^']*:[^']*'|[^\\s:]*:[^\\s&;|)]+)",
+      "pattern": "((?:^|[\\s\\xA0\\x0B])(?:--user(?:=|[\\s\\xA0\\x0B]+)|-u(?:=|[\\s\\xA0\\x0B]+)?))(?:\"(?:\\\\.|[^\"\\\\])*:[^\"]*\"|'[^']*:[^']*'|[^\\s\\xA0\\x0B:]*:[^\\s\\xA0\\x0B&;|)]+)",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": true,
       "provenance": "structural"
@@ -141,7 +165,7 @@
     {
       "id": "sensitive-query-param",
       "description": "Credential-bearing URL query parameters.",
-      "pattern": "([?&](?:access[-_]?token|api[-_]?key|client[-_]?secret|code|key|password|passwd|pwd|pass|refresh[-_]?token|secret|token)=)[^&\\s\"']+",
+      "pattern": "([?&](?:access[-_]?token|api[-_]?key|client[-_]?secret|code|key|password|passwd|pwd|pass|refresh[-_]?token|secret|token)=)[^&\\s\\xA0\\x0B]+",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": true,
       "provenance": "structural"
