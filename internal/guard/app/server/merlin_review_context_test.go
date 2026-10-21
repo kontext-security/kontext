@@ -36,10 +36,6 @@ func TestMerlinReviewContextRedactsConnectionCredentialsInPlainErrors(t *testing
 				}
 				context := merlinReviewContext("Check "+uri, string(history))
 				redactedURI := scheme + "://[REDACTED_SECRET]@db.example.test/invoices"
-				if scheme == "http" || scheme == "https" {
-					// The existing shared HTTP rule also removes the scheme.
-					redactedURI = "[REDACTED_SECRET]db.example.test/invoices"
-				}
 				if context.UserRequest != "Check "+redactedURI {
 					t.Fatalf("unexpected request redaction: %s", context.UserRequest)
 				}
@@ -61,7 +57,7 @@ func TestMerlinReviewContextRedactsConnectionCredentialsInPlainErrors(t *testing
 func TestMerlinReviewRedactionPreservesAtSignsOutsideCredentials(t *testing.T) {
 	tail := "db.example.test/invoices/contact@example.test?recipient=bob@example.test#owner@team"
 	text := "postgres://alice:p@ss@" + tail + " https://bob:a@@b@other.test/path"
-	want := "postgres://[REDACTED_SECRET]@" + tail + " [REDACTED_SECRET]other.test/path"
+	want := "postgres://[REDACTED_SECRET]@" + tail + " https://[REDACTED_SECRET]@other.test/path"
 	if got := redactMerlinReviewText(text); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -81,7 +77,7 @@ func TestMerlinReviewContextRedactsURLsInDecodedResponsesAndNestedArguments(t *t
 	if strings.Contains(context.InteractionHistory, "nested-suffix") {
 		t.Fatal("password suffix survived nested URL redaction")
 	}
-	if strings.Count(context.InteractionHistory, "[REDACTED_SECRET]db.example.test/invoices") != 2 {
+	if strings.Count(context.InteractionHistory, "https://[REDACTED_SECRET]@db.example.test/invoices") != 2 {
 		t.Fatalf("unexpected nested URL evidence: %s", context.InteractionHistory)
 	}
 }

@@ -100,6 +100,10 @@ func TestRedactTextLeavesProseAlone(t *testing.T) {
 		"BYPASS=true deploy",
 		"OLDPWD=/home/user ls",
 		"COMPASS=north run",
+		// An @ in a path or an scp-style remote is not URL userinfo.
+		"curl https://unpkg.com/react@18.3.1/umd/react.js",
+		"curl http://localhost:5173/@vite/client",
+		"git clone git@github.com:org/repo.git",
 	} {
 		redacted, changed := RedactText(input)
 		if changed || redacted != input {

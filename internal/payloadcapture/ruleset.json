@@ -1,5 +1,5 @@
 {
-  "version": "rules/2",
+  "version": "rules/3",
   "keyNormalization": "camel_to_snake",
   "keyPatterns": [
     {
@@ -100,8 +100,9 @@
     },
     {
       "id": "url-userinfo",
-      "description": "Credentials embedded in URLs (scheme plus userinfo up to and including the @).",
-      "pattern": "https?://[^/?#\\s\"'<>@]+@",
+      "description": "Credentials embedded in URLs of any scheme (postgres, mysql, mongodb+srv, redis, amqp, https, ...): the whole userinfo through the last @ before the host, keeping the scheme.",
+      "pattern": "\\b([a-z][a-z0-9+.-]{0,31}://)[^/?#\\s\"<>]+@",
+      "replacement": "$1[REDACTED_SECRET]@",
       "caseInsensitive": true,
       "provenance": "structural"
     },

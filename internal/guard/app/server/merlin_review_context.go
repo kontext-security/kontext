@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"regexp"
 	"unicode/utf8"
 
 	"github.com/kontext-security/kontext/internal/guard/risk"
@@ -27,9 +26,7 @@ func merlinReviewContext(request, history string) *risk.MerlinReviewContext {
 				}
 			}
 		}
-		// Redact full URL credentials before the shared HTTP rule can remove
-		// the scheme and leave a password suffix that no longer looks like a URL.
-		redacted, _ := payloadcapture.RedactJSON(map[string]any{"events": redactMerlinReviewURLValues(events)})
+		redacted, _ := payloadcapture.RedactJSON(map[string]any{"events": events})
 		encoded, err := json.Marshal(redacted["events"])
 		if err == nil {
 			history = redactMerlinReviewText(string(encoded))
@@ -60,28 +57,7 @@ func boundedReviewText(value string, limit int) (string, bool) {
 	return value[:head] + marker + value[tail:], true
 }
 
-// Tool errors can contain connection URLs outside the shared HTTP-only rules.
-// Match through the last @ in the authority, including literal password @s.
-var merlinReviewURLUserinfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/?#\s"'<>]+@`)
-
-func redactMerlinReviewURLValues(value any) any {
-	switch typed := value.(type) {
-	case string:
-		return merlinReviewURLUserinfo.ReplaceAllString(typed, "${1}"+payloadcapture.RedactedPlaceholder+"@")
-	case map[string]any:
-		for key, child := range typed {
-			typed[key] = redactMerlinReviewURLValues(child)
-		}
-	case []any:
-		for i, child := range typed {
-			typed[i] = redactMerlinReviewURLValues(child)
-		}
-	}
-	return value
-}
-
 func redactMerlinReviewText(value string) string {
-	value = merlinReviewURLUserinfo.ReplaceAllString(value, "${1}"+payloadcapture.RedactedPlaceholder+"@")
 	value, _ = payloadcapture.RedactText(value)
 	return value
 }
