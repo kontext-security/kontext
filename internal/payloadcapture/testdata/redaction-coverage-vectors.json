@@ -102,7 +102,50 @@
       "name": "url-userinfo",
       "ruleId": "url-userinfo",
       "input": "git clone https://deploy:hunter2FAKEpass@git.example.test/repo.git",
-      "mustNotSurvive": ["hunter2FAKEpass"]
+      "mustNotSurvive": ["hunter2FAKEpass"],
+      "expected": "git clone https://[REDACTED_SECRET]@git.example.test/repo.git"
+    },
+    {
+      "name": "url-userinfo-database-url",
+      "ruleId": "url-userinfo",
+      "input": "DATABASE_URL=postgres://app:FAKEpgpass123@db.example.test:5432/app psql -c 'select 1'",
+      "mustNotSurvive": ["FAKEpgpass123"],
+      "expected": "DATABASE_URL=postgres://[REDACTED_SECRET]@db.example.test:5432/app psql -c 'select 1'"
+    },
+    {
+      "name": "url-userinfo-mongodb-srv",
+      "ruleId": "url-userinfo",
+      "input": "mongosh \"mongodb+srv://svc:FAKEmongo42@cluster0.example.test/app\"",
+      "mustNotSurvive": ["FAKEmongo42"],
+      "expected": "mongosh \"mongodb+srv://[REDACTED_SECRET]@cluster0.example.test/app\""
+    },
+    {
+      "name": "url-userinfo-password-only",
+      "ruleId": "url-userinfo",
+      "input": "redis-cli --uri redis://:FAKEredis99@cache.example.test:6379/0",
+      "mustNotSurvive": ["FAKEredis99"],
+      "expected": "redis-cli --uri redis://[REDACTED_SECRET]@cache.example.test:6379/0"
+    },
+    {
+      "name": "url-userinfo-at-sign-password",
+      "ruleId": "url-userinfo",
+      "input": "psql postgresql://app:FAKEat@signtail@db.example.test/app",
+      "mustNotSurvive": ["FAKEat", "signtail"],
+      "expected": "psql postgresql://[REDACTED_SECRET]@db.example.test/app"
+    },
+    {
+      "name": "url-userinfo-apostrophe-password",
+      "ruleId": "url-userinfo",
+      "input": "psql \"postgres://app:FAKEpa'ss@db.example.test/app\"",
+      "mustNotSurvive": ["FAKEpa'ss"],
+      "expected": "psql \"postgres://[REDACTED_SECRET]@db.example.test/app\""
+    },
+    {
+      "name": "url-userinfo-after-word-character",
+      "ruleId": "url-userinfo",
+      "input": "see _https://alice:FAKEunderscore1@db.example.test/path_ and x_postgres://app:FAKEunderscore2@db.example.test/app",
+      "mustNotSurvive": ["FAKEunderscore1", "FAKEunderscore2"],
+      "expected": "see _https://[REDACTED_SECRET]@db.example.test/path_ and x_postgres://[REDACTED_SECRET]@db.example.test/app"
     },
     {
       "name": "env-assignment",
