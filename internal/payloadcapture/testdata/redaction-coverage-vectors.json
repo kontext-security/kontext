@@ -284,6 +284,18 @@
       "mustNotSurvive": ["FAKEdemo3", "FAKEsword3"]
     },
     {
+      "name": "userinfo-quoted-password",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u app:'FAKEuq1 FAKEuq2' https://example.test && curl -u app:\"FAKEuq3 FAKEuq4\" x",
+      "mustNotSurvive": ["FAKEuq1", "FAKEuq2", "FAKEuq3", "FAKEuq4"]
+    },
+    {
+      "name": "assignment-ansi-c-quote",
+      "ruleId": "sensitive-assignment",
+      "input": "PGPASSWORD=$'FAKEansi1\\' FAKEansi2' psql",
+      "mustNotSurvive": ["FAKEansi1", "FAKEansi2"]
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
