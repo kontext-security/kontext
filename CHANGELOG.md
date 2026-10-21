@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.14.0](https://github.com/kontext-security/kontext/compare/v1.13.1...v1.14.0) (2026-10-21)
+
+
+### Features
+
+* **turns:** mint a turn per prompt, stamp actions and usage, upload turn records ([#600](https://github.com/kontext-security/kontext/issues/600)) ([bee2577](https://github.com/kontext-security/kontext/commit/bee2577e4879100a8ad1b5406eccdae6f915fa73))
+* **turns:** one excerpt bound for Summaries and Full payloads ([#604](https://github.com/kontext-security/kontext/issues/604)) ([ffc07a6](https://github.com/kontext-security/kontext/commit/ffc07a6bc066d5c961590fc161a09a0137773ded))
+
+
+### Bug Fixes
+
+* **redaction:** mask URL credentials for every scheme before upload ([#605](https://github.com/kontext-security/kontext/issues/605)) ([95d4da9](https://github.com/kontext-security/kontext/commit/95d4da94a7ae3c7d63aa332a74e1314228ceafe2))
+
 ## [1.13.1](https://github.com/kontext-security/kontext/compare/v1.13.0...v1.13.1) (2026-10-20)
 
 
