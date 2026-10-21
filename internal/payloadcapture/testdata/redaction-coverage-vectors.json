@@ -320,6 +320,24 @@
       "mustNotSurvive": ["FAKEcq1", "FAKEcq2"]
     },
     {
+      "name": "userinfo-ansi-c-escaped-quote",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u $'app:FAKEansiu1\\' FAKEansiu2' https://example.test",
+      "mustNotSurvive": ["FAKEansiu1", "FAKEansiu2"]
+    },
+    {
+      "name": "userinfo-line-continuation",
+      "ruleId": "basic-auth-userinfo",
+      "input": "curl -u \\\n  app:FAKEcontinued https://example.test",
+      "mustNotSurvive": ["FAKEcontinued"]
+    },
+    {
+      "name": "flag-line-continuation",
+      "ruleId": "sensitive-cli-flag",
+      "input": "tool --password \\\n  FAKEflagcont x",
+      "mustNotSurvive": ["FAKEflagcont"]
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
