@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kontext-security/kontext/internal/fsperm"
 	"github.com/kontext-security/kontext/internal/profile"
 )
 
@@ -96,7 +97,7 @@ func EnsureFile(path string) (State, error) {
 	defer os.Remove(temp)
 
 	if err := os.Link(temp, path); err == nil {
-		if err := syncDir(filepath.Dir(path)); err != nil {
+		if err := fsperm.SyncDir(filepath.Dir(path)); err != nil {
 			return State{}, err
 		}
 		return state, nil
@@ -121,8 +122,12 @@ func validateStateFile(path string) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("installation state must be a regular file")
 	}
-	if info.Mode().Perm() != 0o600 {
-		return errors.New("installation state must have 0600 permissions")
+	private, err := fsperm.PrivateFile(path, info)
+	if err != nil {
+		return err
+	}
+	if !private {
+		return errors.New("installation state must have " + fsperm.Requirement)
 	}
 	return nil
 }
@@ -169,7 +174,7 @@ func writeTempState(dir string, data []byte) (string, error) {
 		}
 	}()
 
-	if err := file.Chmod(0o600); err != nil {
+	if err := fsperm.RestrictFile(file); err != nil {
 		return "", err
 	}
 	if _, err := file.Write(data); err != nil {
@@ -183,15 +188,6 @@ func writeTempState(dir string, data []byte) (string, error) {
 	}
 	cleanup = false
 	return path, nil
-}
-
-func syncDir(dir string) error {
-	file, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	return file.Sync()
 }
 
 func newState() (State, error) {

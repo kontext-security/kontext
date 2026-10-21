@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/kontext-security/kontext/internal/fsperm"
 )
 
 const (
@@ -247,7 +249,7 @@ func setActiveLocked(path, name string) error {
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
 
-	if err := temp.Chmod(0o600); err != nil {
+	if err := fsperm.RestrictFile(temp); err != nil {
 		temp.Close()
 		return err
 	}
@@ -265,7 +267,7 @@ func setActiveLocked(path, name string) error {
 	if err := os.Rename(tempPath, path); err != nil {
 		return err
 	}
-	return syncDir(filepath.Dir(path))
+	return fsperm.SyncDir(filepath.Dir(path))
 }
 
 // pointerPath resolves the active pointer's path with its directory in place —
@@ -447,13 +449,4 @@ func Rename(oldName, newName string) (repointed bool, err error) {
 		return nil
 	})
 	return repointed, err
-}
-
-func syncDir(dir string) error {
-	file, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	return file.Sync()
 }
