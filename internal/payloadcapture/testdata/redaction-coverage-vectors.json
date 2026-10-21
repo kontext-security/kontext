@@ -248,6 +248,24 @@
       "mustNotSurvive": ["FAKEsemi0", "FAKEsemi1", "FAKEsemi2"]
     },
     {
+      "name": "prefixed-quoted-header-then-password-flag",
+      "ruleId": "authorization-header-single-quoted",
+      "input": "wget --header='X-Authorization: FAKEprefixed' --password='FAKEalpha FAKEbeta' https://example.test",
+      "mustNotSurvive": ["FAKEprefixed", "FAKEalpha", "FAKEbeta"]
+    },
+    {
+      "name": "unterminated-value-trailing-backslash",
+      "ruleId": "sensitive-assignment",
+      "input": "PASSWORD=\"FAKEtail1\\",
+      "mustNotSurvive": ["FAKEtail1"]
+    },
+    {
+      "name": "unterminated-flag-trailing-backslash",
+      "ruleId": "sensitive-cli-flag",
+      "input": "--password \"FAKEtail2\\",
+      "mustNotSurvive": ["FAKEtail2"]
+    },
+    {
       "name": "env-assignment",
       "ruleId": "sensitive-assignment",
       "input": "GITHUB_TOKEN=verysecretFAKEvalue gh api /user",
