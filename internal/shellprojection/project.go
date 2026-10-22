@@ -362,6 +362,10 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 		return single(classifyDatabricks(args, complete))
 	case "bash", "sh", "zsh", "dash", "ksh":
 		return classifyShell(program, args, complete, w)
+	case "pwsh", "powershell":
+		return classifyPowerShellHost(program, args, complete, w)
+	case "cmd":
+		return classifyCmd(args, complete, w)
 	case "eval":
 		return classifyEval(args, complete, w)
 	default:

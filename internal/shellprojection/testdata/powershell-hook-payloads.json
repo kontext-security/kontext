@@ -1,0 +1,123 @@
+[
+  {
+    "platform": "macos",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "git status --short",
+      "description": "Show short working tree status"
+    },
+    "programs": [
+      "git"
+    ]
+  },
+  {
+    "platform": "macos",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "Get-ChildItem",
+      "description": "List files in current directory"
+    },
+    "programs": [
+      "get-childitem"
+    ]
+  },
+  {
+    "platform": "macos",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "Remove-Item -WhatIf -Recurse -Force ./a.txt",
+      "description": "Preview removing a.txt without deleting it"
+    },
+    "programs": [
+      "remove-item"
+    ]
+  },
+  {
+    "platform": "macos",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "Write-Output $env:HOME",
+      "description": "Print the HOME environment variable"
+    },
+    "programs": [
+      "write-output"
+    ]
+  },
+  {
+    "platform": "macos",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git log --oneline -1",
+      "description": "Show the latest commit"
+    },
+    "programs": [
+      "git"
+    ]
+  },
+  {
+    "platform": "windows",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "git status --short",
+      "description": "Show short git status"
+    },
+    "programs": [
+      "git"
+    ]
+  },
+  {
+    "platform": "windows",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "Get-ChildItem",
+      "description": "List files in current directory"
+    },
+    "programs": [
+      "get-childitem"
+    ]
+  },
+  {
+    "platform": "windows",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "Remove-Item -WhatIf -Recurse -Force .\\a.txt",
+      "description": "Preview deleting a.txt without removing it"
+    },
+    "programs": [
+      "remove-item"
+    ]
+  },
+  {
+    "platform": "windows",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "Write-Output $env:USERPROFILE",
+      "description": "Print user profile path"
+    },
+    "programs": [
+      "write-output"
+    ]
+  },
+  {
+    "platform": "windows",
+    "tool_name": "PowerShell",
+    "tool_input": {
+      "command": "& git log --oneline -1",
+      "description": "Show latest commit"
+    },
+    "programs": [
+      "git"
+    ]
+  },
+  {
+    "platform": "windows",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git log --oneline -1",
+      "description": "Show latest commit"
+    },
+    "programs": [
+      "git"
+    ]
+  }
+]
