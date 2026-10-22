@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/fsperm"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
@@ -25,8 +26,8 @@ func TestCacheRestartRequiresServerConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("cache mode = %o", info.Mode().Perm())
+	if private, err := fsperm.PrivateFile(path, info); err != nil || !private {
+		t.Fatalf("cache not private to its owner (mode %o, err %v), want %s", info.Mode().Perm(), err, fsperm.Requirement)
 	}
 
 	restored := NewCache(path)

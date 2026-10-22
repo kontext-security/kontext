@@ -19,6 +19,7 @@ import (
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/fsperm"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/ledgerping"
@@ -889,8 +890,19 @@ func writeTestManagedConfigWithCloudURL(t *testing.T, path, cloudURL string) {
 
 func writeTestInstallation(t *testing.T, path string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(`{"installation_id":"ins_0123456789abcdefghijklmnopqrstuv"}`+"\n"), 0o600); err != nil {
+	// Written private to its owner, as installation.EnsureFile writes it, or LoadFile refuses it.
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile(installation) error = %v", err)
+	}
+	if err := fsperm.RestrictFile(file); err != nil {
+		t.Fatalf("RestrictFile(installation) error = %v", err)
+	}
+	if _, err := file.WriteString(`{"installation_id":"ins_0123456789abcdefghijklmnopqrstuv"}` + "\n"); err != nil {
 		t.Fatalf("WriteFile(installation) error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close(installation) error = %v", err)
 	}
 	t.Setenv("KONTEXT_INSTALLATION_STATE", path)
 }

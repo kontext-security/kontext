@@ -4,9 +4,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/fsperm"
 )
 
 func TestLoadFileMissingReturnsErrNotFound(t *testing.T) {
@@ -31,7 +34,7 @@ func TestLoadFileExistingState(t *testing.T) {
 
 func TestLoadFileRejectsInvalidJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "installation.json")
-	if err := os.WriteFile(path, []byte(`{"installation_id":`), 0o600); err != nil {
+	if err := writePrivateFile(path, []byte(`{"installation_id":`)); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	if _, err := LoadFile(path); err == nil {
@@ -42,7 +45,7 @@ func TestLoadFileRejectsInvalidJSON(t *testing.T) {
 func TestLoadFileRejectsUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "installation.json")
 	state := mustNewState(t)
-	if err := os.WriteFile(path, []byte(`{"installation_id":"`+state.InstallationID+`","hostname":"mac"}`), 0o600); err != nil {
+	if err := writePrivateFile(path, []byte(`{"installation_id":"`+state.InstallationID+`","hostname":"mac"}`)); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	err := loadFileError(path)
@@ -54,7 +57,7 @@ func TestLoadFileRejectsUnknownFields(t *testing.T) {
 func TestLoadFileRejectsTrailingJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "installation.json")
 	state := mustNewState(t)
-	if err := os.WriteFile(path, []byte(`{"installation_id":"`+state.InstallationID+`"}{}`), 0o600); err != nil {
+	if err := writePrivateFile(path, []byte(`{"installation_id":"`+state.InstallationID+`"}{}`)); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	err := loadFileError(path)
@@ -77,8 +80,8 @@ func TestEnsureFileCreatesIDWithPrivateMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat() error = %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("mode = %o, want 0600", got)
+	if private, err := fsperm.PrivateFile(path, info); err != nil || !private {
+		t.Fatalf("state file not private to its owner (mode %o, err %v), want %s", info.Mode().Perm(), err, fsperm.Requirement)
 	}
 	loaded, err := LoadFile(path)
 	if err != nil {
@@ -91,7 +94,7 @@ func TestEnsureFileCreatesIDWithPrivateMode(t *testing.T) {
 
 func TestLoadFileRejectsMalformedInstallationID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "installation.json")
-	if err := os.WriteFile(path, []byte(`{"installation_id":"ins_x"}`), 0o600); err != nil {
+	if err := writePrivateFile(path, []byte(`{"installation_id":"ins_x"}`)); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	if _, err := LoadFile(path); err == nil {
@@ -100,6 +103,9 @@ func TestLoadFileRejectsMalformedInstallationID(t *testing.T) {
 }
 
 func TestLoadFileRejectsUnsafeMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no mode bits on Windows; TestLoadFileRejectsStateOthersCanRead covers the DACL")
+	}
 	path := writeState(t, mustNewState(t))
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
@@ -112,7 +118,7 @@ func TestLoadFileRejectsUnsafeMode(t *testing.T) {
 func TestLoadFileRejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(target, []byte(`{"installation_id":"ins_x"}`), 0o600); err != nil {
+	if err := writePrivateFile(target, []byte(`{"installation_id":"ins_x"}`)); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	link := filepath.Join(dir, "installation.json")
@@ -182,6 +188,41 @@ func TestPathFromEnvHonorsOverride(t *testing.T) {
 	}
 }
 
+func TestLoadFileRejectsStateOthersCanRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "installation.json")
+	data, err := encode(mustNewState(t))
+	if err != nil {
+		t.Fatalf("encode() error = %v", err)
+	}
+	// 0644 on Unix; on Windows the directory's inherited DACL, which grants other principals access.
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil { // past the umask
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	if _, err := LoadFile(path); err == nil || !strings.Contains(err.Error(), fsperm.Requirement) {
+		t.Fatalf("LoadFile() error = %v, want the %s refusal", err, fsperm.Requirement)
+	}
+}
+
+// writePrivateFile writes a fixture the way EnsureFile writes state: private to its owner.
+func writePrivateFile(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := fsperm.RestrictFile(file); err != nil {
+		file.Close()
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
 func writeState(t *testing.T, state State) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "installation.json")
@@ -189,7 +230,7 @@ func writeState(t *testing.T, state State) string {
 	if err != nil {
 		t.Fatalf("encode() error = %v", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := writePrivateFile(path, data); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	return path
