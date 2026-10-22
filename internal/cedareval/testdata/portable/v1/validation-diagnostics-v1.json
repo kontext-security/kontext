@@ -70,6 +70,13 @@
     },
     {
       "version": 1,
+      "name": "powershell-shell-alias",
+      "description": "Claude Code's PowerShell tool is reported as shell, not its tool name; it warns.",
+      "policyText": "@id(\"powershell-tool\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"PowerShell\");",
+      "expected": { "valid": true, "diagnosticCodes": ["unsupported_tool_id"] }
+    },
+    {
+      "version": 1,
       "name": "catalogued-github-tool",
       "description": "A github-mcp/ id in the pinned catalogue is one an endpoint reports; no warning.",
       "policyText": "@id(\"catalogued-tool\")\npermit(principal, action == Kontext::Action::\"ToolUse\", resource == Kontext::Tool::\"github-mcp/merge_pull_request\");",

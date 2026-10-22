@@ -36,7 +36,7 @@ var fixtureDigests = map[string]string{
 	"decision-mapping-v1.json":       "7a0ba0b761b13759ef1a5ffefb155c7a066412b0115227f928529546a337e0b2",
 	"evaluation-errors-v1.json":      "aef0f751ebf54625b4f516f67f37b58a59042a03fd684614172736a91c07a763",
 	"hashing-v1.json":                "5179f41ae61872ee9f6a048cba4592dc12c0267fc8c8699a0c2afa886da62775",
-	"validation-diagnostics-v1.json": "3c0dd2a0b4e7290820103a44e3d58f464d85c580ca30b15d18acdfc619e77d6b",
+	"validation-diagnostics-v1.json": "7eb5f3a29ffaddde83d6be8255af0718744b9c96560d94ed2b95d9352d3fa12f",
 }
 
 type authorizationFixture struct {
