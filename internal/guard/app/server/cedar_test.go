@@ -166,6 +166,40 @@ func TestCedarPowerShellToolEnforcesShellPolicy(t *testing.T) {
 	}
 }
 
+func TestCedarCodexShellOnWindowsReadsBothDialects(t *testing.T) {
+	for _, test := range []struct {
+		name, agent, hostOS, command string
+		want                         risk.Decision
+		readings                     int
+	}{
+		{"codex on windows reads PowerShell too", "codex", "windows", "& git push --force origin main", risk.DecisionDeny, 2},
+		{"codex on windows drops a duplicate reading", "codex", "windows", "git push -f origin main", risk.DecisionDeny, 1},
+		{"codex on windows allows a read", "codex", "windows", "& git status", risk.DecisionAllow, 2},
+		{"codex elsewhere reads POSIX only", "codex", "darwin", "& git push --force origin main", risk.DecisionAllow, 1},
+		{"claude bash on windows is Git Bash", "claude", "windows", "& git push --force origin main", risk.DecisionAllow, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hostOS := shellHostOS
+			shellHostOS = test.hostOS
+			t.Cleanup(func() { shellHostOS = hostOS })
+			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+			event := cedarHookEvent("Bash", map[string]any{"command": test.command})
+			event.Agent = test.agent
+			decision, err := provider.DecideHook(context.Background(), event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != test.want || decision.Cedar == nil || decision.Cedar.ToolID != cedareval.ToolShellV2 {
+				t.Fatalf("decision = %#v, want %s with tool %s", decision, test.want, cedareval.ToolShellV2)
+			}
+			if len(decision.Cedar.Shell) != test.readings {
+				t.Fatalf("shell evidence = %#v, want %d readings", decision.Cedar.Shell, test.readings)
+			}
+		})
+	}
+}
+
 func (p *countingHookPolicy) DecideHook(context.Context, risk.HookEvent) (risk.RiskDecision, error) {
 	p.calls++
 	return p.decision, nil

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -334,7 +335,7 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 	// this alias to Cowork so unrelated MCP servers keep their named tool id.
 	coworkShell := (event.Agent == "cowork" || event.Agent == "claude-cowork") && event.ToolName == "mcp__workspace__bash"
 	if risk.IsShellTool(event.ToolName) || coworkShell {
-		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput)), nil
+		return cedareval.ToolShellV2, shellProjections(event.Agent, risk.CommandFromInput(event.ToolInput)), nil
 	}
 	if risk.IsPowerShellTool(event.ToolName) {
 		return cedareval.ToolShellV2, shellprojection.ProjectPowerShell(risk.CommandFromInput(event.ToolInput)), nil
@@ -371,6 +372,34 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 		return name, nil, nil
 	}
 	return cedareval.ToolUnknownV2, nil, nil
+}
+
+// shellHostOS is the OS the daemon runs on; tests set it.
+var shellHostOS = runtime.GOOS
+
+// shellProjections projects a shell tool's command. Codex on Windows runs it
+// in PowerShell or a POSIX shell as the model chooses per call, and its hook
+// does not say which, so the command is read both ways and Cedar denies when
+// either reading is denied. A PowerShell reading that only adds the dialect
+// fact to a POSIX one is dropped.
+func shellProjections(agent, command string) []cedareval.ShellProjectionV2 {
+	projections := shellprojection.Project(command)
+	if shellHostOS != "windows" || agent != "codex" && agent != cedareval.AgentCodexV2 {
+		return projections
+	}
+	posix := len(projections)
+	for _, reading := range shellprojection.ProjectPowerShell(command) {
+		bare := reading
+		bare.Facts = slices.DeleteFunc(slices.Clone(reading.Facts), func(fact string) bool { return fact == shellprojection.FactDialectPowerShell })
+		if !slices.ContainsFunc(projections[:posix], func(p cedareval.ShellProjectionV2) bool { return sameProjection(p, bare) }) {
+			projections = append(projections, reading)
+		}
+	}
+	return projections
+}
+
+func sameProjection(a, b cedareval.ShellProjectionV2) bool {
+	return a.Version == b.Version && a.Program == b.Program && a.ParseComplete == b.ParseComplete && slices.Equal(a.Facts, b.Facts) && slices.Equal(a.Features, b.Features)
 }
 
 // unknownToolLiteral is how a policy names the pre-pass-through catch-all.
