@@ -15,6 +15,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	sqlitestore "github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedstream"
@@ -458,11 +459,7 @@ func TestWaitForDaemonRestartSucceeds(t *testing.T) {
 	env := newDoctorTestEnv(t)
 	env.writeDaemonStatus(t, os.Getpid(), "1.2.3")
 	// Unix socket paths cap at 104 bytes on macOS; t.TempDir is too deep.
-	socketDir, err := os.MkdirTemp("/tmp", "kontext-doctor-test-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -564,7 +561,7 @@ func wantAutomaticDaemonRepair() bool {
 func newDoctorTestEnv(t *testing.T) doctorTestEnv {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	hermetic.SetHome(t, dir)
 	configPath := filepath.Join(dir, "Library", "Application Support", "Kontext", "managed.json")
 	installationPath := filepath.Join(dir, "installation.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {

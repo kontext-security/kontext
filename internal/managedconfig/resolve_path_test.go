@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 // withSystemPath points the ResolvePath system-path probe at a temp location
@@ -36,7 +38,7 @@ func TestResolvePathSystemWinsWhenPresent(t *testing.T) {
 	}
 	withSystemPath(t, system)
 	t.Setenv(EnvPath, "")
-	t.Setenv("HOME", filepath.Join(dir, "home"))
+	hermetic.SetHome(t, filepath.Join(dir, "home"))
 
 	path, scope := ResolvePath()
 	if path != system || scope != ScopeSystem {
@@ -49,7 +51,7 @@ func TestResolvePathFallsBackToUserWhenSystemAbsent(t *testing.T) {
 	withSystemPath(t, filepath.Join(dir, "missing", "managed.json"))
 	t.Setenv(EnvPath, "")
 	home := filepath.Join(dir, "home")
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 
 	path, scope := ResolvePath()
 	want := filepath.Join(home, "Library", "Application Support", "Kontext", "managed.json")
@@ -71,7 +73,7 @@ func TestResolvePathSystemStatErrorDoesNotFallThrough(t *testing.T) {
 	system := filepath.Join(blocked, "managed.json")
 	withSystemPath(t, system)
 	t.Setenv(EnvPath, "")
-	t.Setenv("HOME", filepath.Join(dir, "home"))
+	hermetic.SetHome(t, filepath.Join(dir, "home"))
 
 	if _, err := os.Lstat(system); err == nil || errors.Is(err, os.ErrNotExist) {
 		t.Skip("environment does not produce permission errors (running as root?)")
@@ -88,7 +90,7 @@ func TestLoadResolvesUserScopeConfig(t *testing.T) {
 	withSystemPath(t, filepath.Join(dir, "missing", "managed.json"))
 	t.Setenv(EnvPath, "")
 	home := filepath.Join(dir, "home")
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 
 	userDir := filepath.Join(home, "Library", "Application Support", "Kontext")
 	if err := os.MkdirAll(userDir, 0o755); err != nil {
@@ -116,7 +118,7 @@ func TestLoadInvalidSystemConfigDoesNotFallThroughToUser(t *testing.T) {
 	withSystemPath(t, system)
 	t.Setenv(EnvPath, "")
 	home := filepath.Join(dir, "home")
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 
 	userDir := filepath.Join(home, "Library", "Application Support", "Kontext")
 	if err := os.MkdirAll(userDir, 0o755); err != nil {
@@ -132,7 +134,7 @@ func TestLoadInvalidSystemConfigDoesNotFallThroughToUser(t *testing.T) {
 }
 
 func TestUserPathUsesHomeLibrary(t *testing.T) {
-	t.Setenv("HOME", "/Users/example")
+	hermetic.SetHome(t, "/Users/example")
 	want := filepath.Join("/Users/example", "Library", "Application Support", "Kontext", "managed.json")
 	if got := UserPath(); got != want {
 		t.Fatalf("UserPath() = %q, want %q", got, want)

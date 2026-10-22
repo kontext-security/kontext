@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 )
 
@@ -272,7 +273,7 @@ func TestValidateInstalledAcceptsStableBinaryAndRejectsIncompleteHooks(t *testin
 
 func TestUserHooksPathCreatesCodexDirectory(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 
 	path, err := UserHooksPath()
 	if err != nil {

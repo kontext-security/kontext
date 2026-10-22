@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/profile"
 )
@@ -53,7 +54,7 @@ func TestDiagnoseReportCarriesSummaryFlags(t *testing.T) {
 // summary flags.
 func TestDiagnoseReportSummaryOnUnconfiguredEarlyReturn(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("HOME", root)
+	hermetic.SetHome(t, root)
 	t.Setenv(profile.EnvRoot, root)
 	var out bytes.Buffer
 	// Pin the resolution instead of leaving it to this machine: unset config
@@ -85,7 +86,7 @@ func TestDiagnoseReportSummaryOnUnconfiguredEarlyReturn(t *testing.T) {
 // absent pointer alone would mislabel a clean machine.
 func TestDiagnoseDoesNotCallCleanMachineLegacy(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("HOME", root)
+	hermetic.SetHome(t, root)
 	t.Setenv(profile.EnvRoot, root)
 	var out bytes.Buffer
 	_, report := printStatus(&out, "1.2.3", doctorOptions{

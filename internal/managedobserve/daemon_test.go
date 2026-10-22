@@ -20,6 +20,7 @@ import (
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/ledgerping"
 	"github.com/kontext-security/kontext/internal/localruntime"
@@ -108,7 +109,7 @@ func TestDaemonSessionEndClosesHookSessionID(t *testing.T) {
 
 func TestDaemonStreamsLedgerBatches(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	t.Setenv("KONTEXT_AUTHORITY_SCAN", "")
 	for _, d := range agentinventory.Catalog {
 		if d.ConfigEnv != "" {
@@ -167,11 +168,7 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	dir := t.TempDir()
-	socketDir, err := os.MkdirTemp("/tmp", "kontext-managedobserve-stream-test-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)
@@ -302,11 +299,7 @@ func TestDaemonRefreshesStreamInstallToken(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	dir := t.TempDir()
-	socketDir, err := os.MkdirTemp("/tmp", "kontext-managedobserve-stream-token-test-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)
@@ -388,11 +381,7 @@ func testDaemonAuthFailure(t *testing.T, rejectedStatus int) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	dir := t.TempDir()
-	socketDir, err := os.MkdirTemp("/tmp", "kontext-managedobserve-auth-error-test-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)
@@ -479,11 +468,7 @@ func TestRunDaemonExitsCleanlyAfterHomebrewUpgradeSignal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dir := t.TempDir()
-	socketDir, err := os.MkdirTemp("/tmp", "kontext-managedobserve-updater-test-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)
@@ -769,6 +754,7 @@ func TestEnsureSocketDirRejectsSymlinkParent(t *testing.T) {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
 	link := filepath.Join(t.TempDir(), "socket-link")
+	hermetic.Symlinks(t)
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatalf("Symlink() error = %v", err)
 	}
@@ -785,11 +771,7 @@ func startTestDaemon(t *testing.T) (string, string, func()) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	t.Cleanup(server.Close)
-	socketDir, err := os.MkdirTemp("/tmp", "kontext-managedobserve-daemon-test-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)

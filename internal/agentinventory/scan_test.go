@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestScan(t *testing.T) {
@@ -88,6 +90,7 @@ func TestScan(t *testing.T) {
 				want[0].LastActivityAt = &activity
 				file("outside/recent", now)
 				root := mkdir(".cursor/projects")
+				hermetic.Symlinks(t)
 				if err := os.Symlink(filepath.Join(home, "outside"), filepath.Join(root, "link")); err != nil {
 					t.Fatal(err)
 				}

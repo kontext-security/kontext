@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
@@ -68,6 +69,7 @@ func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
 	if err := os.MkdirAll(linked, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	hermetic.Symlinks(t)
 	if err := os.Symlink(filepath.Join(guarded, ".mcp.json"), filepath.Join(linked, ".mcp.json")); err != nil {
 		t.Fatal(err)
 	}

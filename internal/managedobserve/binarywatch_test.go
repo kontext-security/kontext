@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestBinaryWatchdogFiresWhenFileDeleted(t *testing.T) {
@@ -61,6 +62,7 @@ func TestBinaryWatchdogFiresWhenSymlinkRetargeted(t *testing.T) {
 			t.Fatalf("WriteFile() error = %v", err)
 		}
 	}
+	hermetic.Symlinks(t)
 	if err := os.Symlink(oldKeg, link); err != nil {
 		t.Fatalf("Symlink() error = %v", err)
 	}
