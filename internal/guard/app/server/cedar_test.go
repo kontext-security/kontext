@@ -137,7 +137,13 @@ func TestCedarCoworkWorkspaceBashEnforcesShellPolicy(t *testing.T) {
 }
 
 func TestCedarPowerShellToolEnforcesShellPolicy(t *testing.T) {
-	for _, command := range []string{"git status", "git push -f origin main"} {
+	for _, command := range []string{
+		"git status",
+		"git push -f origin main",
+		`& 'C:\Program Files\Git\cmd\git.exe' push --force origin main`,
+		"pwsh -NoProfile -Command 'git push -f origin main'",
+		"cmd /c git push -f origin main",
+	} {
 		t.Run(command, func(t *testing.T) {
 			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
 			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
