@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func createCursorFixture(t *testing.T, home string) string {
@@ -176,6 +178,7 @@ func TestNoPromptAbsentAndCursorReadGuard(t *testing.T) {
 	if err := os.Rename(path, outside); err != nil {
 		t.Fatal(err)
 	}
+	hermetic.Symlinks(t)
 	if err := os.Symlink(outside, path); err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func loopbackConfigJSON(t *testing.T, cloudURL string, allow bool) []byte {
@@ -150,7 +152,7 @@ func TestLoadAcceptsLoopbackOptInAtUserScope(t *testing.T) {
 	t.Setenv(EnvAllowHTTP, "")
 	t.Setenv(EnvPath, "")
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	systemPath = filepath.Join(t.TempDir(), "absent.json")
 	t.Cleanup(func() { systemPath = DefaultPath })
 

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestCoworkWebLogTail(t *testing.T) {
@@ -31,6 +33,7 @@ func TestCoworkWebLogTail(t *testing.T) {
 	if err := os.Rename(path, outside); err != nil {
 		t.Fatal(err)
 	}
+	hermetic.Symlinks(t)
 	if err := os.Symlink(outside, path); err != nil {
 		t.Fatal(err)
 	}

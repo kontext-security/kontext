@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 // Every way a path can land in a guarded folder, and the near misses that
@@ -23,6 +25,7 @@ func TestGuarded(t *testing.T) {
 	link := func(target, name string) string {
 		t.Helper()
 		path := filepath.Join(home, name)
+		hermetic.Symlinks(t)
 		if err := os.Symlink(target, path); err != nil {
 			t.Fatal(err)
 		}

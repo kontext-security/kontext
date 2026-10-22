@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
 )
@@ -42,7 +42,7 @@ func TestLifecycleMissingSocketKickstartsAndFailsOpen(t *testing.T) {
 }
 
 func TestLifecyclePollsAfterKickstartWithinDeadline(t *testing.T) {
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-delayed-test-%d.sock", time.Now().UnixNano()))
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-delayed-test.sock")
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	ready := make(chan struct{})
 	done := make(chan struct{})
@@ -127,7 +127,7 @@ func TestLifecycleKickstartFailureIsDiagnosedAndFailsOpen(t *testing.T) {
 }
 
 func TestLifecycleHealthySocketDoesNotKickstart(t *testing.T) {
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-test-%d.sock", time.Now().UnixNano()))
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-test.sock")
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -183,7 +183,7 @@ func TestLifecycleHealthySocketDoesNotKickstart(t *testing.T) {
 }
 
 func TestLifecycleEnforcePassesDaemonDenyThroughToAgent(t *testing.T) {
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-enforce-test-%d.sock", time.Now().UnixNano()))
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-enforce-test.sock")
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -240,7 +240,7 @@ func TestLifecycleEnforcePassesDaemonDenyThroughToAgent(t *testing.T) {
 }
 
 func TestLifecycleReservesShadowBudgetAfterAuthoritativePolicy(t *testing.T) {
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-shadow-budget-%d.sock", time.Now().UnixNano()))
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-shadow-budget.sock")
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -308,7 +308,7 @@ func TestLifecycleFailsOpenWhenDaemonUnavailable(t *testing.T) {
 			t.Run(mode+"/"+string(name), func(t *testing.T) {
 				t.Parallel()
 				lifecycle := Lifecycle{
-					SocketPath: filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-down-%d.sock", time.Now().UnixNano())),
+					SocketPath: filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-down.sock"),
 					Label:      DefaultLaunchdLabel,
 					Mode:       mode,
 					Kickstart:  func(context.Context, string) error { return nil },
@@ -328,7 +328,7 @@ func assertFailedOpen(t *testing.T, result hook.Result) {
 }
 
 func TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC(t *testing.T) {
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-enforce-rpc-%d.sock", time.Now().UnixNano()))
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-enforce-rpc.sock")
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -381,7 +381,7 @@ func TestLifecycleEnforceFailsOpenWhenDaemonHangs(t *testing.T) {
 		reply := reply
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-hung-%d.sock", time.Now().UnixNano()))
+			socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-hung.sock")
 			t.Cleanup(func() { _ = os.Remove(socketPath) })
 			listener, err := net.Listen("unix", socketPath)
 			if err != nil {
@@ -447,7 +447,7 @@ func TestLifecycleEnforceRejectsNonAuthoritativeDaemonResult(t *testing.T) {
 }
 
 func TestLifecycleEnforcePromptSubmitDeadDaemonAllowsAfterKickstart(t *testing.T) {
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-prompt-down-%d.sock", time.Now().UnixNano()))
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-prompt-down.sock")
 	kickstarted := false
 	lifecycle := Lifecycle{
 		SocketPath: socketPath,
@@ -571,7 +571,7 @@ func TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget(t *testing.T) {
 	previousRestartWait := daemonRestartWait
 	daemonRestartWait = preToolUseWait + time.Second
 	t.Cleanup(func() { daemonRestartWait = previousRestartWait })
-	socketPath := filepath.Join("/tmp", fmt.Sprintf("kontext-managedobserve-restart-%d.sock", time.Now().UnixNano()))
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-restart.sock")
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	done := make(chan struct{})
 	lifecycle := Lifecycle{

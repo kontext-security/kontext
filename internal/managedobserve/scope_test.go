@@ -7,12 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 )
 
 func TestInstallationPathForScope(t *testing.T) {
-	t.Setenv("HOME", "/Users/example")
+	hermetic.SetHome(t, "/Users/example")
 	t.Setenv(installation.EnvPath, "")
 
 	userPath := filepath.Join("/Users/example", "Library", "Application Support", "Kontext", "installation.json")
@@ -41,7 +42,7 @@ func TestInstallationPathForScope(t *testing.T) {
 func TestInstallationPathForScopeUserWithoutHomeFallsBack(t *testing.T) {
 	// Pathological: scope resolved as user but the home dir has since become
 	// unavailable. The system default is the only sane landing spot.
-	t.Setenv("HOME", "")
+	hermetic.SetHome(t, "")
 	t.Setenv(installation.EnvPath, "")
 
 	if got := installationPathForScope(managedconfig.ScopeUser); got != installation.DefaultPath {
@@ -50,7 +51,7 @@ func TestInstallationPathForScopeUserWithoutHomeFallsBack(t *testing.T) {
 }
 
 func TestInstallationPathForScopeEnvOverrideWins(t *testing.T) {
-	t.Setenv("HOME", "/Users/example")
+	hermetic.SetHome(t, "/Users/example")
 	t.Setenv(installation.EnvPath, "/custom/installation.json")
 
 	if got := installationPathForScope(managedconfig.ScopeUser); got != "/custom/installation.json" {

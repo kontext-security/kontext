@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestInspectInstallationLayers(t *testing.T) {
@@ -100,7 +102,7 @@ func TestInspectInstallationRejectsEventsSplitAcrossLayers(t *testing.T) {
 
 func TestDefaultInstallationPathsHonorsCodexHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	for _, custom := range []string{"", filepath.Join(home, "custom")} {
 		t.Setenv("CODEX_HOME", custom)
 		paths, err := DefaultInstallationPaths()
