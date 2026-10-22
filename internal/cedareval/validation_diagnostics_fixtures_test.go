@@ -43,10 +43,11 @@ var toolResourcePattern = regexp.MustCompile(`Kontext::Tool::"([^"]*)"`)
 
 // expectedWarningCodes mirrors the management plane's unsupported_tool_id
 // emission (isReportedCedarToolId): resolveTool sends shell for every shell
-// alias, github-mcp/* for GitHub MCP tools, and any other tool's own name, so
-// only an empty id, a shell alias other than shell, a raw GitHub MCP name or an
-// uncatalogued github-mcp id can never match. The warning never rejects the
-// policy, so an accepted fixture may carry it.
+// alias, Claude Code's PowerShell tool included, github-mcp/* for GitHub MCP
+// tools, and any other tool's own name, so only an empty id, a shell alias
+// other than shell, a raw GitHub MCP name or an uncatalogued github-mcp id
+// can never match. The warning never rejects the policy, so an accepted
+// fixture may carry it.
 func expectedWarningCodes(policyText string) []string {
 	seen := map[string]bool{}
 	codes := []string{}
@@ -66,7 +67,7 @@ func reportedToolID(id string) bool {
 	switch normalized {
 	case "":
 		return false
-	case "bash", "shell", "shell_command", "unified_exec", "exec_command", "local_shell":
+	case "bash", "shell", "shell_command", "unified_exec", "exec_command", "local_shell", "powershell":
 		return id == cedareval.ToolShellV2
 	}
 	if rest, ok := strings.CutPrefix(id, "mcp__"); ok {
