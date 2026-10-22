@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -81,9 +80,7 @@ func TestScan(t *testing.T) {
 			case "fifo":
 				want[0].LastActivityAt = &activity
 				root := mkdir(".cursor/projects")
-				if err := syscall.Mkfifo(filepath.Join(root, "pipe"), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				testMkfifo(t, filepath.Join(root, "pipe"))
 			case "symlink":
 				want[0].LastActivityAt = &activity
 				file("outside/recent", now)
