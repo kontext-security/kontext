@@ -230,3 +230,22 @@ func contains(values []string, want string) bool {
 	}
 	return false
 }
+
+func TestProjectPowerShellCarriesDialect(t *testing.T) {
+	for _, command := range []string{"git status; git push -f origin main", "", "git 'unterminated"} {
+		projections := ProjectPowerShell(command)
+		if len(projections) == 0 {
+			t.Fatalf("%q: no projection", command)
+		}
+		for _, projection := range projections {
+			if !contains(projection.Facts, FactDialectPowerShell) {
+				t.Errorf("%q: facts %v lack %s", command, projection.Facts, FactDialectPowerShell)
+			}
+		}
+	}
+	for _, projection := range Project("git status") {
+		if contains(projection.Facts, FactDialectPowerShell) {
+			t.Errorf("POSIX shell projection %#v carries %s", projection, FactDialectPowerShell)
+		}
+	}
+}

@@ -319,8 +319,8 @@ func legacyDeployment(snapshot cedarpolicy.Snapshot) *cedarpolicy.LegacyDeployme
 // so catalogued providers are identified by URL before their server name.
 var mcpServers = &mcpconfig.Resolver{}
 
-// resolveTool maps a hook event to its tool id. Shell commands are projected
-// into one entry per call; pinned GitHub MCP tools resolve to their catalog
+// resolveTool maps a hook event to its tool id. Shell commands, PowerShell's
+// included, are projected into one entry per call; pinned GitHub MCP tools resolve to their catalog
 // id; every other tool keeps the name the agent reported (an MCP tool as
 // mcp__<server>__<tool>, a built-in as Write, Read, WebFetch), so a policy
 // can name it. Only a nameless call is unknown.
@@ -335,6 +335,9 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 	coworkShell := (event.Agent == "cowork" || event.Agent == "claude-cowork") && event.ToolName == "mcp__workspace__bash"
 	if risk.IsShellTool(event.ToolName) || coworkShell {
 		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput)), nil
+	}
+	if risk.IsPowerShellTool(event.ToolName) {
+		return cedareval.ToolShellV2, shellprojection.ProjectPowerShell(risk.CommandFromInput(event.ToolInput)), nil
 	}
 	serverURL, serverName, cached := mcpServers.Server(event.Agent, event.SessionID, event.CWD, event.ToolName)
 	toolID, resolved := toolcatalog.Resolve(event.ToolName, serverURL, serverName, event.ToolInput)

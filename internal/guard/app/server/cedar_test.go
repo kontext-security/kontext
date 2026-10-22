@@ -8,6 +8,7 @@ import (
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/shellprojection"
 )
 
 type staticCedarSnapshots struct{ snapshot cedarpolicy.Snapshot }
@@ -132,6 +133,30 @@ func TestCedarCoworkWorkspaceBashEnforcesShellPolicy(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCedarPowerShellToolEnforcesShellPolicy(t *testing.T) {
+	for _, command := range []string{"git status", "git push -f origin main"} {
+		t.Run(command, func(t *testing.T) {
+			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+			// The input Claude Code sends for its PowerShell tool.
+			decision, err := provider.DecideHook(context.Background(), cedarHookEvent("PowerShell", map[string]any{"command": command, "description": "Run git"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := risk.DecisionAllow
+			if command != "git status" {
+				want = risk.DecisionDeny
+			}
+			if decision.Decision != want || decision.Cedar == nil || decision.Cedar.ToolID != cedareval.ToolShellV2 {
+				t.Fatalf("decision = %#v, want %s with tool %s", decision, want, cedareval.ToolShellV2)
+			}
+			if len(decision.Cedar.Shell) != 1 || decision.Cedar.Shell[0].Program != "git" || !containsString(decision.Cedar.Shell[0].Facts, shellprojection.FactDialectPowerShell) {
+				t.Fatalf("shell evidence = %#v, want one git projection with the PowerShell dialect", decision.Cedar.Shell)
+			}
+		})
 	}
 }
 
