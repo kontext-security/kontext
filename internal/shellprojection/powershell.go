@@ -7,9 +7,10 @@ import (
 	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
-// FactDialectPowerShell marks a projection of a command the agent ran
-// through its PowerShell tool, or through pwsh or powershell from another
-// shell, so a policy can tell that dialect apart from a POSIX shell's.
+// FactDialectPowerShell marks a projection made by the PowerShell grammar: of
+// a command run through an agent's PowerShell tool or through pwsh or
+// powershell from another shell, or one of two readings of a command whose
+// shell is not known (Codex on Windows). A policy can match that reading.
 const FactDialectPowerShell = "shell/dialect=powershell"
 
 // ProjectPowerShell projects a command run through an agent's PowerShell
