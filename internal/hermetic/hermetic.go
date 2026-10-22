@@ -32,13 +32,15 @@ func SetHome(t testing.TB, dir string) {
 }
 
 // SocketDir returns a fresh directory short enough for a Unix socket path,
-// which macOS limits to 104 bytes; t.TempDir lies under /var/folders there and
-// is too long. The directory is removed when the test ends.
+// which macOS limits to 104 bytes and Linux to 108. t.TempDir and $TMPDIR can
+// be too long (on macOS they lie under /var/folders), so on Unix the directory
+// is made under /tmp; Windows has no /tmp, and its per-user %TEMP% is used.
+// The directory is removed when the test ends.
 func SocketDir(t testing.TB) string {
 	t.Helper()
-	parent := ""
-	if runtime.GOOS == "darwin" {
-		parent = "/tmp"
+	parent := "/tmp"
+	if runtime.GOOS == "windows" {
+		parent = ""
 	}
 	dir, err := os.MkdirTemp(parent, "k")
 	if err != nil {

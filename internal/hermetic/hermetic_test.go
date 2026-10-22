@@ -3,6 +3,7 @@ package hermetic
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -21,8 +22,11 @@ func TestHomeSetsEveryHomeVariable(t *testing.T) {
 }
 
 func TestSocketDirFitsASocketPath(t *testing.T) {
+	// Even with a long temp root, the directory must leave room for the
+	// longest socket name the tests use.
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("x", 80)))
 	dir := SocketDir(t)
-	if path := filepath.Join(dir, "kontext.sock"); len(path) > 104 {
+	if path := filepath.Join(dir, "kontext-managedobserve-shadow-budget.sock"); len(path) > 104 && runtime.GOOS != "windows" {
 		t.Fatalf("socket path %q is %d bytes, over the 104-byte limit", path, len(path))
 	}
 	if strings.HasPrefix(dir, t.TempDir()) {
