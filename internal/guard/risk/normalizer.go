@@ -253,6 +253,13 @@ func IsShellTool(toolName string) bool {
 	}
 }
 
+// IsPowerShellTool reports whether a hook tool name is Claude Code's
+// PowerShell tool, its default shell on Windows. The command arrives in
+// tool_input.command, as for Bash.
+func IsPowerShellTool(toolName string) bool {
+	return strings.EqualFold(strings.TrimSpace(toolName), "powershell")
+}
+
 var shellWrapperPrograms = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true}
 
 // commandFromArgv turns an argv array into shell text. Non-string elements

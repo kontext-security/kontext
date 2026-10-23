@@ -3,6 +3,8 @@ package shellprojection
 import (
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 type corpusCase struct {
@@ -159,9 +161,14 @@ func TestParseFailuresBecomeProjections(t *testing.T) {
 
 func runCorpus(t *testing.T, tests []corpusCase) {
 	t.Helper()
+	runProjectionCorpus(t, Project, tests)
+}
+
+func runProjectionCorpus(t *testing.T, project func(string) []cedareval.ShellProjectionV2, tests []corpusCase) {
+	t.Helper()
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			projections := Project(test.command)
+			projections := project(test.command)
 			if len(projections) != len(test.programs) {
 				t.Fatalf("program count = %d, want %d: %#v", len(projections), len(test.programs), projections)
 			}
@@ -229,4 +236,23 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestProjectPowerShellCarriesDialect(t *testing.T) {
+	for _, command := range []string{"git status; git push -f origin main", "", "git 'unterminated"} {
+		projections := ProjectPowerShell(command)
+		if len(projections) == 0 {
+			t.Fatalf("%q: no projection", command)
+		}
+		for _, projection := range projections {
+			if !contains(projection.Facts, FactDialectPowerShell) {
+				t.Errorf("%q: facts %v lack %s", command, projection.Facts, FactDialectPowerShell)
+			}
+		}
+	}
+	for _, projection := range Project("git status") {
+		if contains(projection.Facts, FactDialectPowerShell) {
+			t.Errorf("POSIX shell projection %#v carries %s", projection, FactDialectPowerShell)
+		}
+	}
 }
