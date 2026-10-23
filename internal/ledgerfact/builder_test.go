@@ -306,6 +306,13 @@ func TestBuildCarriesCedarRequest(t *testing.T) {
 	if alt, err := ledgerfact.Build(altInput); err != nil || alt.Evidence.CedarRequest != nil {
 		t.Fatalf("cedar_request = %+v (%v), want omitted with alternates", alt.Evidence.CedarRequest, err)
 	}
+	// So is one that also evaluated the tier as admin.
+	adminCedar := mcpCedar
+	adminCedar.AlsoAdmin = true
+	altInput.Cedar = &adminCedar
+	if alt, err := ledgerfact.Build(altInput); err != nil || alt.Evidence.CedarRequest != nil {
+		t.Fatalf("cedar_request = %+v (%v), want omitted with an admin reading", alt.Evidence.CedarRequest, err)
+	}
 	encoded, err = json.Marshal(built.Evidence.CedarRequest)
 	if err != nil {
 		t.Fatalf("marshal mcp cedar_request: %v", err)

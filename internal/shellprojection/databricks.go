@@ -66,15 +66,24 @@ func (op databricksOperation) facts() []string {
 }
 
 // raiseSQL applies the SQL check to each text; the strictest result wins.
-// SQL that calls secret() is a secrets call, so the secrets preset blocks it
-// and read-only-except-sql no longer exempts it.
-func (op databricksOperation) raiseSQL(texts []string) databricksOperation {
-	for _, text := range texts {
-		deletes, admin, secrets, _ := toolcatalog.ClassifyDatabricksSQL(text)
+// sent are the texts Databricks runs, other further readings of them checked
+// only for what they raise. SQL that calls secret() is a secrets call, so the
+// secrets preset blocks it and read-only-except-sql no longer exempts it.
+// Sent SQL the check cannot read, or none at all, may delete or administer,
+// so it raises both. An empty text stands for SQL the projection does not
+// see (a file, stdin).
+func (op databricksOperation) raiseSQL(sent, other []string) databricksOperation {
+	readable := len(sent) > 0
+	for i, text := range append(slices.Clone(sent), other...) {
+		deletes, admin, secrets, recognized := toolcatalog.ClassifyDatabricksSQL(text)
 		op.del, op.admin = op.del || deletes, op.admin || admin
+		readable = readable && (recognized || i >= len(sent))
 		if secrets {
 			op.product = "secrets"
 		}
+	}
+	if !readable {
+		op.del, op.admin = true, true
 	}
 	return op
 }
@@ -332,7 +341,8 @@ func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV
 		return projection(productDatabricks, []string{FactDatabricksRouteUnrecognized, commandFact}, nil, false)
 	}
 	if op.sql {
-		op = op.raiseSQL(databricksSQLArgs(rest))
+		texts := databricksSQLArgs(rest)
+		op = op.raiseSQL(cleanedSQL(texts), texts)
 	}
 	for flag, by := range databricksFlagRaises[command] {
 		if flagSet(rest, flag) {
@@ -362,8 +372,7 @@ func withoutIndexes(args []string, indexes []int) []string {
 }
 
 // databricksSQLValueFlags are the flags of the SQL commands that take a value
-// other than SQL. --file reads SQL the projection cannot see, so the call
-// keeps its base tier.
+// other than SQL.
 var databricksSQLValueFlags = words("-w", "--warehouse", "-f", "--file", "--concurrency", "--param",
 	"-p", "--profile", "-o", "--output", "-t", "--target", "-e", "--environment",
 	"--log-file", "--log-level", "--log-format", "--progress-format")
@@ -372,14 +381,18 @@ var databricksSQLValueFlags = words("-w", "--warehouse", "-f", "--file", "--conc
 // each positional argument, including one after a flag the projection does
 // not know, since that flag may not take a value. A positional ending in .sql
 // is read as a file when one exists and as SQL otherwise, so it is checked
-// as SQL too; a real file name raises nothing.
+// as SQL and also adds an empty text, as a --file in any form does: SQL the
+// projection does not read.
 func databricksSQLArgs(args []string) []string {
 	var texts []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if arg == "--file" || strings.HasPrefix(arg, "--file=") || strings.HasPrefix(arg, "-f") {
+			texts = append(texts, "")
+		}
 		switch {
 		case arg == "--":
-			return withCleanedSQL(append(texts, args[i+1:]...))
+			texts, i = append(texts, args[i+1:]...), len(args)
 		case databricksSQLValueFlags[arg]:
 			i++
 		case strings.HasPrefix(arg, "-") && len(arg) > 1:
@@ -387,14 +400,19 @@ func databricksSQLArgs(args []string) []string {
 			texts = append(texts, arg)
 		}
 	}
-	return withCleanedSQL(texts)
+	for _, text := range texts {
+		if strings.HasSuffix(strings.ToLower(text), ".sql") {
+			texts = append(texts, "")
+		}
+	}
+	return texts
 }
 
-// withCleanedSQL adds each text as the CLI's cleanSQL sends it: trimmed, one
-// pair of enclosing quotes removed, and lines starting with -- dropped. Both
-// readings are checked, so quoting cannot hide a statement.
-func withCleanedSQL(texts []string) []string {
-	out := slices.Clone(texts)
+// cleanedSQL returns each text as the CLI's cleanSQL sends it: trimmed, one
+// pair of enclosing quotes removed, and lines starting with -- dropped. The
+// caller checks the raw texts too, so quoting cannot hide a statement.
+func cleanedSQL(texts []string) []string {
+	var out []string
 	for _, text := range texts {
 		text = strings.TrimSpace(text)
 		if len(text) >= 2 && (text[0] == '"' && text[len(text)-1] == '"' || text[0] == '\'' && text[len(text)-1] == '\'') {
@@ -483,8 +501,8 @@ func classifyDatabricksCurl(host string, parsed *url.URL, method string, bodies 
 // first. MCP endpoints
 // carry their operation in a JSON-RPC body the projection does not read, so
 // they are unrecognized. A POST to the SQL statements route raises its tier
-// by the statements in its literal body pieces; a piece read from a file
-// adds nothing, so SQL only in a file keeps the base tier.
+// by the statements in its body (raiseSQL): SQL it cannot read, from a file
+// or nowhere, raises delete and admin.
 func databricksRouteFacts(method, requestPath string, bodies []string) ([]string, bool) {
 	if requestPath != "" {
 		requestPath = path.Clean(requestPath)
@@ -498,7 +516,7 @@ func databricksRouteFacts(method, requestPath string, bodies []string) ([]string
 	}
 	op := databricksAccess(route.Product, route.Access)
 	if route.Method == "POST" && route.Path == databricksSQLRoute {
-		op = op.raiseSQL(databricksStatements(bodies))
+		op = op.raiseSQL(databricksStatements(bodies), nil)
 	}
 	return op.facts(), true
 }
@@ -512,14 +530,17 @@ const databricksMaxBodyPieces = 8
 // checked. The body is assembled from its literal pieces: curl joins -d
 // pieces with & and --json pieces with nothing, and the CLI keeps the last
 // --json, so each piece alone and every join of the pieces is read. A piece
-// read from a file (@name) is unknown and read as empty. Past
-// databricksMaxBodyPieces only each piece and the two uniform joins are
-// read: SQL split some other way across more pieces keeps sql/write, as SQL
-// the projection cannot read does.
+// read from a file (@name) is not opened, since the same command may write
+// it first, and an empty piece may be a computed one: either adds an empty
+// statement, SQL the projection does not see. Past databricksMaxBodyPieces only
+// each piece and the two uniform joins are read, so SQL split some other way
+// across more pieces is judged by those readings.
 func databricksStatements(bodies []string) (statements []string) {
 	var pieces []string
 	for _, body := range bodies {
-		if !strings.HasPrefix(body, "@") {
+		if body == "" || strings.HasPrefix(body, "@") {
+			statements = append(statements, "")
+		} else {
 			pieces = append(pieces, body)
 		}
 	}

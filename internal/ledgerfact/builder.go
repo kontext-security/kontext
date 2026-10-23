@@ -43,6 +43,9 @@ type CedarInput struct {
 	// AlternateToolIDs are further requests the decision also evaluated. The
 	// fact's request carries one tool id, so with any of them it is omitted.
 	AlternateToolIDs []string
+	// AlsoAdmin means the decision also evaluated Tool as admin. The fact's
+	// request carries one tier, so it is omitted then too.
+	AlsoAdmin bool
 }
 
 // DisabledInput describes why no Cedar deployment answered: an explicit kill
@@ -259,9 +262,10 @@ const maxCedarRequestShellProjections = 64
 
 func factCedarRequest(cedar CedarInput) *CedarRequest {
 	// Over the bound, or when the decision also evaluated alternate tool
-	// ids, the request is omitted, never truncated: replay must not evaluate
-	// part of what was decided. The decision itself is still recorded.
-	if cedar.ToolID == "" || len(cedar.Shell) > maxCedarRequestShellProjections || len(cedar.AlternateToolIDs) > 0 {
+	// ids or tiers, the request is omitted, never truncated: replay must not
+	// evaluate part of what was decided. The decision itself is still
+	// recorded.
+	if cedar.ToolID == "" || len(cedar.Shell) > maxCedarRequestShellProjections || len(cedar.AlternateToolIDs) > 0 || cedar.AlsoAdmin {
 		return nil
 	}
 	shell := make([]cedareval.ShellProjectionV2, 0, len(cedar.Shell))
