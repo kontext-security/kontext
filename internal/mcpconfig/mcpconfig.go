@@ -16,7 +16,9 @@
 //     mcp__<connector-uuid>__<tool>: the connector's URL and name in the
 //     Desktop session record (claude-code-sessions/ for Code tab sessions,
 //     local-agent-mode-sessions/ for Cowork) whose cliSessionId is the
-//     hook's session id. Cowork records may carry only the name.
+//     hook's session id. Cowork records may carry only the name. When no
+//     record of the session lists the connector, its name in the
+//     endpoint's last authority scan.
 //   - claude.ai connectors in the Claude Code CLI, whose tools are named
 //     mcp__claude_ai_<Name>__<tool>: the connector's URL in the newest
 //     Desktop session record of the claude.ai organization the CLI is
@@ -49,6 +51,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/privacyfolder"
+	"github.com/kontext-security/kontext/pkg/agentauthority"
 	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
@@ -80,6 +83,7 @@ type Resolver struct {
 
 	mu      sync.Mutex
 	cache   map[string]cachedFile
+	scan    func() (agentauthority.Report, bool)
 	once    sync.Once
 	lookups chan struct{}
 }
@@ -91,13 +95,22 @@ type cachedFile struct {
 	ok      bool
 }
 
+// SetScan gives the resolver the endpoint's last authority scan, for
+// connectors no session record names (see scannedConnector).
+func (r *Resolver) SetScan(scan func() (agentauthority.Report, bool)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.scan = scan
+}
+
 // Server returns the configured URL of the MCP server behind toolName
 // (mcp__<server>__<tool>) for the agent that reported it, or "". name is
 // the server's display name when the tool name does not carry it (a Claude
 // Desktop connector), else "". cached reports a URL taken from Claude
-// Desktop's cached claude.ai connector list rather than a config or the
-// session's own record, so it may predate a change to the connector. A
-// lookup that does not finish within lookupTimeout returns nothing.
+// Desktop's cached claude.ai connector list, or a name from the last
+// authority scan, rather than a config or the session's own record, so it
+// may predate a change to the connector. A lookup that does not finish
+// within lookupTimeout returns nothing.
 func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name string, cached bool) {
 	if !strings.HasPrefix(toolName, "mcp__") {
 		return "", "", false
@@ -144,7 +157,8 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 	switch agent {
 	case "claude", "claude-code", "claude_code", "cowork", "claude-cowork", "claude_cowork":
 		// Claude Desktop names a claude.ai connector's tools by its UUID. A
-		// UUID no session record lists may still be a configured server.
+		// UUID no session record lists may still be a configured server, and
+		// only one no config defines falls back to the last authority scan.
 		if uuidPattern.MatchString(server) {
 			if url, name, found := r.desktopConnector(home, sessionID, server); found {
 				return url, name, false
@@ -169,6 +183,17 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 			url, _ = r.claudeAIConnector(home, server)
 			return url, "", url != ""
 		}
+		if !found {
+			name := r.scannedConnector(server)
+			return "", name, name != ""
+		}
+		return url, "", false
+	case "cowork", "claude-cowork", "claude_cowork":
+		url, found := find(r.servers(filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json")), server)
+		if !found {
+			name := r.scannedConnector(server)
+			return "", name, name != ""
+		}
 		return url, "", false
 	}
 	return r.configURL(home, agent, cwd, server), "", false
@@ -178,9 +203,6 @@ func (r *Resolver) configURL(home, agent, cwd, server string) string {
 	switch agent {
 	case "claude", "claude-code", "claude_code":
 		url, _ := r.claude(home, cwd, server)
-		return url
-	case "cowork", "claude-cowork", "claude_cowork":
-		url, _ := find(r.servers(filepath.Join(home, "Library/Application Support/Claude/claude_desktop_config.json")), server)
 		return url
 	case "codex":
 		dir := os.Getenv("CODEX_HOME")
@@ -488,6 +510,42 @@ func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name s
 		}
 	}
 	return "", "", false
+}
+
+// scannedConnector names a connector UUID through the endpoint's last
+// authority scan, which lists the connectors of recent session records, for
+// a session whose own record does not list it (Desktop has not written the
+// record yet, or the lookup cannot read it) and that no config defines. The scan keeps only the URL's
+// host, and the Databricks and GitHub catalogs claim a server by host and
+// path, so the connector is identified by its name. The newest sighting
+// wins where the scan's lists disagree.
+func (r *Resolver) scannedConnector(server string) string {
+	if !uuidPattern.MatchString(server) {
+		return ""
+	}
+	r.mu.Lock()
+	scan := r.scan
+	r.mu.Unlock()
+	if scan == nil {
+		return ""
+	}
+	report, ok := scan()
+	if !ok {
+		return ""
+	}
+	name, seen := "", ""
+	for _, agent := range report.Agents {
+		for _, connector := range agent.Connectors {
+			lastSeen := ""
+			if connector.LastSeen != nil {
+				lastSeen = *connector.LastSeen
+			}
+			if strings.EqualFold(connector.UUID, server) && (name == "" || lastSeen > seen) {
+				name, seen = connector.Name, lastSeen
+			}
+		}
+	}
+	return name
 }
 
 // plugin resolves a plugin's MCP server, which Claude Code names
