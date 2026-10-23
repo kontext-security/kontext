@@ -49,33 +49,35 @@ const (
 
 // databricksSQLParity: every SQL entry point, the MCP execute_sql tool and
 // the shell ones, must reach the decision listed for each preset. Presets not
-// listed allow. mcpAllows is the one documented gap (ENG-734): an MCP call
-// carries a single tier, so a statement that both deletes and administers is
-// blocked by protect-databricks-administration through the shell only.
+// listed allow. SQL Kontext cannot read is delete and admin (ENG-792).
 var databricksSQLParity = []struct {
-	sql       string
-	deny      []string
-	mcpAllows []string
+	sql  string
+	deny []string
 }{
-	{"SELECT * FROM main.sales.orders", []string{"databricks-read-only"}, nil},
-	{"INSERT INTO t VALUES (1)", []string{"databricks-read-only"}, nil},
-	{"DROP TABLE main.sales.orders", []string{"databricks-read-only", "block-databricks-deletion"}, nil},
-	{"DELETE FROM t WHERE id = 1", []string{"databricks-read-only", "block-databricks-deletion"}, nil},
-	{"GRANT SELECT ON TABLE t TO `users`", []string{"databricks-read-only", "protect-databricks-administration"}, nil},
-	{"ALTER CATALOG main OWNER TO `someone`", []string{"databricks-read-only", "protect-databricks-administration"}, nil},
-	{"DROP TABLE t; GRANT SELECT ON TABLE u TO `users`", []string{"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"}, []string{"protect-databricks-administration"}},
-	{"SELECT secret('scope', 'key')", []string{"databricks-read-only", "databricks-read-only-except-sql", "protect-databricks-secrets"}, nil},
-	{"SELEC nonsense FRM", []string{"databricks-read-only"}, nil},
+	{"SELECT * FROM main.sales.orders", []string{"databricks-read-only"}},
+	{"INSERT INTO t VALUES (1)", []string{"databricks-read-only"}},
+	{"DROP TABLE main.sales.orders", []string{"databricks-read-only", "block-databricks-deletion"}},
+	{"DELETE FROM t WHERE id = 1", []string{"databricks-read-only", "block-databricks-deletion"}},
+	{"GRANT SELECT ON TABLE t TO `users`", []string{"databricks-read-only", "protect-databricks-administration"}},
+	{"ALTER CATALOG main OWNER TO `someone`", []string{"databricks-read-only", "protect-databricks-administration"}},
+	{"DROP TABLE t; GRANT SELECT ON TABLE u TO `users`", []string{"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"}},
+	{"SELECT secret('scope', 'key')", []string{"databricks-read-only", "databricks-read-only-except-sql", "protect-databricks-secrets"}},
+	{"SELEC nonsense FRM", []string{"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"}},
+	{"EXECUTE IMMEDIATE 'DROP TABLE main.sales.orders'", []string{"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"}},
+	// A proven tier does not vouch for the rest of the text.
+	{"GRANT SELECT ON TABLE t TO `users`; EXECUTE IMMEDIATE 'DROP TABLE t'", []string{"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"}},
+	{"SELECT * FROM read_files('/Volumes/main/raw/f')", []string{"databricks-read-only"}},
 }
 
 func databricksSQLEntryPoints(sql string) map[string]risk.HookEvent {
-	quoted := "'" + strings.ReplaceAll(sql, "'", `'\''`) + "'"
+	shellQuote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	quoted := shellQuote(sql)
 	body := fmt.Sprintf(`{"warehouse_id":"abc","statement":%q}`, sql)
 	return map[string]risk.HookEvent{
 		"aitools query":    cedarHookEvent("Bash", map[string]any{"command": "databricks experimental aitools tools query " + quoted}),
 		"statement submit": cedarHookEvent("Bash", map[string]any{"command": "databricks experimental aitools tools statement submit -w abc " + quoted}),
-		"databricks api":   cedarHookEvent("Bash", map[string]any{"command": "databricks api post /api/2.0/sql/statements --json '" + body + "'"}),
-		"curl":             cedarHookEvent("Bash", map[string]any{"command": "curl -sS -X POST -H 'Authorization: Bearer x' --json '" + body + "' https://dbc-1234.cloud.databricks.com/api/2.0/sql/statements"}),
+		"databricks api":   cedarHookEvent("Bash", map[string]any{"command": "databricks api post /api/2.0/sql/statements --json " + shellQuote(body)}),
+		"curl":             cedarHookEvent("Bash", map[string]any{"command": "curl -sS -X POST -H 'Authorization: Bearer x' --json " + shellQuote(body) + " https://dbc-1234.cloud.databricks.com/api/2.0/sql/statements"}),
 		"codex query":      codexHookEvent("exec_command", map[string]any{"command": []any{"bash", "-lc", "databricks experimental aitools tools query " + quoted}}),
 		"codex argv api":   codexHookEvent("shell", map[string]any{"command": []any{"databricks", "api", "post", "/api/2.0/sql/statements", "--json", body}}),
 		"mcp execute_sql":  cedarHookEvent("mcp__wh__execute_sql", map[string]any{"query": sql, "warehouse_id": "abc"}),
@@ -94,10 +96,6 @@ func TestCedarDatabricksSQLParity(t *testing.T) {
 				want = dbDeny
 			}
 			for entry, event := range databricksSQLEntryPoints(test.sql) {
-				want := want
-				if entry == "mcp execute_sql" && containsString(test.mcpAllows, preset) {
-					want = dbAllow
-				}
 				if got := decideDatabricks(t, provider, event); got != want {
 					t.Errorf("%s, %s, %q: decision = %s, want %s", preset, entry, test.sql, got, want)
 				}
@@ -140,6 +138,11 @@ func TestCedarDatabricksShellPresets(t *testing.T) {
 		"bash -lc 'databricks clusters delete 0123-abc'":                                                       {"databricks-read-only", "databricks-read-only-except-sql", "block-databricks-deletion"},
 		"zsh -c 'databricks auth token -p prod'":                                                               {"protect-databricks-secrets"},
 		"databricks experimental aitools tools query \"SELECT 1\"; databricks clusters delete 0123-abc":        {"databricks-read-only", "databricks-read-only-except-sql", "block-databricks-deletion"},
+		// SQL the projection does not read is delete and admin (ENG-792).
+		"databricks api post /api/2.0/sql/statements --json @drop.json":                           {"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"},
+		"curl -X POST -d @drop.json https://dbc-1234.cloud.databricks.com/api/2.0/sql/statements": {"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"},
+		"databricks experimental aitools tools query --file drop.sql":                             {"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"},
+		"cat drop.sql | databricks experimental aitools tools query":                              {"databricks-read-only", "block-databricks-deletion", "protect-databricks-administration"},
 	}
 	for preset := range databricksPresets {
 		provider := databricksPresetProvider(t, preset)

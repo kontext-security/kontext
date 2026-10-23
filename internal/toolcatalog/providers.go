@@ -321,6 +321,10 @@ type ProviderClassification struct {
 	Provider string
 	Product  string
 	Access   string
+	// AlsoAdmin marks a delete that also changes administration. A call
+	// carries one context.tool.access, so the daemon judges it once more as
+	// admin.
+	AlsoAdmin bool
 }
 
 // ClassifyCall classifies the call behind toolID, the id Resolve gave it. A
@@ -355,26 +359,33 @@ const (
 )
 
 // classifyDatabricksSQLCall raises a Databricks SQL tool's catalog tier by
-// what its query does (ClassifyDatabricksSQL); it never lowers it. SQL that
-// deletes and changes administration reports delete, since a call carries
-// one access and lost data cannot be restored. SQL that calls secret() is
-// product secrets. execute_sql_read_only is raised the same way: Databricks
-// rejects such SQL there, so raising it only denies a call that would fail.
-// A missing or non-string query, or SQL the classifier does not recognize,
-// keeps the catalog tier.
+// what its query does (ClassifyDatabricksSQL); it never lowers it. Both
+// managed SQL servers, /api/2.0/mcp/sql and the AI Gateway's system.ai.dbsql,
+// name the SQL argument query. SQL that deletes and changes administration
+// reports delete with AlsoAdmin. SQL that calls secret() is product secrets.
+// execute_sql_read_only is raised the same way: Databricks rejects such SQL
+// there, so raising it only denies a call that would fail.
+//
+// On execute_sql, SQL the classifier cannot read, or no query string at all
+// (a server that names the argument differently), may delete or administer,
+// so it is both. On execute_sql_read_only it keeps the read tier, since
+// Databricks runs only reads there.
 func classifyDatabricksSQLCall(toolID string, input map[string]any) (ProviderClassification, bool) {
 	class, ok := Classify(toolID)
-	query, isString := input["query"].(string)
-	if !ok || !isString {
-		return class, ok
+	if !ok {
+		return class, false
 	}
-	deletes, admin, touchesSecrets, _ := ClassifyDatabricksSQL(query)
+	query, _ := input["query"].(string)
+	deletes, admin, touchesSecrets, recognized := ClassifyDatabricksSQL(query)
+	if !recognized && toolID == databricksExecuteSQL {
+		deletes, admin = true, true
+	}
 	if touchesSecrets {
 		class.Product = "secrets"
 	}
 	switch {
 	case deletes:
-		class.Access = AccessDelete
+		class.Access, class.AlsoAdmin = AccessDelete, admin
 	case admin:
 		class.Access = AccessAdmin
 	}

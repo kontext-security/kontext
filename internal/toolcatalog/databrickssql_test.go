@@ -39,7 +39,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 
 		// Delete forms.
 		{"drop", "DROP TABLE t", true, false, false, true},
-		{"commit then drop", "COMMIT; DROP TABLE t", true, false, false, true},
+		{"commit then drop", "COMMIT; DROP TABLE t", true, false, false, false},
 		{"delete", "DELETE FROM t WHERE a = 1", true, false, false, true},
 		{"delete inside cte", "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d", false, false, false, true},
 		{"delete in subquery", "SELECT * FROM (DELETE FROM t)", false, false, false, true},
@@ -150,7 +150,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"backslash in double-quoted secret", `SELECT "a\"; SELECT secret('s', 'k') --"`, false, false, true, true},
 		{"ambiguous comment before drop", "/* /*+ */ -- */\nDROP TABLE victim", true, false, false, true},
 		{"ambiguous comment between keywords", "DROP /* /*+ */ -- */\nTABLE victim", true, false, false, true},
-		{"ambiguous comment before grant", "/* /*+ */ */ GRANT SELECT ON t TO u", false, true, false, true},
+		{"ambiguous comment before grant", "/* /*+ */ */ GRANT SELECT ON t TO u", false, true, false, false},
 		{"mask function named end", "ALTER TABLE t ADD COLUMN ssn STRING MASK end", false, true, false, true},
 		{"mask function named from in list", "CREATE TABLE t (ssn STRING MASK from, b INT)", false, true, false, true},
 		{"mask function named on with using", "CREATE TABLE t (ssn STRING MASK on USING COLUMNS (b))", false, true, false, true},
@@ -263,7 +263,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"escape ends string", `SELECT 'a\''; DROP TABLE t --'`, true, false, false, true},
 		{"raw string has no escapes", `SELECT r'a\'; DROP TABLE t --'`, true, false, false, true},
 		{"line comment continues past backslash", "SELECT 1 -- a\\\n'\n; DROP TABLE t\n--'", true, false, false, true},
-		{"hint in comment does not nest", "SELECT 1 /* /*+ */ ; DROP TABLE t; /* */", true, false, false, true},
+		{"hint in comment does not nest", "SELECT 1 /* /*+ */ ; DROP TABLE t; /* */", true, false, false, false},
 		{"hint in comment either lexer", "SELECT /* /*+ */ ' */ 1; DROP TABLE victim; -- '", true, false, false, true},
 		{"hint in comment either lexer single statement", "SELECT /* /*+ */ ' */ 1; DROP TABLE t -- '", true, false, false, true},
 		{"quoted secret after ambiguous comment", "SELECT /* /*+ */ */ `secret`('scope', 'key')", false, false, true, true},
@@ -271,9 +271,9 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"quoted http_request after ambiguous comment", "SELECT /* /*+ */ */ `http_request`(conn => 'c')", false, false, false, false},
 		{"secret with comment before call after ambiguous comment", "SELECT /* /*+ */ */ secret/**/('scope', 'key')", false, false, true, true},
 		{"try_secret with line comment after ambiguous comment", "SELECT /* /*+ */ */ try_secret --c\n('scope', 'key')", false, false, true, true},
-		{"unclosed nested comment", "SELECT 1 /* /* */; DROP TABLE t", true, false, false, true},
-		{"unterminated string", "SELECT 'x; DROP TABLE t", true, false, false, true},
-		{"unterminated dollar body", "SELECT $$ x; GRANT ALL ON t TO u", false, true, false, true},
+		{"unclosed nested comment", "SELECT 1 /* /* */; DROP TABLE t", true, false, false, false},
+		{"unterminated string", "SELECT 'x; DROP TABLE t", true, false, false, false},
+		{"unterminated dollar body", "SELECT $$ x; GRANT ALL ON t TO u", false, true, false, false},
 		{"tagged dollar body", "CREATE FUNCTION f() RETURNS STRING LANGUAGE PYTHON AS $py$ return 'DROP; $$ GRANT' $py$", false, false, false, true},
 		{"quote in tagged dollar body", "CREATE FUNCTION f() RETURNS STRING LANGUAGE PYTHON AS $py$\n# '\nreturn 'ok'\n$py$;\nDROP TABLE victim;\n-- '", true, false, false, true},
 		{"quote in tagged body then grant", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $a1$ # ' $a1$; GRANT ALL ON t TO u -- '", false, true, false, true},
@@ -282,9 +282,9 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"unicode tag then grant", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $ſ$ # ' $ſ$; GRANT ALL ON t TO u -- '", false, true, false, true},
 		{"unicode tag then secret", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $ü$ # ' $ü$; SELECT secret('s', 'k') -- '", false, false, true, true},
 		{"unicode tag body", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $ü$ return 'DROP' $ü$", false, false, false, true},
-		{"case variant closes tag", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $i$ # ' $ı$; DROP TABLE t; $i$", true, false, false, true},
-		{"case variant overlaps close", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $i$ x $I$i$; DROP TABLE t", true, false, false, true},
-		{"unterminated tagged body", "SELECT $t$ x; DROP TABLE t", true, false, false, true},
+		{"case variant closes tag", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $i$ # ' $ı$; DROP TABLE t; $i$", true, false, false, false},
+		{"case variant overlaps close", "CREATE FUNCTION f() RETURNS INT LANGUAGE PYTHON AS $i$ x $I$i$; DROP TABLE t", true, false, false, false},
+		{"unterminated tagged body", "SELECT $t$ x; DROP TABLE t", true, false, false, false},
 		{"dollar without tag is punctuation", "SELECT $1 FROM t", false, false, false, true},
 		{"dotless i spells I", "INSERT OVERWRıTE t SELECT 1", true, false, false, true},
 		{"no-break space separates", "DROP TABLE t", true, false, false, true},
@@ -302,7 +302,7 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"secret in string", "SELECT 'secret(1)'", false, false, false, true},
 		{"secret column", "SELECT secret FROM t", false, false, false, true},
 
-		// Unrecognized: the caller keeps write.
+		// Unrecognized: the caller treats it as delete and admin.
 		{"execute immediate", "EXECUTE IMMEDIATE 'DROP TABLE t'", false, false, false, false},
 		{"call", "CALL system.p()", false, false, false, false},
 		{"identifier clause", "SELECT * FROM IDENTIFIER('t')", false, false, false, false},
@@ -313,14 +313,14 @@ func TestClassifyDatabricksSQL(t *testing.T) {
 		{"create_file", "SELECT create_file('x', '/Volumes/main/default/v/file', 'overwrite')", false, false, false, false},
 		{"copy_file overwrite raises", "SELECT copy_file('/Volumes/a', '/Volumes/b', overwrite => true)", false, false, false, false},
 		{"try_copy_file", "SELECT try_copy_file('/Volumes/a', '/Volumes/b')", false, false, false, false},
-		{"list_files", "SELECT * FROM list_files('https://drive.google.com/drive/folders/id', connection => my_conn)", false, false, false, false},
+		{"list_files reads", "SELECT * FROM list_files('https://drive.google.com/drive/folders/id', connection => my_conn)", false, false, false, true},
 		{"backticked to_file", "SELECT `to_file`('/Volumes/main/default/v/f')", false, false, false, false},
 		{"system builtin try_to_file", "SELECT system.builtin.try_to_file('/Volumes/main/default/v/f')", false, false, false, false},
 		{"reflect", "SELECT reflect('java.util.UUID', 'randomUUID')", false, false, false, false},
 		{"java_method", "SELECT java_method('java.lang.System', 'getenv', 'HOME')", false, false, false, false},
 		{"try_reflect", "SELECT try_reflect('java.lang.System', 'setProperty', 'k', 'v')", false, false, false, false},
 		{"single raised unknown form", "OPTIMIZE t WHERE DELETE", false, false, false, true},
-		{"read_files", "SELECT * FROM read_files('s3://bucket/path')", false, false, false, false},
+		{"read_files reads", "SELECT * FROM read_files('s3://bucket/path')", false, false, false, true},
 		{"multiple statements", "SELECT 1; SELECT 2", false, false, false, true},
 		{"alter outside known forms", "ALTER TABLE t ADD COLUMN c INT", false, false, false, true},
 		{"refresh", "REFRESH STREAMING TABLE sales", false, false, false, true},
@@ -402,8 +402,8 @@ func TestClassifyDatabricksSQLCap(t *testing.T) {
 	const drop = "DROP TABLE t; "
 	atCap := drop + strings.Repeat("/* /*+ a.", (databricksSQLMaxLen-len(drop))/9)
 	atCap += strings.Repeat(" ", databricksSQLMaxLen-len(atCap))
-	if deletes, _, _, recognized := ClassifyDatabricksSQL(atCap); len(atCap) != databricksSQLMaxLen || !deletes || !recognized {
-		t.Errorf("at the cap (%d bytes): deletes = %v, recognized = %v; want true, true", len(atCap), deletes, recognized)
+	if deletes, _, _, _ := ClassifyDatabricksSQL(atCap); len(atCap) != databricksSQLMaxLen || !deletes {
+		t.Errorf("at the cap (%d bytes): deletes = %v, want true", len(atCap), deletes)
 	}
 	if elapsed := bestOf(atCap)[0]; elapsed > 300*time.Millisecond {
 		t.Errorf("%d bytes took %v", len(atCap), elapsed)
