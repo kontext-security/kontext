@@ -16,6 +16,7 @@ import (
 	"github.com/kontext-security/kontext/internal/mcpconfig"
 	"github.com/kontext-security/kontext/internal/shellprojection"
 	"github.com/kontext-security/kontext/internal/toolcatalog"
+	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
 const cedarEvaluatorVersion = "cedar-go/v1.8.0"
@@ -319,6 +320,12 @@ func legacyDeployment(snapshot cedarpolicy.Snapshot) *cedarpolicy.LegacyDeployme
 // so catalogued providers are identified by URL before their server name.
 var mcpServers = &mcpconfig.Resolver{}
 
+// SetConnectorScan gives the lookup the endpoint's last authority scan, which
+// names claude.ai connectors a session's own Desktop record does not list.
+func SetConnectorScan(scan func() (agentauthority.Report, bool)) {
+	mcpServers.SetScan(scan)
+}
+
 // resolveTool maps a hook event to its tool id. Shell commands are projected
 // into one entry per call; pinned GitHub MCP tools resolve to their catalog
 // id; every other tool keeps the name the agent reported (an MCP tool as
@@ -338,36 +345,47 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 	}
 	serverURL, serverName, cached := mcpServers.Server(event.Agent, event.SessionID, event.CWD, event.ToolName)
 	toolID, resolved := toolcatalog.Resolve(event.ToolName, serverURL, serverName, event.ToolInput)
+	if !resolved {
+		return passThrough(event, legacyUnknown), nil, nil
+	}
 	// A claude.ai connector's URL in the Claude Code CLI comes from Claude
-	// Desktop's cached connector list, which can predate a change to the
-	// connector. The call is judged as the URL says and also as its tool
-	// name reads, within the URL's catalog and by the name hints; Cedar
-	// denies when any reading is denied, so a stale URL cannot drop a match.
+	// Desktop's cached connector list, and a Desktop connector's name can
+	// come from the last authority scan; either can predate a change to the
+	// connector. The call is judged as the URL or name says, also within that
+	// catalog by its tool name, and also as it reads without the cached entry;
+	// Cedar denies when any reading is denied, so a stale entry cannot drop a
+	// match.
 	var alternates []string
-	if cached && resolved {
-		inCatalog, inCatalogOK := toolcatalog.ResolveInCatalog(toolID, event.ToolName, event.ToolInput)
-		byName, byNameOK := toolcatalog.Resolve(event.ToolName, "", "", event.ToolInput)
-		for _, candidate := range []struct {
-			id string
-			ok bool
-		}{{inCatalog, inCatalogOK}, {byName, byNameOK}} {
-			// Only a reading with a tier can add a match; an unrecognized
-			// one would only trip the opt-in guards on the URL's kinds.
-			if candidate.ok && candidate.id != toolID && !slices.Contains(alternates, candidate.id) && toolClassification(candidate.id, event) != nil {
-				alternates = append(alternates, candidate.id)
-			}
+	if cached {
+		// Only an in-catalog reading with a tier can add a match; an
+		// unrecognized one would only trip the opt-in guards on the URL's kinds.
+		if inCatalog, ok := toolcatalog.ResolveInCatalog(toolID, event.ToolName, event.ToolInput); ok && inCatalog != toolID && toolClassification(inCatalog, event) != nil {
+			alternates = append(alternates, inCatalog)
+		}
+		// The reading without the cached entry is kept whole, raw name and
+		// unrecognized ids included, so a policy that matched before still does.
+		uncached, ok := toolcatalog.Resolve(event.ToolName, "", "", event.ToolInput)
+		if !ok {
+			uncached = passThrough(event, legacyUnknown)
+		}
+		if uncached != toolID && !slices.Contains(alternates, uncached) {
+			alternates = append(alternates, uncached)
 		}
 	}
-	if resolved {
-		return toolID, nil, alternates
-	}
+	return toolID, nil, alternates
+}
+
+// passThrough is the tool id of a call no catalog resolves: the name the
+// agent reported, or the catch-all for a legacy policy set or a name that
+// cannot be an id.
+func passThrough(event risk.HookEvent, legacyUnknown bool) string {
 	if legacyUnknown {
-		return cedareval.ToolUnknownV2, nil, nil
+		return cedareval.ToolUnknownV2
 	}
 	if name := strings.TrimSpace(event.ToolName); name != "" && utf8.ValidString(name) && len(name) <= 4096 {
-		return name, nil, nil
+		return name
 	}
-	return cedareval.ToolUnknownV2, nil, nil
+	return cedareval.ToolUnknownV2
 }
 
 // unknownToolLiteral is how a policy names the pre-pass-through catch-all.
