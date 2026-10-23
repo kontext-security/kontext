@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestCatalogConfigGuards(t *testing.T) {
@@ -44,6 +46,7 @@ func TestCatalogConfigGuards(t *testing.T) {
 			if err := os.Remove(path); err != nil {
 				t.Fatal(err)
 			}
+			hermetic.Symlinks(t)
 			if err := os.Symlink(filepath.Join(home, "target"), path); err != nil {
 				t.Fatal(err)
 			}
@@ -114,6 +117,7 @@ func TestCatalogOverridesAndLayers(t *testing.T) {
 func TestCatalogPluginGuardAndRedaction(t *testing.T) {
 	home := fixtureHome(t, "home_hermes")
 	writeFixture(t, home, ".hermes/plugins/secret/plugin.yaml", "name: 'ghp_"+strings.Repeat("A", 30)+"'")
+	hermetic.Symlinks(t)
 	if err := os.Symlink(filepath.Join(home, ".hermes/plugins/sample"), filepath.Join(home, ".hermes/plugins/link")); err != nil {
 		t.Fatal(err)
 	}

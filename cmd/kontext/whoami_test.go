@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/profile"
@@ -34,7 +35,7 @@ func TestWhoami(t *testing.T) {
 		{name: "expired", status: 410, wantError: "this setup command has expired; copy a fresh one from Get started in the dashboard"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
+			hermetic.SetHome(t, t.TempDir())
 			t.Setenv(profile.EnvRoot, "")
 			if _, err := profile.Create("work"); err != nil {
 				t.Fatal(err)

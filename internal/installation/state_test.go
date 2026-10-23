@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestLoadFileMissingReturnsErrNotFound(t *testing.T) {
@@ -116,6 +118,7 @@ func TestLoadFileRejectsSymlink(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	link := filepath.Join(dir, "installation.json")
+	hermetic.Symlinks(t)
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatalf("Symlink() error = %v", err)
 	}

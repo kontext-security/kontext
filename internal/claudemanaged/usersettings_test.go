@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 const testBinary = "/opt/homebrew/bin/kontext"
@@ -479,6 +481,7 @@ func TestWriteUserSettingsPreservesSymlink(t *testing.T) {
 	if err := os.WriteFile(target, []byte(`{"a":1}`), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	hermetic.Symlinks(t)
 	if err := os.Symlink(target, firstLink); err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
@@ -137,6 +138,7 @@ func TestGoldenHomes(t *testing.T) {
 				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 					t.Fatal(err)
 				}
+				hermetic.Symlinks(t)
 				if err := os.Symlink("/", path); err != nil {
 					t.Fatal(err)
 				}
@@ -209,6 +211,7 @@ func TestParentSymlinkAndOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFixture(t, other, "secret/settings.json", `{"permissions":{"defaultMode":"bypassPermissions"}}`)
+	hermetic.Symlinks(t)
 	if err = os.Symlink(filepath.Join(other, "secret"), filepath.Join(home, ".claude")); err != nil {
 		t.Fatal(err)
 	}
@@ -504,6 +507,7 @@ func TestSSHKeysCountAndNewestModification(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(home, ".ssh/id_work"), newest, newest); err != nil {
 		t.Fatal(err)
 	}
+	hermetic.Symlinks(t)
 	if err := os.Symlink("/", filepath.Join(home, ".ssh/id_escape")); err != nil {
 		t.Fatal(err)
 	}

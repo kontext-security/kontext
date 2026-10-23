@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 	"io"
 	"os"
@@ -35,7 +36,7 @@ func TestHooksCommandContract(t *testing.T) {
 
 func TestDoctorIgnoresLocalHooksWhenClaudeAbsent(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	path := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
