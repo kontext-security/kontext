@@ -1,6 +1,7 @@
 package shellprojection
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 
@@ -53,6 +54,7 @@ type scriptWord struct {
 	// variable or a type literal, rather than a command name.
 	expression bool
 	assign     bool // the assignment operator after a leading variable
+	cast       bool // starts with a type literal, as in [string]$x
 }
 
 type scriptStatement struct {
@@ -69,7 +71,14 @@ type scriptStatement struct {
 
 // powerShellKeywords open a language construct, not a call; the calls in
 // their blocks and conditions are projected from those.
-var powerShellKeywords = words("if", "elseif", "else", "foreach", "for", "while", "do", "until", "switch", "try", "catch", "finally", "trap", "function", "filter", "workflow", "param", "begin", "process", "end", "return", "throw", "break", "continue", "exit", "data", "dynamicparam", "class", "enum", "using")
+var powerShellKeywords = words("if", "elseif", "else", "foreach", "for", "while", "do", "until", "switch", "try", "catch", "finally", "trap", "function", "filter", "workflow", "param", "begin", "process", "end", "break", "continue", "data", "dynamicparam", "class", "enum", "using")
+
+// powerShellFlowKeywords run the pipeline that follows them before they
+// return, throw or exit, so that pipeline is the statement's call.
+var powerShellFlowKeywords = words("return", "throw", "exit")
+
+// powerShellAssignments are the assignment operators as words.
+var powerShellAssignments = words("=", "+=", "-=", "*=", "/=", "%=", "??=")
 
 // windowsExecutableSuffixes are the PATHEXT defaults Windows finds a
 // program by without them being typed.
@@ -190,8 +199,20 @@ func callWords(statement scriptStatement, dialect scriptDialect) ([]scriptWord, 
 		}
 		return words, len(words) > 0
 	}
-	if len(words) >= 2 && words[0].variable && words[1].assign {
+	if len(words) >= 2 && words[0].variable && words[1].literal && !words[1].quoted && strings.EqualFold(words[1].value, "in") {
+		// The grouping of foreach ($x in git ...) runs the pipeline after in.
 		words = words[2:]
+	}
+	for {
+		// $x = git ..., $a, $b = git ... and chains of them run the call
+		// after the last operator.
+		if len(words) >= 2 && words[0].variable && words[1].assign {
+			words = words[2:]
+		} else if k := multipleAssignment(words); k > 0 {
+			words = words[k+1:]
+		} else {
+			break
+		}
 	}
 	if statement.invoke {
 		return words, true
@@ -209,10 +230,98 @@ func callWords(statement scriptStatement, dialect scriptDialect) ([]scriptWord, 
 		// groupings and blocks, which are projected from those.
 		return nil, false
 	}
+	if words[0].literal && !words[0].quoted && isNumberExpression(words[0].value) {
+		// A number, a range or an array of numbers is a value, as in
+		// exit 1 or @{ Count = 2 }; 7z is still a command.
+		return nil, false
+	}
+	if words[0].literal && powerShellFlowKeywords[strings.ToLower(words[0].value)] {
+		statement.words = words[1:]
+		return callWords(statement, dialect)
+	}
 	if words[0].literal && powerShellKeywords[strings.ToLower(words[0].value)] {
 		return nil, false
 	}
 	return words, true
+}
+
+// numberLiteral is a PowerShell integer, real or hex literal with its type
+// and multiplier suffixes.
+var numberLiteral = regexp.MustCompile(`^(?i:[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)(e[+-]?[0-9]+)?|0x[0-9a-f]+)(?i:[dlun]|[us][ly]?|y)?(?i:[kmgtp]b)?$`)
+
+// isNumberExpression reports a word that PowerShell reads as a number, a
+// range of numbers (1..3) or an array of them (1,2,3).
+func isNumberExpression(word string) bool {
+	if word == "" || strings.IndexByte("0123456789+-.", word[0]) < 0 {
+		return false
+	}
+	numbers := 0
+	for _, part := range strings.Split(strings.ReplaceAll(word, "..", ","), ",") {
+		if part == "" {
+			continue
+		}
+		if !numberLiteral.MatchString(part) {
+			return false
+		}
+		numbers++
+	}
+	return numbers > 0
+}
+
+// assignmentPrefix reports words that are only the targets and operators
+// of an assignment so far, as in $x = or $a, or $x = $a, — a variable that
+// follows them is another target, not an expression.
+func assignmentPrefix(words []scriptWord) bool {
+	// The pipeline of return, throw or exit, or after foreach's in, may
+	// itself be an assignment.
+	if len(words) > 0 && words[0].literal && powerShellFlowKeywords[strings.ToLower(words[0].value)] {
+		words = words[1:]
+	} else if len(words) >= 2 && words[0].variable && words[1].literal && !words[1].quoted && strings.EqualFold(words[1].value, "in") {
+		words = words[2:]
+	}
+	start := 0
+	for i, word := range words {
+		if word.assign || word.literal && !word.quoted && powerShellAssignments[word.value] {
+			if !variableList(words[start:i], true) {
+				return false
+			}
+			start = i + 1
+		}
+	}
+	return variableList(words[start:], false)
+}
+
+// variableList reports variables separated by commas; a complete list ends
+// with a variable, an open one with a comma (or is empty).
+func variableList(words []scriptWord, complete bool) bool {
+	for i, word := range words {
+		if i%2 == 0 && !word.variable || i%2 == 1 && !(word.literal && word.value == ",") {
+			return false
+		}
+	}
+	if complete {
+		return len(words)%2 == 1
+	}
+	return len(words)%2 == 0
+}
+
+// multipleAssignment returns the index of the assignment operator after a
+// list of variables, as in $a, $b = ..., or -1 when the words do not start
+// with one.
+func multipleAssignment(words []scriptWord) int {
+	if len(words) < 3 || !words[0].variable {
+		return -1
+	}
+	for k := 1; k < len(words); k++ {
+		switch word := words[k]; {
+		case word.literal && !word.quoted && powerShellAssignments[word.value]:
+			return k
+		case word.variable, word.literal && !word.quoted && word.value == ",":
+		default:
+			return -1
+		}
+	}
+	return -1
 }
 
 // pipedString returns the string a statement that is a single string
@@ -579,7 +688,7 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 				word.WriteByte('$')
 				break
 			}
-			leading := current.literal && word.Len() == 0
+			leading := (current.literal || current.cast) && word.Len() == 0
 			current.literal = false
 			current.variable = current.variable || leading
 			current.expression = current.expression || leading
@@ -608,7 +717,7 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 				}
 				i = j - 1
 			}
-			if leading && reason == "" && len(statement.words) == 0 && !statement.invoke {
+			if leading && reason == "" && !statement.invoke && assignmentPrefix(statement.words) {
 				if end, ok := assignmentOperator(src, i+1); ok {
 					endWord()
 					statement.words = append(statement.words, scriptWord{value: "=", literal: true, assign: true})
@@ -625,9 +734,11 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 				beginWord()
 				current.literal = false
 				// An array subexpression holds statements; a hashtable
-				// holds keys and values.
+				// holds keys and values, and each value is a statement.
 				if next == '(' {
 					nested = append(nested, src[i+2:end])
+				} else {
+					nested = append(nested, hashtableValues(src[i+2:end])...)
 				}
 				i = end
 			case (next == '\'' || next == '"') && i+2 < len(src) && src[i+2] == '\n':
@@ -674,17 +785,38 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 			nested = append(nested, src[i+1:end])
 			i = end
 		case ps && c == '[' && !inWord:
-			// A type literal, as in [IO.File]::Delete(...).
+			// A type literal, as in [IO.File]::Delete(...), or an attribute,
+			// whose arguments may hold a script block, as in
+			// [ValidateScript({...})].
 			end, ok := block(i)
 			if !ok {
 				break
 			}
+			if open := strings.IndexByte(src[i:end], '('); open > 0 {
+				nested = append(nested, scriptBlocks(src[i+open:end])...)
+			}
 			beginWord()
 			current.literal = false
 			current.expression = true
+			current.cast = true
 			i = end
+			if i+2 < len(src) && src[i+1] == '@' && src[i+2] == '{' {
+				// A cast hashtable, as in [ordered]@{...} or
+				// [pscustomobject]@{...}.
+				end, ok := block(i + 2)
+				if !ok {
+					break
+				}
+				nested = append(nested, hashtableValues(src[i+3:end])...)
+				current.cast = false
+				i = end
+			}
 		case ps && (c == ')' || c == '}'):
 			reason = "syntax-error"
+		case ps && c == ',' && inWord && current.variable:
+			// A comma after a variable continues a list, as in $a,$b = ...
+			endWord()
+			statement.words = append(statement.words, scriptWord{value: ",", literal: true})
 		case !ps && c == '%':
 			beginWord()
 			if end := strings.IndexByte(src[i+1:], '%'); end > 0 && isCmdVariable(src[i+1:i+1+end]) {
@@ -830,6 +962,76 @@ func subexpressions(body string) []string {
 		}
 	}
 	return scripts
+}
+
+// scriptBlocks returns the scripts of the { } blocks in text that is not
+// itself a script, such as an attribute's arguments, which are otherwise
+// constants. Text that does not tokenize is returned whole, so it fails as a
+// script.
+func scriptBlocks(text string) []string {
+	var scripts []string
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '`':
+			i++
+		case '\'', '"':
+			i = closingQuote(text, i)
+		case '{':
+			end := matchBracket(text, i)
+			if end < 0 {
+				return append(scripts, text)
+			}
+			scripts = append(scripts, text[i+1:end])
+			i = end
+		}
+	}
+	return scripts
+}
+
+// hashtableValues returns the value statements in the body of a hashtable
+// literal: entries are key = value, separated by ; or a new line, and each
+// value runs as a statement while the table is built. A body that does not
+// tokenize is returned whole, so it fails as a script.
+func hashtableValues(body string) []string {
+	var values []string
+	assign := -1
+	entry := func(end int) {
+		if assign >= 0 {
+			values = append(values, body[assign+1:end])
+		}
+		assign = -1
+	}
+	for i := 0; i < len(body); i++ {
+		switch c := body[i]; c {
+		case '`':
+			i++
+		case '\'', '"':
+			i = closingQuote(body, i)
+		case '#':
+			if i == 0 || strings.IndexByte(" \t\n;", body[i-1]) >= 0 {
+				end := strings.IndexByte(body[i:], '\n')
+				if end < 0 {
+					end = len(body) - i
+				}
+				entry(i)
+				i += end
+			}
+		case '(', '{', '[':
+			end := matchBracket(body, i)
+			if end < 0 {
+				return append(values, body)
+			}
+			i = end
+		case '=':
+			if assign < 0 {
+				assign = i
+			}
+		case ';', '\n':
+			entry(i)
+		}
+	}
+	entry(len(body))
+	return values
 }
 
 // matchBracket returns the index of the bracket that closes the one at
