@@ -79,6 +79,10 @@ var powerShellKeywords = words("if", "elseif", "else", "foreach", "for", "while"
 // return, throw or exit, so that pipeline is the statement's call.
 var powerShellFlowKeywords = words("return", "throw", "exit")
 
+// powerShellClauses continue a construct after one of its blocks, as in
+// if { } else { }, try { } catch { } or do { } while ( ).
+var powerShellClauses = words("else", "elseif", "catch", "finally", "while", "until")
+
 // powerShellAssignments are the assignment operators as words.
 var powerShellAssignments = words("=", "+=", "-=", "*=", "/=", "%=", "??=")
 
@@ -239,9 +243,34 @@ func callWords(statement scriptStatement, dialect scriptDialect) ([]scriptWord, 
 		return nil, false
 	}
 	if words[0].literal && powerShellKeywords[strings.ToLower(words[0].value)] {
+		// A construct that ends in a block needs no ; before the next
+		// statement, as in if ($x) { } git push, so the first plain word
+		// after one of its blocks starts a statement of its own.
+		if rest := afterConstruct(words); len(rest) > 0 {
+			return callWords(scriptStatement{words: rest}, dialect)
+		}
 		return nil, false
 	}
 	return words, true
+}
+
+// afterConstruct returns the words that follow a keyword construct: those
+// from the first plain word after one of its blocks or groupings that is not
+// a clause such as else or catch, or nil when the statement ends with it.
+// Words before the first block, a function's name or switch's -regex, belong
+// to the construct.
+func afterConstruct(words []scriptWord) []scriptWord {
+	block := false
+	for i := 1; i < len(words); i++ {
+		w := words[i]
+		switch {
+		case !w.literal:
+			block = block || !w.expression
+		case block && w.value != "," && !powerShellClauses[strings.ToLower(w.value)]:
+			return words[i:]
+		}
+	}
+	return nil
 }
 
 // isFlowKeyword reports return, throw or exit as a statement's first word.
