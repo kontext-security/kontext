@@ -113,6 +113,24 @@ func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
 	}
 }
 
+// Claude Desktop 3.x keeps Cowork agent session records in <org>/agent/.
+func TestDesktopConnectorReadsCoworkAgentRecords(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions/acct/org/agent")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const connector = "c2be245b-9fd0-47e8-9a48-80c63e49e3fb"
+	const url = "https://dbc.cloud.databricks.com/ai-gateway/mcp-services/system.ai.dbsql"
+	record := `{"cliSessionId": "session-agent", "remoteMcpServersConfig": [{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "local_agent.json"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := (&Resolver{Home: home}).desktopConnector(home, "session-agent", connector); got != url {
+		t.Fatalf("desktopConnector() = %q", got)
+	}
+}
+
 // Every active Claude Desktop session rewrites its record, and a record is
 // mostly its connector list, so a lookup that decodes other sessions'
 // records whole misses its deadline under load and the connector stays

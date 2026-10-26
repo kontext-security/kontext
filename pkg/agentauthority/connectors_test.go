@@ -93,3 +93,17 @@ func TestConnectorsFromClaudeSessionFiles(t *testing.T) {
 		t.Fatalf("empty scan sent a connectors field: %s", data)
 	}
 }
+
+// Claude Desktop 3.x keeps Cowork agent sessions in <org>/agent/.
+func TestConnectorsFromCoworkAgentSessionFiles(t *testing.T) {
+	home := fixtureHome(t, "home_empty")
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	writeSession(t, home, "local-agent-mode-sessions", "agent/local_agent.json", now, map[string]any{
+		"remoteMcpServersConfig": []any{connector("33333333-3333-3333-3333-333333333333", "Notion", "https://mcp.notion.com/mcp")},
+	})
+	agents := []AgentLocation{{"claude_cowork", "~/Library/Application Support/Claude/local-agent-mode-sessions"}}
+	r := scan(context.Background(), home, Environment{}, agents, now, filepath.Join(home, "managed"))
+	if got := r.Agents[0].Connectors; len(got) != 1 || got[0].Name != "Notion" {
+		t.Fatalf("cowork agent session connectors = %+v", got)
+	}
+}

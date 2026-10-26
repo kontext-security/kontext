@@ -460,6 +460,11 @@ func isCoworkPath(value string) bool {
 	}
 	suffix := strings.TrimPrefix(strings.TrimPrefix(normalized, root), "/")
 	parts := strings.Split(suffix, "/")
+	// Claude Desktop 3.x keeps Cowork agent sessions one level down, in
+	// <account>/<workspace>/agent/, and starts them in /var/empty.
+	if len(parts) > 3 && parts[2] == "agent" {
+		parts = append(parts[:2], parts[3:]...)
+	}
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" {
 		return false
 	}

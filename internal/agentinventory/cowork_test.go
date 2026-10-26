@@ -35,6 +35,7 @@ func TestCoworkDiscovery(t *testing.T) {
 		{"neither", nil, nil, nil, false, "", true},
 		{"host directory only", []string{coworkHostSessions}, nil, nil, false, "null", false},
 		{"bundle only", []string{coworkVMBundle}, nil, nil, false, "null", false},
+		{"agent host sidecar", nil, []sidecar{{"agent/local_host.json", "host", now.Add(-time.Minute), boolPointer(true)}}, map[string]bool{"host": true}, false, "false", false},
 		{"old host sidecar", nil, []sidecar{{"local_old_host.json", "old-host", now.Add(-60 * 24 * time.Hour), nil}}, nil, false, "false", false},
 		{"store unreadable", nil, []sidecar{{"local_host.json", "host", now.Add(-time.Minute), boolPointer(true)}}, nil, true, "null", false},
 	} {

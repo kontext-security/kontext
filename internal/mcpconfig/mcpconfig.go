@@ -421,8 +421,9 @@ func newestFirst(paths []string) []string {
 func desktopRecords(home string) []string {
 	var paths []string
 	for _, dir := range desktopRecordDirs {
-		found := desktopGlob(home, dir, "*/*/local_*.json")
-		paths = append(paths, found...)
+		paths = append(paths, desktopGlob(home, dir, "*/*/local_*.json")...)
+		// Claude Desktop 3.x keeps Cowork agent sessions in <org>/agent/.
+		paths = append(paths, desktopGlob(home, dir, "*/*/agent/local_*.json")...)
 	}
 	return paths
 }
