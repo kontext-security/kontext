@@ -18,7 +18,7 @@ There are two supported ways to use it:
 ## User path
 
 ```bash
-brew install kontext-security/tap/kontext
+brew install kontext
 kontext setup
 ```
 
