@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"embed"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -12,9 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 )
-
-//go:embed model/native/*.gz
-var nativeAssets embed.FS
 
 var nativeOnce sync.Once
 var nativeReady = make(chan struct{})
