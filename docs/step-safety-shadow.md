@@ -28,6 +28,17 @@ installed model directory. The hidden historical ONNX installer does not replace
 this candidate. Serving provenance is in `model/native/PROVENANCE.json`; the
 older `model/PROVENANCE.json` describes only that historical installer.
 
+The checkpoint is about 213 MB of the binary. Hosts that cannot carry that, such
+as plugin packages for hosted agent sessions, can build without it:
+
+```bash
+CGO_ENABLED=0 go build -tags nostepsafetymodel -ldflags='-s -w' ./cmd/kontext
+```
+
+That binary is about 18 MB. Assessment then reports `unavailable`, which means
+not assessed; authorization and decisions are unchanged. Release artifacts are
+built with the model.
+
 ## Input limits
 
 The four training fields, markers, separators, and 512-token padding stay the

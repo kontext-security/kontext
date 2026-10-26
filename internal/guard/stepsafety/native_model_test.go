@@ -105,6 +105,7 @@ func TestNativeLinearAgainstScalar(t *testing.T) {
 }
 
 func TestNativeEmbeddedWorksWithoutInstalledFiles(t *testing.T) {
+	requireEmbeddedModel(t)
 	t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "")
 	t.Setenv("KONTEXT_STEP_SAFETY_MODEL_DIR", "/nonexistent/merlin")
 	root := t.TempDir()
@@ -137,6 +138,7 @@ func TestNativeEmbeddedWorksWithoutInstalledFiles(t *testing.T) {
 }
 
 func TestNativeCancellationReleasesSlot(t *testing.T) {
+	requireEmbeddedModel(t)
 	b, err := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: nativeTestStartupTimeout}))
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +180,7 @@ func TestNativeRejectsInvalidInput(t *testing.T) {
 }
 
 func TestNativeConcurrentInference(t *testing.T) {
+	requireEmbeddedModel(t)
 	m, tok := nativeTestModel(t)
 	cases := loadHistoryGoldenFixture(t).Cases
 	inputs := []packedInput{frozenPacked(t, tok, cases[0]), frozenPacked(t, tok, cases[5])}

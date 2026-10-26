@@ -12,6 +12,7 @@ import (
 )
 
 func TestScopedPythonNativeParity(t *testing.T) {
+	requireEmbeddedModel(t)
 	path := os.Getenv("MERLIN_V3_PARITY_FIXTURE")
 	if path == "" {
 		path = "testdata/scoped_golden.json"
