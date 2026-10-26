@@ -428,7 +428,10 @@ func (a managedHookAgent) DecodeHookInput(input []byte) (hook.Event, error) {
 }
 
 func isCoworkHookContext(input []byte, event hook.Event) bool {
-	if isCoworkPath(event.CWD) {
+	// Claude Desktop 3.x starts host-loop Cowork in /var/empty: an empty,
+	// root-owned folder no Claude Code session works in. Desktop's one-shot
+	// runs there disable hooks.
+	if isCoworkPath(event.CWD) || event.CWD == "/var/empty" || event.CWD == "/private/var/empty" {
 		return true
 	}
 	var paths struct {

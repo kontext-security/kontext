@@ -133,7 +133,6 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 		{"short agent session directory", root + "/acme/ws/agent/abc123ef/outputs", "cowork"},
 		{"agent directory", root + "/acme/ws/agent", "claude"},
 		{"non-session agent directory", root + "/acme/ws/agent/rpm/plugin", "claude"},
-		{"system empty directory", "/private/var/empty", "claude"},
 		{"ordinary claude", "/Users/michel/project", "claude"},
 		{"lookalike path", "/Users/michel/work/Library/Application Support/Claude/local-agent-mode-sessions/acme/ws/abc123ef/outputs", "claude"},
 		{"lookalike root", root + "-other/acme/ws/abc123ef/outputs", "claude"},
@@ -166,6 +165,35 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 				})
 			}
 		})
+	}
+}
+
+// Claude Desktop 3.x starts host-loop Cowork in /var/empty. The cwd alone
+// marks Cowork, so Cowork's workspace shell gets shell rules even when the
+// transcript path is elsewhere; the same path as a transcript does not.
+func TestManagedHookAgentIdentifiesCoworkByHostLoopCwd(t *testing.T) {
+	a, ok := agent.Get("claude")
+	if !ok {
+		t.Fatal("claude agent not registered")
+	}
+	for _, tt := range []struct{ field, path, want string }{
+		{"cwd", "/private/var/empty", "cowork"},
+		{"cwd", "/var/empty", "cowork"},
+		{"cwd", "/private/var/empty/project", "claude"},
+		{"cwd", "/Users/dev/var/empty", "claude"},
+		{"transcript_path", "/private/var/empty", "claude"},
+	} {
+		input, err := json.Marshal(map[string]string{"session_id": "s1", "hook_event_name": "PreToolUse", tt.field: tt.path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := (managedHookAgent{Agent: a}).DecodeHookInput(input)
+		if err != nil {
+			t.Fatalf("DecodeHookInput() error = %v", err)
+		}
+		if event.Agent != tt.want {
+			t.Fatalf("%s %s: Agent = %q, want %q", tt.field, tt.path, event.Agent, tt.want)
+		}
 	}
 }
 
