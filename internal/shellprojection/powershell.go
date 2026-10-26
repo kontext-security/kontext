@@ -725,7 +725,9 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 				i = j - 1
 			}
 			if leading && reason == "" && !statement.invoke && assignmentPrefix(statement.words) {
-				if end, ok := assignmentOperator(src, i+1); ok {
+				// The target may be a member or an element, as in
+				// $x.Prop=git ... or $x[0]=git ....
+				if end, ok := assignmentOperator(src, memberSuffix(src, i+1)); ok {
 					endWord()
 					statement.words = append(statement.words, scriptWord{value: "=", literal: true, assign: true})
 					i = end
@@ -807,7 +809,15 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 			current.expression = true
 			current.cast = true
 			i = end
-			if i+2 < len(src) && src[i+1] == '@' && src[i+2] == '{' {
+			if strings.HasPrefix(src[i+1:], "::") && !statement.invoke && assignmentPrefix(statement.words) {
+				// A static member is a target too, as in [Console]::Title=git ....
+				if end, ok := assignmentOperator(src, memberSuffix(src, i+1)); ok {
+					current.variable = true
+					endWord()
+					statement.words = append(statement.words, scriptWord{value: "=", literal: true, assign: true})
+					i = end
+				}
+			} else if i+2 < len(src) && src[i+1] == '@' && src[i+2] == '{' {
 				// A cast hashtable, as in [ordered]@{...} or
 				// [pscustomobject]@{...}.
 				end, ok := block(i + 2)
@@ -1048,6 +1058,44 @@ func hashtableValues(body string) []string {
 	}
 	entry(len(body))
 	return values
+}
+
+// memberSuffix returns the index after the member accesses and indexes that
+// follow a variable or a type ending before src[i], as in .Prop, ::Name, [0]
+// or .Method(), so that an assignment to a member or an element is seen.
+func memberSuffix(src string, i int) int {
+	for i < len(src) {
+		switch {
+		case src[i] == '[':
+			end := matchBracket(src, i)
+			if end < 0 {
+				return i
+			}
+			i = end + 1
+		case src[i] == '.' || strings.HasPrefix(src[i:], "::"):
+			start := i + 1
+			if src[i] == ':' {
+				start++
+			}
+			end := start
+			for end < len(src) && isNameByte(src[end]) {
+				end++
+			}
+			if end == start {
+				return i
+			}
+			i = end
+			if i < len(src) && src[i] == '(' {
+				if end = matchBracket(src, i); end < 0 {
+					return i
+				}
+				i = end + 1
+			}
+		default:
+			return i
+		}
+	}
+	return i
 }
 
 // matchBracket returns the index of the bracket that closes the one at
