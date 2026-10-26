@@ -168,6 +168,10 @@ type CedarEvidence struct {
 	// (a cached claude.ai connector URL plus its tool name's readings); any
 	// one of them denying denied the call.
 	AlternateToolIDs []string `json:"alternateToolIds,omitempty"`
+	// AlsoAdmin means the call was judged as Tool and once more with access
+	// admin: SQL that deletes and changes administration, or that Kontext
+	// cannot read.
+	AlsoAdmin bool `json:"alsoAdmin,omitempty"`
 }
 
 // ClassifierAnnotation is one action's risk annotation. AgentTask and the

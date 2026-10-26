@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
@@ -115,14 +116,25 @@ func TestCedarDatabricksPresets(t *testing.T) {
 		{"select", "mcp__wh__execute_sql", sql("SELECT * FROM t"), []string{readOnly}},
 		{"drop", "mcp__wh__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
 		{"grant", "mcp__wh__execute_sql", sql("GRANT SELECT ON TABLE t TO `u`"), []string{readOnly, admin}},
-		// Known gap (ENG-734): delete and admin together report delete.
-		{"create or replace", "mcp__wh__execute_sql", sql("CREATE OR REPLACE TABLE t AS SELECT 1"), []string{readOnly, deletion}},
+		// Delete and admin together report delete and are judged once more
+		// as admin.
+		{"create or replace", "mcp__wh__execute_sql", sql("CREATE OR REPLACE TABLE t AS SELECT 1"), []string{readOnly, deletion, admin}},
 		{"secret", "mcp__wh__execute_sql", sql("SELECT secret('scope', 'key')"), []string{readOnly, exceptSQL, secrets}},
-		{"malformed SQL keeps write", "mcp__wh__execute_sql", sql("SELEC ((("), []string{readOnly}},
-		{"missing query keeps write", "mcp__wh__execute_sql", map[string]any{}, []string{readOnly}},
+		// SQL Kontext cannot read may delete or administer (ENG-792).
+		{"malformed SQL", "mcp__wh__execute_sql", sql("SELEC ((("), []string{readOnly, deletion, admin}},
+		{"missing query", "mcp__wh__execute_sql", map[string]any{}, []string{readOnly, deletion, admin}},
+		{"dynamic SQL", "mcp__wh__execute_sql", sql("EXECUTE IMMEDIATE 'DROP TABLE main.sales.orders'"), []string{readOnly, deletion, admin}},
+		{"SQL under another argument name", "mcp__wh__execute_sql", map[string]any{"statement": "DROP TABLE main.sales.orders"}, []string{readOnly, deletion, admin}},
+		// The false positives this accepts: a read Kontext cannot prove.
+		{"select under another argument name", "mcp__wh__execute_sql", map[string]any{"statement": "SELECT 1"}, []string{readOnly, deletion, admin}},
+		{"ai_query may call an agent", "mcp__wh__execute_sql", sql("SELECT ai_query('endpoint', 'hi')"), []string{readOnly, deletion, admin}},
+		{"read_files only reads", "mcp__wh__execute_sql", sql("SELECT * FROM read_files('/Volumes/main/raw/f')"), []string{readOnly}},
 		{"read-only SQL", "mcp__wh__execute_sql_read_only", sql("SELECT 1"), nil},
 		{"read-only SQL that drops", "mcp__wh__execute_sql_read_only", sql("DROP TABLE t"), []string{readOnly, deletion}},
 		{"read-only SQL with secret", "mcp__wh__execute_sql_read_only", sql("SELECT secret('s', 'k')"), []string{secrets}},
+		// Databricks runs only reads there.
+		{"read-only SQL Kontext cannot read", "mcp__wh__execute_sql_read_only", sql("EXECUTE IMMEDIATE 'DROP TABLE t'"), nil},
+		{"read-only SQL under another argument name", "mcp__wh__execute_sql_read_only", map[string]any{"statement": "DROP TABLE t"}, nil},
 		{"poll", "mcp__wh__poll_sql_result", map[string]any{"statement_id": "s"}, nil},
 		{"conflicting name github", "mcp__github__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
 		{"genie ask", "mcp__genie__genie_ask", map[string]any{"question": "q"}, nil},
@@ -202,6 +214,10 @@ func TestCedarDatabricksPresets(t *testing.T) {
 					}
 					if decision.Decision != want {
 						t.Fatalf("decision = %q (tool %q, %+v), want %q", decision.Decision, decision.Cedar.ToolID, decision.Cedar.Tool, want)
+					}
+					// The ledger omits a request that cannot carry both tiers.
+					if bothTiers := slices.Contains(call.denies, deletion) && slices.Contains(call.denies, admin); bothTiers != decision.Cedar.AlsoAdmin {
+						t.Fatalf("AlsoAdmin = %v, want %v", decision.Cedar.AlsoAdmin, bothTiers)
 					}
 				})
 			}

@@ -21,21 +21,21 @@ import (
 //   - deletes, admin: what the statements do; a statement type such as DROP
 //     POLICY can set both.
 //   - touchesSecrets: a secret() call anywhere, recognized or not.
-//   - recognized: false means nothing was proven: both flags are false and the
-//     caller keeps write. A set flag is proven, and recognized is then true
-//     whatever else the text holds. Otherwise it needs every statement to be
-//     a listed type, the text lexed to the end, and no dynamic SQL or listed
-//     function with outside effects.
+//   - recognized: every statement is a listed type, the text lexed to the
+//     end, and no dynamic SQL or listed function with outside effects. When
+//     false the caller treats the text as deleting and administering, so a
+//     proven flag never vouches for the rest: GRANT …; EXECUTE IMMEDIATE …
+//     is admin and unrecognized.
 //
-// Callers (decided in ENG-734): the shell emits databricks/delete=true and
-// databricks/admin=true for each flag set. An MCP call carries a single
-// context.tool.access, so a statement with both flags reports delete there,
-// and protect-databricks-administration does not see its admin side.
+// Callers: the shell emits databricks/delete=true and databricks/admin=true
+// for each flag set. An MCP call carries a single context.tool.access, so a
+// statement with both flags reports delete there and the daemon judges it
+// once more as admin.
 //
 // ponytail: a statement-type table over a lexer that follows Spark's quoting,
 // not a grammar. SQL scripting (BEGIN … END, IF, loops, handlers), EXECUTE
-// IMMEDIATE, CALL and unlisted types are unrecognized, so a delete or admin
-// change inside them stays write: only the read-only preset catches it.
+// IMMEDIATE, CALL and unlisted types are unrecognized, so callers block them
+// under the deletion and administration presets, harmless ones too.
 // Upgrade path: a parser generated from Spark's SqlBaseParser.g4.
 func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recognized bool) {
 	if len(sql) > databricksSQLMaxLen {
@@ -56,7 +56,7 @@ func ClassifyDatabricksSQL(sql string) (deletes, admin, touchesSecrets, recogniz
 			deletes, admin, touchesSecrets, known = deletes || d, admin || a, touchesSecrets || secrets, known && k
 		}
 	}
-	return deletes, admin, touchesSecrets, deletes || admin || known
+	return deletes, admin, touchesSecrets, known
 }
 
 func classifyDatabricksTokens(tokens []sqlToken, complete bool) (deletes, admin, touchesSecrets, known bool) {
@@ -85,11 +85,11 @@ func classifyDatabricksTokens(tokens []sqlToken, complete bool) (deletes, admin,
 	return deletes, admin, touchesSecrets, known && statements > 0
 }
 
-// ponytail: text over 64 KiB is unrecognized unread, so the caller keeps write
-// and a hostile statement cannot hold a PreToolUse hook past its ~1s budget.
-// touchesSecrets fails closed there: any "secret" in the text sets it. A delete
-// or admin change past the cap stays write, like other unrecognized SQL.
-// Classification is linear below it; raise the cap if real statements hit it.
+// ponytail: text over 64 KiB is unrecognized unread, so callers treat it as
+// delete and admin, and a hostile statement cannot hold a PreToolUse hook
+// past its ~1s budget. touchesSecrets fails closed there too: any "secret" in
+// the text sets it. Classification is linear below the cap; raise it if real
+// statements hit it.
 const databricksSQLMaxLen = 64 << 10
 
 // mentionsSecret reports whether s contains "secret" in any ASCII case.
@@ -154,13 +154,14 @@ var databricksTypeModifiers = setOf("OR", "REPLACE", "REFRESH", "TEMPORARY", "TE
 
 var databricksSecretFunctions = setOf("SECRET", "TRY_SECRET", "LIST_SECRETS")
 
-// Functions that reach outside the warehouse, read or write files, run Java
-// or name objects at run time. Every AI_ function calls a model endpoint and
-// counts too.
-var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "READ_FILES", "READ_KAFKA", "READ_KINESIS",
-	"READ_PUBSUB", "READ_PULSAR", "REMOTE_QUERY", "VECTOR_SEARCH", "CLOUD_FILES", "IDENTIFIER",
-	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE", "LIST_FILES", "TO_FILE", "TRY_TO_FILE",
-	"READ_STATESTORE", "READ_STATE_METADATA", "CLOUD_FILES_STATE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
+// Functions whose effects the statement does not show: they send requests
+// or queries elsewhere, write files, run Java, or name objects at run time,
+// so a call can hide behind one. Every AI_ function calls a model endpoint,
+// which may be an agent with tools, and counts too. Functions that only read
+// (read_files, read_kafka, vector_search, list_files and the like) are not
+// listed: they cannot delete or administer.
+var databricksOpaqueFunctions = setOf("HTTP_REQUEST", "REMOTE_QUERY", "IDENTIFIER",
+	"CREATE_FILE", "COPY_FILE", "TRY_COPY_FILE", "TO_FILE", "TRY_TO_FILE", "REFLECT", "JAVA_METHOD", "TRY_REFLECT")
 
 // databricksMaskIsName reports whether a MASK after prev is a name (a column,
 // alias, table or field) rather than a mask clause. Whatever follows MASK may
