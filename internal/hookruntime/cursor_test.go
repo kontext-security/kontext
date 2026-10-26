@@ -171,6 +171,12 @@ func (cursorTestCodec) NoDecision() []byte { return []byte("{}") }
 func TestRunPrintsNoDecisionForSkippedCursorEvents(t *testing.T) {
 	t.Parallel()
 
+	var panicked strings.Builder
+	if code := Run(strings.NewReader(string(readCursorPayload(t, "pre-tool-use-shell"))), &panicked, &strings.Builder{}, cursorTestCodec{}, func(hook.Event) (hook.Result, error) {
+		panic("evaluator bug")
+	}); code != 0 || panicked.String() != "{}" {
+		t.Fatalf("Run after a panic = %d, stdout %q; want 0 and {}", code, panicked.String())
+	}
 	for _, input := range [][]byte{readCursorPayload(t, "pre-tool-use-mcp"), []byte("not json")} {
 		var stdout, stderr strings.Builder
 		code := Run(strings.NewReader(string(input)), &stdout, &stderr, cursorTestCodec{}, func(hook.Event) (hook.Result, error) {

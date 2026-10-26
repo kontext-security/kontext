@@ -33,7 +33,7 @@ func Run(stdin io.Reader, stdout, stderr io.Writer, codec Codec, evaluate func(h
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			fmt.Fprintf(stderr, "kontext: hook failed: %v\n", recovered)
-			code = 0
+			code = failed()
 		}
 	}()
 
