@@ -9,6 +9,7 @@ import (
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
 // databricksPresets are the seven Databricks presets (ENG-740) in the shape
@@ -65,6 +66,7 @@ func TestCedarDatabricksPresets(t *testing.T) {
 "sandbox": {"url": "` + workspace + `/ai-gateway/mcp-services/system.ai.sandbox"},
 "websearch": {"url": "` + workspace + `/ai-gateway/mcp-services/system.ai.web_search"},
 "e2b": {"url": "https://mcp.e2b.dev/sse"},
+"1c7d8e9f-0a1b-4c2d-9e4f-5a6b7c8d9e0f": {"url": "` + workspace + `/api/2.0/mcp/sql"},
 "serving": {"url": "` + workspace + `/serving-endpoints/chat/invocations"}}`
 	// The Claude Code CLI reports a claude.ai connector as claude_ai_<Name>
 	// (ENG-758 F3): "Warehouse" is the signed-in organization's Databricks
@@ -96,6 +98,30 @@ func TestCedarDatabricksPresets(t *testing.T) {
   {"uuid": "`+sandboxConnector+`", "name": "Sandbox", "url": "`+workspace+`/ai-gateway/mcp-services/system.ai.sandbox"},
   {"uuid": "`+searchConnector+`", "name": "Web search", "url": "`+workspace+`/ai-gateway/mcp-services/system.ai.web_search"}
 ]}`)
+	// Connectors no record of the session lists, named only by the
+	// endpoint's last authority scan.
+	const (
+		scannedConnector = "7d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a"
+		renamedConnector = "8e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b"
+		staleConnector   = "9f4a5b6c-7d8e-4f9a-8b1c-2d3e4f5a6b7c"
+		neutralConnector = "0a5b6c7d-8e9f-4a0b-9c2d-3e4f5a6b7c8d"
+		configuredServer = "1c7d8e9f-0a1b-4c2d-9e4f-5a6b7c8d9e0f"
+	)
+	scanned := func(uuid, name, lastSeen string) agentauthority.Connector {
+		host := "dbc-1234.cloud.databricks.com"
+		return agentauthority.Connector{UUID: uuid, Name: name, URLHost: &host, LastSeen: &lastSeen}
+	}
+	scan := agentauthority.Report{Agents: []agentauthority.Agent{
+		{ID: "claude_code", Connectors: []agentauthority.Connector{
+			scanned(scannedConnector, "Databricks SQL", "2026-10-20T10:00:00Z"),
+			scanned(renamedConnector, "Jira", "2026-10-19T10:00:00Z"),
+			scanned(staleConnector, "Jira", "2026-10-20T10:00:00Z"),
+			scanned(neutralConnector, "Warehouse", "2026-10-20T10:00:00Z"),
+			scanned(configuredServer, "Jira", "2026-10-20T10:00:00Z"),
+		}},
+		{ID: "claude_cowork", Connectors: []agentauthority.Connector{scanned(renamedConnector, "Databricks", "2026-10-20T10:00:00Z")}},
+	}}
+	mcpServers.SetScan(func() (agentauthority.Report, bool) { return scan, true })
 
 	const (
 		readOnly   = "databricks-read-only"
@@ -160,6 +186,18 @@ func TestCedarDatabricksPresets(t *testing.T) {
 		{"desktop connector select", "mcp__" + connector + "__execute_sql", sql("SELECT 1"), []string{readOnly}},
 		{"desktop sandbox connector", "mcp__" + sandboxConnector + "__run_code", map[string]any{"code": "print(1)"}, []string{readOnly, exceptSQL, runs}},
 		{"desktop web search connector", "mcp__" + searchConnector + "__web_search", map[string]any{"query": "q"}, nil},
+		{"scanned connector drop", "mcp__" + scannedConnector + "__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
+		{"scanned connector select", "mcp__" + scannedConnector + "__execute_sql", sql("SELECT 1"), []string{readOnly}},
+		{"newest scanned name wins", "mcp__" + renamedConnector + "__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
+		// The scan can be an hour old: a name that reads lower than the
+		// tool name never wins.
+		{"stale scanned name cannot lower the tool name", "mcp__" + staleConnector + "__genie_cancel_response", map[string]any{}, []string{readOnly, exceptSQL}},
+		// Known limit: the scan keeps only the host, so a neutral name stays
+		// unidentified, as does a UUID the scan does not list.
+		{"scanned neutral name", "mcp__" + neutralConnector + "__execute_sql", sql("DROP TABLE t"), nil},
+		{"unscanned connector", "mcp__1b6c7d8e-9f0a-4b1c-8d3e-4f5a6b7c8d9e__execute_sql", sql("DROP TABLE t"), nil},
+		// A server the config names by the UUID wins over the scan.
+		{"configured UUID server beats the scan", "mcp__" + configuredServer + "__execute_sql", sql("DROP TABLE t"), []string{readOnly, deletion}},
 	}
 	// Only the Claude Code CLI names connectors claude_ai_<Name>.
 	cliConnector := []struct {
@@ -209,8 +247,8 @@ func TestCedarDatabricksPresets(t *testing.T) {
 					if decision.Cedar == nil || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateEvaluated || decision.Cedar.EngineErrorCount != 0 {
 						t.Fatalf("Cedar evidence = %#v, want evaluation without errors", decision.Cedar)
 					}
-					if call.name == "stale connector URL, neutral name" && (len(decision.Cedar.AlternateToolIDs) != 1 || decision.Cedar.AlternateToolIDs[0] != "databricks-mcp/execute_sql") {
-						t.Fatalf("alternates = %v, want the in-catalog execute_sql reading", decision.Cedar.AlternateToolIDs)
+					if call.name == "stale connector URL, neutral name" && !slices.Equal(decision.Cedar.AlternateToolIDs, []string{"databricks-mcp/execute_sql", "mcp__claude_ai_Lakehouse__execute_sql"}) {
+						t.Fatalf("alternates = %v, want the in-catalog execute_sql reading and the raw name", decision.Cedar.AlternateToolIDs)
 					}
 					if decision.Decision != want {
 						t.Fatalf("decision = %q (tool %q, %+v), want %q", decision.Decision, decision.Cedar.ToolID, decision.Cedar.Tool, want)
@@ -222,5 +260,27 @@ func TestCedarDatabricksPresets(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// A scanned connector name only adds readings: a policy written for the call
+// as it read without the scan, here by its raw name, still applies.
+func TestCedarScannedConnectorKeepsUnscannedReading(t *testing.T) {
+	useMCPHome(t)
+	const tool = "mcp__7d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a__execute_sql"
+	mcpServers.SetScan(func() (agentauthority.Report, bool) {
+		connector := agentauthority.Connector{UUID: "7d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a", Name: "Databricks SQL"}
+		return agentauthority.Report{Agents: []agentauthority.Agent{{Connectors: []agentauthority.Connector{connector}}}}, true
+	})
+	policy := `@id("allow") permit(principal, action == Kontext::Action::"ToolUse", resource);
+@id("raw") forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"` + tool + `");`
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, policy)
+	provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, LastKnownGood: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+	decision, err := provider.DecideHook(context.Background(), cedarHookEvent(tool, map[string]any{"query": "SELECT 1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionDeny || decision.Cedar == nil || decision.Cedar.ToolID != "databricks-mcp/execute_sql" {
+		t.Fatalf("decision = %q (%+v), want deny with the scanned reading as the tool", decision.Decision, decision.Cedar)
 	}
 }
