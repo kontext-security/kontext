@@ -748,7 +748,7 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 				if next == '(' {
 					nested = append(nested, src[i+2:end])
 				} else {
-					nested = append(nested, hashtableValues(src[i+2:end])...)
+					nested = append(nested, hashtableStatements(src[i+2:end])...)
 				}
 				i = end
 			case (next == '\'' || next == '"') && i+2 < len(src) && src[i+2] == '\n':
@@ -826,7 +826,7 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 				if !ok {
 					break
 				}
-				nested = append(nested, hashtableValues(src[i+3:end])...)
+				nested = append(nested, hashtableStatements(src[i+3:end])...)
 				current.cast = false
 				i = end
 			}
@@ -1007,18 +1007,23 @@ func scriptBlocks(text string) []string {
 	return scripts
 }
 
-// hashtableValues returns the value statements in the body of a hashtable
+// hashtableStatements returns the statements in the body of a hashtable
 // literal: entries are key = value, separated by ; or a new line, and each
-// value runs as a statement while the table is built. A body that does not
-// tokenize is returned whole, so it fails as a script.
-func hashtableValues(body string) []string {
+// value runs as a statement while the table is built. A key is evaluated
+// too, as in @{ "$(git ...)" = 1 }, so a key that can run anything comes back
+// as an expression to read; a bare or single-quoted key is plain text. A body
+// that does not tokenize is returned whole, so it fails as a script.
+func hashtableStatements(body string) []string {
 	var values []string
-	assign := -1
+	start, assign := 0, -1
 	entry := func(end int) {
 		if assign >= 0 {
+			if key := strings.TrimSpace(body[start:assign]); strings.ContainsAny(key, "$(@\"") {
+				values = append(values, "$null["+key+"]")
+			}
 			values = append(values, body[assign+1:end])
 		}
-		assign = -1
+		start, assign = end+1, -1
 	}
 	for i := 0; i < len(body); i++ {
 		switch c := body[i]; c {
@@ -1033,7 +1038,11 @@ func hashtableValues(body string) []string {
 				if end < 0 {
 					return append(values, body)
 				}
+				blank := assign < 0 && strings.TrimSpace(body[start:i]) == ""
 				i += end + 3
+				if blank {
+					start = i + 1
+				}
 			}
 		case '#':
 			if i == 0 || strings.IndexByte(" \t\n;", body[i-1]) >= 0 {
@@ -1043,6 +1052,7 @@ func hashtableValues(body string) []string {
 				}
 				entry(i)
 				i += end
+				start = i + 1
 			}
 		case '(', '{', '[':
 			end := matchBracket(body, i)
