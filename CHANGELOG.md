@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.1](https://github.com/kontext-security/kontext/compare/v1.14.0...v1.14.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **hooks:** add Homebrew Claude user hooks and diagnose configuration conflicts ([#617](https://github.com/kontext-security/kontext/issues/617)) ([fb2cb9d](https://github.com/kontext-security/kontext/commit/fb2cb9dad79691ada426479de53cd7d873ceb245))
+
 ## [1.14.0](https://github.com/kontext-security/kontext/compare/v1.13.1...v1.14.0) (2026-10-26)
 
 
