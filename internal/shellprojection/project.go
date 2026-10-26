@@ -2046,6 +2046,7 @@ func sortedUnique(values []string) []string {
 }
 
 var ghWriteCommands = map[string]bool{
+	"ssh-key/add": true, "ssh-key/delete": true, "gpg-key/add": true, "gpg-key/delete": true,
 	"codespace/create": true, "codespace/delete": true, "codespace/rebuild": true, "codespace/stop": true,
 	"gist/create": true, "gist/delete": true, "gist/edit": true,
 	"issue/close": true, "issue/create": true, "issue/delete": true, "issue/develop": true, "issue/edit": true, "issue/reopen": true, "issue/transfer": true,
@@ -2060,6 +2061,7 @@ var ghWriteCommands = map[string]bool{
 }
 
 var ghReadCommands = map[string]bool{
+	"ssh-key/list": true, "gpg-key/list": true,
 	"auth/status": true, "codespace/list": true, "gist/clone": true, "gist/list": true, "gist/view": true,
 	"issue/list": true, "issue/status": true, "issue/view": true, "label/list": true,
 	"pr/checks": true, "pr/diff": true, "pr/list": true, "pr/status": true, "pr/view": true,
