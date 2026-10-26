@@ -27,6 +27,20 @@ const (
 	databricksSQLRoute      = "/api/2.0/sql/statements"
 )
 
+// SDK operation names join the generated CLI and REST routes.
+var databricksExportOperations = map[string]bool{
+	"workspace.Workspace.Export":                              true,
+	"files.Dbfs.Read":                                         true,
+	"files.Files.Download":                                    true,
+	"dashboards.Genie.GenerateDownloadFullQueryResult":        true,
+	"dashboards.Genie.GetDownloadFullQueryResult":             true,
+	"dashboards.Genie.DownloadMessageAttachmentVisualization": true,
+	"jobs.Jobs.ExportRun":                                     true,
+	"billing.BillableUsage.Download":                          true,
+	"ml.ModelRegistry.GetModelVersionDownloadUri":             true,
+	"serving.ServingEndpoints.ExportMetrics":                  true,
+}
+
 func databricksProductFact(product string) string { return databricksProductPrefix + product }
 
 // databricksOperation is a classified call: its product and tier. del and
@@ -34,6 +48,7 @@ func databricksProductFact(product string) string { return databricksProductPref
 type databricksOperation struct {
 	product           string
 	write, del, admin bool
+	export            bool
 	// sql marks a command whose positional arguments and stdin are SQL.
 	sql bool
 }
@@ -59,6 +74,9 @@ func databricksAccess(product, access string) databricksOperation {
 
 func (op databricksOperation) facts() []string {
 	facts := []string{FactDatabricksRouteCatalogued}
+	if op.export {
+		facts = append(facts, "databricks/export=true")
+	}
 	if op.product != "" {
 		facts = append(facts, databricksProductFact(op.product))
 	}
@@ -76,6 +94,7 @@ func (op databricksOperation) raiseSQL(sent, other []string) databricksOperation
 	readable := len(sent) > 0
 	for i, text := range append(slices.Clone(sent), other...) {
 		deletes, admin, secrets, recognized := toolcatalog.ClassifyDatabricksSQL(text)
+		op.export = op.export || toolcatalog.DatabricksSQLExports(text)
 		op.del, op.admin = op.del || deletes, op.admin || admin
 		readable = readable && (recognized || i >= len(sent))
 		if secrets {
@@ -83,7 +102,7 @@ func (op databricksOperation) raiseSQL(sent, other []string) databricksOperation
 		}
 	}
 	if !readable {
-		op.del, op.admin = true, true
+		op.del, op.admin, op.export = true, true, true
 	}
 	return op
 }
@@ -273,7 +292,7 @@ const databricksMaxCommandWords = 5
 // not know takes the next word as its value. The command is then looked up in
 // databricksCommands and the generated route table; `databricks api` goes
 // through the route table by method and path.
-func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV2 {
+func classifyDatabricks(args []string, complete, oneArgumentEach bool) cedareval.ShellProjectionV2 {
 	var path []string
 	var pathIndexes []int
 	dynamic := false
@@ -314,6 +333,7 @@ func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV
 		if generated, ok := toolcatalog.DatabricksCommand(strings.Join(path[:n-1], " "), path[n-1]); ok {
 			if n > length {
 				op, length = databricksAccess(generated.Product, generated.Access), n
+				op.export = databricksExportOperations[generated.Operation]
 			}
 			break
 		}
@@ -331,6 +351,53 @@ func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV
 	}
 	rest := withoutIndexes(args, pathIndexes[:length])
 	command := strings.Join(path[:length], " ")
+	if command == "workspace export" || command == "workspace export-dir" || command == "fs cat" {
+		op.export = true
+	}
+	if command == "fs cp" {
+		var positional []string
+		terminated := false
+		unresolvedLeadingOption := false
+		for i := 0; i < len(rest); i++ {
+			arg := rest[i]
+			if arg == "--" && !terminated {
+				terminated = true
+				continue
+			}
+			if !terminated && len(arg) > 1 && strings.HasPrefix(arg, "-") {
+				takesNext := (databricksValueFlags[arg] || arg == "--concurrency") && !strings.Contains(arg, "=")
+				if len(arg) > 2 && arg[1] != '-' {
+					letters, _, attached := strings.Cut(arg[1:], "=")
+					if index := strings.IndexAny(letters, "pote"); index >= 0 {
+						takesNext = !attached && index == len(letters)-1
+					}
+				}
+				if takesNext {
+					i++
+				}
+				continue
+			}
+			if !terminated && !complete && arg == "" && len(positional) == 0 {
+				unresolvedLeadingOption = true
+			}
+			positional = append(positional, arg)
+		}
+		if len(positional) >= 2 {
+			source, target := positional[0], positional[1]
+			op.export = (source == "" || strings.HasPrefix(source, "dbfs:")) && !strings.HasPrefix(target, "dbfs:")
+		} else {
+			op.export = slices.Contains(rest, "")
+		}
+		// A computed option can shift the source and target. With excess
+		// operands their apparent positions cannot prove a remote target.
+		if !oneArgumentEach || unresolvedLeadingOption && len(positional) > 2 {
+			op.export = true
+		}
+	}
+	if op.sql {
+		texts := databricksSQLArgs(rest)
+		op = op.raiseSQL(cleanedSQL(texts), texts)
+	}
 	commandFact := productDatabricks + "/command=" + strings.Join(path[:length], "/")
 	// A word the shell computes may be a flag or a command word. Before the
 	// last command word, or in a command a flag raises, it leaves the call
@@ -338,11 +405,11 @@ func classifyDatabricks(args []string, complete bool) cedareval.ShellProjectionV
 	// unrecognized with no tier. Elsewhere it is an argument and the tier
 	// holds.
 	if at := slices.Index(args, ""); !complete && at >= 0 && (at < pathIndexes[length-1] || databricksFlagRaises[command] != nil) {
-		return projection(productDatabricks, []string{FactDatabricksRouteUnrecognized, commandFact}, nil, false)
-	}
-	if op.sql {
-		texts := databricksSQLArgs(rest)
-		op = op.raiseSQL(cleanedSQL(texts), texts)
+		facts := []string{FactDatabricksRouteUnrecognized, commandFact}
+		if op.export {
+			facts = append(facts, "databricks/export=true")
+		}
+		return projection(productDatabricks, facts, nil, false)
 	}
 	for flag, by := range databricksFlagRaises[command] {
 		if flagSet(rest, flag) {
@@ -515,8 +582,14 @@ func databricksRouteFacts(method, requestPath string, bodies []string) ([]string
 		return []string{FactDatabricksRouteUnrecognized}, false
 	}
 	op := databricksAccess(route.Product, route.Access)
+	if databricksExportOperations[route.Operation] {
+		op.export = true
+	}
 	if route.Method == "POST" && route.Path == databricksSQLRoute {
 		op = op.raiseSQL(databricksStatements(bodies), nil)
+		for _, disposition := range databricksBodyStrings(bodies, "disposition") {
+			op.export = op.export || strings.EqualFold(disposition, "EXTERNAL_LINKS")
+		}
 	}
 	return op.facts(), true
 }
@@ -535,7 +608,11 @@ const databricksMaxBodyPieces = 8
 // statement, SQL the projection does not see. Past databricksMaxBodyPieces only
 // each piece and the two uniform joins are read, so SQL split some other way
 // across more pieces is judged by those readings.
-func databricksStatements(bodies []string) (statements []string) {
+func databricksStatements(bodies []string) []string {
+	return databricksBodyStrings(bodies, "statement")
+}
+
+func databricksBodyStrings(bodies []string, field string) (statements []string) {
 	var pieces []string
 	for _, body := range bodies {
 		if body == "" || strings.HasPrefix(body, "@") {
@@ -556,12 +633,12 @@ func databricksStatements(bodies []string) (statements []string) {
 		candidates = append(candidates, joined.String())
 	}
 	for _, body := range candidates {
-		statements = append(statements, jsonStatements(body)...)
+		statements = append(statements, jsonStringFields(body, field)...)
 	}
 	return statements
 }
 
-func jsonStatements(body string) []string {
+func jsonStringFields(body, field string) []string {
 	var statements []string
 	decoder := json.NewDecoder(strings.NewReader(body))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
@@ -577,7 +654,7 @@ func jsonStatements(body string) []string {
 			break
 		}
 		var statement string
-		if name, ok := key.(string); ok && strings.EqualFold(name, "statement") && json.Unmarshal(value, &statement) == nil {
+		if name, ok := key.(string); ok && strings.EqualFold(name, field) && json.Unmarshal(value, &statement) == nil {
 			statements = append(statements, statement)
 		}
 	}
@@ -619,6 +696,6 @@ var mentionsDatabricks = regexp.MustCompile(`(?i)databricks`)
 // cannot read at all: every tier, and the products the secrets and
 // runs-and-deploys presets single out.
 func databricksWorstFacts() []string {
-	return []string{FactDatabricksRouteUnrecognized, databricksProductFact("secrets"), databricksProductFact("execution"),
+	return []string{FactDatabricksRouteUnrecognized, "databricks/export=true", databricksProductFact("secrets"), databricksProductFact("execution"),
 		writeFact(productDatabricks), deleteFact(productDatabricks), adminFact(productDatabricks)}
 }

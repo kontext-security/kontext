@@ -688,7 +688,7 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 	case "forge":
 		return single(forgeCLI.classify(args, complete))
 	case "databricks":
-		return single(classifyDatabricks(args, complete))
+		return single(classifyDatabricks(args, complete, wrapperComplete && w.oneArgumentEach))
 	case "bash", "sh", "zsh", "dash", "ksh":
 		return classifyShell(program, args, complete, w)
 	case "eval":

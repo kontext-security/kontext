@@ -365,7 +365,7 @@ func databricksRenamesColumn(stmt []sqlToken, i int) bool {
 const (
 	sqlWord   = iota + 1 // unquoted word, upper-cased: a keyword or a name
 	sqlName              // backtick or double-quoted, upper-cased: never a keyword
-	sqlString            // single-quoted, raw or dollar-quoted literal: content dropped
+	sqlString            // literal content is used only to identify export targets
 	sqlPunct
 )
 
@@ -427,7 +427,7 @@ func lexDatabricksSQL(sql string, hintNests, dqIdentifiers bool) (tokens []sqlTo
 				continue
 			}
 			if r == '\'' {
-				tokens = append(tokens, sqlToken{kind: sqlString})
+				tokens = append(tokens, sqlToken{kind: sqlString, text: rest[1 : end-1]})
 			} else {
 				q := rest[:1]
 				tokens = append(tokens, sqlToken{kind: sqlName, text: strings.ToUpper(strings.ReplaceAll(rest[1:end-1], q+q, q))})
@@ -442,7 +442,7 @@ func lexDatabricksSQL(sql string, hintNests, dqIdentifiers bool) (tokens []sqlTo
 				complete = false
 				continue
 			}
-			tokens = append(tokens, sqlToken{kind: sqlString})
+			tokens = append(tokens, sqlToken{kind: sqlString, text: rest[len(tag) : len(tag)+end]})
 			i += len(tag) + end + len(tag)
 		case isSQLWordRune(r):
 			j := i + sqlWordEnd(rest)
@@ -454,7 +454,7 @@ func lexDatabricksSQL(sql string, hintNests, dqIdentifiers bool) (tokens []sqlTo
 					complete = false
 					continue
 				}
-				tokens = append(tokens, sqlToken{kind: sqlString})
+				tokens = append(tokens, sqlToken{kind: sqlString, text: sql[j+1 : j+1+end]})
 				i = j + 1 + end + 1
 				continue
 			}
