@@ -243,7 +243,7 @@ func PrintHookStatus(out io.Writer) HookStatus {
 			case hosted:
 				fmt.Fprintln(out, "Claude Code local Guard hook mode: hosted")
 			default:
-				fmt.Fprintln(out, "Claude Code local Guard hook mode: no Kontext hook detected")
+				fmt.Fprintln(out, "Claude Code local Guard hook mode: no Kontext hook detected in user settings (managed hooks are checked separately)")
 			}
 		}
 		if disabled, _ := settings["disableAllHooks"].(bool); disabled {
@@ -381,7 +381,10 @@ func readClaudeSettings() (string, map[string]any, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	settingsPath, err := claudemanaged.UserSettingsPathNoCreate(home)
+	if err != nil {
+		return "", nil, err
+	}
 	settings := map[string]any{}
 	raw, err := os.ReadFile(settingsPath)
 	if err == nil {

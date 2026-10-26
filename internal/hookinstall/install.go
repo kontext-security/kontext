@@ -39,8 +39,8 @@ type Definition struct {
 	Validate    func([]byte) (string, error)
 }
 
-// Definitions is the only list of installations. Claude uses its managed
-// system drop-in even for self-serve; Codex follows the requested scope.
+// Definitions is the only list of installations. Self-serve Claude installs
+// identical managed and user hooks; system deployments retain only the drop-in.
 func Definitions(scope Scope, home string) ([]Definition, error) {
 	return definitions(scope, home, os.Getenv("CODEX_HOME"))
 }
@@ -62,8 +62,16 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 			return nil, errors.New("CODEX_HOME must be an absolute path")
 		}
 	}
+	claudeFiles := []File{{"claude", claudemanaged.ManagedSettingsDropInPath, System}}
+	if scope == User {
+		path, err := claudemanaged.UserSettingsPathNoCreate(home)
+		if err != nil {
+			return nil, err
+		}
+		claudeFiles = append(claudeFiles, File{"claude-user", path, User})
+	}
 	return []Definition{
-		{Agent: "claude_code", Name: "Claude Code", Files: []File{{"claude", claudemanaged.ManagedSettingsDropInPath, System}}, Validate: validateClaude},
+		{Agent: "claude_code", Name: "Claude Code", Files: claudeFiles, Validate: validateClaude},
 		{Agent: "codex", Name: "Codex", Files: []File{{"codex", filepath.Join(codexDir, "hooks.json"), scope}, {"feature", filepath.Join(codexDir, "config.toml"), scope}}, Validate: codexmanaged.ValidateInstalled},
 	}, nil
 }
@@ -94,8 +102,6 @@ type Options struct {
 	WriteClaude  func(string, []byte) error
 	RemoveClaude func(string) error
 	Report       func(Result)
-	// AfterClaude preserves self-serve legacy cleanup between the two agents.
-	AfterClaude func() error
 }
 
 type change struct {
@@ -139,7 +145,7 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 			if err != nil {
 				c.result.Action = "error"
 				c.result.Err = err
-				if !opts.Setup || !(file.Kind == "feature" || remove && file.Kind == "codex") {
+				if !setupTolerates(opts, file.Kind, remove) {
 					return fmt.Errorf("%s: %w", file.Path, err)
 				}
 			}
@@ -154,18 +160,13 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 			if err := apply(c, opts); err != nil {
 				r.Err = err
 				r.Action = "error"
-				if !opts.Setup || !(r.File.Kind == "feature" || remove && r.File.Kind == "codex") {
+				if !setupTolerates(opts, r.File.Kind, remove) {
 					return err
 				}
 			}
 		}
 		if opts.Report != nil {
 			opts.Report(r)
-		}
-		if r.File.Kind == "claude" && opts.AfterClaude != nil && !opts.DryRun {
-			if err := opts.AfterClaude(); err != nil {
-				return err
-			}
 		}
 		if opts.Out != nil {
 			action := r.Action
@@ -176,6 +177,14 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 		}
 	}
 	return nil
+}
+
+// setupTolerates lists the files setup reports instead of failing on. The Claude
+// user copy is only a fallback for machines whose remote policy skips the
+// managed drop-in; a read-only or root-owned settings.json must not block a
+// setup whose managed hooks installed fine.
+func setupTolerates(opts Options, kind string, remove bool) bool {
+	return opts.Setup && (kind == "feature" || kind == "claude-user" || remove && kind == "codex")
 }
 
 func plan(file File, opts Options, remove bool) (change, error) {
@@ -190,6 +199,11 @@ func plan(file File, opts Options, remove bool) (change, error) {
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return c, err
+	}
+	if err == nil && file.Kind == "claude-user" && info.Mode()&os.ModeSymlink != 0 {
+		if _, err := filepath.EvalSymlinks(file.Path); err != nil {
+			return c, fmt.Errorf("resolve Claude user settings symlink: %w", err)
+		}
 	}
 	c.before, err = os.ReadFile(file.Path)
 	c.missing = errors.Is(err, os.ErrNotExist)
@@ -213,7 +227,10 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		if !remove {
 			c.after, err = claudemanaged.TemplateJSON(opts.Binary)
 		}
-	case "codex":
+	case "codex", "claude-user":
+		if file.Kind == "claude-user" && !remove && claudemanaged.CanonicalManagedHooks(c.before, opts.Binary) {
+			return c, nil
+		}
 		settings := map[string]any{}
 		if !c.missing {
 			err = json.Unmarshal(c.before, &settings)
@@ -225,7 +242,11 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			return c, errors.New("hooks must be a JSON object")
 		}
 		before, _ := json.Marshal(settings)
-		if remove {
+		if file.Kind == "claude-user" && remove {
+			err = claudemanaged.RemoveManagedHooks(settings)
+		} else if file.Kind == "claude-user" {
+			_, err = claudemanaged.MergeManagedHooks(settings, opts.Binary)
+		} else if remove {
 			err = codexmanaged.RemoveManagedHooks(settings)
 		} else {
 			err = codexmanaged.MergeManagedHooks(settings, opts.Binary)
@@ -234,13 +255,13 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			return c, err
 		}
 		after, _ := json.Marshal(settings)
-		if bytes.Equal(before, after) && !opts.Setup {
+		if bytes.Equal(before, after) && (!opts.Setup || file.Kind == "claude-user") {
 			return c, nil
 		}
 		c.after, err = json.MarshalIndent(settings, "", "  ")
 		c.after = append(c.after, '\n')
 		// Only delete an empty file when all of its content was our hooks.
-		if remove && !opts.Setup && len(settings) == 0 {
+		if remove && !opts.Setup && len(settings) == 0 && file.Kind != "claude-user" {
 			c.after = nil
 		}
 	case "feature":

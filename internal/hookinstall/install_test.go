@@ -15,6 +15,7 @@ import (
 func fixture(t *testing.T, scope Scope) (Options, []Definition) {
 	t.Helper()
 	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	root := t.TempDir()
 	opts := Options{Scope: scope, Home: "/Users/test", Binary: filepath.Join(root, "kontext")}
 	write(t, opts.Binary, "#!/bin/sh\n", 0755)
@@ -99,7 +100,11 @@ func TestDefinitionsInstallRemove(t *testing.T) {
 			if err := runDefinitions(opts, defs, false); err != nil {
 				t.Fatal(err)
 			}
-			if strings.Count(out.String(), "skip\t") != 3 {
+			wantFiles := 3
+			if scope == User {
+				wantFiles++
+			}
+			if strings.Count(out.String(), "skip\t") != wantFiles {
 				t.Fatalf("re-run wrote: %s", &out)
 			}
 			for _, d := range defs {
@@ -115,6 +120,12 @@ func TestDefinitionsInstallRemove(t *testing.T) {
 			}
 			for _, d := range defs {
 				for _, f := range d.Files {
+					if f.Kind == "claude-user" {
+						if strings.TrimSpace(read(t, f.Path)) != "{}" {
+							t.Fatalf("user hooks remain: %s", read(t, f.Path))
+						}
+						continue
+					}
 					if _, err := os.Stat(f.Path); !os.IsNotExist(err) {
 						t.Fatalf("owned file remains: %s", f.Path)
 					}
@@ -485,8 +496,12 @@ func TestUserCommandsHonorCodexHome(t *testing.T) {
 	opts, defs := fixture(t, User)
 	custom := filepath.Join(t.TempDir(), "custom-codex")
 	t.Setenv("CODEX_HOME", custom)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "custom-claude"))
 	opts.ClaudePath = defs[0].Files[0].Path
 	if err := Install(opts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "settings.json")); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"hooks.json", "config.toml"} {
