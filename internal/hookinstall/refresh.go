@@ -19,10 +19,31 @@ func ClaudeRefreshDigest(path, binary string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if claudemanaged.Validate(c.before, binary) == nil {
+	if claudemanaged.Validate(c.before, binary) == nil && claudemanaged.CanonicalManagedHooks(c.before, binary) {
 		return "", nil
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(c.before)), nil
+}
+
+// RefreshClaudeUser installs only the self-serve user layer after the managed
+// copy is canonical. Refuse differing handlers if elevation was declined or an
+// administrator replaced the drop-in. The caller gates this with its receipt.
+func RefreshClaudeUser(managedPath, userPath, binary string) error {
+	digest, err := ClaudeRefreshDigest(managedPath, binary)
+	if err != nil {
+		return err
+	}
+	if digest != "" {
+		return fmt.Errorf("managed Claude hooks must be refreshed before installing user hooks")
+	}
+	c, err := plan(File{"claude-user", userPath, User}, Options{Binary: binary}, false)
+	if err != nil {
+		return err
+	}
+	if c.result.Action == "skip" {
+		return nil
+	}
+	return apply(c, Options{})
 }
 
 // RefreshClaude upgrades only Claude's existing drop-in. The caller must have

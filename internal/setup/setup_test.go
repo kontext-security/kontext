@@ -235,8 +235,9 @@ func TestRunFullFlow(t *testing.T) {
 	if err := claudemanaged.Validate(data, "/opt/homebrew/bin/kontext"); err != nil {
 		t.Fatalf("managed hooks invalid after setup: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(h.home, ".claude", "settings.json")); !os.IsNotExist(err) {
-		t.Fatalf("setup created user settings file: %v", err)
+	userData, err := os.ReadFile(filepath.Join(h.home, ".claude", "settings.json"))
+	if err != nil || !claudemanaged.CanonicalManagedHooks(userData, "/opt/homebrew/bin/kontext") {
+		t.Fatalf("setup did not install canonical user hooks: %v", err)
 	}
 	codexHooksPath := filepath.Join(h.home, ".codex", "hooks.json")
 	codexHooks, err := codexmanaged.ReadHooks(codexHooksPath)
@@ -714,7 +715,7 @@ func TestRunFailsWhenLegacyUserSettingsDisableHooks(t *testing.T) {
 	}
 }
 
-func TestRunWarnsAfterInstallWhenLegacyCleanupWriteFails(t *testing.T) {
+func TestRunFailsWhenUserHookWriteFails(t *testing.T) {
 	h := newHarness(t)
 	allowLoopback(t)
 	settingsDir := filepath.Join(h.home, ".claude")
@@ -736,8 +737,8 @@ func TestRunWarnsAfterInstallWhenLegacyCleanupWriteFails(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(settingsDir, 0o755) })
 	server := pingServer(t, "tok")
 
-	if err := Run(context.Background(), h.options("tok", server)); err != nil {
-		t.Fatalf("Run() error = %v, want warning-only legacy cleanup failure", err)
+	if err := Run(context.Background(), h.options("tok", server)); err == nil {
+		t.Fatal("Run() succeeded without installing user hooks")
 	}
 	if _, err := os.Stat(managedSettingsPath); err != nil {
 		t.Fatalf("managed drop-in not installed: %v", err)
@@ -748,11 +749,8 @@ func TestRunWarnsAfterInstallWhenLegacyCleanupWriteFails(t *testing.T) {
 			bootstrapped = true
 		}
 	}
-	if !bootstrapped {
-		t.Fatal("LaunchAgent was not installed before cleanup failure")
-	}
-	if !strings.Contains(h.errOut.String(), "legacy Claude Code user hooks could not be removed") {
-		t.Fatalf("stderr missing cleanup warning:\n%s", h.errOut.String())
+	if bootstrapped {
+		t.Fatal("LaunchAgent was installed despite incomplete hooks")
 	}
 }
 
