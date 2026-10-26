@@ -658,99 +658,82 @@ func TestRunRefreshesStaleSelfServeDropIn(t *testing.T) {
 	}
 }
 
-func TestRunPreflightsLegacyCleanupBeforeWritingState(t *testing.T) {
-	// A corrupt ~/.claude/settings.json must fail before setup writes active
-	// managed config or hooks. Otherwise hook commands can switch to managed
-	// observe before the LaunchAgent exists.
-	h := newHarness(t)
-	allowLoopback(t)
-	settingsPath := filepath.Join(h.home, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(settingsPath, []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	server := pingServer(t, "tok")
-
-	err := Run(context.Background(), h.options("tok", server))
-	if err == nil || !strings.Contains(err.Error(), "check legacy Claude Code hooks") {
-		t.Fatalf("Run() error = %v, want legacy cleanup failure", err)
-	}
-	if _, err := os.Stat(managedSettingsPath); !os.IsNotExist(err) {
-		t.Fatalf("managed drop-in written before preflight failure: %v", err)
-	}
-	if _, err := os.Stat(managedconfig.UserPath()); !os.IsNotExist(err) {
-		t.Fatalf("managed config written before preflight failure: %v", err)
-	}
-	if len(h.keychain) != 0 {
-		t.Fatal("keychain written before preflight failure")
-	}
-}
-
-func TestRunFailsWhenLegacyUserSettingsDisableHooks(t *testing.T) {
-	h := newHarness(t)
-	allowLoopback(t)
-	settingsPath := filepath.Join(h.home, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(settingsPath, []byte(`{"disableAllHooks":true}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	server := pingServer(t, "tok")
-
-	err := Run(context.Background(), h.options("tok", server))
-	if err == nil || !strings.Contains(err.Error(), "disableAllHooks must not be true") {
-		t.Fatalf("Run() error = %v, want disableAllHooks failure", err)
-	}
-	if _, err := os.Stat(managedSettingsPath); !os.IsNotExist(err) {
-		t.Fatalf("managed drop-in written before preflight failure: %v", err)
-	}
-	if _, err := os.Stat(managedconfig.UserPath()); !os.IsNotExist(err) {
-		t.Fatalf("managed config written before preflight failure: %v", err)
-	}
-	if len(h.keychain) != 0 {
-		t.Fatal("keychain written before preflight failure")
-	}
-}
-
-func TestRunFailsWhenUserHookWriteFails(t *testing.T) {
-	h := newHarness(t)
-	allowLoopback(t)
-	settingsDir := filepath.Join(h.home, ".claude")
-	settingsPath := filepath.Join(settingsDir, "settings.json")
-	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	settings := map[string]any{"hooks": map[string]any{
-		"PreToolUse": []any{
-			map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": "'/opt/homebrew/bin/kontext' hook 'pre-tool-use'"}}},
-		},
-	}}
-	if err := claudemanaged.WriteUserSettings(settingsPath, settings); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(settingsDir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(settingsDir, 0o755) })
-	server := pingServer(t, "tok")
-
-	if err := Run(context.Background(), h.options("tok", server)); err == nil {
-		t.Fatal("Run() succeeded without installing user hooks")
-	}
-	if _, err := os.Stat(managedSettingsPath); err != nil {
-		t.Fatalf("managed drop-in not installed: %v", err)
-	}
-	var bootstrapped bool
-	for _, call := range h.calls {
-		if call.name == "launchctl" && len(call.args) > 0 && call.args[0] == "bootstrap" {
-			bootstrapped = true
+func TestRunCompletesWhenUserHooksCannotBeInstalled(t *testing.T) {
+	// The user copy is a fallback for machines whose remote Claude policy skips
+	// the managed drop-in. A settings.json Kontext cannot merge into must leave a
+	// working install with a warning, never a setup that cannot finish.
+	readOnlyTarget := func(t *testing.T, path string) {
+		target := filepath.Join(t.TempDir(), "store")
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, "settings.json"), []byte(`{"model":"opus"}`), 0o444); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(target, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(target, 0o755) })
+		if err := os.Symlink(filepath.Join(target, "settings.json"), path); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if bootstrapped {
-		t.Fatal("LaunchAgent was installed despite incomplete hooks")
+	write := func(content string) func(*testing.T, string) {
+		return func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		prepare  func(*testing.T, string)
+		readOnly bool
+		warns    bool
+	}{
+		{name: "invalid JSON", prepare: write("{not json"), warns: true},
+		{name: "hooks not an object", prepare: write(`{"hooks":[]}`), warns: true},
+		{name: "read-only symlink target", prepare: readOnlyTarget, warns: true},
+		{name: "unwritable directory", prepare: write(`{"model":"opus"}`), readOnly: true, warns: true},
+		// User-level disableAllHooks cannot disable managed hooks.
+		{name: "user disableAllHooks", prepare: write(`{"disableAllHooks":true}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			allowLoopback(t)
+			settingsDir := filepath.Join(h.home, ".claude")
+			if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			tc.prepare(t, filepath.Join(settingsDir, "settings.json"))
+			if tc.readOnly {
+				if err := os.Chmod(settingsDir, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(settingsDir, 0o755) })
+			}
+
+			if err := Run(context.Background(), h.options("tok", pingServer(t, "tok"))); err != nil {
+				t.Fatalf("Run() error = %v, want setup to finish", err)
+			}
+			data, err := os.ReadFile(managedSettingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := claudemanaged.Validate(data, "/opt/homebrew/bin/kontext"); err != nil {
+				t.Fatalf("managed hooks invalid: %v", err)
+			}
+			var bootstrapped bool
+			for _, call := range h.calls {
+				bootstrapped = bootstrapped || call.name == "launchctl" && len(call.args) > 0 && call.args[0] == "bootstrap"
+			}
+			if !bootstrapped {
+				t.Fatal("LaunchAgent was not installed")
+			}
+			if warned := strings.Contains(h.errOut.String(), "Claude Code user hooks were not installed"); warned != tc.warns {
+				t.Fatalf("user hooks warning = %v, want %v; stderr:\n%s", warned, tc.warns, h.errOut.String())
+			}
+		})
 	}
 }
 

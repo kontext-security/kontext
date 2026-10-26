@@ -145,7 +145,7 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 			if err != nil {
 				c.result.Action = "error"
 				c.result.Err = err
-				if !opts.Setup || !(file.Kind == "feature" || remove && file.Kind == "codex") {
+				if !setupTolerates(opts, file.Kind, remove) {
 					return fmt.Errorf("%s: %w", file.Path, err)
 				}
 			}
@@ -160,7 +160,7 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 			if err := apply(c, opts); err != nil {
 				r.Err = err
 				r.Action = "error"
-				if !opts.Setup || !(r.File.Kind == "feature" || remove && r.File.Kind == "codex") {
+				if !setupTolerates(opts, r.File.Kind, remove) {
 					return err
 				}
 			}
@@ -177,6 +177,14 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 		}
 	}
 	return nil
+}
+
+// setupTolerates lists the files setup reports instead of failing on. The Claude
+// user copy is only a fallback for machines whose remote policy skips the
+// managed drop-in; a read-only or root-owned settings.json must not block a
+// setup whose managed hooks installed fine.
+func setupTolerates(opts Options, kind string, remove bool) bool {
+	return opts.Setup && (kind == "feature" || kind == "claude-user" || remove && kind == "codex")
 }
 
 func plan(file File, opts Options, remove bool) (change, error) {

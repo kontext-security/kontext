@@ -16,6 +16,7 @@ import (
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/internal/profile"
 )
 
@@ -78,6 +79,13 @@ func runSelfServeHookMigration(ctx context.Context, loaded managedconfig.LoadedC
 	if err != nil {
 		logAlways(log, "Claude user hook migration pending: %v\n", err)
 		return
+	}
+	// The daemon lacks the terminal's folder access: following a settings.json
+	// symlink into ~/Documents (a dotfiles repo) would prompt in the background.
+	// `kontext setup` runs from the terminal and can add the user copy there.
+	if privacyfolder.Guarded(home, userSettings) {
+		logAlways(log, "Claude user hook migration skipped: %s is in a macOS privacy-guarded folder; run `kontext setup` to add the user hooks\n", userSettings)
+		userSettings = ""
 	}
 	m := hookMigration{
 		version: version, binary: binary, hooksPath: claudemanaged.ManagedSettingsDropInPath,

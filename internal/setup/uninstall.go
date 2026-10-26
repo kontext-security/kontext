@@ -84,7 +84,9 @@ func Uninstall(ctx context.Context, opts Options) error {
 					fmt.Fprintln(opts.Stdout, "✓ Codex hooks removed from ~/.codex/hooks.json")
 				}
 			case "claude-user":
-				if r.Action == "write" {
+				if r.Err != nil {
+					fmt.Fprintf(opts.Stderr, "warning: Claude Code hooks could not be removed from %s (%v)\n", r.File.Path, r.Err)
+				} else if r.Action == "write" {
 					fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks removed from %s\n", r.File.Path)
 				} else {
 					fmt.Fprintf(opts.Stdout, "  • No Claude Code user hooks to remove (%s)\n", r.File.Path)

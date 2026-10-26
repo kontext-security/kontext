@@ -16,7 +16,12 @@ Claude's drop-in is system-scoped in both channels. Homebrew/self-serve also
 merges the same hooks into the user's settings, preserving foreign settings and
 symlinks and backing up changed files. This keeps terminal Code hooks available
 when a remote managed source skips the local drop-in, provided that policy
-permits user hooks. System/MDM installations retain only the managed drop-in;
+permits user hooks. The user copy is best-effort: when `kontext setup` cannot
+merge it (invalid JSON, a read-only or root-owned file), setup still finishes
+with the managed hooks and prints a warning with the repair command. The daemon
+upgrade migration skips a user settings file that resolves into a macOS
+privacy-guarded folder, leaving it to `kontext setup` in the terminal.
+System/MDM installations retain only the managed drop-in;
 the Addigy installation commands and behavior are unchanged. Cowork continues
 using the managed settings. The managed config contract remains `agent: claude`.
 
