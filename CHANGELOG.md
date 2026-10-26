@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.14.0](https://github.com/kontext-security/kontext/compare/v1.13.1...v1.14.0) (2026-10-26)
+
+
+### Features
+
+* **turns:** mint a turn per prompt, stamp actions and usage, upload turn records ([#600](https://github.com/kontext-security/kontext/issues/600)) ([bee2577](https://github.com/kontext-security/kontext/commit/bee2577e4879100a8ad1b5406eccdae6f915fa73))
+* **turns:** one excerpt bound for Summaries and Full payloads ([#604](https://github.com/kontext-security/kontext/issues/604)) ([ffc07a6](https://github.com/kontext-security/kontext/commit/ffc07a6bc066d5c961590fc161a09a0137773ded))
+
+
+### Bug Fixes
+
+* **databricks:** SQL Kontext cannot read is delete and admin (ENG-792) ([#613](https://github.com/kontext-security/kontext/issues/613)) ([b72db31](https://github.com/kontext-security/kontext/commit/b72db315df927a6901bc3e178524a6887c99c260))
+* **mcpconfig:** name a connector from the authority scan when its session record is missing (ENG-795) ([#614](https://github.com/kontext-security/kontext/issues/614)) ([a857ac3](https://github.com/kontext-security/kontext/commit/a857ac38fa4faa4023635312befbdbcaecff69bf))
+* **redaction:** mask URL credentials for every scheme before upload ([#605](https://github.com/kontext-security/kontext/issues/605)) ([95d4da9](https://github.com/kontext-security/kontext/commit/95d4da94a7ae3c7d63aa332a74e1314228ceafe2))
+
 ## [1.13.1](https://github.com/kontext-security/kontext/compare/v1.13.0...v1.13.1) (2026-10-20)
 
 
