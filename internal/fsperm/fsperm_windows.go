@@ -29,7 +29,7 @@ func RestrictFile(file *os.File) error {
 }
 
 // PrivateFile reports whether the file at path is private to the current user: owned by the user
-// or the token's default owner, with a protected DACL whose entries all name that user.
+// or the token's default owner, with a protected DACL that grants access to that user alone.
 func PrivateFile(path string, _ os.FileInfo) (bool, error) {
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
@@ -62,15 +62,25 @@ func PrivateFile(path string, _ os.FileInfo) (bool, error) {
 	if err != nil || dacl == nil {
 		return false, err
 	}
+	return grantsOnly(dacl, user)
+}
+
+// grantsOnly reports whether every entry of dacl that can grant access is a plain allow entry
+// for sid. Deny entries grant nothing; object, callback and compound allow entries can grant
+// access too and are not read here, so a DACL holding one is not known to be private.
+func grantsOnly(dacl *windows.ACL, sid *windows.SID) (bool, error) {
 	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, i, &ace); err != nil {
 			return false, err
 		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
-			continue
-		}
-		if !(*windows.SID)(unsafe.Pointer(&ace.SidStart)).Equals(user) {
+		switch ace.Header.AceType {
+		case windows.ACCESS_DENIED_ACE_TYPE:
+		case windows.ACCESS_ALLOWED_ACE_TYPE:
+			if !(*windows.SID)(unsafe.Pointer(&ace.SidStart)).Equals(sid) {
+				return false, nil
+			}
+		default:
 			return false, nil
 		}
 	}

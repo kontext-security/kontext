@@ -3,9 +3,11 @@
 package fsperm
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -91,4 +93,67 @@ func TestOwnerAllowedRefusesOtherOwners(t *testing.T) {
 	if OwnerAllowed(nil, user.User.Sid) || OwnerAllowed(system, nil) {
 		t.Fatal("a missing SID must never match")
 	}
+}
+
+func TestGrantsOnlyRefusesEntryTypesItDoesNotRead(t *testing.T) {
+	user, err := currentUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		allowed               = windows.ACCESS_ALLOWED_ACE_TYPE
+		denied                = windows.ACCESS_DENIED_ACE_TYPE
+		allowedObject         = 5 // ACCESS_ALLOWED_OBJECT_ACE_TYPE
+		allowedCallback       = 9 // ACCESS_ALLOWED_CALLBACK_ACE_TYPE
+		allowedCallbackObject = 11
+	)
+	for _, tc := range []struct {
+		name    string
+		entries []rawACE
+		want    bool
+	}{
+		{"the user alone", []rawACE{{allowed, user}}, true},
+		{"a deny for others", []rawACE{{allowed, user}, {denied, users}}, true},
+		{"an allow for others", []rawACE{{allowed, user}, {allowed, users}}, false},
+		{"an object allow for others", []rawACE{{allowed, user}, {allowedObject, users}}, false},
+		{"a callback allow for others", []rawACE{{allowed, user}, {allowedCallback, users}}, false},
+		{"a callback object allow for the user", []rawACE{{allowed, user}, {allowedCallbackObject, user}}, false},
+	} {
+		got, err := grantsOnly(rawACL(tc.entries), user)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: grantsOnly() = %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+}
+
+type rawACE struct {
+	aceType byte
+	sid     *windows.SID
+}
+
+// rawACL lays out a DACL with entries of any type, which ACLFromEntries cannot write: each
+// entry is its header, an access mask and the SID, padded to four bytes.
+func rawACL(entries []rawACE) *windows.ACL {
+	size := 8
+	for _, e := range entries {
+		size += (8 + e.sid.Len() + 3) &^ 3
+	}
+	buf := make([]byte, size)
+	buf[0] = 4 // ACL_REVISION_DS, which admits every entry type
+	binary.LittleEndian.PutUint16(buf[2:], uint16(size))
+	binary.LittleEndian.PutUint16(buf[4:], uint16(len(entries)))
+	offset := 8
+	for _, e := range entries {
+		n := (8 + e.sid.Len() + 3) &^ 3
+		buf[offset] = e.aceType
+		binary.LittleEndian.PutUint16(buf[offset+2:], uint16(n))
+		binary.LittleEndian.PutUint32(buf[offset+4:], windows.GENERIC_READ)
+		copy(buf[offset+8:], unsafe.Slice((*byte)(unsafe.Pointer(e.sid)), e.sid.Len()))
+		offset += n
+	}
+	return (*windows.ACL)(unsafe.Pointer(&buf[0]))
 }
