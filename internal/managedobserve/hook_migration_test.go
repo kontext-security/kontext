@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 )
@@ -101,6 +102,118 @@ func TestHookMigrationCurrentHooksNeedNoApproval(t *testing.T) {
 		if err := m.run(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestHookMigrationAddsUserLayerOnceAndPreservesSymlink(t *testing.T) {
+	m := migrationFixture(t)
+	m.userSettingsPath = filepath.Join(t.TempDir(), "settings.json")
+	target := filepath.Join(t.TempDir(), "dotfiles.json")
+	original := []byte(`{"permissions":{"allow":["Bash(ls *)"]},"hooks":{"Notification":[{"hooks":[{"type":"command","command":"echo personal"}]}]}}`)
+	if err := os.WriteFile(target, original, 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, m.userSettingsPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if state := migrationReceipt(t, m); state.Status != "complete" || !state.UserHooksComplete {
+		t.Fatalf("receipt: %+v", state)
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil || !claudemanaged.CanonicalManagedHooks(raw, m.binary) {
+		t.Fatalf("invalid user hooks: %v", err)
+	}
+	info, _ := os.Lstat(m.userSettingsPath)
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("symlink replaced")
+	}
+	backups, _ := filepath.Glob(m.userSettingsPath + ".kontext-setup-backup-*")
+	if len(backups) != 1 {
+		t.Fatalf("backups: %v", backups)
+	}
+	backup, _ := os.ReadFile(backups[0])
+	if string(backup) != string(original) {
+		t.Fatal("backup does not preserve original settings")
+	}
+	// A deliberate deletion is not undone on every daemon restart.
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("re-enrolled user hooks on normal restart")
+	}
+}
+
+func TestHookMigrationUpgradesOldCompletedReceipt(t *testing.T) {
+	m := migrationFixture(t)
+	raw, _ := claudemanaged.TemplateJSON(m.binary)
+	if err := os.WriteFile(m.hooksPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	m.userSettingsPath = filepath.Join(t.TempDir(), "settings.json")
+	if err := writeJSONBreadcrumb(m.statePath, hookMigrationState{Version: m.version, Status: "complete"}); err != nil {
+		t.Fatal(err)
+	}
+	m.refresh = func(context.Context, string) error { t.Fatal("prompted for canonical managed hooks"); return nil }
+	if err := m.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if state := migrationReceipt(t, m); !state.UserHooksComplete {
+		t.Fatalf("old receipt did not migrate user hooks: %+v", state)
+	}
+}
+
+func TestHookMigrationDoesNotAddUserHooksAfterDeclinedManagedRefresh(t *testing.T) {
+	m := migrationFixture(t)
+	m.userSettingsPath = filepath.Join(t.TempDir(), "settings.json")
+	m.refresh = func(context.Context, string) error { return errors.New("cancelled") }
+	if err := m.run(context.Background()); err == nil {
+		t.Fatal("ignored declined refresh")
+	}
+	if _, err := os.Stat(m.userSettingsPath); !os.IsNotExist(err) {
+		t.Fatal("added potentially different handlers after declined refresh")
+	}
+}
+
+func TestHookMigrationUserFailureRemainsPending(t *testing.T) {
+	m := migrationFixture(t)
+	raw, _ := claudemanaged.TemplateJSON(m.binary)
+	if err := os.WriteFile(m.hooksPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	m.userSettingsPath = filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(m.userSettingsPath, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.refresh = func(context.Context, string) error { t.Fatal("prompted for user settings failure"); return nil }
+	for range 2 {
+		if err := m.run(context.Background()); err == nil {
+			t.Fatal("reported successful user migration with malformed settings")
+		}
+	}
+	if state := migrationReceipt(t, m); state.Status != "pending" || state.UserHooksComplete || state.LastError == "" {
+		t.Fatalf("receipt: %+v", state)
+	}
+	got, _ := os.ReadFile(m.userSettingsPath)
+	if string(got) != "{" {
+		t.Fatal("replaced malformed user settings")
+	}
+}
+
+func TestSystemDaemonSkipsUserHookMigration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "custom-claude"))
+	runSelfServeHookMigration(context.Background(), managedconfig.LoadedConfig{Scope: managedconfig.ScopeSystem}, "1.14.0", diagnostic.Logger{})
+	entries, err := os.ReadDir(home)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("system daemon created user state: %v %v", entries, err)
 	}
 }
 

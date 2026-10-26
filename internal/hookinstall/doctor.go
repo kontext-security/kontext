@@ -36,7 +36,18 @@ func Diagnose(out io.Writer, scope Scope, home string) bool {
 	if scope == System {
 		otherHooks = filepath.Join(filepath.Dir(userConfig), "hooks.json")
 	}
-	return diagnose(out, scope, defs, func(agent string) bool { return AgentPresent(agent, home) }, userConfig, otherHooks)
+	healthy := diagnose(out, scope, defs, func(agent string) bool { return AgentPresent(agent, home) }, userConfig, otherHooks)
+	if AgentPresent("claude_code", home) {
+		userPath, err := claudemanaged.UserSettingsPathNoCreate(home)
+		if err != nil {
+			fmt.Fprintf(out, "Claude Code hook sources: %v\n", err)
+			return false
+		}
+		if !diagnoseClaudeSources(out, claudemanaged.ManagedSettingsDropInPath, userPath) {
+			healthy = false
+		}
+	}
+	return healthy
 }
 
 func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string) bool, userConfig, otherCodexHooks string) bool {
@@ -46,7 +57,14 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 			fmt.Fprintf(out, "%s hooks: not installed (agent not present)\n", def.Name)
 			continue
 		}
+		claudeBinary := ""
 		for _, file := range def.Files {
+			if file.Kind == "claude-user" {
+				if claudeBinary != "" && !diagnoseClaudeUser(out, file.Path, claudeBinary) {
+					healthy = false
+				}
+				continue
+			}
 			if file.Kind == "feature" {
 				if err := checkFeature(file.Path, userConfig); err != nil {
 					fmt.Fprintf(out, "%s hooks feature: %v\n", def.Name, err)
@@ -90,6 +108,11 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 				fmt.Fprintf(out, "%s hooks: %v (%s)\n", def.Name, err, file.Path)
 			} else {
 				fmt.Fprintf(out, "%s hooks: installed (%s; binary %s)\n", def.Name, file.Path, binary)
+				claudeBinary = binary
+				if scope == User && !claudemanaged.CanonicalManagedHooks(raw, binary) {
+					fmt.Fprintf(out, "Claude Code managed hooks: differ from the user template; run `%s hooks install --scope user --binary %s` to synchronize both layers and prevent duplicate execution\n", agenthooks.ShellQuote(binary), agenthooks.ShellQuote(binary))
+					healthy = false
+				}
 			}
 		}
 	}

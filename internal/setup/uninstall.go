@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
@@ -66,35 +65,6 @@ func Uninstall(ctx context.Context, opts Options) error {
 	if err := hookinstall.Remove(hookinstall.Options{
 		Scope: hookinstall.User, Home: home, Setup: true, KeepClaude: organizationManaged, ClaudePath: managedSettingsPath,
 		RemoveClaude: func(_ string) error { _, err := removeManagedSettings(ctx); return err },
-		AfterClaude: func() error {
-			settingsPath, err := userSettingsPathNoCreate()
-			if err != nil {
-				return err
-			}
-			if _, err := os.Lstat(settingsPath); errors.Is(err, os.ErrNotExist) {
-				// A removal must never CREATE settings: on a machine without Claude
-				// settings (or after the user deleted them) there is nothing to do.
-				fmt.Fprintln(opts.Stdout, "  • No Claude Code settings file; no hooks to remove")
-			} else if err != nil {
-				return err
-			} else {
-				settings, err := claudemanaged.ReadUserSettings(settingsPath)
-				if err != nil {
-					return err
-				}
-				if err := claudemanaged.BackupUserSettings(settingsPath, settingsBackupLabel); err != nil {
-					return err
-				}
-				if err := claudemanaged.RemoveManagedHooks(settings); err != nil {
-					return err
-				}
-				if err := claudemanaged.WriteUserSettings(settingsPath, settings); err != nil {
-					return err
-				}
-				fmt.Fprintln(opts.Stdout, "  ✓ Claude Code hooks removed from ~/.claude/settings.json")
-			}
-			return nil
-		},
 		Report: func(r hookinstall.Result) {
 			switch r.File.Kind {
 			case "claude":
@@ -112,6 +82,14 @@ func Uninstall(ctx context.Context, opts Options) error {
 					fmt.Fprintln(opts.Stdout, "  • No Codex hooks file; no hooks to remove")
 				} else {
 					fmt.Fprintln(opts.Stdout, "✓ Codex hooks removed from ~/.codex/hooks.json")
+				}
+			case "claude-user":
+				if r.Err != nil {
+					fmt.Fprintf(opts.Stderr, "warning: Claude Code hooks could not be removed from %s (%v)\n", r.File.Path, r.Err)
+				} else if r.Action == "write" {
+					fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks removed from %s\n", r.File.Path)
+				} else {
+					fmt.Fprintf(opts.Stdout, "  • No Claude Code user hooks to remove (%s)\n", r.File.Path)
 				}
 			}
 		},
@@ -261,5 +239,5 @@ func userSettingsPathNoCreate() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".claude", "settings.json"), nil
+	return claudemanaged.UserSettingsPathNoCreate(home)
 }

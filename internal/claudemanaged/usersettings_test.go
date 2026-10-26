@@ -103,6 +103,31 @@ func TestMergeManagedHooksMatchesTemplateShape(t *testing.T) {
 	}
 }
 
+func TestCanonicalManagedHooksIgnoresForeignHookPlacement(t *testing.T) {
+	settings := map[string]any{}
+	if _, err := MergeManagedHooks(settings, testBinary); err != nil {
+		t.Fatal(err)
+	}
+	hooks := settings["hooks"].(map[string]any)
+	groups := hooks["PreToolUse"].([]any)
+	groups = append(groups, map[string]any{"matcher": "Bash", "hooks": []any{map[string]any{"type": "prompt", "prompt": "Personal prompt"}}})
+	hooks["PreToolUse"] = groups
+	// A personal command sharing the same matcher group is also unrelated to
+	// whether our handler is identical across sources.
+	group := groups[0].(map[string]any)
+	group["hooks"] = append(group["hooks"].([]any), map[string]any{"type": "command", "command": "true"})
+	raw, _ := json.Marshal(settings)
+	if !CanonicalManagedHooks(raw, testBinary) {
+		t.Fatal("foreign hooks caused false handler drift")
+	}
+	handler := group["hooks"].([]any)[0].(map[string]any)
+	handler["timeout"] = float64(21)
+	raw, _ = json.Marshal(settings)
+	if CanonicalManagedHooks(raw, testBinary) {
+		t.Fatal("missed timeout drift")
+	}
+}
+
 func TestMergeManagedHooksPreservesForeignContent(t *testing.T) {
 	settings := decode(t, `{
 		"permissions": {"allow": ["Bash(ls:*)"]},
