@@ -52,6 +52,8 @@ func TestPowerShellCorpus(t *testing.T) {
 		{name: "statement after try and catch", command: "try { } catch [System.Exception] { } git push -f origin main", programs: []string{"git"}, facts: []string{forcePush}, complete: true},
 		{name: "statement after do while", command: "do { } while ($x) git push -f origin main", programs: []string{"git"}, facts: []string{forcePush}, complete: true},
 		{name: "statement after a function", command: "function f { } git push -f origin main", programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "call operator after an if block", command: `if ($ok) { } & 'C:\Program Files\Git\cmd\git.exe' push --force origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "call operator after do while", command: `do { } while ($x) & 'C:\Program Files\Git\cmd\git.exe' push --force origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
 		{name: "clauses stay in their construct", command: "if ($a) { git status } elseif ($b) { } else { }; try { } catch { } finally { }", programs: []string{"git"}, absentFacts: []string{forcePush}, complete: true},
 		{name: "subexpression", command: "Write-Output $(git push -f origin main)", programs: []string{"write-output", "git"}, facts: []string{forcePush}, complete: false},
 		{name: "subexpression in a string", command: `Write-Output "pushed: $(git push -f origin main)"`, programs: []string{"write-output", "git"}, facts: []string{forcePush}, complete: false},

@@ -254,6 +254,17 @@ func callWords(statement scriptStatement, dialect scriptDialect) ([]scriptWord, 
 	return words, true
 }
 
+// endsConstruct reports a statement that is a keyword construct whose last
+// word is one of its blocks or groupings, so that what follows starts a
+// statement of its own.
+func endsConstruct(words []scriptWord) bool {
+	if len(words) < 2 || !words[0].literal || !powerShellKeywords[strings.ToLower(words[0].value)] {
+		return false
+	}
+	last := words[len(words)-1]
+	return !last.literal && !last.expression
+}
+
 // afterConstruct returns the words that follow a keyword construct: those
 // from the first plain word after one of its blocks or groupings that is not
 // a clause such as else or catch, or nil when the statement ends with it.
@@ -661,6 +672,15 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 				statement.invoke = true
 				statement.invokeAt = len(statement.words)
 			default:
+				endWord()
+				if ps && !statement.invoke && endsConstruct(statement.words) {
+					// A construct that ends in a block needs no ; before the
+					// next statement, so an & after it is that statement's call
+					// operator, as in if ($x) { } & 'C:\...\git.exe' push.
+					endStatement()
+					statement.invoke = true
+					break
+				}
 				// PowerShell runs what precedes a trailing & as a job; cmd
 				// separates commands with it.
 				endStatement()
