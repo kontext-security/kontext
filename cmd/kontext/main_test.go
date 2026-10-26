@@ -168,18 +168,20 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 	}
 }
 
-// Claude Desktop 3.x starts host-loop Cowork in /var/empty. For a Claude
-// event the cwd alone marks Cowork, so Cowork's workspace shell gets shell
-// rules even when the transcript path is elsewhere. The same path as a
-// transcript does not, and a Codex event keeps its own identity.
-func TestManagedHookAgentIdentifiesCoworkByHostLoopCwd(t *testing.T) {
+// Only a Claude event becomes Cowork: Codex keeps its own policy identity in
+// a Cowork session folder. A /var/empty cwd alone does not mark Cowork, so a
+// Claude Code run there keeps its own MCP configuration; the server labels
+// such sessions at ingest.
+func TestManagedHookAgentCoworkNeedsClaudeAndSessionPath(t *testing.T) {
+	oldHome := userHomeDir
+	userHomeDir = func() (string, error) { return "/Users/michel", nil }
+	t.Cleanup(func() { userHomeDir = oldHome })
+	const session = "/Users/michel/Library/Application Support/Claude/local-agent-mode-sessions/acme/ws/agent/local_123"
 	for _, tt := range []struct{ agent, field, path, want string }{
-		{"claude", "cwd", "/private/var/empty", "cowork"},
-		{"claude", "cwd", "/var/empty", "cowork"},
-		{"claude", "cwd", "/private/var/empty/project", "claude"},
-		{"claude", "cwd", "/Users/dev/var/empty", "claude"},
-		{"claude", "transcript_path", "/private/var/empty", "claude"},
-		{"codex", "cwd", "/private/var/empty", "codex"},
+		{"claude", "transcript_path", session + "/.claude/projects/-private-var-empty/s1.jsonl", "cowork"},
+		{"codex", "cwd", session + "/outputs", "codex"},
+		{"codex", "transcript_path", session + "/.claude/projects/-private-var-empty/s1.jsonl", "codex"},
+		{"claude", "cwd", "/private/var/empty", "claude"},
 	} {
 		a, ok := agent.Get(tt.agent)
 		if !ok {
