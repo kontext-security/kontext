@@ -172,6 +172,8 @@ type CedarEvidence struct {
 	// admin: SQL that deletes and changes administration, or that Kontext
 	// cannot read.
 	AlsoAdmin bool `json:"alsoAdmin,omitempty"`
+	// AlsoActions adds workflow protection without removing the code tier.
+	AlsoActions bool `json:"alsoActions,omitempty"`
 }
 
 // ClassifierAnnotation is one action's risk annotation. AgentTask and the

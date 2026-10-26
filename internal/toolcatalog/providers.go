@@ -324,7 +324,8 @@ type ProviderClassification struct {
 	// AlsoAdmin marks a delete that also changes administration. A call
 	// carries one context.tool.access, so the daemon judges it once more as
 	// admin.
-	AlsoAdmin bool
+	AlsoAdmin   bool
+	AlsoActions bool
 }
 
 // ClassifyCall classifies the call behind toolID, the id Resolve gave it. A
@@ -335,6 +336,9 @@ type ProviderClassification struct {
 // carries none. Databricks SQL tools are raised by their query; see
 // classifyDatabricksSQLCall.
 func ClassifyCall(toolID, toolName string, input map[string]any) (ProviderClassification, bool) {
+	if class, ok := Classify(toolID); ok && class.Provider == GitHubProvider {
+		return classifyGitHubFileWrite(class, toolName, input), true
+	}
 	switch toolID {
 	case databricksExecuteSQL, databricksExecuteSQLReadOnly:
 		return classifyDatabricksSQLCall(toolID, input)
@@ -350,7 +354,7 @@ func ClassifyCall(toolID, toolName string, input map[string]any) (ProviderClassi
 	if !ok {
 		return ProviderClassification{}, false
 	}
-	return ProviderClassification{Provider: GitHubProvider, Product: catalogued.Product, Access: catalogued.Access}, true
+	return classifyGitHubFileWrite(ProviderClassification{Provider: GitHubProvider, Product: catalogued.Product, Access: catalogued.Access}, toolName, input), true
 }
 
 const (

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
+	"net/url"
+	"path"
 	"sort"
 	"strings"
 
@@ -52,6 +54,61 @@ type githubTool struct {
 }
 
 var githubTools = loadGitHubTools()
+
+// Workflow content writes have the same policy effect as Actions controls.
+// Keep the access tier and tool id so existing write policies still apply.
+func classifyGitHubFileWrite(class ProviderClassification, toolName string, input map[string]any) ProviderClassification {
+	_, tool, ok := splitMCPToolName(toolName)
+	if !ok || class.Access == AccessRead {
+		return class
+	}
+	workflow := func(value any) bool {
+		file, ok := value.(string)
+		if !ok {
+			return false
+		}
+		protected := func(file string) bool {
+			clean := path.Clean("/" + file)
+			return clean == "/.github" || clean == "/.github/workflows" || strings.HasPrefix(clean, "/.github/workflows/")
+		}
+		if tool == "create_or_update_file" {
+			// The Contents API interpolates the cleaned file into a URL.
+			// Parse query/fragment boundaries before using decoded Path.
+			owner, _ := input["owner"].(string)
+			repo, _ := input["repo"].(string)
+			if owner == "" {
+				owner = "owner"
+			}
+			if repo == "" {
+				repo = "repo"
+			}
+			base, _ := url.Parse("https://api.github.com/")
+			target, err := base.Parse("repos/" + owner + "/" + repo + "/contents/" + strings.TrimPrefix(path.Clean("/"+file), "/"))
+			if err != nil {
+				return false
+			}
+			parts := strings.SplitN(target.Path, "/", 6)
+			return len(parts) == 6 && parts[1] == "repos" && parts[4] == "contents" && protected(parts[5])
+		}
+		// push_files and delete_file send literal Git tree paths as JSON.
+		return protected(file)
+	}
+	switch tool {
+	case "create_or_update_file", "delete_file":
+		if workflow(input["path"]) {
+			class.AlsoActions = true
+		}
+	case "push_files":
+		files, _ := input["files"].([]any)
+		for _, value := range files {
+			if file, ok := value.(map[string]any); ok && workflow(file["path"]) {
+				class.AlsoActions = true
+				break
+			}
+		}
+	}
+	return class
+}
 
 // GitHubProvider is the provider name GitHub MCP tools carry in context.tool.
 const GitHubProvider = "github"
