@@ -94,7 +94,7 @@ func diagnoseClaudeSources(out io.Writer, dropin, userPath string) bool {
 	}
 	cache := filepath.Join(filepath.Dir(userPath), "remote-settings.json")
 	if _, err := os.Lstat(cache); err == nil {
-		fmt.Fprintf(out, "Claude Code remote managed settings: cache found (%s); if active, remote policy can skip local drop-ins or restrict user hooks. Confirm Setting sources and Skipped sources in Claude `/status`; cache presence alone does not prove an active policy.\n", cache)
+		fmt.Fprintf(out, "Claude Code remote managed settings: cache found (%s); if active, remote policy can skip local drop-ins or restrict user hooks. Confirm Setting sources and Skipped sources in Claude `/status`; cache presence alone does not prove an active policy. If `/status` skips the drop-ins and the remote policy sets allowManagedHooksOnly, an organization Owner can add \"managedSourcesBehavior\": \"merge\" to the claude.ai managed settings so the Kontext drop-in loads with it.\n", cache)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(out, "Claude Code remote managed settings: cache unavailable (%v); policy selection unverified\n", err)
 	}
