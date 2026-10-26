@@ -35,6 +35,8 @@ func TestPowerShellCorpus(t *testing.T) {
 		{name: "cmd /c", command: "cmd /c git push --force origin main", programs: []string{"git"}, facts: []string{forcePush}, features: []string{"nested-script"}, complete: true},
 		{name: "cmd /C with a quoted chain", command: `cmd.exe /C "git status & git push -f origin main"`, programs: []string{"git", "git"}, facts: []string{forcePush}, complete: true},
 		{name: "cmd variable", command: `cmd /c "%GIT% push -f origin main"`, programs: []string{"dynamic"}, complete: false},
+		{name: "cmd delayed expansion", command: `cmd /v:on /c "set FORCE=--force& git push !FORCE! origin main"`, programs: []string{"set", "git"}, absentFacts: []string{forcePush}, complete: false},
+		{name: "cmd delayed expansion in quotes", command: `cmd /v:on /c git push "!FORCE!" origin main`, programs: []string{"git"}, absentFacts: []string{forcePush}, complete: false},
 		{name: "Invoke-Expression", command: "Invoke-Expression 'git push -f origin main'", programs: []string{"git"}, facts: []string{forcePush}, features: []string{"nested-script"}, complete: true},
 		{name: "dynamic Invoke-Expression", command: "iex $script", programs: []string{"invoke-expression"}, features: []string{"dynamic-script"}, complete: false},
 		{name: "variable without call operator is an expression", command: "$GIT push --force origin main", programs: []string{"unknown"}, features: []string{"empty-command"}, complete: false},
@@ -123,6 +125,7 @@ func TestPowerShellHostFromPOSIXShell(t *testing.T) {
 		{name: "pwsh -c", command: "pwsh -c 'git push -f origin main'", programs: []string{"git"}, facts: []string{forcePush, FactDialectPowerShell}, features: []string{"nested-script"}, complete: true},
 		{name: "pwsh -Command with call operator", command: `pwsh -Command '& git push --force origin main'`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
 		{name: "cmd.exe /c", command: "cmd.exe /c git push -f origin main", programs: []string{"git"}, facts: []string{forcePush}, absentFacts: []string{FactDialectPowerShell}, complete: true},
+		{name: "cmd.exe delayed expansion", command: `cmd /v:on /c "set FORCE=--force& git push !FORCE! origin main"`, programs: []string{"set", "git"}, absentFacts: []string{forcePush, FactDialectPowerShell}, complete: false},
 		{name: "interactive pwsh", command: "pwsh -NoLogo", programs: []string{"pwsh"}, complete: true},
 	})
 }

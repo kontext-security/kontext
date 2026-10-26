@@ -836,9 +836,12 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 			// A comma after a variable continues a list, as in $a,$b = ...
 			endWord()
 			statement.words = append(statement.words, scriptWord{value: ",", literal: true})
-		case !ps && c == '%':
+		case !ps && (c == '%' || c == '!'):
+			// !NAME! expands under delayed expansion, which /v:on or the
+			// DelayedExpansion registry value turn on, so it is read as a
+			// variable either way.
 			beginWord()
-			if end := strings.IndexByte(src[i+1:], '%'); end > 0 && isCmdVariable(src[i+1:i+1+end]) {
+			if end := strings.IndexByte(src[i+1:], c); end > 0 && isCmdVariable(src[i+1:i+1+end]) {
 				current.literal = false
 				i += end + 1
 				break
@@ -914,7 +917,7 @@ var powerShellEscapes = map[byte]byte{'0': 0, 'a': 7, 'b': 8, 'e': 27, 'f': 12, 
 // scanDoubleQuoted reads a double-quoted string at src[i]. In PowerShell a
 // variable or a $( ) subexpression makes it non-literal, and the
 // subexpressions' scripts are returned so their calls are projected. cmd
-// quotes have no escapes, and %NAME% expands inside them.
+// quotes have no escapes, and %NAME% and !NAME! expand inside them.
 func scanDoubleQuoted(src string, i int, dialect scriptDialect, word *strings.Builder) (end int, literal bool, scripts []string, ok bool) {
 	literal = true
 	for j := i + 1; j < len(src); j++ {
@@ -928,8 +931,8 @@ func scanDoubleQuoted(src string, i int, dialect scriptDialect, word *strings.Bu
 			}
 			return j, literal, scripts, true
 		case dialect == dialectCmd:
-			if c == '%' {
-				if close := strings.IndexByte(src[j+1:], '%'); close > 0 && isCmdVariable(src[j+1:j+1+close]) {
+			if c == '%' || c == '!' {
+				if close := strings.IndexByte(src[j+1:], c); close > 0 && isCmdVariable(src[j+1:j+1+close]) {
 					literal = false
 				}
 			}
