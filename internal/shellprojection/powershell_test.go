@@ -83,6 +83,21 @@ func TestPowerShellCorpus(t *testing.T) {
 		{name: "script block in an attribute", command: "[ValidateScript({ git push -f origin main })][string]$v = 'a'", programs: []string{"git"}, facts: []string{forcePush}, complete: true},
 		{name: "attribute arguments are not calls", command: "[Parameter(Mandatory)][string]$Name", programs: []string{"unknown"}, features: []string{"empty-command"}, complete: false},
 		{name: "a command name starting with a digit", command: "7z x archive.zip", programs: []string{"7z"}, complete: true},
+		{name: "call operator after return", command: `return & 'C:\Program Files\Git\cmd\git.exe' push --force origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "call operator after throw", command: `throw & "C:\Program Files\Git\cmd\git.exe" push -f origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "call operator after exit", command: `exit & 'C:\Program Files\Git\cmd\git.exe' push --force origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "call operator after foreach's in", command: `foreach ($x in & 'C:\Program Files\Git\cmd\git.exe' push --force origin main) { }`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "call operator after a multiple assignment", command: `$a, $b = & 'C:\Program Files\Git\cmd\git.exe' push --force origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "call operator after a property assignment", command: `$x.Prop = & 'C:\Program Files\Git\cmd\git.exe' push --force origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "call operator after a typed assignment", command: `[string]$x = & 'C:\Program Files\Git\cmd\git.exe' push --force origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "call operator after a chained assignment", command: `$x = $y = & 'C:\Program Files\Git\cmd\git.exe' push --force origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "variable called after return", command: "return & $GIT push -f origin main", programs: []string{"dynamic"}, complete: false},
+		{name: "return called as a command", command: "& return git push -f origin main", programs: []string{"return"}, absentFacts: []string{forcePush}, complete: true},
+		{name: "background job before a statement", command: "git status & git push -f origin main", programs: []string{"git", "git"}, facts: []string{forcePush}, complete: true},
+		{name: "block comment in a hashtable", command: "$h = @{ <# a = git push -f origin main; #> Name = 'x' }", programs: []string{"dynamic"}, absentFacts: []string{forcePush}, complete: false},
+		{name: "quote in a hashtable block comment", command: "$h = @{ <# it's a note #> a = git push -f origin main }", programs: []string{"dynamic", "git"}, facts: []string{forcePush}, complete: false},
+		{name: "block comment after a hashtable value", command: "$h = @{ a = git push -f origin main <# c #> }", programs: []string{"dynamic", "git"}, facts: []string{forcePush}, complete: false},
+		{name: "block comment in a cast hashtable", command: "[ordered]@{ <# k = git push -f origin main #> n = 1 }", programs: []string{"unknown"}, absentFacts: []string{forcePush}, complete: false},
 	})
 }
 

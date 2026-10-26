@@ -59,9 +59,11 @@ type scriptWord struct {
 
 type scriptStatement struct {
 	words []scriptWord
-	// invoke is set by the & call operator: the first word names the
-	// program even when it is a string or a variable.
-	invoke bool
+	// invoke is set by the & call operator: the word after it names the
+	// program even when it is a string or a variable. invokeAt counts the
+	// words before it, an assignment, return, throw, exit or foreach's in.
+	invoke   bool
+	invokeAt int
 	// verbatim is set by PowerShell's --% token, after which the words are
 	// passed on with cmd-style expansion this tokenizer does not model.
 	verbatim bool
@@ -199,23 +201,24 @@ func callWords(statement scriptStatement, dialect scriptDialect) ([]scriptWord, 
 		}
 		return words, len(words) > 0
 	}
-	if len(words) >= 2 && words[0].variable && words[1].literal && !words[1].quoted && strings.EqualFold(words[1].value, "in") {
-		// The grouping of foreach ($x in git ...) runs the pipeline after in.
-		words = words[2:]
+	if statement.invoke {
+		return words[statement.invokeAt:], true
 	}
 	for {
-		// $x = git ..., $a, $b = git ... and chains of them run the call
-		// after the last operator.
-		if len(words) >= 2 && words[0].variable && words[1].assign {
+		// The pipeline after return, throw or exit, after foreach's in
+		// ($x in git ...), and after $x = git ..., $a, $b = git ... and chains
+		// of them is the call.
+		if len(words) > 0 && isFlowKeyword(words[0]) {
+			words = words[1:]
+		} else if len(words) >= 2 && words[0].variable && words[1].literal && !words[1].quoted && strings.EqualFold(words[1].value, "in") {
+			words = words[2:]
+		} else if len(words) >= 2 && words[0].variable && words[1].assign {
 			words = words[2:]
 		} else if k := multipleAssignment(words); k > 0 {
 			words = words[k+1:]
 		} else {
 			break
 		}
-	}
-	if statement.invoke {
-		return words, true
 	}
 	if len(words) == 0 {
 		return nil, false
@@ -235,14 +238,15 @@ func callWords(statement scriptStatement, dialect scriptDialect) ([]scriptWord, 
 		// exit 1 or @{ Count = 2 }; 7z is still a command.
 		return nil, false
 	}
-	if words[0].literal && powerShellFlowKeywords[strings.ToLower(words[0].value)] {
-		statement.words = words[1:]
-		return callWords(statement, dialect)
-	}
 	if words[0].literal && powerShellKeywords[strings.ToLower(words[0].value)] {
 		return nil, false
 	}
 	return words, true
+}
+
+// isFlowKeyword reports return, throw or exit as a statement's first word.
+func isFlowKeyword(word scriptWord) bool {
+	return word.literal && !word.quoted && powerShellFlowKeywords[strings.ToLower(word.value)]
 }
 
 // numberLiteral is a PowerShell integer, real or hex literal with its type
@@ -274,7 +278,7 @@ func isNumberExpression(word string) bool {
 func assignmentPrefix(words []scriptWord) bool {
 	// The pipeline of return, throw or exit, or after foreach's in, may
 	// itself be an assignment.
-	if len(words) > 0 && words[0].literal && powerShellFlowKeywords[strings.ToLower(words[0].value)] {
+	if len(words) > 0 && isFlowKeyword(words[0]) {
 		words = words[1:]
 	} else if len(words) >= 2 && words[0].variable && words[1].literal && !words[1].quoted && strings.EqualFold(words[1].value, "in") {
 		words = words[2:]
@@ -611,9 +615,12 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 			case i+1 < len(src) && src[i+1] == '&':
 				endStatement()
 				i++
-			case ps && !inWord && !statement.invoke && (len(statement.words) == 0 || len(statement.words) == 2 && statement.words[1].assign):
-				// The call operator, at the start or after an assignment.
+			case ps && !inWord && !statement.invoke && assignmentPrefix(statement.words):
+				// The call operator, at the start of a pipeline: of the
+				// statement, after an assignment, after return, throw or exit,
+				// or after foreach's in.
 				statement.invoke = true
+				statement.invokeAt = len(statement.words)
 			default:
 				// PowerShell runs what precedes a trailing & as a job; cmd
 				// separates commands with it.
@@ -1007,6 +1014,15 @@ func hashtableValues(body string) []string {
 			i++
 		case '\'', '"':
 			i = closingQuote(body, i)
+		case '<':
+			// A block comment is blank space: its = and ; separate nothing.
+			if i+1 < len(body) && body[i+1] == '#' {
+				end := strings.Index(body[i+2:], "#>")
+				if end < 0 {
+					return append(values, body)
+				}
+				i += end + 3
+			}
 		case '#':
 			if i == 0 || strings.IndexByte(" \t\n;", body[i-1]) >= 0 {
 				end := strings.IndexByte(body[i:], '\n')
