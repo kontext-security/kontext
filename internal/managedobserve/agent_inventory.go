@@ -2,6 +2,7 @@ package managedobserve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
 
@@ -54,7 +56,32 @@ func agentWiring(paths codexmanaged.InstallationPaths, pathsErr error) map[strin
 			}
 			return agentinventory.WiredYes
 		},
+		"cursor": cursorWired,
 	}
+}
+
+// cursorWired reports whether Cursor's machine-wide hooks.json carries the
+// complete Kontext hook set.
+func cursorWired() agentinventory.Wired {
+	raw, err := os.ReadFile(cursormanaged.SystemHooksPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return agentinventory.WiredNo
+	case err != nil || !json.Valid(raw):
+		return agentinventory.WiredError
+	}
+	binary, err := cursormanaged.ValidateInstalled(raw)
+	switch {
+	case errors.Is(err, cursormanaged.ErrMalformed):
+		return agentinventory.WiredError
+	case err != nil:
+		return agentinventory.WiredNo
+	}
+	// Hooks that point at a missing binary fail on every call.
+	if info, err := os.Stat(binary); err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return agentinventory.WiredError
+	}
+	return agentinventory.WiredYes
 }
 
 type agentInventoryHolder struct {
@@ -95,6 +122,9 @@ func (h *agentInventoryHolder) run(ctx context.Context, opts DaemonOptions, dbPa
 			},
 		})
 		cancel()
+		versionCtx, cancelVersions := context.WithTimeout(ctx, 5*time.Second)
+		agentinventory.AddVersions(versionCtx, home, &inv)
+		cancelVersions()
 		opts.Diagnostic.Printf("agent inventory: scanned %d agents in %s (incomplete=%t)\n", len(inv.Agents), time.Since(started), inv.Incomplete)
 		if ctx.Err() == nil {
 			if err := writeJSONBreadcrumb(AgentInventoryPath(dbPath), inv); err != nil {

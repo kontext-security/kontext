@@ -49,7 +49,11 @@ func writeReport(out io.Writer, report managedstream.Report) error {
 			if agent.LastActivityAt != nil {
 				activity = *agent.LastActivityAt
 			}
-			lines[agent.ID] = fmt.Sprintf("wired %s, last activity %s", agent.Wired, activity)
+			version := "version not reported"
+			if agent.Version != nil {
+				version = "version " + *agent.Version
+			}
+			lines[agent.ID] = fmt.Sprintf("%s, wired %s, last activity %s", version, agent.Wired, activity)
 		}
 	}
 	authority := report.Authority

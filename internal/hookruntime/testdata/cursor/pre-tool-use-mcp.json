@@ -1,0 +1,18 @@
+{
+  "conversation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "generation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "model": "default",
+  "tool_name": "MCP:echo",
+  "tool_input": {
+    "text": "probe-mcp-1"
+  },
+  "tool_use_id": "4ed602ba-cb6b-4d91-966b-42e45a8c4587",
+  "session_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "hook_event_name": "preToolUse",
+  "cursor_version": "2026.10.22-27dcf5f",
+  "workspace_roots": [
+    "/Users/dev/cursor-probe-ws"
+  ],
+  "user_email": "dev@example.com",
+  "transcript_path": "/Users/dev/.cursor/projects/Users-dev-cursor-probe-ws/agent-transcripts/58ec982e-4a94-4496-937a-e6a05859e461/58ec982e-4a94-4496-937a-e6a05859e461.jsonl"
+}

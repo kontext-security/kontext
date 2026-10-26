@@ -100,9 +100,9 @@ func TestDefinitionsInstallRemove(t *testing.T) {
 			if err := runDefinitions(opts, defs, false); err != nil {
 				t.Fatal(err)
 			}
-			wantFiles := 3
-			if scope == User {
-				wantFiles++
+			wantFiles := 0
+			for _, d := range defs {
+				wantFiles += len(d.Files)
 			}
 			if strings.Count(out.String(), "skip\t") != wantFiles {
 				t.Fatalf("re-run wrote: %s", &out)
@@ -388,7 +388,11 @@ func TestRefreshStaleHooksAndRemoveDryRun(t *testing.T) {
 			if err := runDefinitions(opts, defs, true); err != nil {
 				t.Fatal(err)
 			}
-			if strings.Count(out.String(), "would-remove\t") != 3 {
+			wantRemoved := 3
+			if scope == System {
+				wantRemoved++ // Cursor's enterprise hooks.json
+			}
+			if strings.Count(out.String(), "would-remove\t") != wantRemoved {
 				t.Fatal(&out)
 			}
 			for _, d := range defs {
@@ -404,7 +408,7 @@ func TestRefreshStaleHooksAndRemoveDryRun(t *testing.T) {
 
 func TestForeignOnlyFilesUnchangedOnRemoval(t *testing.T) {
 	opts, defs := fixture(t, System)
-	data := []string{`{"permissions":{}}`, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo foreign"}]}]}}`, "[features]\nhooks = true\n"}
+	data := []string{`{"permissions":{}}`, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo foreign"}]}]}}`, "[features]\nhooks = true\n", `{"version":1,"hooks":{"stop":[{"command":"echo foreign"}]}}`}
 	i := 0
 	for _, d := range defs {
 		for _, f := range d.Files {

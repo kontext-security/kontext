@@ -16,7 +16,7 @@ import (
 func TestScan(t *testing.T) {
 	now := time.Date(2026, 9, 9, 8, 20, 0, 0, time.UTC)
 	activity := now.Add(-8 * time.Minute).Format(time.RFC3339)
-	for _, name := range []string{"empty", "cursor", "outside home", "home override", "activity", "cap", "depth", "shallow sibling", "directory activity", "fifo", "symlink", "wired error", "cancelled", "path cap"} {
+	for _, name := range []string{"empty", "unsupported", "outside home", "home override", "activity", "cap", "depth", "shallow sibling", "directory activity", "fifo", "symlink", "wired error", "cancelled", "path cap"} {
 		t.Run(name, func(t *testing.T) {
 			home := t.TempDir()
 			env := map[string]string{}
@@ -43,8 +43,8 @@ func TestScan(t *testing.T) {
 				}
 			}
 			if name != "empty" && name != "outside home" && name != "home override" && name != "cancelled" && name != "path cap" {
-				mkdir(".cursor")
-				want = []Agent{{ID: "cursor", ConfigPath: "~/.cursor", Wired: WiredUnsupported}}
+				mkdir(".gemini")
+				want = []Agent{{ID: "gemini_cli", ConfigPath: "~/.gemini", Wired: WiredUnsupported}}
 			}
 			switch name {
 			case "home override":
@@ -56,12 +56,12 @@ func TestScan(t *testing.T) {
 				wired["codex"] = func() Wired { return WiredNo }
 				want = []Agent{{ID: "codex", ConfigPath: env["CODEX_HOME"], Wired: WiredNo}}
 			case "activity":
-				file(".cursor/projects/old", now.Add(-time.Hour))
-				file(".cursor/projects/a/b/new", now.Add(-8*time.Minute))
+				file(".gemini/tmp/old", now.Add(-time.Hour))
+				file(".gemini/tmp/a/b/new", now.Add(-8*time.Minute))
 				want[0].LastActivityAt = &activity
 			case "cap":
 				for i := 0; i < 2500; i++ {
-					file(fmt.Sprintf(".cursor/projects/%04d", i), now.Add(-8*time.Minute))
+					file(fmt.Sprintf(".gemini/tmp/%04d", i), now.Add(-8*time.Minute))
 				}
 				want[0].LastActivityAt = &activity
 				incomplete = true
@@ -70,21 +70,21 @@ func TestScan(t *testing.T) {
 				if name == "shallow sibling" {
 					deep, shallow = shallow, deep
 				}
-				file(".cursor/projects/a/b/c/deep", deep)
-				file(".cursor/projects/a/b/c/d/too-deep", now)
-				file(".cursor/projects/z", shallow)
+				file(".gemini/tmp/a/b/c/deep", deep)
+				file(".gemini/tmp/a/b/c/d/too-deep", now)
+				file(".gemini/tmp/z", shallow)
 				want[0].LastActivityAt = &activity
 			case "directory activity":
-				mkdir(".cursor/projects/a/b/c/d")
+				mkdir(".gemini/tmp/a/b/c/d")
 				want[0].LastActivityAt = &activity
 			case "fifo":
 				want[0].LastActivityAt = &activity
-				root := mkdir(".cursor/projects")
+				root := mkdir(".gemini/tmp")
 				testMkfifo(t, filepath.Join(root, "pipe"))
 			case "symlink":
 				want[0].LastActivityAt = &activity
 				file("outside/recent", now)
-				root := mkdir(".cursor/projects")
+				root := mkdir(".gemini/tmp")
 				if err := os.Symlink(filepath.Join(home, "outside"), filepath.Join(root, "link")); err != nil {
 					t.Fatal(err)
 				}
@@ -188,7 +188,7 @@ func TestCatalogAndWireContract(t *testing.T) {
 		}
 	}
 	activity := "2026-09-09T08:12:00Z"
-	data, err := json.Marshal(Inventory{Agents: []Agent{{"claude_code", "~/.claude", WiredYes, &activity, nil}, {"cursor", "~/.cursor", WiredUnsupported, nil, nil}}, ReportedAt: "2026-09-09T08:20:00Z"})
+	data, err := json.Marshal(Inventory{Agents: []Agent{{"claude_code", "~/.claude", WiredYes, &activity, nil, nil}, {"cursor", "~/.cursor", WiredUnsupported, nil, nil, nil}}, ReportedAt: "2026-09-09T08:20:00Z"})
 	if err != nil {
 		t.Fatal(err)
 	}

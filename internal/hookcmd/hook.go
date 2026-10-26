@@ -50,3 +50,13 @@ func (c agentCodec) DecodeHookEvent(input []byte) (hook.Event, error) {
 func (c agentCodec) EncodeHookResult(event hook.Event, result hook.Result) ([]byte, error) {
 	return c.agent.EncodeHookResult(event, result)
 }
+
+// NoDecision asks the registered adapter, since callers may wrap it.
+func (c agentCodec) NoDecision() []byte {
+	if a, ok := agent.Get(c.agentName); ok {
+		if n, ok := a.(hookruntime.NoDecisionCodec); ok {
+			return n.NoDecision()
+		}
+	}
+	return nil
+}

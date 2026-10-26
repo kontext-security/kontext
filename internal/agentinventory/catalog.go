@@ -18,6 +18,7 @@ type Agent struct {
 	Wired          Wired   `json:"wired"`
 	LastActivityAt *string `json:"last_activity_at"`
 	Sandboxed      *bool   `json:"sandboxed,omitempty"`
+	Version        *string `json:"version,omitempty"`
 }
 
 // MarshalJSON keeps the optional sandbox fact exclusive to Cowork, including an

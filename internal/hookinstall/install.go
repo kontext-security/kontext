@@ -17,6 +17,7 @@ import (
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/cursormanaged"
 )
 
 type Scope string
@@ -70,10 +71,16 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 		}
 		claudeFiles = append(claudeFiles, File{"claude-user", path, User})
 	}
-	return []Definition{
+	defs := []Definition{
 		{Agent: "claude_code", Name: "Claude Code", Files: claudeFiles, Validate: validateClaude},
 		{Agent: "codex", Name: "Codex", Files: []File{{"codex", filepath.Join(codexDir, "hooks.json"), scope}, {"feature", filepath.Join(codexDir, "config.toml"), scope}}, Validate: codexmanaged.ValidateInstalled},
-	}, nil
+	}
+	// Cursor reads managed hooks from one machine-wide file (Cursor 2.4+); there
+	// is no per-user install, so self-serve setup leaves Cursor alone.
+	if scope == User {
+		return defs, nil
+	}
+	return append(defs, Definition{Agent: "cursor", Name: "Cursor", Files: []File{{"cursor", cursormanaged.SystemHooksPath, System}}, Validate: cursormanaged.ValidateInstalled}), nil
 }
 
 func validateClaude(data []byte) (string, error) {
@@ -227,7 +234,7 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		if !remove {
 			c.after, err = claudemanaged.TemplateJSON(opts.Binary)
 		}
-	case "codex", "claude-user":
+	case "codex", "claude-user", "cursor":
 		if file.Kind == "claude-user" && !remove && claudemanaged.CanonicalManagedHooks(c.before, opts.Binary) {
 			return c, nil
 		}
@@ -246,6 +253,10 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			err = claudemanaged.RemoveManagedHooks(settings)
 		} else if file.Kind == "claude-user" {
 			_, err = claudemanaged.MergeManagedHooks(settings, opts.Binary)
+		} else if file.Kind == "cursor" && remove {
+			err = cursormanaged.RemoveManagedHooks(settings)
+		} else if file.Kind == "cursor" {
+			err = cursormanaged.MergeManagedHooks(settings, opts.Binary)
 		} else if remove {
 			err = codexmanaged.RemoveManagedHooks(settings)
 		} else {
