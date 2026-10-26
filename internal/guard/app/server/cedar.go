@@ -405,26 +405,16 @@ var shellHostOS = runtime.GOOS
 // shellProjections projects a shell tool's command. Codex on Windows runs it
 // in PowerShell or a POSIX shell as the model chooses per call, and its hook
 // does not say which, so the command is read both ways and Cedar denies when
-// either reading is denied. A PowerShell reading that only adds the dialect
-// fact to a POSIX one is dropped.
+// either reading is denied. Every PowerShell reading is kept, with its dialect
+// fact. Known limitation: a rule on shell/dialect=powershell therefore matches
+// every Codex command on Windows, since any of them may have run in
+// PowerShell, until the shell a call ran in can be told.
 func shellProjections(agent, command string) []cedareval.ShellProjectionV2 {
 	projections := shellprojection.Project(command)
 	if shellHostOS != "windows" || agent != "codex" && agent != cedareval.AgentCodexV2 {
 		return projections
 	}
-	posix := len(projections)
-	for _, reading := range shellprojection.ProjectPowerShell(command) {
-		bare := reading
-		bare.Facts = slices.DeleteFunc(slices.Clone(reading.Facts), func(fact string) bool { return fact == shellprojection.FactDialectPowerShell })
-		if !slices.ContainsFunc(projections[:posix], func(p cedareval.ShellProjectionV2) bool { return sameProjection(p, bare) }) {
-			projections = append(projections, reading)
-		}
-	}
-	return projections
-}
-
-func sameProjection(a, b cedareval.ShellProjectionV2) bool {
-	return a.Version == b.Version && a.Program == b.Program && a.ParseComplete == b.ParseComplete && slices.Equal(a.Facts, b.Facts) && slices.Equal(a.Features, b.Features)
+	return append(projections, shellprojection.ProjectPowerShell(command)...)
 }
 
 // unknownToolLiteral is how a policy names the pre-pass-through catch-all.
