@@ -727,7 +727,8 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 			if leading && reason == "" && !statement.invoke && assignmentPrefix(statement.words) {
 				// The target may be a member or an element, as in
 				// $x.Prop=git ... or $x[0]=git ....
-				if end, ok := assignmentOperator(src, memberSuffix(src, i+1)); ok {
+				if end, target, ok := assignmentTarget(src, i+1); ok {
+					nested = append(nested, target...)
 					endWord()
 					statement.words = append(statement.words, scriptWord{value: "=", literal: true, assign: true})
 					i = end
@@ -811,7 +812,8 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 			i = end
 			if strings.HasPrefix(src[i+1:], "::") && !statement.invoke && assignmentPrefix(statement.words) {
 				// A static member is a target too, as in [Console]::Title=git ....
-				if end, ok := assignmentOperator(src, memberSuffix(src, i+1)); ok {
+				if end, target, ok := assignmentTarget(src, i+1); ok {
+					nested = append(nested, target...)
 					current.variable = true
 					endWord()
 					statement.words = append(statement.words, scriptWord{value: "=", literal: true, assign: true})
@@ -1058,6 +1060,21 @@ func hashtableValues(body string) []string {
 	}
 	entry(len(body))
 	return values
+}
+
+// assignmentTarget reports whether the member accesses and indexes from
+// src[i] on end in an assignment operator, and returns the operator's last
+// index. The target's indexes and arguments run before the assignment, as in
+// $x[$(git ...)]=1, so they come back as an expression to read on its own.
+func assignmentTarget(src string, i int) (end int, target []string, ok bool) {
+	suffix := memberSuffix(src, i)
+	if end, ok = assignmentOperator(src, suffix); !ok {
+		return 0, nil, false
+	}
+	if strings.ContainsAny(src[i:suffix], "[(") {
+		target = []string{"$null" + src[i:suffix]}
+	}
+	return end, target, true
 }
 
 // memberSuffix returns the index after the member accesses and indexes that
