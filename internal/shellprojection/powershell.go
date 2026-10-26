@@ -367,10 +367,20 @@ func pipedString(statement scriptStatement) (_ []string, complete bool) {
 	return []string{statement.words[0].value}, true
 }
 
-// classifyInvokeExpression runs its argument as PowerShell, like eval.
+// classifyInvokeExpression runs its argument as PowerShell, like eval. A
+// cmdlet takes any unambiguous prefix of a parameter name, and no common
+// parameter starts with c, so -c, -Com and -Command:'...' all name -Command;
+// any other parameter before the script leaves the reading incomplete.
 func classifyInvokeExpression(args []string, complete bool, w walk) []cedareval.ShellProjectionV2 {
-	if len(args) > 0 && strings.EqualFold(args[0], "-command") {
+	if len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		name, value, inline := strings.Cut(args[0][1:], ":")
+		if name == "" || !strings.HasPrefix("command", strings.ToLower(name)) {
+			return single(projection("invoke-expression", nil, []string{"unrecognized-wrapper-arguments"}, false))
+		}
 		args = args[1:]
+		if inline {
+			args = append([]string{value}, args...)
+		}
 	}
 	if !complete {
 		return single(projection("invoke-expression", nil, []string{"dynamic-script"}, false))
