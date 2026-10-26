@@ -173,7 +173,7 @@ func TestRefreshDatabricksMCP(t *testing.T) {
 		tools[item.Name] = item
 	}
 	for name, want := range map[string]tool{
-		"upload_file":           {Name: "upload_file", Product: "execution", Access: "write"},
+		"upload_file":           {Name: "upload_file", Product: "files", Access: "delete"},
 		"genie_new_thing":       {Name: "genie_new_thing", Product: "ai", Access: "write", Distinctive: true},
 		"execute_sql_read_only": {Name: "execute_sql_read_only", Product: "sql", Access: "delete"},
 	} {

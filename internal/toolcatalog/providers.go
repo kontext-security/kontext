@@ -169,6 +169,14 @@ func resolveProvider(server, tool string, input map[string]any) (string, bool) {
 // resolve maps a call to this catalog. On a hinted server it always
 // resolves: a tool the catalog does not list is unrecognized.
 func (p *providerIndex) resolve(tool string, input map[string]any, hinted bool) (string, bool) {
+	if hinted && p.catalog.Provider == DatabricksProvider && tool == "get_table_lineage" {
+		// The pinned server interpolates full_name into its HTTP path.
+		// Only a plain path segment can retain the lineage read class.
+		name, _ := input["full_name"].(string)
+		if name == "." || name == ".." || strings.ContainsAny(name, "/\\?#%") {
+			return p.catalog.ToolIDPrefix + UnrecognizedToolName, true
+		}
+	}
 	if dispatcher, ok := p.dispatchers[tool]; ok {
 		operation, _ := input[dispatcher.OperationField].(string)
 		// A generic dispatcher name (`execute`) on another server only
@@ -342,6 +350,24 @@ func ClassifyCall(toolID, toolName string, input map[string]any) (ProviderClassi
 		return classifyGitHubFileWrite(class, toolName, input), true
 	}
 	switch toolID {
+	case "databricks-mcp/download_file":
+		class, ok := Classify(toolID)
+		target, _ := input["local_path"].(string)
+		if strings.HasPrefix(target, "dbfs:") {
+			// The CLI accepts dbfs: as remote; the legacy backend needs
+			// dbfs:/. Preserve both readings when the backends disagree.
+			class.Product, class.Access = "files", AccessDelete
+			class.AlsoExport = !strings.HasPrefix(target, "dbfs:/")
+		}
+		return class, ok
+	case "databricks-mcp/create_table":
+		// This community tool runs the supplied statement, not a fixed DDL.
+		query := make(map[string]any, len(input)+1)
+		for key, value := range input {
+			query[key] = value
+		}
+		query["query"] = input["statement"]
+		return classifyDatabricksSQLCall(toolID, query)
 	case databricksExecuteSQL, databricksExecuteSQLReadOnly:
 		return classifyDatabricksSQLCall(toolID, input)
 	case GitHubUnrecognizedTool:
@@ -383,10 +409,28 @@ func classifyDatabricksSQLCall(toolID string, input map[string]any) (ProviderCla
 	}
 	query, _ := input["query"].(string)
 	deletes, admin, touchesSecrets, recognized := ClassifyDatabricksSQL(query)
-	// A no-write guarantee does not exclude outbound data. Opaque SQL may
-	// export through either SQL tool, while ordinary readable SELECTs do not.
-	class.AlsoExport = DatabricksSQLExports(query)
-	if !recognized && toolID == databricksExecuteSQL {
+	// Community servers name SQL statement or params.statement. Read every
+	// supplied text for export destinations, without lowering the original
+	// query-based delete/admin fallback.
+	var exportQueries []string
+	for _, key := range []string{"query", "statement"} {
+		if text, ok := input[key].(string); ok {
+			exportQueries = append(exportQueries, text)
+		}
+	}
+	if params, ok := input["params"].(map[string]any); ok {
+		if text, ok := params["statement"].(string); ok {
+			exportQueries = append(exportQueries, text)
+		}
+	}
+	if len(exportQueries) == 0 {
+		exportQueries = []string{""}
+	}
+	// A no-write guarantee does not exclude outbound data.
+	for _, text := range exportQueries {
+		class.AlsoExport = class.AlsoExport || DatabricksSQLExports(text)
+	}
+	if !recognized && toolID != databricksExecuteSQLReadOnly {
 		deletes, admin = true, true
 	}
 	if touchesSecrets {
