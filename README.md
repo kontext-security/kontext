@@ -69,8 +69,7 @@ brew install kontext
 
 `kontext` is in homebrew-core and updates a few hours after each release. To get
 each release minutes after it ships, install the cask from our tap instead. It
-installs the notarized binary, so Homebrew skips its Xcode and Command Line Tools
-check:
+installs the notarized binary as is, so it does not need an up-to-date Xcode:
 
 ```bash
 brew install --cask kontext-security/tap/kontext
