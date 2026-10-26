@@ -168,21 +168,23 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 	}
 }
 
-// Claude Desktop 3.x starts host-loop Cowork in /var/empty. The cwd alone
-// marks Cowork, so Cowork's workspace shell gets shell rules even when the
-// transcript path is elsewhere; the same path as a transcript does not.
+// Claude Desktop 3.x starts host-loop Cowork in /var/empty. For a Claude
+// event the cwd alone marks Cowork, so Cowork's workspace shell gets shell
+// rules even when the transcript path is elsewhere. The same path as a
+// transcript does not, and a Codex event keeps its own identity.
 func TestManagedHookAgentIdentifiesCoworkByHostLoopCwd(t *testing.T) {
-	a, ok := agent.Get("claude")
-	if !ok {
-		t.Fatal("claude agent not registered")
-	}
-	for _, tt := range []struct{ field, path, want string }{
-		{"cwd", "/private/var/empty", "cowork"},
-		{"cwd", "/var/empty", "cowork"},
-		{"cwd", "/private/var/empty/project", "claude"},
-		{"cwd", "/Users/dev/var/empty", "claude"},
-		{"transcript_path", "/private/var/empty", "claude"},
+	for _, tt := range []struct{ agent, field, path, want string }{
+		{"claude", "cwd", "/private/var/empty", "cowork"},
+		{"claude", "cwd", "/var/empty", "cowork"},
+		{"claude", "cwd", "/private/var/empty/project", "claude"},
+		{"claude", "cwd", "/Users/dev/var/empty", "claude"},
+		{"claude", "transcript_path", "/private/var/empty", "claude"},
+		{"codex", "cwd", "/private/var/empty", "codex"},
 	} {
+		a, ok := agent.Get(tt.agent)
+		if !ok {
+			t.Fatalf("%s agent not registered", tt.agent)
+		}
 		input, err := json.Marshal(map[string]string{"session_id": "s1", "hook_event_name": "PreToolUse", tt.field: tt.path})
 		if err != nil {
 			t.Fatal(err)
@@ -192,7 +194,7 @@ func TestManagedHookAgentIdentifiesCoworkByHostLoopCwd(t *testing.T) {
 			t.Fatalf("DecodeHookInput() error = %v", err)
 		}
 		if event.Agent != tt.want {
-			t.Fatalf("%s %s: Agent = %q, want %q", tt.field, tt.path, event.Agent, tt.want)
+			t.Fatalf("%s %s %s: Agent = %q, want %q", tt.agent, tt.field, tt.path, event.Agent, tt.want)
 		}
 	}
 }

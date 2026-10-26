@@ -115,6 +115,7 @@ func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
 
 // Claude Desktop 3.x keeps Cowork agent session records in <org>/agent/.
 func TestDesktopConnectorReadsCoworkAgentRecords(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home := t.TempDir()
 	dir := filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions/acct/org/agent")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
