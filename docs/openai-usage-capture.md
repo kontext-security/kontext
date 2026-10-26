@@ -65,6 +65,21 @@ output. A sub-agent rollout starts none of its own: it opens with its parent's
 history copied under the copy's timestamp, and its usage falls into the root
 session's turn at that time.
 
+Codex Desktop also runs threads for itself, and their hooks fire like a
+person's. After a turn it forks the thread to predict the next message
+(`thread/fork` with `ephemeral`, `threadSource: composer_predictions`, the
+parent's model and effort, one sampling request over the whole parent
+context), and it generates titles, summaries and commit messages in ephemeral
+threads. The prediction prompt is supplied by OpenAI's server
+(`/wham/predictions/config`, versioned), so its opening is not a stable
+prefix: in the 2026-10-22 staging data all 22 forks carried 1,259 characters
+and were labeled Other. An ephemeral thread keeps no rollout, so its hooks
+send `"transcript_path": null`, while every persisted thread sends its rollout
+path. The daemon mints no turn for a Codex prompt without a transcript path.
+Their usage is not captured either (there is no rollout to read, and a
+prediction calls no tools), and the hook payload names no parent thread, so
+nothing is attributed to the parent's turn.
+
 ## Local end-to-end verification
 
 Use the existing enrolled local profile and run:

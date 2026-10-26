@@ -100,6 +100,26 @@ func TestDecodeCodexEventUserPromptSubmitPreservesPrompt(t *testing.T) {
 	}
 }
 
+// An ephemeral Codex thread keeps no rollout: its hooks send
+// "transcript_path": null (nullable in Codex's hook schema), which the daemon
+// reads as an app-internal thread. A persisted thread's path is kept.
+func TestDecodeCodexEventNullTranscriptPath(t *testing.T) {
+	t.Parallel()
+
+	for payload, want := range map[string]string{
+		`{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"p","transcript_path":null,"turn_id":"t1","model":"gpt-6.1-sol","cwd":"/tmp","permission_mode":"default"}`: "",
+		`{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"p","transcript_path":"/Users/x/.codex/sessions/rollout-s1.jsonl"}`:                                        "/Users/x/.codex/sessions/rollout-s1.jsonl",
+	} {
+		event, err := DecodeCodexEvent([]byte(payload), "codex")
+		if err != nil {
+			t.Fatalf("DecodeCodexEvent() error = %v", err)
+		}
+		if event.TranscriptPath != want {
+			t.Fatalf("TranscriptPath = %q, want %q", event.TranscriptPath, want)
+		}
+	}
+}
+
 func TestDecodeCodexEventTopLevelPromptTakesPrecedence(t *testing.T) {
 	t.Parallel()
 
