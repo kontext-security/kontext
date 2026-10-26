@@ -331,15 +331,17 @@ func SetConnectorScan(scan func() (agentauthority.Report, bool)) {
 }
 
 // resolveTool maps a hook event to its tool id. Shell commands, PowerShell's
-// included, are projected into one entry per call; pinned GitHub MCP tools resolve to their catalog
-// id; every other tool keeps the name the agent reported (an MCP tool as
-// mcp__<server>__<tool>, a built-in as Write, Read, WebFetch), so a policy
-// can name it. Only a nameless call is unknown.
+// included, are projected into one entry per call; pinned GitHub MCP tools
+// resolve to their catalog id; every other tool keeps the name the agent
+// reported (an MCP tool as mcp__<server>__<tool>, a built-in as Write, Read,
+// WebFetch), so a policy can name it. Only a nameless call is unknown.
 //
 // A policy set written before names passed through may target
 // Kontext::Tool::"unknown" to mean "every other tool"; `legacyUnknown` keeps
 // that mapping for such a policy set, so updating the daemon cannot turn its
-// permits into denies or let its forbids stop applying.
+// permits into denies or let its forbids stop applying. PowerShell is the
+// exception: its calls resolve to shell, as Bash's do, so such a set's shell
+// rules judge them and its "unknown" rules no longer do.
 func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.ShellProjectionV2, []string) {
 	// Cowork exposes its built-in shell through a workspace MCP tool. Scope
 	// this alias to Cowork so unrelated MCP servers keep their named tool id.
