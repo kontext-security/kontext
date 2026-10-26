@@ -485,6 +485,7 @@ func riskEventFromHookEvent(event hook.Event) risk.HookEvent {
 		IsInterrupt:          event.IsInterrupt,
 		UserRequest:          event.UserRequest,
 		AvailableToolSchemas: event.AvailableToolSchemas,
+		TranscriptPath:       event.TranscriptPath,
 	}
 }
 
@@ -505,6 +506,7 @@ func hookEventFromRiskEvent(event risk.HookEvent) hook.Event {
 		IsInterrupt:          event.IsInterrupt,
 		UserRequest:          event.UserRequest,
 		AvailableToolSchemas: event.AvailableToolSchemas,
+		TranscriptPath:       event.TranscriptPath,
 	}
 }
 

@@ -30,6 +30,9 @@ type HookEvent struct {
 	// TurnID is the daemon-minted turn in progress when the event arrived.
 	// Annotation only: it is stored on the action, never in its receipt.
 	TurnID string `json:"turn_id,omitempty"`
+	// TranscriptPath is the agent's transcript for the session, empty when
+	// the agent keeps none. Local only: never serialized or recorded.
+	TranscriptPath string `json:"-"`
 }
 
 type EventType string
