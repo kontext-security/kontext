@@ -29,6 +29,7 @@
 ./internal/managedstream
 ./internal/modelusage
 ./internal/payloadcapture
+./internal/privacyfolder
 ./internal/runtimecore
 ./internal/shellprojection
 ./internal/toolcatalog
