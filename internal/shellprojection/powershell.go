@@ -21,8 +21,8 @@ const FactDialectPowerShell = "shell/dialect=powershell"
 // PowerShell text is not POSIX shell text: a backslash is a path separator,
 // not an escape; the backtick escapes and continues lines; & calls a program
 // named by a string; and a statement that starts with a variable or a string
-// is an expression, so `$GIT push` runs nothing. The tokenizer below reads
-// that much. The words of each call are then classified as a POSIX shell's
+// is an expression, so `$GIT push` runs nothing. The tokenizer in script.go
+// reads that much. The words of each call are then classified as a POSIX shell's
 // are, so git, gh, curl and the provider CLIs keep their facts. Cmdlets get
 // no facts of their own.
 func ProjectPowerShell(command string) []cedareval.ShellProjectionV2 {
