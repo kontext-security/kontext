@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -329,22 +330,27 @@ func SetConnectorScan(scan func() (agentauthority.Report, bool)) {
 	mcpServers.SetScan(scan)
 }
 
-// resolveTool maps a hook event to its tool id. Shell commands are projected
-// into one entry per call; pinned GitHub MCP tools resolve to their catalog
-// id; every other tool keeps the name the agent reported (an MCP tool as
-// mcp__<server>__<tool>, a built-in as Write, Read, WebFetch), so a policy
-// can name it. Only a nameless call is unknown.
+// resolveTool maps a hook event to its tool id. Shell commands, PowerShell's
+// included, are projected into one entry per call; pinned GitHub MCP tools
+// resolve to their catalog id; every other tool keeps the name the agent
+// reported (an MCP tool as mcp__<server>__<tool>, a built-in as Write, Read,
+// WebFetch), so a policy can name it. Only a nameless call is unknown.
 //
 // A policy set written before names passed through may target
 // Kontext::Tool::"unknown" to mean "every other tool"; `legacyUnknown` keeps
 // that mapping for such a policy set, so updating the daemon cannot turn its
-// permits into denies or let its forbids stop applying.
+// permits into denies or let its forbids stop applying. PowerShell is the
+// exception: its calls resolve to shell, as Bash's do, so such a set's shell
+// rules judge them and its "unknown" rules no longer do.
 func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.ShellProjectionV2, []string) {
 	// Cowork exposes its built-in shell through a workspace MCP tool. Scope
 	// this alias to Cowork so unrelated MCP servers keep their named tool id.
 	coworkShell := (event.Agent == "cowork" || event.Agent == "claude-cowork") && event.ToolName == "mcp__workspace__bash"
 	if risk.IsShellTool(event.ToolName) || coworkShell {
-		return cedareval.ToolShellV2, shellprojection.Project(risk.CommandFromInput(event.ToolInput)), nil
+		return cedareval.ToolShellV2, shellProjections(event.Agent, risk.CommandFromInput(event.ToolInput)), nil
+	}
+	if risk.IsPowerShellTool(event.ToolName) {
+		return cedareval.ToolShellV2, shellprojection.ProjectPowerShell(risk.CommandFromInput(event.ToolInput)), nil
 	}
 	serverURL, serverName, cached := mcpServers.Server(event.Agent, event.SessionID, event.CWD, event.ToolName)
 	toolID, resolved := toolcatalog.Resolve(event.ToolName, serverURL, serverName, event.ToolInput)
@@ -391,6 +397,24 @@ func passThrough(event risk.HookEvent, legacyUnknown bool) string {
 		return name
 	}
 	return cedareval.ToolUnknownV2
+}
+
+// shellHostOS is the OS the daemon runs on; tests set it.
+var shellHostOS = runtime.GOOS
+
+// shellProjections projects a shell tool's command. Codex on Windows runs it
+// in PowerShell or a POSIX shell as the model chooses per call, and its hook
+// does not say which, so the command is read both ways and Cedar denies when
+// either reading is denied. Every PowerShell reading is kept, with its dialect
+// fact. Known limitation: a rule on shell/dialect=powershell therefore matches
+// every Codex command on Windows, since any of them may have run in
+// PowerShell, until the shell a call ran in can be told.
+func shellProjections(agent, command string) []cedareval.ShellProjectionV2 {
+	projections := shellprojection.Project(command)
+	if shellHostOS != "windows" || agent != "codex" && agent != cedareval.AgentCodexV2 {
+		return projections
+	}
+	return append(projections, shellprojection.ProjectPowerShell(command)...)
 }
 
 // unknownToolLiteral is how a policy names the pre-pass-through catch-all.

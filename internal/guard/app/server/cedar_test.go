@@ -8,6 +8,7 @@ import (
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/shellprojection"
 )
 
 type staticCedarSnapshots struct{ snapshot cedarpolicy.Snapshot }
@@ -132,6 +133,107 @@ func TestCedarCoworkWorkspaceBashEnforcesShellPolicy(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCedarPowerShellToolEnforcesShellPolicy(t *testing.T) {
+	for _, command := range []string{
+		"git status",
+		"git push -f origin main",
+		`& 'C:\Program Files\Git\cmd\git.exe' push --force origin main`,
+		"pwsh -NoProfile -Command 'git push -f origin main'",
+		"cmd /c git push -f origin main",
+	} {
+		t.Run(command, func(t *testing.T) {
+			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+			// The input Claude Code sends for its PowerShell tool.
+			decision, err := provider.DecideHook(context.Background(), cedarHookEvent("PowerShell", map[string]any{"command": command, "description": "Run git"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := risk.DecisionAllow
+			if command != "git status" {
+				want = risk.DecisionDeny
+			}
+			if decision.Decision != want || decision.Cedar == nil || decision.Cedar.ToolID != cedareval.ToolShellV2 {
+				t.Fatalf("decision = %#v, want %s with tool %s", decision, want, cedareval.ToolShellV2)
+			}
+			if len(decision.Cedar.Shell) != 1 || decision.Cedar.Shell[0].Program != "git" || !containsString(decision.Cedar.Shell[0].Facts, shellprojection.FactDialectPowerShell) {
+				t.Fatalf("shell evidence = %#v, want one git projection with the PowerShell dialect", decision.Cedar.Shell)
+			}
+		})
+	}
+}
+
+func TestCedarCodexShellOnWindowsReadsBothDialects(t *testing.T) {
+	for _, test := range []struct {
+		name, agent, hostOS, command string
+		want                         risk.Decision
+		readings                     int
+	}{
+		{"codex on windows reads PowerShell too", "codex", "windows", "& git push --force origin main", risk.DecisionDeny, 2},
+		{"codex on windows keeps the PowerShell reading of a plain command", "codex", "windows", "git push -f origin main", risk.DecisionDeny, 2},
+		{"codex on windows allows a read", "codex", "windows", "& git status", risk.DecisionAllow, 2},
+		{"codex elsewhere reads POSIX only", "codex", "darwin", "& git push --force origin main", risk.DecisionAllow, 1},
+		{"claude bash on windows is Git Bash", "claude", "windows", "& git push --force origin main", risk.DecisionAllow, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hostOS := shellHostOS
+			shellHostOS = test.hostOS
+			t.Cleanup(func() { shellHostOS = hostOS })
+			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
+			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+			event := cedarHookEvent("Bash", map[string]any{"command": test.command})
+			event.Agent = test.agent
+			decision, err := provider.DecideHook(context.Background(), event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != test.want || decision.Cedar == nil || decision.Cedar.ToolID != cedareval.ToolShellV2 {
+				t.Fatalf("decision = %#v, want %s with tool %s", decision, test.want, cedareval.ToolShellV2)
+			}
+			if len(decision.Cedar.Shell) != test.readings {
+				t.Fatalf("shell evidence = %#v, want %d readings", decision.Cedar.Shell, test.readings)
+			}
+		})
+	}
+}
+
+// TestCedarCodexShellOnWindowsDialectRule pins the known limitation of
+// reading Codex commands both ways: a rule on the PowerShell dialect matches
+// every Codex command on Windows, since any of them may have run in
+// PowerShell, and none elsewhere.
+func TestCedarCodexShellOnWindowsDialectRule(t *testing.T) {
+	const dialectPolicy = `@id("allow")
+permit(principal, action == Kontext::Action::"ToolUse", resource);
+
+@id("no-powershell")
+forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"shell")
+when { context.shell.facts.contains("shell/dialect=powershell") };`
+	for _, test := range []struct {
+		name, hostOS string
+		want         risk.Decision
+	}{
+		{"codex on windows", "windows", risk.DecisionDeny},
+		{"codex elsewhere", "darwin", risk.DecisionAllow},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hostOS := shellHostOS
+			shellHostOS = test.hostOS
+			t.Cleanup(func() { shellHostOS = hostOS })
+			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, dialectPolicy)
+			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+			event := cedarHookEvent("Bash", map[string]any{"command": "git status"})
+			event.Agent = "codex"
+			decision, err := provider.DecideHook(context.Background(), event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != test.want {
+				t.Fatalf("decision = %s, want %s: %#v", decision.Decision, test.want, decision.Cedar)
+			}
+		})
 	}
 }
 
