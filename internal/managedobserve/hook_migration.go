@@ -16,6 +16,7 @@ import (
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/internal/profile"
 )
 
@@ -23,14 +24,16 @@ import (
 // the attempt before opening a dialog so a crash or cancelled prompt cannot
 // cause a password prompt on every launchd restart.
 type hookMigrationState struct {
-	Version   string `json:"version"`
-	Status    string `json:"status"`
-	Digest    string `json:"expected_sha256,omitempty"`
-	LastError string `json:"last_error,omitempty"`
+	Version           string `json:"version"`
+	Status            string `json:"status"`
+	Digest            string `json:"expected_sha256,omitempty"`
+	LastError         string `json:"last_error,omitempty"`
+	UserHooksComplete bool   `json:"user_hooks_complete,omitempty"`
 }
 
 type hookMigration struct {
 	version, binary, hooksPath, statePath string
+	userSettingsPath                      string
 	canPrompt                             func() bool
 	refresh                               func(context.Context, string) error
 }
@@ -68,9 +71,26 @@ func runSelfServeHookMigration(ctx context.Context, loaded managedconfig.LoadedC
 			return
 		}
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	userSettings, err := claudemanaged.UserSettingsPathNoCreate(home)
+	if err != nil {
+		logAlways(log, "Claude user hook migration pending: %v\n", err)
+		return
+	}
+	// The daemon lacks the terminal's folder access: following a settings.json
+	// symlink into ~/Documents (a dotfiles repo) would prompt in the background.
+	// `kontext setup` runs from the terminal and can add the user copy there.
+	if privacyfolder.Guarded(home, userSettings) {
+		logAlways(log, "Claude user hook migration skipped: %s is in a macOS privacy-guarded folder; run `kontext setup` to add the user hooks\n", userSettings)
+		userSettings = ""
+	}
 	m := hookMigration{
 		version: version, binary: binary, hooksPath: claudemanaged.ManagedSettingsDropInPath,
-		statePath: filepath.Join(root, "hook-migration.json"), canPrompt: hookMigrationCanPrompt,
+		userSettingsPath: userSettings,
+		statePath:        filepath.Join(root, "hook-migration.json"), canPrompt: hookMigrationCanPrompt,
 		refresh: func(ctx context.Context, digest string) error {
 			return approveClaudeHookMigration(ctx, exe, binary, digest)
 		},
@@ -103,6 +123,12 @@ func (m hookMigration) run(ctx context.Context) error {
 			return err
 		}
 		if state.Version == m.version && state.Status != "awaiting_login" {
+			// Older receipts covered only the managed drop-in. Complete the user
+			// layer once, even if this version's managed hooks already passed.
+			if state.Status == "complete" && !state.UserHooksComplete && m.userSettingsPath != "" {
+				m.migrateUserHooks(&state)
+				return writeJSONBreadcrumb(m.statePath, state)
+			}
 			return nil
 		}
 		if state.Version != m.version {
@@ -112,6 +138,8 @@ func (m hookMigration) run(ctx context.Context) error {
 				state.Status, state.LastError = "pending", err.Error()
 			} else if digest != "" {
 				state.Status, state.Digest = "awaiting_login", digest
+			} else {
+				m.migrateUserHooks(&state)
 			}
 		}
 		if state.Status == "awaiting_login" && m.canPrompt() {
@@ -160,9 +188,26 @@ func (m hookMigration) run(ctx context.Context) error {
 		if current.Version != m.version {
 			return nil
 		}
+		if refreshErr == nil {
+			m.migrateUserHooks(&state)
+		}
 		return writeJSONBreadcrumb(m.statePath, state)
 	})
+	if state.LastError != "" {
+		return errors.Join(errors.New(state.LastError), err)
+	}
 	return errors.Join(refreshErr, err)
+}
+
+func (m hookMigration) migrateUserHooks(state *hookMigrationState) {
+	if m.userSettingsPath == "" {
+		return
+	}
+	if err := hookinstall.RefreshClaudeUser(m.hooksPath, m.userSettingsPath, m.binary); err != nil {
+		state.Status, state.LastError = "pending", fmt.Sprintf("install Claude user hooks: %v; run `kontext hooks install --scope user --binary %s` to retry", err, agenthooks.ShellQuote(m.binary))
+		return
+	}
+	state.UserHooksComplete = true
 }
 
 // AppleScript and the shell each have their own quoting rules. The generated

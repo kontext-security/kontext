@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -19,9 +18,7 @@ func TestServerURLSkipsNonRegularFiles(t *testing.T) {
 	if err := os.MkdirAll(project, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := syscall.Mkfifo(filepath.Join(project, ".mcp.json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	testMkfifo(t, filepath.Join(project, ".mcp.json"))
 	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json")}
 	if got, _, _ := r.Server("claude", "s", project, "mcp__work__search"); got != "" {
 		t.Fatalf("ServerURL() = %q", got)

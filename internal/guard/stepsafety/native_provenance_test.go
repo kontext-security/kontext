@@ -9,6 +9,7 @@ import (
 )
 
 func TestV3NativeProvenanceAndAssets(t *testing.T) {
+	requireEmbeddedModel(t)
 	data, err := os.ReadFile("model/native/PROVENANCE.json")
 	if err != nil {
 		t.Fatal(err)

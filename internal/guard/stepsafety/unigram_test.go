@@ -11,6 +11,7 @@ import (
 // array per node held this vocabulary in more than 600 MiB; the map needs
 // about 8 MiB.
 func TestEmbeddedTokenizerStaysSmall(t *testing.T) {
+	requireEmbeddedModel(t)
 	f, err := nativeAssets.Open("model/native/tokenizer.json.gz")
 	if err != nil {
 		t.Fatal(err)

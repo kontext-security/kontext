@@ -359,10 +359,46 @@ func TestPromptsThatMintNoTurn(t *testing.T) {
 		}
 	}
 	// Codex sessions mint under their prefixed id, like their usage.
-	h.hook(risk.HookEvent{SessionID: "codex-th", Agent: "codex", HookEventName: "UserPromptSubmit", ToolInput: map[string]any{"prompt": "hi"}})
+	rollout := "/Users/x/.codex/sessions/2026/10/26/rollout-2026-10-26T12-39-24-th.jsonl"
+	h.hook(risk.HookEvent{SessionID: "codex-th", Agent: "codex", HookEventName: "UserPromptSubmit", ToolInput: map[string]any{"prompt": "hi"}, TranscriptPath: rollout})
 	h.runJobs()
 	if turns, err := store.PendingTurns(ctx, 10); err != nil || len(turns) != 1 || turns[0].SessionID != "codex-th" || turns[0].Agent != "codex" {
 		t.Fatalf("codex turns = %+v, %v", turns, err)
+	}
+}
+
+// Codex Desktop forks a thread after each turn to predict the next message,
+// and generates titles and commit messages, in ephemeral threads that keep
+// no rollout. Their prompts come from the app or its server, and their
+// hooks carry no transcript path; they mint no turn. A Claude prompt never
+// depended on one.
+func TestAppInternalCodexThreadsMintNoTurn(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	h := newTurnHarness(t, store)
+	prediction := strings.Repeat("Predict the user's next message. ", 38) + "\n\nReturn only JSON matching this schema: {\"suggestion\":null}."
+	h.hook(risk.HookEvent{SessionID: "codex-fork", Agent: "codex", HookEventName: "SessionStart", ToolInput: map[string]any{"source": "fork"}})
+	h.hook(risk.HookEvent{SessionID: "codex-fork", Agent: "codex", HookEventName: "UserPromptSubmit", ToolInput: map[string]any{"prompt": prediction}})
+	h.hook(risk.HookEvent{SessionID: "codex-fork", Agent: "codex", HookEventName: "Stop"})
+	h.hook(risk.HookEvent{SessionID: "s", Agent: "claude", HookEventName: "UserPromptSubmit", ToolInput: map[string]any{"prompt": "fix the failing spec"}})
+	h.runJobs()
+	turns, err := store.PendingTurns(ctx, 10)
+	if err != nil || len(turns) != 1 || turns[0].SessionID != "s" {
+		t.Fatalf("turns = %+v, %v; want the Claude prompt only", turns, err)
+	}
+	for key, rows := range actionTurns(t, store) {
+		if strings.HasPrefix(key, "UserPromptSubmit") {
+			continue
+		}
+		for _, turn := range rows {
+			if turn != "" {
+				t.Fatalf("%s carries turn %q", key, turn)
+			}
+		}
 	}
 }
 
@@ -385,6 +421,8 @@ func TestHarnessMessagesMintNoTurn(t *testing.T) {
 	h.hook(toolUse("s", "t2"))
 	h.hook(prompt("s", "<system-reminder>\nThe user opened report.md\n</system-reminder>"))
 	h.hook(prompt("s", "<side-sessions-event>\nThe session ended a turn.\n</side-sessions-event>"))
+	h.hook(prompt("s", "<agent-message from=\"a1\">\n[Subagent hand-back] done\n</agent-message>"))
+	h.hook(prompt("s", "<bash-input>git status</bash-input>"))
 	h.hook(toolUse("s", "t3"))
 	h.hook(prompt("s", "<system-reminder>\nThe user opened report.md\n</system-reminder>\nnow fix the failing spec"))
 	h.hook(toolUse("s", "t4"))
@@ -406,9 +444,9 @@ func TestHarnessMessagesMintNoTurn(t *testing.T) {
 		}
 	}
 	// Each prompt event's own row: the two typed ones carry their new turn,
-	// the three harness messages the turn already current.
+	// the five harness messages the turn already current.
 	prompts := got["UserPromptSubmit"]
-	want := []string{turns[0].ID, turns[0].ID, turns[0].ID, turns[0].ID, turns[1].ID}
+	want := []string{turns[0].ID, turns[0].ID, turns[0].ID, turns[0].ID, turns[0].ID, turns[0].ID, turns[1].ID}
 	if len(prompts) != len(want) {
 		t.Fatalf("prompt rows = %v", prompts)
 	}

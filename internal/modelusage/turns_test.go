@@ -249,9 +249,10 @@ func TestClaudeRowsThatStartNoTurn(t *testing.T) {
 }
 
 // Harness messages delivered as prompts start no turn: a task notification
-// mid-turn (as a user row and as an absorbed queued message) and a session
-// event after the turn ended. The usage after them keeps the person's turn.
-// A prompt that only begins with a reminder block still starts one.
+// mid-turn (as a user row and as an absorbed queued message), a subagent's
+// hand-back absorbed mid-turn, and after the turn a session event, a "!"
+// shell command and a local command's output. The usage after them keeps the
+// person's turn. A prompt that only begins with a reminder block starts one.
 func TestClaudeHarnessMessagesStartNoTurn(t *testing.T) {
 	data, err := os.ReadFile("testdata/claude-envelopes.jsonl")
 	if err != nil {
