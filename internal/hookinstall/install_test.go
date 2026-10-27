@@ -100,9 +100,9 @@ func TestDefinitionsInstallRemove(t *testing.T) {
 			if err := runDefinitions(opts, defs, false); err != nil {
 				t.Fatal(err)
 			}
-			wantFiles := 3
-			if scope == User {
-				wantFiles++
+			wantFiles := 0
+			for _, d := range defs {
+				wantFiles += len(d.Files)
 			}
 			if strings.Count(out.String(), "skip\t") != wantFiles {
 				t.Fatalf("re-run wrote: %s", &out)
@@ -388,7 +388,7 @@ func TestRefreshStaleHooksAndRemoveDryRun(t *testing.T) {
 			if err := runDefinitions(opts, defs, true); err != nil {
 				t.Fatal(err)
 			}
-			if strings.Count(out.String(), "would-remove\t") != 3 {
+			if strings.Count(out.String(), "would-remove\t") != 4 {
 				t.Fatal(&out)
 			}
 			for _, d := range defs {
@@ -404,7 +404,7 @@ func TestRefreshStaleHooksAndRemoveDryRun(t *testing.T) {
 
 func TestForeignOnlyFilesUnchangedOnRemoval(t *testing.T) {
 	opts, defs := fixture(t, System)
-	data := []string{`{"permissions":{}}`, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo foreign"}]}]}}`, "[features]\nhooks = true\n"}
+	data := []string{`{"permissions":{}}`, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo foreign"}]}]}}`, "[features]\nhooks = true\n", `{"version":1,"hooks":{"stop":[{"command":"echo foreign"}]}}`}
 	i := 0
 	for _, d := range defs {
 		for _, f := range d.Files {
@@ -498,6 +498,7 @@ func TestUserCommandsHonorCodexHome(t *testing.T) {
 	t.Setenv("CODEX_HOME", custom)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "custom-claude"))
 	opts.ClaudePath = defs[0].Files[0].Path
+	opts.CursorPath = defs[2].Files[0].Path
 	if err := Install(opts); err != nil {
 		t.Fatal(err)
 	}
@@ -685,5 +686,29 @@ func TestDoctorNamesMissingCodexPromptHook(t *testing.T) {
 	diagnose(&out, opts.Scope, defs[1:], func(id string) bool { return id == "codex" }, defs[1].Files[1].Path, "")
 	if strings.Contains(out.String(), "prompt hook missing") {
 		t.Fatalf("complete set still reported the prompt hook missing: %s", &out)
+	}
+}
+
+// A machine-wide file an administrator changes while sudo waits for a password
+// must not be overwritten with the plan made before the change.
+func TestSystemWriterRechecksAfterAuthorization(t *testing.T) {
+	opts, defs := fixture(t, User)
+	cursor := defs[2].Files[0].Path
+	write(t, cursor, `{"version":1,"hooks":{}}`, 0644)
+	const admin = `{"version":1,"hooks":{"stop":[{"command":"/opt/audit/hook"}]}}`
+	opts.WriteSystem = func(path string, data []byte, unchanged func() error) error {
+		if path == cursor {
+			write(t, cursor, admin, 0644) // the administrator's edit lands during the prompt
+		}
+		if err := unchanged(); err != nil {
+			return err
+		}
+		return os.WriteFile(path, data, 0644)
+	}
+	if err := runDefinitions(opts, defs[2:], false); err == nil || !strings.Contains(err.Error(), "changed during hook installation") {
+		t.Fatalf("runDefinitions() = %v, want a changed-file error", err)
+	}
+	if got := read(t, cursor); got != admin {
+		t.Fatalf("Cursor hooks = %s, want the administrator's edit kept", got)
 	}
 }

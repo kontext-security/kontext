@@ -7,7 +7,6 @@ package setup
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +27,7 @@ import (
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/ledgerping"
@@ -96,6 +96,7 @@ var (
 	orgInstallTokenPath = managedconfig.InstallTokenFilePath
 	managedSettingsPath = claudemanaged.ManagedSettingsDropInPath
 	managedSettingsFile = claudemanaged.ManagedSettingsPath
+	cursorHooksPath     = cursormanaged.SystemHooksPath
 	goos                = runtime.GOOS
 )
 
@@ -158,6 +159,9 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	fmt.Fprintln(opts.Stdout, "Kontext setup")
 
 	if err := preflightCodexUserHooks(binary); err != nil {
+		return err
+	}
+	if err := preflightCursorHooks(binary); err != nil {
 		return err
 	}
 
@@ -462,8 +466,10 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		return err
 	}
 	if err := hookinstall.Install(hookinstall.Options{
-		Scope: hookinstall.User, Home: home, Binary: binary, Setup: true, ClaudePath: managedSettingsPath,
-		WriteClaude: func(_ string, data []byte) error { _, err := installManagedSettings(ctx, data); return err },
+		Scope: hookinstall.User, Home: home, Binary: binary, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
+		WriteSystem: func(path string, data []byte, unchanged func() error) error {
+			return writePrivilegedFile(ctx, path, data, unchanged)
+		},
 		Report: func(r hookinstall.Result) {
 			switch r.File.Kind {
 			case "claude":
@@ -476,6 +482,8 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 				}
 			case "codex":
 				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", r.File.Path)
+			case "cursor":
+				fmt.Fprintf(opts.Stdout, "  ✓ Cursor hooks installed (%s)\n", r.File.Path)
 			case "feature":
 				if r.Err != nil {
 					fmt.Fprintf(opts.Stderr, "note: could not enable the Codex hooks feature automatically (%v); set `[features].hooks = true` in ~/.codex/config.toml or the hooks will not run.\n", r.Err)
@@ -920,30 +928,42 @@ func managedSettingsData(binary string) ([]byte, error) {
 	return data, nil
 }
 
-// installManagedSettings writes the Claude drop-in, skipping the write entirely
-// when the file on disk already has exactly this content.
-//
-// The write needs root, so it costs an administrator password. Re-running setup
-// or adding a second profile does not change these settings — they name the
-// binary and the hook events, neither of which varies per profile — so asking
-// for a password to rewrite identical bytes is pure friction. It also trains
-// people to type a password at a prompt that did not need one.
-func installManagedSettings(ctx context.Context, data []byte) (string, error) {
-	if current, err := os.ReadFile(managedSettingsPath); err == nil && bytes.Equal(current, data) {
-		return managedSettingsPath, nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		// An unreadable existing file must not be silently overwritten: the
-		// privileged write would mask whatever the real problem is.
-		return "", fmt.Errorf("cannot read existing Claude managed settings: %w", err)
-	}
-	if err := writePrivilegedFile(ctx, managedSettingsPath, data); err != nil {
-		return "", err
-	}
-	return managedSettingsPath, nil
+func writePrivilegedFile(ctx context.Context, path string, data []byte, unchanged func() error) error {
+	return hookinstall.WriteSystemFile(path, data, geteuid(), privilegedRunner(ctx), unchanged)
 }
 
-func writePrivilegedFile(ctx context.Context, path string, data []byte) error {
-	return hookinstall.WriteClaudeFile(path, data, geteuid(), func(name string, args ...string) error { return runPrivilegedCommand(ctx, name, args...) })
+func removePrivilegedFile(ctx context.Context, path string, unchanged func() error) error {
+	return hookinstall.RemoveSystemFile(path, geteuid(), privilegedRunner(ctx), unchanged)
+}
+
+func privilegedRunner(ctx context.Context) func(string, ...string) error {
+	return func(name string, args ...string) error { return runPrivilegedCommand(ctx, name, args...) }
+}
+
+// preflightCursorHooks stops setup before anything is written when Cursor's
+// machine-wide hooks file cannot take Kontext's entries.
+func preflightCursorHooks(binary string) error {
+	info, err := os.Lstat(cursorHooksPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err == nil && !info.Mode().IsRegular() {
+		err = errors.New("not a regular file")
+	}
+	var settings map[string]any
+	if err == nil {
+		var raw []byte
+		if raw, err = os.ReadFile(cursorHooksPath); err == nil {
+			err = json.Unmarshal(raw, &settings)
+		}
+	}
+	if err == nil {
+		err = cursormanaged.MergeManagedHooks(settings, binary)
+	}
+	if err != nil {
+		return fmt.Errorf("check Cursor hooks: %w\n\nFix or move %s, then rerun setup.\nNothing changed.", err, cursorHooksPath)
+	}
+	return nil
 }
 
 func preflightCodexUserHooks(binary string) error {

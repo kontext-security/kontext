@@ -1,0 +1,18 @@
+{
+  "conversation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "generation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "model": "default",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/Users/dev/cursor-probe-ws/notes.txt"
+  },
+  "tool_use_id": "call-71db463a-a17c-4b23-8fc3-e0fe49f6da4e-1\nfc_2b8d959e-9331-90f7-b549-c2c783f55ad1_0",
+  "session_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "hook_event_name": "preToolUse",
+  "cursor_version": "2026.10.22-27dcf5f",
+  "workspace_roots": [
+    "/Users/dev/cursor-probe-ws"
+  ],
+  "user_email": "dev@example.com",
+  "transcript_path": "/Users/dev/.cursor/projects/Users-dev-cursor-probe-ws/agent-transcripts/58ec982e-4a94-4496-937a-e6a05859e461/58ec982e-4a94-4496-937a-e6a05859e461.jsonl"
+}

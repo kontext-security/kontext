@@ -109,7 +109,7 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 			} else {
 				fmt.Fprintf(out, "%s hooks: installed (%s; binary %s)\n", def.Name, file.Path, binary)
 				claudeBinary = binary
-				if scope == User && !claudemanaged.CanonicalManagedHooks(raw, binary) {
+				if def.Agent == "claude_code" && scope == User && !claudemanaged.CanonicalManagedHooks(raw, binary) {
 					fmt.Fprintf(out, "Claude Code managed hooks: differ from the user template; run `%s hooks install --scope user --binary %s` to synchronize both layers and prevent duplicate execution\n", agenthooks.ShellQuote(binary), agenthooks.ShellQuote(binary))
 					healthy = false
 				}
@@ -193,8 +193,11 @@ func executable(path string) bool {
 
 func AgentPresent(agent, home string) bool {
 	command, app := "claude", "Claude.app"
-	if agent == "codex" {
+	switch agent {
+	case "codex":
 		command, app = "codex", "Codex.app"
+	case "cursor":
+		command, app = "cursor-agent", "Cursor.app"
 	}
 	if _, err := exec.LookPath(command); err == nil {
 		return true

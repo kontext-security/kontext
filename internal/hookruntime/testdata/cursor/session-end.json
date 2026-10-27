@@ -1,0 +1,17 @@
+{
+  "conversation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "generation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "model": "default",
+  "reason": "error",
+  "duration_ms": 98973,
+  "is_background_agent": false,
+  "final_status": "error",
+  "session_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "hook_event_name": "sessionEnd",
+  "cursor_version": "2026.10.22-27dcf5f",
+  "workspace_roots": [
+    "/Users/dev/cursor-probe-ws"
+  ],
+  "user_email": "dev@example.com",
+  "transcript_path": "/Users/dev/.cursor/projects/Users-dev-cursor-probe-ws/agent-transcripts/58ec982e-4a94-4496-937a-e6a05859e461/58ec982e-4a94-4496-937a-e6a05859e461.jsonl"
+}

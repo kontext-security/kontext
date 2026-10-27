@@ -32,6 +32,7 @@ import (
 	_ "github.com/kontext-security/kontext/internal/agent/claude"
 	_ "github.com/kontext-security/kontext/internal/agent/codex"
 	_ "github.com/kontext-security/kontext/internal/agent/cowork"
+	_ "github.com/kontext-security/kontext/internal/agent/cursor"
 )
 
 var version = "dev"

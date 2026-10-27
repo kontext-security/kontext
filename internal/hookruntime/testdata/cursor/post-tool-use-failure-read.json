@@ -1,0 +1,22 @@
+{
+  "conversation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "generation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "model": "default",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/Users/dev/cursor-probe-ws/new.txt"
+  },
+  "error_message": "File not found: /Users/dev/cursor-probe-ws/new.txt",
+  "failure_type": "error",
+  "duration": 1.293,
+  "tool_use_id": "call-c8fa8180-7561-4a6b-b7a4-7df080da5d53-2\nfc_9c86f32b-6b99-9ff9-9756-e11704740841_0",
+  "is_interrupt": false,
+  "session_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "hook_event_name": "postToolUseFailure",
+  "cursor_version": "2026.10.22-27dcf5f",
+  "workspace_roots": [
+    "/Users/dev/cursor-probe-ws"
+  ],
+  "user_email": "dev@example.com",
+  "transcript_path": "/Users/dev/.cursor/projects/Users-dev-cursor-probe-ws/agent-transcripts/58ec982e-4a94-4496-937a-e6a05859e461/58ec982e-4a94-4496-937a-e6a05859e461.jsonl"
+}

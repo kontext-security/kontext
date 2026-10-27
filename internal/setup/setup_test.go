@@ -17,6 +17,7 @@ import (
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedobserve"
@@ -58,6 +59,7 @@ func newHarness(t *testing.T) *harness {
 	overrideVar(t, &orgInstallTokenPath, filepath.Join(h.home, "no-system", "install-token"))
 	overrideVar(t, &managedSettingsPath, filepath.Join(h.home, "Library", "Application Support", "ClaudeCode", "managed-settings.d", "20-kontext.json"))
 	overrideVar(t, &managedSettingsFile, filepath.Join(h.home, "Library", "Application Support", "ClaudeCode", "managed-settings.json"))
+	overrideVar(t, &cursorHooksPath, filepath.Join(h.home, "Library", "Application Support", "Cursor", "hooks.json"))
 	overrideVar(t, &geteuid, func() int { return 0 })
 	overrideVar(t, &executablePath, func() (string, error) { return "/opt/homebrew/bin/kontext", nil })
 	overrideVar(t, &dialSocket, func(string, time.Duration) error { return nil })
@@ -238,6 +240,15 @@ func TestRunFullFlow(t *testing.T) {
 	userData, err := os.ReadFile(filepath.Join(h.home, ".claude", "settings.json"))
 	if err != nil || !claudemanaged.CanonicalManagedHooks(userData, "/opt/homebrew/bin/kontext") {
 		t.Fatalf("setup did not install canonical user hooks: %v", err)
+	}
+	// Every supported agent is installed on every channel: self-serve writes
+	// Cursor's machine-wide file like the system package does.
+	cursorHooks, err := os.ReadFile(cursorHooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary, err := cursormanaged.ValidateInstalled(cursorHooks); err != nil || binary != "/opt/homebrew/bin/kontext" {
+		t.Fatalf("Cursor hooks after setup: binary %q, %v", binary, err)
 	}
 	codexHooksPath := filepath.Join(h.home, ".codex", "hooks.json")
 	codexHooks, err := codexmanaged.ReadHooks(codexHooksPath)
@@ -1017,7 +1028,7 @@ func TestUninstallRejectsStaleOrganizationConfigBeforeKeepingManagedHooks(t *tes
 	}
 }
 
-func TestInstallManagedSettingsUsesSudoWhenNotRoot(t *testing.T) {
+func TestWritePrivilegedFileUsesSudoWhenNotRoot(t *testing.T) {
 	h := newHarness(t)
 	overrideVar(t, &geteuid, func() int { return 501 })
 	data, err := managedSettingsData("/opt/homebrew/bin/kontext")
@@ -1025,8 +1036,8 @@ func TestInstallManagedSettingsUsesSudoWhenNotRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := installManagedSettings(context.Background(), data); err != nil {
-		t.Fatalf("installManagedSettings() error = %v", err)
+	if err := writePrivilegedFile(context.Background(), managedSettingsPath, data, nil); err != nil {
+		t.Fatalf("writePrivilegedFile() error = %v", err)
 	}
 
 	var sudo [][]string
@@ -1044,7 +1055,7 @@ func TestWritePrivilegedFileRootWritesAtomicallyWithMode(t *testing.T) {
 	newHarness(t)
 	path := filepath.Join(t.TempDir(), "managed-settings.d", "20-kontext.json")
 
-	if err := writePrivilegedFile(context.Background(), path, []byte(`{"hooks":{}}`+"\n")); err != nil {
+	if err := writePrivilegedFile(context.Background(), path, []byte(`{"hooks":{}}`+"\n"), nil); err != nil {
 		t.Fatalf("writePrivilegedFile() error = %v", err)
 	}
 

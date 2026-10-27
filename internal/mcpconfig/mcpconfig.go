@@ -212,6 +212,22 @@ func (r *Resolver) configURL(home, agent, cwd, server string) string {
 		config, _ := load(r, filepath.Join(dir, "config.toml"), readers.Codex)
 		url, _ := find(config.MCPServers, server)
 		return url
+	case "cursor":
+		// A project's .cursor/mcp.json wins over the global one. A project in
+		// a guarded folder cannot be read and may define the server, so the
+		// global file may not stand in for it.
+		global := filepath.Join(home, ".cursor", "mcp.json")
+		if cwd != "" {
+			project := filepath.Join(cwd, ".cursor", "mcp.json")
+			if privacyfolder.Guarded(home, project) {
+				return ""
+			}
+			if url, found := find(r.servers(project), server); found {
+				return url
+			}
+		}
+		url, _ := find(r.servers(global), server)
+		return url
 	}
 	return ""
 }

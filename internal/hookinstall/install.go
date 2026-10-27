@@ -17,6 +17,7 @@ import (
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/cursormanaged"
 )
 
 type Scope string
@@ -70,10 +71,13 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 		}
 		claudeFiles = append(claudeFiles, File{"claude-user", path, User})
 	}
-	return []Definition{
+	defs := []Definition{
 		{Agent: "claude_code", Name: "Claude Code", Files: claudeFiles, Validate: validateClaude},
 		{Agent: "codex", Name: "Codex", Files: []File{{"codex", filepath.Join(codexDir, "hooks.json"), scope}, {"feature", filepath.Join(codexDir, "config.toml"), scope}}, Validate: codexmanaged.ValidateInstalled},
-	}, nil
+	}
+	// Cursor reads managed hooks from one machine-wide file (Cursor 2.4+), so
+	// both scopes install the same file; self-serve writes it with sudo.
+	return append(defs, Definition{Agent: "cursor", Name: "Cursor", Files: []File{{"cursor", cursormanaged.SystemHooksPath, System}}, Validate: cursormanaged.ValidateInstalled}), nil
 }
 
 func validateClaude(data []byte) (string, error) {
@@ -96,11 +100,17 @@ type Options struct {
 	Out          io.Writer
 	// Setup keeps its existing messages, nonfatal feature warning, and uninstall
 	// behavior. The command uses strict errors and removes its own feature flag.
-	Setup        bool
-	KeepClaude   bool
-	ClaudePath   string
-	WriteClaude  func(string, []byte) error
-	RemoveClaude func(string) error
+	Setup bool
+	// KeepSystem leaves machine-wide files alone on removal (an
+	// organization-managed install owns them).
+	KeepSystem             bool
+	ClaudePath, CursorPath string
+	// WriteSystem and RemoveSystem change machine-wide files for an
+	// unprivileged caller; nil writes them directly (root). The last argument
+	// fails when the file changed since planning; call it after any password
+	// prompt.
+	WriteSystem  func(path string, data []byte, unchanged func() error) error
+	RemoveSystem func(path string, unchanged func() error) error
 	Report       func(Result)
 }
 
@@ -139,6 +149,9 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 		for _, file := range def.Files {
 			if file.Kind == "claude" && opts.ClaudePath != "" {
 				file.Path = opts.ClaudePath
+			}
+			if file.Kind == "cursor" && opts.CursorPath != "" {
+				file.Path = opts.CursorPath
 			}
 			c, err := plan(file, opts, remove)
 			c.result.File = file
@@ -184,12 +197,12 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 // managed drop-in; a read-only or root-owned settings.json must not block a
 // setup whose managed hooks installed fine.
 func setupTolerates(opts Options, kind string, remove bool) bool {
-	return opts.Setup && (kind == "feature" || kind == "claude-user" || remove && kind == "codex")
+	return opts.Setup && (kind == "feature" || kind == "claude-user" || remove && (kind == "codex" || kind == "cursor"))
 }
 
 func plan(file File, opts Options, remove bool) (change, error) {
 	c := change{result: Result{File: file, Action: "skip", Reason: "unchanged"}}
-	if remove && (file.Kind == "claude" && opts.KeepClaude || file.Kind == "feature" && opts.Setup) {
+	if remove && (file.Scope == System && opts.KeepSystem || file.Kind == "feature" && opts.Setup) {
 		c.result.Reason = "kept"
 		return c, nil
 	}
@@ -227,7 +240,7 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		if !remove {
 			c.after, err = claudemanaged.TemplateJSON(opts.Binary)
 		}
-	case "codex", "claude-user":
+	case "codex", "claude-user", "cursor":
 		if file.Kind == "claude-user" && !remove && claudemanaged.CanonicalManagedHooks(c.before, opts.Binary) {
 			return c, nil
 		}
@@ -246,6 +259,10 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			err = claudemanaged.RemoveManagedHooks(settings)
 		} else if file.Kind == "claude-user" {
 			_, err = claudemanaged.MergeManagedHooks(settings, opts.Binary)
+		} else if file.Kind == "cursor" && remove {
+			err = cursormanaged.RemoveManagedHooks(settings)
+		} else if file.Kind == "cursor" {
+			err = cursormanaged.MergeManagedHooks(settings, opts.Binary)
 		} else if remove {
 			err = codexmanaged.RemoveManagedHooks(settings)
 		} else {
@@ -255,13 +272,15 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			return c, err
 		}
 		after, _ := json.Marshal(settings)
-		if bytes.Equal(before, after) && (!opts.Setup || file.Kind == "claude-user") {
+		// Setup rewrites Codex's file as is; a machine-wide file is only
+		// rewritten when Kontext's entries change, so a rerun asks for no password.
+		if bytes.Equal(before, after) && (!opts.Setup || file.Kind == "claude-user" || file.Kind == "cursor") {
 			return c, nil
 		}
 		c.after, err = json.MarshalIndent(settings, "", "  ")
 		c.after = append(c.after, '\n')
 		// Only delete an empty file when all of its content was our hooks.
-		if remove && !opts.Setup && len(settings) == 0 && file.Kind != "claude-user" {
+		if remove && (!opts.Setup || file.Kind == "cursor") && len(settings) == 0 && file.Kind != "claude-user" {
 			c.after = nil
 		}
 	case "feature":
@@ -299,28 +318,36 @@ func plan(file File, opts Options, remove bool) (change, error) {
 func apply(c change, opts Options) error {
 	file := c.result.File
 	// Catch changes since planning before replacing the file.
-	if file.Scope == System {
-		info, err := os.Lstat(file.Path)
-		if err == nil && !info.Mode().IsRegular() {
-			return fmt.Errorf("%s is no longer a regular file", file.Path)
+	unchanged := func() error {
+		if file.Scope == System {
+			info, err := os.Lstat(file.Path)
+			if err == nil && !info.Mode().IsRegular() {
+				return fmt.Errorf("%s is no longer a regular file", file.Path)
+			}
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
 		}
+		current, err := os.ReadFile(file.Path)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		if c.missing != errors.Is(err, os.ErrNotExist) || !bytes.Equal(current, c.before) {
+			return fmt.Errorf("%s changed during hook installation; retry", file.Path)
+		}
+		return nil
 	}
-	current, err := os.ReadFile(file.Path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := unchanged(); err != nil {
 		return err
 	}
-	if c.missing != errors.Is(err, os.ErrNotExist) || !bytes.Equal(current, c.before) {
-		return fmt.Errorf("%s changed during hook installation; retry", file.Path)
-	}
-	if file.Kind == "claude" {
-		if c.after == nil && opts.RemoveClaude != nil {
-			return opts.RemoveClaude(file.Path)
+	// ponytail: the privileged writer keeps no backup; Kontext only changes its
+	// own entries in a machine-wide file.
+	if file.Scope == System {
+		if c.after == nil && opts.RemoveSystem != nil {
+			return opts.RemoveSystem(file.Path, unchanged)
 		}
-		if c.after != nil && opts.WriteClaude != nil {
-			return opts.WriteClaude(file.Path, c.after)
+		if c.after != nil && opts.WriteSystem != nil {
+			return opts.WriteSystem(file.Path, c.after, unchanged)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(file.Path), 0755); err != nil {

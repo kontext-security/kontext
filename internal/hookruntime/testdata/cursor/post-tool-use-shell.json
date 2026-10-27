@@ -1,0 +1,23 @@
+{
+  "conversation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "generation_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "model": "default",
+  "tool_name": "Shell",
+  "tool_input": {
+    "command": "echo probe-shell-1",
+    "cwd": "",
+    "timeout": 30000
+  },
+  "tool_output": "{\"output\":\"probe-shell-1\\n\",\"exitCode\":0}",
+  "duration": 3081.958,
+  "tool_use_id": "83fcc838-e470-4151-a57c-8877340db3f2",
+  "cwd": "",
+  "session_id": "58ec982e-4a94-4496-937a-e6a05859e461",
+  "hook_event_name": "postToolUse",
+  "cursor_version": "2026.10.22-27dcf5f",
+  "workspace_roots": [
+    "/Users/dev/cursor-probe-ws"
+  ],
+  "user_email": "dev@example.com",
+  "transcript_path": "/Users/dev/.cursor/projects/Users-dev-cursor-probe-ws/agent-transcripts/58ec982e-4a94-4496-937a-e6a05859e461/58ec982e-4a94-4496-937a-e6a05859e461.jsonl"
+}

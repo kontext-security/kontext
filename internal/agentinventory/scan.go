@@ -54,7 +54,7 @@ func Scan(ctx context.Context, home string, env func(string) string, now time.Ti
 		if descriptor.ID == "claude_cowork" {
 			agent.Sandboxed = coworkSandbox(ctx, home, now, opts.HasCoworkSession)
 		}
-		if descriptor.ID == "claude_code" || descriptor.ID == "claude_cowork" || descriptor.ID == "codex" {
+		if descriptor.ID == "claude_code" || descriptor.ID == "claude_cowork" || descriptor.ID == "codex" || descriptor.ID == "cursor" {
 			agent.Wired = WiredError
 			if evaluate := opts.Wired[descriptor.ID]; evaluate != nil {
 				agent.Wired = evaluate()

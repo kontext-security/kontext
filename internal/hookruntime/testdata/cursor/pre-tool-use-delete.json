@@ -1,0 +1,18 @@
+{
+  "conversation_id": "ae782ea3-1f45-44ff-b222-815e7873f917",
+  "generation_id": "ae782ea3-1f45-44ff-b222-815e7873f917",
+  "model": "default",
+  "tool_name": "Delete",
+  "tool_input": {
+    "file_path": "/Users/dev/cursor-probe-ws/del.txt"
+  },
+  "tool_use_id": "call-d8394b9b-8272-4ac4-9263-ee7d3c7889c9-10\nfc_088dd56a-ec02-925a-9ea7-affd2b9c81f2_0",
+  "session_id": "ae782ea3-1f45-44ff-b222-815e7873f917",
+  "hook_event_name": "preToolUse",
+  "cursor_version": "2026.10.22-27dcf5f",
+  "workspace_roots": [
+    "/Users/dev/cursor-probe-ws"
+  ],
+  "user_email": "dev@example.com",
+  "transcript_path": "/Users/dev/.cursor/projects/Users-dev-cursor-probe-ws/agent-transcripts/ae782ea3-1f45-44ff-b222-815e7873f917/ae782ea3-1f45-44ff-b222-815e7873f917.jsonl"
+}
