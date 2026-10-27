@@ -51,7 +51,10 @@ func Project(command string) []cedareval.ShellProjectionV2 {
 
 // walk carries what a nested script inherits from the command around it.
 type walk struct {
-	depth int
+	depth         int
+	stdin         bool
+	argumentFacts []string
+	stdinFacts    []string
 	// stateful is set inside a script whose caller may have changed how
 	// words expand (see project), so no word there is provably one argument.
 	stateful bool
@@ -71,6 +74,11 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	}
 
 	calls := make([]*syntax.CallExpr, 0, 4)
+	callText := map[*syntax.CallExpr]string{}
+	stdinCalls := map[*syntax.CallExpr]bool{}
+	stdinOverrides := map[*syntax.CallExpr]bool{}
+	stdinFacts := map[*syntax.CallExpr][]string{}
+	stdinHistory := map[*syntax.CallExpr][]string{}
 	nodes, nesting := 0, 0
 	tooComplex := false
 	// A statement that can change how a later word expands (a nameref from
@@ -93,6 +101,80 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 			return false
 		}
 		switch node := node.(type) {
+		case *syntax.BinaryCmd:
+			if node.Op == syntax.Pipe || node.Op == syntax.PipeAll {
+				pipeFacts := literalEmitterFactsAtDepth(node.X, command, 0, w.argumentFacts)
+				replacesInput := literalOutputOnly(node.X)
+				syntax.Walk(node.Y, func(child syntax.Node) bool {
+					if call, ok := child.(*syntax.CallExpr); ok {
+						stdinCalls[call] = true
+						if replacesInput {
+							stdinFacts[call] = slices.Clone(pipeFacts)
+							stdinOverrides[call] = true // This producer does not forward inherited stdin.
+						} else {
+							stdinFacts[call] = append(stdinFacts[call], pipeFacts...)
+						}
+					}
+					return true
+				})
+			}
+		case *syntax.Stmt:
+			if call, ok := node.Cmd.(*syntax.CallExpr); ok {
+				callText[call] = command[call.Pos().Offset():call.End().Offset()]
+			}
+			for _, redir := range node.Redirs {
+				if node.Cmd == nil {
+					continue
+				}
+				if redir.N != nil && redir.N.Value != "0" {
+					continue
+				}
+				switch redir.Op {
+				case syntax.RdrIn, syntax.RdrInOut, syntax.DplIn, syntax.Hdoc, syntax.DashHdoc, syntax.WordHdoc:
+					unknownDescriptor := false
+					if redir.Op == syntax.DplIn {
+						source, literal := literalWord(redir.Word)
+						if literal && source == "0" {
+							continue // Duplicating stdin leaves its current source intact.
+						}
+						unknownDescriptor = !literal || source != "-"
+					}
+					var heredocFacts []string
+					if redir.Hdoc != nil {
+						heredocFacts = providerHostFacts(command[redir.Hdoc.Pos().Offset():redir.Hdoc.End().Offset()])
+					} else if redir.Op == syntax.WordHdoc && redir.Word != nil {
+						text, _ := literalWord(redir.Word)
+						heredocFacts = providerHostFacts(text + " " + command[redir.Word.Pos().Offset():redir.Word.End().Offset()])
+					}
+					if redir.Word != nil {
+						syntax.Walk(redir.Word, func(child syntax.Node) bool {
+							if input, ok := child.(*syntax.ProcSubst); ok {
+								if input.Op == syntax.CmdIn {
+									heredocFacts = append(heredocFacts, literalEmitterFactsAtDepth(input, command, 0, w.argumentFacts)...)
+								}
+								return false
+							}
+							return true
+						})
+					}
+					syntax.Walk(node.Cmd, func(child syntax.Node) bool {
+						if call, ok := child.(*syntax.CallExpr); ok {
+							stdinCalls[call] = true
+							if unknownDescriptor {
+								// A saved descriptor may restore an earlier source. Without a
+								// descriptor graph, retain its possible local and inherited facts.
+								stdinFacts[call] = sortedUnique(append(stdinFacts[call], stdinHistory[call]...))
+								stdinOverrides[call] = false
+							} else {
+								stdinHistory[call] = sortedUnique(append(stdinHistory[call], stdinFacts[call]...))
+								stdinOverrides[call] = true
+								stdinFacts[call] = slices.Clone(heredocFacts)
+							}
+						}
+						return true
+					})
+				}
+			}
 		case *syntax.Assign:
 			// BASH_ENV and ENV name a startup file a nested shell runs first.
 			if node.Name != nil && (node.Name.Value == "BASH_ENV" || node.Name.Value == "ENV") {
@@ -132,20 +214,264 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	projections := make([]cedareval.ShellProjectionV2, 0, len(calls))
 	for _, call := range calls {
 		words, complete := literalWords(call.Args)
+		unwrapped, wrapperComplete, _, _ := unwrap(words, true)
+		httpie, newHTTPClient := false, false
+		if len(unwrapped) > 0 {
+			program := strings.TrimSuffix(strings.ToLower(filepath.Base(unwrapped[0])), ".exe")
+			httpie = program == "http" || program == "https"
+			newHTTPClient = httpie || program == "wget"
+		}
+		// An authorization value cannot add argv when quoted. Keep its
+		// literal option/header name even when the token is computed.
+		for i, word := range call.Args {
+			if !newHTTPClient || words[i] != "" || !oneArgument(word) {
+				continue
+			}
+			var prefix strings.Builder
+			var appendPrefix func([]syntax.WordPart) bool
+			appendPrefix = func(parts []syntax.WordPart) bool {
+				for _, part := range parts {
+					switch part := part.(type) {
+					case *syntax.Lit:
+						prefix.WriteString(part.Value)
+					case *syntax.SglQuoted:
+						prefix.WriteString(part.Value)
+					case *syntax.DblQuoted:
+						if !appendPrefix(part.Parts) {
+							return false
+						}
+					default:
+						return false
+					}
+				}
+				return true
+			}
+			appendPrefix(word.Parts)
+			text := prefix.String()
+			if !httpie {
+				for _, option := range []string{"-qO", "-O", "-o", "-T", "-t", "-U"} {
+					if strings.HasPrefix(text, option) {
+						words[i] = text + "computed-value"
+						break
+					}
+				}
+			}
+			if strings.HasPrefix(text, "--") {
+				if option, _, attached := strings.Cut(text, "="); attached {
+					words[i] = option + "=computed-value"
+				}
+			}
+			for _, option := range []string{"--body-data=", "--post-data="} {
+				if strings.HasPrefix(text, option) {
+					words[i] = option + "@computed-body"
+				}
+			}
+			for _, option := range []string{"--body-file=", "--post-file=", "--user=", "--password=", "--http-user=", "--http-password="} {
+				if strings.HasPrefix(text, option) {
+					words[i] = option + "computed-value"
+				}
+			}
+			if strings.HasPrefix(strings.ToLower(text), "--header=") && strings.Contains(text, ":") || strings.HasPrefix(strings.ToLower(text), "authorization:") {
+				words[i] = text
+			}
+			if httpie {
+				if item := httpieItem.FindStringSubmatch(text); item != nil {
+					switch item[2] {
+					case "=", ":=":
+						words[i] = item[1] + item[2] + "@computed-field"
+					case ":":
+						words[i] = item[1] + ":computed-header"
+					case "==":
+						words[i] = item[1] + "==computed-field"
+					}
+				}
+			}
+		}
 		// No wrapper either: env, sudo and launchers can rewrite argv.
 		direct := len(words) > 0 && words[0] == "gh"
 		cw := w
+		cw.stdin = w.stdin || stdinCalls[call]
+		cw.stdinFacts = append(slices.Clone(w.stdinFacts), stdinFacts[call]...)
+		if stdinOverrides[call] {
+			cw.stdinFacts = slices.Clone(stdinFacts[call])
+		}
 		// The earliest change by offset (Walk visits redirections after the
 		// command), up to the call's end: a ${ cmd; } inside its own words
 		// runs before they expand.
 		cw.stateful = w.stateful || len(stateChanges) > 0 && (loops || slices.Min(stateChanges) < int(call.End().Offset()))
 		cw.oneArgumentEach = !cw.stateful && !slices.ContainsFunc(call.Args, func(word *syntax.Word) bool { return !oneArgument(word) })
-		projections = append(projections, classify(words, complete, cw, helpAllowed && direct)...)
+		// Retain visible host fragments in positional shell arguments even
+		// when expansion prevents literalWords from resolving the whole word.
+		if len(unwrapped) > 0 {
+			switch strings.TrimSuffix(strings.ToLower(filepath.Base(unwrapped[0])), ".exe") {
+			case "bash", "sh", "zsh", "dash", "ksh":
+				rawWords := rawCallWords(call, command)
+				if len(rawWords) > 0 {
+					if i, commandFlag := shellCommandIndex(rawWords[1:]); commandFlag && i+2 < len(rawWords) {
+						cw.argumentFacts = append(slices.Clone(cw.argumentFacts), providerHostFacts(strings.Join(rawWords[i+2:], " "))...)
+					}
+				}
+			}
+		}
+		classified := classify(words, complete, cw, helpAllowed && direct)
+		// A computed URL may still name a provider literally. Retain that
+		// hint for the new clients when no route could be established.
+		rawProgram, clientProgram := "", ""
+		if len(unwrapped) > 0 {
+			rawProgram = unwrapped[0]
+			clientProgram = strings.TrimSuffix(strings.ToLower(filepath.Base(rawProgram)), ".exe")
+		}
+		for i := range classified {
+			if (clientProgram == "wget" || clientProgram == "http" || clientProgram == "https") && !classified[i].ParseComplete && !slices.Contains(classified[i].Facts, "github/route=catalogued") && !slices.Contains(classified[i].Facts, FactDatabricksRouteCatalogued) {
+				rawWords := rawCallWords(call, command)
+				if len(rawWords) > 0 {
+					var converted []string
+					if clientProgram == "wget" {
+						converted = wgetArgs(rawWords[1:])
+					} else {
+						converted, _ = httpieArgs(clientProgram, rawWords[1:], cw.stdin)
+					}
+					facts, targetsResolved := httpClientTargetFacts(converted)
+					classified[i].Facts = sortedUnique(append(classified[i].Facts, facts...))
+					if !wrapperComplete || !cw.oneArgumentEach || !targetsResolved {
+						classified[i].Facts = sortedUnique(append(classified[i].Facts, cw.argumentFacts...))
+					}
+				}
+			}
+			if slices.Contains(classified[i].Features, "nested-script") {
+				continue
+			}
+			// Other interpreter forms deliberately remain unrecognized.
+			jsonFormatter := false
+			if len(unwrapped) > 0 && standardUtilityPath(rawProgram) && strings.HasPrefix(clientProgram, "python") {
+				jsonFormatter = len(unwrapped) >= 3 && unwrapped[1] == "-m" && unwrapped[2] == "json.tool"
+			}
+			if !jsonFormatter && !localUtility(rawProgram) && (opaqueProgram(classified[i].Program) || slices.Contains(classified[i].Features, "opaque-script")) {
+				text := callText[call] + " " + strings.Join(words, " ")
+				if !slices.Contains(classified[i].Facts, "github/route=catalogued") && !slices.Contains(classified[i].Facts, FactDatabricksRouteCatalogued) {
+					facts := append(providerHostFacts(text), cw.argumentFacts...)
+					facts = append(facts, cw.stdinFacts...)
+					if len(facts) > 0 {
+						classified[i] = projection(classified[i].Program, append(classified[i].Facts, facts...), classified[i].Features, false)
+					}
+				}
+			}
+		}
+		projections = append(projections, classified...)
 	}
 	if len(projections) == 0 {
 		projections = append(projections, projection("unknown", nil, []string{"empty-command"}, false))
 	}
 	return projections
+}
+
+// rawCallWords preserves visible syntax where expansion hides a whole word.
+func rawCallWords(call *syntax.CallExpr, command string) []string {
+	words, _ := literalWords(call.Args)
+	for i, arg := range call.Args {
+		if _, literal := literalWord(arg); !literal {
+			words[i] = command[arg.Pos().Offset():arg.End().Offset()]
+		}
+	}
+	words, _, _, _ = unwrap(words, true)
+	return words
+}
+
+// Direct printf/echo output is independent of stdin. Compound commands
+// and unknown descriptors remain conservative because they can restore pipes.
+func literalOutputOnly(node syntax.Node) bool {
+	stmt, ok := node.(*syntax.Stmt)
+	if !ok {
+		return false
+	}
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok {
+		return false
+	}
+	argv, _ := literalWords(call.Args)
+	argv, complete, _, ok := unwrap(argv, true)
+	if !ok || !complete || len(argv) == 0 {
+		return false
+	}
+	program := strings.TrimSuffix(strings.ToLower(filepath.Base(argv[0])), ".exe")
+	return program == "printf" || program == "echo"
+}
+
+func stdoutRedirectedAway(redirs []*syntax.Redirect) bool {
+	away := false
+	for _, redir := range redirs {
+		both := redir.Op == syntax.RdrAll || redir.Op == syntax.AppAll
+		if redir.N != nil && redir.N.Value != "1" && !both || redir.Word == nil {
+			continue
+		}
+		target, literal := literalWord(redir.Word)
+		switch redir.Op {
+		case syntax.DplOut:
+			if literal && target == "1" {
+				continue
+			}
+			if literal && target == "-" {
+				away = true
+				continue
+			}
+			if _, err := strconv.Atoi(strings.TrimSuffix(target, "-")); err == nil {
+				away = false // A saved descriptor may restore the pipe.
+				continue
+			}
+			fallthrough
+		case syntax.RdrOut, syntax.AppOut, syntax.RdrClob, syntax.RdrAll, syntax.AppAll:
+			away = literal && target != "" && (target == "/dev/null" || !strings.HasPrefix(target, "/dev/") && !strings.HasPrefix(target, "/proc/"))
+		}
+	}
+	return away
+}
+
+// Literal code emitters pass source into an interpreter. A provider response
+// piped into a formatter carries data, not the request URL as executable source.
+func literalEmitterFactsAtDepth(node syntax.Node, command string, depth int, argumentFacts []string) []string {
+	if depth >= maxScriptDepth {
+		return providerHostFacts(command)
+	}
+	var facts []string
+	syntax.Walk(node, func(child syntax.Node) bool {
+		if stmt, ok := child.(*syntax.Stmt); ok && literalOutputOnly(stmt) && stdoutRedirectedAway(stmt.Redirs) {
+			return false
+		}
+		if call, ok := child.(*syntax.CallExpr); ok {
+			words, complete := literalWords(call.Args)
+			words, _, _, _ = unwrap(words, true)
+			program := ""
+			if len(words) > 0 {
+				program = strings.TrimSuffix(strings.ToLower(filepath.Base(words[0])), ".exe")
+			}
+			if program == "printf" || program == "echo" {
+				facts = append(facts, providerHostFacts(command[call.Pos().Offset():call.End().Offset()]+" "+strings.Join(words[1:], " "))...)
+				if !complete {
+					facts = append(facts, argumentFacts...)
+				}
+			}
+			if program == "bash" || program == "sh" || program == "zsh" || program == "dash" || program == "ksh" {
+				args := words[1:]
+				i, commandFlag := shellCommandIndex(args)
+				if commandFlag && i < len(args) {
+					script := args[i]
+					if len(script) > maxCommandBytes {
+						facts = append(facts, providerHostFacts(script)...)
+					} else if nested, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(script), "emitter"); err == nil {
+						positionalFacts := slices.Clone(argumentFacts)
+						// Raw syntax retains literal hosts inside computed arguments.
+						rawWords := rawCallWords(call, command)
+						if len(rawWords) > i+2 {
+							positionalFacts = append(positionalFacts, providerHostFacts(strings.Join(rawWords[i+2:], " "))...)
+						}
+						facts = append(facts, literalEmitterFactsAtDepth(nested, script, depth+1, positionalFacts)...)
+					}
+				}
+			}
+		}
+		return true
+	})
+	return facts
 }
 
 // singlePlainCall reports a script that is one simple command with no
@@ -247,8 +573,9 @@ func parseFailure(reason, command string) cedareval.ShellProjectionV2 {
 		program = strings.TrimSuffix(strings.ToLower(filepath.Base(fields[0])), ".exe")
 	}
 	var facts []string
+	facts = append(facts, providerHostFacts(command)...)
 	if mentionsDatabricks.MatchString(command) {
-		facts = databricksWorstFacts()
+		facts = append(facts, databricksWorstFacts()...)
 	}
 	return projection(program, facts, []string{FeatureParseError, reason}, false)
 }
@@ -349,7 +676,9 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 	case "gh":
 		return single(classifyGH(args, complete, helpAllowed))
 	case "curl":
-		return single(classifyCurl(args, complete, !wordsComplete && wrapperComplete && w.oneArgumentEach))
+		return single(classifyCurl(args, complete, !wordsComplete && wrapperComplete && w.oneArgumentEach, true))
+	case "wget", "http", "https":
+		return single(classifyHTTPClient(program, args, complete && w.oneArgumentEach, !wordsComplete && wrapperComplete && w.oneArgumentEach, w.stdin))
 	case "acli":
 		return single(acliCLI.classify(args, complete))
 	case "jira":
@@ -365,7 +694,11 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 	case "eval":
 		return classifyEval(args, complete, w)
 	default:
-		return single(projection(program, nil, nil, complete))
+		var features []string
+		if strings.ContainsRune(words[0], '/') {
+			features = []string{"opaque-script"}
+		}
+		return single(projection(program, nil, features, complete))
 	}
 }
 
@@ -687,7 +1020,7 @@ func unwrapXargs(words []string) ([]string, bool) {
 // classified like a top-level one. A script that is not a literal cannot be
 // seen through; it stays incomplete without a GitHub route fact because the
 // program inside is unknown.
-func classifyShell(program string, args []string, complete bool, w walk) []cedareval.ShellProjectionV2 {
+func shellCommandIndex(args []string) (int, bool) {
 	commandFlag := false
 	i := 0
 	for ; i < len(args); i++ {
@@ -710,12 +1043,18 @@ func classifyShell(program string, args []string, complete bool, w walk) []cedar
 			commandFlag = true
 		}
 	}
+	return i, commandFlag
+}
+
+func classifyShell(program string, args []string, complete bool, w walk) []cedareval.ShellProjectionV2 {
+	i, commandFlag := shellCommandIndex(args)
 	if !commandFlag {
 		return single(projection(program, nil, nil, complete))
 	}
 	if i >= len(args) {
 		return single(projection(program, nil, []string{"missing-script"}, false))
 	}
+	w.argumentFacts = append(w.argumentFacts, providerHostFacts(strings.Join(args[i+1:], " "))...)
 	return nestedScript(program, args[i], w)
 }
 
@@ -738,7 +1077,7 @@ func nestedScript(program, script string, w walk) []cedareval.ShellProjectionV2 
 	if w.depth >= maxScriptDepth {
 		return single(projection(program, nil, []string{"script-depth-exceeded"}, false))
 	}
-	inner := project(script, walk{depth: w.depth + 1, stateful: w.stateful})
+	inner := project(script, walk{depth: w.depth + 1, stateful: w.stateful, stdin: w.stdin, argumentFacts: w.argumentFacts, stdinFacts: w.stdinFacts})
 	for i := range inner {
 		inner[i].Features = sortedUnique(append(inner[i].Features, "nested-script"))
 	}
@@ -1187,8 +1526,8 @@ func (op curlOperation) withUpload(index int, urlText string) (_ curlOperation, 
 // value is then opaque text that does not change the route ("Authorization:
 // Bearer $TOKEN"), while one in a URL, method or target still leaves it
 // unclear. Other providers keep main's reading: any computed word leaves
-// their request incomplete.
-func classifyCurl(args []string, complete, opaqueValues bool) cedareval.ShellProjectionV2 {
+// their request incomplete. urlGlobs is false for clients without curl globbing.
+func classifyCurl(args []string, complete, opaqueValues, urlGlobs bool) cedareval.ShellProjectionV2 {
 	// unclear is set when the request cannot be read exactly: a word the
 	// shell computes where an option, URL or method goes, a config file
 	// (-K), which can set any option, or an option the parser does not know
@@ -1350,7 +1689,7 @@ func classifyCurl(args []string, complete, opaqueValues bool) cedareval.ShellPro
 			readable = readable && targetReadable
 			// The fragment is not sent, so a glob in it changes nothing.
 			beforeFragment, _, _ := strings.Cut(urlText, "#")
-			globbed := strings.ContainsAny(beforeFragment, "{}[]")
+			globbed := urlGlobs && strings.ContainsAny(beforeFragment, "{}[]")
 			complete = complete && !globbed
 			if unclear || !readable || globbed {
 				if databricksURL(urlText) {
