@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.15.0](https://github.com/kontext-security/kontext/compare/v1.14.1...v1.15.0) (2026-10-27)
+
+
+### Features
+
+* **agent:** record and enforce Cursor tool calls; report agent versions ([#632](https://github.com/kontext-security/kontext/issues/632)) ([613c42a](https://github.com/kontext-security/kontext/commit/613c42a167787dab41859cc52210bf69b2322610))
+* **catalog:** classify community Databricks MCP tools (ENG-794) ([#628](https://github.com/kontext-security/kontext/issues/628)) ([bd1d65e](https://github.com/kontext-security/kontext/commit/bd1d65e6e38ed72d0b697093958a9f9a8c05577c))
+* **policy:** classify Databricks data export destinations (ENG-793) ([#627](https://github.com/kontext-security/kontext/issues/627)) ([94d3dac](https://github.com/kontext-security/kontext/commit/94d3dac446fb6ac1d0c15033029a28aa655e9fd1))
+
+
+### Bug Fixes
+
+* **cowork:** find Claude Desktop 3.x agent sessions under &lt;org&gt;/agent ([#621](https://github.com/kontext-security/kontext/issues/621)) ([fee8f90](https://github.com/kontext-security/kontext/commit/fee8f904d011056322c9eaab16fecbf1d8a6a7c4))
+* **github:** classify organization and account administration (ENG-789) ([#625](https://github.com/kontext-security/kontext/issues/625)) ([4a38602](https://github.com/kontext-security/kontext/commit/4a38602fa125073f45d16f441975b7d3ba64c934))
+* **policy:** classify MCP workflow mutations (ENG-790) ([#626](https://github.com/kontext-security/kontext/issues/626)) ([bda7450](https://github.com/kontext-security/kontext/commit/bda7450b026c459e467ada2605ae3775b8e1a379))
+* **shell:** classify wget, HTTPie and provider scripts (ENG-791) ([#624](https://github.com/kontext-security/kontext/issues/624)) ([b0c3dd7](https://github.com/kontext-security/kontext/commit/b0c3dd70fc62d91dd20230dcd1b118eef377fbfc))
+* **turns:** no turns for subagent hand-backs, shell echoes and Codex's own threads ([#623](https://github.com/kontext-security/kontext/issues/623)) ([1e8976c](https://github.com/kontext-security/kontext/commit/1e8976c9ce50a2a0d615c02978e31a65395661fb))
+
 ## [1.14.1](https://github.com/kontext-security/kontext/compare/v1.14.0...v1.14.1) (2026-10-26)
 
 
