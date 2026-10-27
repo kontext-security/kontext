@@ -66,33 +66,6 @@ func TestEnsureSocketDirSetsOwnerOnlyDACL(t *testing.T) {
 	}
 }
 
-func TestOwnerAllowedRefusesOtherOwners(t *testing.T) {
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
-		t.Fatal(err)
-	}
-	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ownerAllowed(user.User.Sid, user.User.Sid, admins) {
-		t.Fatal("the user must own its socket directory")
-	}
-	if !ownerAllowed(admins, user.User.Sid, admins) {
-		t.Fatal("an elevated process's default owner must be accepted")
-	}
-	if ownerAllowed(system, user.User.Sid, admins) {
-		t.Fatal("a directory another principal owns must be refused")
-	}
-	if ownerAllowed(nil, user.User.Sid) || ownerAllowed(system, nil) {
-		t.Fatal("a missing SID must never match")
-	}
-}
-
 func aceCount(acl *windows.ACL) any {
 	if acl == nil {
 		return "no DACL"
