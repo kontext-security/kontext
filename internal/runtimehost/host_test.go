@@ -3,8 +3,10 @@ package runtimehost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -123,6 +125,22 @@ func TestStartUsesFullSessionIDForSessionDir(t *testing.T) {
 
 	if got, want := filepath.Base(host.SessionDir), sessionID; got != want {
 		t.Fatalf("session dir base = %q, want %q", got, want)
+	}
+	if got, want := filepath.Dir(host.SessionDir), sessionRootDir(); got != want {
+		t.Fatalf("session dir parent = %q, want %q", got, want)
+	}
+}
+
+func TestSessionRootDirIsPerUser(t *testing.T) {
+	root := sessionRootDir()
+	if runtime.GOOS == "windows" {
+		if want := filepath.Join(os.TempDir(), "kontext"); root != want {
+			t.Fatalf("sessionRootDir() = %q, want %q", root, want)
+		}
+		return
+	}
+	if want := filepath.Join("/tmp", fmt.Sprintf("kontext-%d", os.Getuid())); root != want {
+		t.Fatalf("sessionRootDir() = %q, want %q", root, want)
 	}
 }
 
