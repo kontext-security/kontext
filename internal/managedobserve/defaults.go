@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/profile"
 )
 
@@ -32,7 +33,7 @@ func DefaultSocketPath() string {
 	if path := strings.TrimSpace(os.Getenv(envSocketPath)); path != "" {
 		return path
 	}
-	return filepath.Join("/tmp", fmt.Sprintf("kontext-managed-observe-%d", os.Getuid()), "kontext.sock")
+	return filepath.Join(localruntime.SocketDir("managed-observe"), "kontext.sock")
 }
 
 // DefaultDBPath is the ledger cache location. With a profile active it is that
