@@ -45,6 +45,9 @@ const (
 	OperationEditWebhooks         = "edit-webhooks"
 	OperationEditDeployKeys       = "edit-deploy-keys"
 	OperationEditSecrets          = "edit-secrets"
+	OperationEditOrganization     = "edit-organization"
+	OperationEditTeams            = "edit-teams"
+	OperationEditAccountKeys      = "edit-account-keys"
 	// OperationOtherWrite marks a catalogued GitHub write no row above
 	// names, so a strict custom policy can deny "every other write" without
 	// the read-only preset.
@@ -104,6 +107,10 @@ var ghCommandOperations = map[string][]string{
 	"secret/delete":          {OperationEditSecrets},
 	"variable/set":           {OperationEditSecrets},
 	"variable/delete":        {OperationEditSecrets},
+	"ssh-key/add":            {OperationEditAccountKeys},
+	"ssh-key/delete":         {OperationEditAccountKeys},
+	"gpg-key/add":            {OperationEditAccountKeys},
+	"gpg-key/delete":         {OperationEditAccountKeys},
 }
 
 // ghOperations classifies a non-api gh write command from its key and the
@@ -220,6 +227,19 @@ func uploadsRoute(methods, pattern, operation string) githubRoute {
 }
 
 var githubRoutes = []githubRoute{
+	// Organization settings and membership, including legacy team routes.
+	route("POST PUT PATCH DELETE", "orgs/*", OperationEditOrganization),
+	route("POST PUT PATCH DELETE", "orgs/*/**", OperationEditOrganization),
+	route("POST PUT PATCH DELETE", "orgs/*/teams", OperationEditTeams),
+	route("POST PUT PATCH DELETE", "orgs/*/teams/**", OperationEditTeams),
+	route("POST PUT PATCH DELETE", "teams/*", OperationEditTeams),
+	route("POST PUT PATCH DELETE", "teams/*/**", OperationEditTeams),
+	route("POST PUT PATCH DELETE", "user/keys", OperationEditAccountKeys),
+	route("POST PUT PATCH DELETE", "user/keys/*", OperationEditAccountKeys),
+	route("POST PUT PATCH DELETE", "user/gpg_keys", OperationEditAccountKeys),
+	route("POST PUT PATCH DELETE", "user/gpg_keys/*", OperationEditAccountKeys),
+	route("POST PUT PATCH DELETE", "user/ssh_signing_keys", OperationEditAccountKeys),
+	route("POST PUT PATCH DELETE", "user/ssh_signing_keys/*", OperationEditAccountKeys),
 	// Git refs. PATCH is handled in githubRouteOperations because force and
 	// tag detection decide between several operations.
 	route("DELETE", "repos/*/*/git/refs/**", OperationDeleteRef),
@@ -377,11 +397,22 @@ func githubRouteOperations(host, method string, segments []string, force, approv
 			}
 		}
 	}
+	legacyMatched := matched
+	organizationMatched := false
 	for _, r := range githubRoutes {
 		if r.matches(host, method, segments) {
 			operations = append(operations, r.operation)
+			if r.operation == OperationEditOrganization || r.operation == OperationEditTeams || r.operation == OperationEditAccountKeys {
+				organizationMatched = true
+			} else {
+				legacyMatched = true
+			}
 			matched = true
 		}
+	}
+	if organizationMatched && !legacyMatched {
+		// Keep the catch-all only on routes it described before this catalog.
+		operations = append(operations, OperationOtherWrite)
 	}
 	if !matched && isWriteMethod(method) {
 		operations = append(operations, OperationOtherWrite)
