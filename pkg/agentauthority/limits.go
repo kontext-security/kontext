@@ -191,10 +191,13 @@ func (g *guard) readError(path, reason string) {
 }
 
 // Check every ancestor before opening anything, including dataless directories.
+// The walk starts at the path's volume: / on unix, C:\ or \\server\share\ on Windows.
 func guardedInfo(path string, stat func(string) (os.FileInfo, error), tail bool) (os.FileInfo, error) {
-	prefix := "/"
+	volume := filepath.VolumeName(path)
+	prefix := volume + string(filepath.Separator)
+	rest := filepath.ToSlash(path[len(volume):])
 	var info os.FileInfo
-	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+	for _, part := range strings.Split(strings.TrimPrefix(rest, "/"), "/") {
 		prefix = filepath.Join(prefix, part)
 		var err error
 		info, err = stat(prefix)

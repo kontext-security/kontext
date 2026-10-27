@@ -12,8 +12,8 @@ import (
 // O_NOFOLLOW from the parent's descriptor and checks that the file it read is the one it checked;
 // Windows needs its own walk with the same guarantees (no reparse points, no placeholder
 // hydration). Until then the scan reads no file content there. A stat-only check does not come
-// here: access answers it from guardedInfo's walk, which is not yet written for drive letters or
-// UNC paths.
+// here: access answers it from guardedInfo's walk, which starts at the drive or UNC share and
+// refuses a junction (reported as irregular) or a placeholder ancestor.
 func readGuarded(context.Context, string, string) fileResult {
 	return fileResult{err: os.ErrPermission}
 }
