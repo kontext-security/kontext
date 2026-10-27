@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/managedstream"
 	"github.com/kontext-security/kontext/internal/profile"
 )
@@ -11,7 +12,7 @@ import (
 func fakeProfileHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	t.Setenv(profile.EnvRoot, "")
 	t.Setenv(envDBPath, "")
 	return home

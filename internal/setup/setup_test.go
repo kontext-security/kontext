@@ -18,6 +18,7 @@ import (
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedobserve"
@@ -43,7 +44,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{t: t, home: t.TempDir(), keychain: map[string]string{}}
-	t.Setenv("HOME", h.home)
+	hermetic.SetHome(t, h.home)
 	t.Setenv("CODEX_HOME", "")
 	overrideVar(t, &agentWiring, func() map[string]func() agentinventory.Wired {
 		return managedobserve.AgentWiringWithCodexPaths(codexmanaged.InstallationPaths{

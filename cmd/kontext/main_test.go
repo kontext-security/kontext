@@ -8,10 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/kontext-security/kontext/internal/agent"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 )
 
@@ -202,7 +202,7 @@ func TestManagedHookAgentCoworkNeedsClaudeAndSessionPath(t *testing.T) {
 }
 
 func TestEvaluateViaSidecarFailsOpenOnMarshalError(t *testing.T) {
-	socket := filepath.Join("/tmp", fmt.Sprintf("kontext-%d.sock", time.Now().UnixNano()))
+	socket := filepath.Join(hermetic.SocketDir(t), "kontext.sock")
 	t.Cleanup(func() { _ = os.Remove(socket) })
 	ln, err := net.Listen("unix", socket)
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agent"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 	"github.com/kontext-security/kontext/internal/runtimehost"
 )
@@ -45,7 +46,7 @@ func TestFullDiskAccessProbe(t *testing.T) {
 
 func TestManagedHookFullDiskAccessReachesDaemonLedger(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, "Library", "Mail"), 0700); err != nil {
 		t.Fatal(err)
 	}

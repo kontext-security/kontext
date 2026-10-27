@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
 )
@@ -125,11 +125,7 @@ func TestSaturatedRecorderPreservesSettledDecisions(t *testing.T) {
 					var send func(int) (string, error)
 					var stop func()
 					if transport == "socket" {
-						dir, err := os.MkdirTemp("/tmp", "audit-full-*")
-						if err != nil {
-							t.Fatal(err)
-						}
-						t.Cleanup(func() { _ = os.RemoveAll(dir) })
+						dir := hermetic.SocketDir(t)
 						service, err := localruntime.NewService(localruntime.Options{SocketPath: filepath.Join(dir, "s.sock"), Core: srv.RuntimeCore()})
 						if err != nil {
 							t.Fatal(err)

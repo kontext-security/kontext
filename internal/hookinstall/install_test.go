@@ -10,6 +10,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func fixture(t *testing.T, scope Scope) (Options, []Definition) {
@@ -347,6 +348,7 @@ func TestDoctorKeepsOtherClaudeValidationErrorsRaw(t *testing.T) {
 				if err := os.Rename(path, path+".target"); err != nil {
 					t.Fatal(err)
 				}
+				hermetic.Symlinks(t)
 				if err := os.Symlink(path+".target", path); err != nil {
 					t.Fatal(err)
 				}
@@ -434,6 +436,7 @@ func TestSystemInstallRefusesSymlink(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
 		t.Fatal(err)
 	}
+	hermetic.Symlinks(t)
 	if err := os.Symlink(target, file); err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +576,7 @@ func TestDoctorCodexLayers(t *testing.T) {
 					t.Fatal(err)
 				}
 				home := t.TempDir()
-				t.Setenv("HOME", home)
+				hermetic.SetHome(t, home)
 				other := filepath.Join(home, ".codex", "hooks.json")
 				otherBinary := opts.Binary
 				if state == "different binary" || state == "missing other binary" {

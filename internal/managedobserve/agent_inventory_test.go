@@ -13,11 +13,12 @@ import (
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestAgentInventoryRefresh(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	for _, d := range agentinventory.Catalog {
 		if d.ConfigEnv != "" {
 			t.Setenv(d.ConfigEnv, "")
@@ -68,7 +69,7 @@ func TestAgentInventoryRefresh(t *testing.T) {
 
 func TestAgentWiring(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	previousDropIn, previousFile := managedSettingsDropInPath, managedSettingsFilePath
 	managedSettingsDropInPath, managedSettingsFilePath = filepath.Join(home, "missing-dropin"), filepath.Join(home, "missing-file")
 	t.Cleanup(func() { managedSettingsDropInPath, managedSettingsFilePath = previousDropIn, previousFile })
@@ -172,7 +173,7 @@ func TestCoworkInventoryUsesLatestSessionPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	for _, d := range agentinventory.Catalog {
 		if d.ConfigEnv != "" {
 			t.Setenv(d.ConfigEnv, "")

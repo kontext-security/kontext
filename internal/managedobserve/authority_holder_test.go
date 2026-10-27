@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestAuthorityHolderStartupAndSwitch(t *testing.T) {
@@ -16,7 +17,7 @@ func TestAuthorityHolderStartupAndSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	t.Setenv("KONTEXT_AUTHORITY_SCAN", "")
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0700); err != nil {
 		t.Fatal(err)
@@ -68,7 +69,7 @@ func TestAuthorityHolderScansOnPolicyRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	t.Setenv("KONTEXT_AUTHORITY_SCAN", "")
 	var enabled atomic.Bool
 	available := make(chan struct{}, 1)

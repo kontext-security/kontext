@@ -18,6 +18,7 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/hookruntime"
 	"github.com/kontext-security/kontext/internal/localruntime"
@@ -195,11 +196,7 @@ func TestDeferredStepSafetyDoesNotHoldSocketResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := os.MkdirTemp("/tmp", "merlin-async-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := hermetic.SocketDir(t)
 	service, err := localruntime.NewService(localruntime.Options{SocketPath: filepath.Join(dir, "guard.sock"), Core: server.RuntimeCore(), AgentName: "claude"})
 	if err != nil {
 		t.Fatal(err)
@@ -242,10 +239,7 @@ func TestStepSafetyAsyncHistoryIsObservedOnceBeforeNextSocketHook(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	socketDir, err := os.MkdirTemp("/tmp", "kontext-step-safety-*")
-	if err != nil {
-		t.Fatal(err)
-	}
+	socketDir := hermetic.SocketDir(t)
 	service, err := localruntime.NewService(localruntime.Options{
 		SocketPath:  filepath.Join(socketDir, "kontext.sock"),
 		Core:        server.RuntimeCore(),

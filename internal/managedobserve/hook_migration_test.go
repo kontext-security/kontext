@@ -10,6 +10,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 )
@@ -207,8 +208,7 @@ func TestHookMigrationUserFailureRemainsPending(t *testing.T) {
 }
 
 func TestSystemDaemonSkipsUserHookMigration(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := hermetic.Home(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "custom-claude"))
 	runSelfServeHookMigration(context.Background(), managedconfig.LoadedConfig{Scope: managedconfig.ScopeSystem}, "1.14.0", diagnostic.Logger{})
 	entries, err := os.ReadDir(home)

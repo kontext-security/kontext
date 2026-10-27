@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestGuardHookCompatibilityCommandIsRetired(t *testing.T) {
@@ -137,7 +139,7 @@ func TestMergeHooksPreservesNonGuardHookInMixedGroup(t *testing.T) {
 
 func TestUninstallClaudeHooksPreservesNonGuardHookInMixedGroup(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -190,7 +192,7 @@ func TestUninstallClaudeHooksPreservesNonGuardHookInMixedGroup(t *testing.T) {
 
 func TestPrintHookStatusReportsGuardAndHostedConflict(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatal(err)

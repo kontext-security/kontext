@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/profile"
 )
 
@@ -198,6 +199,6 @@ func TestDeriveProfileNameHandlesAnUnknownBackend(t *testing.T) {
 
 func withProfileRoot(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	hermetic.SetHome(t, t.TempDir())
 	t.Setenv(profile.EnvRoot, "")
 }

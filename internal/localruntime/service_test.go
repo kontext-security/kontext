@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/runtimecore"
 )
@@ -380,10 +381,7 @@ func newTestService(t *testing.T, runtime *stubRuntime, asyncIngest bool) *Servi
 func newTestServiceWithOptions(t *testing.T, opts Options) *Service {
 	t.Helper()
 
-	dir, err := os.MkdirTemp("/tmp", "kontext-runtime-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp() error = %v", err)
-	}
+	dir := hermetic.SocketDir(t)
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	opts.SocketPath = filepath.Join(dir, "kontext.sock")
 	if opts.AgentName == "" {

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func refreshFixture(t *testing.T) (string, string, []byte) {
@@ -96,6 +97,7 @@ func TestRefreshClaudeRefusesMissingForeignAndSymlinkFiles(t *testing.T) {
 				if err := os.Rename(path, path+".target"); err != nil {
 					t.Fatal(err)
 				}
+				hermetic.Symlinks(t)
 				err = os.Symlink(path+".target", path)
 			}
 			if err != nil {
