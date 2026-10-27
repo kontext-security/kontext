@@ -33,7 +33,7 @@ func DefaultSocketPath() string {
 	if path := strings.TrimSpace(os.Getenv(envSocketPath)); path != "" {
 		return path
 	}
-	return filepath.Join(localruntime.SocketDir("managed-observe"), "kontext.sock")
+	return localruntime.SocketPath("managed-observe")
 }
 
 // DefaultDBPath is the ledger cache location. With a profile active it is that
@@ -78,6 +78,9 @@ func DefaultLabel() string {
 }
 
 func EnsureSocketDir(socketPath string) error {
+	if err := localruntime.CheckSocketPath(socketPath, envSocketPath); err != nil {
+		return err
+	}
 	dir := filepath.Dir(socketPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
