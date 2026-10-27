@@ -141,6 +141,9 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	evidence.AlternateToolIDs = alternates
 	evidence.Shell = projections
 	evidence.Tool, evidence.AlsoAdmin = toolClassification(toolID, event)
+	if class, ok := toolcatalog.ClassifyCall(toolID, event.ToolName, event.ToolInput); ok {
+		evidence.AlsoActions = class.AlsoActions
+	}
 
 	metadata := snapshot.Deployment
 	if metadata == nil {
@@ -448,6 +451,13 @@ func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent
 			input.ToolID = id
 			input.Tool, alsoAdmin = toolClassification(id, event)
 			inputs = append(inputs, input)
+			if class, ok := toolcatalog.ClassifyCall(id, event.ToolName, event.ToolInput); ok && class.AlsoActions && input.Tool != nil {
+				actions := *input.Tool
+				actions.Product = "actions"
+				actionInput := input
+				actionInput.Tool = &actions
+				inputs = append(inputs, actionInput)
+			}
 			if alsoAdmin {
 				admin := *input.Tool
 				admin.Access = toolcatalog.AccessAdmin
