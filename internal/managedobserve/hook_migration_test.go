@@ -260,7 +260,12 @@ func TestHookMigrationOverlappingStartsOnlyPromptOnce(t *testing.T) {
 	m.refresh = func(context.Context, string) error { close(started); <-finish; return errors.New("cancelled") }
 	done := make(chan error, 1)
 	go func() { done <- m.run(context.Background()) }()
-	<-started
+	select {
+	case <-started:
+	case err := <-done:
+		// Without this the test waits for go test's timeout.
+		t.Fatalf("first run returned before the refresh started: %v", err)
+	}
 	if err := m.run(context.Background()); err == nil {
 		t.Error("expected pending approval")
 	}
