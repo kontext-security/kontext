@@ -356,12 +356,7 @@ func (r *Resolver) claudeAIConnector(home, server string) (url string, found boo
 	if !uuidPattern.MatchString(account) || !uuidPattern.MatchString(org) {
 		return "", false
 	}
-	var paths []string
-	for _, dir := range desktopRecordDirs {
-		matches := desktopGlob(home, dir, filepath.Join(account, org, "local_*.json"))
-		paths = append(paths, matches...)
-	}
-	for _, path := range newestFirst(paths) {
+	for _, path := range newestFirst(desktopRecords(home, filepath.Join(account, org))) {
 		session, ok := load(r, path, parseJSON[desktopSession])
 		if !ok {
 			continue
@@ -397,7 +392,7 @@ func (r *Resolver) Warm() {
 			return
 		}
 	}
-	for _, path := range desktopRecords(home) {
+	for _, path := range desktopRecords(home, "*/*") {
 		loadHead(r, path, recordHeadBytes, parseSessionID)
 		load(r, path, parseJSON[desktopSession])
 	}
@@ -418,11 +413,17 @@ func newestFirst(paths []string) []string {
 	return paths
 }
 
-func desktopRecords(home string) []string {
+// desktopRecords lists the session records of the <account>/<org> folders
+// that orgs matches, and of their agent/ folders, where Claude Desktop 3.x
+// keeps Cowork agent sessions. An agent folder is checked before it is listed.
+func desktopRecords(home, orgs string) []string {
 	var paths []string
 	for _, dir := range desktopRecordDirs {
-		found := desktopGlob(home, dir, "*/*/local_*.json")
-		paths = append(paths, found...)
+		paths = append(paths, desktopGlob(home, dir, filepath.Join(orgs, "local_*.json"))...)
+		for _, agent := range desktopGlob(home, dir, filepath.Join(orgs, "agent")) {
+			found, _ := filepath.Glob(filepath.Join(agent, "local_*.json"))
+			paths = append(paths, slices.DeleteFunc(found, func(path string) bool { return privacyfolder.Guarded(home, path) })...)
+		}
 	}
 	return paths
 }
@@ -494,7 +495,7 @@ func (r *Resolver) desktopConnector(home, sessionID, server string) (url, name s
 	if sessionID == "" {
 		return "", "", false
 	}
-	for _, path := range newestFirst(desktopRecords(home)) {
+	for _, path := range newestFirst(desktopRecords(home, "*/*")) {
 		// A record whose head does not hold its cliSessionId is decoded whole.
 		if id, ok := loadHead(r, path, recordHeadBytes, parseSessionID); ok && string(id) != sessionID {
 			continue

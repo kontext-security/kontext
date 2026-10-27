@@ -129,6 +129,10 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 		{"short session directory", root + "/acme/ws/abc123ef/outputs", "cowork"},
 		{"short account and workspace directories", root + "/1234abcd/5678efab/abc123ef/.claude/transcript.jsonl", "cowork"},
 		{"short session root", root + "/acme/ws/abc123ef", "cowork"},
+		{"agent session transcript", root + "/acme/ws/agent/local_123/.claude/projects/-private-var-empty/s1.jsonl", "cowork"},
+		{"short agent session directory", root + "/acme/ws/agent/abc123ef/outputs", "cowork"},
+		{"agent directory", root + "/acme/ws/agent", "claude"},
+		{"non-session agent directory", root + "/acme/ws/agent/rpm/plugin", "claude"},
 		{"ordinary claude", "/Users/michel/project", "claude"},
 		{"lookalike path", "/Users/michel/work/Library/Application Support/Claude/local-agent-mode-sessions/acme/ws/abc123ef/outputs", "claude"},
 		{"lookalike root", root + "-other/acme/ws/abc123ef/outputs", "claude"},
@@ -161,6 +165,39 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 				})
 			}
 		})
+	}
+}
+
+// Only a Claude event becomes Cowork: Codex keeps its own policy identity in
+// a Cowork session folder. A /var/empty cwd alone does not mark Cowork, so a
+// Claude Code run there keeps its own MCP configuration; the server labels
+// such sessions at ingest.
+func TestManagedHookAgentCoworkNeedsClaudeAndSessionPath(t *testing.T) {
+	oldHome := userHomeDir
+	userHomeDir = func() (string, error) { return "/Users/michel", nil }
+	t.Cleanup(func() { userHomeDir = oldHome })
+	const session = "/Users/michel/Library/Application Support/Claude/local-agent-mode-sessions/acme/ws/agent/local_123"
+	for _, tt := range []struct{ agent, field, path, want string }{
+		{"claude", "transcript_path", session + "/.claude/projects/-private-var-empty/s1.jsonl", "cowork"},
+		{"codex", "cwd", session + "/outputs", "codex"},
+		{"codex", "transcript_path", session + "/.claude/projects/-private-var-empty/s1.jsonl", "codex"},
+		{"claude", "cwd", "/private/var/empty", "claude"},
+	} {
+		a, ok := agent.Get(tt.agent)
+		if !ok {
+			t.Fatalf("%s agent not registered", tt.agent)
+		}
+		input, err := json.Marshal(map[string]string{"session_id": "s1", "hook_event_name": "PreToolUse", tt.field: tt.path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := (managedHookAgent{Agent: a}).DecodeHookInput(input)
+		if err != nil {
+			t.Fatalf("DecodeHookInput() error = %v", err)
+		}
+		if event.Agent != tt.want {
+			t.Fatalf("%s %s %s: Agent = %q, want %q", tt.agent, tt.field, tt.path, event.Agent, tt.want)
+		}
 	}
 }
 

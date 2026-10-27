@@ -87,7 +87,8 @@ func latestCoworkSidecar(ctx context.Context, root string, now time.Time) (*cowo
 				}
 				path := filepath.Join(dir, entry.Name())
 				if entry.IsDir() {
-					if depth < 2 && !walk(path, depth+1) {
+					// Claude Desktop 3.x keeps agent sessions in <org>/agent/.
+					if (depth < 2 || depth == 2 && entry.Name() == "agent") && !walk(path, depth+1) {
 						return false
 					}
 					continue

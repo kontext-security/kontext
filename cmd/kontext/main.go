@@ -421,7 +421,8 @@ func (a managedHookAgent) DecodeHookInput(input []byte) (hook.Event, error) {
 		return hook.Event{}, err
 	}
 	event.FullDiskAccess = hookFullDiskAccess()
-	if isCoworkHookContext(input, event) {
+	// Cowork runs Claude; a Codex event keeps its identity wherever it runs.
+	if event.Agent == "claude" && isCoworkHookContext(input, event) {
 		event.Agent = "cowork"
 	}
 	return event, nil
@@ -460,6 +461,11 @@ func isCoworkPath(value string) bool {
 	}
 	suffix := strings.TrimPrefix(strings.TrimPrefix(normalized, root), "/")
 	parts := strings.Split(suffix, "/")
+	// Claude Desktop 3.x keeps Cowork agent sessions one level down, in
+	// <account>/<workspace>/agent/, and starts them in /var/empty.
+	if len(parts) > 3 && parts[2] == "agent" {
+		parts = append(parts[:2], parts[3:]...)
+	}
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" {
 		return false
 	}

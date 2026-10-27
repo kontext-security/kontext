@@ -428,7 +428,8 @@ func (g *guard) desktop(a *Agent) {
 var connectorUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // connectors names claude.ai connectors from Claude desktop session files
-// (root/<account>/<org>/local_*.json). Tool calls name them only by UUID.
+// (root/<account>/<org>/local_*.json, and <org>/agent/ for Cowork agent
+// sessions since Desktop 3.x). Tool calls name them only by UUID.
 // ponytail: newest 8 files per root; older sessions only add stale connectors.
 func (g *guard) connectors(a *Agent, root string) {
 	type session struct {
@@ -438,11 +439,13 @@ func (g *guard) connectors(a *Agent, root string) {
 	var sessions []session
 	for _, account := range g.entries(root) {
 		for _, org := range g.entries(filepath.Join(root, account.Name())) {
-			dir := filepath.Join(root, account.Name(), org.Name())
-			for _, entry := range g.sessionEntries(dir) {
-				info, err := entry.Info()
-				if err == nil && info.Mode().IsRegular() && strings.HasPrefix(entry.Name(), "local_") && filepath.Ext(entry.Name()) == ".json" {
-					sessions = append(sessions, session{filepath.Join(dir, entry.Name()), info.ModTime()})
+			orgDir := filepath.Join(root, account.Name(), org.Name())
+			for _, dir := range []string{orgDir, filepath.Join(orgDir, "agent")} {
+				for _, entry := range g.sessionEntries(dir) {
+					info, err := entry.Info()
+					if err == nil && info.Mode().IsRegular() && strings.HasPrefix(entry.Name(), "local_") && filepath.Ext(entry.Name()) == ".json" {
+						sessions = append(sessions, session{filepath.Join(dir, entry.Name()), info.ModTime()})
+					}
 				}
 			}
 		}

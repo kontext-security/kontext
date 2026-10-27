@@ -113,6 +113,67 @@ func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
 	}
 }
 
+// Claude Desktop 3.x keeps Cowork agent session records in <org>/agent/.
+func TestDesktopConnectorReadsCoworkAgentRecords(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	dir := filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions/acct/org/agent")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const connector = "c2be245b-9fd0-47e8-9a48-80c63e49e3fb"
+	const url = "https://dbc.cloud.databricks.com/ai-gateway/mcp-services/system.ai.dbsql"
+	record := `{"cliSessionId": "session-agent", "remoteMcpServersConfig": [{"uuid": "` + connector + `", "name": "Databricks", "url": "` + url + `"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "local_agent.json"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := (&Resolver{Home: home}).desktopConnector(home, "session-agent", connector); got != url {
+		t.Fatalf("desktopConnector() = %q", got)
+	}
+	// The Claude Code CLI names the same connector claude_ai_<Name>; the
+	// signed-in organization's agent records hold its URL too.
+	const account, org = "11111111-2222-4333-8444-555555555555", "66666666-7777-4888-9999-000000000000"
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"oauthAccount": {"accountUuid": "`+account+`", "organizationUuid": "`+org+`"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	signedIn := filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions", account, org, "agent")
+	if err := os.MkdirAll(signedIn, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(signedIn, "local_agent.json"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, found := (&Resolver{Home: home}).claudeAIConnector(home, normalize("claude.ai Databricks")); !found || got != url {
+		t.Fatalf("claudeAIConnector() = %q, %v", got, found)
+	}
+}
+
+// An agent folder that links into a guarded folder is checked before it is
+// listed, so macOS never asks for access on the daemon's behalf.
+func TestDesktopRecordsSkipGuardedAgentFolder(t *testing.T) {
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	home := t.TempDir()
+	guarded := filepath.Join(home, "Documents", "sessions")
+	if err := os.MkdirAll(guarded, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guarded, "local_guarded.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	org := filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions/acct/org")
+	if err := os.MkdirAll(org, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(guarded, filepath.Join(org, "agent")); err != nil {
+		t.Fatal(err)
+	}
+	if records := desktopRecords(home, "*/*"); len(records) != 0 {
+		t.Fatalf("desktopRecords() read a guarded agent folder: %v", records)
+	}
+}
+
 // Every active Claude Desktop session rewrites its record, and a record is
 // mostly its connector list, so a lookup that decodes other sessions'
 // records whole misses its deadline under load and the connector stays
