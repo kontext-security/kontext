@@ -18,8 +18,9 @@ func DefaultSocketPath() string {
 // Unix it is /tmp/kontext-<name>-<uid>, short because sun_path is 104 bytes on
 // macOS. On Windows os.Getuid returns -1, so that path would be one directory
 // for every user; the user's local app data (%LOCALAPPDATA%\Kontext\run\<name>)
-// is used instead. Without LOCALAPPDATA the Unix form remains, which the
-// daemon's owner check refuses for a second user.
+// is used instead. Without LOCALAPPDATA the Unix form remains, as before;
+// the daemon's owner check refuses it to a second user, the guard socket's
+// directory has no such check yet (ENG-816).
 func SocketDir(name string) string {
 	if runtime.GOOS == "windows" {
 		if dir, err := os.UserCacheDir(); err == nil {
