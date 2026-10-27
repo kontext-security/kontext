@@ -656,7 +656,7 @@ func removeOrganizationManagedInstall(ctx context.Context) error {
 
 	serviceTarget := "gui/" + strconv.Itoa(os.Getuid()) + "/" + LaunchAgentLabel
 	out, err := execCommand(ctx, "", "launchctl", "bootout", serviceTarget)
-	if err != nil && !launchctlPrintMeansAbsent(out) {
+	if err != nil && !managedobserve.LaunchctlPrintMeansAbsent(out) {
 		return fmt.Errorf("stop organization-managed background agent: launchctl bootout failed: %w (%s)", err, strings.TrimSpace(out))
 	}
 	return nil

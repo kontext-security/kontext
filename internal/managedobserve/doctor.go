@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -98,6 +99,9 @@ type doctorOptions struct {
 	Dial               func(network, address string, timeout time.Duration) (net.Conn, error)
 	Now                func() time.Time
 	LaunchAgentPresent func() bool
+	// LaunchAgentLoaded asks launchd whether the agent the hook kickstarts is
+	// still loaded. An error means unknown and keeps the default readout.
+	LaunchAgentLoaded func() (bool, error)
 	// LoadConfig resolves the managed config whose scope drives most of this
 	// readout. Defaults to managedconfig.Load; injectable so callers can pin a
 	// scope instead of inheriting whatever this machine happens to have under
@@ -144,6 +148,9 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	}
 	if opts.LaunchAgentPresent == nil {
 		opts.LaunchAgentPresent = selfServeLaunchAgentPresent
+	}
+	if opts.LaunchAgentLoaded == nil {
+		opts.LaunchAgentLoaded = launchAgentLoaded
 	}
 	if opts.LoadConfig == nil {
 		opts.LoadConfig = managedconfig.Load
@@ -308,7 +315,19 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 			}
 		}
 	} else {
-		fmt.Fprintln(out, "  daemon: not running (it starts with your next Claude Code session)")
+		// The hook only kickstarts the agent. That revives a loaded agent but
+		// not one launchd has unloaded (Stop daemon in the menu bar, an
+		// interrupted profile switch), so only promise a restart when loaded.
+		if loaded, err := opts.LaunchAgentLoaded(); err == nil && !loaded {
+			if repairTargetAvailable {
+				fmt.Fprintf(out, "  daemon: stopped (launchd has unloaded its agent, so your next Claude Code session will not start it; run `launchctl bootstrap gui/%d %q`)\n",
+					os.Getuid(), selfServeLaunchAgentPath())
+			} else {
+				fmt.Fprintln(out, "  daemon: stopped (launchd has unloaded its agent, so your next Claude Code session will not start it; restart it through its managing installation)")
+			}
+		} else {
+			fmt.Fprintln(out, "  daemon: not running (it starts with your next Claude Code session)")
+		}
 		status.Healthy = false
 	}
 
@@ -337,8 +356,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	// Self-serve installs have a user LaunchAgent; MDM installs manage theirs
 	// under /Library. Having BOTH scopes on one Mac deserves a callout — the
 	// system config wins and the user agent should be removed.
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		userPlist := filepath.Join(home, "Library", "LaunchAgents", DefaultLaunchdLabel+".plist")
+	if userPlist := selfServeLaunchAgentPath(); userPlist != "" {
 		if launchAgentPresent {
 			fmt.Fprintf(out, "  launch agent: %s\n", userPlist)
 			if loaded.Scope == managedconfig.ScopeSystem {
@@ -389,14 +407,37 @@ func installTokenFileReadable(path string) error {
 	return nil
 }
 
-func selfServeLaunchAgentPresent() bool {
+func selfServeLaunchAgentPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", DefaultLaunchdLabel+".plist")
+}
+
+func selfServeLaunchAgentPresent() bool {
+	path := selfServeLaunchAgentPath()
+	if path == "" {
 		return false
 	}
-	path := filepath.Join(home, "Library", "LaunchAgents", DefaultLaunchdLabel+".plist")
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode().IsRegular()
+}
+
+func launchAgentLoaded() (bool, error) {
+	if runtime.GOOS != "darwin" {
+		return false, errors.New("launchd is only available on macOS")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "launchctl", "print", "gui/"+itoa(os.Getuid())+"/"+DefaultLabel()).CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	if ctx.Err() == nil && LaunchctlPrintMeansAbsent(string(out)) {
+		return false, nil
+	}
+	return false, err
 }
 
 func describeScope(scope managedconfig.Scope) string {

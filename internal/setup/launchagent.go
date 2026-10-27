@@ -240,17 +240,10 @@ func launchAgentLoaded(ctx context.Context, serviceTarget string, bounded bool) 
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false, fmt.Errorf("launchctl print failed: %w (%s)", err, strings.TrimSpace(out))
 	}
-	if launchctlPrintMeansAbsent(out) {
+	if managedobserve.LaunchctlPrintMeansAbsent(out) {
 		return false, nil
 	}
 	return false, fmt.Errorf("launchctl print failed: %w (%s)", err, strings.TrimSpace(out))
-}
-
-func launchctlPrintMeansAbsent(output string) bool {
-	normalized := strings.ToLower(output)
-	return strings.Contains(normalized, "could not find service") ||
-		strings.Contains(normalized, "service is not loaded") ||
-		strings.Contains(normalized, "no such service")
 }
 
 // removeLaunchAgent reverses installLaunchAgent; both steps tolerate
