@@ -60,8 +60,8 @@ func RefreshClaude(path, binary, expectedDigest string) error {
 	if c.result.Action == "skip" {
 		return nil
 	}
-	return apply(c, Options{WriteClaude: func(path string, data []byte) error {
-		return WriteClaudeFile(path, data, 0, nil)
+	return apply(c, Options{WriteSystem: func(path string, data []byte) error {
+		return WriteSystemFile(path, data, 0, nil)
 	}})
 }
 

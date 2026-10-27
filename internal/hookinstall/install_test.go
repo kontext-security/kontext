@@ -388,11 +388,7 @@ func TestRefreshStaleHooksAndRemoveDryRun(t *testing.T) {
 			if err := runDefinitions(opts, defs, true); err != nil {
 				t.Fatal(err)
 			}
-			wantRemoved := 3
-			if scope == System {
-				wantRemoved++ // Cursor's enterprise hooks.json
-			}
-			if strings.Count(out.String(), "would-remove\t") != wantRemoved {
+			if strings.Count(out.String(), "would-remove\t") != 4 {
 				t.Fatal(&out)
 			}
 			for _, d := range defs {
@@ -502,6 +498,7 @@ func TestUserCommandsHonorCodexHome(t *testing.T) {
 	t.Setenv("CODEX_HOME", custom)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "custom-claude"))
 	opts.ClaudePath = defs[0].Files[0].Path
+	opts.CursorPath = defs[2].Files[0].Path
 	if err := Install(opts); err != nil {
 		t.Fatal(err)
 	}

@@ -42,10 +42,10 @@ func hooksCmd() *cobra.Command {
 					c.Stderr = cmd.ErrOrStderr()
 					return c.Run()
 				}
-				opts.WriteClaude = func(path string, data []byte) error {
-					return hookinstall.WriteClaudeFile(path, data, os.Geteuid(), run)
+				opts.WriteSystem = func(path string, data []byte) error {
+					return hookinstall.WriteSystemFile(path, data, os.Geteuid(), run)
 				}
-				opts.RemoveClaude = func(path string) error {
+				opts.RemoveSystem = func(path string) error {
 					if os.Geteuid() == 0 {
 						return os.Remove(path)
 					}

@@ -63,8 +63,15 @@ func Uninstall(ctx context.Context, opts Options) error {
 		return err
 	}
 	if err := hookinstall.Remove(hookinstall.Options{
-		Scope: hookinstall.User, Home: home, Setup: true, KeepClaude: organizationManaged, ClaudePath: managedSettingsPath,
-		RemoveClaude: func(_ string) error { _, err := removeManagedSettings(ctx); return err },
+		Scope: hookinstall.User, Home: home, Setup: true, KeepSystem: organizationManaged, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
+		RemoveSystem: func(path string) error {
+			if path == managedSettingsPath {
+				_, err := removeManagedSettings(ctx)
+				return err
+			}
+			return removePrivilegedFile(ctx, path)
+		},
+		WriteSystem: func(path string, data []byte) error { return writePrivilegedFile(ctx, path, data) },
 		Report: func(r hookinstall.Result) {
 			switch r.File.Kind {
 			case "claude":
@@ -82,6 +89,17 @@ func Uninstall(ctx context.Context, opts Options) error {
 					fmt.Fprintln(opts.Stdout, "  • No Codex hooks file; no hooks to remove")
 				} else {
 					fmt.Fprintln(opts.Stdout, "✓ Codex hooks removed from ~/.codex/hooks.json")
+				}
+			case "cursor":
+				switch {
+				case r.Err != nil:
+					fmt.Fprintf(opts.Stderr, "warning: Cursor hooks could not be removed from %s (%v)\n", r.File.Path, r.Err)
+				case organizationManaged:
+					fmt.Fprintf(opts.Stdout, "  • Kept Cursor hooks because an organization-managed install is active (%s)\n", r.File.Path)
+				case r.Action == "remove" || r.Action == "write":
+					fmt.Fprintf(opts.Stdout, "  ✓ Cursor hooks removed (%s)\n", r.File.Path)
+				default:
+					fmt.Fprintf(opts.Stdout, "  • No Cursor hooks to remove (%s)\n", r.File.Path)
 				}
 			case "claude-user":
 				if r.Err != nil {
@@ -210,13 +228,7 @@ func removeManagedSettings(ctx context.Context) (bool, error) {
 	if !claudemanaged.IsManagedSettingsDropIn(existing) {
 		return false, nil
 	}
-	if geteuid() == 0 {
-		if err := os.Remove(managedSettingsPath); err != nil && !os.IsNotExist(err) {
-			return false, err
-		}
-		return true, nil
-	}
-	if err := runPrivilegedCommand(ctx, "sudo", "rm", "-f", managedSettingsPath); err != nil {
+	if err := removePrivilegedFile(ctx, managedSettingsPath); err != nil {
 		return false, fmt.Errorf("remove Claude managed settings: %w", err)
 	}
 	return true, nil
