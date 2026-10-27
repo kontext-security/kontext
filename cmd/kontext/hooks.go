@@ -42,14 +42,11 @@ func hooksCmd() *cobra.Command {
 					c.Stderr = cmd.ErrOrStderr()
 					return c.Run()
 				}
-				opts.WriteSystem = func(path string, data []byte) error {
-					return hookinstall.WriteSystemFile(path, data, os.Geteuid(), run)
+				opts.WriteSystem = func(path string, data []byte, unchanged func() error) error {
+					return hookinstall.WriteSystemFile(path, data, os.Geteuid(), run, unchanged)
 				}
-				opts.RemoveSystem = func(path string) error {
-					if os.Geteuid() == 0 {
-						return os.Remove(path)
-					}
-					return run("sudo", "rm", "-f", path)
+				opts.RemoveSystem = func(path string, unchanged func() error) error {
+					return hookinstall.RemoveSystemFile(path, os.Geteuid(), run, unchanged)
 				}
 			}
 			if action == "remove" {

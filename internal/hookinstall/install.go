@@ -106,9 +106,11 @@ type Options struct {
 	KeepSystem             bool
 	ClaudePath, CursorPath string
 	// WriteSystem and RemoveSystem change machine-wide files for an
-	// unprivileged caller; nil writes them directly (root).
-	WriteSystem  func(string, []byte) error
-	RemoveSystem func(string) error
+	// unprivileged caller; nil writes them directly (root). The last argument
+	// fails when the file changed since planning; call it after any password
+	// prompt.
+	WriteSystem  func(path string, data []byte, unchanged func() error) error
+	RemoveSystem func(path string, unchanged func() error) error
 	Report       func(Result)
 }
 
@@ -316,30 +318,36 @@ func plan(file File, opts Options, remove bool) (change, error) {
 func apply(c change, opts Options) error {
 	file := c.result.File
 	// Catch changes since planning before replacing the file.
-	if file.Scope == System {
-		info, err := os.Lstat(file.Path)
-		if err == nil && !info.Mode().IsRegular() {
-			return fmt.Errorf("%s is no longer a regular file", file.Path)
+	unchanged := func() error {
+		if file.Scope == System {
+			info, err := os.Lstat(file.Path)
+			if err == nil && !info.Mode().IsRegular() {
+				return fmt.Errorf("%s is no longer a regular file", file.Path)
+			}
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
 		}
+		current, err := os.ReadFile(file.Path)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		if c.missing != errors.Is(err, os.ErrNotExist) || !bytes.Equal(current, c.before) {
+			return fmt.Errorf("%s changed during hook installation; retry", file.Path)
+		}
+		return nil
 	}
-	current, err := os.ReadFile(file.Path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := unchanged(); err != nil {
 		return err
-	}
-	if c.missing != errors.Is(err, os.ErrNotExist) || !bytes.Equal(current, c.before) {
-		return fmt.Errorf("%s changed during hook installation; retry", file.Path)
 	}
 	// ponytail: the privileged writer keeps no backup; Kontext only changes its
 	// own entries in a machine-wide file.
 	if file.Scope == System {
 		if c.after == nil && opts.RemoveSystem != nil {
-			return opts.RemoveSystem(file.Path)
+			return opts.RemoveSystem(file.Path, unchanged)
 		}
 		if c.after != nil && opts.WriteSystem != nil {
-			return opts.WriteSystem(file.Path, c.after)
+			return opts.WriteSystem(file.Path, c.after, unchanged)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(file.Path), 0755); err != nil {

@@ -45,16 +45,17 @@ func hookCommand(kontextBinary, alias string) string {
 }
 
 // IsManagedHookCommand matches on the agent and alias rather than the binary
-// path, so an install replaces entries left by a moved binary.
+// path, so an install replaces entries left by a moved binary. Only literal
+// words count: "audit;/usr/local/bin/kontext hook …" belongs to an
+// administrator, while a quoted path such as '/Applications/Kontext (Dev)/kontext'
+// is ours.
 func IsManagedHookCommand(command string) bool {
-	fields, ok := agenthooks.SplitCommand(command)
+	fields, ok := agenthooks.SplitLiteralCommand(command)
 	if !ok || len(fields) != 5 {
 		return false
 	}
-	// A command such as "audit;/usr/local/bin/kontext hook …" belongs to an
-	// administrator, not to Kontext.
-	if !filepath.IsAbs(fields[0]) || strings.ContainsAny(fields[0], ";&|<>$`()") ||
-		filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != "--agent" || fields[3] != "cursor" {
+	if !filepath.IsAbs(fields[0]) || filepath.Base(fields[0]) != "kontext" ||
+		fields[1] != "hook" || fields[2] != "--agent" || fields[3] != "cursor" {
 		return false
 	}
 	for _, event := range Events {
@@ -137,7 +138,7 @@ func withoutManagedHooks(settings map[string]any) (map[string]any, int, error) {
 			}
 			kept = append(kept, entry)
 		}
-		if len(kept) == 0 {
+		if len(kept) == 0 && len(entries) > 0 {
 			delete(hooks, name)
 		} else {
 			hooks[name] = kept

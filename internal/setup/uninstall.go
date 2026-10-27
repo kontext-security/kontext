@@ -64,14 +64,16 @@ func Uninstall(ctx context.Context, opts Options) error {
 	}
 	if err := hookinstall.Remove(hookinstall.Options{
 		Scope: hookinstall.User, Home: home, Setup: true, KeepSystem: organizationManaged, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
-		RemoveSystem: func(path string) error {
+		RemoveSystem: func(path string, unchanged func() error) error {
 			if path == managedSettingsPath {
 				_, err := removeManagedSettings(ctx)
 				return err
 			}
-			return removePrivilegedFile(ctx, path)
+			return removePrivilegedFile(ctx, path, unchanged)
 		},
-		WriteSystem: func(path string, data []byte) error { return writePrivilegedFile(ctx, path, data) },
+		WriteSystem: func(path string, data []byte, unchanged func() error) error {
+			return writePrivilegedFile(ctx, path, data, unchanged)
+		},
 		Report: func(r hookinstall.Result) {
 			switch r.File.Kind {
 			case "claude":
@@ -228,7 +230,7 @@ func removeManagedSettings(ctx context.Context) (bool, error) {
 	if !claudemanaged.IsManagedSettingsDropIn(existing) {
 		return false, nil
 	}
-	if err := removePrivilegedFile(ctx, managedSettingsPath); err != nil {
+	if err := removePrivilegedFile(ctx, managedSettingsPath, nil); err != nil {
 		return false, fmt.Errorf("remove Claude managed settings: %w", err)
 	}
 	return true, nil

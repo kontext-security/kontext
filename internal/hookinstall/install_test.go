@@ -688,3 +688,27 @@ func TestDoctorNamesMissingCodexPromptHook(t *testing.T) {
 		t.Fatalf("complete set still reported the prompt hook missing: %s", &out)
 	}
 }
+
+// A machine-wide file an administrator changes while sudo waits for a password
+// must not be overwritten with the plan made before the change.
+func TestSystemWriterRechecksAfterAuthorization(t *testing.T) {
+	opts, defs := fixture(t, User)
+	cursor := defs[2].Files[0].Path
+	write(t, cursor, `{"version":1,"hooks":{}}`, 0644)
+	const admin = `{"version":1,"hooks":{"stop":[{"command":"/opt/audit/hook"}]}}`
+	opts.WriteSystem = func(path string, data []byte, unchanged func() error) error {
+		if path == cursor {
+			write(t, cursor, admin, 0644) // the administrator's edit lands during the prompt
+		}
+		if err := unchanged(); err != nil {
+			return err
+		}
+		return os.WriteFile(path, data, 0644)
+	}
+	if err := runDefinitions(opts, defs[2:], false); err == nil || !strings.Contains(err.Error(), "changed during hook installation") {
+		t.Fatalf("runDefinitions() = %v, want a changed-file error", err)
+	}
+	if got := read(t, cursor); got != admin {
+		t.Fatalf("Cursor hooks = %s, want the administrator's edit kept", got)
+	}
+}

@@ -1028,7 +1028,7 @@ func TestUninstallRejectsStaleOrganizationConfigBeforeKeepingManagedHooks(t *tes
 	}
 }
 
-func TestInstallManagedSettingsUsesSudoWhenNotRoot(t *testing.T) {
+func TestWritePrivilegedFileUsesSudoWhenNotRoot(t *testing.T) {
 	h := newHarness(t)
 	overrideVar(t, &geteuid, func() int { return 501 })
 	data, err := managedSettingsData("/opt/homebrew/bin/kontext")
@@ -1036,8 +1036,8 @@ func TestInstallManagedSettingsUsesSudoWhenNotRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := installManagedSettings(context.Background(), data); err != nil {
-		t.Fatalf("installManagedSettings() error = %v", err)
+	if err := writePrivilegedFile(context.Background(), managedSettingsPath, data, nil); err != nil {
+		t.Fatalf("writePrivilegedFile() error = %v", err)
 	}
 
 	var sudo [][]string
@@ -1055,7 +1055,7 @@ func TestWritePrivilegedFileRootWritesAtomicallyWithMode(t *testing.T) {
 	newHarness(t)
 	path := filepath.Join(t.TempDir(), "managed-settings.d", "20-kontext.json")
 
-	if err := writePrivilegedFile(context.Background(), path, []byte(`{"hooks":{}}`+"\n")); err != nil {
+	if err := writePrivilegedFile(context.Background(), path, []byte(`{"hooks":{}}`+"\n"), nil); err != nil {
 		t.Fatalf("writePrivilegedFile() error = %v", err)
 	}
 

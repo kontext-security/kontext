@@ -7,7 +7,6 @@ package setup
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -468,12 +467,8 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	}
 	if err := hookinstall.Install(hookinstall.Options{
 		Scope: hookinstall.User, Home: home, Binary: binary, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
-		WriteSystem: func(path string, data []byte) error {
-			if path == managedSettingsPath {
-				_, err := installManagedSettings(ctx, data)
-				return err
-			}
-			return writePrivilegedFile(ctx, path, data)
+		WriteSystem: func(path string, data []byte, unchanged func() error) error {
+			return writePrivilegedFile(ctx, path, data, unchanged)
 		},
 		Report: func(r hookinstall.Result) {
 			switch r.File.Kind {
@@ -933,40 +928,16 @@ func managedSettingsData(binary string) ([]byte, error) {
 	return data, nil
 }
 
-// installManagedSettings writes the Claude drop-in, skipping the write entirely
-// when the file on disk already has exactly this content.
-//
-// The write needs root, so it costs an administrator password. Re-running setup
-// or adding a second profile does not change these settings — they name the
-// binary and the hook events, neither of which varies per profile — so asking
-// for a password to rewrite identical bytes is pure friction. It also trains
-// people to type a password at a prompt that did not need one.
-func installManagedSettings(ctx context.Context, data []byte) (string, error) {
-	if current, err := os.ReadFile(managedSettingsPath); err == nil && bytes.Equal(current, data) {
-		return managedSettingsPath, nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		// An unreadable existing file must not be silently overwritten: the
-		// privileged write would mask whatever the real problem is.
-		return "", fmt.Errorf("cannot read existing Claude managed settings: %w", err)
-	}
-	if err := writePrivilegedFile(ctx, managedSettingsPath, data); err != nil {
-		return "", err
-	}
-	return managedSettingsPath, nil
+func writePrivilegedFile(ctx context.Context, path string, data []byte, unchanged func() error) error {
+	return hookinstall.WriteSystemFile(path, data, geteuid(), privilegedRunner(ctx), unchanged)
 }
 
-func writePrivilegedFile(ctx context.Context, path string, data []byte) error {
-	return hookinstall.WriteSystemFile(path, data, geteuid(), func(name string, args ...string) error { return runPrivilegedCommand(ctx, name, args...) })
+func removePrivilegedFile(ctx context.Context, path string, unchanged func() error) error {
+	return hookinstall.RemoveSystemFile(path, geteuid(), privilegedRunner(ctx), unchanged)
 }
 
-func removePrivilegedFile(ctx context.Context, path string) error {
-	if geteuid() == 0 {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	return runPrivilegedCommand(ctx, "sudo", "rm", "-f", path)
+func privilegedRunner(ctx context.Context) func(string, ...string) error {
+	return func(name string, args ...string) error { return runPrivilegedCommand(ctx, name, args...) }
 }
 
 // preflightCursorHooks stops setup before anything is written when Cursor's

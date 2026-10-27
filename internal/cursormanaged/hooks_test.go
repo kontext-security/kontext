@@ -46,6 +46,28 @@ func TestMergeRemoveValidate(t *testing.T) {
 		t.Fatal("remove emptied a file that held no Kontext hooks, so the installer would delete it")
 	}
 
+	// An array an administrator left empty is theirs: removal must not touch
+	// it, or the installer asks for sudo to rewrite a file with no Kontext hooks.
+	emptyArray := decode(t, `{"version":1,"hooks":{"beforeShellExecution":[]}}`)
+	if err := RemoveManagedHooks(emptyArray); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(encode(t, emptyArray)); !strings.Contains(got, "beforeShellExecution") {
+		t.Fatalf("remove dropped a foreign empty array:\n%s", got)
+	}
+
+	// A quoted binary path is ours, so a rerun replaces the set instead of
+	// adding a second one.
+	quoted := map[string]any{}
+	for range 2 {
+		if err := MergeManagedHooks(quoted, "/Applications/Kontext (Dev)/kontext"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(quoted["hooks"].(map[string]any)["preToolUse"].([]any)); n != 1 {
+		t.Fatalf("two installs left %d preToolUse hooks, want 1", n)
+	}
+
 	for _, broken := range []string{
 		`{"version":1,"hooks":{}}`,
 		strings.Replace(string(merged), `"version": 1`, `"version": 0`, 1),
