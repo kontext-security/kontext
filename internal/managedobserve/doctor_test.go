@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -328,6 +329,66 @@ func TestPrintStatusDaemonDeadPIDTreatedAsUnknownAndFixable(t *testing.T) {
 	}
 }
 
+// The hook only kickstarts the agent, which cannot revive one launchd has
+// unloaded. Doctor must not promise the next session will start it then.
+func TestPrintStatusDaemonDownReadoutFollowsLaunchdState(t *testing.T) {
+	const restartPromise = "  daemon: not running (it starts with your next Claude Code session)\n"
+	const unloaded = "  daemon: stopped (launchd has unloaded its agent, so your next Claude Code session will not start it; "
+	selfServeRemedy := "restart it through its managing installation)"
+	if wantAutomaticDaemonRepair() {
+		selfServeRemedy = "run `launchctl bootstrap gui/"
+	}
+	for _, tc := range []struct {
+		name   string
+		scope  managedconfig.Scope
+		loaded func() (bool, error)
+		want   string
+	}{
+		{"loaded", managedconfig.ScopeUser, func() (bool, error) { return true, nil }, restartPromise},
+		{"unknown", managedconfig.ScopeUser, func() (bool, error) { return false, errors.New("launchctl timed out") }, restartPromise},
+		{"unloaded self-serve", managedconfig.ScopeUser, func() (bool, error) { return false, nil }, unloaded + selfServeRemedy},
+		{"unloaded org-managed", managedconfig.ScopeSystem, func() (bool, error) { return false, nil }, unloaded + "restart it through its managing installation)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newDoctorTestEnv(t)
+			opts := env.options()
+			opts.Dial = func(string, string, time.Duration) (net.Conn, error) {
+				return nil, syscall.ECONNREFUSED
+			}
+			opts.LoadConfig = env.loadConfig(tc.scope)
+			opts.LaunchAgentLoaded = tc.loaded
+
+			var out bytes.Buffer
+			status, report := printStatus(&out, "1.2.3", opts)
+
+			output := out.String()
+			if !strings.Contains(output, tc.want) {
+				t.Fatalf("output = %q, want %q", output, tc.want)
+			}
+			if tc.want != restartPromise && strings.Contains(output, restartPromise) {
+				t.Fatalf("output = %q, must not promise a restart for an unloaded agent", output)
+			}
+			if status.Healthy || report.DaemonRunning {
+				t.Fatalf("status = %+v, report.DaemonRunning = %v, want unhealthy and not running", status, report.DaemonRunning)
+			}
+		})
+	}
+}
+
+func TestLaunchctlPrintMeansAbsent(t *testing.T) {
+	for output, want := range map[string]bool{
+		"Bad request.\nCould not find service \"security.kontext.managed-observe\" in domain for user gui: 501\n": true,
+		"Service is not loaded.":         true,
+		"No such service":                true,
+		"Unrecognized target specifier.": false,
+		"":                               false,
+	} {
+		if got := LaunchctlPrintMeansAbsent(output); got != want {
+			t.Errorf("LaunchctlPrintMeansAbsent(%q) = %v, want %v", output, got, want)
+		}
+	}
+}
+
 func TestPIDAliveRejectsNonPositivePID(t *testing.T) {
 	for _, pid := range []int{0, -1} {
 		if pidAlive(pid) {
@@ -614,6 +675,7 @@ func (e doctorTestEnv) options() doctorOptions {
 		},
 		Now:                func() time.Time { return e.now },
 		LaunchAgentPresent: func() bool { return true },
+		LaunchAgentLoaded:  func() (bool, error) { return true, nil },
 		LoadConfig:         e.loadConfig(managedconfig.ScopeUser),
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -282,6 +283,15 @@ func kickstartLaunchd(ctx context.Context, label string, kill bool) error {
 	args = append(args, "gui/"+itoa(os.Getuid())+"/"+label)
 	cmd := exec.CommandContext(ctx, "launchctl", args...)
 	return cmd.Run()
+}
+
+// LaunchctlPrintMeansAbsent reports whether `launchctl print` failed because
+// the service is not loaded, as opposed to failing to answer at all.
+func LaunchctlPrintMeansAbsent(output string) bool {
+	normalized := strings.ToLower(output)
+	return strings.Contains(normalized, "could not find service") ||
+		strings.Contains(normalized, "service is not loaded") ||
+		strings.Contains(normalized, "no such service")
 }
 
 func itoa(value int) string {
