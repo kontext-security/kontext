@@ -55,6 +55,7 @@ func applyDecisionFact(action map[string]any, event risk.HookEvent, decision ris
 			AlternateToolIDs:       evidence.AlternateToolIDs,
 			AlsoAdmin:              evidence.AlsoAdmin,
 			AlsoActions:            evidence.AlsoActions,
+			AlsoExport:             evidence.AlsoExport,
 		}
 	} else if evidence != nil {
 		// The server's state is the cause, not the cached deployment's mode:

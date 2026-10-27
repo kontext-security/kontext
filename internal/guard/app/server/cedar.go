@@ -140,7 +140,7 @@ func (p *cedarPolicyProvider) evaluate(snapshot cedarpolicy.Snapshot, event risk
 	evidence.ToolID = toolID
 	evidence.AlternateToolIDs = alternates
 	evidence.Shell = projections
-	evidence.Tool, evidence.AlsoAdmin = toolClassification(toolID, event)
+	evidence.Tool, evidence.AlsoAdmin, evidence.AlsoExport = toolClassification(toolID, event)
 	if class, ok := toolcatalog.ClassifyCall(toolID, event.ToolName, event.ToolInput); ok {
 		evidence.AlsoActions = class.AlsoActions
 	}
@@ -363,7 +363,7 @@ func resolveTool(event risk.HookEvent, legacyUnknown bool) (string, []cedareval.
 		// Only an in-catalog reading with a tier can add a match; an
 		// unrecognized one would only trip the opt-in guards on the URL's kinds.
 		if inCatalog, ok := toolcatalog.ResolveInCatalog(toolID, event.ToolName, event.ToolInput); ok && inCatalog != toolID {
-			if tool, _ := toolClassification(inCatalog, event); tool != nil {
+			if tool, _, _ := toolClassification(inCatalog, event); tool != nil {
 				alternates = append(alternates, inCatalog)
 			}
 		}
@@ -411,15 +411,15 @@ func namesUnknownTool(snapshot cedarpolicy.Snapshot) bool {
 // context.tool, or nil for shell, unrecognized and non-provider calls.
 // alsoAdmin marks a delete that also changes administration: context.tool
 // carries one access, so the call is evaluated once more as admin.
-func toolClassification(toolID string, event risk.HookEvent) (tool *cedareval.ToolClassificationV2, alsoAdmin bool) {
+func toolClassification(toolID string, event risk.HookEvent) (tool *cedareval.ToolClassificationV2, alsoAdmin, alsoExport bool) {
 	if toolID == cedareval.ToolShellV2 {
-		return nil, false
+		return nil, false, false
 	}
 	class, ok := toolcatalog.ClassifyCall(toolID, event.ToolName, event.ToolInput)
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
-	return &cedareval.ToolClassificationV2{Provider: class.Provider, Product: class.Product, Access: class.Access}, class.AlsoAdmin
+	return &cedareval.ToolClassificationV2{Provider: class.Provider, Product: class.Product, Access: class.Access}, class.AlsoAdmin, class.AlsoExport
 }
 
 // alternates are other tool ids the call is also judged as (see
@@ -447,9 +447,9 @@ func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent
 		var inputs []cedareval.ToolUseInputV2
 		for _, id := range append([]string{toolID}, alternates...) {
 			input := base
-			var alsoAdmin bool
+			var alsoAdmin, alsoExport bool
 			input.ToolID = id
-			input.Tool, alsoAdmin = toolClassification(id, event)
+			input.Tool, alsoAdmin, alsoExport = toolClassification(id, event)
 			inputs = append(inputs, input)
 			if class, ok := toolcatalog.ClassifyCall(id, event.ToolName, event.ToolInput); ok && class.AlsoActions && input.Tool != nil {
 				actions := *input.Tool
@@ -457,6 +457,16 @@ func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent
 				actionInput := input
 				actionInput.Tool = &actions
 				inputs = append(inputs, actionInput)
+			}
+			if alsoExport {
+				export := *input.Tool
+				export.Product = "export"
+				// Export is an additional read of the source data; the
+				// original request retains every write/delete/admin tier.
+				export.Access = toolcatalog.AccessRead
+				exportInput := input
+				exportInput.Tool = &export
+				inputs = append(inputs, exportInput)
 			}
 			if alsoAdmin {
 				admin := *input.Tool

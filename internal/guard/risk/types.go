@@ -177,6 +177,7 @@ type CedarEvidence struct {
 	AlsoAdmin bool `json:"alsoAdmin,omitempty"`
 	// AlsoActions adds workflow protection without removing the code tier.
 	AlsoActions bool `json:"alsoActions,omitempty"`
+	AlsoExport  bool `json:"alsoExport,omitempty"`
 }
 
 // ClassifierAnnotation is one action's risk annotation. AgentTask and the

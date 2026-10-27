@@ -326,6 +326,8 @@ type ProviderClassification struct {
 	// admin.
 	AlsoAdmin   bool
 	AlsoActions bool
+	// AlsoExport adds an export reading without losing the original tier.
+	AlsoExport bool
 }
 
 // ClassifyCall classifies the call behind toolID, the id Resolve gave it. A
@@ -381,6 +383,9 @@ func classifyDatabricksSQLCall(toolID string, input map[string]any) (ProviderCla
 	}
 	query, _ := input["query"].(string)
 	deletes, admin, touchesSecrets, recognized := ClassifyDatabricksSQL(query)
+	// A no-write guarantee does not exclude outbound data. Opaque SQL may
+	// export through either SQL tool, while ordinary readable SELECTs do not.
+	class.AlsoExport = DatabricksSQLExports(query)
 	if !recognized && toolID == databricksExecuteSQL {
 		deletes, admin = true, true
 	}
