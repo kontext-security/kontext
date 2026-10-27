@@ -41,6 +41,7 @@ func TestScopedEffectContract(t *testing.T) {
 }
 
 func TestScopedAuthorizationAndBounds(t *testing.T) {
+	requireEmbeddedModel(t)
 	_, tok := nativeTestModel(t)
 	base := Input{UserRequest: "Please delete that file.", ToolName: "delete_file", ToolArguments: map[string]any{"file_id": "example"}}
 	if _, e := packScopedInput(context.Background(), tok, base); errorCode(e) != ErrorCompoundRequest {
@@ -68,6 +69,7 @@ func TestScopedAuthorizationAndBounds(t *testing.T) {
 }
 
 func TestScopedConcurrentInference(t *testing.T) {
+	requireEmbeddedModel(t)
 	b, e := newNativeBackend(context.Background(), normalizeConfig(Config{StartupTimeout: nativeTestStartupTimeout}))
 	if e != nil {
 		t.Fatal(e)

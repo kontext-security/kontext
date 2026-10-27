@@ -22,6 +22,9 @@ var harnessEnvelopes = []string{
 	"<ci-monitor-event>",      // Claude desktop: a watched pull request changed
 	"<cross-session-message",  // Claude desktop: another session wrote
 	"[Cross-session",          // the same, in its plain-text form
+	"<agent-message",          // Claude Code: a subagent's hand-back
+	"<bash-input>",            // Claude Code: a "!" shell command, run without the model
+	"<local-command-stdout>",  // Claude Code: a local slash command's output
 	"<environment_context>",   // Codex: working directory, date, shell
 	"<external_codex_apps_",   // Codex: app integration context
 	"<codex_internal_context", // Codex: internal context

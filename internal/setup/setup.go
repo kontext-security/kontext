@@ -157,9 +157,6 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	}
 	fmt.Fprintln(opts.Stdout, "Kontext setup")
 
-	if err := preflightLegacyUserHooks(); err != nil {
-		return err
-	}
 	if err := preflightCodexUserHooks(binary); err != nil {
 		return err
 	}
@@ -471,6 +468,12 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 			switch r.File.Kind {
 			case "claude":
 				fmt.Fprintf(opts.Stdout, "  ✓ Claude Code managed hooks installed (%s)\n", r.File.Path)
+			case "claude-user":
+				if r.Err != nil {
+					fmt.Fprintf(opts.Stderr, "warning: Claude Code user hooks were not installed (%v). Managed hooks are installed; they cover Claude Code unless your organization delivers Claude Code managed settings from claude.ai. Fix the file, then run `kontext hooks install --scope user --binary %s`.\n", r.Err, binary)
+				} else {
+					fmt.Fprintf(opts.Stdout, "  ✓ Claude Code user hooks installed (%s)\n", r.File.Path)
+				}
 			case "codex":
 				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", r.File.Path)
 			case "feature":
@@ -563,10 +566,6 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		fmt.Fprintf(opts.Stderr, "warning: the background agent has not come up yet (%v); check `tail -f %s`\n", err, logPath)
 	} else {
 		fmt.Fprintln(opts.Stdout, "  ✓ Background agent running")
-	}
-
-	if err := removeLegacyUserHooks(); err != nil {
-		fmt.Fprintf(opts.Stderr, "warning: legacy Claude Code user hooks could not be removed after installing managed hooks (%v)\n", err)
 	}
 
 	fmt.Fprintln(opts.Stdout, "\nNext")
@@ -945,69 +944,6 @@ func installManagedSettings(ctx context.Context, data []byte) (string, error) {
 
 func writePrivilegedFile(ctx context.Context, path string, data []byte) error {
 	return hookinstall.WriteClaudeFile(path, data, geteuid(), func(name string, args ...string) error { return runPrivilegedCommand(ctx, name, args...) })
-}
-
-func removeLegacyUserHooks() error {
-	path, err := userSettingsPathNoCreate()
-	if err != nil {
-		return fmt.Errorf("clean legacy Claude Code hooks: %w", err)
-	}
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("clean legacy Claude Code hooks: %w", err)
-	}
-	settings, err := claudemanaged.ReadUserSettings(path)
-	if err != nil {
-		return fmt.Errorf("clean legacy Claude Code hooks: %w", err)
-	}
-	if disabled, _ := settings["disableAllHooks"].(bool); disabled {
-		return fmt.Errorf("clean legacy Claude Code hooks: disableAllHooks must not be true")
-	}
-	before, err := json.Marshal(settings)
-	if err != nil {
-		return fmt.Errorf("clean legacy Claude Code hooks: %w", err)
-	}
-	if err := claudemanaged.RemoveManagedHooks(settings); err != nil {
-		return fmt.Errorf("clean legacy Claude Code hooks: %w", err)
-	}
-	after, err := json.Marshal(settings)
-	if err != nil {
-		return fmt.Errorf("clean legacy Claude Code hooks: %w", err)
-	}
-	if bytes.Equal(before, after) {
-		return nil
-	}
-	if err := claudemanaged.BackupUserSettings(path, settingsBackupLabel); err != nil {
-		return fmt.Errorf("clean legacy Claude Code hooks: %w", err)
-	}
-	if err := claudemanaged.WriteUserSettings(path, settings); err != nil {
-		return fmt.Errorf("clean legacy Claude Code hooks: %w", err)
-	}
-	return nil
-}
-
-func preflightLegacyUserHooks() error {
-	path, err := userSettingsPathNoCreate()
-	if err != nil {
-		return fmt.Errorf("check legacy Claude Code hooks: %w", err)
-	}
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("check legacy Claude Code hooks: %w", err)
-	}
-	settings, err := claudemanaged.ReadUserSettings(path)
-	if err != nil {
-		return fmt.Errorf("check legacy Claude Code hooks: %w", err)
-	}
-	if disabled, _ := settings["disableAllHooks"].(bool); disabled {
-		return fmt.Errorf("check legacy Claude Code hooks: disableAllHooks must not be true")
-	}
-	if err := claudemanaged.RemoveManagedHooks(settings); err != nil {
-		return fmt.Errorf("check legacy Claude Code hooks: %w", err)
-	}
-	return nil
 }
 
 func preflightCodexUserHooks(binary string) error {

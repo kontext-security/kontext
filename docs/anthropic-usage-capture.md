@@ -127,10 +127,14 @@ for a completed turn; it does not implement stopping or limiting an agent.
    A harness message delivered as a prompt is not a turn: when, with system
    reminders removed, it is empty or opens with `<task-notification>`,
    `<side-sessions-event>`, `<ci-monitor-event>`, `<cross-session-message`,
-   `[Cross-session` or Codex's injected context (`<environment_context>`,
+   `[Cross-session`, a subagent's `<agent-message` hand-back, a `!` shell
+   command's `<bash-input>`, a local command's `<local-command-stdout>`, or
+   Codex's injected context (`<environment_context>`,
    `<external_codex_apps_…`, `<codex_internal_context`), no turn is minted,
    the transcript starts none, and the work after it stays with the prompt
-   before (`modelusage.IsHarnessEnvelope`).
+   before (`modelusage.IsHarnessEnvelope`). Nor is a prompt in a Codex
+   thread the app runs for itself, recognised by its hooks carrying no
+   transcript path (see `openai-usage-capture.md`).
 
    The reader matches usage to turns by time, not by text or ordinal. Every
    real prompt line starts a transcript turn: a `user` row that is not a tool

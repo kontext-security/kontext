@@ -11,6 +11,7 @@ import (
 )
 
 func TestCandidateMatchesPython(t *testing.T) {
+	requireEmbeddedModel(t)
 	m, tok := nativeTestModel(t)
 	path := os.Getenv("KONTEXT_MERLIN_PARITY_FIXTURE")
 	if path == "" {
@@ -95,6 +96,7 @@ func TestCandidateMatchesPython(t *testing.T) {
 }
 
 func TestEmbeddedTokenizerMatchesHuggingFace(t *testing.T) {
+	requireEmbeddedModel(t)
 	_, tok := nativeTestModel(t)
 	data, err := os.ReadFile("testdata/tokenizer_golden.json")
 	if err != nil {

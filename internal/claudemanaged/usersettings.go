@@ -1,8 +1,12 @@
 package claudemanaged
 
 import (
+	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
@@ -15,17 +19,74 @@ import (
 // foreign JSON content (their hooks, permissions, env, unknown keys), be
 // idempotent, and be cleanly reversible.
 
-// UserSettingsPath returns ~/.claude/settings.json, creating ~/.claude.
+// UserSettingsPath resolves the active user settings and creates its directory.
 func UserSettingsPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	claudeDir := filepath.Join(home, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+	path, err := UserSettingsPathNoCreate(home)
+	if err != nil {
 		return "", err
 	}
-	return filepath.Join(claudeDir, "settings.json"), nil
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// UserSettingsPathNoCreate honors Claude's configuration-directory override.
+// Discovery, dry runs and daemon preflight must not create settings directories.
+func UserSettingsPathNoCreate(home string) (string, error) {
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if dir == "" {
+		dir = filepath.Join(home, ".claude")
+	}
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("Claude configuration directory must be absolute: %s", dir)
+	}
+	return filepath.Join(dir, "settings.json"), nil
+}
+
+// CanonicalManagedHooks checks the complete owned groups, including command
+// spelling, matcher, timeout and extra handler fields. Claude deduplicates equal
+// handlers across settings sources, but semantically equivalent commands or
+// different timeout values can execute twice. Foreign groups are ignored.
+func CanonicalManagedHooks(data []byte, binary string) bool {
+	var settings map[string]any
+	if json.Unmarshal(data, &settings) != nil || settings == nil {
+		return false
+	}
+	hooks, ok := settings["hooks"].(map[string]any)
+	if !ok {
+		return false
+	}
+	owned := map[string]any{}
+	for _, event := range SupportedEvents {
+		name := event.Name.String()
+		groups, _ := hooks[name].([]any)
+		var ownedGroups []any
+		for _, raw := range groups {
+			group, _ := raw.(map[string]any)
+			handlers, _ := group["hooks"].([]any)
+			var ownedHandlers []any
+			for _, handler := range handlers {
+				// Use the same command/args ownership rules as installation.
+				probe := map[string]any{name: []any{map[string]any{"hooks": []any{handler}}}}
+				if agenthooks.HasCommand(probe, isManagedHookHandler) {
+					ownedHandlers = append(ownedHandlers, handler)
+				}
+			}
+			if len(ownedHandlers) > 0 {
+				next := maps.Clone(group)
+				next["hooks"] = ownedHandlers
+				ownedGroups = append(ownedGroups, next)
+			}
+		}
+		owned[name] = ownedGroups
+	}
+	canonical, err := agenthooks.ToJSONAny(Template(binary).Hooks)
+	return err == nil && reflect.DeepEqual(owned, canonical)
 }
 
 // ReadUserSettings parses the settings file into a generic map so unknown

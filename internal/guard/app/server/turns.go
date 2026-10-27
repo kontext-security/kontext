@@ -99,8 +99,9 @@ func (r guardHookRuntime) trackTurn(event risk.HookEvent) (stamped risk.HookEven
 	prompt, _ := event.ToolInput["prompt"].(string)
 	// A harness message (a task notification, a session event) arrives as a
 	// prompt but starts no turn: the work after it stays with the person's
-	// prompt before, and nothing is classified for it.
-	if agent := turnAgent(event.Agent); event.HookEventName == hook.HookUserPromptSubmit.String() && !modelusage.IsHarnessEnvelope(prompt) && agent != "" {
+	// prompt before, and nothing is classified for it. Neither does a thread
+	// the agent app runs for itself.
+	if agent := turnAgent(event.Agent); event.HookEventName == hook.HookUserPromptSubmit.String() && !modelusage.IsHarnessEnvelope(prompt) && agent != "" && !appInternalThread(agent, event) {
 		event.TurnID = r.turns.mint(session)
 		return event, &mintedTurn{
 			record: sqlite.TurnRecord{
@@ -148,6 +149,18 @@ func (r guardHookRuntime) recordTurn(ctx context.Context, event *risk.HookEvent,
 		}
 		event.TurnID = id
 	}
+}
+
+// appInternalThread reports a Codex thread the app runs for itself rather
+// than for a person: Codex Desktop forks the thread after a turn to predict
+// the next message (thread/fork, ephemeral, threadSource
+// composer_predictions, a server-supplied prompt), and generates titles,
+// summaries and commit messages in ephemeral threads. An ephemeral thread
+// keeps no rollout, so its hooks carry no transcript path, while a person's
+// thread always has one. Its usage is never captured either: there is no
+// rollout to read.
+func appInternalThread(agent string, event risk.HookEvent) bool {
+	return agent == "codex" && event.TranscriptPath == ""
 }
 
 // turnAgent maps a hook agent to the turn/v1 vocabulary; "" for agents
