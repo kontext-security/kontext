@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "afterMCPExecution": [
+      {
+        "command": "'<bin>' hook --agent 'cursor' 'post-tool-use'",
+        "timeout": 20
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "'<bin>' hook --agent 'cursor' 'pre-tool-use'",
+        "timeout": 20
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "'<bin>' hook --agent 'cursor' 'user-prompt-submit'",
+        "timeout": 20
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "'<bin>' hook --agent 'cursor' 'post-tool-use'",
+        "timeout": 20
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "'<bin>' hook --agent 'cursor' 'post-tool-use-failure'",
+        "timeout": 20
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "'<bin>' hook --agent 'cursor' 'pre-tool-use'",
+        "timeout": 20
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "'<bin>' hook --agent 'cursor' 'session-end'",
+        "timeout": 20
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": "'<bin>' hook --agent 'cursor' 'session-start'",
+        "timeout": 20
+      }
+    ],
+    "stop": [
+      {
+        "command": "'<bin>' hook --agent 'cursor' 'stop'",
+        "timeout": 20
+      }
+    ]
+  },
+  "version": 1
+}

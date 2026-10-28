@@ -71,6 +71,8 @@ func TestClaudeHookLayersDispatch(t *testing.T) {
 		{"repair_different_paths", User, "repair-path", 1},
 		{"different_timeouts_negative_control", User, "timeout", 2},
 		{"repair_different_timeouts", User, "repair-timeout", 1},
+		{"project_disable_all_user_only", User, "project-disable-user", 0},
+		{"project_disable_all_with_managed", User, "project-disable", 1},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			if err := os.RemoveAll(managed); err != nil {
@@ -135,6 +137,10 @@ func TestClaudeHookLayersDispatch(t *testing.T) {
 					t.Fatal(err)
 				}
 				write(t, user, strings.ReplaceAll(string(raw), fake, alias), 0600)
+			case "project-disable-user":
+				if err := os.Remove(dropin); err != nil {
+					t.Fatal(err)
+				}
 			case "timeout", "repair-timeout":
 				write(t, user, strings.ReplaceAll(string(raw), `"timeout":20`, `"timeout":21`), 0600)
 			}
@@ -147,6 +153,9 @@ func TestClaudeHookLayersDispatch(t *testing.T) {
 			workspace := filepath.Join(home, "workspace")
 			if err := os.Mkdir(workspace, 0700); err != nil {
 				t.Fatal(err)
+			}
+			if strings.HasPrefix(scenario.change, "project-disable") {
+				write(t, filepath.Join(workspace, ".claude", "settings.json"), `{"disableAllHooks":true}`, 0644)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 			defer cancel()
