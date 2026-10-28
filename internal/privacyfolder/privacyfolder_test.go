@@ -77,6 +77,9 @@ func TestGuarded(t *testing.T) {
 }
 
 func TestGuardedOffMacOS(t *testing.T) {
+	if want := runtime.GOOS == "darwin"; Enabled != want {
+		t.Fatalf("Enabled = %v on %s, want %v", Enabled, runtime.GOOS, want)
+	}
 	enabled := Enabled
 	Enabled = false
 	t.Cleanup(func() { Enabled = enabled })

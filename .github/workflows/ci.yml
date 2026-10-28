@@ -105,3 +105,11 @@ jobs:
       - name: Test the packages that pass on Windows
         shell: bash
         run: grep -v '^#' .github/windows-test-packages.txt | xargs go test -count=1
+
+      # Windows-specific tests in packages that do not pass as a whole yet; they
+      # move into the list above with their package.
+      - name: Test the Windows-specific tests of the other packages
+        shell: bash
+        run: |
+          go test -count=1 -run '^(TestGuardedInfoStartsAtTheVolume|TestStatRefusesJunctionAndPlaceholderAncestors|TestReadGuardedFailsClosed|TestDatalessRecallAttributes)$' ./pkg/agentauthority/
+          go test -count=1 -run '^(TestDefaultSocketPathListensUnderLocalAppData|TestEnsureSocketDirRefusesPathsWindowsCannotBind|TestEnsureSocketDirSetsOwnerOnlyDACL|TestEnsureSocketDirRejectsNonDirectoryParent|TestEnsureSocketDirRejectsSymlinkParent)$' ./internal/managedobserve/
