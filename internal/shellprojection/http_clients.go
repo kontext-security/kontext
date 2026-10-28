@@ -101,7 +101,7 @@ type webCmdletParameter struct {
 var webCmdletParameters = []webCmdletParameter{
 	{name: "uri", value: true, role: "uri"},
 	{name: "method", value: true, role: "method"},
-	{name: "custommethod", value: true, role: "method"},
+	{name: "custommethod", value: true, role: "method", aliases: []string{"cm"}},
 	{name: "body", value: true, role: "body"},
 	{name: "infile", value: true, role: "infile"},
 	{name: "form", value: true, role: "body"},
@@ -134,13 +134,13 @@ var webCmdletParameters = []webCmdletParameter{
 }
 
 // windowsPowerShellWebParameters are the parameters Invoke-WebRequest has in
-// Windows PowerShell 5.1, with the common parameters.
+// Windows PowerShell 5.1, with its common parameters (-ProgressAction came in 7.4).
 var windowsPowerShellWebParameters = []string{
 	"usebasicparsing", "uri", "websession", "sessionvariable", "credential", "usedefaultcredentials",
 	"certificatethumbprint", "certificate", "useragent", "disablekeepalive", "timeoutsec", "headers",
 	"maximumredirection", "method", "proxy", "proxycredential", "proxyusedefaultcredentials", "body",
 	"contenttype", "transferencoding", "infile", "outfile", "passthru",
-	"verbose", "debug", "erroraction", "warningaction", "informationaction", "progressaction", "errorvariable",
+	"verbose", "debug", "erroraction", "warningaction", "informationaction", "errorvariable",
 	"warningvariable", "informationvariable", "outvariable", "outbuffer", "pipelinevariable",
 }
 
