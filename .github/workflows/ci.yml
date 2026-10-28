@@ -111,5 +111,5 @@ jobs:
       - name: Test the Windows-specific tests of the other packages
         shell: bash
         run: |
-          go test -count=1 -run '^(TestGuardedInfoStartsAtTheVolume|TestStatRefusesJunctionAndPlaceholderAncestors|TestReadGuardedFailsClosed|TestDatalessRecallAttributes)$' ./pkg/agentauthority/
+          go test -count=1 -run '^(TestGuardedInfoStartsAtTheVolume|TestGuardedInfoRefusesAFlaggedRoot|TestStatRefusesJunctionAndPlaceholderAncestors|TestReadGuardedFailsClosed|TestDatalessRecallAttributes)$' ./pkg/agentauthority/
           go test -count=1 -run '^(TestDefaultSocketPathListensUnderLocalAppData|TestEnsureSocketDirRefusesPathsWindowsCannotBind|TestEnsureSocketDirSetsOwnerOnlyDACL|TestEnsureSocketDirRejectsNonDirectoryParent|TestEnsureSocketDirRejectsSymlinkParent)$' ./internal/managedobserve/
