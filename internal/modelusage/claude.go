@@ -400,13 +400,18 @@ func (s *claudeState) parseLine(text []byte) error {
 		}
 	}
 	// The split is one value: a snapshot that reports either lifetime
-	// replaces both. A split kept from an earlier snapshot can exceed this
-	// snapshot's total; report it as missing then.
+	// replaces both. A split kept from an earlier snapshot is reported as
+	// missing once it exceeds this snapshot's total, or when this snapshot's
+	// own split was rejected and the kept one doesn't exactly fit the total.
 	if short != nil || long != nil {
 		record.Tokens.CacheWrite5m, record.Tokens.CacheWrite1h = short, long
 	}
-	if t := &record.Tokens; t.InputCacheWrite != nil && !(cacheCreation{FiveMinute: t.CacheWrite5m, OneHour: t.CacheWrite1h}).within(*t.InputCacheWrite) {
-		t.CacheWrite5m, t.CacheWrite1h = nil, nil
+	rejected := short == nil && long == nil && u.CacheCreation.reported()
+	if t := &record.Tokens; t.InputCacheWrite != nil {
+		kept := cacheCreation{FiveMinute: t.CacheWrite5m, OneHour: t.CacheWrite1h}
+		if !kept.within(*t.InputCacheWrite) || rejected && !kept.sums(*t.InputCacheWrite) {
+			t.CacheWrite5m, t.CacheWrite1h = nil, nil
+		}
 	}
 	for _, field := range []struct {
 		dst *string

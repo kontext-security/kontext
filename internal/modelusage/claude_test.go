@@ -160,6 +160,19 @@ func TestReadClaudeTranscriptCacheSplitAfterFallback(t *testing.T) {
 	if got := records[0].Tokens; got.CacheWrite5m != nil || got.CacheWrite1h != nil {
 		t.Fatalf("an overflowing split is unknown: %+v", got)
 	}
+	// A later snapshot whose own split is rejected also drops an earlier
+	// partial split that no longer exactly fits the total.
+	const halfWrite = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":50,"ephemeral_1h_input_tokens":0}}}}
+`
+	const contradicted = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[],"usage":{"cache_creation_input_tokens":80,"cache_creation":{"ephemeral_5m_input_tokens":90,"ephemeral_1h_input_tokens":0}}}}
+`
+	records, err = ReadClaudeTranscript(strings.NewReader(halfWrite + contradicted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 80 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
+		t.Fatalf("a contradicted snapshot should drop an earlier partial split: %+v", got)
+	}
 
 	// The attempt that produced the message supplies its split even when it
 	// names a lifetime for only part of the write.
