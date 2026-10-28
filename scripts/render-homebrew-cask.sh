@@ -4,8 +4,12 @@
 # A cask installs the prebuilt, notarized binary as is. Unlike the formula,
 # which has no bottle, Homebrew does not treat it as a source build, so it
 # never runs its Xcode and Command Line Tools checks. Only publish it for
-# releases whose macOS binaries are notarized: casks keep the quarantine
-# attribute, and Gatekeeper blocks an un-notarized binary.
+# releases whose macOS binaries are notarized: Homebrew quarantines what a
+# cask downloads, and Gatekeeper blocks an un-notarized binary. The cask then
+# removes that quarantine attribute, because launchd starts the daemon from
+# this binary, and macOS holds a quarantined binary that launchd starts at its
+# "downloaded from the internet" prompt until someone clicks Open. That prompt
+# came back after every upgrade.
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
@@ -53,6 +57,17 @@ cask "kontext" do
     on_intel do
       url "${base_url}/kontext_#{version}_darwin_amd64.tar.gz"
       sha256 "${darwin_amd64_sha}"
+    end
+
+    # Preflight runs after extraction and before the binary is linked, so
+    # nothing can start the new binary while it is still quarantined. The
+    # attribute is absent with --no-quarantine, hence must_succeed: false.
+    # Needs Homebrew 6.0.16 or newer.
+    preflight_steps do
+      run "/usr/bin/xattr",
+          args:         ["-d", "com.apple.quarantine", "{{staged_path}}/kontext"],
+          must_succeed: false,
+          print_stderr: false
     end
   end
   on_linux do

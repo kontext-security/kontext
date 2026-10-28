@@ -88,6 +88,40 @@ jobs:
               return 1
             fi
           }
+          # Starts the binary the way launchd starts the daemon. A quarantined
+          # binary started by launchd waits on Gatekeeper's "downloaded from
+          # the internet" prompt, which nobody clicks.
+          runs_from_launchd() {
+            local binary="$1" version="$2" label="security.kontext.ci-launchd-check"
+            local plist="$RUNNER_TEMP/launchd-check.plist" out="$RUNNER_TEMP/launchd.out" err="$RUNNER_TEMP/launchd.err"
+            if xattr -p com.apple.quarantine "$binary" >/dev/null 2>&1; then
+              echo "::error::$binary still has the quarantine attribute"
+              return 1
+            fi
+            cat > "$plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>Label</key><string>$label</string>
+            <key>ProgramArguments</key><array><string>$binary</string><string>--version</string></array>
+            <key>RunAtLoad</key><true/>
+            <key>StandardOutPath</key><string>$out</string>
+            <key>StandardErrorPath</key><string>$err</string>
+          </dict></plist>
+          PLIST
+            launchctl bootstrap "gui/$(id -u)" "$plist"
+            for _ in $(seq 30); do
+              if grep -qF "kontext version $version " "$out" 2>/dev/null; then break; fi
+              sleep 1
+            done
+            launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+            # stdout only: an error on stderr names the versioned path too.
+            if ! grep -F "kontext version $version " "$out"; then
+              echo "::error::$binary did not print its version from launchd within 30 seconds"
+              cat "$err" 2>/dev/null || true
+              return 1
+            fi
+          }
           HELPERS
 
       - name: Render formula and cask for the latest release
@@ -145,6 +179,11 @@ jobs:
           else
             echo "::warning::$VERSION is not notarized and no cask is published yet; installed but not run"
           fi
+
+      - name: Cask binary starts from launchd
+        run: |
+          set -euo pipefail
+          runs_from_launchd "$(readlink -f "$(brew --prefix)/bin/kontext-cask")" "$VERSION"
 
       - name: Upload install logs
         if: always()
@@ -209,6 +248,40 @@ jobs:
               return 1
             fi
           }
+          # Starts the binary the way launchd starts the daemon. A quarantined
+          # binary started by launchd waits on Gatekeeper's "downloaded from
+          # the internet" prompt, which nobody clicks.
+          runs_from_launchd() {
+            local binary="$1" version="$2" label="security.kontext.ci-launchd-check"
+            local plist="$RUNNER_TEMP/launchd-check.plist" out="$RUNNER_TEMP/launchd.out" err="$RUNNER_TEMP/launchd.err"
+            if xattr -p com.apple.quarantine "$binary" >/dev/null 2>&1; then
+              echo "::error::$binary still has the quarantine attribute"
+              return 1
+            fi
+            cat > "$plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>Label</key><string>$label</string>
+            <key>ProgramArguments</key><array><string>$binary</string><string>--version</string></array>
+            <key>RunAtLoad</key><true/>
+            <key>StandardOutPath</key><string>$out</string>
+            <key>StandardErrorPath</key><string>$err</string>
+          </dict></plist>
+          PLIST
+            launchctl bootstrap "gui/$(id -u)" "$plist"
+            for _ in $(seq 30); do
+              if grep -qF "kontext version $version " "$out" 2>/dev/null; then break; fi
+              sleep 1
+            done
+            launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+            # stdout only: an error on stderr names the versioned path too.
+            if ! grep -F "kontext version $version " "$out"; then
+              echo "::error::$binary did not print its version from launchd within 30 seconds"
+              cat "$err" 2>/dev/null || true
+              return 1
+            fi
+          }
           HELPERS
 
       - name: Install with the command from the dashboard
@@ -239,6 +312,12 @@ jobs:
           brew install --cask kontext-security/tap/kontext 2>&1 | tee -a "$RUNNER_TEMP/published.log"
           require_notarized "$(readlink -f "$(brew --prefix)/bin/kontext")"
           kontext --version
+          # Casks published before the quarantine fix have no preflight_steps.
+          if brew cat --cask kontext-security/tap/kontext | grep -q preflight_steps; then
+            runs_from_launchd "$(readlink -f "$(brew --prefix)/bin/kontext")" "$(brew list --cask --versions kontext | awk '{print $NF}')"
+          else
+            echo "::warning::the published cask predates the quarantine fix; launchd check skipped"
+          fi
           # What the daemon updater runs for a cask install.
           brew list --cask --versions kontext
           brew upgrade --cask --no-ask kontext-security/tap/kontext
