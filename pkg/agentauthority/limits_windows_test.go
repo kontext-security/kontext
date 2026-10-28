@@ -41,8 +41,8 @@ func TestGuardedInfoStartsAtTheVolume(t *testing.T) {
 		path string
 		want []string
 	}{
-		{`C:\Users\a\.ssh\id`, []string{`C:\Users`, `C:\Users\a`, `C:\Users\a\.ssh`, `C:\Users\a\.ssh\id`}},
-		{`\\server\share\home\a\.ssh\id`, []string{`\\server\share\home`, `\\server\share\home\a`, `\\server\share\home\a\.ssh`, `\\server\share\home\a\.ssh\id`}},
+		{`C:\Users\a\.ssh\id`, []string{`C:\`, `C:\Users`, `C:\Users\a`, `C:\Users\a\.ssh`, `C:\Users\a\.ssh\id`}},
+		{`\\server\share\home\a\.ssh\id`, []string{`\\server\share\`, `\\server\share\home`, `\\server\share\home\a`, `\\server\share\home\a\.ssh`, `\\server\share\home\a\.ssh\id`}},
 	} {
 		var walked []string
 		stat := func(p string) (os.FileInfo, error) {
@@ -54,6 +54,24 @@ func TestGuardedInfoStartsAtTheVolume(t *testing.T) {
 		}
 		if !slices.Equal(walked, tc.want) {
 			t.Errorf("%s: walked %q, want %q", tc.path, walked, tc.want)
+		}
+	}
+}
+
+func TestGuardedInfoRefusesAFlaggedRoot(t *testing.T) {
+	dir, err := os.Lstat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{`C:\`, `\\server\share\`} {
+		stat := func(p string) (os.FileInfo, error) {
+			if p == root {
+				return attributeInfo{dir, syscall.Win32FileAttributeData{FileAttributes: windows.FILE_ATTRIBUTE_DIRECTORY | windows.FILE_ATTRIBUTE_RECALL_ON_OPEN}}, nil
+			}
+			return dir, nil
+		}
+		if _, err := guardedInfo(root+`home\a\.ssh\id`, stat, false); !errors.Is(err, os.ErrPermission) {
+			t.Errorf("%s as a placeholder: err = %v, want a refusal", root, err)
 		}
 	}
 }

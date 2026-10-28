@@ -196,15 +196,23 @@ func guardedInfo(path string, stat func(string) (os.FileInfo, error), tail bool)
 	volume := filepath.VolumeName(path)
 	prefix := volume + string(filepath.Separator)
 	rest := filepath.ToSlash(path[len(volume):])
-	var info os.FileInfo
+	refused := func(info os.FileInfo) bool {
+		return info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) || isDataless(info) || (!tail && !info.IsDir() && info.Size() > maxFileBytes)
+	}
+	// The root is an ancestor too, checked like the others.
+	info, err := stat(prefix)
+	if err != nil {
+		return nil, err
+	}
+	if refused(info) {
+		return nil, os.ErrPermission
+	}
 	for _, part := range strings.Split(strings.TrimPrefix(rest, "/"), "/") {
 		prefix = filepath.Join(prefix, part)
-		var err error
-		info, err = stat(prefix)
-		if err != nil {
+		if info, err = stat(prefix); err != nil {
 			return nil, err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) || isDataless(info) || (!tail && !info.IsDir() && info.Size() > maxFileBytes) {
+		if refused(info) {
 			return nil, os.ErrPermission
 		}
 	}
