@@ -1342,3 +1342,11 @@ func TestLegacySelfServeCoworkStartsWithAnOlderDropIn(t *testing.T) {
 		t.Fatal("ignored administrator's disabled hooks")
 	}
 }
+
+// Self-heal writes hook files; an organization-managed config must never reach
+// it, whatever files exist on disk.
+func TestHookHealerNeverRunsForOrganizationConfig(t *testing.T) {
+	if heal := selfServeHookHealer(managedconfig.LoadedConfig{Scope: managedconfig.ScopeSystem}, diagnostic.Logger{}); heal != nil {
+		t.Fatal("organization-managed config got a hook healer")
+	}
+}

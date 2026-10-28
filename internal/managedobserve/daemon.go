@@ -289,7 +289,14 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		endpointConfigRefresher.Run(policyCtx)
 	}()
 
-	inventoryHolder := &agentInventoryHolder{scope: loadedConfig.Scope}
+	// A rescan after hook changes refreshes the authority report too, so a
+	// newly hooked agent does not wait for the hourly authority scan.
+	inventoryHolder := &agentInventoryHolder{scope: loadedConfig.Scope, rescan: make(chan struct{}, 1), afterRescan: func() {
+		select {
+		case authorityAvailable <- struct{}{}:
+		default:
+		}
+	}}
 	inventoryReady := make(chan struct{})
 	background.Add(1)
 	go func() {
@@ -331,6 +338,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		stopPolicyRefresh()
 		stopStream()
 		background.Wait()
+	}()
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		runHookWatch(policyCtx, loadedConfig, opts.Diagnostic, inventoryHolder.requestRescan)
 	}()
 
 	startUpdater := opts.HomebrewUpdater

@@ -379,7 +379,9 @@ Rotate the installation token by running setup again:
 kontext setup
 ```
 
-Remove the self-serve installation:
+The background agent restores Kontext hooks removed by hand within a minute and
+adds hooks for newly supported agents after an update. To switch Kontext off,
+remove the installation:
 
 ```bash
 kontext setup --uninstall

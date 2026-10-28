@@ -80,11 +80,30 @@ unrelated settings alone. Removing the ownership comment relinquishes ownership.
 Self-serve setup retains its existing messages, backups, and uninstall behavior,
 including leaving its Codex feature setting enabled.
 
-## Self-serve upgrades
+## Self-serve upgrades and self-heal
 
-The daemon no longer refreshes Claude's machine-wide drop-in through an
-administrator prompt after an upgrade; self-serve hooks live in the user's
-home.
+Once a minute the self-serve daemon runs `hooks install --scope user` with its
+stable Homebrew binary. Unchanged files are left alone; a removed entry comes
+back, and the first start of a version that supports a new agent adds that
+agent's hooks. Nothing needs a password, because every file is in the user's
+home. The daemon skips the run while it is an old process after Homebrew
+retargeted its symlink, and skips a settings file that resolves into a macOS
+privacy-guarded folder (`kontext hooks install --scope user` in a terminal
+covers that case).
+
+To switch Kontext off on a self-serve Mac, run `kontext setup --uninstall`: it
+stops the background agent before removing the hooks, so they stay removed.
+Removing hook entries by hand while the agent runs is undone within a minute,
+and doctor says so.
+
+This runs only when the daemon loaded the self-serve user config. An
+organization-managed config never reaches it, whatever files exist on disk.
+Development and custom builds outside Homebrew are left alone too.
+
+When any hook file of either scope changes, the daemon rescans agents right
+away, so the dashboard's agent inventory follows within a minute instead of
+waiting for the ten-minute scan. Already-running agent sessions may need
+restarting to load updated hooks.
 
 ## Claude diagnostics and dispatch verification
 
