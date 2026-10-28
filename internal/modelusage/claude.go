@@ -133,7 +133,7 @@ func (u *anthropicUsage) refusedAttempts() []int {
 func (a anthropicIteration) tokens() Tokens {
 	t := Tokens{InputUncached: a.InputTokens, InputCacheRead: a.CacheReadInputTokens,
 		InputCacheWrite: a.CacheCreationInputTokens, Output: a.OutputTokens}
-	if a.CacheCreationInputTokens == nil || a.CacheCreation.sums(*a.CacheCreationInputTokens) {
+	if a.CacheCreationInputTokens == nil || a.CacheCreation.within(*a.CacheCreationInputTokens) {
 		t.CacheWrite5m, t.CacheWrite1h = a.CacheCreation.FiveMinute, a.CacheCreation.OneHour
 	}
 	return t
@@ -142,16 +142,20 @@ func (a anthropicIteration) tokens() Tokens {
 // cacheWriteSplit returns the cache write's lifetime split. After a model
 // fallback, Claude Code logs the final attempt's write total with the first
 // attempt's split, so the iteration whose total matches supplies it. A split
-// that still contradicts the total is left out, never a guess.
+// below the total reports part of the write and is kept as reported; one
+// above it contradicts the total and is left out, never a guess.
 func (u *anthropicUsage) cacheWriteSplit() (short, long *int64) {
 	total, split := u.CacheCreationInputTokens, u.CacheCreation
-	if total == nil || (split.FiveMinute == nil && split.OneHour == nil) || split.sums(*total) {
+	if total == nil || !split.reported() || split.sums(*total) {
 		return split.FiveMinute, split.OneHour
 	}
 	for _, attempt := range slices.Backward(u.Iterations) {
-		if attempt.CacheCreationInputTokens != nil && *attempt.CacheCreationInputTokens == *total && attempt.CacheCreation.sums(*total) {
+		if attempt.CacheCreationInputTokens != nil && *attempt.CacheCreationInputTokens == *total && attempt.CacheCreation.reported() && attempt.CacheCreation.within(*total) {
 			return attempt.CacheCreation.FiveMinute, attempt.CacheCreation.OneHour
 		}
+	}
+	if split.within(*total) {
+		return split.FiveMinute, split.OneHour
 	}
 	return nil, nil
 }
@@ -170,14 +174,33 @@ func attemptMessageID(message string, iteration int) string {
 	return message + suffix
 }
 
-func (c cacheCreation) sums(total int64) bool {
-	var sum int64
+func (c cacheCreation) reported() bool { return c.FiveMinute != nil || c.OneHour != nil }
+
+// rest returns the part of total the split leaves without a lifetime, and
+// false when a count is negative or the counts exceed total. Each count is
+// taken from what remains, so large counts can't overflow into a fit.
+func (c cacheCreation) rest(total int64) (int64, bool) {
 	for _, count := range []*int64{c.FiveMinute, c.OneHour} {
 		if count != nil {
-			sum += *count
+			if *count < 0 || *count > total {
+				return 0, false
+			}
+			total -= *count
 		}
 	}
-	return sum == total
+	return total, true
+}
+
+func (c cacheCreation) sums(total int64) bool {
+	rest, ok := c.rest(total)
+	return ok && rest == 0
+}
+
+// within reports whether the split accounts for no more of the write than
+// total. Claude Code sometimes reports a lifetime for only part of a write.
+func (c cacheCreation) within(total int64) bool {
+	_, ok := c.rest(total)
+	return ok
 }
 
 // ReadClaudeTranscript reads complete JSONL records from a Claude Code
@@ -377,13 +400,18 @@ func (s *claudeState) parseLine(text []byte) error {
 		}
 	}
 	// The split is one value: a snapshot that reports either lifetime
-	// replaces both. A split kept from an earlier snapshot can still
-	// contradict this snapshot's total; report it as missing then.
+	// replaces both. A split kept from an earlier snapshot is reported as
+	// missing once it exceeds this snapshot's total, or when this snapshot's
+	// own split was rejected and the kept one doesn't exactly fit the total.
 	if short != nil || long != nil {
 		record.Tokens.CacheWrite5m, record.Tokens.CacheWrite1h = short, long
 	}
-	if t := &record.Tokens; t.InputCacheWrite != nil && !(cacheCreation{FiveMinute: t.CacheWrite5m, OneHour: t.CacheWrite1h}).sums(*t.InputCacheWrite) {
-		t.CacheWrite5m, t.CacheWrite1h = nil, nil
+	rejected := short == nil && long == nil && u.CacheCreation.reported()
+	if t := &record.Tokens; t.InputCacheWrite != nil {
+		kept := cacheCreation{FiveMinute: t.CacheWrite5m, OneHour: t.CacheWrite1h}
+		if !kept.within(*t.InputCacheWrite) || rejected && !kept.sums(*t.InputCacheWrite) {
+			t.CacheWrite5m, t.CacheWrite1h = nil, nil
+		}
 	}
 	for _, field := range []struct {
 		dst *string
