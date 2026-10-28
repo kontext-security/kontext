@@ -1517,10 +1517,17 @@ func TestFlushKeepsRowsTheHostedLedgerDidNotStoreAsSent(t *testing.T) {
 		if len(payload.Actions) == 0 {
 			return `{"quarantined":[],"altered":[]}`
 		}
-		quarantined, _ = payload.Actions[0]["id"].(string)
-		// An altered receipt keeps the action it belongs to.
+		// An altered receipt keeps the action it belongs to; the other action
+		// is quarantined. Actions come ordered by update time, then id, so
+		// when both were saved in the same clock tick either can come first.
 		receipt := payload.Receipts[len(payload.Receipts)-1]
 		altered, _ = receipt["action_id"].(string)
+		for _, action := range payload.Actions {
+			if id, _ := action["id"].(string); id != altered {
+				quarantined = id
+				break
+			}
+		}
 		return fmt.Sprintf(`{"quarantined":[{"kind":"authorization_action","id":%q}],"altered":[{"kind":"authorization_receipt","id":%q,"reason":"redacted"}]}`, quarantined, receipt["id"])
 	})
 	statePath := filepath.Join(t.TempDir(), "stream-state.json")
