@@ -64,15 +64,20 @@ session directory names, preserving their Cowork identity in activity records.
 ### Install Kontext
 
 ```bash
-brew install kontext
+brew install --cask kontext-security/tap/kontext
 ```
 
-`kontext` is in homebrew-core and updates a few hours after each release. To get
-each release minutes after it ships, install the cask from our tap instead. It
-installs the notarized binary as is, so it does not need an up-to-date Xcode:
+The cask updates itself: the background agent checks for a new release a few
+minutes after it starts and every six hours, upgrades through Homebrew, and
+restarts on the new version. It installs the notarized binary as is, so it does
+not need an up-to-date Xcode.
+
+To let Homebrew alone manage updates, install the homebrew-core formula instead.
+It gets each release a few hours later, and you update it with
+`brew upgrade kontext` (Homebrew does not allow formulae to update themselves):
 
 ```bash
-brew install --cask kontext-security/tap/kontext
+brew install kontext
 ```
 
 ### Connect this Mac
