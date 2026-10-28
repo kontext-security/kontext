@@ -87,7 +87,7 @@ kontext setup
 Setup:
 
 - stores the install token in the macOS login keychain;
-- installs hooks for supported agents;
+- installs hooks for supported agents in your home folder, without `sudo`;
 - starts the local Kontext daemon;
 - connects the installation to your Kontext organization.
 
@@ -360,9 +360,12 @@ conflicting installations still report an unhealthy setup.
 
 When an owned Claude drop-in is missing only events required by the current
 version, doctor names the missing events and the scope-specific `hooks install`
-command. Self-serve repairs prompt for sudo only to update Claude's system file;
-organization repairs require `sudo` with `--scope system`. `doctor --fix` does
-not reinstall hooks.
+command. Self-serve repairs never need `sudo`; organization repairs require
+`sudo` with `--scope system`. `doctor --fix` does not reinstall hooks.
+
+Cowork reads only machine-wide Claude settings, so a self-serve Mac governs
+Cowork only when an earlier setup left Claude's machine-wide drop-in. Doctor
+says which applies.
 
 When a self-serve daemon is stale:
 

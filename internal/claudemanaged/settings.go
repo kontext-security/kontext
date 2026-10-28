@@ -298,6 +298,22 @@ func DisablesAllHooks(data []byte) bool {
 	return settings.DisableAllHooks != nil && *settings.DisableAllHooks
 }
 
+// CoveredEvents lists the events data carries a Kontext hook for. Claude merges
+// hooks from its settings sources, so callers combine several files' coverage.
+func CoveredEvents(data []byte) map[string]bool {
+	var settings Settings
+	covered := map[string]bool{}
+	if json.Unmarshal(data, &settings) != nil {
+		return covered
+	}
+	for _, event := range SupportedEvents {
+		if hasManagedObserveHook(settings.Hooks[event.Name.String()], event) {
+			covered[event.Name.String()] = true
+		}
+	}
+	return covered
+}
+
 func hasManagedObserveHook(groups []MatcherGroup, event Event) bool {
 	for _, group := range groups {
 		if !isAllMatcher(group.Matcher) {

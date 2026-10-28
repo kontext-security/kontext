@@ -40,8 +40,9 @@ type Definition struct {
 	Validate    func([]byte) (string, error)
 }
 
-// Definitions is the only list of installations. Self-serve Claude installs
-// identical managed and user hooks; system deployments retain only the drop-in.
+// Definitions is the only list of installations. Self-serve writes only files
+// in the user's home, so neither setup nor the daemon ever asks for an
+// administrator; organization packages keep the machine-wide files.
 func Definitions(scope Scope, home string) ([]Definition, error) {
 	return definitions(scope, home, os.Getenv("CODEX_HOME"))
 }
@@ -63,21 +64,64 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 			return nil, errors.New("CODEX_HOME must be an absolute path")
 		}
 	}
-	claudeFiles := []File{{"claude", claudemanaged.ManagedSettingsDropInPath, System}}
+	claude := File{"claude", claudemanaged.ManagedSettingsDropInPath, System}
+	cursor := File{"cursor", cursormanaged.SystemHooksPath, System}
 	if scope == User {
 		path, err := claudemanaged.UserSettingsPathNoCreate(home)
 		if err != nil {
 			return nil, err
 		}
-		claudeFiles = append(claudeFiles, File{"claude-user", path, User})
+		claude = File{"claude-user", path, User}
+		cursor = File{"cursor", filepath.Join(home, ".cursor", "hooks.json"), User}
 	}
-	defs := []Definition{
-		{Agent: "claude_code", Name: "Claude Code", Files: claudeFiles, Validate: validateClaude},
+	return []Definition{
+		{Agent: "claude_code", Name: "Claude Code", Files: []File{claude}, Validate: validateClaude},
 		{Agent: "codex", Name: "Codex", Files: []File{{"codex", filepath.Join(codexDir, "hooks.json"), scope}, {"feature", filepath.Join(codexDir, "config.toml"), scope}}, Validate: codexmanaged.ValidateInstalled},
+		{Agent: "cursor", Name: "Cursor", Files: []File{cursor}, Validate: cursormanaged.ValidateInstalled},
+	}, nil
+}
+
+// Machine-wide files a user-scope install reads but never writes (test seams).
+var (
+	machineClaudeDropIn = claudemanaged.ManagedSettingsDropInPath
+	machineCursorHooks  = cursormanaged.SystemHooksPath
+)
+
+// machineClaudeSources returns Claude's machine-wide managed settings: the
+// drop-in an earlier self-serve setup wrote and managed-settings.json. A user
+// copy repeats the Kontext handlers they declare, so each runs once.
+func machineClaudeSources(opts Options) [][]byte {
+	dropIn := opts.ClaudePath
+	if dropIn == "" {
+		dropIn = machineClaudeDropIn
 	}
-	// Cursor reads managed hooks from one machine-wide file (Cursor 2.4+), so
-	// both scopes install the same file; self-serve writes it with sudo.
-	return append(defs, Definition{Agent: "cursor", Name: "Cursor", Files: []File{{"cursor", cursormanaged.SystemHooksPath, System}}, Validate: cursormanaged.ValidateInstalled}), nil
+	var sources [][]byte
+	for _, path := range []string{dropIn, filepath.Join(filepath.Dir(filepath.Dir(dropIn)), "managed-settings.json")} {
+		if raw, err := os.ReadFile(path); err == nil {
+			sources = append(sources, raw)
+		}
+	}
+	return sources
+}
+
+// machineCursorCoverage lists the Cursor events whose machine-wide Kontext
+// hook can run. A hook naming a deleted binary covers nothing.
+func machineCursorCoverage(opts Options) map[string]bool {
+	path := opts.CursorPath
+	if path == "" {
+		path = machineCursorHooks
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	covered := map[string]bool{}
+	for event, binary := range cursormanaged.Coverage(raw) {
+		if executable(binary) {
+			covered[event] = true
+		}
+	}
+	return covered
 }
 
 func validateClaude(data []byte) (string, error) {
@@ -103,7 +147,10 @@ type Options struct {
 	Setup bool
 	// KeepSystem leaves machine-wide files alone on removal (an
 	// organization-managed install owns them).
-	KeepSystem             bool
+	KeepSystem bool
+	// ClaudePath and CursorPath override the machine-wide files: where system
+	// scope writes, and what user scope checks for hooks an earlier self-serve
+	// setup put there.
 	ClaudePath, CursorPath string
 	// WriteSystem and RemoveSystem change machine-wide files for an
 	// unprivileged caller; nil writes them directly (root). The last argument
@@ -150,7 +197,7 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 			if file.Kind == "claude" && opts.ClaudePath != "" {
 				file.Path = opts.ClaudePath
 			}
-			if file.Kind == "cursor" && opts.CursorPath != "" {
+			if file.Kind == "cursor" && file.Scope == System && opts.CursorPath != "" {
 				file.Path = opts.CursorPath
 			}
 			c, err := plan(file, opts, remove)
@@ -192,12 +239,10 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 	return nil
 }
 
-// setupTolerates lists the files setup reports instead of failing on. The Claude
-// user copy is only a fallback for machines whose remote policy skips the
-// managed drop-in; a read-only or root-owned settings.json must not block a
-// setup whose managed hooks installed fine.
+// setupTolerates lists the files setup reports instead of failing on: the
+// optional Codex feature flag, and any file an uninstall cannot clean.
 func setupTolerates(opts Options, kind string, remove bool) bool {
-	return opts.Setup && (kind == "feature" || kind == "claude-user" || remove && (kind == "codex" || kind == "cursor"))
+	return opts.Setup && (kind == "feature" || remove && (kind == "codex" || kind == "cursor" || kind == "claude-user"))
 }
 
 func plan(file File, opts Options, remove bool) (change, error) {
@@ -213,9 +258,11 @@ func plan(file File, opts Options, remove bool) (change, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return c, err
 	}
-	if err == nil && file.Kind == "claude-user" && info.Mode()&os.ModeSymlink != 0 {
+	// A dangling link in the home folder reads as missing but cannot be
+	// written; fail while planning, before any file changes.
+	if err == nil && file.Scope == User && info.Mode()&os.ModeSymlink != 0 {
 		if _, err := filepath.EvalSymlinks(file.Path); err != nil {
-			return c, fmt.Errorf("resolve Claude user settings symlink: %w", err)
+			return c, fmt.Errorf("resolve %s symlink: %w", file.Path, err)
 		}
 	}
 	c.before, err = os.ReadFile(file.Path)
@@ -241,7 +288,20 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			c.after, err = claudemanaged.TemplateJSON(opts.Binary)
 		}
 	case "codex", "claude-user", "cursor":
-		if file.Kind == "claude-user" && !remove && claudemanaged.CanonicalManagedHooks(c.before, opts.Binary) {
+		binary := opts.Binary
+		var machine [][]byte
+		if file.Kind == "claude-user" && !remove {
+			machine = machineClaudeSources(opts)
+		}
+		// Cursor runs every hooks.json it finds and does not deduplicate, so the
+		// user file leaves out the events an earlier setup's machine-wide file
+		// already covers.
+		var covered map[string]bool
+		if file.Kind == "cursor" && file.Scope == User && !remove {
+			covered = machineCursorCoverage(opts)
+		}
+		removeHere := remove || len(covered) == len(cursormanaged.Events)
+		if file.Kind == "claude-user" && !remove && claudemanaged.UserHooksMatch(c.before, binary, machine...) {
 			return c, nil
 		}
 		settings := map[string]any{}
@@ -258,11 +318,11 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		if file.Kind == "claude-user" && remove {
 			err = claudemanaged.RemoveManagedHooks(settings)
 		} else if file.Kind == "claude-user" {
-			_, err = claudemanaged.MergeManagedHooks(settings, opts.Binary)
-		} else if file.Kind == "cursor" && remove {
+			_, err = claudemanaged.MergeManagedHooksMirroring(settings, binary, machine...)
+		} else if file.Kind == "cursor" && removeHere {
 			err = cursormanaged.RemoveManagedHooks(settings)
 		} else if file.Kind == "cursor" {
-			err = cursormanaged.MergeManagedHooks(settings, opts.Binary)
+			err = cursormanaged.MergeManagedHooksExcept(settings, binary, covered)
 		} else if remove {
 			err = codexmanaged.RemoveManagedHooks(settings)
 		} else {
@@ -280,7 +340,7 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		c.after, err = json.MarshalIndent(settings, "", "  ")
 		c.after = append(c.after, '\n')
 		// Only delete an empty file when all of its content was our hooks.
-		if remove && (!opts.Setup || file.Kind == "cursor") && len(settings) == 0 && file.Kind != "claude-user" {
+		if removeHere && (!opts.Setup || file.Kind == "cursor") && len(settings) == 0 && file.Kind != "claude-user" {
 			c.after = nil
 		}
 	case "feature":

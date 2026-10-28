@@ -54,7 +54,9 @@ var errPersonalKeyBoundElsewhere = errors.New("this setup command was already us
 // process and terminal interactions go through these so tests never touch
 // launchctl/security/scutil or a real TTY.
 var (
-	agentWiring = managedobserve.AgentWiring
+	agentWiring = func() map[string]func() agentinventory.Wired {
+		return managedobserve.AgentWiring(managedconfig.ScopeUser)
+	}
 	execCommand = func(ctx context.Context, stdin string, name string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, name, args...)
 		if stdin != "" {
@@ -151,7 +153,7 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	if goos != "darwin" {
 		return errors.New("kontext setup is currently macOS-only")
 	}
-	binary, binaryNote := stableBinaryPath()
+	binary, binaryNote := StableBinaryPath()
 	settingsData, err := managedSettingsData(binary)
 	if err != nil {
 		return err
@@ -161,7 +163,10 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	if err := preflightCodexUserHooks(binary); err != nil {
 		return err
 	}
-	if err := preflightCursorHooks(binary); err != nil {
+	if err := preflightClaudeUserHooks(binary); err != nil {
+		return err
+	}
+	if err := preflightCursorHooks(binary, cursorUserHooksPath()); err != nil {
 		return err
 	}
 
@@ -465,20 +470,15 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	if err != nil {
 		return err
 	}
+	// Every hook file is in the user's home, so setup never asks for a password.
 	if err := hookinstall.Install(hookinstall.Options{
 		Scope: hookinstall.User, Home: home, Binary: binary, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
-		WriteSystem: func(path string, data []byte, unchanged func() error) error {
-			return writePrivilegedFile(ctx, path, data, unchanged)
-		},
 		Report: func(r hookinstall.Result) {
 			switch r.File.Kind {
-			case "claude":
-				fmt.Fprintf(opts.Stdout, "  ✓ Claude Code managed hooks installed (%s)\n", r.File.Path)
 			case "claude-user":
-				if r.Err != nil {
-					fmt.Fprintf(opts.Stderr, "warning: Claude Code user hooks were not installed (%v). Managed hooks are installed; they cover Claude Code unless your organization delivers Claude Code managed settings from claude.ai. Fix the file, then run `kontext hooks install --scope user --binary %s`.\n", r.Err, binary)
-				} else {
-					fmt.Fprintf(opts.Stdout, "  ✓ Claude Code user hooks installed (%s)\n", r.File.Path)
+				fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks installed (%s)\n", r.File.Path)
+				if raw, err := os.ReadFile(r.File.Path); err == nil && claudemanaged.DisablesAllHooks(raw) {
+					fmt.Fprintf(opts.Stderr, "warning: disableAllHooks in %s switches Claude Code hooks off; remove it so Kontext can observe Claude Code.\n", r.File.Path)
 				}
 			case "codex":
 				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", r.File.Path)
@@ -496,6 +496,9 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		return err
 	}
 	fmt.Fprintln(opts.Stderr, "note: Codex hooks require review before they run; open `/hooks` in Codex to trust the Kontext hooks.")
+	if !hookinstall.CoworkGoverned(managedSettingsPath, managedSettingsFile) {
+		fmt.Fprintln(opts.Stdout, "  • Cowork: not governed. Cowork reads only machine-wide Claude settings, which need an organization install")
+	}
 	if home, err := os.UserHomeDir(); err == nil {
 		scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		inv := agentinventory.Scan(scanCtx, home, os.Getenv, time.Now(), agentinventory.ScanOptions{Wired: agentWiring()})
@@ -889,11 +892,11 @@ func writeUserManagedConfig(slot target, cloudURL, label string, allowHTTPLoopba
 	return path, nil
 }
 
-// stableBinaryPath picks the path baked into hooks and the LaunchAgent. The
+// StableBinaryPath picks the path baked into hooks and the LaunchAgent. The
 // brew prefix symlink (/opt/homebrew/bin, /usr/local/bin) survives `brew
 // upgrade`; a Cellar or Caskroom path dies with the next version, so prefer a
 // stable symlink that resolves to the same binary.
-func stableBinaryPath() (string, string) {
+func StableBinaryPath() (string, string) {
 	exe, err := executablePath()
 	if err != nil || exe == "" {
 		return claudemanaged.DefaultKontextBinary, ""
@@ -928,24 +931,31 @@ func managedSettingsData(binary string) ([]byte, error) {
 	return data, nil
 }
 
-func writePrivilegedFile(ctx context.Context, path string, data []byte, unchanged func() error) error {
-	return hookinstall.WriteSystemFile(path, data, geteuid(), privilegedRunner(ctx), unchanged)
-}
-
-func removePrivilegedFile(ctx context.Context, path string, unchanged func() error) error {
-	return hookinstall.RemoveSystemFile(path, geteuid(), privilegedRunner(ctx), unchanged)
-}
-
-func privilegedRunner(ctx context.Context) func(string, ...string) error {
-	return func(name string, args ...string) error { return runPrivilegedCommand(ctx, name, args...) }
+// cursorUserHooksPath is Cursor's per-user hooks file, the one self-serve
+// writes.
+func cursorUserHooksPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".cursor", "hooks.json")
 }
 
 // preflightCursorHooks stops setup before anything is written when Cursor's
-// machine-wide hooks file cannot take Kontext's entries.
-func preflightCursorHooks(binary string) error {
-	info, err := os.Lstat(cursorHooksPath)
+// hooks file cannot take Kontext's entries.
+func preflightCursorHooks(binary, path string) error {
+	// Follows a dotfiles symlink; the writer preserves it. A dangling link
+	// would fail only after credentials and other hooks are written.
+	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		if _, lerr := os.Lstat(path); lerr != nil {
+			// Absent: the folder must still take the new file.
+			if err := writableDir(path); err != nil {
+				return fmt.Errorf("check Cursor hooks: %w\n\nFix the folder, then rerun setup.\nNothing changed.", err)
+			}
+			return nil
+		}
+		err = errors.New("symlink target does not exist")
 	}
 	if err == nil && !info.Mode().IsRegular() {
 		err = errors.New("not a regular file")
@@ -953,7 +963,7 @@ func preflightCursorHooks(binary string) error {
 	var settings map[string]any
 	if err == nil {
 		var raw []byte
-		if raw, err = os.ReadFile(cursorHooksPath); err == nil {
+		if raw, err = os.ReadFile(path); err == nil {
 			err = json.Unmarshal(raw, &settings)
 		}
 	}
@@ -961,9 +971,66 @@ func preflightCursorHooks(binary string) error {
 		err = cursormanaged.MergeManagedHooks(settings, binary)
 	}
 	if err != nil {
-		return fmt.Errorf("check Cursor hooks: %w\n\nFix or move %s, then rerun setup.\nNothing changed.", err, cursorHooksPath)
+		return fmt.Errorf("check Cursor hooks: %w\n\nFix or move %s, then rerun setup.\nNothing changed.", err, path)
 	}
 	return nil
+}
+
+// preflightClaudeUserHooks stops setup before anything is written when the
+// user's Claude settings cannot take Kontext's hooks.
+func preflightClaudeUserHooks(binary string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path, err := claudemanaged.UserSettingsPathNoCreate(home)
+	if err != nil {
+		return fmt.Errorf("check Claude Code hooks: %w", err)
+	}
+	err = danglingLink(path)
+	var settings map[string]any
+	if err == nil {
+		settings, err = claudemanaged.ReadUserSettings(path)
+	}
+	if err == nil {
+		_, err = claudemanaged.MergeManagedHooks(settings, binary)
+	}
+	if err == nil {
+		err = writableDir(path)
+	}
+	if err != nil {
+		return fmt.Errorf("check Claude Code hooks: %w\n\nFix or move %s, then rerun setup.\nNothing changed.", err, path)
+	}
+	return nil
+}
+
+// danglingLink rejects a symlink whose target is gone: it reads as a missing
+// file, but installing through it fails only after setup changed state.
+func danglingLink(path string) error {
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if _, err := filepath.EvalSymlinks(path); err != nil {
+			return fmt.Errorf("symlink target does not exist: %w", err)
+		}
+	}
+	return nil
+}
+
+// writableDir checks that the folder holding path (through a symlink, its
+// target's) takes the backup and atomic replace hook installation writes.
+func writableDir(path string) error {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	dir := filepath.Dir(path)
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	probe, err := os.CreateTemp(dir, ".kontext-setup-check-*")
+	if err != nil {
+		return fmt.Errorf("%s is not writable: %w", dir, err)
+	}
+	probe.Close()
+	return os.Remove(probe.Name())
 }
 
 func preflightCodexUserHooks(binary string) error {

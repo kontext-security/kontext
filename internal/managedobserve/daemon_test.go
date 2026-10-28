@@ -618,9 +618,9 @@ func TestManagedObserveHooksFact(t *testing.T) {
 		}
 		swapManagedSettingsPaths(t, dropIn, filepath.Join(dir, "missing", "managed-settings.json"))
 
-		fact, ok := managedObserveHooksFact()
+		fact, ok := managedObserveHooksFact(managedconfig.ScopeSystem)
 		if !ok || !fact.Present || fact.DisabledAllHooks {
-			t.Fatalf("managedObserveHooksFact() = %+v, %v; want present", fact, ok)
+			t.Fatalf("managedObserveHooksFact(managedconfig.ScopeSystem) = %+v, %v; want present", fact, ok)
 		}
 	})
 
@@ -630,9 +630,9 @@ func TestManagedObserveHooksFact(t *testing.T) {
 			filepath.Join(dir, "missing", "20-kontext.json"),
 			filepath.Join(dir, "missing", "managed-settings.json"))
 
-		fact, ok := managedObserveHooksFact()
+		fact, ok := managedObserveHooksFact(managedconfig.ScopeSystem)
 		if !ok || fact.Present || fact.DisabledAllHooks {
-			t.Fatalf("managedObserveHooksFact() = %+v, %v; want known-missing", fact, ok)
+			t.Fatalf("managedObserveHooksFact(managedconfig.ScopeSystem) = %+v, %v; want known-missing", fact, ok)
 		}
 	})
 
@@ -648,9 +648,9 @@ func TestManagedObserveHooksFact(t *testing.T) {
 		}
 		swapManagedSettingsPaths(t, dropIn, root)
 
-		fact, ok := managedObserveHooksFact()
+		fact, ok := managedObserveHooksFact(managedconfig.ScopeSystem)
 		if !ok || fact.Present || !fact.DisabledAllHooks {
-			t.Fatalf("managedObserveHooksFact() = %+v, %v; want disabled", fact, ok)
+			t.Fatalf("managedObserveHooksFact(managedconfig.ScopeSystem) = %+v, %v; want disabled", fact, ok)
 		}
 	})
 
@@ -664,8 +664,8 @@ func TestManagedObserveHooksFact(t *testing.T) {
 		}
 		swapManagedSettingsPaths(t, dropIn, filepath.Join(dir, "missing", "managed-settings.json"))
 
-		if _, ok := managedObserveHooksFact(); ok {
-			t.Fatal("managedObserveHooksFact() ok = true, want unknown on read error")
+		if _, ok := managedObserveHooksFact(managedconfig.ScopeSystem); ok {
+			t.Fatal("managedObserveHooksFact(managedconfig.ScopeSystem) ok = true, want unknown on read error")
 		}
 	})
 }
@@ -674,11 +674,16 @@ func swapManagedSettingsPaths(t *testing.T, dropIn, root string) {
 	t.Helper()
 	previousDropIn := managedSettingsDropInPath
 	previousRoot := managedSettingsFilePath
+	previousUser := claudeUserSettingsPath
 	managedSettingsDropInPath = dropIn
 	managedSettingsFilePath = root
+	// Never read the developer's own Claude settings.
+	user := filepath.Join(filepath.Dir(root), "user-settings.json")
+	claudeUserSettingsPath = func() (string, error) { return user, nil }
 	t.Cleanup(func() {
 		managedSettingsDropInPath = previousDropIn
 		managedSettingsFilePath = previousRoot
+		claudeUserSettingsPath = previousUser
 	})
 }
 
@@ -1225,5 +1230,39 @@ values('act_old', 'session-1', 'request.observed', 'completed', ?, ?, ?)`, old.F
 	}
 	if err := pruneExportedLedger(ctx, opts, dbPath); err != nil || count() != 0 {
 		t.Fatalf("exported row kept: rows %d, err %v", count(), err)
+	}
+}
+
+func TestLegacySelfServeCoworkStartsWithAnOlderDropIn(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "kontext")
+	settings := claudemanaged.Template(binary)
+	// The original five-event drop-in, before Stop and SubagentStop.
+	delete(settings.Hooks, "Stop")
+	delete(settings.Hooks, "SubagentStop")
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropIn := filepath.Join(dir, "20-kontext.json")
+	if err := os.WriteFile(dropIn, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	swapManagedSettingsPaths(t, dropIn, filepath.Join(dir, "absent"))
+	cfg := managedconfig.Config{LegacyCoworkEnabled: true}
+	if err := requireManagedHooksForLegacyCowork(cfg, managedconfig.ScopeUser); err != nil {
+		t.Fatalf("an older self-serve drop-in prevented the daemon from starting: %v", err)
+	}
+	if err := requireManagedHooksForLegacyCowork(cfg, managedconfig.ScopeSystem); err == nil {
+		t.Fatal("relaxed system installation checks")
+	}
+	if present, ok := managedObserveHooksFact(managedconfig.ScopeUser); !ok || present.Present {
+		t.Fatalf("reported incomplete hooks as healthy: present=%v ok=%v", present, ok)
+	}
+	if err := os.WriteFile(managedSettingsFilePath, []byte(`{"disableAllHooks":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireManagedHooksForLegacyCowork(cfg, managedconfig.ScopeUser); err == nil {
+		t.Fatal("ignored administrator's disabled hooks")
 	}
 }

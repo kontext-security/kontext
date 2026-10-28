@@ -10,24 +10,37 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 )
 
-func diagnoseClaudeUser(out io.Writer, path, binary string) bool {
+// diagnoseClaudeUser checks the user copy against what installation writes:
+// the current template, repeating each handler machine-wide settings declare.
+// A handler that differs from a machine-wide one runs twice.
+func diagnoseClaudeUser(out io.Writer, path, binary string, machine [][]byte) bool {
 	raw, err := os.ReadFile(path)
-	if err == nil {
-		err = claudemanaged.Validate(raw, binary)
-	}
-	if err == nil && !claudemanaged.CanonicalManagedHooks(raw, binary) {
-		err = errors.New("Kontext handlers differ from the managed template; differing handlers can execute twice")
+	if err == nil && !claudemanaged.UserHooksMatch(raw, binary, machine...) {
+		err = errors.New("Kontext handlers differ from the machine-wide settings or the current template; differing handlers can execute twice")
 	}
 	if err != nil {
-		fmt.Fprintf(out, "Claude Code user hooks: %v (%s). Run `%s hooks install --scope user --binary %s`.\n", err, path, agenthooks.ShellQuote(binary), agenthooks.ShellQuote(binary))
+		fmt.Fprintf(out, "Claude Code user hooks: %v (%s). Run `kontext hooks install --scope user`.\n", err, path)
 		return false
 	}
-	fmt.Fprintf(out, "Claude Code user hooks: installed (%s; binary %s)\n", path, binary)
 	return true
+}
+
+// mirroredClaudeBinary accepts a user copy whose handlers name several
+// binaries when it is exactly what installation writes for the machine-wide
+// sources.
+func mirroredClaudeBinary(raw []byte, machine [][]byte) (string, bool) {
+	if claudemanaged.DisablesAllHooks(raw) {
+		return "", false
+	}
+	for _, binary := range claudemanaged.KontextBinaries(raw) {
+		if executable(binary) && claudemanaged.UserHooksMatch(raw, binary, machine...) {
+			return binary, true
+		}
+	}
+	return "", false
 }
 
 // diagnoseClaudeSources is deliberately an offline configuration check. A cache

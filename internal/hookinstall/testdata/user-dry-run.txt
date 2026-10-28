@@ -1,5 +1,4 @@
-would-write	system	<root>/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json	missing
 would-write	user	<root>/Users/test/.claude/settings.json	missing
 would-write	user	<root>/Users/test/.codex/hooks.json	missing
 would-write	user	<root>/Users/test/.codex/config.toml	missing
-would-write	system	<root>/Library/Application Support/Cursor/hooks.json	missing
+would-write	user	<root>/Users/test/.cursor/hooks.json	missing
