@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.16.1](https://github.com/kontext-security/kontext/compare/v1.16.0...v1.16.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **modelusage:** account for each attempt of a Claude fallback request ([#646](https://github.com/kontext-security/kontext/issues/646)) ([d47d687](https://github.com/kontext-security/kontext/commit/d47d687612b6b02d6810daf18f352b78caae3928))
+* **step-safety:** benchmark an in-scope sample so inferences run ([#647](https://github.com/kontext-security/kontext/issues/647)) ([2298a59](https://github.com/kontext-security/kontext/commit/2298a59d962ef827f1c79d6463fe9bc607929735))
+
 ## [1.16.0](https://github.com/kontext-security/kontext/compare/v1.15.0...v1.16.0) (2026-10-28)
 
 
