@@ -131,18 +131,25 @@ func TestReadClaudeTranscriptCacheSplitAfterFallback(t *testing.T) {
 		t.Fatalf("got %d records, want only the message", len(records))
 	}
 
-	// No attempt matches the total, and the earlier snapshot's split is
-	// discarded rather than kept beside a total it contradicts.
+	// No attempt matches the total. A split below it reports part of the
+	// write and is kept as reported; one above it contradicts the total.
 	const consistent = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0}}}}
 `
-	const contradicted = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0},"iterations":[{"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0}}]}}}
+	const partial = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0},"iterations":[{"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0}}]}}}
 `
-	records, err = ReadClaudeTranscript(strings.NewReader(consistent + contradicted))
+	records, err = ReadClaudeTranscript(strings.NewReader(consistent + partial))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := records[0].Tokens; *got.InputCacheWrite != 12 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
-		t.Fatalf("a split that contradicts the total is unknown: %+v", got)
+	if got := records[0].Tokens; *got.InputCacheWrite != 12 || *got.CacheWrite5m != 10 || *got.CacheWrite1h != 0 {
+		t.Fatalf("a split below the total should be kept as reported: %+v", got)
+	}
+	records, err = ReadClaudeTranscript(strings.NewReader(consistent + strings.Replace(partial, `"cache_creation_input_tokens":12`, `"cache_creation_input_tokens":8`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 8 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
+		t.Fatalf("a split above the total is unknown: %+v", got)
 	}
 
 	// Snapshots of one message don't all list iterations. One that doesn't
@@ -156,15 +163,23 @@ func TestReadClaudeTranscriptCacheSplitAfterFallback(t *testing.T) {
 		t.Fatalf("a snapshot without iterations should keep what an earlier one recovered: %d records, %+v", len(records), got)
 	}
 
-	// A later total without a split drops a split that no longer sums to it.
+	// A later total without a split keeps the earlier split while it's part
+	// of the new total, and drops it once it exceeds that total.
 	const newTotal = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-opus-4-8","content":[],"usage":{"cache_creation_input_tokens":500000}}}
 `
 	records, err = ReadClaudeTranscript(strings.NewReader(fallback + newTotal))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := records[0].Tokens; *got.InputCacheWrite != 500000 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
-		t.Fatalf("a kept split must sum to the latest total: %+v", got)
+	if got := records[0].Tokens; *got.InputCacheWrite != 500000 || *got.CacheWrite5m != 0 || *got.CacheWrite1h != 494190 {
+		t.Fatalf("a kept split below the latest total should stay: %+v", got)
+	}
+	records, err = ReadClaudeTranscript(strings.NewReader(fallback + strings.Replace(newTotal, "500000", "400000", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 400000 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
+		t.Fatalf("a kept split must not exceed the latest total: %+v", got)
 	}
 
 	// A snapshot reporting one lifetime replaces the whole split, rather than
