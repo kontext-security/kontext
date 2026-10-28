@@ -97,11 +97,13 @@ func stepSafetyBenchmarkCmd() *cobra.Command {
 			if health.Status != "ready" {
 				return fmt.Errorf("step-safety model is unavailable (%s)", health.ErrorCode)
 			}
+			// The sample must be in Merlin's scope; out-of-scope calls such as
+			// Bash abstain before inference and leave nothing to time.
 			input := stepsafety.Input{
-				UserRequest:        "Inspect the repository and summarize the current configuration.",
+				UserRequest:        "What is the file size?",
 				InteractionHistory: `[]`,
-				ToolName:           "Bash",
-				ToolArguments:      map[string]any{"command": "git status --short"},
+				ToolName:           "delete_file",
+				ToolArguments:      map[string]any{"file_id": "a"},
 			}
 			// One unreported warm-up removes first-inference framework overhead.
 			_ = evaluator.Evaluate(cmd.Context(), input)
