@@ -230,8 +230,8 @@ func fingerprintTranscript(info fs.FileInfo) (string, error) {
 		return "", fmt.Errorf("usage transcript must be a regular file up to 256 MiB")
 	}
 	// v5: Claude fallback requests take their cache write split from the
-	// matching usage iteration, so transcripts read before that, which
-	// reported a split contradicting the total, are read once more.
+	// matching usage iteration and report a refused attempt's billed usage,
+	// so transcripts read before that are read once more.
 	return fmt.Sprintf("tool-metadata-v5:%d:%d", info.Size(), info.ModTime().UnixNano()), nil
 }
 

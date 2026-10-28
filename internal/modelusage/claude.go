@@ -26,7 +26,8 @@ type Tokens struct {
 	Thinking        *int64 `json:"thinking"`
 }
 
-// Record describes one model message, which may generate several tool calls.
+// Record describes one model message, which may generate several tool calls,
+// or a refused attempt billed before it (MessageID "<message>#iteration-N").
 // ToolUseIDs correlate tools with a message; they do not allocate its cost.
 // Consumers must upsert by (SessionID, MessageID) across transcript reads.
 type Record struct {
@@ -94,14 +95,46 @@ type anthropicUsage struct {
 	} `json:"output_tokens_details"`
 	// Iterations itemizes a request's attempts, e.g. a refused attempt and
 	// the fallback model's. Top-level counts are the attempt that produced
-	// the message.
-	Iterations []struct {
-		CacheCreationInputTokens *int64        `json:"cache_creation_input_tokens"`
-		CacheCreation            cacheCreation `json:"cache_creation"`
-	} `json:"iterations"`
-	ServiceTier  string `json:"service_tier"`
-	InferenceGeo string `json:"inference_geo"`
-	Speed        string `json:"speed"`
+	// the message, the last one.
+	Iterations   []anthropicIteration `json:"iterations"`
+	ServiceTier  string               `json:"service_tier"`
+	InferenceGeo string               `json:"inference_geo"`
+	Speed        string               `json:"speed"`
+}
+
+type anthropicIteration struct {
+	Type                     string        `json:"type"`
+	Model                    string        `json:"model"`
+	InputTokens              *int64        `json:"input_tokens"`
+	CacheReadInputTokens     *int64        `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens *int64        `json:"cache_creation_input_tokens"`
+	OutputTokens             *int64        `json:"output_tokens"`
+	CacheCreation            cacheCreation `json:"cache_creation"`
+}
+
+// refusedAttempts returns the iteration indices of the attempts before the one
+// that produced the message which are billed on their own, at their own
+// model's rates: a model
+// that declined after producing output. One that declined before any output
+// is billed only for some refusal categories, which the transcript doesn't
+// record, so it is left out.
+func (u *anthropicUsage) refusedAttempts() []int {
+	var attempts []int
+	for i, attempt := range u.Iterations[:max(len(u.Iterations)-1, 0)] {
+		if attempt.Type == "message" && attempt.Model != "" && attempt.OutputTokens != nil && *attempt.OutputTokens > 0 {
+			attempts = append(attempts, i)
+		}
+	}
+	return attempts
+}
+
+func (a anthropicIteration) tokens() Tokens {
+	t := Tokens{InputUncached: a.InputTokens, InputCacheRead: a.CacheReadInputTokens,
+		InputCacheWrite: a.CacheCreationInputTokens, Output: a.OutputTokens}
+	if a.CacheCreationInputTokens == nil || a.CacheCreation.sums(*a.CacheCreationInputTokens) {
+		t.CacheWrite5m, t.CacheWrite1h = a.CacheCreation.FiveMinute, a.CacheCreation.OneHour
+	}
+	return t
 }
 
 // cacheWriteSplit returns the cache write's lifetime split. After a model
@@ -144,6 +177,7 @@ func ReadClaudeTranscript(reader io.Reader) ([]Record, error) {
 func NewClaudeTranscript() *Transcript {
 	return &Transcript{kind: "claude", state: &claudeState{
 		indices:        make(map[[2]string]int),
+		attemptOf:      make(map[int]int),
 		pendingResults: make(map[string][]string),
 		tools:          make(map[[2]string]Tool),
 	}}
@@ -153,6 +187,9 @@ type claudeState struct {
 	line    int
 	records []Record
 	indices map[[2]string]int
+	// attemptOf maps a refused attempt's record to the record of the message
+	// its request produced, whose tool links and pricing tier it shares.
+	attemptOf map[int]int
 	// Only the next assistant request consumes a tool-result user message.
 	// A later ordinary user prompt clears the association.
 	pendingResults map[string][]string
@@ -285,9 +322,16 @@ func (s *claudeState) parseLine(text []byte) error {
 		CacheWrite5m:    short, CacheWrite1h: long,
 		Output: u.OutputTokens, Thinking: u.OutputTokensDetails.Thinking,
 	}
-	for _, count := range tokens.fields() {
-		if *count != nil && **count < 0 {
-			return fmt.Errorf("claude transcript line %d: negative token count", s.line)
+	attempts := u.refusedAttempts()
+	checked := []Tokens{tokens}
+	for _, i := range attempts {
+		checked = append(checked, u.Iterations[i].tokens())
+	}
+	for _, t := range checked {
+		for _, count := range t.fields() {
+			if *count != nil && **count < 0 {
+				return fmt.Errorf("claude transcript line %d: negative token count", s.line)
+			}
 		}
 	}
 	key := [2]string{row.SessionID, row.Message.ID}
@@ -339,11 +383,32 @@ func (s *claudeState) parseLine(text []byte) error {
 			s.tools[key] = mergeToolMetadata(s.tools[key], block)
 		}
 	}
+	// Every snapshot carries each attempt's final usage, so it replaces the
+	// attempt's tokens rather than merging into them.
+	for _, i := range attempts {
+		key := [2]string{row.SessionID, fmt.Sprintf("%s#iteration-%d", row.Message.ID, i)}
+		attempt, exists := s.indices[key]
+		if !exists {
+			attempt = len(s.records)
+			s.indices[key] = attempt
+			s.attemptOf[attempt] = index
+			s.records = append(s.records, Record{SessionID: row.SessionID, MessageID: key[1]})
+		}
+		s.records[attempt].Model, s.records[attempt].Tokens = u.Iterations[i].Model, u.Iterations[i].tokens()
+	}
 	return nil
 }
 
 func (s *claudeState) finish() ([]Record, error) {
 	records := slices.Clone(s.records)
+	// A refused attempt belongs to the same request as its message: the same
+	// tool links, turn and pricing tier. Tool calls are counted by ID, so
+	// sharing them doesn't count a call twice.
+	for attempt, message := range s.attemptOf {
+		r, m := &records[attempt], records[message]
+		r.RequestID, r.Timestamp, r.ServiceTier, r.InferenceGeo, r.Speed = m.RequestID, m.Timestamp, m.ServiceTier, m.InferenceGeo, m.Speed
+		r.ToolUseIDs, r.ConsumedToolUseIDs = m.ToolUseIDs, slices.Clone(m.ConsumedToolUseIDs)
+	}
 	for i := range records {
 		records[i].ToolUseIDs = slices.Clone(records[i].ToolUseIDs)
 		seen := make(map[string]bool)
@@ -374,7 +439,7 @@ func (s *claudeState) promptsSoFar() []Prompt {
 }
 
 func (s *claudeState) clone() transcriptState {
-	c := &claudeState{line: s.line, records: slices.Clone(s.records), indices: maps.Clone(s.indices),
+	c := &claudeState{line: s.line, records: slices.Clone(s.records), indices: maps.Clone(s.indices), attemptOf: maps.Clone(s.attemptOf),
 		pendingResults: make(map[string][]string, len(s.pendingResults)), tools: maps.Clone(s.tools), prompts: slices.Clone(s.prompts)}
 	for i := range c.records {
 		c.records[i].ToolUseIDs = slices.Clone(c.records[i].ToolUseIDs)

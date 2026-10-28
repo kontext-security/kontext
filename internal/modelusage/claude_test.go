@@ -2,6 +2,7 @@ package modelusage
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -101,8 +102,33 @@ func TestReadClaudeTranscriptCacheSplitAfterFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want the message and its refused attempt", len(records))
+	}
 	if got := records[0].Tokens; *got.InputCacheWrite != 494190 || *got.CacheWrite5m != 0 || *got.CacheWrite1h != 494190 {
 		t.Fatalf("split should come from the attempt that produced the message: %+v", got)
+	}
+	// The refused attempt produced output, so it's billed on its own at its
+	// own model's rates, under the same request and tool links.
+	attempt := records[1]
+	if attempt.MessageID != "m#iteration-0" || attempt.Model != "claude-fable-5" || attempt.RequestID != "r" ||
+		!slices.Equal(attempt.ToolUseIDs, []string{"t1"}) || len(attempt.Tools) != 1 {
+		t.Fatalf("refused attempt identity: %+v", attempt)
+	}
+	if got := attempt.Tokens; *got.InputUncached != 2 || *got.InputCacheRead != 32155 || *got.InputCacheWrite != 528936 ||
+		*got.CacheWrite5m != 0 || *got.CacheWrite1h != 528936 || *got.Output != 3406 || got.Thinking != nil {
+		t.Fatalf("refused attempt tokens: %+v", got)
+	}
+
+	// An attempt refused before any output is billed only for some refusal
+	// categories, which the transcript doesn't record.
+	beforeOutput := strings.Replace(fallback, `"output_tokens":3406`, `"output_tokens":0`, 1)
+	records, err = ReadClaudeTranscript(strings.NewReader(beforeOutput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want only the message", len(records))
 	}
 
 	// No attempt matches the total, and the earlier snapshot's split is
