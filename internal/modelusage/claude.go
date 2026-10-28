@@ -4,6 +4,8 @@ package modelusage
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -140,18 +142,32 @@ func (a anthropicIteration) tokens() Tokens {
 // cacheWriteSplit returns the cache write's lifetime split. After a model
 // fallback, Claude Code logs the final attempt's write total with the first
 // attempt's split, so the iteration whose total matches supplies it. A split
-// that still contradicts the total is unknown (ok is false), never a guess.
-func (u *anthropicUsage) cacheWriteSplit() (short, long *int64, ok bool) {
+// that still contradicts the total is left out, never a guess.
+func (u *anthropicUsage) cacheWriteSplit() (short, long *int64) {
 	total, split := u.CacheCreationInputTokens, u.CacheCreation
 	if total == nil || (split.FiveMinute == nil && split.OneHour == nil) || split.sums(*total) {
-		return split.FiveMinute, split.OneHour, true
+		return split.FiveMinute, split.OneHour
 	}
 	for _, attempt := range slices.Backward(u.Iterations) {
 		if attempt.CacheCreationInputTokens != nil && *attempt.CacheCreationInputTokens == *total && attempt.CacheCreation.sums(*total) {
-			return attempt.CacheCreation.FiveMinute, attempt.CacheCreation.OneHour, true
+			return attempt.CacheCreation.FiveMinute, attempt.CacheCreation.OneHour
 		}
 	}
-	return nil, nil, false
+	return nil, nil
+}
+
+// maxMessageID is the API's limit on a usage record's message ID.
+const maxMessageID = 256
+
+// attemptMessageID names a refused attempt's record. A message ID too long
+// to take the suffix within maxMessageID is replaced by its SHA-256.
+func attemptMessageID(message string, iteration int) string {
+	suffix := fmt.Sprintf("#iteration-%d", iteration)
+	if len(message)+len(suffix) > maxMessageID {
+		sum := sha256.Sum256([]byte(message))
+		message = hex.EncodeToString(sum[:])
+	}
+	return message + suffix
 }
 
 func (c cacheCreation) sums(total int64) bool {
@@ -315,7 +331,7 @@ func (s *claudeState) parseLine(text []byte) error {
 		return fmt.Errorf("claude transcript line %d: usage missing session, message ID, or model", s.line)
 	}
 	u := row.Message.Usage
-	short, long, splitKnown := u.cacheWriteSplit()
+	short, long := u.cacheWriteSplit()
 	tokens := Tokens{
 		InputUncached: u.InputTokens, InputCacheRead: u.CacheReadInputTokens,
 		InputCacheWrite: u.CacheCreationInputTokens,
@@ -360,9 +376,10 @@ func (s *claudeState) parseLine(text []byte) error {
 			*previous[i] = *count
 		}
 	}
-	if !splitKnown {
-		// An earlier snapshot's split contradicts this total too.
-		record.Tokens.CacheWrite5m, record.Tokens.CacheWrite1h = nil, nil
+	// Fields merge one by one, so a split kept from an earlier snapshot can
+	// contradict this snapshot's total. Report the split as missing then.
+	if t := &record.Tokens; t.InputCacheWrite != nil && !(cacheCreation{FiveMinute: t.CacheWrite5m, OneHour: t.CacheWrite1h}).sums(*t.InputCacheWrite) {
+		t.CacheWrite5m, t.CacheWrite1h = nil, nil
 	}
 	for _, field := range []struct {
 		dst *string
@@ -383,10 +400,15 @@ func (s *claudeState) parseLine(text []byte) error {
 			s.tools[key] = mergeToolMetadata(s.tools[key], block)
 		}
 	}
-	// Every snapshot carries each attempt's final usage, so it replaces the
-	// attempt's tokens rather than merging into them.
+	if u.Iterations == nil {
+		return nil
+	}
+	// A snapshot that lists iterations carries each attempt's final usage, so
+	// it replaces the attempt's tokens rather than merging into them.
+	listed := make(map[string]bool, len(attempts))
 	for _, i := range attempts {
-		key := [2]string{row.SessionID, fmt.Sprintf("%s#iteration-%d", row.Message.ID, i)}
+		key := [2]string{row.SessionID, attemptMessageID(row.Message.ID, i)}
+		listed[key[1]] = true
 		attempt, exists := s.indices[key]
 		if !exists {
 			attempt = len(s.records)
@@ -395,6 +417,15 @@ func (s *claudeState) parseLine(text []byte) error {
 			s.records = append(s.records, Record{SessionID: row.SessionID, MessageID: key[1]})
 		}
 		s.records[attempt].Model, s.records[attempt].Tokens = u.Iterations[i].Model, u.Iterations[i].tokens()
+	}
+	// An attempt it no longer lists keeps its record with zero usage, so a
+	// charge already uploaded is withdrawn by the same upsert.
+	for attempt, message := range s.attemptOf {
+		if message == index && !listed[s.records[attempt].MessageID] {
+			zero := new(int64)
+			s.records[attempt].Tokens = Tokens{InputUncached: zero, InputCacheRead: zero, InputCacheWrite: zero,
+				CacheWrite5m: zero, CacheWrite1h: zero, Output: zero}
+		}
 	}
 	return nil
 }

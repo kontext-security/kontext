@@ -144,6 +144,56 @@ func TestReadClaudeTranscriptCacheSplitAfterFallback(t *testing.T) {
 	if got := records[0].Tokens; *got.InputCacheWrite != 12 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
 		t.Fatalf("a split that contradicts the total is unknown: %+v", got)
 	}
+
+	// Snapshots of one message don't all list iterations. One that doesn't
+	// keeps the recovered split and the refused attempt.
+	noIterations := fallback[:strings.Index(fallback, `,"iterations"`)] + "}}}\n"
+	records, err = ReadClaudeTranscript(strings.NewReader(fallback + noIterations))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; len(records) != 2 || *got.CacheWrite5m != 0 || *got.CacheWrite1h != 494190 {
+		t.Fatalf("a snapshot without iterations should keep what an earlier one recovered: %d records, %+v", len(records), got)
+	}
+
+	// A later total without a split drops a split that no longer sums to it.
+	const newTotal = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-opus-4-8","content":[],"usage":{"cache_creation_input_tokens":500000}}}
+`
+	records, err = ReadClaudeTranscript(strings.NewReader(fallback + newTotal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 500000 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
+		t.Fatalf("a kept split must sum to the latest total: %+v", got)
+	}
+
+	// A snapshot listing iterations without the attempt withdraws its usage,
+	// so an upload already made is replaced by zero.
+	records, err = ReadClaudeTranscript(strings.NewReader(fallback + beforeOutput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want the message and the withdrawn attempt", len(records))
+	}
+	for _, count := range records[1].Tokens.fields() {
+		if *count != nil && **count != 0 {
+			t.Fatalf("withdrawn attempt still has usage: %+v", records[1].Tokens)
+		}
+	}
+	if records[1].Tokens.Output == nil {
+		t.Fatal("withdrawn attempt should report zero output, not unknown")
+	}
+
+	// The suffix never pushes an ID past the API's message ID limit.
+	long := strings.Repeat("m", maxMessageID-5)
+	records, err = ReadClaudeTranscript(strings.NewReader(strings.Replace(fallback, `"id":"m"`, `"id":"`+long+`"`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := records[1].MessageID; len(id) > maxMessageID || !strings.HasSuffix(id, "#iteration-0") || id == long+"#iteration-0" {
+		t.Fatalf("attempt ID %q exceeds the limit", id)
+	}
 }
 
 func TestReadClaudeTranscriptMissingUsageAndSyntheticErrors(t *testing.T) {
