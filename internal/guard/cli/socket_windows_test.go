@@ -26,3 +26,16 @@ func TestRunDaemonRefusesUnbindableSocketBeforeHooks(t *testing.T) {
 		t.Fatalf("hooks were written for a socket that cannot bind (%v)", statErr)
 	}
 }
+
+// The standalone install names the socket too, so it refuses the same path.
+func TestHooksInstallRefusesUnbindableSocket(t *testing.T) {
+	home := hermetic.Home(t)
+	long := filepath.Join(hermetic.SocketDir(t), strings.Repeat("x", 100), "kontext.sock")
+	err := runHooks([]string{"install", "claude-code", "--socket", long}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--socket") || !strings.Contains(err.Error(), "KONTEXT_GUARD_SOCKET") {
+		t.Fatalf("runHooks(install, %d-byte socket) = %v, want the length error naming --socket and KONTEXT_GUARD_SOCKET", len(long), err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(statErr) {
+		t.Fatalf("hooks were written for a socket that cannot bind (%v)", statErr)
+	}
+}

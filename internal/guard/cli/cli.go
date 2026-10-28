@@ -314,6 +314,10 @@ func runHooks(args []string, out io.Writer) error {
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
+		// As in runDaemon: the hooks name this socket, and one Windows cannot bind is useless.
+		if err := localruntime.CheckSocketPath(*socketPath, "--socket or KONTEXT_GUARD_SOCKET"); err != nil {
+			return err
+		}
 		return installClaudeHooks(out, *socketPath)
 	case "uninstall":
 		if len(args) != 2 {
