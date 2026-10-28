@@ -376,8 +376,12 @@ func (s *claudeState) parseLine(text []byte) error {
 			*previous[i] = *count
 		}
 	}
-	// Fields merge one by one, so a split kept from an earlier snapshot can
-	// contradict this snapshot's total. Report the split as missing then.
+	// The split is one value: a snapshot that reports either lifetime
+	// replaces both. A split kept from an earlier snapshot can still
+	// contradict this snapshot's total; report it as missing then.
+	if short != nil || long != nil {
+		record.Tokens.CacheWrite5m, record.Tokens.CacheWrite1h = short, long
+	}
 	if t := &record.Tokens; t.InputCacheWrite != nil && !(cacheCreation{FiveMinute: t.CacheWrite5m, OneHour: t.CacheWrite1h}).sums(*t.InputCacheWrite) {
 		t.CacheWrite5m, t.CacheWrite1h = nil, nil
 	}

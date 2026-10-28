@@ -167,6 +167,20 @@ func TestReadClaudeTranscriptCacheSplitAfterFallback(t *testing.T) {
 		t.Fatalf("a kept split must sum to the latest total: %+v", got)
 	}
 
+	// A snapshot reporting one lifetime replaces the whole split, rather than
+	// summing with the other lifetime an earlier snapshot reported.
+	const fiveMinutes = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":10}}}}
+`
+	const oneHour = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[],"usage":{"cache_creation":{"ephemeral_1h_input_tokens":10}}}}
+`
+	records, err = ReadClaudeTranscript(strings.NewReader(fiveMinutes + oneHour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 10 || got.CacheWrite5m != nil || got.CacheWrite1h == nil || *got.CacheWrite1h != 10 {
+		t.Fatalf("a later split should replace an earlier one: %+v", got)
+	}
+
 	// A snapshot listing iterations without the attempt withdraws its usage,
 	// so an upload already made is replaced by zero.
 	records, err = ReadClaudeTranscript(strings.NewReader(fallback + beforeOutput))
