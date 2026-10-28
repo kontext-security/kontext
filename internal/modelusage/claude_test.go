@@ -2,6 +2,7 @@ package modelusage
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,123 @@ func TestReadClaudeTranscriptMergesMessageSnapshots(t *testing.T) {
 	}
 	if r.Tokens.CacheWrite5m != nil || r.Tokens.CacheWrite1h != nil {
 		t.Fatal("missing cache lifetime is unknown, not zero or a guessed duration")
+	}
+}
+
+// Claude Code 2.1.229 logged a refused claude-fable-5 attempt and the
+// claude-opus-4-8 fallback with the final write total but the first split.
+func TestReadClaudeTranscriptCacheSplitAfterFallback(t *testing.T) {
+	const fallback = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"t1"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":494190,"cache_read_input_tokens":64310,"output_tokens":2039,"cache_creation":{"ephemeral_1h_input_tokens":528936,"ephemeral_5m_input_tokens":0},"iterations":[{"input_tokens":2,"output_tokens":3406,"cache_read_input_tokens":32155,"cache_creation_input_tokens":528936,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":528936},"type":"message","model":"claude-fable-5"},{"input_tokens":2,"output_tokens":2039,"cache_read_input_tokens":64310,"cache_creation_input_tokens":494190,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":494190},"type":"fallback_message","model":"claude-opus-4-8"}]}}}
+`
+	records, err := ReadClaudeTranscript(strings.NewReader(fallback + fallback))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want the message and its refused attempt", len(records))
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 494190 || *got.CacheWrite5m != 0 || *got.CacheWrite1h != 494190 {
+		t.Fatalf("split should come from the attempt that produced the message: %+v", got)
+	}
+	// The refused attempt produced output, so it's billed on its own at its
+	// own model's rates, under the same request and tool links.
+	attempt := records[1]
+	if attempt.MessageID != "m#iteration-0" || attempt.Model != "claude-fable-5" || attempt.RequestID != "r" ||
+		!slices.Equal(attempt.ToolUseIDs, []string{"t1"}) || len(attempt.Tools) != 1 {
+		t.Fatalf("refused attempt identity: %+v", attempt)
+	}
+	if got := attempt.Tokens; *got.InputUncached != 2 || *got.InputCacheRead != 32155 || *got.InputCacheWrite != 528936 ||
+		*got.CacheWrite5m != 0 || *got.CacheWrite1h != 528936 || *got.Output != 3406 || got.Thinking != nil {
+		t.Fatalf("refused attempt tokens: %+v", got)
+	}
+
+	// An attempt refused before any output is billed only for some refusal
+	// categories, which the transcript doesn't record.
+	beforeOutput := strings.Replace(fallback, `"output_tokens":3406`, `"output_tokens":0`, 1)
+	records, err = ReadClaudeTranscript(strings.NewReader(beforeOutput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want only the message", len(records))
+	}
+
+	// No attempt matches the total, and the earlier snapshot's split is
+	// discarded rather than kept beside a total it contradicts.
+	const consistent = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0}}}}
+`
+	const contradicted = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0},"iterations":[{"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0}}]}}}
+`
+	records, err = ReadClaudeTranscript(strings.NewReader(consistent + contradicted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 12 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
+		t.Fatalf("a split that contradicts the total is unknown: %+v", got)
+	}
+
+	// Snapshots of one message don't all list iterations. One that doesn't
+	// keeps the recovered split and the refused attempt.
+	noIterations := fallback[:strings.Index(fallback, `,"iterations"`)] + "}}}\n"
+	records, err = ReadClaudeTranscript(strings.NewReader(fallback + noIterations))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; len(records) != 2 || *got.CacheWrite5m != 0 || *got.CacheWrite1h != 494190 {
+		t.Fatalf("a snapshot without iterations should keep what an earlier one recovered: %d records, %+v", len(records), got)
+	}
+
+	// A later total without a split drops a split that no longer sums to it.
+	const newTotal = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-opus-4-8","content":[],"usage":{"cache_creation_input_tokens":500000}}}
+`
+	records, err = ReadClaudeTranscript(strings.NewReader(fallback + newTotal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 500000 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
+		t.Fatalf("a kept split must sum to the latest total: %+v", got)
+	}
+
+	// A snapshot reporting one lifetime replaces the whole split, rather than
+	// summing with the other lifetime an earlier snapshot reported.
+	const fiveMinutes = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":10}}}}
+`
+	const oneHour = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[],"usage":{"cache_creation":{"ephemeral_1h_input_tokens":10}}}}
+`
+	records, err = ReadClaudeTranscript(strings.NewReader(fiveMinutes + oneHour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 10 || got.CacheWrite5m != nil || got.CacheWrite1h == nil || *got.CacheWrite1h != 10 {
+		t.Fatalf("a later split should replace an earlier one: %+v", got)
+	}
+
+	// A snapshot listing iterations without the attempt withdraws its usage,
+	// so an upload already made is replaced by zero.
+	records, err = ReadClaudeTranscript(strings.NewReader(fallback + beforeOutput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want the message and the withdrawn attempt", len(records))
+	}
+	for _, count := range records[1].Tokens.fields() {
+		if *count != nil && **count != 0 {
+			t.Fatalf("withdrawn attempt still has usage: %+v", records[1].Tokens)
+		}
+	}
+	if records[1].Tokens.Output == nil {
+		t.Fatal("withdrawn attempt should report zero output, not unknown")
+	}
+
+	// The suffix never pushes an ID past the API's message ID limit.
+	long := strings.Repeat("m", maxMessageID-5)
+	records, err = ReadClaudeTranscript(strings.NewReader(strings.Replace(fallback, `"id":"m"`, `"id":"`+long+`"`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := records[1].MessageID; len(id) > maxMessageID || !strings.HasSuffix(id, "#iteration-0") || id == long+"#iteration-0" {
+		t.Fatalf("attempt ID %q exceeds the limit", id)
 	}
 }
 

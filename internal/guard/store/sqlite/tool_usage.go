@@ -229,9 +229,10 @@ func fingerprintTranscript(info fs.FileInfo) (string, error) {
 	if !info.Mode().IsRegular() || info.Size() > maxTranscriptBytes {
 		return "", fmt.Errorf("usage transcript must be a regular file up to 256 MiB")
 	}
-	// v4: Codex sub-agent records carry their root session, so rollouts read
-	// before that, whose records were dropped, are read once more.
-	return fmt.Sprintf("tool-metadata-v4:%d:%d", info.Size(), info.ModTime().UnixNano()), nil
+	// v5: Claude fallback requests take their cache write split from the
+	// matching usage iteration and report a refused attempt's billed usage,
+	// so transcripts read before that are read once more.
+	return fmt.Sprintf("tool-metadata-v5:%d:%d", info.Size(), info.ModTime().UnixNano()), nil
 }
 
 // readToolTranscript parses a transcript without touching the database, so
