@@ -92,6 +92,34 @@ func TestReadClaudeTranscriptMergesMessageSnapshots(t *testing.T) {
 	}
 }
 
+// Claude Code 2.1.229 logged a refused claude-fable-5 attempt and the
+// claude-opus-4-8 fallback with the final write total but the first split.
+func TestReadClaudeTranscriptCacheSplitAfterFallback(t *testing.T) {
+	const fallback = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"t1"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":494190,"cache_read_input_tokens":64310,"output_tokens":2039,"cache_creation":{"ephemeral_1h_input_tokens":528936,"ephemeral_5m_input_tokens":0},"iterations":[{"input_tokens":2,"output_tokens":3406,"cache_read_input_tokens":32155,"cache_creation_input_tokens":528936,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":528936},"type":"message","model":"claude-fable-5"},{"input_tokens":2,"output_tokens":2039,"cache_read_input_tokens":64310,"cache_creation_input_tokens":494190,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":494190},"type":"fallback_message","model":"claude-opus-4-8"}]}}}
+`
+	records, err := ReadClaudeTranscript(strings.NewReader(fallback + fallback))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 494190 || *got.CacheWrite5m != 0 || *got.CacheWrite1h != 494190 {
+		t.Fatalf("split should come from the attempt that produced the message: %+v", got)
+	}
+
+	// No attempt matches the total, and the earlier snapshot's split is
+	// discarded rather than kept beside a total it contradicts.
+	const consistent = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0}}}}
+`
+	const contradicted = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0},"iterations":[{"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0}}]}}}
+`
+	records, err = ReadClaudeTranscript(strings.NewReader(consistent + contradicted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 12 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
+		t.Fatalf("a split that contradicts the total is unknown: %+v", got)
+	}
+}
+
 func TestReadClaudeTranscriptMissingUsageAndSyntheticErrors(t *testing.T) {
 	input := `{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0}}}
 {"type":"assistant","sessionId":"s","message":{"id":"m1","model":"claude"}}

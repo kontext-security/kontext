@@ -78,21 +78,57 @@ func (r Record) ToolRelated() bool {
 	return len(r.ToolUseIDs) > 0 || len(r.ConsumedToolUseIDs) > 0
 }
 
+type cacheCreation struct {
+	FiveMinute *int64 `json:"ephemeral_5m_input_tokens"`
+	OneHour    *int64 `json:"ephemeral_1h_input_tokens"`
+}
+
 type anthropicUsage struct {
-	InputTokens              *int64 `json:"input_tokens"`
-	CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
-	CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
-	OutputTokens             *int64 `json:"output_tokens"`
-	CacheCreation            struct {
-		FiveMinute *int64 `json:"ephemeral_5m_input_tokens"`
-		OneHour    *int64 `json:"ephemeral_1h_input_tokens"`
-	} `json:"cache_creation"`
-	OutputTokensDetails struct {
+	InputTokens              *int64        `json:"input_tokens"`
+	CacheReadInputTokens     *int64        `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens *int64        `json:"cache_creation_input_tokens"`
+	OutputTokens             *int64        `json:"output_tokens"`
+	CacheCreation            cacheCreation `json:"cache_creation"`
+	OutputTokensDetails      struct {
 		Thinking *int64 `json:"thinking_tokens"`
 	} `json:"output_tokens_details"`
+	// Iterations itemizes a request's attempts, e.g. a refused attempt and
+	// the fallback model's. Top-level counts are the attempt that produced
+	// the message.
+	Iterations []struct {
+		CacheCreationInputTokens *int64        `json:"cache_creation_input_tokens"`
+		CacheCreation            cacheCreation `json:"cache_creation"`
+	} `json:"iterations"`
 	ServiceTier  string `json:"service_tier"`
 	InferenceGeo string `json:"inference_geo"`
 	Speed        string `json:"speed"`
+}
+
+// cacheWriteSplit returns the cache write's lifetime split. After a model
+// fallback, Claude Code logs the final attempt's write total with the first
+// attempt's split, so the iteration whose total matches supplies it. A split
+// that still contradicts the total is unknown (ok is false), never a guess.
+func (u *anthropicUsage) cacheWriteSplit() (short, long *int64, ok bool) {
+	total, split := u.CacheCreationInputTokens, u.CacheCreation
+	if total == nil || (split.FiveMinute == nil && split.OneHour == nil) || split.sums(*total) {
+		return split.FiveMinute, split.OneHour, true
+	}
+	for _, attempt := range slices.Backward(u.Iterations) {
+		if attempt.CacheCreationInputTokens != nil && *attempt.CacheCreationInputTokens == *total && attempt.CacheCreation.sums(*total) {
+			return attempt.CacheCreation.FiveMinute, attempt.CacheCreation.OneHour, true
+		}
+	}
+	return nil, nil, false
+}
+
+func (c cacheCreation) sums(total int64) bool {
+	var sum int64
+	for _, count := range []*int64{c.FiveMinute, c.OneHour} {
+		if count != nil {
+			sum += *count
+		}
+	}
+	return sum == total
 }
 
 // ReadClaudeTranscript reads complete JSONL records from a Claude Code
@@ -242,10 +278,11 @@ func (s *claudeState) parseLine(text []byte) error {
 		return fmt.Errorf("claude transcript line %d: usage missing session, message ID, or model", s.line)
 	}
 	u := row.Message.Usage
+	short, long, splitKnown := u.cacheWriteSplit()
 	tokens := Tokens{
 		InputUncached: u.InputTokens, InputCacheRead: u.CacheReadInputTokens,
 		InputCacheWrite: u.CacheCreationInputTokens,
-		CacheWrite5m:    u.CacheCreation.FiveMinute, CacheWrite1h: u.CacheCreation.OneHour,
+		CacheWrite5m:    short, CacheWrite1h: long,
 		Output: u.OutputTokens, Thinking: u.OutputTokensDetails.Thinking,
 	}
 	for _, count := range tokens.fields() {
@@ -278,6 +315,10 @@ func (s *claudeState) parseLine(text []byte) error {
 		if *count != nil {
 			*previous[i] = *count
 		}
+	}
+	if !splitKnown {
+		// An earlier snapshot's split contradicts this total too.
+		record.Tokens.CacheWrite5m, record.Tokens.CacheWrite1h = nil, nil
 	}
 	for _, field := range []struct {
 		dst *string
