@@ -76,9 +76,14 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 	if len(got.Sessions) != 1 || len(got.Actions) != 2 || len(got.Receipts) != 2 {
 		t.Fatalf("batch counts = sessions %d actions %d receipts %d", len(got.Sessions), len(got.Actions), len(got.Receipts))
 	}
-	if got.Actions[0]["canonical_event_type"] != "request.proposed" ||
-		got.Actions[1]["canonical_event_type"] != "request.decided" ||
-		got.Actions[1]["decision_result"] != "allow" {
+	// Actions come ordered by update time, then id; both events of one
+	// decision can share a clock tick, so they are looked up by type.
+	byType := map[any]map[string]any{}
+	for _, action := range got.Actions {
+		byType[action["canonical_event_type"]] = action
+	}
+	if byType["request.proposed"] == nil || byType["request.decided"] == nil ||
+		byType["request.decided"]["decision_result"] != "allow" {
 		t.Fatalf("actions = %+v, want proposed and decided ledger events", got.Actions)
 	}
 
