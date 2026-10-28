@@ -740,7 +740,8 @@ func TestEnsureSocketDirRestoresOwnerWritePermission(t *testing.T) {
 }
 
 func TestEnsureSocketDirRejectsNonDirectoryParent(t *testing.T) {
-	parent := filepath.Join(t.TempDir(), "socket-parent")
+	// A short parent, so the socket path stays bindable and the parent check is what fails.
+	parent := filepath.Join(hermetic.SocketDir(t), "socket-parent")
 	if err := os.WriteFile(parent, []byte("not a directory"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -754,7 +755,7 @@ func TestEnsureSocketDirRejectsSymlinkParent(t *testing.T) {
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)
 	}
-	link := filepath.Join(t.TempDir(), "socket-link")
+	link := filepath.Join(hermetic.SocketDir(t), "socket-link")
 	hermetic.Symlinks(t)
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatalf("Symlink() error = %v", err)

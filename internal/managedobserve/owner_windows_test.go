@@ -8,10 +8,13 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestEnsureSocketDirSetsOwnerOnlyDACL(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "run")
+	// A short parent: t.TempDir carries the test name and can push the socket past 107 bytes.
+	dir := filepath.Join(hermetic.SocketDir(t), "run")
 	for i := 0; i < 2; i++ { // a second start finds the directory and must accept it
 		if err := EnsureSocketDir(filepath.Join(dir, "kontext.sock")); err != nil {
 			t.Fatalf("EnsureSocketDir() call %d error = %v", i+1, err)

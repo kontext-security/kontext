@@ -80,6 +80,10 @@ func runDaemon(ctx context.Context, args []string, out io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// Before the hooks are written: they name this socket, and one Windows cannot bind is useless.
+	if err := localruntime.CheckSocketPath(*socketPath, "--socket or KONTEXT_GUARD_SOCKET"); err != nil {
+		return err
+	}
 	if !*skipHookInstall {
 		if err := verifyClaudeCode(); err != nil {
 			return err
