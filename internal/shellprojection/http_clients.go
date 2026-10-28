@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
@@ -16,9 +17,12 @@ import (
 func classifyHTTPClient(program string, args []string, complete, opaqueValues, stdin bool) cedareval.ShellProjectionV2 {
 	var converted []string
 	offline := false
-	if program == "wget" {
+	switch {
+	case webCmdlet(program):
+		converted = webCmdletArgs(args, stdin)
+	case program == "wget":
 		converted = wgetArgs(args)
-	} else {
+	default:
 		converted, offline = httpieArgs(program, args, stdin)
 	}
 	if offline && (complete || opaqueValues) {
@@ -31,6 +35,159 @@ func classifyHTTPClient(program string, args []string, complete, opaqueValues, s
 		result.Facts = sortedUnique(append(result.Facts, facts...))
 	}
 	return result
+}
+
+// webCmdlet reports PowerShell's web cmdlets, by name or alias.
+func webCmdlet(program string) bool {
+	switch program {
+	case "invoke-restmethod", "invoke-webrequest", "irm", "iwr":
+		return true
+	}
+	return false
+}
+
+// webCmdletStyle reports arguments in the web cmdlets' form. In Windows
+// PowerShell 5.1, curl and wget are aliases of Invoke-WebRequest; these full
+// parameter names are no curl or wget option, so such a call is the cmdlet.
+// In PowerShell 7 they run the real program, which reads them as other
+// options; reading the call as the cmdlet keeps the method and URL it names.
+func webCmdletStyle(args []string) bool {
+	for _, arg := range args {
+		if len(arg) < 3 || arg[0] != '-' || arg[1] == '-' {
+			continue
+		}
+		name, _, _ := strings.Cut(arg[1:], ":")
+		switch strings.ToLower(name) {
+		case "uri", "method", "custommethod", "body", "infile", "outfile", "headers", "form", "contenttype",
+			"usebasicparsing", "websession", "sessionvariable", "passthru", "timeoutsec", "skipcertificatecheck":
+			return true
+		}
+	}
+	return false
+}
+
+// webCmdletParameter is a parameter of Invoke-WebRequest and Invoke-RestMethod
+// (Windows PowerShell 5.1 and PowerShell 7) or a common parameter: whether a
+// value follows, and what the request does with it. An empty role only
+// shapes output, credentials, timeouts or error handling.
+type webCmdletParameter struct {
+	name    string
+	value   bool
+	role    string
+	aliases []string
+}
+
+var webCmdletParameters = []webCmdletParameter{
+	{name: "uri", value: true, role: "uri"},
+	{name: "method", value: true, role: "method"},
+	{name: "custommethod", value: true, role: "method"},
+	{name: "body", value: true, role: "body"},
+	{name: "infile", value: true, role: "infile"},
+	{name: "form", value: true, role: "body"},
+	{name: "headers", value: true, role: "headers"},
+	// A web session can carry headers; a Unix socket sends the request to a
+	// local listener instead of the URL's host.
+	{name: "websession", value: true, role: "opaque"},
+	{name: "unixsocket", value: true, role: "opaque"},
+	{name: "contenttype", value: true}, {name: "outfile", value: true}, {name: "credential", value: true},
+	{name: "authentication", value: true}, {name: "token", value: true}, {name: "useragent", value: true},
+	{name: "timeoutsec", value: true}, {name: "maximumredirection", value: true}, {name: "maximumretrycount", value: true},
+	{name: "retryintervalsec", value: true}, {name: "proxy", value: true}, {name: "proxycredential", value: true},
+	{name: "sessionvariable", value: true, aliases: []string{"sv"}}, {name: "httpversion", value: true},
+	{name: "sslprotocol", value: true}, {name: "transferencoding", value: true}, {name: "maximumfollowrellink", value: true, aliases: []string{"ml"}},
+	{name: "responseheadersvariable", value: true, aliases: []string{"rhv"}}, {name: "statuscodevariable", value: true},
+	{name: "connectiontimeoutseconds", value: true}, {name: "operationtimeoutseconds", value: true},
+	{name: "certificatethumbprint", value: true}, {name: "certificate", value: true},
+	{name: "usebasicparsing"}, {name: "passthru"}, {name: "skipcertificatecheck"}, {name: "skipheadervalidation"},
+	{name: "noproxy"}, {name: "resume"}, {name: "allowunencryptedauthentication"}, {name: "preserveauthorizationonredirect"},
+	{name: "followrellink", aliases: []string{"fl"}}, {name: "skiphttperrorcheck"}, {name: "disablekeepalive"},
+	{name: "preservehttpmethodonredirect"}, {name: "usedefaultcredentials"}, {name: "proxyusedefaultcredentials"},
+	{name: "allowinsecureredirect"},
+	// Common parameters.
+	{name: "verbose", aliases: []string{"vb"}}, {name: "debug", aliases: []string{"db"}},
+	{name: "erroraction", value: true, aliases: []string{"ea"}}, {name: "warningaction", value: true, aliases: []string{"wa"}},
+	{name: "informationaction", value: true, aliases: []string{"infa"}}, {name: "progressaction", value: true, aliases: []string{"proga"}},
+	{name: "errorvariable", value: true, aliases: []string{"ev"}}, {name: "warningvariable", value: true, aliases: []string{"wv"}},
+	{name: "informationvariable", value: true, aliases: []string{"iv"}}, {name: "outvariable", value: true, aliases: []string{"ov"}},
+	{name: "outbuffer", value: true, aliases: []string{"ob"}}, {name: "pipelinevariable", value: true, aliases: []string{"pv"}},
+}
+
+// lookupWebCmdletParameter resolves a parameter as PowerShell binds it: the
+// full name or an alias, else a prefix of exactly one parameter.
+func lookupWebCmdletParameter(name string) (webCmdletParameter, bool) {
+	var match []webCmdletParameter
+	for _, p := range webCmdletParameters {
+		if p.name == name || slices.Contains(p.aliases, name) {
+			return p, true
+		}
+		if strings.HasPrefix(p.name, name) {
+			match = append(match, p)
+		}
+	}
+	if len(match) == 1 {
+		return match[0], true
+	}
+	return webCmdletParameter{}, false
+}
+
+// webCmdletArgs translates Invoke-WebRequest and Invoke-RestMethod arguments
+// to curl's: a positional value is -Uri; -Body, -Form and -InFile are the
+// body, as is input from the pipeline; -Headers are headers, so a computed
+// table is an opaque header value, as for curl. A parameter that cannot be
+// bound, a second positional value or a session make the request unreadable,
+// as an unknown wget option does; every positional value stays a URL, since
+// it may be the value of a parameter that was not read.
+func webCmdletArgs(args []string, stdin bool) []string {
+	var out, body []string
+	positional := 0
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if len(arg) < 2 || arg[0] != '-' {
+			out = append(out, "--url", arg)
+			if positional++; positional == 2 {
+				out = append(out, "-K", "unreadable-web-cmdlet-argument")
+			}
+			continue
+		}
+		name, attached, hasValue := strings.Cut(arg[1:], ":")
+		p, ok := lookupWebCmdletParameter(strings.ToLower(name))
+		if !ok {
+			out = append(out, "-K", "unreadable-web-cmdlet-parameter")
+			continue
+		}
+		value := ""
+		if p.value {
+			switch {
+			case hasValue:
+				value = attached
+			case i+1 < len(args):
+				i++
+				value = args[i]
+			default:
+				// PowerShell refuses a parameter with its value missing.
+				out = append(out, "-K", "unreadable-web-cmdlet-parameter")
+				continue
+			}
+		}
+		switch p.role {
+		case "uri":
+			out = append(out, "--url", value)
+		case "method":
+			out = append(out, "-X", value)
+		case "body":
+			body = []string{"--data-raw", value}
+		case "infile":
+			body = []string{"--data-binary", "@" + value}
+		case "headers":
+			out = append(out, "-H", value)
+		case "opaque":
+			out = append(out, "-K", "unreadable-web-cmdlet-"+p.name)
+		}
+	}
+	if body == nil && stdin {
+		body = []string{"--data-binary", "@-"}
+	}
+	return append(out, body...)
 }
 
 // The translators mark request operands with --url. Inspect only their

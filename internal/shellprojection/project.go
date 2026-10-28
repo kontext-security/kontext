@@ -677,7 +677,7 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 		return single(classifyGH(args, complete, helpAllowed))
 	case "curl":
 		return single(classifyCurl(args, complete, !wordsComplete && wrapperComplete && w.oneArgumentEach, true))
-	case "wget", "http", "https":
+	case "wget", "http", "https", "invoke-restmethod", "invoke-webrequest", "irm", "iwr":
 		return single(classifyHTTPClient(program, args, complete && w.oneArgumentEach, !wordsComplete && wrapperComplete && w.oneArgumentEach, w.stdin))
 	case "acli":
 		return single(acliCLI.classify(args, complete))

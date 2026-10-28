@@ -64,6 +64,17 @@ func commandName(word string) string {
 	return word
 }
 
+// webCmdletAlias reports curl or wget, named bare, called with the web
+// cmdlets' parameters: in Windows PowerShell 5.1 both are aliases of
+// Invoke-WebRequest. A path or an .exe suffix always names the program.
+func webCmdletAlias(command string, args []string) bool {
+	switch strings.ToLower(command) {
+	case "curl", "wget":
+		return webCmdletStyle(args)
+	}
+	return false
+}
+
 // projectStatements classifies each statement's call, then the scripts in
 // its blocks, groupings and subexpressions, which run as part of it.
 func projectStatements(statements []scriptStatement, nested []string, dialect scriptDialect, w walk, top bool) []cedareval.ShellProjectionV2 {
@@ -88,6 +99,9 @@ func projectStatements(statements []scriptStatement, nested []string, dialect sc
 		if len(values) > 0 && values[0] != "" {
 			values[0] = commandName(values[0])
 		}
+		if len(values) > 0 && dialect == dialectPowerShell && webCmdletAlias(words[0].value, values[1:]) {
+			values[0] = "invoke-webrequest"
+		}
 		if len(values) > 0 && dialect == dialectPowerShell {
 			if program := strings.ToLower(values[0]); program == "iex" || program == "invoke-expression" {
 				args := values[1:]
@@ -100,7 +114,11 @@ func projectStatements(statements []scriptStatement, nested []string, dialect sc
 			}
 		}
 		direct := len(values) > 0 && values[0] == "gh"
-		projections = append(projections, classify(values, complete, walk{depth: w.depth}, helpAllowed && direct)...)
+		// PowerShell binds each word of a cmdlet call as one argument, and
+		// the web cmdlets take input from the pipeline as the request body.
+		cmdlet := dialect == dialectPowerShell && len(values) > 0 && webCmdlet(strings.ToLower(values[0]))
+		cw := walk{depth: w.depth, oneArgumentEach: cmdlet, stdin: cmdlet && statement.piped && index > 0}
+		projections = append(projections, classify(values, complete, cw, helpAllowed && direct)...)
 	}
 	for _, script := range nested {
 		// A block runs as part of the command, not as a script handed to
