@@ -151,6 +151,27 @@ func TestReadClaudeTranscriptCacheSplitAfterFallback(t *testing.T) {
 	if got := records[0].Tokens; *got.InputCacheWrite != 8 || got.CacheWrite5m != nil || got.CacheWrite1h != nil {
 		t.Fatalf("a split above the total is unknown: %+v", got)
 	}
+	// Counts whose sum overflows int64 still exceed the total.
+	overflow := strings.Replace(partial, `"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0},"iterations"`, `"ephemeral_5m_input_tokens":9223372036854775807,"ephemeral_1h_input_tokens":2},"iterations"`, 1)
+	records, err = ReadClaudeTranscript(strings.NewReader(overflow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; got.CacheWrite5m != nil || got.CacheWrite1h != nil {
+		t.Fatalf("an overflowing split is unknown: %+v", got)
+	}
+
+	// The attempt that produced the message supplies its split even when it
+	// names a lifetime for only part of the write.
+	const partialAttempt = `{"type":"assistant","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude","content":[{"type":"tool_use","id":"t1"}],"usage":{"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":20,"ephemeral_1h_input_tokens":0},"iterations":[{"type":"message","cache_creation_input_tokens":20,"cache_creation":{"ephemeral_5m_input_tokens":20,"ephemeral_1h_input_tokens":0}},{"type":"fallback_message","cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":5}}]}}}
+`
+	records, err = ReadClaudeTranscript(strings.NewReader(partialAttempt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[0].Tokens; *got.InputCacheWrite != 12 || got.CacheWrite5m == nil || *got.CacheWrite5m != 0 || got.CacheWrite1h == nil || *got.CacheWrite1h != 5 {
+		t.Fatalf("a partial split should come from the attempt that produced the message: %+v", got)
+	}
 
 	// Snapshots of one message don't all list iterations. One that doesn't
 	// keeps the recovered split and the refused attempt.

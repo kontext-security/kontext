@@ -146,11 +146,11 @@ func (a anthropicIteration) tokens() Tokens {
 // above it contradicts the total and is left out, never a guess.
 func (u *anthropicUsage) cacheWriteSplit() (short, long *int64) {
 	total, split := u.CacheCreationInputTokens, u.CacheCreation
-	if total == nil || (split.FiveMinute == nil && split.OneHour == nil) || split.sums(*total) {
+	if total == nil || !split.reported() || split.sums(*total) {
 		return split.FiveMinute, split.OneHour
 	}
 	for _, attempt := range slices.Backward(u.Iterations) {
-		if attempt.CacheCreationInputTokens != nil && *attempt.CacheCreationInputTokens == *total && attempt.CacheCreation.sums(*total) {
+		if attempt.CacheCreationInputTokens != nil && *attempt.CacheCreationInputTokens == *total && attempt.CacheCreation.reported() && attempt.CacheCreation.within(*total) {
 			return attempt.CacheCreation.FiveMinute, attempt.CacheCreation.OneHour
 		}
 	}
@@ -174,21 +174,34 @@ func attemptMessageID(message string, iteration int) string {
 	return message + suffix
 }
 
-func (c cacheCreation) sum() int64 {
-	var sum int64
+func (c cacheCreation) reported() bool { return c.FiveMinute != nil || c.OneHour != nil }
+
+// rest returns the part of total the split leaves without a lifetime, and
+// false when a count is negative or the counts exceed total. Each count is
+// taken from what remains, so large counts can't overflow into a fit.
+func (c cacheCreation) rest(total int64) (int64, bool) {
 	for _, count := range []*int64{c.FiveMinute, c.OneHour} {
 		if count != nil {
-			sum += *count
+			if *count < 0 || *count > total {
+				return 0, false
+			}
+			total -= *count
 		}
 	}
-	return sum
+	return total, true
 }
 
-func (c cacheCreation) sums(total int64) bool { return c.sum() == total }
+func (c cacheCreation) sums(total int64) bool {
+	rest, ok := c.rest(total)
+	return ok && rest == 0
+}
 
 // within reports whether the split accounts for no more of the write than
 // total. Claude Code sometimes reports a lifetime for only part of a write.
-func (c cacheCreation) within(total int64) bool { return c.sum() <= total }
+func (c cacheCreation) within(total int64) bool {
+	_, ok := c.rest(total)
+	return ok
+}
 
 // ReadClaudeTranscript reads complete JSONL records from a Claude Code
 // transcript. The unfinished trailing line is left for the next read. Repeated
