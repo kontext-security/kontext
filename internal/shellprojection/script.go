@@ -64,15 +64,16 @@ func commandName(word string) string {
 	return word
 }
 
-// webCmdletAlias reports curl or wget, named bare, called with the web
-// cmdlets' parameters: in Windows PowerShell 5.1 both are aliases of
-// Invoke-WebRequest. A path or an .exe suffix always names the program.
-func webCmdletAlias(command string, args []string) bool {
+// webCmdletAlias returns the arguments of curl or wget, named bare, as
+// Invoke-WebRequest's when Windows PowerShell 5.1, where both are its
+// aliases, would bind them; PowerShell 7 runs the program. A path or an .exe
+// suffix always names the program.
+func webCmdletAlias(command string, args []string) ([]string, bool) {
 	switch strings.ToLower(command) {
 	case "curl", "wget":
-		return webCmdletStyle(args)
+		return windowsPowerShellWebArgs(args)
 	}
-	return false
+	return nil, false
 }
 
 // projectStatements classifies each statement's call, then the scripts in
@@ -99,9 +100,6 @@ func projectStatements(statements []scriptStatement, nested []string, dialect sc
 		if len(values) > 0 && values[0] != "" {
 			values[0] = commandName(values[0])
 		}
-		if len(values) > 0 && dialect == dialectPowerShell && webCmdletAlias(words[0].value, values[1:]) {
-			values[0] = "invoke-webrequest"
-		}
 		if len(values) > 0 && dialect == dialectPowerShell {
 			if program := strings.ToLower(values[0]); program == "iex" || program == "invoke-expression" {
 				args := values[1:]
@@ -119,6 +117,15 @@ func projectStatements(statements []scriptStatement, nested []string, dialect sc
 		cmdlet := dialect == dialectPowerShell && len(values) > 0 && webCmdlet(strings.ToLower(values[0]))
 		cw := walk{depth: w.depth, oneArgumentEach: cmdlet, stdin: cmdlet && statement.piped && index > 0}
 		projections = append(projections, classify(values, complete, cw, helpAllowed && direct)...)
+		if dialect != dialectPowerShell || len(values) == 0 {
+			continue
+		}
+		if args, ok := webCmdletAlias(words[0].value, values[1:]); ok {
+			// Which runs depends on the PowerShell version, so a policy
+			// sees both: the program above and the cmdlet here.
+			aw := walk{depth: w.depth, oneArgumentEach: true, stdin: statement.piped && index > 0}
+			projections = append(projections, classify(append([]string{"invoke-webrequest"}, args...), complete, aw, false)...)
+		}
 	}
 	for _, script := range nested {
 		// A block runs as part of the command, not as a script handed to

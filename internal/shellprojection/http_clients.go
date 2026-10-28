@@ -46,24 +46,44 @@ func webCmdlet(program string) bool {
 	return false
 }
 
-// webCmdletStyle reports arguments in the web cmdlets' form. In Windows
-// PowerShell 5.1, curl and wget are aliases of Invoke-WebRequest; these full
-// parameter names are no curl or wget option, so such a call is the cmdlet.
-// In PowerShell 7 they run the real program, which reads them as other
-// options; reading the call as the cmdlet keeps the method and URL it names.
-func webCmdletStyle(args []string) bool {
-	for _, arg := range args {
-		if len(arg) < 3 || arg[0] != '-' || arg[1] == '-' {
+// windowsPowerShellWebArgs binds arguments as Windows PowerShell 5.1 does for
+// its curl and wget aliases of Invoke-WebRequest, and returns them with each
+// parameter under its full name. ok is false when 5.1 refuses the call and
+// runs nothing: no named parameter (the call is then read as the program),
+// a parameter Invoke-WebRequest does not have there or an ambiguous prefix,
+// a missing value, or not exactly one URI.
+func windowsPowerShellWebArgs(args []string) (_ []string, ok bool) {
+	var out []string
+	named, uris := false, 0
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+			out = append(out, arg)
+			uris++
 			continue
 		}
-		name, _, _ := strings.Cut(arg[1:], ":")
-		switch strings.ToLower(name) {
-		case "uri", "method", "custommethod", "body", "infile", "outfile", "headers", "form", "contenttype",
-			"usebasicparsing", "websession", "sessionvariable", "passthru", "timeoutsec", "skipcertificatecheck":
-			return true
+		name, value, hasValue := strings.Cut(arg[1:], ":")
+		p, found := lookupWebCmdletParameter(strings.ToLower(name), true)
+		if !found {
+			return nil, false
+		}
+		named = true
+		if p.role == "uri" {
+			uris++
+		}
+		switch {
+		case hasValue:
+			out = append(out, "-"+p.name+":"+value)
+		case p.value && i+1 < len(args) && !parameterToken(args[i+1]):
+			out = append(out, "-"+p.name, args[i+1])
+			i++
+		case p.value:
+			return nil, false
+		default:
+			out = append(out, "-"+p.name)
 		}
 	}
-	return false
+	return out, named && uris == 1
 }
 
 // webCmdletParameter is a parameter of Invoke-WebRequest and Invoke-RestMethod
@@ -75,6 +95,7 @@ type webCmdletParameter struct {
 	value   bool
 	role    string
 	aliases []string
+	common  bool
 }
 
 var webCmdletParameters = []webCmdletParameter{
@@ -104,19 +125,36 @@ var webCmdletParameters = []webCmdletParameter{
 	{name: "preservehttpmethodonredirect"}, {name: "usedefaultcredentials"}, {name: "proxyusedefaultcredentials"},
 	{name: "allowinsecureredirect"},
 	// Common parameters.
-	{name: "verbose", aliases: []string{"vb"}}, {name: "debug", aliases: []string{"db"}},
-	{name: "erroraction", value: true, aliases: []string{"ea"}}, {name: "warningaction", value: true, aliases: []string{"wa"}},
-	{name: "informationaction", value: true, aliases: []string{"infa"}}, {name: "progressaction", value: true, aliases: []string{"proga"}},
-	{name: "errorvariable", value: true, aliases: []string{"ev"}}, {name: "warningvariable", value: true, aliases: []string{"wv"}},
-	{name: "informationvariable", value: true, aliases: []string{"iv"}}, {name: "outvariable", value: true, aliases: []string{"ov"}},
-	{name: "outbuffer", value: true, aliases: []string{"ob"}}, {name: "pipelinevariable", value: true, aliases: []string{"pv"}},
+	{name: "verbose", aliases: []string{"vb"}, common: true}, {name: "debug", aliases: []string{"db"}, common: true},
+	{name: "erroraction", value: true, aliases: []string{"ea"}, common: true}, {name: "warningaction", value: true, aliases: []string{"wa"}, common: true},
+	{name: "informationaction", value: true, aliases: []string{"infa"}, common: true}, {name: "progressaction", value: true, aliases: []string{"proga"}, common: true},
+	{name: "errorvariable", value: true, aliases: []string{"ev"}, common: true}, {name: "warningvariable", value: true, aliases: []string{"wv"}, common: true},
+	{name: "informationvariable", value: true, aliases: []string{"iv"}, common: true}, {name: "outvariable", value: true, aliases: []string{"ov"}, common: true},
+	{name: "outbuffer", value: true, aliases: []string{"ob"}, common: true}, {name: "pipelinevariable", value: true, aliases: []string{"pv"}, common: true},
+}
+
+// windowsPowerShellWebParameters are the parameters Invoke-WebRequest has in
+// Windows PowerShell 5.1, with the common parameters.
+var windowsPowerShellWebParameters = []string{
+	"usebasicparsing", "uri", "websession", "sessionvariable", "credential", "usedefaultcredentials",
+	"certificatethumbprint", "certificate", "useragent", "disablekeepalive", "timeoutsec", "headers",
+	"maximumredirection", "method", "proxy", "proxycredential", "proxyusedefaultcredentials", "body",
+	"contenttype", "transferencoding", "infile", "outfile", "passthru",
+	"verbose", "debug", "erroraction", "warningaction", "informationaction", "progressaction", "errorvariable",
+	"warningvariable", "informationvariable", "outvariable", "outbuffer", "pipelinevariable",
 }
 
 // lookupWebCmdletParameter resolves a parameter as PowerShell binds it: the
-// full name or an alias, else a prefix of exactly one parameter.
-func lookupWebCmdletParameter(name string) (webCmdletParameter, bool) {
+// full name or an alias, else a prefix of exactly one parameter, where a
+// cmdlet parameter wins over common ones (-d is -DisableKeepAlive, not
+// -Debug). With windowsPowerShell set, only Windows PowerShell 5.1's
+// parameters count.
+func lookupWebCmdletParameter(name string, windowsPowerShell bool) (webCmdletParameter, bool) {
 	var match []webCmdletParameter
 	for _, p := range webCmdletParameters {
+		if windowsPowerShell && !slices.Contains(windowsPowerShellWebParameters, p.name) {
+			continue
+		}
 		if p.name == name || slices.Contains(p.aliases, name) {
 			return p, true
 		}
@@ -124,33 +162,46 @@ func lookupWebCmdletParameter(name string) (webCmdletParameter, bool) {
 			match = append(match, p)
 		}
 	}
+	if len(match) > 1 {
+		match = slices.DeleteFunc(match, func(p webCmdletParameter) bool { return p.common })
+	}
 	if len(match) == 1 {
 		return match[0], true
 	}
 	return webCmdletParameter{}, false
 }
 
+// parameterToken reports a word PowerShell reads as a parameter name rather
+// than as the value of the parameter before it.
+func parameterToken(word string) bool {
+	return len(word) > 1 && word[0] == '-' && (word[1] >= 'a' && word[1] <= 'z' || word[1] >= 'A' && word[1] <= 'Z')
+}
+
 // webCmdletArgs translates Invoke-WebRequest and Invoke-RestMethod arguments
 // to curl's: a positional value is -Uri; -Body, -Form and -InFile are the
 // body, as is input from the pipeline; -Headers are headers, so a computed
-// table is an opaque header value, as for curl. A parameter that cannot be
-// bound, a second positional value or a session make the request unreadable,
-// as an unknown wget option does; every positional value stays a URL, since
-// it may be the value of a parameter that was not read.
+// table is an opaque header value, as for curl. Without -Method the request
+// is a GET even with a body, and -Method Default is GET. A parameter that
+// cannot be bound, a second URI (by position or name) or a session make the
+// request unreadable, as an unknown wget option does; every positional value
+// stays a URL, since it may be the value of a parameter that was not read.
 func webCmdletArgs(args []string, stdin bool) []string {
 	var out, body []string
-	positional := 0
+	uris, method := 0, false
+	uri := func() {
+		if uris++; uris == 2 {
+			out = append(out, "-K", "unreadable-web-cmdlet-argument")
+		}
+	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if len(arg) < 2 || arg[0] != '-' {
 			out = append(out, "--url", arg)
-			if positional++; positional == 2 {
-				out = append(out, "-K", "unreadable-web-cmdlet-argument")
-			}
+			uri()
 			continue
 		}
 		name, attached, hasValue := strings.Cut(arg[1:], ":")
-		p, ok := lookupWebCmdletParameter(strings.ToLower(name))
+		p, ok := lookupWebCmdletParameter(strings.ToLower(name), false)
 		if !ok {
 			out = append(out, "-K", "unreadable-web-cmdlet-parameter")
 			continue
@@ -160,7 +211,7 @@ func webCmdletArgs(args []string, stdin bool) []string {
 			switch {
 			case hasValue:
 				value = attached
-			case i+1 < len(args):
+			case i+1 < len(args) && !parameterToken(args[i+1]):
 				i++
 				value = args[i]
 			default:
@@ -172,7 +223,12 @@ func webCmdletArgs(args []string, stdin bool) []string {
 		switch p.role {
 		case "uri":
 			out = append(out, "--url", value)
+			uri()
 		case "method":
+			method = true
+			if p.name == "method" && strings.EqualFold(value, "default") {
+				value = "GET"
+			}
 			out = append(out, "-X", value)
 		case "body":
 			body = []string{"--data-raw", value}
@@ -186,6 +242,11 @@ func webCmdletArgs(args []string, stdin bool) []string {
 	}
 	if body == nil && stdin {
 		body = []string{"--data-binary", "@-"}
+	}
+	if body != nil && !method {
+		// curl would send a body as a POST; the cmdlets send a GET (or, in
+		// Windows PowerShell 5.1, refuse a body that is not a table).
+		out = append(out, "-X", "GET")
 	}
 	return append(out, body...)
 }
