@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.16.0](https://github.com/kontext-security/kontext/compare/v1.15.0...v1.16.0) (2026-10-28)
+
+
+### Features
+
+* **guard:** evaluate PowerShell tool calls as shell commands ([#615](https://github.com/kontext-security/kontext/issues/615)) ([c44e625](https://github.com/kontext-security/kontext/commit/c44e62533555f9237e21b74c60bb61ab3b036d55))
+
+
+### Bug Fixes
+
+* **doctor:** don't promise a restart when launchd has unloaded the agent ([#639](https://github.com/kontext-security/kontext/issues/639)) ([bac224b](https://github.com/kontext-security/kontext/commit/bac224bbc07e7715e8d160d535760016d83c1e12))
+* **homebrew:** stop the Gatekeeper prompt when launchd starts the cask binary ([#643](https://github.com/kontext-security/kontext/issues/643)) ([de99851](https://github.com/kontext-security/kontext/commit/de99851cd9b01ef296fffc0966ff1affdeefc5c1))
+* **installation,profile,cedarpolicy,endpointconfig:** windows-safe directory sync and private-file check ([#607](https://github.com/kontext-security/kontext/issues/607)) ([9fd4d49](https://github.com/kontext-security/kontext/commit/9fd4d49474f965e78d32368398f97b57daf0ac4c))
+* **runtimehost:** per-user session dir ([#609](https://github.com/kontext-security/kontext/issues/609)) ([67c7a02](https://github.com/kontext-security/kontext/commit/67c7a02344e5099e996701a88f424553cf1f6edc))
+
 ## [1.15.0](https://github.com/kontext-security/kontext/compare/v1.14.1...v1.15.0) (2026-10-27)
 
 
