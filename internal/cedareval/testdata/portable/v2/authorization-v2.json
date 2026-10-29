@@ -4,7 +4,7 @@
     "name": "claude-code-git-force-push",
     "input": {
       "version": 2,
-      "endpointId": "ins_katana_mac_01",
+      "endpointId": "ins_acme_mac_01",
       "agentId": "anthropic-claude-code",
       "sessionId": "session_01",
       "toolId": "shell",
@@ -23,7 +23,7 @@
     "expected": {
       "principal": {
         "type": "Kontext::Endpoint",
-        "id": "ins_katana_mac_01"
+        "id": "ins_acme_mac_01"
       },
       "action": {
         "type": "Kontext::Action",
@@ -56,7 +56,7 @@
         {
           "uid": {
             "type": "Kontext::Endpoint",
-            "id": "ins_katana_mac_01"
+            "id": "ins_acme_mac_01"
           },
           "attrs": {},
           "parents": []
@@ -85,7 +85,7 @@
     "name": "codex-jira-provider-tool",
     "input": {
       "version": 2,
-      "endpointId": "ins_katana_mac_01",
+      "endpointId": "ins_acme_mac_01",
       "agentId": "openai-codex",
       "sessionId": "session_02",
       "toolId": "atlassian-mcp/createJiraIssue",
@@ -102,7 +102,7 @@
     "expected": {
       "principal": {
         "type": "Kontext::Endpoint",
-        "id": "ins_katana_mac_01"
+        "id": "ins_acme_mac_01"
       },
       "action": {
         "type": "Kontext::Action",
@@ -133,7 +133,7 @@
         {
           "uid": {
             "type": "Kontext::Endpoint",
-            "id": "ins_katana_mac_01"
+            "id": "ins_acme_mac_01"
           },
           "attrs": {},
           "parents": []

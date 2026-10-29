@@ -55,7 +55,7 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
 		InstallToken:   "test-install-token",
 		DeviceLabel:    "michel-macbook",
-		UserEmail:      " anna@katana.com ",
+		UserEmail:      " anna@example.com ",
 		HTTPClient:     server.Client(),
 	}); err != nil {
 		t.Fatalf("Flush() error = %v", err)
@@ -70,8 +70,8 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 	if got.Device == nil || got.Device.Label != "michel-macbook" {
 		t.Fatalf("device = %+v", got.Device)
 	}
-	if got.Device.UserEmail != "anna@katana.com" {
-		t.Fatalf("device user_email = %q, want trimmed anna@katana.com", got.Device.UserEmail)
+	if got.Device.UserEmail != "anna@example.com" {
+		t.Fatalf("device user_email = %q, want trimmed anna@example.com", got.Device.UserEmail)
 	}
 	if len(got.Sessions) != 1 || len(got.Actions) != 2 || len(got.Receipts) != 2 {
 		t.Fatalf("batch counts = sessions %d actions %d receipts %d", len(got.Sessions), len(got.Actions), len(got.Receipts))
@@ -310,13 +310,13 @@ func TestFlushEmitsDeviceForUserEmailAlone(t *testing.T) {
 		CloudURL:       server.URL,
 		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
 		InstallToken:   "test-install-token",
-		UserEmail:      "anna@katana.com",
+		UserEmail:      "anna@example.com",
 		HTTPClient:     server.Client(),
 	}); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
 
-	if got.Device == nil || got.Device.UserEmail != "anna@katana.com" || got.Device.Label != "" {
+	if got.Device == nil || got.Device.UserEmail != "anna@example.com" || got.Device.Label != "" {
 		t.Fatalf("device = %+v, want user_email only", got.Device)
 	}
 }

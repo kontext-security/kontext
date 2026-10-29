@@ -64,11 +64,11 @@ func TestPlatformUUIDErrors(t *testing.T) {
 // every already-reported device key from the machines that reported them. Do
 // not update the vectors without a hosted-side migration plan.
 func TestKeyMatchesFixedVectors(t *testing.T) {
-	key, err := Key("0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B", "org_katana")
+	key, err := Key("0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B", "org_acme")
 	if err != nil {
 		t.Fatalf("Key() error = %v", err)
 	}
-	if key != "dk_r9NpM1vh94fxqPIcsnx6DalBNVfubPTNYHUBLGUoUcc" {
+	if key != "dk_UGFHI3h-97Mpwk-odh5SGTOJwzLHaxCx_lW2QY5Vtzk" {
 		t.Fatalf("Key() = %q, want pinned vector", key)
 	}
 
@@ -85,11 +85,11 @@ func TestKeyMatchesFixedVectors(t *testing.T) {
 }
 
 func TestKeyNormalizesInputCase(t *testing.T) {
-	upper, err := Key("0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B", "org_katana")
+	upper, err := Key("0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B", "org_acme")
 	if err != nil {
 		t.Fatalf("Key() error = %v", err)
 	}
-	lower, err := Key(" 0f3a45b2-1c4d-4e5f-8a9b-0c1d2e3f4a5b ", "org_katana")
+	lower, err := Key(" 0f3a45b2-1c4d-4e5f-8a9b-0c1d2e3f4a5b ", "org_acme")
 	if err != nil {
 		t.Fatalf("Key() error = %v", err)
 	}
@@ -99,7 +99,7 @@ func TestKeyNormalizesInputCase(t *testing.T) {
 }
 
 func TestKeyRequiresBothInputs(t *testing.T) {
-	if _, err := Key("", "org_katana"); err == nil {
+	if _, err := Key("", "org_acme"); err == nil {
 		t.Fatal("Key() with blank UUID = nil error, want refusal")
 	}
 	if _, err := Key("0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B", " "); err == nil {
@@ -108,7 +108,7 @@ func TestKeyRequiresBothInputs(t *testing.T) {
 }
 
 func TestKeyShape(t *testing.T) {
-	key, err := Key("0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B", "org_katana")
+	key, err := Key("0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B", "org_acme")
 	if err != nil {
 		t.Fatalf("Key() error = %v", err)
 	}
