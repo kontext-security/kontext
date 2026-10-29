@@ -65,3 +65,70 @@ func TestUntrustedHooks(t *testing.T) {
 		})
 	}
 }
+
+// Fields Codex hashes only for some events, and strings serde_json writes
+// differently from Go. Expected values come from a serde-equivalent encoder
+// (sorted keys, compact, no ASCII escaping); the stop value is Codex's own.
+func TestHookHashMatchesCodex(t *testing.T) {
+	pre := map[string]any{"type": "command", "command": "'/opt/homebrew/bin/kontext' hook --agent 'codex' 'pre-tool-use'", "timeout": float64(20)}
+	with := func(key string, value any) map[string]any {
+		h := map[string]any{key: value}
+		for k, v := range pre {
+			h[k] = v
+		}
+		return h
+	}
+	empty := ""
+	for _, tc := range []struct {
+		name, label string
+		matcher     *string
+		handler     map[string]any
+		want        string
+	}{
+		{name: "stop ignores additionalContextLimit", label: "stop", matcher: &empty, handler: map[string]any{
+			"type": "command", "command": "'/opt/homebrew/bin/kontext' hook --agent 'codex' 'stop'", "timeout": float64(20), "additionalContextLimit": float64(1000),
+		}, want: codexTrustedHashes["stop"]},
+		{name: "pre-tool-use keeps additionalContextLimit", label: "pre_tool_use", matcher: &empty, handler: with("additionalContextLimit", float64(1000)),
+			want: "sha256:32407f907945f0ad15046b43c11eaefb4bf1578994db4772983f7520bacd85f2"},
+		{name: "line separators and an escaped backslash", label: "pre_tool_use", matcher: &empty, handler: with("statusMessage", "a b \\u2029 c"),
+			want: "sha256:607bd3e4f21df9e47cf08b9bba0c3bf2b7ba90defc981de44f29ec40dcb0c4e4"},
+		{name: "adjacent line separators", label: "pre_tool_use", matcher: &empty, handler: with("statusMessage", "  "),
+			want: "sha256:4572b298a4dd320e45ad42fb3cda4cc901a63103291e309dffbb510a3704c12b"},
+	} {
+		if got := hookHash(tc.label, tc.matcher, tc.handler); got != tc.want {
+			t.Errorf("%s: hookHash = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Codex resolves a symlinked CODEX_HOME before it builds the trust key.
+func TestUntrustedHooksResolvesCodexHome(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "codex-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", link)
+	data, err := TemplateJSON("/opt/homebrew/bin/kontext")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "hooks.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config strings.Builder
+	for label, hash := range codexTrustedHashes {
+		fmt.Fprintf(&config, "[hooks.state.%q]\ntrusted_hash = %q\n", filepath.Join(resolved, "hooks.json")+":"+label+":0:0", hash)
+	}
+	if err := os.WriteFile(filepath.Join(real, "config.toml"), []byte(config.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := UntrustedHooks(filepath.Join(link, "hooks.json"), filepath.Join(link, "config.toml"))
+	if err != nil || len(got) != 0 {
+		t.Fatalf("UntrustedHooks = %v, %v; want all trusted", got, err)
+	}
+}

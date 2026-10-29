@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"unicode"
@@ -54,6 +55,14 @@ func UntrustedHooks(hooksPath, configPath string) ([]string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	// Codex resolves a CODEX_HOME symlink before it builds the state key; the
+	// default ~/.codex it uses as is.
+	keyPath := hooksPath
+	if home := os.Getenv("CODEX_HOME"); home != "" && filepath.Clean(home) == filepath.Dir(hooksPath) {
+		if real, err := filepath.EvalSymlinks(home); err == nil {
+			keyPath = filepath.Join(real, filepath.Base(hooksPath))
+		}
+	}
 	var untrusted []string
 	for event, groups := range file.Hooks {
 		label := eventLabel(event)
@@ -63,7 +72,7 @@ func UntrustedHooks(hooksPath, configPath string) ([]string, error) {
 				if handler["type"] != "command" || !IsManagedHookCommand(command) {
 					continue
 				}
-				state, _ := states[fmt.Sprintf("%s:%s:%d:%d", hooksPath, label, gi, hi)].(map[string]any)
+				state, _ := states[fmt.Sprintf("%s:%s:%d:%d", keyPath, label, gi, hi)].(map[string]any)
 				trusted, _ := state["trusted_hash"].(string)
 				if state["enabled"] == false || trusted != hookHash(label, group.Matcher, handler) {
 					untrusted = append(untrusted, label)
@@ -105,8 +114,12 @@ func hookHash(label string, matcher *string, handler map[string]any) string {
 	if message, ok := handler["statusMessage"].(string); ok {
 		normalized["statusMessage"] = message
 	}
-	if limit, ok := handler["additionalContextLimit"].(float64); ok && limit != defaultContextLimit {
-		normalized["additionalContextLimit"] = uint64(limit)
+	// Only events that can return additionalContext keep the limit.
+	switch label {
+	case "pre_tool_use", "post_tool_use", "session_start", "user_prompt_submit", "subagent_start":
+		if limit, ok := handler["additionalContextLimit"].(float64); ok && limit != defaultContextLimit {
+			normalized["additionalContextLimit"] = uint64(limit)
+		}
 	}
 	identity := map[string]any{"event_name": label, "hooks": []any{normalized}}
 	switch label {
@@ -120,8 +133,28 @@ func hookHash(label string, matcher *string, handler map[string]any) string {
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
 	_ = encoder.Encode(identity)
-	sum := sha256.Sum256(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
+	sum := sha256.Sum256(unescapeLineSeparators(bytes.TrimSuffix(buf.Bytes(), []byte("\n"))))
 	return fmt.Sprintf("sha256:%x", sum)
+}
+
+// unescapeLineSeparators writes U+2028 and U+2029 as they are, like
+// serde_json; Go's encoder escapes them. It walks escape pairs whole, so an
+// escaped backslash followed by "u2028" stays text.
+func unescapeLineSeparators(data []byte) []byte {
+	out := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		switch {
+		case data[i] != '\\' || i+1 == len(data):
+			out = append(out, data[i])
+		case bytes.HasPrefix(data[i:], []byte(`\u2028`)):
+			out, i = append(out, "\u2028"...), i+5
+		case bytes.HasPrefix(data[i:], []byte(`\u2029`)):
+			out, i = append(out, "\u2029"...), i+5
+		default:
+			out, i = append(out, data[i], data[i+1]), i+1
+		}
+	}
+	return out
 }
 
 func normalizedTimeout(label string, value any) uint64 {
