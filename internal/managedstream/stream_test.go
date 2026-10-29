@@ -76,9 +76,14 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 	if len(got.Sessions) != 1 || len(got.Actions) != 2 || len(got.Receipts) != 2 {
 		t.Fatalf("batch counts = sessions %d actions %d receipts %d", len(got.Sessions), len(got.Actions), len(got.Receipts))
 	}
-	if got.Actions[0]["canonical_event_type"] != "request.proposed" ||
-		got.Actions[1]["canonical_event_type"] != "request.decided" ||
-		got.Actions[1]["decision_result"] != "allow" {
+	// Actions come ordered by update time, then id; both events of one
+	// decision can share a clock tick, so they are looked up by type.
+	byType := map[any]map[string]any{}
+	for _, action := range got.Actions {
+		byType[action["canonical_event_type"]] = action
+	}
+	if byType["request.proposed"] == nil || byType["request.decided"] == nil ||
+		byType["request.decided"]["decision_result"] != "allow" {
 		t.Fatalf("actions = %+v, want proposed and decided ledger events", got.Actions)
 	}
 
@@ -1517,10 +1522,17 @@ func TestFlushKeepsRowsTheHostedLedgerDidNotStoreAsSent(t *testing.T) {
 		if len(payload.Actions) == 0 {
 			return `{"quarantined":[],"altered":[]}`
 		}
-		quarantined, _ = payload.Actions[0]["id"].(string)
-		// An altered receipt keeps the action it belongs to.
+		// An altered receipt keeps the action it belongs to; the other action
+		// is quarantined. Actions come ordered by update time, then id, so
+		// when both were saved in the same clock tick either can come first.
 		receipt := payload.Receipts[len(payload.Receipts)-1]
 		altered, _ = receipt["action_id"].(string)
+		for _, action := range payload.Actions {
+			if id, _ := action["id"].(string); id != altered {
+				quarantined = id
+				break
+			}
+		}
 		return fmt.Sprintf(`{"quarantined":[{"kind":"authorization_action","id":%q}],"altered":[{"kind":"authorization_receipt","id":%q,"reason":"redacted"}]}`, quarantined, receipt["id"])
 	})
 	statePath := filepath.Join(t.TempDir(), "stream-state.json")
