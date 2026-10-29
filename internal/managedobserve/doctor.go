@@ -704,9 +704,8 @@ func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
 		fmt.Fprintf(out, "  auto-update: off (%s is not a Homebrew install under /opt/homebrew or /usr/local)\n", selfExecutablePath())
 		return
 	case homebrewBuild():
-		// The outdated check above already ran for every homebrew-core build.
+		// The daemon still checks for a newer version and saves the result.
 		fmt.Fprintf(out, "  auto-update: off (homebrew-core; update with `brew upgrade kontext`, or switch to the self-updating cask: `brew uninstall --formula kontext && brew install --cask %s`)\n", homebrewFormula)
-		return
 	case strings.TrimSpace(os.Getenv(envNoUpdateCheck)) != "":
 		fmt.Fprintf(out, "  auto-update: off (%s is set)\n", envNoUpdateCheck)
 		return
@@ -723,7 +722,8 @@ func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
 	if state.Error != "" {
 		warn("the last update check failed: %s", state.Error)
 	}
-	if state.Notice != "" {
+	// For homebrew-core the outdated check above already printed the notice.
+	if state.Notice != "" && !homebrewBuild() {
 		warn("%s", state.Notice)
 	}
 }

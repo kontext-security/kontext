@@ -80,12 +80,17 @@ func startHomebrewUpdater(ctx context.Context, loadedConfig managedconfig.Loaded
 		// homebrew-core does not allow self-updating formulae: notice only.
 		check = func(ctx context.Context) (bool, string, error) {
 			// brew outdated reads cached metadata; refresh it first.
-			if _, err := runBrewWithTimeout(ctx, brewUpdateTimeout, []string{"HOMEBREW_AUTO_UPDATE_SECS=" + brewAutoUpdateSecs}, install.brewPath, "update-if-needed"); err != nil && ctx.Err() == nil {
-				logHomebrewUpdater(log, "daemon updater: brew update-if-needed: %v\n", err)
+			_, refreshErr := runBrewWithTimeout(ctx, brewUpdateTimeout, []string{"HOMEBREW_AUTO_UPDATE_SECS=" + brewAutoUpdateSecs}, install.brewPath, "update-if-needed")
+			if ctx.Err() != nil {
+				return false, "", ctx.Err()
 			}
 			notice, err := homebrewOutdatedWarning(ctx, install.brewPath)
 			if notice != "" {
 				logHomebrewUpdater(log, "%s\n", notice)
+			}
+			// Stale metadata that shows nothing new proves nothing: retry soon.
+			if err == nil && notice == "" && refreshErr != nil {
+				err = fmt.Errorf("brew update-if-needed: %w", refreshErr)
 			}
 			return false, notice, err
 		}
@@ -123,6 +128,8 @@ func updateSource(install homebrewInstall) string {
 
 func runUpdateSchedule(ctx context.Context, source string, interval time.Duration, check func(context.Context) (bool, string, error), log diagnostic.Logger, upgraded chan<- struct{}) {
 	wait := firstUpdateCheckDelay
+	// The last check this process ran, for when the saved file cannot be written.
+	var last UpdateState
 	for {
 		timer := time.NewTimer(wait)
 		select {
@@ -137,7 +144,11 @@ func runUpdateSchedule(ctx context.Context, source string, interval time.Duratio
 		// by another package (homebrew-core before a switch to the cask) does
 		// not count.
 		// A saved time in the future (a clock that was ahead) is due at once.
-		if state, err := LoadUpdateState(); err == nil && state.Source == source {
+		state, err := LoadUpdateState()
+		if err != nil || state.Source != source {
+			state = last
+		}
+		if state.Source == source {
 			// A failed check (offline after wake, brew busy) retries within the hour.
 			limit := interval
 			if state.Error != "" {
@@ -151,11 +162,12 @@ func runUpdateSchedule(ctx context.Context, source string, interval time.Duratio
 		if ctx.Err() != nil {
 			return
 		}
-		state := UpdateState{CheckedAt: time.Now(), Source: source, Notice: notice}
+		state = UpdateState{CheckedAt: time.Now(), Source: source, Notice: notice}
 		if err != nil {
 			state.Error = err.Error()
 			logHomebrewUpdater(log, "daemon updater: %v\n", err)
 		}
+		last = state
 		if writeErr := writeJSONBreadcrumb(updateStatePath(), state); writeErr != nil {
 			logHomebrewUpdater(log, "daemon updater: save check time: %v\n", writeErr)
 		}
@@ -228,7 +240,13 @@ func checkHomebrewUpgrade(ctx context.Context, install homebrewInstall, log diag
 		return false, notice, fmt.Errorf("version after upgrade: %w", err)
 	}
 	version := homebrewVersion(after)
-	return version != "" && version != install.version, notice, nil
+	changed := version != "" && version != install.version
+	// Nothing to upgrade on a tap that could not be refreshed (offline after
+	// wake) is not a finished check: fail it so it retries within the hour.
+	if !changed && notice != "" {
+		return false, "", errors.New(notice)
+	}
+	return changed, notice, nil
 }
 
 func runBrewWithTimeout(parent context.Context, timeout time.Duration, env []string, brewPath string, args ...string) (string, error) {

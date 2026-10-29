@@ -76,6 +76,8 @@ func TestCheckHomebrewUpgrade(t *testing.T) {
 		{name: "already current", after: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext"},
 		{name: "broken unrelated tap", updateErr: errors.New("Fetching broken/tap failed"), after: "/opt/homebrew/Caskroom/kontext/1.17.0/kontext", wantChanged: true},
 		{name: "upgrade fails", upErr: errors.New("download failed"), wantErr: true},
+		// Offline after wake: a stale tap shows nothing new, so the check fails and retries within the hour.
+		{name: "refresh fails, nothing to upgrade", updateErr: errors.New("could not resolve host"), after: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resetUpdaterSeams(t)
@@ -92,7 +94,7 @@ func TestCheckHomebrewUpgrade(t *testing.T) {
 			}
 			evalSymlinksPath = func(string) (string, error) { return tc.after, nil }
 			changed, notice, err := checkHomebrewUpgrade(context.Background(), cask, diagnostic.Logger{})
-			if changed != tc.wantChanged || (err != nil) != tc.wantErr || (notice != "") != (tc.updateErr != nil) {
+			if changed != tc.wantChanged || (err != nil) != tc.wantErr || (notice != "") != (tc.updateErr != nil && !tc.wantErr) {
 				t.Fatalf("checkHomebrewUpgrade() = %v, %q, %v", changed, notice, err)
 			}
 			want := []string{
@@ -165,6 +167,23 @@ func TestUpdateScheduleUsesTheSavedCheckTime(t *testing.T) {
 	saved, err := LoadUpdateState()
 	if err != nil || time.Since(saved.CheckedAt) > time.Minute || saved.Source != "cask" {
 		t.Fatalf("saved state = %+v, %v", saved, err)
+	}
+
+	// A check time that cannot be saved still holds the next check back.
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updateStatePath = func() string { return filepath.Join(blocker, "update-check.json") }
+	checks := 0
+	unsaved, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer stop()
+	runUpdateSchedule(unsaved, "cask", 6*time.Hour, func(context.Context) (bool, string, error) {
+		checks++
+		return false, "", nil
+	}, diagnostic.Logger{}, make(chan struct{}, 1))
+	if checks != 1 {
+		t.Fatalf("ran %d checks while the check time could not be saved, want 1", checks)
 	}
 }
 
@@ -301,4 +320,35 @@ func (w channelWriter) Write(p []byte) (int, error) {
 	default:
 	}
 	return len(p), nil
+}
+
+// A homebrew-core check on a tap it could not refresh saves an error, not a clean result.
+func TestHomebrewCoreRefreshFailureIsSaved(t *testing.T) {
+	stubHomebrewBuild(t)
+	state := filepath.Join(t.TempDir(), "update-check.json")
+	updateStatePath = func() string { return state }
+	firstUpdateCheckDelay = time.Millisecond
+	t.Cleanup(func() { firstUpdateCheckDelay = 2 * time.Minute })
+	runCommand = func(_ context.Context, _ []string, _ string, args ...string) (string, error) {
+		if args[0] == "update-if-needed" {
+			return "", errors.New("could not resolve host")
+		}
+		return `{"formulae":[]}`, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startHomebrewUpdater(ctx, managedconfig.LoadedConfig{Scope: managedconfig.ScopeUser}, diagnostic.Logger{})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if saved, err := LoadUpdateState(); err == nil {
+			if !strings.Contains(saved.Error, "update-if-needed") {
+				t.Fatalf("saved state = %+v, want the refresh failure", saved)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no check saved")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
