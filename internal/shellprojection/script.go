@@ -64,6 +64,41 @@ func commandName(word string) string {
 	return word
 }
 
+// webCmdletWords returns the arguments of a web cmdlet call: a computed word
+// keeps a literal parameter name before its colon (-TimeoutSec:$t), with
+// computedValue for the rest, so the value stays with its parameter; any other
+// computed word is empty. In a script that touches $PSDefaultParameterValues
+// the call is marked, since defaults can supply what it leaves out.
+func webCmdletWords(words []scriptWord, w walk) []string {
+	args := make([]string, len(words), len(words)+1)
+	for i, word := range words {
+		switch name := powerShellDash(word.value); {
+		case word.literal && word.quoted && name != "" && name[0] == '-':
+			args[i] = quotedValue + word.value
+		case word.literal:
+			args[i] = word.value
+		case !word.quoted && parameterToken(name) && strings.HasSuffix(name, ":"):
+			args[i] = word.value + computedValue
+		}
+	}
+	if w.cmdletDefaults {
+		args = append(args, cmdletDefaults)
+	}
+	return args
+}
+
+// webCmdletAlias returns the arguments of curl or wget, named bare, as
+// Invoke-WebRequest's when Windows PowerShell 5.1, where both are its
+// aliases, would bind them; PowerShell 7 runs the program. A path or an .exe
+// suffix always names the program.
+func webCmdletAlias(command string, args []string) ([]string, bool) {
+	switch strings.ToLower(command) {
+	case "curl", "wget":
+		return windowsPowerShellWebArgs(args)
+	}
+	return nil, false
+}
+
 // projectStatements classifies each statement's call, then the scripts in
 // its blocks, groupings and subexpressions, which run as part of it.
 func projectStatements(statements []scriptStatement, nested []string, dialect scriptDialect, w walk, top bool) []cedareval.ShellProjectionV2 {
@@ -100,7 +135,27 @@ func projectStatements(statements []scriptStatement, nested []string, dialect sc
 			}
 		}
 		direct := len(values) > 0 && values[0] == "gh"
-		projections = append(projections, classify(values, complete, walk{depth: w.depth}, helpAllowed && direct)...)
+		// PowerShell binds each word of a cmdlet call as one argument, and
+		// the web cmdlets take input from the pipeline as the request body.
+		// The check reads the word as written: .\irm.cmd is a file.
+		cmdlet := dialect == dialectPowerShell && len(values) > 0 && webCmdletCall(words[0].value)
+		cw := walk{depth: w.depth, oneArgumentEach: cmdlet, stdin: cmdlet && statement.piped && index > 0, cmdlet: cmdlet}
+		if cmdlet {
+			values = append(values[:1], webCmdletWords(words[1:], w)...)
+		}
+		projections = append(projections, classify(values, complete, cw, helpAllowed && direct)...)
+		if dialect != dialectPowerShell || len(values) == 0 {
+			continue
+		}
+		if args, ok := webCmdletAlias(words[0].value, webCmdletWords(words[1:], walk{})); ok {
+			// Which runs depends on the PowerShell version, so a policy
+			// sees both: the program above and the cmdlet here.
+			if w.cmdletDefaults {
+				args = append(args, cmdletDefaults)
+			}
+			aw := walk{depth: w.depth, oneArgumentEach: true, stdin: statement.piped && index > 0, cmdlet: true}
+			projections = append(projections, classify(append([]string{"invoke-webrequest"}, args...), complete, aw, false)...)
+		}
 	}
 	for _, script := range nested {
 		// A block runs as part of the command, not as a script handed to

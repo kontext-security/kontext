@@ -3,6 +3,7 @@ package shellprojection
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -138,6 +139,126 @@ func TestPowerShellHostFromPOSIXShell(t *testing.T) {
 		{name: "cmd.exe delayed expansion", command: `cmd /v:on /c "set FORCE=--force& git push !FORCE! origin main"`, programs: []string{"set", "git"}, absentFacts: []string{forcePush, FactDialectPowerShell}, complete: false},
 		{name: "interactive pwsh", command: "pwsh -NoLogo", programs: []string{"pwsh"}, complete: true},
 	})
+}
+
+// TestPowerShellWebCmdlets covers Invoke-RestMethod and Invoke-WebRequest,
+// read through curl's classification: their parameters, what makes a request
+// unreadable, input from the pipeline, and Windows PowerShell's curl and wget
+// aliases, which a path, an .exe suffix or a POSIX shell never take.
+func TestPowerShellWebCmdlets(t *testing.T) {
+	const repo = "https://api.github.com/repos/acme/api"
+	deleteRepo := "github/operation=delete-repository"
+	runProjectionCorpus(t, ProjectPowerShell, []corpusCase{
+		{name: "Invoke-RestMethod deletes a repository", command: "Invoke-RestMethod -Method Delete " + repo, programs: []string{"invoke-restmethod"}, facts: []string{deleteRepo, write, catalogued, "http/method=DELETE"}, complete: true},
+		{name: "values after a colon", command: "irm -Method:Delete -Uri:" + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write, catalogued}, complete: true},
+		{name: "abbreviated parameters", command: "irm -Meth Delete -Ur " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "custom method", command: "iwr -CustomMethod DELETE " + repo, programs: []string{"iwr"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "custom method by its alias", command: "irm -CM DELETE " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write, catalogued}, complete: true},
+		{name: "module-qualified name", command: `Microsoft.PowerShell.Utility\Invoke-WebRequest -Method Delete ` + repo, programs: []string{"invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "positional URI is a read", command: "iwr " + repo, programs: []string{"iwr"}, facts: []string{catalogued, "http/method=GET"}, absentFacts: []string{write}, complete: true},
+		{name: "parameters that shape only the output", command: "irm " + repo + " -UseBasicParsing -OutFile a.json -ea Stop -TimeoutSec 5", programs: []string{"irm"}, facts: []string{catalogued}, absentFacts: []string{write, incomplete}, complete: true},
+		{name: "computed URI", command: "irm -Method Delete -Uri $u", programs: []string{"irm"}, facts: []string{incomplete}, complete: false},
+		{name: "computed method", command: "irm -Method $m " + repo, programs: []string{"irm"}, facts: []string{unrecognized}, complete: false},
+		{name: "splatted parameters", command: "irm @p", programs: []string{"irm"}, facts: []string{incomplete}, complete: false},
+		{name: "a second positional value", command: "irm " + repo + " https://api.github.com/repos/acme/other", programs: []string{"irm"}, facts: []string{unrecognized, "http/path=/repos/acme/other"}, complete: false},
+		{name: "a parameter that cannot be read keeps the URL", command: "iwr -Fo body " + repo, programs: []string{"iwr"}, facts: []string{unrecognized, "curl/host=api.github.com"}, complete: false},
+		{name: "ambiguous abbreviation", command: "irm -m Delete " + repo, programs: []string{"irm"}, facts: []string{unrecognized}, complete: false},
+		{name: "missing value", command: "irm " + repo + " -Method", programs: []string{"irm"}, facts: []string{unrecognized}, complete: false},
+		{name: "web session", command: "irm " + repo + " -WebSession $s", programs: []string{"irm"}, facts: []string{unrecognized}, complete: false},
+		{name: "computed headers", command: "irm -Headers $h -Method Delete " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write, unrecognized}, complete: false},
+		{name: "literal GraphQL mutation", command: `irm -Method Post https://api.github.com/graphql -Body '{"query":"mutation { deleteRepository(input: {}) { clientMutationId } }"}'`, programs: []string{"irm"}, facts: []string{write, catalogued}, complete: true},
+		{name: "GraphQL body from a file", command: "irm -Method Post https://api.github.com/graphql -InFile q.json", programs: []string{"irm"}, facts: []string{write, unrecognized}, features: []string{FeatureGraphQLNotLiteral}, complete: false},
+		{name: "body from the pipeline", command: `'{"event":"APPROVE"}' | irm -Method Post ` + repo + "/pulls/1/reviews", programs: []string{"irm"}, facts: []string{write, unrecognized}, complete: false},
+		{name: "body without a method is a GET", command: "irm " + repo + "/merges -Body '{}'", programs: []string{"irm"}, facts: []string{catalogued, "http/method=GET"}, absentFacts: []string{write}, complete: true},
+		{name: "piped body without a method is a GET", command: "'{}' | irm " + repo + "/merges", programs: []string{"irm"}, facts: []string{"http/method=GET"}, absentFacts: []string{write}, complete: false},
+		{name: "method Default is a GET", command: "irm -Method Default " + repo, programs: []string{"irm"}, facts: []string{catalogued, "http/method=GET"}, absentFacts: []string{write}, complete: true},
+		{name: "a URI given twice", command: "irm -Uri " + repo + " -Uri " + repo + " -Method Delete", programs: []string{"irm"}, facts: []string{unrecognized}, complete: false},
+		{name: "a URI by name and by position", command: "irm " + repo + " -Uri " + repo + " -Method Delete", programs: []string{"irm"}, facts: []string{unrecognized}, complete: false},
+		{name: "a parameter where a value belongs", command: "irm -Method -Uri " + repo, programs: []string{"irm"}, facts: []string{unrecognized}, complete: false},
+		{name: "a cmdlet parameter wins over a common one", command: "irm -d -Meth Delete -Ur " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write, catalogued}, complete: true},
+		{name: "method as a number", command: "irm -Method 5 " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write, catalogued, "http/method=DELETE"}, complete: true},
+		{name: "method as a hex number", command: "irm -Method 0x5 " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "method with blanks", command: "irm -Method ' Delete' " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "method in any case", command: "irm -Method dELETE " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "methods combined bitwise", command: "irm -Method 'Get,Delete' " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "methods combined bitwise in any order", command: "irm -Method 'Delete,Get' " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "Get,Head is a POST", command: "irm -Method 'Get,Head' " + repo + "/merges", programs: []string{"irm"}, facts: []string{write, "http/method=POST"}, complete: true},
+		{name: "a method PowerShell refuses", command: "irm -Method 99 " + repo, programs: []string{"irm"}, facts: []string{unrecognized}, absentFacts: []string{"http/method=99"}, complete: false},
+		{name: "a space after the colon", command: "irm -Method: Delete " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write, catalogued}, complete: true},
+		{name: "an en dash", command: "irm \u2013Method Delete " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "an em dash", command: "irm \u2014Method Delete " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "a horizontal bar", command: "irm \u2015Method Delete " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "end of parameters", command: "irm -Method Delete -- " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write, catalogued}, complete: true},
+		{name: "a computed method stays unknown", command: "irm -Method:$m " + repo, programs: []string{"irm"}, facts: []string{unrecognized}, absentFacts: []string{write}, complete: false},
+		{name: "defaults the script may set", command: "$PSDefaultParameterValues['Invoke-RestMethod:Method'] = 'Delete'; irm " + repo, programs: []string{"irm"}, facts: []string{unrecognized}, absentFacts: []string{catalogued}, complete: false},
+		{name: "a batch file named irm", command: `.\irm.cmd ` + repo, programs: []string{"irm"}, absentFacts: []string{catalogued, "http/method=GET"}, complete: true},
+		{name: "an executable named irm", command: `C:\tools\irm.exe -Method Delete ` + repo, programs: []string{"irm"}, absentFacts: []string{deleteRepo, write}, complete: true},
+		{name: "-Form is the body", command: `irm -Method Post https://api.github.com/graphql -Form '{"query":"mutation { deleteRepository(input: {}) { clientMutationId } }"}'`, programs: []string{"irm"}, facts: []string{write, "github/operation=other-write"}, features: []string{FeatureOperationFromGraphQL}, complete: true},
+		{name: "alias after end of parameters", command: "curl -UseB -Meth Delete -- " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "alias with a computed value", command: "curl -UseB -TimeoutSec:$t -Meth Delete -Ur " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "alias with a space after the colon", command: "curl -UseB -Method: Delete -Uri " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "alias with values after a colon", command: "curl -Method:Delete -Uri:" + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "alias with a body from the pipeline", command: `'{"event":"APPROVE"}' | curl -Method Post -Uri ` + repo + "/pulls/1/reviews", programs: []string{"curl", "invoke-webrequest"}, facts: []string{write}, complete: false},
+		{name: "a path to curl is the program", command: `.\curl -Method Delete -Uri ` + repo, programs: []string{"curl"}, absentFacts: []string{deleteRepo}, complete: false},
+		{name: "an empty value before the next parameter", command: "irm " + repo + " -UserAgent:'' -Method:Delete", programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "an array of methods", command: "irm " + repo + " -Method Get, Delete", programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "a decimal method with a leading zero", command: "irm -Method 09 " + repo, programs: []string{"irm"}, facts: []string{write, "http/method=PATCH"}, complete: true},
+		{name: "a method with a type suffix", command: "irm -Method 5l " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "a soft hyphen in the parameter name", command: "irm -M\u00adethod Delete " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "end of parameters with mixed dashes", command: "irm -Method Delete -\u2013 " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "defaults reached through Get-Variable", command: "$v = Get-Variable PSDefaultParameterValue*; $v.Value['Invoke-RestMethod:Method'] = 'Delete'; irm " + repo, programs: []string{"get-variable", "irm"}, facts: []string{unrecognized}, absentFacts: []string{catalogued}, complete: false},
+		{name: "alias with an empty value before the next parameter", command: "curl -UseB -UserAgent: '' -Method:Delete -Uri " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "alias with a quoted value that starts with a dash", command: "curl -UseB -method:Delete -UserAgent '-s' " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: true},
+		{name: "alias after end of parameters with mixed dashes", command: "curl -UseB -method:Delete -\u2013 " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "Windows PowerShell's curl alias", command: "curl -Method Delete -Uri " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "Windows PowerShell's wget alias", command: "wget -Uri " + repo + " -Method Delete", programs: []string{"wget", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "alias in capitals", command: "CURL -Uri " + repo + " -Method Delete", programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "alias with abbreviated parameters", command: "curl -Meth Delete -Ur " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "alias with a credential", command: "curl -Credential $c -Method Delete " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "alias where -d is -DisableKeepAlive", command: "curl -d -UseB -Meth Delete -Ur " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, write}, complete: false},
+		{name: "curl's -d value that looks like a parameter", command: "curl -d -Method " + repo, programs: []string{"curl"}, facts: []string{write, "http/method=POST"}, complete: true},
+		{name: "alias with a parameter where a value belongs is read, unreadable", command: "curl -Method -Uri " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{unrecognized}, complete: false},
+		{name: "a common parameter Windows PowerShell 5.1 lacks", command: "curl -ProgressAction SilentlyContinue " + repo, programs: []string{"curl"}, complete: false},
+		{name: "a parameter Windows PowerShell lacks leaves the cmdlet reading unreadable", command: "curl -SkipCertificateCheck -Method Delete -Uri " + repo, programs: []string{"curl", "invoke-webrequest"}, facts: []string{deleteRepo, unrecognized}, complete: false},
+		{name: "curl -s takes the URI as a session variable", command: "curl -s " + repo, programs: []string{"curl"}, absentFacts: []string{write}, complete: true},
+		{name: "curl -sSL is curl", command: "curl -sSL " + repo, programs: []string{"curl"}, absentFacts: []string{write}, complete: false},
+		{name: "wget -qO- is wget", command: "wget -qO- " + repo, programs: []string{"wget"}, absentFacts: []string{write}, complete: false},
+		{name: "curl.exe is the program", command: "curl.exe -Method Delete -Uri " + repo, programs: []string{"curl"}, absentFacts: []string{write}, complete: false},
+		{name: "curl with its own options", command: "curl -X DELETE " + repo, programs: []string{"curl"}, facts: []string{deleteRepo, write, catalogued}, complete: true},
+	})
+	runProjectionCorpus(t, Project, []corpusCase{
+		{name: "POSIX curl with cmdlet parameters", command: "curl -Method Delete -Uri " + repo, programs: []string{"curl"}, absentFacts: []string{write}, complete: false},
+		{name: "irm in a POSIX shell is any program", command: "irm -Method Delete " + repo, programs: []string{"irm"}, absentFacts: []string{deleteRepo, write, catalogued, "http/method=DELETE"}, complete: true},
+		{name: "a script named irm in a POSIX shell", command: "./irm " + repo, programs: []string{"irm"}, absentFacts: []string{catalogued, "http/method=GET"}, features: []string{"opaque-script"}, complete: false},
+	})
+}
+
+// TestPowerShellWebCmdletsMatchCurl holds each cmdlet call to the facts of its
+// curl equivalent, so every provider's rules apply to both alike.
+func TestPowerShellWebCmdletsMatchCurl(t *testing.T) {
+	for _, tc := range []struct{ cmdlet, curl string }{
+		{"irm -Method Delete https://api.github.com/repos/acme/api", "curl -X DELETE https://api.github.com/repos/acme/api"},
+		{"iwr https://api.github.com/repos/acme/api", "curl https://api.github.com/repos/acme/api"},
+		{"Invoke-WebRequest -Method Post -Uri https://api.github.com/repos/acme/api/merges -Body '{}'", "curl -X POST https://api.github.com/repos/acme/api/merges -d '{}'"},
+		{"irm -Method Patch https://api.github.com/repos/acme/api -Body '{}'", "curl -X PATCH https://api.github.com/repos/acme/api -d '{}'"},
+		{"irm -Method Put https://api.github.com/repos/acme/api/branches/main/protection -Body '{}'", "curl -X PUT https://api.github.com/repos/acme/api/branches/main/protection -d '{}'"},
+		{`irm -Method Post https://api.github.com/repos/acme/api/pulls/1/reviews -Body '{"event":"APPROVE"}'`, `curl -X POST https://api.github.com/repos/acme/api/pulls/1/reviews -d '{"event":"APPROVE"}'`},
+		{`'{"event":"APPROVE"}' | irm -Method Post https://api.github.com/repos/acme/api/pulls/1/reviews`, `printf x | curl -X POST https://api.github.com/repos/acme/api/pulls/1/reviews --data-binary @-`},
+		{"irm -Headers $h https://api.github.com/repos/acme/api", `curl -H "$h" https://api.github.com/repos/acme/api`},
+		{"irm -Method Delete https://api.hubapi.com/crm/v3/objects/contacts/1", "curl -X DELETE https://api.hubapi.com/crm/v3/objects/contacts/1"},
+		{"irm https://api.github.com/repos/acme/api/merges -Body '{}'", "curl -X GET https://api.github.com/repos/acme/api/merges -d '{}'"},
+		{"irm -Method Default https://api.github.com/repos/acme/api", "curl https://api.github.com/repos/acme/api"},
+	} {
+		got, want := ProjectPowerShell(tc.cmdlet), Project(tc.curl)
+		g, w := got[len(got)-1], want[len(want)-1]
+		gotFacts := slices.DeleteFunc(slices.Clone(g.Facts), func(fact string) bool { return fact == FactDialectPowerShell })
+		wantFacts := slices.Clone(w.Facts)
+		slices.Sort(gotFacts)
+		slices.Sort(wantFacts)
+		if len(wantFacts) < 2 || !slices.Equal(gotFacts, wantFacts) || g.ParseComplete != w.ParseComplete {
+			t.Errorf("%s: facts %v, complete %t; want those of %s: %v, complete %t", tc.cmdlet, gotFacts, g.ParseComplete, tc.curl, wantFacts, w.ParseComplete)
+		}
+	}
 }
 
 // TestPowerShellRecordedHookPayloads replays PreToolUse payloads Claude Code
