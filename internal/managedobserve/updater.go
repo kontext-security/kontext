@@ -241,7 +241,11 @@ func checkTapTrust(ctx context.Context, install homebrewInstall) error {
 	if err != nil && strings.Contains(output, "from untrusted tap") {
 		return tapTrustError(install.kind)
 	}
-	// Any other failure shows up in the upgrade itself.
+	// Any other failure (a timeout before brew printed the refusal) fails
+	// closed: the upgrade would trust the package.
+	if err != nil {
+		return fmt.Errorf("brew info: %w", err)
+	}
 	return nil
 }
 
@@ -250,9 +254,6 @@ func checkTapTrust(ctx context.Context, install homebrewInstall) error {
 // while every other tap, ours included, still updates. The refresh failure
 // comes back as a notice, so doctor shows it.
 func checkHomebrewUpgrade(ctx context.Context, install homebrewInstall, log diagnostic.Logger) (bool, string, error) {
-	if err := checkTapTrust(ctx, install); err != nil {
-		return false, "", err
-	}
 	notice := ""
 	if _, err := runBrewWithTimeout(ctx, brewUpdateTimeout, []string{"HOMEBREW_AUTO_UPDATE_SECS=" + brewAutoUpdateSecs}, install.brewPath, "update-if-needed"); err != nil {
 		if ctx.Err() != nil {
@@ -260,6 +261,11 @@ func checkHomebrewUpgrade(ctx context.Context, install homebrewInstall, log diag
 		}
 		notice = fmt.Sprintf("brew update-if-needed failed (%v); the check used the last fetched tap", err)
 		logHomebrewUpdater(log, "daemon updater: %s\n", notice)
+	}
+	// Right before the upgrade: the refresh above can update Homebrew itself
+	// to 7, which starts requiring trust.
+	if err := checkTapTrust(ctx, install); err != nil {
+		return false, "", err
 	}
 	if _, err := runBrewWithTimeout(ctx, brewUpgradeTimeout, []string{"HOMEBREW_NO_AUTO_UPDATE=1"}, install.brewPath, "upgrade", install.kind, "--no-ask", homebrewFormula); err != nil {
 		return false, notice, fmt.Errorf("brew upgrade: %w", err)

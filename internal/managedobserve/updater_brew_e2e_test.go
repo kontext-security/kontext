@@ -25,6 +25,13 @@ func TestBrewTapTrustE2E(t *testing.T) {
 	}
 	resetUpdaterSeams(t)
 	executablePath = func() (string, error) { return "/opt/homebrew/bin/kontext", nil }
+	// Leave the Mac's taps as they are: skip the refresh, run every other brew call for real.
+	runCommand = func(ctx context.Context, env []string, path string, args ...string) (string, error) {
+		if args[0] == "update-if-needed" {
+			return "", nil
+		}
+		return runCommandOutput(ctx, env, path, args...)
+	}
 	install, ok := currentHomebrewInstall()
 	if !ok || install.kind != "--cask" {
 		t.Fatalf("needs the Kontext cask under /opt/homebrew: %+v %v", install, ok)

@@ -69,7 +69,7 @@ func TestCheckHomebrewUpgrade(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
 		updateErr, upErr     error
-		untrusted            bool
+		untrusted, probeErr  bool
 		after                string
 		wantChanged, wantErr bool
 	}{
@@ -81,6 +81,8 @@ func TestCheckHomebrewUpgrade(t *testing.T) {
 		{name: "refresh fails, nothing to upgrade", updateErr: errors.New("could not resolve host"), after: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext", wantErr: true},
 		// Installed before Homebrew 7: brew upgrade would trust the cask itself, so the check stops.
 		{name: "untrusted tap", untrusted: true, wantErr: true},
+		// A probe that fails without an answer (timeout) must not fall through to the upgrade.
+		{name: "trust check fails", probeErr: true, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resetUpdaterSeams(t)
@@ -92,6 +94,9 @@ func TestCheckHomebrewUpgrade(t *testing.T) {
 				calls = append(calls, strings.Join(env, " ")+" | "+strings.Join(args, " "))
 				if args[0] == "info" && tc.untrusted {
 					return "Error: Refusing to load cask kontext-security/tap/kontext from untrusted tap kontext-security/tap.", errors.New("exit status 1")
+				}
+				if args[0] == "info" && tc.probeErr {
+					return "", context.DeadlineExceeded
 				}
 				if args[0] == "info" {
 					return "{}", nil
@@ -107,12 +112,14 @@ func TestCheckHomebrewUpgrade(t *testing.T) {
 				t.Fatalf("checkHomebrewUpgrade() = %v, %q, %v", changed, notice, err)
 			}
 			want := []string{
-				" | info --json=v2 --cask " + homebrewFormula,
 				"HOMEBREW_AUTO_UPDATE_SECS=" + brewAutoUpdateSecs + " | update-if-needed",
+				" | info --json=v2 --cask " + homebrewFormula,
 				"HOMEBREW_NO_AUTO_UPDATE=1 | upgrade --cask --no-ask " + homebrewFormula,
 			}
+			if tc.untrusted || tc.probeErr {
+				want = want[:2]
+			}
 			if tc.untrusted {
-				want = want[:1]
 				if err == nil || !strings.Contains(err.Error(), "Run: brew trust --cask "+homebrewFormula) {
 					t.Fatalf("error = %v, want the brew trust command", err)
 				}
