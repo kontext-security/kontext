@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.17.1](https://github.com/kontext-security/kontext/compare/v1.17.0...v1.17.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **hooks:** tell the user when Codex has not trusted the Kontext hooks ([#658](https://github.com/kontext-security/kontext/issues/658)) ([b3a50bb](https://github.com/kontext-security/kontext/commit/b3a50bb27f5cad2504d4bf2c20678fb0eeff09e8))
+* **managedobserve:** doctor stops repeating an update failure the user already fixed with brew trust ([#662](https://github.com/kontext-security/kontext/issues/662)) ([dd71806](https://github.com/kontext-security/kontext/commit/dd71806ae2f22bafb71cc3b70f53db8f5f5ec068))
+* **managedobserve:** never trust the Kontext tap for the user on Homebrew 7 ([#657](https://github.com/kontext-security/kontext/issues/657)) ([94537a1](https://github.com/kontext-security/kontext/commit/94537a1aae4dca5ef7d37920fc8429a1741cdbf5))
+* **setup:** calmer first-run output for a new self-serve user ([#659](https://github.com/kontext-security/kontext/issues/659)) ([4e1c2fc](https://github.com/kontext-security/kontext/commit/4e1c2fcd3cb6e3caee3463bbdf9485b9ec75b824))
+
 ## [1.17.0](https://github.com/kontext-security/kontext/compare/v1.16.1...v1.17.0) (2026-10-29)
 
 
