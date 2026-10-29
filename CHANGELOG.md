@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.17.0](https://github.com/kontext-security/kontext/compare/v1.16.1...v1.17.0) (2026-10-29)
+
+
+### Features
+
+* **hooks:** self-serve installs hooks in the user's home, without sudo ([#650](https://github.com/kontext-security/kontext/issues/650)) ([af77e15](https://github.com/kontext-security/kontext/commit/af77e158b935ef2b6e8babf378968041fac14850))
+* **managedobserve:** keep self-serve hooks complete without admin prompts ([#651](https://github.com/kontext-security/kontext/issues/651)) ([44f0043](https://github.com/kontext-security/kontext/commit/44f0043cc8f7b8b15f3ba9e09f8ff474254a4b65))
+
+
+### Bug Fixes
+
+* **agentauthority:** start the stat walk at the path's volume ([#634](https://github.com/kontext-security/kontext/issues/634)) ([89c887a](https://github.com/kontext-security/kontext/commit/89c887a89c4d03bbeb5d079bead12e046aa68671))
+* **localruntime,managedobserve:** per-user socket directories on Windows ([#635](https://github.com/kontext-security/kontext/issues/635)) ([8a30017](https://github.com/kontext-security/kontext/commit/8a30017885748a515381c66781354c89b1fcaf7f))
+* **managedobserve:** self-serve updater checks soon after start and by wall clock ([#652](https://github.com/kontext-security/kontext/issues/652)) ([f9d7919](https://github.com/kontext-security/kontext/commit/f9d7919d82fcaeedcf2efbfdfbb533ec115b0d29))
+* **modelusage:** keep a Claude cache write split below its total ([#655](https://github.com/kontext-security/kontext/issues/655)) ([2db0821](https://github.com/kontext-security/kontext/commit/2db0821aa2070f068f45f73e15912ce07297b84e))
+* **shell:** classify PowerShell's web cmdlets (ENG-837) ([#644](https://github.com/kontext-security/kontext/issues/644)) ([378146e](https://github.com/kontext-security/kontext/commit/378146e5993c8b53edf6749e95ceb8a522f39012))
+* **shellprojection:** read a program's directory as POSIX text on every host ([#637](https://github.com/kontext-security/kontext/issues/637)) ([0ab014c](https://github.com/kontext-security/kontext/commit/0ab014ced72ff541e183df70f698bb189fbc883d))
+
 ## [1.16.1](https://github.com/kontext-security/kontext/compare/v1.16.0...v1.16.1) (2026-10-28)
 
 
