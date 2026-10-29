@@ -6,6 +6,8 @@
 #      files upgrades to the new build: the daemon restarts on it, adds hooks
 #      in the home folder without any password prompt, and leaves the root
 #      files untouched, so no hook runs twice.
+#   B0. Homebrew 7 trust: with the cask untrusted (as installed before Homebrew 7)
+#      doctor names `brew trust`, and the updater neither upgrades nor trusts it.
 #   B. The new daemon updates itself: a newer cask in the tap is installed by
 #      the daemon's own updater and launchd restarts it on that version.
 #   C. Self-heal: hooks removed from a home-folder file come back within a
@@ -138,8 +140,30 @@ claude_probe "root drop-in plus user file"
 wait_for 240 "doctor healthy after the upgrade" "$prefix/bin/kontext" doctor
 "$prefix/bin/kontext" doctor | tee "$art/doctor-upgrade.txt"
 
-step "B. The new daemon updates itself to $v2"
+state="$HOME/Library/Application Support/Kontext/update-check.json"
+recheck() { rm -f "$state"; launchctl kickstart -k "gui/$uid/$label"; } # a fresh daemon checks 2 min after start
+
+step "B0. Homebrew 7 trust: a cask installed before Homebrew 7 is not trusted, and Kontext never trusts it"
+brew trust --json=v1
+brew untrust --cask kontext-security/tap/kontext
+brew info --json=v2 --cask kontext-security/tap/kontext >/dev/null 2>&1 && fail "the cask still loads after brew untrust"
+brew trust --json=v1 > "$art/trust-untrusted.json"
+"$prefix/bin/kontext" doctor > "$art/doctor-untrusted.txt" 2>&1 || true
+grep -F "trust --cask kontext-security/tap/kontext" "$art/doctor-untrusted.txt" >/dev/null && pass "doctor names the brew trust command for an untrusted cask" || fail "doctor does not name brew trust"
 publish "$v2"
+recheck
+wait_for 240 "the updater refused an untrusted cask" grep -q "does not trust" "$state"
+cat "$state"; echo
+[ "$(daemon_version)" = "$v1" ] && pass "no upgrade from an untrusted tap (still $v1)" || fail "upgraded from an untrusted tap"
+brew trust --json=v1 | diff "$art/trust-untrusted.json" - && pass "the updater left Homebrew's trust store alone" || fail "the updater changed Homebrew's trust store"
+
+step "B. The user trusts the cask; the daemon updates itself to $v2"
+brew trust --cask kontext-security/tap/kontext
+brew info --json=v2 --cask kontext-security/tap/kontext >/dev/null || fail "the cask does not load after brew trust"
+"$prefix/bin/kontext" doctor > "$art/doctor-trusted.txt" 2>&1 || true
+grep -q "brew trust" "$art/doctor-trusted.txt" && fail "doctor still asks to trust a trusted cask"
+pass "doctor is quiet once the cask is trusted"
+recheck
 wait_for 420 "daemon updater upgraded and launchd restarted it on $v2" sh -c "[ \"\$(grep -o 'managed-observe daemon [^ ]* (pid [0-9]*) started' '$mlog' | tail -1 | awk '{print \$3}')\" = $v2 ]"
 grep -F "daemon updater: upgraded" "$mlog" | tail -1
 cat "$HOME/Library/Application Support/Kontext/update-check.json"; echo
