@@ -1356,7 +1356,8 @@ func TestHookFilesFingerprintSeesSameSizeEdits(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	t.Setenv("CODEX_HOME", "")
+	// A relative CODEX_HOME is invalid, but must not hide the other agents' files.
+	t.Setenv("CODEX_HOME", "relative/codex")
 	swapManagedSettingsPaths(t, filepath.Join(home, "missing", "20-kontext.json"), filepath.Join(home, "missing", "managed-settings.json"))
 	settings := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {

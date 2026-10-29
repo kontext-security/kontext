@@ -48,6 +48,12 @@ func Definitions(scope Scope, home string) ([]Definition, error) {
 	return definitions(scope, home, os.Getenv("CODEX_HOME"))
 }
 
+// SetupDefinitions lists the files setup and Options.SetupPaths write:
+// Codex's under ~/.codex whatever CODEX_HOME says.
+func SetupDefinitions(scope Scope, home string) ([]Definition, error) {
+	return definitions(scope, home, "")
+}
+
 func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 	if scope != User && scope != System {
 		return nil, fmt.Errorf("invalid scope %q: want user or system", scope)

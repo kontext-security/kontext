@@ -153,7 +153,8 @@ func hookFilesFingerprint() string {
 		add(path)
 	}
 	for _, scope := range []hookinstall.Scope{hookinstall.User, hookinstall.System} {
-		defs, err := hookinstall.Definitions(scope, home)
+		// The files the healer writes; a relative CODEX_HOME cannot hide them.
+		defs, err := hookinstall.SetupDefinitions(scope, home)
 		if err != nil {
 			continue
 		}
