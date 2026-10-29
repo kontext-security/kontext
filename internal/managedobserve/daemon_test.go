@@ -1408,3 +1408,23 @@ func TestHookFilesFingerprintSkipsGuardedMachineFiles(t *testing.T) {
 		t.Fatal("fingerprint read a machine-wide file linked into ~/Documents")
 	}
 }
+
+// Hooks the explicit command wrote under an absolute CODEX_HOME are watched too.
+func TestHookFilesFingerprintWatchesCodexHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	codexHome := filepath.Join(home, "codex-elsewhere")
+	t.Setenv("CODEX_HOME", codexHome)
+	swapManagedSettingsPaths(t, filepath.Join(home, "missing", "20-kontext.json"), filepath.Join(home, "missing", "managed-settings.json"))
+	before := hookFilesFingerprint()
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "hooks.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if hookFilesFingerprint() == before {
+		t.Fatal("a hooks file under CODEX_HOME left the fingerprint unchanged")
+	}
+}

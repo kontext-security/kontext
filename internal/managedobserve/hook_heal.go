@@ -152,15 +152,19 @@ func hookFilesFingerprint() string {
 	for _, path := range claudemanaged.MachineSettingsFiles(managedSettingsDropInPath, managedSettingsFilePath) {
 		add(path)
 	}
+	// The files the healer writes and, under a valid CODEX_HOME, the ones the
+	// explicit hooks command writes; an invalid CODEX_HOME hides neither.
+	seen := map[string]bool{}
 	for _, scope := range []hookinstall.Scope{hookinstall.User, hookinstall.System} {
-		// The files the healer writes; a relative CODEX_HOME cannot hide them.
-		defs, err := hookinstall.SetupDefinitions(scope, home)
-		if err != nil {
-			continue
-		}
-		for _, def := range defs {
-			for _, file := range def.Files {
-				add(file.Path)
+		for _, list := range []func(hookinstall.Scope, string) ([]hookinstall.Definition, error){hookinstall.SetupDefinitions, hookinstall.Definitions} {
+			defs, _ := list(scope, home)
+			for _, def := range defs {
+				for _, file := range def.Files {
+					if !seen[file.Path] {
+						seen[file.Path] = true
+						add(file.Path)
+					}
+				}
 			}
 		}
 	}
