@@ -69,6 +69,13 @@ func IsManagedHookCommand(command string) bool {
 // MergeManagedHooks replaces Kontext's entries and keeps every other hook,
 // including other entries an administrator put in the same file.
 func MergeManagedHooks(settings map[string]any, kontextBinary string) error {
+	return MergeManagedHooksExcept(settings, kontextBinary, nil)
+}
+
+// MergeManagedHooksExcept leaves out the events in skip. Cursor runs every
+// hooks file it finds without deduplicating, so a user file skips the events
+// a machine-wide file already covers.
+func MergeManagedHooksExcept(settings map[string]any, kontextBinary string, skip map[string]bool) error {
 	hooks, _, err := withoutManagedHooks(settings)
 	if err != nil {
 		return err
@@ -78,6 +85,9 @@ func MergeManagedHooks(settings map[string]any, kontextBinary string) error {
 		kontextBinary = DefaultKontextBinary
 	}
 	for _, event := range Events {
+		if skip[event.Cursor] {
+			continue
+		}
 		entries, _ := hooks[event.Cursor].([]any)
 		hooks[event.Cursor] = append(entries, map[string]any{
 			"command": hookCommand(kontextBinary, event.Alias),
@@ -167,6 +177,32 @@ type handler struct {
 	Timeout    int    `json:"timeout"`
 	Matcher    string `json:"matcher"`
 	FailClosed bool   `json:"failClosed"`
+}
+
+// Coverage maps each Cursor event that carries a valid Kontext hook in data to
+// the binary that hook runs. Cursor ignores a file without a valid version, so
+// such a file covers nothing.
+func Coverage(data []byte) map[string]string {
+	var settings struct {
+		Version any                  `json:"version"`
+		Hooks   map[string][]handler `json:"hooks"`
+	}
+	covered := map[string]string{}
+	if json.Unmarshal(data, &settings) != nil || !validVersion(settings.Version) {
+		return covered
+	}
+	for _, event := range Events {
+		for _, h := range settings.Hooks[event.Cursor] {
+			if !IsManagedHookCommand(h.Command) {
+				continue
+			}
+			fields, _ := agenthooks.SplitCommand(h.Command)
+			if fields[4] == event.Alias && (h.Type == "" || h.Type == "command") && h.Timeout > 0 && (h.Matcher == "" || h.Matcher == "*") {
+				covered[event.Cursor] = fields[0]
+			}
+		}
+	}
+	return covered
 }
 
 // ValidateInstalled checks every event Kontext needs and returns the binary

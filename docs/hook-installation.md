@@ -6,31 +6,37 @@ agent's hooks, even when that agent is absent.
 
 | Scope | Agent | Files |
 | --- | --- | --- |
-| user | Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json` |
-| user | Claude Code fallback | `~/.claude/settings.json` (or `CLAUDE_CONFIG_DIR/settings.json`) |
+| user | Claude Code | `~/.claude/settings.json` (or `CLAUDE_CONFIG_DIR/settings.json`) |
 | user | Codex | `~/.codex/hooks.json`, `~/.codex/config.toml` |
+| user | Cursor | `~/.cursor/hooks.json` |
 | system | Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json` |
 | system | Codex | `/etc/codex/hooks.json`, `/etc/codex/config.toml` |
+| system | Cursor | `/Library/Application Support/Cursor/hooks.json` |
 
-Claude's drop-in is system-scoped in both channels. Homebrew/self-serve also
-merges the same hooks into the user's settings, preserving foreign settings and
-symlinks and backing up changed files. This keeps terminal Code hooks available
-when a remote managed source skips the local drop-in, provided that policy
-permits user hooks. The user copy is best-effort: when `kontext setup` cannot
-merge it (invalid JSON, a read-only or root-owned file), setup still finishes
-with the managed hooks and prints a warning with the repair command. The daemon
-upgrade migration skips a user settings file that resolves into a macOS
-privacy-guarded folder, leaving it to `kontext setup` in the terminal.
-System/MDM installations retain only the managed drop-in;
-the Addigy installation commands and behavior are unchanged. Cowork continues
-using the managed settings. The managed config contract remains `agent: claude`.
+Self-serve (`kontext setup`, `hooks install --scope user`) writes only files in
+the user's home, so it never asks for a password. It merges into existing
+files, preserving foreign settings and symlinks and backing up changed files.
+Setup stops before writing anything when a Claude, Codex or Cursor file cannot
+take the hooks. Organization packages install the system set; their output is
+pinned byte for byte by `TestSystemScopeOutputPinned`. The managed config
+contract remains `agent: claude`.
 
-Both self-serve copies must have identical commands, binary paths, matchers,
-timeouts and async settings. Claude 2.1.304 deduplicates identical handlers across
-these sources; differing paths or timeouts can run twice. Installation, repair
-and upgrades generate both from the canonical hook template. Uninstall removes
-only Kontext's handlers from the user file and retains its other content and
-symlink. It leaves an empty user settings object rather than deleting that file.
+Cowork starts Claude with a per-session `CLAUDE_CONFIG_DIR`, so it reads only
+Claude's machine-wide managed settings. Self-serve does not write them: Cowork
+is governed on a self-serve Mac only when an earlier setup left the drop-in.
+Setup and doctor say so. A project `.claude/settings.json` with
+`disableAllHooks: true` switches off user-level hooks in that project but not
+managed ones.
+
+Machine-wide files an earlier self-serve setup wrote stay untouched and keep
+governing. Claude runs a handler present in two files once only when both are
+identical (differing paths or timeouts run twice), so the user copy repeats the
+binary path the earlier drop-in names. Cursor runs every hooks file it finds
+without deduplication, so the user file stays free of Kontext while the
+machine-wide file carries the complete set. Uninstall removes only Kontext's
+handlers from the user files and names `sudo kontext hooks remove --scope
+system` when an earlier setup's machine-wide hooks remain. It leaves an empty
+user settings object rather than deleting that file.
 
 ## Package commands
 
@@ -42,16 +48,16 @@ sudo kontext hooks remove --scope system
 
 The explicit user commands honor `CODEX_HOME` and `CLAUDE_CONFIG_DIR` when set;
 the table shows their defaults. Existing `kontext setup` Codex paths remain at
-`~/.codex`. User scope now installs/removes both Claude hook locations.
+`~/.codex`. `--binary` defaults to this executable's stable Homebrew path for
+user scope and `/usr/local/bin/kontext` for system scope.
 
 These commands are macOS-only. System mutations require root. Dry-run requires
 no elevation and creates no files, directories, or backups. A real install
 requires the target binary to be an executable file; dry-run can plan before
-the binary exists. User scope runs as
-the target user and uses sudo only for the Claude drop-in:
+the binary exists. User scope runs as the target user without elevation:
 
 ```sh
-kontext hooks install --scope user --binary /opt/homebrew/bin/kontext
+kontext hooks install --scope user
 kontext hooks remove --scope user --dry-run
 ```
 
@@ -76,39 +82,9 @@ including leaving its Codex feature setting enabled.
 
 ## Self-serve upgrades
 
-The existing Homebrew daemon checks its Claude drop-in once on the first
-successful startup of each CLI version. The receipt is shared by all profiles
-at `~/Library/Application Support/Kontext/hook-migration.json`. Once the managed
-copy is canonical, the same migration merges the user copy without elevation.
-The `user_hooks_complete` receipt field records completion. An old completed
-receipt without this field still receives the user migration. Normal restarts
-read the receipt and skip hook inspection; no periodic migration check runs.
-
-If the existing Kontext-owned hooks need updating (for example, the older
-five-event configuration lacks Stop and SubagentStop, or handler options differ
-from the canonical template), the daemon requests
-administrator approval through macOS and refreshes only the Claude drop-in.
-Unchanged hooks need no approval. Both automatic and manual Homebrew upgrades
-are covered by the existing daemon restart mechanism. No management app or
-additional user command is required for an approved migration.
-
-The approval runs after the hook socket starts serving, so waiting, cancellation
-or failure does not interrupt existing hooks or exports. An attempt is saved
-before the dialog opens; cancellation, timeout or failure leaves the receipt
-pending and does not prompt again for that version. If no console session is
-available, approval is deferred until a subsequent daemon startup with the
-user logged in. Existing hook health checks continue reporting missing hooks.
-The user copy is added only after the managed refresh succeeds, so a declined
-refresh does not introduce a second, differing hook set. An explicit
-`kontext hooks install --scope user --binary <stable-kontext-path>` repairs both
-copies after a declined or failed migration without waiting for another release.
-
-Automatic migration never creates a missing drop-in or replaces foreign,
-malformed or symlinked settings. The elevated command rechecks the approved
-file digest, the running binary and the absence of organization-managed
-configuration before writing. System/MDM, environment-scoped and development
-installations do not use this flow. Already-running Claude sessions may still
-need restarting to load updated hooks.
+The daemon no longer refreshes Claude's machine-wide drop-in through an
+administrator prompt after an upgrade; self-serve hooks live in the user's
+home.
 
 ## Claude diagnostics and dispatch verification
 
@@ -128,8 +104,9 @@ activation is unverified and directs the user to a fresh session's `/status`,
 fetch is started by doctor. The doctor JSON contract is unchanged.
 
 The optional native dispatch test verifies the actual installer output with
-Claude 2.1.304, including system-only installs, identical layers, user fallback,
-managed restrictions, differing-path/timeout negative controls, and repair:
+Claude 2.1.300, including system-only and user-only installs, a user copy next
+to an earlier drop-in (same and different binary path), a differing-path
+negative control, managed restrictions, and project `disableAllHooks`:
 
 ```sh
 KONTEXT_TEST_CLAUDE_BINARY=/absolute/path/to/claude \
@@ -139,7 +116,7 @@ KONTEXT_TEST_CLAUDE_BINARY=/absolute/path/to/claude \
 It uses an ad-hoc signed temporary executable copy with only the system managed
 directory redirected, temporary settings, a hook recorder, and a loopback fake
 model server. It does not access real account credentials or model APIs, edit
-host settings, or verify CarOnSale's remote policy delivery. The test refuses
+host settings, or verify a customer's remote policy delivery. The test refuses
 unrecognized executable layouts rather than changing arbitrary binary bytes.
 
 ## Codex system configuration

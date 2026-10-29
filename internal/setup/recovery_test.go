@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/profile"
@@ -227,95 +226,6 @@ func TestUseActiveProfileRefusesWhenNoAgentIsInstalled(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "is running") {
 		t.Errorf("reported a running agent with no plist:\n%s", out.String())
-	}
-}
-
-// The Claude drop-in write needs root, so it costs an administrator password.
-// Re-running setup does not change its content — it names the binary and the
-// hook events, neither of which varies per profile — so an identical rewrite
-// must not ask for one.
-func TestSetupSkipsThePrivilegedWriteWhenSettingsAreUnchanged(t *testing.T) {
-	h := profileHarness(t)
-	first := pingServer(t, "kt_1")
-	opts := h.options("kt_1", first)
-	opts.Profile = "one"
-	if err := Run(context.Background(), opts); err != nil {
-		t.Fatalf("first Run() error = %v", err)
-	}
-	if _, err := os.Lstat(managedSettingsPath); err != nil {
-		t.Fatalf("expected the drop-in to exist after the first run: %v", err)
-	}
-	// Assert on whether the FILE was written, not on whether sudo ran: the test
-	// harness fakes root, so the privileged path writes directly and a sudo check
-	// would pass vacuously.
-	marker := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(managedSettingsPath, marker, marker); err != nil {
-		t.Fatal(err)
-	}
-
-	// A second profile: same binary, same hooks, so the drop-in content is
-	// identical and nothing should be written.
-	second := pingServer(t, "kt_2")
-	opts2 := h.options("kt_2", second)
-	opts2.Profile = "two"
-	if err := Run(context.Background(), opts2); err != nil {
-		t.Fatalf("second Run() error = %v", err)
-	}
-
-	info, err := os.Stat(managedSettingsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !info.ModTime().Equal(marker) {
-		t.Error("identical settings were rewritten; that costs an administrator password for nothing")
-	}
-	data, err := os.ReadFile(managedSettingsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(data) == 0 {
-		t.Error("drop-in is empty after the skipped write")
-	}
-}
-
-// Changed content must still be written, or an upgrade that moves the binary
-// would leave hooks pointing at the old path.
-func TestSetupWritesWhenSettingsContentChanges(t *testing.T) {
-	h := profileHarness(t)
-	if err := Run(context.Background(), h.options("kt_1", pingServer(t, "kt_1"))); err != nil {
-		t.Fatal(err)
-	}
-	// A drop-in that is recognizably OURS but names a different binary — what an
-	// upgrade or a path change produces. A foreign file is refused by the
-	// ownership preflight instead, which is a different (pre-existing) behavior.
-	stale, err := claudemanaged.TemplateJSON("/usr/local/bin/kontext")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(managedSettingsPath, stale, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	marker := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(managedSettingsPath, marker, marker); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := Run(context.Background(), h.options("kt_2", pingServer(t, "kt_2"))); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(managedSettingsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "/usr/local/bin/kontext") {
-		t.Error("drop-in still names the old binary; the changed content was not written")
-	}
-	info, err := os.Stat(managedSettingsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.ModTime().Equal(marker) {
-		t.Error("changed settings were not written")
 	}
 }
 

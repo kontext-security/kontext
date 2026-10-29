@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 // User-level Claude Code settings (~/.claude/settings.json) integration for
@@ -53,6 +55,12 @@ func UserSettingsPathNoCreate(home string) (string, error) {
 // handlers across settings sources, but semantically equivalent commands or
 // different timeout values can execute twice. Foreign groups are ignored.
 func CanonicalManagedHooks(data []byte, binary string) bool {
+	return UserHooksMatch(data, binary)
+}
+
+// UserHooksMatch reports whether data's Kontext handlers are exactly the ones
+// MergeManagedHooksMirroring writes for binary and the machine-wide sources.
+func UserHooksMatch(data []byte, binary string, machine ...[]byte) bool {
 	var settings map[string]any
 	if json.Unmarshal(data, &settings) != nil || settings == nil {
 		return false
@@ -85,8 +93,139 @@ func CanonicalManagedHooks(data []byte, binary string) bool {
 		}
 		owned[name] = ownedGroups
 	}
-	canonical, err := agenthooks.ToJSONAny(Template(binary).Hooks)
+	canonical, err := agenthooks.ToJSONAny(expectedUserHooks(binary, machine).Hooks)
 	return err == nil && reflect.DeepEqual(owned, canonical)
+}
+
+// RunnableEvents lists the events data carries a valid Kontext hook for whose
+// binary exists and is executable.
+func RunnableEvents(data []byte) map[string]bool {
+	var settings Settings
+	covered := map[string]bool{}
+	if json.Unmarshal(data, &settings) != nil {
+		return covered
+	}
+	for _, event := range SupportedEvents {
+		for _, group := range settings.Hooks[event.Name.String()] {
+			for _, handler := range group.Hooks {
+				// A handler with an `if` condition runs for some calls only.
+				if binary, ok := kontextHook(group, handler, event); ok && runnable(binary) && validateAsync(event, handler.Async) == nil && handler.Extra["if"] == nil {
+					covered[event.Name.String()] = true
+				}
+			}
+		}
+	}
+	return covered
+}
+
+// kontextHook returns the binary of a Kontext hook for event: a command
+// handler for every tool that runs `<dir>/kontext hook <alias>`, as one command
+// string or as a command with args.
+func kontextHook(group MatcherGroup, handler Handler, event Event) (string, bool) {
+	if handler.Type != "command" || !isAllMatcher(group.Matcher) {
+		return "", false
+	}
+	fields, ok := agenthooks.SplitCommand(handler.Command)
+	if len(handler.Args) > 0 {
+		// Exec form: command is the executable's path, not a shell line.
+		fields, ok = commandHandlerFields(agenthooks.CommandHandler{Command: handler.Command, Args: handler.Args})
+	}
+	if !ok || len(fields) != 3 || filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != event.Alias {
+		return "", false
+	}
+	return fields[0], true
+}
+
+// MachineSettingsFiles lists the machine-wide files Claude Code merges hooks
+// from, in its merge order: managedSettings, then every JSON drop-in in
+// dropIn's folder by name (Claude skips hidden ones). dropIn is always listed,
+// so a broken one is noticed.
+func MachineSettingsFiles(dropIn, managedSettings string) []string {
+	files := []string{managedSettings}
+	// Listing a folder linked into ~/Documents or iCloud would prompt for access.
+	if privacyfolder.Guarded("", filepath.Dir(dropIn)) {
+		return append(files, dropIn)
+	}
+	entries, err := os.ReadDir(filepath.Dir(dropIn))
+	if err != nil {
+		return append(files, dropIn)
+	}
+	for _, entry := range entries {
+		path := filepath.Join(filepath.Dir(dropIn), entry.Name())
+		if path == dropIn || !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && strings.HasSuffix(entry.Name(), ".json") {
+			files = append(files, path)
+		}
+	}
+	return files
+}
+
+// KontextBinaries lists the distinct binaries data's Kontext hook commands name.
+func KontextBinaries(data []byte) []string {
+	var settings Settings
+	if json.Unmarshal(data, &settings) != nil {
+		return nil
+	}
+	var binaries []string
+	for _, event := range SupportedEvents {
+		for _, group := range settings.Hooks[event.Name.String()] {
+			for _, handler := range group.Hooks {
+				if binary, ok := kontextHook(group, handler, event); ok && !slices.Contains(binaries, binary) {
+					binaries = append(binaries, binary)
+				}
+			}
+		}
+	}
+	return binaries
+}
+
+// expectedUserHooks is Template(binary), except that each event a machine-wide
+// source already hooks with a runnable Kontext handler repeats that exact
+// handler. Claude runs a handler present in two sources once only when both
+// are identical.
+func expectedUserHooks(binary string, machine [][]byte) Settings {
+	// Events machine-wide settings lack use that binary too, so every handler
+	// in the user copy names one executable, as doctor expects.
+	for _, data := range machine {
+		if machineBinary, ok := ManagedObserveHookBinary(data); ok && runnable(machineBinary) {
+			binary = machineBinary
+			break
+		}
+		if _, machineBinary := MissingRequiredEvents(data); machineBinary != "" && runnable(machineBinary) {
+			binary = machineBinary
+			break
+		}
+	}
+	expected := Template(binary)
+	for _, data := range machine {
+		var settings Settings
+		if json.Unmarshal(data, &settings) != nil {
+			continue
+		}
+		for _, event := range SupportedEvents {
+			for _, group := range settings.Hooks[event.Name.String()] {
+				for _, handler := range group.Hooks {
+					// Repeat it exactly, whatever binary it names: a machine-wide
+					// source with another binary (managed-settings.json next to an
+					// earlier drop-in) still runs, and a differing copy runs twice.
+					if binary, ok := kontextHook(group, handler, event); !ok || !runnable(binary) {
+						continue
+					}
+					expected.Hooks[event.Name.String()] = []MatcherGroup{{Matcher: group.Matcher, Hooks: []Handler{handler}}}
+				}
+			}
+		}
+	}
+	return expected
+}
+
+// runnable never stats a binary in a privacy-guarded folder: the daemon calls
+// it in the background, where that would prompt for folder access.
+func runnable(path string) bool {
+	if privacyfolder.Guarded("", path) {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0
 }
 
 // ReadUserSettings parses the settings file into a generic map so unknown
@@ -213,6 +352,14 @@ func isManagedHookFields(fields []string) bool {
 // merging twice is a fixpoint. Returns non-fatal warnings for conditions the
 // user should know about.
 func MergeManagedHooks(settings map[string]any, kontextBinary string) ([]string, error) {
+	return MergeManagedHooksMirroring(settings, kontextBinary)
+}
+
+// MergeManagedHooksMirroring is MergeManagedHooks, except that each event a
+// machine-wide source (Claude's managed drop-in or managed-settings.json)
+// already hooks with a runnable Kontext handler gets that exact handler, so
+// Claude runs it once.
+func MergeManagedHooksMirroring(settings map[string]any, kontextBinary string, machine ...[]byte) ([]string, error) {
 	var warnings []string
 
 	if disabled, ok := settings["disableAllHooks"].(bool); ok && disabled {
@@ -234,7 +381,7 @@ func MergeManagedHooks(settings map[string]any, kontextBinary string) ([]string,
 
 	// Build the typed plan before touching the map, so an error can
 	// never leave the caller's settings half-merged.
-	plan := managedHookPlan(kontextBinary)
+	plan := managedHookPlanFrom(expectedUserHooks(kontextBinary, machine))
 	if err := plan.Validate(); err != nil {
 		return nil, err
 	}
@@ -246,26 +393,19 @@ func MergeManagedHooks(settings map[string]any, kontextBinary string) ([]string,
 }
 
 func managedHookPlan(kontextBinary string) agenthooks.Plan {
-	kontextBinary = strings.TrimSpace(kontextBinary)
-	if kontextBinary == "" {
-		kontextBinary = DefaultKontextBinary
-	}
+	return managedHookPlanFrom(Template(kontextBinary))
+}
 
+func managedHookPlanFrom(settings Settings) agenthooks.Plan {
 	events := make(map[hook.HookName]agenthooks.EventPlan, len(SupportedEvents))
 	for _, event := range SupportedEvents {
-		handler := agenthooks.CommandHook{
-			Command: hookCommand(kontextBinary, event.Alias),
-			Timeout: DefaultHookTimeout,
-		}
-		if event.Async {
-			value := true
-			handler.Async = &value
-		}
+		group := settings.Hooks[event.Name.String()][0]
+		handler := group.Hooks[0]
 		events[event.Name] = agenthooks.EventPlan{
 			Match: agenthooks.MatchSpec{
-				Pattern: "",
+				Pattern: group.Matcher,
 			},
-			Command:   handler,
+			Command:   agenthooks.CommandHook{Command: handler.Command, Args: handler.Args, Timeout: handler.Timeout, Async: handler.Async, Extra: handler.Extra},
 			Placement: agenthooks.PlacementAppend,
 		}
 	}

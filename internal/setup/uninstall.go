@@ -2,12 +2,14 @@ package setup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
@@ -63,27 +65,9 @@ func Uninstall(ctx context.Context, opts Options) error {
 		return err
 	}
 	if err := hookinstall.Remove(hookinstall.Options{
-		Scope: hookinstall.User, Home: home, Setup: true, KeepSystem: organizationManaged, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
-		RemoveSystem: func(path string, unchanged func() error) error {
-			if path == managedSettingsPath {
-				_, err := removeManagedSettings(ctx)
-				return err
-			}
-			return removePrivilegedFile(ctx, path, unchanged)
-		},
-		WriteSystem: func(path string, data []byte, unchanged func() error) error {
-			return writePrivilegedFile(ctx, path, data, unchanged)
-		},
+		Scope: hookinstall.User, Home: home, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
 		Report: func(r hookinstall.Result) {
 			switch r.File.Kind {
-			case "claude":
-				if organizationManaged {
-					fmt.Fprintf(opts.Stdout, "  • Kept Claude Code managed hooks because an organization-managed install is active (%s)\n", r.File.Path)
-				} else if r.Action == "remove" {
-					fmt.Fprintf(opts.Stdout, "  ✓ Claude Code managed hooks removed (%s)\n", r.File.Path)
-				} else {
-					fmt.Fprintf(opts.Stdout, "  • Kept Claude Code managed hooks because ownership is unknown (%s)\n", r.File.Path)
-				}
 			case "codex":
 				if r.Err != nil {
 					fmt.Fprintf(opts.Stderr, "warning: Codex hooks could not be removed from ~/.codex/hooks.json (%v)\n", r.Err)
@@ -96,8 +80,6 @@ func Uninstall(ctx context.Context, opts Options) error {
 				switch {
 				case r.Err != nil:
 					fmt.Fprintf(opts.Stderr, "warning: Cursor hooks could not be removed from %s (%v)\n", r.File.Path, r.Err)
-				case organizationManaged:
-					fmt.Fprintf(opts.Stdout, "  • Kept Cursor hooks because an organization-managed install is active (%s)\n", r.File.Path)
 				case r.Action == "remove" || r.Action == "write":
 					fmt.Fprintf(opts.Stdout, "  ✓ Cursor hooks removed (%s)\n", r.File.Path)
 				default:
@@ -109,12 +91,17 @@ func Uninstall(ctx context.Context, opts Options) error {
 				} else if r.Action == "write" {
 					fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks removed from %s\n", r.File.Path)
 				} else {
-					fmt.Fprintf(opts.Stdout, "  • No Claude Code user hooks to remove (%s)\n", r.File.Path)
+					fmt.Fprintf(opts.Stdout, "  • No Claude Code hooks to remove (%s)\n", r.File.Path)
 				}
 			}
 		},
 	}); err != nil {
 		return err
+	}
+	// Uninstall never asks for a password. Machine-wide hooks an earlier setup
+	// wrote stay until the user removes them; an organization install keeps its own.
+	if !organizationManaged && legacyMachineHooks() {
+		fmt.Fprintln(opts.Stdout, "  • Machine-wide hooks from an earlier setup remain. Remove them with: sudo kontext hooks remove --scope system")
 	}
 
 	// Every profile's token, not just the active one: leaving another
@@ -217,23 +204,29 @@ func removeSelfServeLaunchAgentIfPresent(ctx context.Context) (bool, string, err
 	return err == nil, path, err
 }
 
-// removeManagedSettings removes the drop-in only when it is ours by content
-// (mirroring setup's ownership check), so uninstall never deletes an enterprise
-// or foreign managed-settings file. Returns whether the file was removed.
-func removeManagedSettings(ctx context.Context) (bool, error) {
-	existing, err := os.ReadFile(managedSettingsPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	} else if err != nil {
-		return false, err
+// legacyMachineHooks reports Kontext-owned machine-wide hooks: the Claude
+// drop-in or Cursor's machine-wide file that earlier setups wrote with sudo.
+func legacyMachineHooks() bool {
+	if raw, err := os.ReadFile(managedSettingsPath); err == nil && claudemanaged.IsManagedSettingsDropIn(raw) {
+		return true
 	}
-	if !claudemanaged.IsManagedSettingsDropIn(existing) {
-		return false, nil
+	var settings struct {
+		Hooks map[string][]struct {
+			Command string `json:"command"`
+		} `json:"hooks"`
 	}
-	if err := removePrivilegedFile(ctx, managedSettingsPath, nil); err != nil {
-		return false, fmt.Errorf("remove Claude managed settings: %w", err)
+	raw, err := os.ReadFile(cursorHooksPath)
+	if err != nil || json.Unmarshal(raw, &settings) != nil {
+		return false
 	}
-	return true, nil
+	for _, entries := range settings.Hooks {
+		for _, entry := range entries {
+			if cursormanaged.IsManagedHookCommand(entry.Command) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func organizationManagedInstall() (bool, error) {

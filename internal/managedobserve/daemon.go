@@ -23,6 +23,7 @@ import (
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedstream"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/internal/runtimehost"
 )
 
@@ -56,6 +57,13 @@ type DaemonOptions struct {
 var (
 	managedSettingsDropInPath = claudemanaged.ManagedSettingsDropInPath
 	managedSettingsFilePath   = claudemanaged.DefaultManagedSettingsPath()
+	claudeUserSettingsPath    = func() (string, error) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return claudemanaged.UserSettingsPathNoCreate(home)
+	}
 )
 
 func RunDaemon(ctx context.Context, opts DaemonOptions) error {
@@ -281,7 +289,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		endpointConfigRefresher.Run(policyCtx)
 	}()
 
-	inventoryHolder := &agentInventoryHolder{}
+	inventoryHolder := &agentInventoryHolder{scope: loadedConfig.Scope}
 	inventoryReady := make(chan struct{})
 	background.Add(1)
 	go func() {
@@ -323,11 +331,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		stopPolicyRefresh()
 		stopStream()
 		background.Wait()
-	}()
-	background.Add(1)
-	go func() {
-		defer background.Done()
-		runSelfServeHookMigration(policyCtx, loadedConfig, binaryVersion, opts.Diagnostic)
 	}()
 
 	startUpdater := opts.HomebrewUpdater
@@ -433,25 +436,72 @@ func requireManagedHooksForLegacyCowork(cfg managedconfig.Config, scope managedc
 // either file switches off hooks the other file declares. A read error yields
 // ok=false — the fact is omitted from the batch rather than reported as
 // missing, so a daemon that cannot read /Library (sandboxing, permissions)
-// never files a false "hooks deleted" alarm.
-func managedObserveHooksFact() (managedstream.HooksFact, bool) {
-	var hasHooks, disabled bool
-	for _, path := range []string{managedSettingsDropInPath, managedSettingsFilePath} {
-		state, err := managedObserveHooksState(path)
-		if err != nil {
+// never files a false "hooks deleted" alarm. Self-serve installs keep their
+// hooks in the user's Claude settings, which count for the user scope only.
+func managedObserveHooksFact(scope managedconfig.Scope) (managedstream.HooksFact, bool) {
+	user := ""
+	if scope == managedconfig.ScopeUser {
+		path, err := claudeUserSettingsPath()
+		// The daemon lacks the terminal's folder access: reading settings that
+		// resolve into ~/Documents or iCloud would prompt in the background.
+		if err != nil || privacyfolder.Guarded("", path) {
 			return managedstream.HooksFact{}, false
 		}
-		if state.disabled {
-			disabled = true
+		user = path
+	}
+	return claudeHooksFact(user)
+}
+
+// machineClaudeHooksFact covers Claude's machine-wide managed settings, the
+// only Claude configuration Cowork sessions read.
+func machineClaudeHooksFact() (managedstream.HooksFact, bool) {
+	return claudeHooksFact("")
+}
+
+// claudeHooksFact merges the events each source covers, as Claude merges hooks
+// across its settings. disableAllHooks in managed settings, as the last
+// machine-wide value leaves it, switches off every source; in the user's
+// settings it switches off only the user's hooks.
+func claudeHooksFact(userSettings string) (managedstream.HooksFact, bool) {
+	covered := map[string]bool{}
+	var machine [][]byte
+	userDisabled := false
+	paths := append(claudemanaged.MachineSettingsFiles(managedSettingsDropInPath, managedSettingsFilePath), userSettings)
+	for _, path := range paths {
+		if path == "" {
+			continue
 		}
-		if state.hasHooks {
-			hasHooks = true
+		// A machine-wide file linked into ~/Documents or iCloud would prompt
+		// for folder access in the background.
+		if privacyfolder.Guarded("", path) {
+			return managedstream.HooksFact{}, false
+		}
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil && (path == managedSettingsDropInPath || path == managedSettingsFilePath || path == userSettings) {
+			return managedstream.HooksFact{}, false
+		}
+		if err != nil {
+			continue // another product's drop-in Claude cannot read either
+		}
+		if path == userSettings {
+			if claudemanaged.DisablesAllHooks(data) {
+				userDisabled = true
+				continue
+			}
+		} else {
+			machine = append(machine, data)
+		}
+		// Hooks that name a binary an upgrade or uninstall removed cannot run.
+		for event := range claudemanaged.RunnableEvents(data) {
+			covered[event] = true
 		}
 	}
-	return managedstream.HooksFact{
-		Present:          hasHooks && !disabled,
-		DisabledAllHooks: disabled,
-	}, true
+	managedDisabled := claudemanaged.MachineHooksDisabled(machine)
+	present := !managedDisabled && len(covered) == len(claudemanaged.SupportedEvents)
+	return managedstream.HooksFact{Present: present, DisabledAllHooks: managedDisabled || userDisabled && !present}, true
 }
 
 type managedObserveHooksStatus struct {
@@ -650,7 +700,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		UserEmail:          loadedConfig.Config.Device.UserEmail,
 		DeploymentVersion:  deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
 		CLIVersion:         opts.BinaryVersion,
-		HooksFact:          managedObserveHooksFact,
+		HooksFact:          func() (managedstream.HooksFact, bool) { return managedObserveHooksFact(loadedConfig.Scope) },
 		AgentsFact:         inventoryHolder.Fact,
 		AuthorityFact:      authorityHolder.Fact,
 		AuthorityAvailable: authorityHolder.resend,

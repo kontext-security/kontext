@@ -13,7 +13,7 @@ import (
 
 func TestClaudeUserInstallPreservesSymlinkAndForeignSettings(t *testing.T) {
 	opts, defs := fixture(t, User)
-	path := defs[0].Files[1].Path
+	path := defs[0].Files[0].Path
 	target := filepath.Join(t.TempDir(), "dotfiles.json")
 	original := `{"env":{"PERSONAL":"keep"},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo personal"}]}]}}`
 	write(t, target, original, 0640)
@@ -75,12 +75,12 @@ func TestClaudeUserPlanRejectsMalformedSettingsBeforeWriting(t *testing.T) {
 	for _, raw := range []string{"{", "null", `{"hooks":[]}`} {
 		t.Run(raw, func(t *testing.T) {
 			opts, defs := fixture(t, User)
-			write(t, defs[0].Files[1].Path, raw, 0600)
+			write(t, defs[0].Files[0].Path, raw, 0600)
 			if err := runDefinitions(opts, defs, false); err == nil {
 				t.Fatal("accepted invalid user settings")
 			}
-			if _, err := os.Stat(defs[0].Files[0].Path); !os.IsNotExist(err) {
-				t.Fatal("managed file changed before user settings validated")
+			if _, err := os.Stat(defs[1].Files[0].Path); !os.IsNotExist(err) {
+				t.Fatal("Codex hooks written before Claude settings validated")
 			}
 		})
 	}
@@ -88,7 +88,7 @@ func TestClaudeUserPlanRejectsMalformedSettingsBeforeWriting(t *testing.T) {
 
 func TestClaudeUserPlanRejectsDanglingSymlinkBeforeWriting(t *testing.T) {
 	opts, defs := fixture(t, User)
-	path := defs[0].Files[1].Path
+	path := defs[0].Files[0].Path
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +98,8 @@ func TestClaudeUserPlanRejectsDanglingSymlinkBeforeWriting(t *testing.T) {
 	if err := runDefinitions(opts, defs, false); err == nil {
 		t.Fatal("accepted dangling user settings symlink")
 	}
-	if _, err := os.Stat(defs[0].Files[0].Path); !os.IsNotExist(err) {
-		t.Fatal("changed managed hooks before resolving user settings")
+	if _, err := os.Stat(defs[1].Files[0].Path); !os.IsNotExist(err) {
+		t.Fatal("wrote Codex hooks before resolving Claude settings")
 	}
 }
 
@@ -108,7 +108,7 @@ func TestDoctorDetectsUserDriftWithoutChangingSettings(t *testing.T) {
 	if err := runDefinitions(opts, defs, false); err != nil {
 		t.Fatal(err)
 	}
-	path := defs[0].Files[1].Path
+	path := defs[0].Files[0].Path
 	original := strings.Replace(read(t, path), `"timeout": 20`, `"timeout": 21`, 1)
 	write(t, path, original, 0600)
 	var out bytes.Buffer
@@ -131,7 +131,7 @@ func TestDoctorScansSiblingPoliciesAndTreatsRemoteCacheAsUnverified(t *testing.T
 	if err := runDefinitions(opts, defs, false); err != nil {
 		t.Fatal(err)
 	}
-	dropin, user := defs[0].Files[0].Path, defs[0].Files[1].Path
+	dropin, user := machineClaudeDropIn, defs[0].Files[0].Path
 	write(t, filepath.Join(filepath.Dir(filepath.Dir(dropin)), "managed-settings.json"), "\n", 0644)
 	sibling := filepath.Join(filepath.Dir(dropin), "99-policy.json")
 	write(t, sibling, `{"disableAllHooks":true}`, 0644)
@@ -161,25 +161,69 @@ func TestDoctorScansSiblingPoliciesAndTreatsRemoteCacheAsUnverified(t *testing.T
 	}
 }
 
-func TestRefreshClaudeUserRefusesUnsynchronizedManagedCopy(t *testing.T) {
-	path, binary, _ := refreshFixture(t)
-	user := filepath.Join(t.TempDir(), "settings.json")
-	if err := RefreshClaudeUser(path, user, binary); err == nil {
-		t.Fatal("introduced user hooks before managed migration")
+func TestCoworkCoverageSplitAcrossMachineSourcesAndDisabledMirror(t *testing.T) {
+	opts, defs := fixture(t, User)
+	alias := filepath.Join(t.TempDir(), "other", "kontext")
+	write(t, alias, "#!/bin/sh\n", 0755)
+	writeMixedMachineSources(t, machineClaudeDropIn, opts.Binary, alias)
+	managed := filepath.Join(filepath.Dir(filepath.Dir(machineClaudeDropIn)), "managed-settings.json")
+	if !CoworkGoverned(machineClaudeDropIn, managed) {
+		t.Fatal("split machine-wide coverage not counted for Cowork")
 	}
-	if _, err := os.Stat(user); !os.IsNotExist(err) {
-		t.Fatal("created user hooks on failed migration")
-	}
-	canonical, _ := claudemanaged.TemplateJSON(binary)
-	write(t, path, string(canonical), 0644)
-	if err := RefreshClaudeUser(path, user, binary); err != nil {
+	if err := runDefinitions(opts, defs[:1], false); err != nil {
 		t.Fatal(err)
 	}
+	path := defs[0].Files[0].Path
 	var settings map[string]any
-	if err := json.Unmarshal([]byte(read(t, user)), &settings); err != nil {
+	if err := json.Unmarshal([]byte(read(t, path)), &settings); err != nil {
 		t.Fatal(err)
 	}
-	if !claudemanaged.CanonicalManagedHooks([]byte(read(t, user)), binary) {
-		t.Fatal("user migration installed different handlers")
+	settings["disableAllHooks"] = true
+	data, _ := json.Marshal(settings)
+	write(t, path, string(data), 0600)
+	var out bytes.Buffer
+	if diagnose(&out, User, defs[:1], func(string) bool { return true }, "", "") {
+		t.Fatalf("doctor accepted a mirrored copy with disableAllHooks: %s", &out)
+	}
+}
+
+// Claude runs only command handlers, an `if` condition limits a handler to some
+// calls, and the last machine-wide disableAllHooks value wins.
+func TestCoworkGovernedNeedsUnconditionalEnabledCommandHandlers(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		handler  func(*claudemanaged.Handler)
+		dropIns  map[string]string
+		governed bool
+	}{
+		{name: "command handlers", governed: true},
+		{name: "prompt handlers", handler: func(h *claudemanaged.Handler) { h.Type = "prompt" }},
+		{name: "conditional handlers", handler: func(h *claudemanaged.Handler) { h.Extra = map[string]any{"if": "Bash(*)"} }},
+		{name: "later drop-in re-enables hooks", dropIns: map[string]string{"10-off.json": `{"disableAllHooks":true}`, "99-on.json": `{"disableAllHooks":false}`}, governed: true},
+		{name: "later drop-in disables hooks", dropIns: map[string]string{"10-on.json": `{"disableAllHooks":false}`, "99-off.json": `{"disableAllHooks":true}`}},
+		{name: "invalid later value changes nothing", dropIns: map[string]string{"10-off.json": `{"disableAllHooks":true}`, "99-bad.json": `{"disableAllHooks":"false"}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, _ := fixture(t, User)
+			settings := claudemanaged.Template(opts.Binary)
+			for _, groups := range settings.Hooks {
+				for i := range groups {
+					for j := range groups[i].Hooks {
+						if tc.handler != nil {
+							tc.handler(&groups[i].Hooks[j])
+						}
+					}
+				}
+			}
+			data, _ := json.Marshal(settings)
+			write(t, machineClaudeDropIn, string(data), 0644)
+			for name, content := range tc.dropIns {
+				write(t, filepath.Join(filepath.Dir(machineClaudeDropIn), name), content, 0644)
+			}
+			managed := filepath.Join(filepath.Dir(filepath.Dir(machineClaudeDropIn)), "managed-settings.json")
+			if got := CoworkGoverned(machineClaudeDropIn, managed); got != tc.governed {
+				t.Fatalf("CoworkGoverned = %v, want %v", got, tc.governed)
+			}
+		})
 	}
 }

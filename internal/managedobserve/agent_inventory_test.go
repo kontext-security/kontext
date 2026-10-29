@@ -12,8 +12,11 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hermetic"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 func TestAgentInventoryRefresh(t *testing.T) {
@@ -73,7 +76,7 @@ func TestAgentWiring(t *testing.T) {
 	previousDropIn, previousFile := managedSettingsDropInPath, managedSettingsFilePath
 	managedSettingsDropInPath, managedSettingsFilePath = filepath.Join(home, "missing-dropin"), filepath.Join(home, "missing-file")
 	t.Cleanup(func() { managedSettingsDropInPath, managedSettingsFilePath = previousDropIn, previousFile })
-	evaluators := agentWiring(codexmanaged.InstallationPaths{SystemHooks: filepath.Join(home, "system-hooks.json"), UserHooks: filepath.Join(home, ".codex/hooks.json")}, nil)
+	evaluators := agentWiring(codexmanaged.InstallationPaths{SystemHooks: filepath.Join(home, "system-hooks.json"), UserHooks: filepath.Join(home, ".codex/hooks.json")}, nil, managedconfig.ScopeSystem)
 	for _, id := range []string{"claude_code", "claude_cowork", "codex"} {
 		if got := evaluators[id](); got != agentinventory.WiredNo {
 			t.Fatalf("%s=%s", id, got)
@@ -121,13 +124,13 @@ func TestAgentWiringRecognizesSystemCodexHooks(t *testing.T) {
 	if err := os.WriteFile(paths.UserHooks, []byte(`{"hooks":{}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if got := agentWiring(paths, nil)["codex"](); got != agentinventory.WiredYes {
+	if got := agentWiring(paths, nil, managedconfig.ScopeSystem)["codex"](); got != agentinventory.WiredYes {
 		t.Fatalf("wired=%s", got)
 	}
 	if err := os.Remove(paths.SystemHooks); err != nil {
 		t.Fatal(err)
 	}
-	if got := agentWiring(paths, nil)["codex"](); got != agentinventory.WiredNo {
+	if got := agentWiring(paths, nil, managedconfig.ScopeSystem)["codex"](); got != agentinventory.WiredNo {
 		t.Fatalf("wired=%s", got)
 	}
 }
@@ -277,9 +280,75 @@ func TestAgentWiringCodexLayers(t *testing.T) {
 					}
 				}
 			}
-			if got := agentWiring(paths, nil)["codex"](); got != tc.want {
+			if got := agentWiring(paths, nil, managedconfig.ScopeSystem)["codex"](); got != tc.want {
 				t.Fatalf("wired=%s, want %s", got, tc.want)
 			}
 		})
 	}
+}
+
+// The background scan never stats a hook binary in a privacy-guarded folder.
+func TestCursorWiredSkipsGuardedBinaries(t *testing.T) {
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	swapCursorSystemHooks(t, filepath.Join(home, "missing", "hooks.json"))
+	settings := map[string]any{}
+	if err := cursormanaged.MergeManagedHooks(settings, filepath.Join(home, "Downloads", "kontext")); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(settings)
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".cursor", "hooks.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := cursorWired(managedconfig.ScopeUser); got != agentinventory.WiredError {
+		t.Fatalf("cursorWired = %v, want %v for a binary in ~/Downloads", got, agentinventory.WiredError)
+	}
+}
+
+// A complete machine-wide Cursor set wires Cursor whatever the user's file holds.
+func TestCursorWiredCompleteMachineSetIgnoresUserFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	binary := filepath.Join(home, "bin", "kontext")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	machine := map[string]any{}
+	if err := cursormanaged.MergeManagedHooks(machine, binary); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(machine)
+	system := filepath.Join(home, "system", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(system), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(system, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	swapCursorSystemHooks(t, system)
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".cursor", "hooks.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := cursorWired(managedconfig.ScopeUser); got != agentinventory.WiredYes {
+		t.Fatalf("cursorWired = %v, want %v", got, agentinventory.WiredYes)
+	}
+}
+
+func swapCursorSystemHooks(t *testing.T, path string) {
+	t.Helper()
+	previous := cursorSystemHooksPath
+	cursorSystemHooksPath = path
+	t.Cleanup(func() { cursorSystemHooksPath = previous })
 }

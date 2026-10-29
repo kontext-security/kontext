@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/claudemanaged"
 )
 
 // Opt in with KONTEXT_TEST_CLAUDE_BINARY=/absolute/path/to/claude. This exercises
@@ -56,23 +58,24 @@ func TestClaudeHookLayersDispatch(t *testing.T) {
 	defer api.Close()
 
 	for _, scenario := range []struct {
-		name   string
-		scope  Scope
-		change string
-		want   int
+		name string
+		// legacy installs the drop-in an earlier self-serve setup wrote, named
+		// with binary "fake" or "alias" (a symlink to the same script).
+		legacy, policy, project string
+		user                    bool
+		want                    int
 	}{
-		{"system_only", System, "", 1},
-		{"identical_layers", User, "", 1},
-		{"migrated_user_layer", User, "migrate", 1},
-		{"user_fallback", User, "shadow", 1},
-		{"managed_hooks_only", User, "managed-only", 1},
-		{"managed_disable_all", User, "disabled", 0},
-		{"different_paths_negative_control", User, "path", 2},
-		{"repair_different_paths", User, "repair-path", 1},
-		{"different_timeouts_negative_control", User, "timeout", 2},
-		{"repair_different_timeouts", User, "repair-timeout", 1},
-		{"project_disable_all_user_only", User, "project-disable-user", 0},
-		{"project_disable_all_with_managed", User, "project-disable", 1},
+		{"system_only", "fake", "", "", false, 1},
+		{"user_only", "", "", "", true, 1},
+		{"legacy_dropin_and_user", "fake", "", "", true, 1},
+		{"user_mirrors_legacy_binary", "alias", "", "", true, 1},
+		{"user_mirrors_legacy_timeout", "fake", "", "", true, 1},
+		{"user_mirrors_mixed_machine_sources", "fake", "", "", true, 1},
+		{"different_paths_negative_control", "alias", "", "", false, 2},
+		{"managed_hooks_only_blocks_user", "", `{"allowManagedHooksOnly":true}`, "", true, 0},
+		{"managed_disable_all", "fake", `{"disableAllHooks":true}`, "", true, 0},
+		{"project_disable_all_user_only", "", "", `{"disableAllHooks":true}`, true, 0},
+		{"project_disable_all_with_legacy", "fake", "", `{"disableAllHooks":true}`, true, 1},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			if err := os.RemoveAll(managed); err != nil {
@@ -81,81 +84,70 @@ func TestClaudeHookLayersDispatch(t *testing.T) {
 			home := t.TempDir()
 			fake := filepath.Join(home, "kontext")
 			write(t, fake, "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \"$*\" >> \"$KONTEXT_PROBE_EVENTS\"\n", 0755)
-			defs, err := Definitions(scenario.scope, home)
-			if err != nil {
+			alias := filepath.Join(home, "alias", "kontext")
+			if err := os.MkdirAll(filepath.Dir(alias), 0700); err != nil {
 				t.Fatal(err)
 			}
-			if scenario.change == "migrate" {
-				// Start from the previous Homebrew managed-only layout.
-				defs[0].Files = defs[0].Files[:1]
+			if err := os.Symlink(fake, alias); err != nil {
+				t.Fatal(err)
 			}
 			dropin := filepath.Join(managed, "managed-settings.d", "20-kontext.json")
-			defs[0].Files[0].Path = dropin
-			opts := Options{Scope: scenario.scope, Home: home, Binary: fake}
-			if err := runDefinitions(opts, defs[:1], false); err != nil {
-				t.Fatal(err)
-			}
+			saved := machineClaudeDropIn
+			machineClaudeDropIn = dropin
+			t.Cleanup(func() { machineClaudeDropIn = saved })
 			user := filepath.Join(home, ".claude", "settings.json")
 			// Preserve a personal permission and hook alongside the installed set.
-			var settings map[string]any
-			if raw, err := os.ReadFile(user); err == nil {
-				_ = json.Unmarshal(raw, &settings)
+			write(t, user, `{"permissions":{"allow":["Bash(ls *)"]},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"true"}]}]}}`, 0600)
+			if scenario.legacy != "" {
+				binary := map[string]string{"fake": fake, "alias": alias}[scenario.legacy]
+				defs, err := Definitions(System, home)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defs[0].Files[0].Path = dropin
+				if err := runDefinitions(Options{Scope: System, Home: home, Binary: binary}, defs[:1], false); err != nil {
+					t.Fatal(err)
+				}
+				if scenario.name == "user_mirrors_legacy_timeout" {
+					// An older drop-in whose handlers differ from today's template.
+					write(t, dropin, strings.ReplaceAll(read(t, dropin), `"timeout": 20`, `"timeout": 21`), 0644)
+				}
+				if scenario.name == "user_mirrors_mixed_machine_sources" {
+					// The drop-in lacks Stop and SubagentStop; managed-settings.json
+					// supplies them with another binary.
+					writeMixedMachineSources(t, dropin, fake, alias)
+				}
 			}
-			if settings == nil {
-				settings = map[string]any{}
+			if scenario.name == "different_paths_negative_control" {
+				// A user copy that ignores the drop-in's binary, as before mirroring.
+				raw := map[string]any{}
+				_ = json.Unmarshal([]byte(read(t, user)), &raw)
+				if _, err := claudemanaged.MergeManagedHooks(raw, fake); err != nil {
+					t.Fatal(err)
+				}
+				data, _ := json.Marshal(raw)
+				write(t, user, string(data), 0600)
 			}
-			hooks, _ := settings["hooks"].(map[string]any)
-			if hooks == nil {
-				hooks = map[string]any{}
-				settings["hooks"] = hooks
+			if scenario.user {
+				defs, err := Definitions(User, home)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defs[0].Files[0].Path = user
+				if err := runDefinitions(Options{Scope: User, Home: home, Binary: fake}, defs[:1], false); err != nil {
+					t.Fatal(err)
+				}
 			}
-			groups, _ := hooks["PreToolUse"].([]any)
-			hooks["PreToolUse"] = append(groups, map[string]any{"matcher": "Bash", "hooks": []any{map[string]any{"type": "command", "command": "true"}}})
-			settings["permissions"] = map[string]any{"allow": []string{"Bash(ls *)"}}
-			raw, _ := json.Marshal(settings)
-			write(t, user, string(raw), 0600)
-			switch scenario.change {
-			case "migrate":
-				if err := RefreshClaudeUser(dropin, user, fake); err != nil {
-					t.Fatal(err)
-				}
-			case "shadow":
-				if err := os.Remove(dropin); err != nil {
-					t.Fatal(err)
-				}
-				write(t, filepath.Join(managed, "managed-settings.json"), `{"cleanupPeriodDays":30}`, 0644)
-			case "managed-only":
-				write(t, filepath.Join(managed, "managed-settings.json"), `{"allowManagedHooksOnly":true}`, 0644)
-			case "disabled":
-				write(t, filepath.Join(managed, "managed-settings.json"), `{"disableAllHooks":true}`, 0644)
-			case "path", "repair-path":
-				alias := filepath.Join(home, "alias", "kontext")
-				if err := os.MkdirAll(filepath.Dir(alias), 0700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(fake, alias); err != nil {
-					t.Fatal(err)
-				}
-				write(t, user, strings.ReplaceAll(string(raw), fake, alias), 0600)
-			case "project-disable-user":
-				if err := os.Remove(dropin); err != nil {
-					t.Fatal(err)
-				}
-			case "timeout", "repair-timeout":
-				write(t, user, strings.ReplaceAll(string(raw), `"timeout":20`, `"timeout":21`), 0600)
-			}
-			if strings.HasPrefix(scenario.change, "repair-") {
-				if err := runDefinitions(opts, defs[:1], false); err != nil {
-					t.Fatal(err)
-				}
+			if scenario.policy != "" {
+				write(t, filepath.Join(managed, "managed-settings.json"), scenario.policy, 0644)
 			}
 			events := filepath.Join(home, "events.txt")
 			workspace := filepath.Join(home, "workspace")
 			if err := os.Mkdir(workspace, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if strings.HasPrefix(scenario.change, "project-disable") {
-				write(t, filepath.Join(workspace, ".claude", "settings.json"), `{"disableAllHooks":true}`, 0644)
+			if scenario.project != "" {
+				write(t, filepath.Join(workspace, ".claude", "settings.json"), scenario.project, 0644)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 			defer cancel()

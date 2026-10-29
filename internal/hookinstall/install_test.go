@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/hermetic"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 func fixture(t *testing.T, scope Scope) (Options, []Definition) {
@@ -18,6 +22,10 @@ func fixture(t *testing.T, scope Scope) (Options, []Definition) {
 	t.Setenv("CODEX_HOME", "")
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	root := t.TempDir()
+	claudeDropIn, cursorHooks := machineClaudeDropIn, machineCursorHooks
+	machineClaudeDropIn = filepath.Join(root, claudemanaged.ManagedSettingsDropInPath)
+	machineCursorHooks = filepath.Join(root, cursormanaged.SystemHooksPath)
+	t.Cleanup(func() { machineClaudeDropIn, machineCursorHooks = claudeDropIn, cursorHooks })
 	opts := Options{Scope: scope, Home: "/Users/test", Binary: filepath.Join(root, "kontext")}
 	write(t, opts.Binary, "#!/bin/sh\n", 0755)
 	defs, err := Definitions(scope, opts.Home)
@@ -163,6 +171,9 @@ func TestForeignContentSurvives(t *testing.T) {
 			}
 			if got := read(t, hooks); !strings.Contains(got, "echo foreign") || strings.Contains(got, "kontext") {
 				t.Fatalf("remaining hooks %s", got)
+			}
+			if scope == User {
+				return
 			}
 			write(t, defs[0].Files[0].Path, `{"permissions":{}}`, 0644)
 			if err := runDefinitions(opts, defs, true); err != nil {
@@ -390,7 +401,8 @@ func TestRefreshStaleHooksAndRemoveDryRun(t *testing.T) {
 			if err := runDefinitions(opts, defs, true); err != nil {
 				t.Fatal(err)
 			}
-			if strings.Count(out.String(), "would-remove\t") != 4 {
+			// The user's Claude settings file stays; only its hooks go.
+			if want := map[Scope]int{User: 3, System: 4}[scope]; strings.Count(out.String(), "would-remove\t") != want {
 				t.Fatal(&out)
 			}
 			for _, d := range defs {
@@ -496,12 +508,11 @@ func TestDoctorRejectsBrokenOtherCodexLayer(t *testing.T) {
 }
 
 func TestUserCommandsHonorCodexHome(t *testing.T) {
-	opts, defs := fixture(t, User)
+	opts, _ := fixture(t, User)
 	custom := filepath.Join(t.TempDir(), "custom-codex")
 	t.Setenv("CODEX_HOME", custom)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "custom-claude"))
-	opts.ClaudePath = defs[0].Files[0].Path
-	opts.CursorPath = defs[2].Files[0].Path
+	opts.Home = t.TempDir()
 	if err := Install(opts); err != nil {
 		t.Fatal(err)
 	}
@@ -695,7 +706,7 @@ func TestDoctorNamesMissingCodexPromptHook(t *testing.T) {
 // A machine-wide file an administrator changes while sudo waits for a password
 // must not be overwritten with the plan made before the change.
 func TestSystemWriterRechecksAfterAuthorization(t *testing.T) {
-	opts, defs := fixture(t, User)
+	opts, defs := fixture(t, System)
 	cursor := defs[2].Files[0].Path
 	write(t, cursor, `{"version":1,"hooks":{}}`, 0644)
 	const admin = `{"version":1,"hooks":{"stop":[{"command":"/opt/audit/hook"}]}}`
@@ -713,5 +724,208 @@ func TestSystemWriterRechecksAfterAuthorization(t *testing.T) {
 	}
 	if got := read(t, cursor); got != admin {
 		t.Fatalf("Cursor hooks = %s, want the administrator's edit kept", got)
+	}
+}
+
+// Cursor runs every hooks file without deduplicating, so each event must carry
+// exactly one runnable Kontext hook across the machine-wide and user files.
+func TestUserCursorCoversWhatTheMachineFileDoesNot(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		drop          string // event removed from the earlier machine-wide set
+		deadBinary    bool
+		wantUserHooks int
+	}{
+		{name: "complete machine-wide set", wantUserHooks: 0},
+		{name: "machine-wide set without stop", drop: "stop", wantUserHooks: 1},
+		{name: "machine-wide binary deleted", deadBinary: true, wantUserHooks: len(cursormanaged.Events)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, defs := fixture(t, User)
+			legacy := filepath.Join(t.TempDir(), "old", "kontext")
+			write(t, legacy, "#!/bin/sh\n", 0755)
+			machine := map[string]any{}
+			if err := cursormanaged.MergeManagedHooks(machine, legacy); err != nil {
+				t.Fatal(err)
+			}
+			delete(machine["hooks"].(map[string]any), tc.drop)
+			raw, _ := json.Marshal(machine)
+			write(t, machineCursorHooks, string(raw), 0644)
+			if tc.deadBinary {
+				if err := os.Remove(legacy); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := runDefinitions(opts, defs, false); err != nil {
+				t.Fatal(err)
+			}
+			user := defs[2].Files[0].Path
+			data, _ := os.ReadFile(user)
+			if got := len(cursormanaged.Coverage(data)); got != tc.wantUserHooks {
+				t.Fatalf("user file covers %d events, want %d: %s", got, tc.wantUserHooks, data)
+			}
+			var out bytes.Buffer
+			if !diagnoseCursorLayers(&out, user, machineCursorHooks) {
+				t.Fatalf("doctor: %s", &out)
+			}
+			if err := runDefinitions(opts, defs, false); err != nil {
+				t.Fatal(err)
+			}
+			if again, _ := os.ReadFile(user); !bytes.Equal(again, data) {
+				t.Fatal("a second run rewrote the user file")
+			}
+		})
+	}
+}
+
+// writeMixedMachineSources leaves Stop and SubagentStop out of the drop-in and
+// puts them in managed-settings.json with another binary, as an organization's
+// settings next to an earlier self-serve drop-in would.
+func writeMixedMachineSources(t *testing.T, dropin, dropinBinary, otherBinary string) {
+	t.Helper()
+	full := claudemanaged.Template(dropinBinary)
+	other := claudemanaged.Template(otherBinary)
+	moved := claudemanaged.Settings{Hooks: map[string][]claudemanaged.MatcherGroup{}}
+	for _, event := range []string{"Stop", "SubagentStop"} {
+		delete(full.Hooks, event)
+		moved.Hooks[event] = other.Hooks[event]
+	}
+	for path, settings := range map[string]claudemanaged.Settings{dropin: full, filepath.Join(filepath.Dir(filepath.Dir(dropin)), "managed-settings.json"): moved} {
+		data, err := json.Marshal(settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, path, string(data), 0644)
+	}
+}
+
+func TestUserClaudeCopyMirrorsMixedMachineSources(t *testing.T) {
+	opts, defs := fixture(t, User)
+	alias := filepath.Join(t.TempDir(), "other", "kontext")
+	write(t, alias, "#!/bin/sh\n", 0755)
+	writeMixedMachineSources(t, machineClaudeDropIn, opts.Binary, alias)
+	if err := runDefinitions(opts, defs[:1], false); err != nil {
+		t.Fatal(err)
+	}
+	user := read(t, defs[0].Files[0].Path)
+	if !strings.Contains(user, "'"+alias+"' hook 'stop'") || !strings.Contains(user, "'"+opts.Binary+"' hook 'pre-tool-use'") {
+		t.Fatalf("user copy does not repeat each machine-wide handler:\n%s", user)
+	}
+	var out bytes.Buffer
+	if !diagnose(&out, User, defs[:1], func(string) bool { return true }, "", "") {
+		t.Fatalf("doctor rejected the mirrored copy: %s", &out)
+	}
+	if err := runDefinitions(opts, defs[:1], false); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, defs[0].Files[0].Path) != user {
+		t.Fatal("a second install rewrote the mirrored copy")
+	}
+}
+
+// Claude merges every drop-in in managed-settings.d, and a handler written as a
+// command with args runs like the one-string form, so the user copy repeats it.
+// The exec-form path holds a space, and one handler carries an `if` condition
+// Kontext never writes itself; the copy keeps both.
+func TestUserClaudeCopyMirrorsEveryMachineDropIn(t *testing.T) {
+	opts, defs := fixture(t, User)
+	binary := filepath.Join(t.TempDir(), "Kontext CLI", "kontext")
+	write(t, binary, "#!/bin/sh\n", 0755)
+	org := claudemanaged.Template(binary)
+	for name, groups := range org.Hooks {
+		for i := range groups {
+			for j := range groups[i].Hooks {
+				h := &groups[i].Hooks[j]
+				fields, _ := agenthooks.SplitCommand(h.Command)
+				h.Command, h.Args, h.Timeout = fields[0], fields[1:], 30
+				if name == "PreToolUse" {
+					h.Extra = map[string]any{"if": "Bash(*)"}
+				}
+			}
+		}
+		org.Hooks[name] = groups
+	}
+	data, _ := json.Marshal(org)
+	write(t, filepath.Join(filepath.Dir(machineClaudeDropIn), "10-org.json"), string(data), 0644)
+	if err := runDefinitions(opts, defs[:1], false); err != nil {
+		t.Fatal(err)
+	}
+	user := read(t, defs[0].Files[0].Path)
+	var got claudemanaged.Settings
+	if err := json.Unmarshal([]byte(user), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Hooks, org.Hooks) {
+		t.Fatalf("user copy does not repeat the other drop-in's handlers:\n%s", user)
+	}
+	var out bytes.Buffer
+	if !diagnose(&out, User, defs[:1], func(string) bool { return true }, "", "") {
+		t.Fatalf("doctor rejected the mirrored copy: %s", &out)
+	}
+	if err := runDefinitions(opts, defs[:1], false); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, defs[0].Files[0].Path) != user {
+		t.Fatal("a second install rewrote the mirrored copy")
+	}
+}
+
+// A dotfiles link whose file held only Kontext's Cursor hooks stays a link
+// when a complete machine-wide set makes the user copy redundant.
+func TestUserCursorLinkSurvivesWhenTheMachineFileCoversEverything(t *testing.T) {
+	opts, defs := fixture(t, User)
+	machine := map[string]any{}
+	if err := cursormanaged.MergeManagedHooks(machine, opts.Binary); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(machine)
+	write(t, machineCursorHooks, string(raw), 0644)
+	target := filepath.Join(t.TempDir(), "dotfiles", "hooks.json")
+	write(t, target, string(raw), 0644)
+	user := defs[2].Files[0].Path
+	if err := os.MkdirAll(filepath.Dir(user), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, user); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDefinitions(opts, defs, false); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(user); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("user hooks link replaced or removed: %v", err)
+	}
+	if got := cursormanaged.Coverage([]byte(read(t, target))); len(got) != 0 {
+		t.Fatalf("link target still runs %d Kontext hooks next to the machine-wide set", len(got))
+	}
+}
+
+// The daemon's background repair never follows a machine-wide file into a
+// privacy-guarded folder.
+func TestUserInstallSkipsGuardedMachineFiles(t *testing.T) {
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	opts, defs := fixture(t, User)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, link := range []string{machineClaudeDropIn, machineCursorHooks} {
+		target := filepath.Join(home, "Documents", filepath.Base(link))
+		write(t, target, "{not json", 0644)
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := machineClaudeSources(opts); len(got) != 0 {
+		t.Fatalf("read %d machine-wide Claude files through a guarded link", len(got))
+	}
+	if got := machineCursorCoverage(opts); got != nil {
+		t.Fatalf("read the machine-wide Cursor file through a guarded link: %v", got)
+	}
+	if err := runDefinitions(opts, defs, false); err != nil {
+		t.Fatal(err)
 	}
 }
