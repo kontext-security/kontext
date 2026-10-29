@@ -162,12 +162,16 @@ func runUpdateSchedule(ctx context.Context, source string, interval time.Duratio
 		if ctx.Err() != nil {
 			return
 		}
+		previous := state.Error
 		// Round(0) drops the monotonic reading, which pauses in sleep: the
 		// in-memory fallback must compare wall clocks like the saved file.
 		state = UpdateState{CheckedAt: time.Now().Round(0), Source: source, Notice: notice}
 		if err != nil {
 			state.Error = err.Error()
-			logHomebrewUpdater(log, "daemon updater: %v\n", err)
+			// An hourly retry of the same failure (an untrusted tap) logs once.
+			if state.Error != previous {
+				logHomebrewUpdater(log, "daemon updater: %v\n", err)
+			}
 		}
 		last = state
 		if writeErr := writeJSONBreadcrumb(updateStatePath(), state); writeErr != nil {
@@ -221,11 +225,34 @@ func homebrewOutdatedWarning(ctx context.Context, brewPath string) (string, erro
 	return "", nil
 }
 
+// tapTrustError reports that Homebrew 7 or later does not trust Kontext's tap
+// package, with the command that trusts it.
+func tapTrustError(kind string) error {
+	return fmt.Errorf("Homebrew does not trust %s, so it cannot update Kontext. Run: brew trust %s %s", homebrewFormula, kind, homebrewFormula)
+}
+
+// checkTapTrust asks Homebrew to load the package without trusting it.
+// `brew upgrade` and `brew install` trust a package named in full on their
+// own, so the updater checks first and never trusts on the user's behalf. A
+// package installed before Homebrew 7 is not trusted until the user runs
+// `brew trust`; Homebrew before 7, or HOMEBREW_NO_REQUIRE_TAP_TRUST, loads it.
+func checkTapTrust(ctx context.Context, install homebrewInstall) error {
+	output, err := runBrewWithTimeout(ctx, brewListTimeout, nil, install.brewPath, "info", "--json=v2", install.kind, homebrewFormula)
+	if err != nil && strings.Contains(output, "from untrusted tap") {
+		return tapTrustError(install.kind)
+	}
+	// Any other failure shows up in the upgrade itself.
+	return nil
+}
+
 // checkHomebrewUpgrade refreshes Homebrew's taps, then upgrades kontext. A
 // failed refresh does not stop the upgrade: one broken tap fails `brew update`
 // while every other tap, ours included, still updates. The refresh failure
 // comes back as a notice, so doctor shows it.
 func checkHomebrewUpgrade(ctx context.Context, install homebrewInstall, log diagnostic.Logger) (bool, string, error) {
+	if err := checkTapTrust(ctx, install); err != nil {
+		return false, "", err
+	}
 	notice := ""
 	if _, err := runBrewWithTimeout(ctx, brewUpdateTimeout, []string{"HOMEBREW_AUTO_UPDATE_SECS=" + brewAutoUpdateSecs}, install.brewPath, "update-if-needed"); err != nil {
 		if ctx.Err() != nil {

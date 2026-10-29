@@ -23,12 +23,12 @@ import (
 )
 
 func TestDoctorHomebrewOutdated(t *testing.T) {
-	for _, name := range []string{"outdated", "up to date", "brew error", "brew missing", "not Homebrew"} {
+	for _, name := range []string{"outdated", "up to date", "brew error", "brew missing", "not Homebrew", "untrusted tap"} {
 		t.Run(name, func(t *testing.T) {
 			env := newDoctorTestEnv(t)
 			env.writeDaemonStatus(t, os.Getpid(), "1.2.3")
 			stubHomebrewBuild(t)
-			if name == "not Homebrew" {
+			if name == "not Homebrew" || name == "untrusted tap" {
 				homebrewBuild = func() bool { return false }
 			}
 			if name == "brew missing" {
@@ -37,6 +37,16 @@ func TestDoctorHomebrewOutdated(t *testing.T) {
 			calls := 0
 			runCommand = func(_ context.Context, _ []string, _ string, args ...string) (string, error) {
 				calls++
+				// The trust check only reads; brew info never trusts a package.
+				if args[0] == "info" {
+					if !reflect.DeepEqual(args, []string{"info", "--json=v2", "--formula", homebrewFormula}) {
+						t.Fatalf("trust check = %v", args)
+					}
+					if name == "untrusted tap" {
+						return "Error: Refusing to load formula kontext-security/tap/kontext from untrusted tap kontext-security/tap.", errors.New("exit status 1")
+					}
+					return "{}", nil
+				}
 				if !reflect.DeepEqual(args, []string{"outdated", "--formula", "--json=v2", "kontext"}) {
 					t.Fatalf("doctor must not update or upgrade: %v", args)
 				}
@@ -59,10 +69,11 @@ func TestDoctorHomebrewOutdated(t *testing.T) {
 				t.Fatalf("report warnings = %v", report.Warnings)
 			}
 			want := map[string]string{
-				"brew error":   "Homebrew update: unknown",
-				"brew missing": "auto-update: off (",
-				"not Homebrew": "auto-update: on (tap formula",
-				"outdated":     "auto-update: off (homebrew-core",
+				"brew error":    "Homebrew update: unknown",
+				"brew missing":  "auto-update: off (",
+				"not Homebrew":  "auto-update: on (tap formula",
+				"outdated":      "auto-update: off (homebrew-core",
+				"untrusted tap": "WARNING: Homebrew does not trust kontext-security/tap/kontext, so it cannot update Kontext. Run: brew trust --formula kontext-security/tap/kontext",
 			}[name]
 			if !strings.Contains(out.String(), want) {
 				t.Fatalf("missing %q:\n%s", want, out.String())
@@ -70,9 +81,9 @@ func TestDoctorHomebrewOutdated(t *testing.T) {
 			if (name == "brew error" || name == "brew missing") && !status.Healthy {
 				t.Fatalf("brew failure made doctor unhealthy:\n%s", out.String())
 			}
-			// Only homebrew-core builds ask brew; the tap's own updater reports its saved check.
-			if name == "not Homebrew" && (calls != 0 || strings.Contains(out.String(), warning)) {
-				t.Fatalf("tap build ran brew: calls %d, output %s", calls, out.String())
+			// A tap build asks brew only whether it trusts the tap; its updater reports the rest.
+			if name == "not Homebrew" && (calls != 1 || strings.Contains(out.String(), warning) || strings.Contains(out.String(), "brew trust")) {
+				t.Fatalf("tap build: calls %d, output %s", calls, out.String())
 			}
 		})
 	}

@@ -699,6 +699,7 @@ func printAgentInventory(out io.Writer, inv *agentinventory.Inventory, now time.
 // formula update themselves; homebrew-core does not allow it.
 func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
 	install, ok := currentHomebrewInstall()
+	var trustErr error
 	switch {
 	case !ok:
 		fmt.Fprintf(out, "  auto-update: off (%s is not a Homebrew install under /opt/homebrew or /usr/local)\n", selfExecutablePath())
@@ -711,6 +712,10 @@ func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
 		return
 	default:
 		fmt.Fprintf(out, "  auto-update: on (%s %s, version %s)\n", updateSource(install), homebrewFormula, install.version)
+		// Homebrew 7 refuses updates from a tap the user has not trusted.
+		if trustErr = checkTapTrust(context.Background(), install); trustErr != nil {
+			warn("%v", trustErr)
+		}
 	}
 	// A check another package saved (before a formula-cask switch) is not this one's.
 	state, err := LoadUpdateState()
@@ -719,7 +724,7 @@ func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
 		return
 	}
 	fmt.Fprintf(out, "  last update check: %s\n", state.CheckedAt.Local().Format(time.RFC3339))
-	if state.Error != "" {
+	if state.Error != "" && (trustErr == nil || state.Error != trustErr.Error()) {
 		warn("the last update check failed: %s", state.Error)
 	}
 	// For homebrew-core the outdated check above already printed the notice.
