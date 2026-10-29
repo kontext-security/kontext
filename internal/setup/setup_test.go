@@ -66,7 +66,7 @@ func newHarness(t *testing.T) *harness {
 	overrideVar(t, &executablePath, func() (string, error) { return "/opt/homebrew/bin/kontext", nil })
 	overrideVar(t, &dialSocket, func(string, time.Duration) error { return nil })
 	// Never ask the real launchd.
-	overrideVar(t, &daemonRunning, func() bool { return false })
+	overrideVar(t, &daemonRunning, func(context.Context) (bool, bool) { return false, true })
 	overrideVar(t, &isTerminal, func(int) bool { return false })
 	overrideVar(t, &readPassword, func(int) ([]byte, error) { return nil, errors.New("no tty in tests") })
 	overrideVar(t, &resolveToken, func(_ context.Context, ref managedconfig.TokenRef) (string, error) {
@@ -1632,7 +1632,7 @@ func TestRunWaitsForTheBackgroundAgent(t *testing.T) {
 			h := newHarness(t)
 			allowLoopback(t)
 			overrideVar(t, &daemonStartWait, 6*time.Second)
-			overrideVar(t, &daemonRunning, func() bool { return !tc.exited })
+			overrideVar(t, &daemonRunning, func(context.Context) (bool, bool) { return !tc.exited, true })
 			if tc.upAfter > 100 {
 				daemonStartWait = time.Second
 			}
@@ -1653,5 +1653,34 @@ func TestRunWaitsForTheBackgroundAgent(t *testing.T) {
 				t.Fatalf("stderr warning = %v, want %v:\n%s", got, tc.wantStderr, h.errOut.String())
 			}
 		})
+	}
+}
+
+// A launchctl that hangs ends at its own deadline; setup then reports the agent
+// as still starting instead of waiting on, or calling it stopped.
+func TestRunTreatsAStuckLaunchctlAsStillStarting(t *testing.T) {
+	h := newHarness(t)
+	allowLoopback(t)
+	overrideVar(t, &daemonStartWait, time.Second)
+	overrideVar(t, &launchctlTimeout, 200*time.Millisecond)
+	overrideVar(t, &daemonRunning, launchdDaemonRunning)
+	overrideVar(t, &dialSocket, func(string, time.Duration) error { return errors.New("connection refused") })
+	exec := execCommand
+	overrideVar(t, &execCommand, func(ctx context.Context, stdin, name string, args ...string) (string, error) {
+		if name == "launchctl" && len(args) > 0 && args[0] == "print" && strings.Contains(strings.Join(args, " "), LaunchAgentLabel) && !strings.Contains(strings.Join(args, " "), "LaunchAgents") {
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+		return exec(ctx, stdin, name, args...)
+	})
+	start := time.Now()
+	if err := Run(context.Background(), h.options("tok", pingServer(t, "tok"))); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.out.String(), "Background agent is still starting") || strings.Contains(h.errOut.String(), "background agent") {
+		t.Fatalf("stdout:\n%s\nstderr:\n%s", h.out.String(), h.errOut.String())
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("setup took %s", elapsed)
 	}
 }
