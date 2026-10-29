@@ -72,6 +72,11 @@ minutes after it starts and every six hours, upgrades through Homebrew, and
 restarts on the new version. It installs the notarized binary as is, so it does
 not need an up-to-date Xcode.
 
+Homebrew 7 updates only packages from taps you trust. Installing the cask by its
+full name trusts it. A cask installed before Homebrew 7 is not trusted, and
+Kontext does not trust it for you: `kontext doctor` shows the warning, and you
+run `brew trust --cask kontext-security/tap/kontext` once.
+
 To let Homebrew alone manage updates, install the homebrew-core formula instead.
 It gets each release a few hours later, and you update it with
 `brew upgrade kontext` (Homebrew does not allow formulae to update themselves):
