@@ -471,6 +471,11 @@ func claudeHooksFact(userSettings string) (managedstream.HooksFact, bool) {
 		if path == "" {
 			continue
 		}
+		// A machine-wide file linked into ~/Documents or iCloud would prompt
+		// for folder access in the background.
+		if privacyfolder.Guarded("", path) {
+			return managedstream.HooksFact{}, false
+		}
 		data, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue

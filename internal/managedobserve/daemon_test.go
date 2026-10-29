@@ -27,6 +27,7 @@ import (
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedstream"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
@@ -670,6 +671,32 @@ func TestManagedObserveHooksFact(t *testing.T) {
 
 		if fact, ok := managedObserveHooksFact(managedconfig.ScopeSystem); !ok || !fact.Present || fact.DisabledAllHooks {
 			t.Fatalf("managedObserveHooksFact(managedconfig.ScopeSystem) = %+v, %v; want present", fact, ok)
+		}
+	})
+
+	t.Run("machine file linked into a privacy-guarded folder", func(t *testing.T) {
+		enabled := privacyfolder.Enabled
+		privacyfolder.Enabled = true
+		t.Cleanup(func() { privacyfolder.Enabled = enabled })
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		target := filepath.Join(home, "Documents", "managed-settings.json")
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, template, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		root := filepath.Join(dir, "managed-settings.json")
+		if err := os.Symlink(target, root); err != nil {
+			t.Fatal(err)
+		}
+		swapManagedSettingsPaths(t, filepath.Join(dir, "missing", "20-kontext.json"), root)
+
+		// Reading it from the background would prompt; the fact stays unknown.
+		if _, ok := managedObserveHooksFact(managedconfig.ScopeSystem); ok {
+			t.Fatal("managedObserveHooksFact read a file in a privacy-guarded folder")
 		}
 	})
 

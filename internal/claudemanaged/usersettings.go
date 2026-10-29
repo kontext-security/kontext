@@ -12,6 +12,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 // User-level Claude Code settings (~/.claude/settings.json) integration for
@@ -141,6 +142,10 @@ func kontextHook(group MatcherGroup, handler Handler, event Event) (string, bool
 // so a broken one is noticed.
 func MachineSettingsFiles(dropIn, managedSettings string) []string {
 	files := []string{managedSettings}
+	// Listing a folder linked into ~/Documents or iCloud would prompt for access.
+	if privacyfolder.Guarded("", filepath.Dir(dropIn)) {
+		return append(files, dropIn)
+	}
 	entries, err := os.ReadDir(filepath.Dir(dropIn))
 	if err != nil {
 		return append(files, dropIn)
