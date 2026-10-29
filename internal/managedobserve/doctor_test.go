@@ -755,10 +755,13 @@ func TestDoctorDropsAFixedTrustFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		trusted   bool
+		timeout   bool
 		wantTrust int
 	}{
 		{name: "trusted since the failed check", trusted: true},
 		{name: "still untrusted", wantTrust: 1},
+		// A check that did not answer verified nothing: the saved failure stays.
+		{name: "trust check timed out", timeout: true, wantTrust: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resetUpdaterSeams(t)
@@ -775,8 +778,11 @@ func TestDoctorDropsAFixedTrustFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			runCommand = func(_ context.Context, _ []string, _ string, args ...string) (string, error) {
-				if tc.trusted {
+				switch {
+				case tc.trusted:
 					return "{}", nil
+				case tc.timeout:
+					return "", context.DeadlineExceeded
 				}
 				return "Error: Refusing to load cask kontext-security/tap/kontext from untrusted tap kontext-security/tap.", errors.New("exit status 1")
 			}

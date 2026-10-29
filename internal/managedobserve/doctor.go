@@ -728,9 +728,11 @@ func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
 		return
 	}
 	fmt.Fprintf(out, "  last update check: %s\n", state.CheckedAt.Local().Format(time.RFC3339))
-	// Doctor just checked trust itself: a saved untrusted-tap failure is either
-	// the warning above or fixed since (`brew trust` before the next check).
-	if state.Error != "" && !(trustChecked && strings.HasPrefix(state.Error, untrustedTapPrefix)) {
+	// When doctor's own trust check answered, a saved untrusted-tap failure is
+	// either the warning above or fixed since (`brew trust` before the next
+	// check). A check that failed to answer (a timeout) verified nothing.
+	trustAnswered := trustChecked && (trustErr == nil || strings.HasPrefix(trustErr.Error(), untrustedTapPrefix))
+	if state.Error != "" && !(trustAnswered && strings.HasPrefix(state.Error, untrustedTapPrefix)) {
 		warn("the last update check failed: %s", state.Error)
 	}
 	// For homebrew-core the outdated check above already printed the notice.
