@@ -35,7 +35,7 @@ func TestDoctorHomebrewOutdated(t *testing.T) {
 				statPath = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 			}
 			calls := 0
-			runCommand = func(_ context.Context, _ string, args ...string) (string, error) {
+			runCommand = func(_ context.Context, _ []string, _ string, args ...string) (string, error) {
 				calls++
 				if !reflect.DeepEqual(args, []string{"outdated", "--formula", "--json=v2", "kontext"}) {
 					t.Fatalf("doctor must not update or upgrade: %v", args)
@@ -58,16 +58,21 @@ func TestDoctorHomebrewOutdated(t *testing.T) {
 			if got := strings.Contains(strings.Join(report.Warnings, "\n"), warning); got != wantWarning {
 				t.Fatalf("report warnings = %v", report.Warnings)
 			}
-			if name == "brew error" || name == "brew missing" {
-				if !strings.Contains(out.String(), "Homebrew update: unknown") {
-					t.Fatalf("missing soft result:\n%s", out.String())
-				}
-				if !status.Healthy {
-					t.Fatalf("brew failure made doctor unhealthy:\n%s", out.String())
-				}
+			want := map[string]string{
+				"brew error":   "Homebrew update: unknown",
+				"brew missing": "auto-update: off (",
+				"not Homebrew": "auto-update: on (tap formula",
+				"outdated":     "auto-update: off (homebrew-core",
+			}[name]
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("missing %q:\n%s", want, out.String())
 			}
-			if name == "not Homebrew" && (calls != 0 || strings.Contains(out.String(), "Homebrew update:") || strings.Contains(out.String(), warning)) {
-				t.Fatalf("non-Homebrew build checked Homebrew: calls %d, output %s", calls, out.String())
+			if (name == "brew error" || name == "brew missing") && !status.Healthy {
+				t.Fatalf("brew failure made doctor unhealthy:\n%s", out.String())
+			}
+			// Only homebrew-core builds ask brew; the tap's own updater reports its saved check.
+			if name == "not Homebrew" && (calls != 0 || strings.Contains(out.String(), warning)) {
+				t.Fatalf("tap build ran brew: calls %d, output %s", calls, out.String())
 			}
 		})
 	}

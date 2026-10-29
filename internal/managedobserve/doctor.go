@@ -226,6 +226,9 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	if loaded.Config.AllowHTTPLoopback {
 		fmt.Fprintf(out, "  backend: %s (plaintext http to loopback, allowed by this profile)\n", loaded.Config.CloudURL)
 	}
+	if status.SelfServe && runtimeGOOS == "darwin" {
+		printAutoUpdate(out, warn)
+	}
 	launchAgentPresent := opts.LaunchAgentPresent()
 	repairTargetAvailable = runtime.GOOS == "darwin" && loaded.Scope == managedconfig.ScopeUser && launchAgentPresent
 	if loaded.Scope == managedconfig.ScopeUser && !launchAgentPresent {
@@ -327,6 +330,13 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 			}
 		} else {
 			fmt.Fprintln(out, "  daemon: not running (it starts with your next Claude Code session)")
+		}
+		if exe := selfExecutablePath(); status.SelfServe && quarantineUnapproved(exe) {
+			if install, ok := currentHomebrewInstall(); ok && install.kind == "--cask" {
+				warn("macOS has not approved this Kontext binary, so its background agent cannot start; run `brew reinstall --cask %s`", homebrewFormula)
+			} else {
+				warn("macOS has not approved %s, so its background agent cannot start; allow it under System Settings > Privacy & Security", exe)
+			}
 		}
 		status.Healthy = false
 	}
@@ -683,4 +693,48 @@ func printAgentInventory(out io.Writer, inv *agentinventory.Inventory, now time.
 		incomplete = " (incomplete)"
 	}
 	fmt.Fprintf(out, "  agents: %s — scanned %s ago%s\n", summary, doctorDuration(age), incomplete)
+}
+
+// printAutoUpdate states where updates come from. Only the cask and the tap
+// formula update themselves; homebrew-core does not allow it.
+func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
+	install, ok := currentHomebrewInstall()
+	switch {
+	case !ok:
+		fmt.Fprintf(out, "  auto-update: off (%s is not a Homebrew install under /opt/homebrew or /usr/local)\n", selfExecutablePath())
+		return
+	case homebrewBuild():
+		// The daemon still checks for a newer version and saves the result.
+		fmt.Fprintf(out, "  auto-update: off (homebrew-core; update with `brew upgrade kontext`, or switch to the self-updating cask: `brew uninstall --formula kontext && brew install --cask %s`)\n", homebrewFormula)
+	case strings.TrimSpace(os.Getenv(envNoUpdateCheck)) != "":
+		fmt.Fprintf(out, "  auto-update: off (%s is set)\n", envNoUpdateCheck)
+		return
+	default:
+		fmt.Fprintf(out, "  auto-update: on (%s %s, version %s)\n", updateSource(install), homebrewFormula, install.version)
+	}
+	// A check another package saved (before a formula-cask switch) is not this one's.
+	state, err := LoadUpdateState()
+	if err != nil || state.Source != updateSource(install) {
+		fmt.Fprintln(out, "  last update check: none yet")
+		return
+	}
+	fmt.Fprintf(out, "  last update check: %s\n", state.CheckedAt.Local().Format(time.RFC3339))
+	if state.Error != "" {
+		warn("the last update check failed: %s", state.Error)
+	}
+	// For homebrew-core the outdated check above already printed the notice.
+	if state.Notice != "" && !homebrewBuild() {
+		warn("%s", state.Notice)
+	}
+}
+
+func selfExecutablePath() string {
+	exe, err := executablePath()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := evalSymlinksPath(exe); err == nil {
+		return resolved
+	}
+	return exe
 }

@@ -3,7 +3,6 @@ package managedobserve
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,327 +16,209 @@ import (
 	"github.com/kontext-security/kontext/internal/managedconfig"
 )
 
-func TestHomebrewUpdaterEligibility(t *testing.T) {
-	tests := []struct {
-		name         string
-		goos         string
-		scope        managedconfig.Scope
-		exe          string
-		optBrew      bool
-		intelBrew    bool
-		listErr      error
-		noUpdate     string
-		want         bool
-		wantBrewPath string
-		wantKind     string
-	}{
-		{
-			name:         "user scope brew install enables updater",
-			goos:         "darwin",
-			scope:        managedconfig.ScopeUser,
-			exe:          "/opt/homebrew/Cellar/kontext/1.2.3/bin/kontext",
-			optBrew:      true,
-			want:         true,
-			wantBrewPath: "/opt/homebrew/bin/brew",
-			wantKind:     "--formula",
-		},
-		{
-			name:         "cask install enables updater for the cask",
-			goos:         "darwin",
-			scope:        managedconfig.ScopeUser,
-			exe:          "/opt/homebrew/Caskroom/kontext/1.2.3/kontext",
-			optBrew:      true,
-			want:         true,
-			wantBrewPath: "/opt/homebrew/bin/brew",
-			wantKind:     "--cask",
-		},
-		{
-			name:         "intel brew install uses matching brew path",
-			goos:         "darwin",
-			scope:        managedconfig.ScopeUser,
-			exe:          "/usr/local/Cellar/kontext/1.2.3/bin/kontext",
-			optBrew:      true,
-			intelBrew:    true,
-			want:         true,
-			wantBrewPath: "/usr/local/bin/brew",
-			wantKind:     "--formula",
-		},
-		{
-			name:      "system scope skips updater",
-			goos:      "darwin",
-			scope:     managedconfig.ScopeSystem,
-			exe:       "/opt/homebrew/Cellar/kontext/1.2.3/bin/kontext",
-			optBrew:   true,
-			intelBrew: true,
-			want:      false,
-		},
-		{
-			name:    "non darwin skips updater",
-			goos:    "linux",
-			scope:   managedconfig.ScopeUser,
-			exe:     "/opt/homebrew/Cellar/kontext/1.2.3/bin/kontext",
-			optBrew: true,
-			want:    false,
-		},
-		{
-			name:  "missing brew skips updater",
-			goos:  "darwin",
-			scope: managedconfig.ScopeUser,
-			exe:   "/opt/homebrew/Cellar/kontext/1.2.3/bin/kontext",
-			want:  false,
-		},
-		{
-			name:         "failed brew list skips updater",
-			goos:         "darwin",
-			scope:        managedconfig.ScopeUser,
-			exe:          "/opt/homebrew/Cellar/kontext/1.2.3/bin/kontext",
-			optBrew:      true,
-			listErr:      errors.New("formula missing"),
-			want:         false,
-			wantBrewPath: "/opt/homebrew/bin/brew",
-		},
-		{
-			name:     "no update check env skips updater",
-			goos:     "darwin",
-			scope:    managedconfig.ScopeUser,
-			exe:      "/opt/homebrew/Cellar/kontext/1.2.3/bin/kontext",
-			optBrew:  true,
-			noUpdate: "1",
-			want:     false,
-		},
-		{
-			name:      "non brew executable skips updater",
-			goos:      "darwin",
-			scope:     managedconfig.ScopeUser,
-			exe:       "/usr/local/bin/kontext",
-			optBrew:   true,
-			intelBrew: true,
-			want:      false,
-		},
-	}
+// Ways the updater can fail: run where it must not (organization config,
+// Linux, opted out, a development build), misread the package (cask vs formula,
+// version, prefix), stop on a broken unrelated tap, report a change that did
+// not happen, check on a timer that sleep or restarts reset, or upgrade a
+// homebrew-core install, which Homebrew does not allow.
 
-	for _, tc := range tests {
+func TestHomebrewUpdaterInstall(t *testing.T) {
+	for _, tc := range []struct {
+		name, goos, resolved, optOut string
+		scope                        managedconfig.Scope
+		brew                         bool
+		want                         homebrewInstall
+	}{
+		{name: "cask", goos: "darwin", scope: managedconfig.ScopeUser, brew: true, resolved: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext",
+			want: homebrewInstall{brewPath: "/opt/homebrew/bin/brew", kind: "--cask", version: "1.12.0", link: "/opt/homebrew/bin/kontext"}},
+		{name: "tap formula on Intel", goos: "darwin", scope: managedconfig.ScopeUser, brew: true, resolved: "/usr/local/Cellar/kontext/1.2.3/bin/kontext",
+			want: homebrewInstall{brewPath: "/usr/local/bin/brew", kind: "--formula", version: "1.2.3", link: "/usr/local/bin/kontext"}},
+		{name: "custom prefix", goos: "darwin", scope: managedconfig.ScopeUser, brew: true, resolved: "/tmp/hb/Caskroom/kontext/2.0.0/kontext"},
+		{name: "organization config", goos: "darwin", scope: managedconfig.ScopeSystem, brew: true, resolved: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext"},
+		{name: "linux", goos: "linux", scope: managedconfig.ScopeUser, brew: true, resolved: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext"},
+		{name: "opted out", goos: "darwin", scope: managedconfig.ScopeUser, brew: true, optOut: "1", resolved: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext"},
+		{name: "development build", goos: "darwin", scope: managedconfig.ScopeUser, brew: true, resolved: "/Users/dev/Library/Application Support/KontextManagement/runtime/builds/x/kontext"},
+		{name: "brew missing", goos: "darwin", scope: managedconfig.ScopeUser, resolved: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext"},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resetUpdaterSeams(t)
 			runtimeGOOS = tc.goos
-			executablePath = func() (string, error) { return "/tmp/kontext", nil }
-			evalSymlinksPath = func(string) (string, error) { return tc.exe, nil }
+			t.Setenv(envNoUpdateCheck, tc.optOut)
+			executablePath = func() (string, error) { return "/opt/homebrew/bin/kontext", nil }
+			evalSymlinksPath = func(string) (string, error) { return tc.resolved, nil }
 			statPath = func(path string) (os.FileInfo, error) {
-				if tc.optBrew && path == "/opt/homebrew/bin/brew" {
-					return fakeFileInfo{name: "brew"}, nil
-				}
-				if tc.intelBrew && path == "/usr/local/bin/brew" {
+				if tc.brew && strings.HasSuffix(path, "/bin/brew") {
 					return fakeFileInfo{name: "brew"}, nil
 				}
 				return nil, os.ErrNotExist
 			}
-			var gotBrewPath, gotKind string
-			runCommand = func(_ context.Context, path string, args ...string) (string, error) {
-				if len(args) == 4 && args[0] == "list" && args[2] == "--versions" {
-					gotBrewPath, gotKind = path, args[1]
-					if want := map[string]string{"--formula": homebrewFormula, "--cask": "kontext"}[args[1]]; args[3] != want {
-						t.Fatalf("brew list name = %q, want %q", args[3], want)
-					}
-					if tc.listErr != nil {
-						return "", tc.listErr
-					}
-					return "kontext-security/tap/kontext 1.2.3\n", nil
-				}
-				t.Fatalf("unexpected command args = %v", args)
+			runCommand = func(context.Context, []string, string, ...string) (string, error) {
+				t.Fatal("eligibility must not run brew")
 				return "", nil
 			}
-			if tc.noUpdate != "" {
-				t.Setenv(envNoUpdateCheck, tc.noUpdate)
-			}
-
-			_, got := homebrewUpdaterConfig(context.Background(), managedconfig.LoadedConfig{Scope: tc.scope}, diagnostic.Logger{})
-			if got != tc.want {
-				t.Fatalf("homebrewUpdaterConfig() ok = %v, want %v", got, tc.want)
-			}
-			if gotBrewPath != tc.wantBrewPath {
-				t.Fatalf("brew path = %q, want %q", gotBrewPath, tc.wantBrewPath)
-			}
-			if tc.wantKind != "" && gotKind != tc.wantKind {
-				t.Fatalf("brew kind = %q, want %q", gotKind, tc.wantKind)
+			got, ok := homebrewUpdaterInstall(managedconfig.LoadedConfig{Scope: tc.scope}, diagnostic.Logger{})
+			if got != tc.want || ok != (tc.want != homebrewInstall{}) {
+				t.Fatalf("homebrewUpdaterInstall() = %+v, %v; want %+v", got, ok, tc.want)
 			}
 		})
 	}
 }
 
-var formulaUpdater = homebrewUpdaterConfigValue{brewPath: "/opt/homebrew/bin/brew", kind: "--formula"}
-
-func TestCheckHomebrewUpgradeNoVersionChange(t *testing.T) {
-	resetUpdaterSeams(t)
-	var calls [][]string
-	runCommand = func(_ context.Context, _ string, args ...string) (string, error) {
-		calls = append(calls, append([]string(nil), args...))
-		if args[0] == "list" {
-			return "kontext-security/tap/kontext 1.2.3\n", nil
-		}
-		return "", nil
-	}
-
-	changed, err := checkHomebrewUpgrade(context.Background(), formulaUpdater)
-	if err != nil {
-		t.Fatalf("checkHomebrewUpgrade() error = %v", err)
-	}
-	if changed {
-		t.Fatal("checkHomebrewUpgrade() changed = true, want false")
-	}
-	want := [][]string{
-		{"list", "--formula", "--versions", homebrewFormula},
-		{"update-if-needed"},
-		{"upgrade", "--formula", "--no-ask", homebrewFormula},
-		{"list", "--formula", "--versions", homebrewFormula},
-	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("commands = %#v, want %#v", calls, want)
-	}
-}
-
-func TestHomebrewUpdaterEligibilityHonorsCanceledContext(t *testing.T) {
-	resetUpdaterSeams(t)
-	runtimeGOOS = "darwin"
-	executablePath = func() (string, error) { return "/tmp/kontext", nil }
-	evalSymlinksPath = func(string) (string, error) {
-		return "/opt/homebrew/Cellar/kontext/1.2.3/bin/kontext", nil
-	}
-	statPath = func(path string) (os.FileInfo, error) {
-		if path == "/opt/homebrew/bin/brew" {
-			return fakeFileInfo{name: "brew"}, nil
-		}
-		return nil, os.ErrNotExist
-	}
-	sawCanceledContext := false
-	runCommand = func(ctx context.Context, _ string, args ...string) (string, error) {
-		if !reflect.DeepEqual(args, []string{"list", "--formula", "--versions", homebrewFormula}) {
-			t.Fatalf("unexpected command args = %v", args)
-		}
-		if errors.Is(ctx.Err(), context.Canceled) {
-			sawCanceledContext = true
-		}
-		return "", ctx.Err()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, ok := homebrewUpdaterConfig(ctx, managedconfig.LoadedConfig{Scope: managedconfig.ScopeUser}, diagnostic.Logger{})
-	if ok {
-		t.Fatal("homebrewUpdaterConfig() ok = true, want false after cancellation")
-	}
-	if !sawCanceledContext {
-		t.Fatal("brew list did not receive canceled daemon context")
-	}
-}
-
-func TestCheckHomebrewUpgradeVersionChange(t *testing.T) {
-	resetUpdaterSeams(t)
-	listCalls := 0
-	runCommand = func(_ context.Context, _ string, args ...string) (string, error) {
-		if args[0] != "list" {
-			return "", nil
-		}
-		listCalls++
-		if listCalls == 1 {
-			return "kontext-security/tap/kontext 1.2.3\n", nil
-		}
-		return "kontext-security/tap/kontext 1.2.4\n", nil
-	}
-
-	changed, err := checkHomebrewUpgrade(context.Background(), formulaUpdater)
-	if err != nil {
-		t.Fatalf("checkHomebrewUpgrade() error = %v", err)
-	}
-	if !changed {
-		t.Fatal("checkHomebrewUpgrade() changed = false, want true")
-	}
-}
-
-func TestRunHomebrewUpdaterLogsUpdateFailureAndKeepsRunning(t *testing.T) {
-	resetUpdaterSeams(t)
-	logs := make(chan string, 8)
-	runCommand = func(_ context.Context, _ string, args ...string) (string, error) {
-		if args[0] == "update-if-needed" {
-			return "", errors.New("network down")
-		}
-		return "kontext-security/tap/kontext 1.2.3\n", nil
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	upgraded := make(chan struct{}, 1)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runHomebrewUpdater(ctx, homebrewUpdaterConfigValue{
-			brewPath: "/opt/homebrew/bin/brew",
-			kind:     "--formula",
-			interval: time.Millisecond,
-		}, diagnostic.New(channelWriter{ch: logs}, true), upgraded)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for updater shutdown")
-		}
-	})
-
-	deadline := time.After(time.Second)
-	for {
-		select {
-		case line := <-logs:
-			if !strings.Contains(line, "brew update-if-needed") {
-				continue
+func TestCheckHomebrewUpgrade(t *testing.T) {
+	cask := homebrewInstall{brewPath: "/opt/homebrew/bin/brew", kind: "--cask", version: "1.12.0", link: "/opt/homebrew/bin/kontext"}
+	for _, tc := range []struct {
+		name                 string
+		updateErr, upErr     error
+		after                string
+		wantChanged, wantErr bool
+	}{
+		{name: "new version", after: "/opt/homebrew/Caskroom/kontext/1.17.0/kontext", wantChanged: true},
+		{name: "already current", after: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext"},
+		{name: "broken unrelated tap", updateErr: errors.New("Fetching broken/tap failed"), after: "/opt/homebrew/Caskroom/kontext/1.17.0/kontext", wantChanged: true},
+		{name: "upgrade fails", upErr: errors.New("download failed"), wantErr: true},
+		// Offline after wake: a stale tap shows nothing new, so the check fails and retries within the hour.
+		{name: "refresh fails, nothing to upgrade", updateErr: errors.New("could not resolve host"), after: "/opt/homebrew/Caskroom/kontext/1.12.0/kontext", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetUpdaterSeams(t)
+			var calls []string
+			runCommand = func(ctx context.Context, env []string, _ string, args ...string) (string, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatalf("%v has no timeout", args)
+				}
+				calls = append(calls, strings.Join(env, " ")+" | "+strings.Join(args, " "))
+				if args[0] == "update-if-needed" {
+					return "", tc.updateErr
+				}
+				return "", tc.upErr
 			}
-			select {
-			case <-upgraded:
-				t.Fatal("updater signaled upgrade after update failure")
-			default:
+			evalSymlinksPath = func(string) (string, error) { return tc.after, nil }
+			changed, notice, err := checkHomebrewUpgrade(context.Background(), cask, diagnostic.Logger{})
+			if changed != tc.wantChanged || (err != nil) != tc.wantErr || (notice != "") != (tc.updateErr != nil && !tc.wantErr) {
+				t.Fatalf("checkHomebrewUpgrade() = %v, %q, %v", changed, notice, err)
 			}
-			return
-		case <-deadline:
-			t.Fatal("timed out waiting for updater failure log")
-		}
+			want := []string{
+				"HOMEBREW_AUTO_UPDATE_SECS=" + brewAutoUpdateSecs + " | update-if-needed",
+				"HOMEBREW_NO_AUTO_UPDATE=1 | upgrade --cask --no-ask " + homebrewFormula,
+			}
+			if !reflect.DeepEqual(calls, want) {
+				t.Fatalf("commands = %q, want %q", calls, want)
+			}
+		})
 	}
 }
 
-func TestCheckHomebrewUpgradeUpgradeFailure(t *testing.T) {
+func TestUpdateScheduleUsesTheSavedCheckTime(t *testing.T) {
 	resetUpdaterSeams(t)
-	runCommand = func(_ context.Context, _ string, args ...string) (string, error) {
-		if args[0] == "upgrade" {
-			return "", errors.New("pinned formula")
-		}
-		return "kontext-security/tap/kontext 1.2.3\n", nil
-	}
+	state := filepath.Join(t.TempDir(), "update-check.json")
+	updateStatePath = func() string { return state }
+	firstUpdateCheckDelay, updateWakeInterval = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { firstUpdateCheckDelay, updateWakeInterval = 2*time.Minute, 10*time.Minute })
 
-	changed, err := checkHomebrewUpgrade(context.Background(), formulaUpdater)
-	if err == nil || !strings.Contains(err.Error(), "brew upgrade") {
-		t.Fatalf("checkHomebrewUpgrade() error = %v, want brew upgrade error", err)
+	// A check five hours ago, then a restart: not due yet under a six-hour interval.
+	if err := writeJSONBreadcrumb(state, UpdateState{CheckedAt: time.Now().Add(-5 * time.Hour), Source: "cask"}); err != nil {
+		t.Fatal(err)
 	}
-	if changed {
-		t.Fatal("checkHomebrewUpgrade() changed = true, want false")
-	}
-}
-
-func TestCheckHomebrewUpgradeTimeout(t *testing.T) {
-	resetUpdaterSeams(t)
-	runCommand = func(ctx context.Context, _ string, args ...string) (string, error) {
-		if args[0] == "list" {
-			return "kontext-security/tap/kontext 1.2.3\n", nil
-		}
-		<-ctx.Done()
-		return "", ctx.Err()
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	changed, err := checkHomebrewUpgrade(ctx, formulaUpdater)
-	if err == nil || !strings.Contains(err.Error(), "brew update-if-needed") {
-		t.Fatalf("checkHomebrewUpgrade() error = %v, want update timeout error", err)
+	runUpdateSchedule(ctx, "cask", 6*time.Hour, func(context.Context) (bool, string, error) {
+		t.Fatal("checked before the interval elapsed")
+		return false, "", nil
+	}, diagnostic.Logger{}, make(chan struct{}, 1))
+
+	// A check time ahead of the clock does not hold checks back forever.
+	if err := writeJSONBreadcrumb(state, UpdateState{CheckedAt: time.Now().Add(48 * time.Hour), Source: "cask"}); err != nil {
+		t.Fatal(err)
 	}
-	if changed {
-		t.Fatal("checkHomebrewUpgrade() changed = true, want false")
+	ahead := make(chan struct{}, 1)
+	runUpdateSchedule(context.Background(), "cask", 6*time.Hour, func(context.Context) (bool, string, error) {
+		return true, "", nil
+	}, diagnostic.Logger{}, ahead)
+	if len(ahead) != 1 {
+		t.Fatal("a future check time blocked the check")
+	}
+
+	// A failed check an hour and a half ago is due again, though six hours have not passed.
+	if err := writeJSONBreadcrumb(state, UpdateState{CheckedAt: time.Now().Add(-90 * time.Minute), Source: "cask", Error: "brew upgrade: lock held"}); err != nil {
+		t.Fatal(err)
+	}
+	retried := make(chan struct{}, 1)
+	runUpdateSchedule(context.Background(), "cask", 6*time.Hour, func(context.Context) (bool, string, error) {
+		return true, "", nil
+	}, diagnostic.Logger{}, retried)
+	if len(retried) != 1 {
+		t.Fatal("a failed check was not retried within the hour")
+	}
+
+	// A recent check by the homebrew-core formula before a switch to the cask
+	// does not hold the cask's first check back; an upgrade ends the schedule.
+	if err := writeJSONBreadcrumb(state, UpdateState{CheckedAt: time.Now().Add(-time.Minute), Source: "homebrew-core"}); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := make(chan struct{}, 1)
+	runUpdateSchedule(context.Background(), "cask", 6*time.Hour, func(context.Context) (bool, string, error) {
+		return true, "", nil
+	}, diagnostic.Logger{}, upgraded)
+	select {
+	case <-upgraded:
+	default:
+		t.Fatal("upgrade was not signaled")
+	}
+	saved, err := LoadUpdateState()
+	if err != nil || time.Since(saved.CheckedAt) > time.Minute || saved.Source != "cask" {
+		t.Fatalf("saved state = %+v, %v", saved, err)
+	}
+
+	// A check time that cannot be saved still holds the next check back.
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updateStatePath = func() string { return filepath.Join(blocker, "update-check.json") }
+	checks := 0
+	unsaved, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer stop()
+	runUpdateSchedule(unsaved, "cask", 6*time.Hour, func(context.Context) (bool, string, error) {
+		checks++
+		return false, "", nil
+	}, diagnostic.Logger{}, make(chan struct{}, 1))
+	if checks != 1 {
+		t.Fatalf("ran %d checks while the check time could not be saved, want 1", checks)
+	}
+}
+
+func TestHomebrewCoreNeverUpgrades(t *testing.T) {
+	stubHomebrewBuild(t)
+	state := filepath.Join(t.TempDir(), "update-check.json")
+	updateStatePath = func() string { return state }
+	firstUpdateCheckDelay = time.Millisecond
+	t.Cleanup(func() { firstUpdateCheckDelay = 2 * time.Minute })
+	checked := make(chan []string, 4)
+	runCommand = func(_ context.Context, _ []string, _ string, args ...string) (string, error) {
+		checked <- args
+		if args[0] != "outdated" && args[0] != "update-if-needed" {
+			t.Errorf("homebrew-core build ran brew %v", args)
+		}
+		return `{"formulae":[{"name":"kontext","installed_versions":["1.2.3"],"current_version":"1.2.4"}]}`, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	upgraded := startHomebrewUpdater(ctx, managedconfig.LoadedConfig{Scope: managedconfig.ScopeUser}, diagnostic.Logger{})
+	for _, want := range []string{"update-if-needed", "outdated"} {
+		select {
+		case args := <-checked:
+			if args[0] != want {
+				t.Fatalf("brew call = %v, want %s", args, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no %s call", want)
+		}
+	}
+	cancel()
+	select {
+	case <-upgraded:
+		t.Fatal("homebrew-core build signaled an upgrade")
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 
@@ -346,80 +227,9 @@ func TestDaemonUpdateIntervalFromEnv(t *testing.T) {
 	if got := daemonUpdateInterval(); got != 25*time.Millisecond {
 		t.Fatalf("daemonUpdateInterval() = %s, want 25ms", got)
 	}
-
 	t.Setenv(envDaemonUpdateInterval, "not-a-duration")
 	if got := daemonUpdateInterval(); got != defaultDaemonUpdateInterval {
 		t.Fatalf("daemonUpdateInterval(invalid) = %s, want %s", got, defaultDaemonUpdateInterval)
-	}
-}
-
-func stubHomebrewBuild(t *testing.T) {
-	t.Helper()
-	resetUpdaterSeams(t)
-	homebrewBuild = func() bool { return true }
-	runtimeGOOS = "darwin"
-	executablePath = func() (string, error) { return "/opt/homebrew/bin/kontext", nil }
-	evalSymlinksPath = func(string) (string, error) {
-		return "/opt/homebrew/Cellar/kontext/1.2.3/bin/kontext", nil
-	}
-	statPath = func(string) (os.FileInfo, error) { return fakeFileInfo{name: "brew"}, nil }
-	t.Setenv(envNoUpdateCheck, "")
-}
-
-func TestHomebrewBuildOnlyChecksForUpdates(t *testing.T) {
-	stubHomebrewBuild(t)
-	logs := make(chan string, 16)
-	log := diagnostic.New(channelWriter{ch: logs}, true)
-	_, ok := homebrewUpdaterConfig(context.Background(), managedconfig.LoadedConfig{Scope: managedconfig.ScopeUser}, log)
-	if ok {
-		t.Fatal("Homebrew build configured the upgrader")
-	}
-	if line := <-logs; !strings.Contains(line, "auto-update is disabled") || !strings.Contains(line, "brew upgrade kontext") {
-		t.Fatalf("disabled log = %q", line)
-	}
-	t.Setenv(envDaemonUpdateInterval, "1ms")
-	var calls [][]string
-	runCommand = func(_ context.Context, _ string, args ...string) (string, error) {
-		calls = append(calls, append([]string(nil), args...))
-		switch args[0] {
-		case "update-if-needed":
-			return "", nil
-		case "outdated":
-			return `{"formulae":[{"name":"kontext","installed_versions":["1.2.3"],"current_version":"1.2.4"}],"casks":[]}`, nil
-		default:
-			return "", fmt.Errorf("unexpected command %v", args)
-		}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	cfg, _ := homebrewUpdaterConfig(ctx, managedconfig.LoadedConfig{Scope: managedconfig.ScopeUser}, diagnostic.Logger{})
-	go func() {
-		defer close(done)
-		runHomebrewOutdatedChecker(ctx, cfg, log)
-	}()
-	defer func() { cancel(); <-done }()
-	select {
-	case line := <-logs:
-		if line != "kontext 1.2.3 is outdated; 1.2.4 is available. Run: brew upgrade kontext\n" {
-			t.Fatalf("warning = %q", line)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for outdated warning")
-	}
-	cancel()
-	<-done
-	if len(calls) < 2 {
-		t.Fatalf("commands = %v, want update and outdated", calls)
-	}
-	for i, call := range calls {
-		want := []string{"update-if-needed"}
-		if i%2 == 1 {
-			want = []string{"outdated", "--formula", "--json=v2", "kontext"}
-		}
-		if !reflect.DeepEqual(call, want) {
-			t.Fatalf("command = %v, want %v; Homebrew builds must never upgrade", call, want)
-		}
 	}
 }
 
@@ -439,7 +249,7 @@ func TestHomebrewOutdatedWarning(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			resetUpdaterSeams(t)
-			runCommand = func(ctx context.Context, _ string, args ...string) (string, error) {
+			runCommand = func(ctx context.Context, _ []string, _ string, args ...string) (string, error) {
 				if !reflect.DeepEqual(args, []string{"outdated", "--formula", "--json=v2", "kontext"}) {
 					t.Fatalf("command = %v", args)
 				}
@@ -456,29 +266,6 @@ func TestHomebrewOutdatedWarning(t *testing.T) {
 	}
 }
 
-func TestHomebrewBuildCheckerEligibility(t *testing.T) {
-	for _, name := range []string{"opt out", "system scope", "non darwin", "outside Cellar"} {
-		t.Run(name, func(t *testing.T) {
-			stubHomebrewBuild(t)
-			scope := managedconfig.ScopeUser
-			switch name {
-			case "opt out":
-				t.Setenv(envNoUpdateCheck, "1")
-			case "system scope":
-				scope = managedconfig.ScopeSystem
-			case "non darwin":
-				runtimeGOOS = "linux"
-			case "outside Cellar":
-				evalSymlinksPath = func(string) (string, error) { return "/usr/bin/kontext", nil }
-			}
-			cfg, ok := homebrewUpdaterConfig(context.Background(), managedconfig.LoadedConfig{Scope: scope}, diagnostic.Logger{})
-			if ok || cfg.brewPath != "" {
-				t.Fatalf("ineligible checker configured: %+v, %v", cfg, ok)
-			}
-		})
-	}
-}
-
 func resetUpdaterSeams(t *testing.T) {
 	t.Helper()
 	runtimeGOOS = runtime.GOOS
@@ -487,7 +274,9 @@ func resetUpdaterSeams(t *testing.T) {
 	statPath = os.Stat
 	runCommand = runCommandOutput
 	homebrewBuild = buildinfo.HomebrewBuild
+	statePath := updateStatePath
 	t.Cleanup(func() {
+		updateStatePath = statePath
 		runtimeGOOS = runtime.GOOS
 		executablePath = os.Executable
 		evalSymlinksPath = filepath.EvalSymlinks
@@ -495,6 +284,19 @@ func resetUpdaterSeams(t *testing.T) {
 		runCommand = runCommandOutput
 		homebrewBuild = buildinfo.HomebrewBuild
 	})
+}
+
+func stubHomebrewBuild(t *testing.T) {
+	t.Helper()
+	resetUpdaterSeams(t)
+	homebrewBuild = func() bool { return true }
+	runtimeGOOS = "darwin"
+	executablePath = func() (string, error) { return "/opt/homebrew/bin/kontext", nil }
+	evalSymlinksPath = func(string) (string, error) {
+		return "/opt/homebrew/Cellar/kontext/1.2.3/bin/kontext", nil
+	}
+	statPath = func(string) (os.FileInfo, error) { return fakeFileInfo{name: "brew"}, nil }
+	t.Setenv(envNoUpdateCheck, "")
 }
 
 type fakeFileInfo struct {
@@ -518,4 +320,35 @@ func (w channelWriter) Write(p []byte) (int, error) {
 	default:
 	}
 	return len(p), nil
+}
+
+// A homebrew-core check on a tap it could not refresh saves an error, not a clean result.
+func TestHomebrewCoreRefreshFailureIsSaved(t *testing.T) {
+	stubHomebrewBuild(t)
+	state := filepath.Join(t.TempDir(), "update-check.json")
+	updateStatePath = func() string { return state }
+	firstUpdateCheckDelay = time.Millisecond
+	t.Cleanup(func() { firstUpdateCheckDelay = 2 * time.Minute })
+	runCommand = func(_ context.Context, _ []string, _ string, args ...string) (string, error) {
+		if args[0] == "update-if-needed" {
+			return "", errors.New("could not resolve host")
+		}
+		return `{"formulae":[]}`, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startHomebrewUpdater(ctx, managedconfig.LoadedConfig{Scope: managedconfig.ScopeUser}, diagnostic.Logger{})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if saved, err := LoadUpdateState(); err == nil {
+			if !strings.Contains(saved.Error, "update-if-needed") {
+				t.Fatalf("saved state = %+v, want the refresh failure", saved)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no check saved")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
