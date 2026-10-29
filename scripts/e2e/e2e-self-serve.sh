@@ -186,7 +186,15 @@ for key in ("trustedcasks", "trustedformulae", "trustedtaps"):
     store[key] = [e for e in store.get(key, []) if "kontext" not in e]
 json.dump(store, open(path, "w"), indent=2)
 PY
-brew info --json=v2 --cask kontext-security/tap/kontext >/dev/null 2>&1 && fail "the cask still loads without trust"
+echo "trust store: $trust_file"; cat "$trust_file"; echo
+brew trust --json=v1
+brew --version | head -1
+env | grep -E '^(HOMEBREW|XDG)' || true
+if brew info --json=v2 --cask kontext-security/tap/kontext > "$art/info-untrusted.out" 2>&1; then
+  head -c 400 "$art/info-untrusted.out"; echo
+  fail "the cask still loads without trust"
+fi
+cat "$art/info-untrusted.out"
 brew trust --json=v1 > "$art/trust-untrusted.json"
 "$prefix/bin/kontext" doctor > "$art/doctor-untrusted.txt" 2>&1 || true
 grep -F "trust --cask kontext-security/tap/kontext" "$art/doctor-untrusted.txt" >/dev/null && pass "doctor names the brew trust command for an untrusted cask" || fail "doctor does not name brew trust"
