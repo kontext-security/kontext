@@ -24,7 +24,8 @@ const FactDialectPowerShell = "shell/dialect=powershell"
 // is an expression, so `$GIT push` runs nothing. The tokenizer in script.go
 // reads that much. The words of each call are then classified as a POSIX shell's
 // are, so git, gh, curl and the provider CLIs keep their facts. Cmdlets get
-// no facts of their own.
+// no facts of their own, except the web cmdlets, whose requests are read as
+// curl's (http_clients.go).
 func ProjectPowerShell(command string) []cedareval.ShellProjectionV2 {
 	return withDialect(projectPowerShell(command, walk{}, true))
 }
@@ -68,6 +69,9 @@ func powerShellCalls(command string, w walk, top bool) []cedareval.ShellProjecti
 	statements, nested, reason := scanScript(command, dialectPowerShell)
 	if reason != "" {
 		return scriptParseFailure(reason, command)
+	}
+	if strings.Contains(strings.ToLower(command), "psdefaultparametervalues") {
+		w.cmdletDefaults = true
 	}
 	return projectStatements(statements, nested, dialectPowerShell, w, top)
 }

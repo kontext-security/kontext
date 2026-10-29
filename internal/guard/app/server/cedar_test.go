@@ -166,6 +166,37 @@ func TestCedarPowerShellToolEnforcesShellPolicy(t *testing.T) {
 	}
 }
 
+// The web cmdlets reach the same decision as the curl request they send,
+// through the PowerShell tool: a write is refused, a read is not.
+func TestCedarPowerShellWebCmdletsEnforceGitHubPolicy(t *testing.T) {
+	const repo = "https://api.github.com/repos/acme/app"
+	for _, test := range []struct {
+		command string
+		want    risk.Decision
+	}{
+		{"irm " + repo, risk.DecisionAllow},
+		{"irm -Method Delete " + repo, risk.DecisionDeny},
+		{"irm -Method 5 " + repo, risk.DecisionDeny},
+		{"irm -Method: Delete " + repo, risk.DecisionDeny},
+		{"irm \u2013Method Delete " + repo, risk.DecisionDeny},
+		{"Invoke-WebRequest -CM DELETE -Uri " + repo, risk.DecisionDeny},
+		{"curl -UseB -Meth Delete -- " + repo, risk.DecisionDeny},
+		{"curl -d -Method " + repo, risk.DecisionDeny},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubWritePolicy)
+			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+			decision, err := provider.DecideHook(context.Background(), cedarHookEvent("PowerShell", map[string]any{"command": test.command, "description": "Call the GitHub API"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != test.want {
+				t.Fatalf("decision = %s, want %s; shell evidence %#v", decision.Decision, test.want, decision.Cedar)
+			}
+		})
+	}
+}
+
 func TestCedarCodexShellOnWindowsReadsBothDialects(t *testing.T) {
 	for _, test := range []struct {
 		name, agent, hostOS, command string
@@ -725,6 +756,13 @@ func TestCedarRemoteStaysObserveUnderObserveRollout(t *testing.T) {
 		t.Fatalf("Cedar evidence = %#v, want dry-run observe", decision.Cedar)
 	}
 }
+
+const githubWritePolicy = `@id("allow")
+permit(principal, action == Kontext::Action::"ToolUse", resource);
+
+@id("github-block-writes")
+forbid(principal, action == Kontext::Action::"ToolUse", resource == Kontext::Tool::"shell")
+when { context.shell.facts.contains("github/write=true") };`
 
 const githubForcePushPolicy = `@id("allow")
 permit(principal, action == Kontext::Action::"ToolUse", resource);

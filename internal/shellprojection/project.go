@@ -62,6 +62,12 @@ type walk struct {
 	// expands to exactly one argument: a computed word is then quoted, so
 	// it cannot split into extra options (see classifyCurl).
 	oneArgumentEach bool
+	// cmdlet is set while classifying a PowerShell call that runs a web
+	// cmdlet (see webCmdletCall); elsewhere irm or iwr is any program.
+	cmdlet bool
+	// cmdletDefaults is set in a PowerShell script that touches
+	// $PSDefaultParameterValues, which can change any cmdlet's parameters.
+	cmdletDefaults bool
 }
 
 func project(command string, w walk) []cedareval.ShellProjectionV2 {
@@ -670,6 +676,9 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 	// Case-insensitive file systems (macOS, Windows) run ACLI as acli.
 	program := strings.TrimSuffix(strings.ToLower(filepath.Base(words[0])), ".exe")
 	args := words[1:]
+	if w.cmdlet && webCmdlet(program) {
+		return single(classifyHTTPClient(program, args, complete && w.oneArgumentEach, !wordsComplete && wrapperComplete && w.oneArgumentEach, w.stdin))
+	}
 	switch program {
 	case "git":
 		return single(classifyGit(args, complete))
@@ -677,7 +686,7 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 		return single(classifyGH(args, complete, helpAllowed))
 	case "curl":
 		return single(classifyCurl(args, complete, !wordsComplete && wrapperComplete && w.oneArgumentEach, true))
-	case "wget", "http", "https", "invoke-restmethod", "invoke-webrequest", "irm", "iwr":
+	case "wget", "http", "https":
 		return single(classifyHTTPClient(program, args, complete && w.oneArgumentEach, !wordsComplete && wrapperComplete && w.oneArgumentEach, w.stdin))
 	case "acli":
 		return single(acliCLI.classify(args, complete))
