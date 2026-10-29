@@ -73,7 +73,7 @@ func TestDoctorHomebrewOutdated(t *testing.T) {
 				"brew missing":  "auto-update: off (",
 				"not Homebrew":  "auto-update: on (tap formula",
 				"outdated":      "auto-update: off (homebrew-core",
-				"untrusted tap": "WARNING: Homebrew does not trust kontext-security/tap/kontext, so it cannot update Kontext. Run: brew trust --formula kontext-security/tap/kontext",
+				"untrusted tap": "WARNING: Homebrew does not trust kontext-security/tap/kontext, so it cannot update Kontext. Run: /opt/homebrew/bin/brew trust --formula kontext-security/tap/kontext",
 			}[name]
 			if !strings.Contains(out.String(), want) {
 				t.Fatalf("missing %q:\n%s", want, out.String())

@@ -120,7 +120,7 @@ func TestCheckHomebrewUpgrade(t *testing.T) {
 				want = want[:2]
 			}
 			if tc.untrusted {
-				if err == nil || !strings.Contains(err.Error(), "Run: brew trust --cask "+homebrewFormula) {
+				if err == nil || !strings.Contains(err.Error(), "Run: /opt/homebrew/bin/brew trust --cask "+homebrewFormula) {
 					t.Fatalf("error = %v, want the brew trust command", err)
 				}
 			}

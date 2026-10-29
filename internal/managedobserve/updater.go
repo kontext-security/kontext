@@ -226,9 +226,10 @@ func homebrewOutdatedWarning(ctx context.Context, brewPath string) (string, erro
 }
 
 // tapTrustError reports that Homebrew 7 or later does not trust Kontext's tap
-// package, with the command that trusts it.
-func tapTrustError(kind string) error {
-	return fmt.Errorf("Homebrew does not trust %s, so it cannot update Kontext. Run: brew trust %s %s", homebrewFormula, kind, homebrewFormula)
+// package, with the command that trusts it in the Homebrew that installed it
+// (a Mac can have both /opt/homebrew and /usr/local).
+func tapTrustError(install homebrewInstall) error {
+	return fmt.Errorf("Homebrew does not trust %s, so it cannot update Kontext. Run: %s trust %s %s", homebrewFormula, install.brewPath, install.kind, homebrewFormula)
 }
 
 // checkTapTrust asks Homebrew to load the package without trusting it.
@@ -239,7 +240,7 @@ func tapTrustError(kind string) error {
 func checkTapTrust(ctx context.Context, install homebrewInstall) error {
 	output, err := runBrewWithTimeout(ctx, brewListTimeout, nil, install.brewPath, "info", "--json=v2", install.kind, homebrewFormula)
 	if err != nil && strings.Contains(output, "from untrusted tap") {
-		return tapTrustError(install.kind)
+		return tapTrustError(install)
 	}
 	// Any other failure (a timeout before brew printed the refusal) fails
 	// closed: the upgrade would trust the package.

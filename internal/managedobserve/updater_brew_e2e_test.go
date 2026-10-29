@@ -25,10 +25,15 @@ func TestBrewTapTrustE2E(t *testing.T) {
 	}
 	resetUpdaterSeams(t)
 	executablePath = func() (string, error) { return "/opt/homebrew/bin/kontext", nil }
-	// Leave the Mac's taps as they are: skip the refresh, run every other brew call for real.
+	// Leave the Mac's taps as they are: skip the refresh, run every other brew
+	// call for real, and never let an upgrade through, even if the trust check
+	// passes (HOMEBREW_NO_REQUIRE_TAP_TRUST, Homebrew before 7).
 	runCommand = func(ctx context.Context, env []string, path string, args ...string) (string, error) {
-		if args[0] == "update-if-needed" {
+		switch args[0] {
+		case "update-if-needed":
 			return "", nil
+		case "upgrade":
+			t.Fatalf("the test reached brew upgrade: %v", args)
 		}
 		return runCommandOutput(ctx, env, path, args...)
 	}
@@ -51,7 +56,7 @@ func TestBrewTapTrustE2E(t *testing.T) {
 	// Empty trust store, as for a cask installed before Homebrew 7.
 	changed, _, err := checkHomebrewUpgrade(context.Background(), install, diagnostic.Logger{})
 	t.Logf("untrusted: changed=%v err=%v", changed, err)
-	if changed || err == nil || !strings.Contains(err.Error(), "Run: brew trust --cask kontext-security/tap/kontext") {
+	if changed || err == nil || !strings.Contains(err.Error(), "Run: "+install.brewPath+" trust --cask kontext-security/tap/kontext") {
 		t.Fatalf("untrusted cask: changed=%v err=%v, want the brew trust command", changed, err)
 	}
 	if _, statErr := os.Stat(trustFile); !os.IsNotExist(statErr) {
