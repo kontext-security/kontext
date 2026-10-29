@@ -305,8 +305,9 @@ func TestRunFullFlow(t *testing.T) {
 	if strings.Contains(stdout, "Start a Claude Code session") {
 		t.Fatalf("stdout still uses old ending:\n%s", stdout)
 	}
-	if errOut := h.errOut.String(); !strings.Contains(errOut, "Codex hooks require review") || !strings.Contains(errOut, "/hooks") {
-		t.Fatalf("stderr missing Codex /hooks trust review note:\n%s", errOut)
+	// Fresh Codex hooks are not trusted yet, so setup says how to trust them.
+	if !strings.Contains(stdout, codexTrustHint) {
+		t.Fatalf("stdout missing the Codex /hooks trust hint:\n%s", stdout)
 	}
 
 	// The raw token never travels in argv — only via `security -i` stdin.

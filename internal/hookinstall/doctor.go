@@ -226,6 +226,17 @@ func diagnoseCodexHooks(out io.Writer, preferred, other string) bool {
 			continue
 		}
 		fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", layer.Path, layer.Binary)
+		// Codex skips a user hook the user has not trusted in the Codex CLI's
+		// /hooks; the trust lives in config.toml next to hooks.json.
+		if layer.Path != codexmanaged.SystemHooksPath {
+			untrusted, err := codexmanaged.UntrustedHooks(layer.Path, filepath.Join(filepath.Dir(layer.Path), "config.toml"))
+			switch {
+			case err != nil:
+				fmt.Fprintf(out, "Codex hook trust: unknown (%v)\n", err)
+			case len(untrusted) > 0:
+				fmt.Fprintf(out, "Codex hooks: not trusted in Codex (%s); Codex skips them until you run `codex`, open /hooks and trust each Kontext hook\n", strings.Join(untrusted, ", "))
+			}
+		}
 		if binary == "" {
 			binary = layer.Binary
 		} else if layer.Binary != binary {
