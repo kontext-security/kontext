@@ -102,6 +102,11 @@ render_cask() { # version -> stdout: the real cask template, pointed at the loca
     | sed "s|https://github.com/kontext-security/kontext/releases/download/v#{version}/kontext_#{version}_darwin_[a-z0-9]*.tar.gz|file://$art/dist/kontext_#{version}_darwin_$arch.tar.gz|"
 }
 
+step "Homebrew 7, as on a current Mac (runner images can still carry Homebrew 6, which does not require tap trust)"
+brew_major() { brew --version | head -1 | awk '{print $2}' | cut -d. -f1; }
+[ "$(brew_major)" -ge 7 ] || brew update
+[ "$(brew_major)" -ge 7 ] && pass "$(brew --version | head -1)" || fail "$(brew --version | head -1); the trust checks need Homebrew 7"
+
 step "A0. Install the last release's cask and run its setup"
 brew tap kontext-security/tap
 tap="$(brew --repo kontext-security/tap)"
@@ -186,12 +191,7 @@ for key in ("trustedcasks", "trustedformulae", "trustedtaps"):
     store[key] = [e for e in store.get(key, []) if "kontext" not in e]
 json.dump(store, open(path, "w"), indent=2)
 PY
-echo "trust store: $trust_file"; cat "$trust_file"; echo
-brew trust --json=v1
-brew --version | head -1
-env | grep -E '^(HOMEBREW|XDG)' || true
 if brew info --json=v2 --cask kontext-security/tap/kontext > "$art/info-untrusted.out" 2>&1; then
-  head -c 400 "$art/info-untrusted.out"; echo
   fail "the cask still loads without trust"
 fi
 cat "$art/info-untrusted.out"
