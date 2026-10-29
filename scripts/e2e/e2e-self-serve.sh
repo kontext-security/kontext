@@ -173,8 +173,20 @@ recheck() { rm -f "$state"; launchctl kickstart -k "gui/$uid/$label"; } # a fres
 
 step "B0. Homebrew 7 trust: a cask installed before Homebrew 7 is not trusted, and Kontext never trusts it"
 brew trust --json=v1
-brew untrust --cask kontext-security/tap/kontext
-brew info --json=v2 --cask kontext-security/tap/kontext >/dev/null 2>&1 && fail "the cask still loads after brew untrust"
+# Installs and upgrades by full name trusted the cask, by name and, through the
+# local tap remote, by URL. Drop every Kontext entry, as on a Mac that installed
+# the cask before Homebrew 7.
+trust_file="${XDG_CONFIG_HOME:+$XDG_CONFIG_HOME/homebrew/trust.json}"
+trust_file="${trust_file:-$HOME/.homebrew/trust.json}"
+python3 - "$trust_file" <<'PY'
+import json, sys
+path = sys.argv[1]
+store = json.load(open(path))
+for key in ("trustedcasks", "trustedformulae", "trustedtaps"):
+    store[key] = [e for e in store.get(key, []) if "kontext" not in e]
+json.dump(store, open(path, "w"), indent=2)
+PY
+brew info --json=v2 --cask kontext-security/tap/kontext >/dev/null 2>&1 && fail "the cask still loads without trust"
 brew trust --json=v1 > "$art/trust-untrusted.json"
 "$prefix/bin/kontext" doctor > "$art/doctor-untrusted.txt" 2>&1 || true
 grep -F "trust --cask kontext-security/tap/kontext" "$art/doctor-untrusted.txt" >/dev/null && pass "doctor names the brew trust command for an untrusted cask" || fail "doctor does not name brew trust"
