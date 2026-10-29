@@ -12,9 +12,11 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 func TestAgentInventoryRefresh(t *testing.T) {
@@ -282,5 +284,28 @@ func TestAgentWiringCodexLayers(t *testing.T) {
 				t.Fatalf("wired=%s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// The background scan never stats a hook binary in a privacy-guarded folder.
+func TestCursorWiredSkipsGuardedBinaries(t *testing.T) {
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settings := map[string]any{}
+	if err := cursormanaged.MergeManagedHooks(settings, filepath.Join(home, "Downloads", "kontext")); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(settings)
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".cursor", "hooks.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := cursorWired(managedconfig.ScopeUser); got != agentinventory.WiredError {
+		t.Fatalf("cursorWired = %v, want %v for a binary in ~/Downloads", got, agentinventory.WiredError)
 	}
 }

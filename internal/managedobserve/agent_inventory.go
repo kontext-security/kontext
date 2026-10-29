@@ -68,9 +68,8 @@ func agentWiring(paths codexmanaged.InstallationPaths, pathsErr error, scope man
 // cursorWired reports whether Cursor's machine-wide hooks.json, or for a
 // self-serve install the user's, carries the complete Kontext hook set.
 func cursorWired(scope managedconfig.Scope) agentinventory.Wired {
-	state := cursorFileWired(cursormanaged.SystemHooksPath)
-	if state == agentinventory.WiredYes || scope != managedconfig.ScopeUser {
-		return state
+	if scope != managedconfig.ScopeUser {
+		return cursorFileWired(cursormanaged.SystemHooksPath)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -92,6 +91,9 @@ func cursorWired(scope managedconfig.Scope) agentinventory.Wired {
 			return agentinventory.WiredError
 		}
 		for event, binary := range cursormanaged.Coverage(raw) {
+			if privacyfolder.Guarded(home, binary) {
+				return agentinventory.WiredError
+			}
 			if info, err := os.Stat(binary); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
 				covered[event] = true
 			}
