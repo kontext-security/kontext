@@ -29,8 +29,9 @@ func TestLoadInventoryOnEmptyMachine(t *testing.T) {
 	}
 }
 
-// A pre-profile install must be reported as such, so `ls` can point the user at
-// `profile migrate` instead of claiming there is nothing here.
+// An install without profiles is what setup writes for one workspace: `ls`
+// names it plainly and says how a second profile is added, instead of claiming
+// there is nothing here.
 func TestLoadInventoryDetectsLegacyInstall(t *testing.T) {
 	h := profileHarness(t)
 	if err := Run(context.Background(), h.options("kt_legacy", pingServer(t, "kt_legacy"))); err != nil {
@@ -243,8 +244,8 @@ func TestInventoryWriteTextPointsLegacyInstallAtMigrate(t *testing.T) {
 	if err := inventory.WriteText(&buf); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "kontext profile migrate") {
-		t.Errorf("legacy listing does not mention migrate:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "one workspace") || !strings.Contains(buf.String(), "kontext profile add") || strings.Contains(buf.String(), "predates") {
+		t.Errorf("unprofiled listing:\n%s", buf.String())
 	}
 }
 

@@ -65,6 +65,8 @@ func newHarness(t *testing.T) *harness {
 	overrideVar(t, &geteuid, func() int { return 501 })
 	overrideVar(t, &executablePath, func() (string, error) { return "/opt/homebrew/bin/kontext", nil })
 	overrideVar(t, &dialSocket, func(string, time.Duration) error { return nil })
+	// Never ask the real launchd; a test whose dial fails stops after the grace period.
+	overrideVar(t, &daemonRunning, func() bool { return false })
 	overrideVar(t, &isTerminal, func(int) bool { return false })
 	overrideVar(t, &readPassword, func(int) ([]byte, error) { return nil, errors.New("no tty in tests") })
 	overrideVar(t, &resolveToken, func(_ context.Context, ref managedconfig.TokenRef) (string, error) {
@@ -1612,19 +1614,25 @@ func TestRunKeepsCodexTrustAndSkipsTheHint(t *testing.T) {
 // still not up, reports it as progress rather than a warning.
 func TestRunWaitsForTheBackgroundAgent(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		upAfter  int
-		wantLine string
+		name       string
+		upAfter    int
+		exited     bool
+		wantLine   string
+		wantStderr bool
 	}{
 		// The old six tries (about three seconds) gave up on an agent like this one.
 		{name: "up after four seconds", upAfter: 8, wantLine: "  ✓ Background agent running"},
 		{name: "still starting", upAfter: 1 << 30, wantLine: "  • Background agent is still starting; `kontext doctor` shows when it runs"},
+		// A process that exited cannot start by waiting: setup says so at once.
+		{name: "process exited", upAfter: 1 << 30, exited: true, wantLine: "  ! Background agent did not start", wantStderr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
 			allowLoopback(t)
 			overrideVar(t, &daemonStartWait, 6*time.Second)
-			if tc.upAfter > 100 {
+			overrideVar(t, &daemonExitGrace, 500*time.Millisecond)
+			overrideVar(t, &daemonRunning, func() bool { return !tc.exited })
+			if tc.upAfter > 100 && !tc.exited {
 				daemonStartWait = time.Second
 			}
 			tries := 0
@@ -1640,8 +1648,8 @@ func TestRunWaitsForTheBackgroundAgent(t *testing.T) {
 			if !strings.Contains(h.out.String(), tc.wantLine) {
 				t.Fatalf("stdout missing %q:\n%s", tc.wantLine, h.out.String())
 			}
-			if strings.Contains(h.errOut.String(), "background agent") {
-				t.Fatalf("stderr warns about the background agent:\n%s", h.errOut.String())
+			if got := strings.Contains(h.errOut.String(), "background agent"); got != tc.wantStderr {
+				t.Fatalf("stderr warning = %v, want %v:\n%s", got, tc.wantStderr, h.errOut.String())
 			}
 		})
 	}
