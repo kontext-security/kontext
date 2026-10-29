@@ -38,6 +38,9 @@ func Diagnose(out io.Writer, scope Scope, home string) bool {
 		otherHooks = filepath.Join(filepath.Dir(userConfig), "hooks.json")
 	}
 	healthy := diagnose(out, scope, defs, func(agent string) bool { return AgentPresent(agent, home) }, userConfig, otherHooks)
+	if scope == User {
+		fmt.Fprintln(out, "Hook repair: with a Homebrew install, the background agent restores removed Kontext hooks within a minute; `kontext setup --uninstall` switches Kontext off")
+	}
 	if AgentPresent("claude_code", home) {
 		userPath, err := claudemanaged.UserSettingsPathNoCreate(home)
 		if err != nil {

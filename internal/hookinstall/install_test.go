@@ -929,3 +929,20 @@ func TestUserInstallSkipsGuardedMachineFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The daemon repairs the files setup wrote, which ignores CODEX_HOME.
+func TestSetupPathsIgnoreCodexHome(t *testing.T) {
+	opts, _ := fixture(t, User)
+	opts.Home, opts.SetupPaths = t.TempDir(), true
+	other := t.TempDir()
+	t.Setenv("CODEX_HOME", other)
+	if err := Install(opts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(opts.Home, ".codex", "hooks.json")); err != nil {
+		t.Fatalf("~/.codex/hooks.json not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(other, "hooks.json")); !os.IsNotExist(err) {
+		t.Fatalf("wrote into CODEX_HOME: %v", err)
+	}
+}

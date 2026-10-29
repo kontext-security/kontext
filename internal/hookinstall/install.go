@@ -48,6 +48,12 @@ func Definitions(scope Scope, home string) ([]Definition, error) {
 	return definitions(scope, home, os.Getenv("CODEX_HOME"))
 }
 
+// SetupDefinitions lists the files setup and Options.SetupPaths write:
+// Codex's under ~/.codex whatever CODEX_HOME says.
+func SetupDefinitions(scope Scope, home string) ([]Definition, error) {
+	return definitions(scope, home, "")
+}
+
 func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 	if scope != User && scope != System {
 		return nil, fmt.Errorf("invalid scope %q: want user or system", scope)
@@ -169,6 +175,15 @@ type Options struct {
 	WriteSystem  func(path string, data []byte, unchanged func() error) error
 	RemoveSystem func(path string, unchanged func() error) error
 	Report       func(Result)
+	// Skip leaves a file out entirely, e.g. one the caller must not read.
+	Skip func(File) bool
+	// NoBackup skips the timestamped backup before a change. The daemon's
+	// repairs only re-add Kontext's own entries; a backup per repair would
+	// pile up while something keeps removing them.
+	NoBackup bool
+	// SetupPaths writes the files setup wrote, ~/.codex even when CODEX_HOME
+	// is set, without setup's other behavior.
+	SetupPaths bool
 }
 
 type change struct {
@@ -184,7 +199,7 @@ func run(opts Options, remove bool) error {
 	codexHome := os.Getenv("CODEX_HOME")
 	// Setup historically writes ~/.codex regardless of CODEX_HOME. Preserve
 	// existing self-serve paths while the explicit commands follow Codex.
-	if opts.Setup {
+	if opts.Setup || opts.SetupPaths {
 		codexHome = ""
 	}
 	defs, err := definitions(opts.Scope, opts.Home, codexHome)
@@ -204,6 +219,9 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 	var changes []change
 	for _, def := range defs {
 		for _, file := range def.Files {
+			if opts.Skip != nil && opts.Skip(file) {
+				continue
+			}
 			if file.Kind == "claude" && opts.ClaudePath != "" {
 				file.Path = opts.ClaudePath
 			}
@@ -424,7 +442,7 @@ func apply(c change, opts Options) error {
 	if err := os.MkdirAll(filepath.Dir(file.Path), 0755); err != nil {
 		return err
 	}
-	if file.Kind != "claude" {
+	if file.Kind != "claude" && !opts.NoBackup {
 		if err := agenthooks.BackupFile(file.Path, BackupLabel); err != nil {
 			return err
 		}

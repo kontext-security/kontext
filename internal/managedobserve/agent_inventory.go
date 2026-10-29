@@ -135,10 +135,21 @@ func cursorFileWired(path string) agentinventory.Wired {
 }
 
 type agentInventoryHolder struct {
-	scope     managedconfig.Scope
-	mu        sync.RWMutex
-	inventory agentinventory.Inventory
-	present   bool
+	scope managedconfig.Scope
+	// rescan wakes the scan loop early, e.g. after hook files change;
+	// afterRescan then runs, so reports built on the scan follow too.
+	rescan      chan struct{}
+	afterRescan func()
+	mu          sync.RWMutex
+	inventory   agentinventory.Inventory
+	present     bool
+}
+
+func (h *agentInventoryHolder) requestRescan() {
+	select {
+	case h.rescan <- struct{}{}:
+	default:
+	}
 }
 
 // Fact returns immutable scan data; each refresh replaces the whole value.
@@ -162,7 +173,7 @@ func (h *agentInventoryHolder) run(ctx context.Context, opts DaemonOptions, dbPa
 		close(ready)
 		return
 	}
-	first := true
+	first, rescanned := true, false
 	for {
 		started := time.Now()
 		scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -189,11 +200,18 @@ func (h *agentInventoryHolder) run(ctx context.Context, opts DaemonOptions, dbPa
 			close(ready)
 			first = false
 		}
+		if rescanned && h.afterRescan != nil && ctx.Err() == nil {
+			h.afterRescan()
+		}
+		rescanned = false
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-h.rescan:
+			timer.Stop()
+			rescanned = true
 		case <-timer.C:
 		}
 	}

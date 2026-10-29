@@ -1342,3 +1342,89 @@ func TestLegacySelfServeCoworkStartsWithAnOlderDropIn(t *testing.T) {
 		t.Fatal("ignored administrator's disabled hooks")
 	}
 }
+
+// Self-heal writes hook files; an organization-managed config must never reach
+// it, whatever files exist on disk.
+func TestHookHealerNeverRunsForOrganizationConfig(t *testing.T) {
+	if heal := selfServeHookHealer(managedconfig.LoadedConfig{Scope: managedconfig.ScopeSystem}, diagnostic.Logger{}); heal != nil {
+		t.Fatal("organization-managed config got a hook healer")
+	}
+}
+
+// An edit that keeps a hook file's size and time still triggers a rescan.
+func TestHookFilesFingerprintSeesSameSizeEdits(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	// A relative CODEX_HOME is invalid, but must not hide the other agents' files.
+	t.Setenv("CODEX_HOME", "relative/codex")
+	swapManagedSettingsPaths(t, filepath.Join(home, "missing", "20-kontext.json"), filepath.Join(home, "missing", "managed-settings.json"))
+	settings := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"a":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(settings, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	before := hookFilesFingerprint()
+	if err := os.WriteFile(settings, []byte(`{"b":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(settings, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if hookFilesFingerprint() == before {
+		t.Fatal("same-size edit with the old timestamp left the fingerprint unchanged")
+	}
+}
+
+// The fingerprint never follows a machine-wide Claude file into a guarded folder.
+func TestHookFilesFingerprintSkipsGuardedMachineFiles(t *testing.T) {
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	target := filepath.Join(home, "Documents", "managed-settings.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	root := filepath.Join(dir, "managed-settings.json")
+	if err := os.Symlink(target, root); err != nil {
+		t.Fatal(err)
+	}
+	swapManagedSettingsPaths(t, filepath.Join(dir, "missing", "20-kontext.json"), root)
+	if strings.Contains(hookFilesFingerprint(), root) {
+		t.Fatal("fingerprint read a machine-wide file linked into ~/Documents")
+	}
+}
+
+// Hooks the explicit command wrote under an absolute CODEX_HOME are watched too.
+func TestHookFilesFingerprintWatchesCodexHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	codexHome := filepath.Join(home, "codex-elsewhere")
+	t.Setenv("CODEX_HOME", codexHome)
+	swapManagedSettingsPaths(t, filepath.Join(home, "missing", "20-kontext.json"), filepath.Join(home, "missing", "managed-settings.json"))
+	before := hookFilesFingerprint()
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "hooks.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if hookFilesFingerprint() == before {
+		t.Fatal("a hooks file under CODEX_HOME left the fingerprint unchanged")
+	}
+}
