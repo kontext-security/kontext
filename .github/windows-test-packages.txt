@@ -1,0 +1,38 @@
+# Packages whose tests pass natively on Windows; CI's verify-windows job runs exactly these.
+# A package joins when its Windows failures are fixed. When every package passes, this file goes
+# and the job runs ./... (ENG-817). Measured on Windows 11 x64, Go 1.26.10, 2026-10-27.
+./cmd/kontext
+./internal/agent
+./internal/agent/claude
+./internal/agent/codex
+./internal/buildinfo
+./internal/cedareval
+./internal/cedarpolicy
+./internal/cloudhttp
+./internal/deviceid
+./internal/diagnostic
+./internal/endpointconfig
+./internal/fsperm
+./internal/guard/cli
+./internal/guard/hookruntime
+./internal/guard/risk
+./internal/guard/riskclassifier
+./internal/guard/stepsafety
+./internal/hermetic
+./internal/hook
+./internal/hookcmd
+./internal/hookruntime
+./internal/installation
+./internal/ledgerfact
+./internal/ledgerping
+./internal/localruntime
+./internal/managedstream
+./internal/modelusage
+./internal/payloadcapture
+./internal/privacyfolder
+./internal/runtimecore
+./internal/shellprojection
+./internal/toolcatalog
+./pkg/agentauthority/readers
+./scripts/cost-register-codex
+./scripts/toolcatalog-refresh

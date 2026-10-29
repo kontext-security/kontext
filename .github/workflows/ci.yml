@@ -85,3 +85,31 @@ jobs:
           go build -o ./bin/kontext ./cmd/kontext
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck -mode=binary ./bin/kontext
+
+  # Native Windows tests for the packages that already pass there, so they
+  # cannot regress unseen. Not a required check yet; the list grows as the
+  # Windows port fixes packages (.github/windows-test-packages.txt).
+  verify-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test the packages that pass on Windows
+        shell: bash
+        run: grep -v '^#' .github/windows-test-packages.txt | xargs go test -count=1
+
+      # Windows-specific tests in packages that do not pass as a whole yet; they
+      # move into the list above with their package.
+      - name: Test the Windows-specific tests of the other packages
+        shell: bash
+        run: |
+          go test -count=1 -run '^(TestGuardedInfoStartsAtTheVolume|TestGuardedInfoRefusesAFlaggedRoot|TestStatRefusesJunctionAndPlaceholderAncestors|TestReadGuardedFailsClosed|TestDatalessRecallAttributes)$' ./pkg/agentauthority/
+          go test -count=1 -run '^(TestDefaultSocketPathListensUnderLocalAppData|TestEnsureSocketDirRefusesPathsWindowsCannotBind|TestEnsureSocketDirSetsOwnerOnlyDACL|TestEnsureSocketDirRejectsNonDirectoryParent|TestEnsureSocketDirRejectsSymlinkParent)$' ./internal/managedobserve/

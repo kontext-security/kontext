@@ -3,6 +3,7 @@ package privacyfolder
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/hermetic"
@@ -11,6 +12,11 @@ import (
 // Every way a path can land in a guarded folder, and the near misses that
 // must stay readable. Links are resolved by reading them, never their target.
 func TestGuarded(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The guard is macOS's and reads paths as /-separated; Linux runs
+		// these cases too, but Windows paths do not fit them.
+		t.Skip("the macOS privacy-folder guard does not read Windows paths")
+	}
 	enabled := Enabled
 	Enabled = true
 	t.Cleanup(func() { Enabled = enabled })
@@ -68,8 +74,16 @@ func TestGuarded(t *testing.T) {
 	if !Guarded("/Volumes/HomeDisk/alice", "/Volumes/USB/app/.mcp.json") {
 		t.Error("Guarded() allowed another volume next to an external home")
 	}
+}
 
+func TestGuardedOffMacOS(t *testing.T) {
+	if want := runtime.GOOS == "darwin"; Enabled != want {
+		t.Fatalf("Enabled = %v on %s, want %v", Enabled, runtime.GOOS, want)
+	}
+	enabled := Enabled
 	Enabled = false
+	t.Cleanup(func() { Enabled = enabled })
+	home := t.TempDir()
 	if Guarded(home, filepath.Join(home, "Documents", "x")) {
 		t.Error("Guarded() off macOS")
 	}
