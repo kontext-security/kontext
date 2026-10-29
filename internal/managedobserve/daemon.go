@@ -459,11 +459,13 @@ func machineClaudeHooksFact() (managedstream.HooksFact, bool) {
 }
 
 // claudeHooksFact merges the events each source covers, as Claude merges hooks
-// across its settings. disableAllHooks in managed settings switches off every
-// source; in the user's settings it switches off only the user's hooks.
+// across its settings. disableAllHooks in managed settings, as the last
+// machine-wide value leaves it, switches off every source; in the user's
+// settings it switches off only the user's hooks.
 func claudeHooksFact(userSettings string) (managedstream.HooksFact, bool) {
 	covered := map[string]bool{}
-	managedDisabled, userDisabled := false, false
+	var machine [][]byte
+	userDisabled := false
 	paths := append(claudemanaged.MachineSettingsFiles(managedSettingsDropInPath, managedSettingsFilePath), userSettings)
 	for _, path := range paths {
 		if path == "" {
@@ -479,18 +481,20 @@ func claudeHooksFact(userSettings string) (managedstream.HooksFact, bool) {
 		if err != nil {
 			continue // another product's drop-in Claude cannot read either
 		}
-		if claudemanaged.DisablesAllHooks(data) {
-			if path == userSettings {
+		if path == userSettings {
+			if claudemanaged.DisablesAllHooks(data) {
 				userDisabled = true
 				continue
 			}
-			managedDisabled = true
+		} else {
+			machine = append(machine, data)
 		}
 		// Hooks that name a binary an upgrade or uninstall removed cannot run.
 		for event := range claudemanaged.RunnableEvents(data) {
 			covered[event] = true
 		}
 	}
+	managedDisabled := claudemanaged.MachineHooksDisabled(machine)
 	present := !managedDisabled && len(covered) == len(claudemanaged.SupportedEvents)
 	return managedstream.HooksFact{Present: present, DisabledAllHooks: managedDisabled || userDisabled && !present}, true
 }

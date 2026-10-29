@@ -72,6 +72,48 @@ type Handler struct {
 	Args    []string `json:"args,omitempty"`
 	Timeout int      `json:"timeout,omitempty"`
 	Async   *bool    `json:"async,omitempty"`
+	// Extra keeps the fields Kontext does not write, such as an `if`
+	// condition, so a mirrored handler stays identical to its source.
+	Extra map[string]any `json:"-"`
+}
+
+type plainHandler Handler
+
+func (h *Handler) UnmarshalJSON(data []byte) error {
+	var extra map[string]any
+	if err := json.Unmarshal(data, (*plainHandler)(h)); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, &extra); err != nil {
+		return err
+	}
+	for _, known := range []string{"type", "command", "args", "timeout", "async"} {
+		delete(extra, known)
+	}
+	h.Extra = nil
+	if len(extra) > 0 {
+		h.Extra = extra
+	}
+	return nil
+}
+
+// MarshalJSON writes the struct as is when there is no extra field, so
+// templates keep their exact bytes.
+func (h Handler) MarshalJSON() ([]byte, error) {
+	data, err := json.Marshal(plainHandler(h))
+	if err != nil || len(h.Extra) == 0 {
+		return data, err
+	}
+	var all map[string]any
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil, err
+	}
+	for key, value := range h.Extra {
+		if _, set := all[key]; !set {
+			all[key] = value
+		}
+	}
+	return json.Marshal(all)
 }
 
 func Template(kontextBinary string) Settings {
@@ -288,6 +330,22 @@ func ManagedObserveHookBinary(data []byte) (string, bool) {
 		}
 	}
 	return binary, binary != ""
+}
+
+// MachineHooksDisabled is the disableAllHooks value Claude ends with after
+// merging sources in order: a later Boolean or null replaces an earlier value.
+func MachineHooksDisabled(sources [][]byte) bool {
+	disabled := false
+	for _, data := range sources {
+		var settings map[string]any
+		if json.Unmarshal(data, &settings) != nil {
+			continue
+		}
+		if value, set := settings["disableAllHooks"]; set {
+			disabled = value == true
+		}
+	}
+	return disabled
 }
 
 func DisablesAllHooks(data []byte) bool {

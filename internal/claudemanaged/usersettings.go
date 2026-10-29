@@ -107,7 +107,8 @@ func RunnableEvents(data []byte) map[string]bool {
 	for _, event := range SupportedEvents {
 		for _, group := range settings.Hooks[event.Name.String()] {
 			for _, handler := range group.Hooks {
-				if binary, ok := kontextHook(group, handler, event); ok && runnable(binary) && validateAsync(event, handler.Async) == nil {
+				// A handler with an `if` condition runs for some calls only.
+				if binary, ok := kontextHook(group, handler, event); ok && runnable(binary) && validateAsync(event, handler.Async) == nil && handler.Extra["if"] == nil {
 					covered[event.Name.String()] = true
 				}
 			}
@@ -124,25 +125,29 @@ func kontextHook(group MatcherGroup, handler Handler, event Event) (string, bool
 		return "", false
 	}
 	fields, ok := agenthooks.SplitCommand(handler.Command)
-	if !ok || len(handler.Args) > 0 && len(fields) != 1 {
-		return "", false
+	if len(handler.Args) > 0 {
+		// Exec form: command is the executable's path, not a shell line.
+		fields, ok = commandHandlerFields(agenthooks.CommandHandler{Command: handler.Command, Args: handler.Args})
 	}
-	fields = append(fields, handler.Args...)
-	if len(fields) != 3 || filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != event.Alias {
+	if !ok || len(fields) != 3 || filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != event.Alias {
 		return "", false
 	}
 	return fields[0], true
 }
 
 // MachineSettingsFiles lists the machine-wide files Claude Code merges hooks
-// from: managedSettings, dropIn and every other JSON drop-in in its folder
-// (Claude skips hidden ones).
+// from, in its merge order: managedSettings, then every JSON drop-in in
+// dropIn's folder by name (Claude skips hidden ones). dropIn is always listed,
+// so a broken one is noticed.
 func MachineSettingsFiles(dropIn, managedSettings string) []string {
-	files := []string{managedSettings, dropIn}
-	entries, _ := os.ReadDir(filepath.Dir(dropIn))
+	files := []string{managedSettings}
+	entries, err := os.ReadDir(filepath.Dir(dropIn))
+	if err != nil {
+		return append(files, dropIn)
+	}
 	for _, entry := range entries {
 		path := filepath.Join(filepath.Dir(dropIn), entry.Name())
-		if !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && strings.HasSuffix(entry.Name(), ".json") && path != dropIn {
+		if path == dropIn || !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && strings.HasSuffix(entry.Name(), ".json") {
 			files = append(files, path)
 		}
 	}
@@ -390,7 +395,7 @@ func managedHookPlanFrom(settings Settings) agenthooks.Plan {
 			Match: agenthooks.MatchSpec{
 				Pattern: group.Matcher,
 			},
-			Command:   agenthooks.CommandHook{Command: handler.Command, Args: handler.Args, Timeout: handler.Timeout, Async: handler.Async},
+			Command:   agenthooks.CommandHook{Command: handler.Command, Args: handler.Args, Timeout: handler.Timeout, Async: handler.Async, Extra: handler.Extra},
 			Placement: agenthooks.PlacementAppend,
 		}
 	}

@@ -187,27 +187,42 @@ func TestCoworkCoverageSplitAcrossMachineSourcesAndDisabledMirror(t *testing.T) 
 	}
 }
 
-// Claude runs only command handlers; a Kontext command under another handler
-// type governs nothing.
-func TestCoworkGovernedNeedsCommandHandlers(t *testing.T) {
-	opts, _ := fixture(t, User)
-	managed := filepath.Join(filepath.Dir(filepath.Dir(machineClaudeDropIn)), "managed-settings.json")
+// Claude runs only command handlers, an `if` condition limits a handler to some
+// calls, and the last machine-wide disableAllHooks value wins.
+func TestCoworkGovernedNeedsUnconditionalEnabledCommandHandlers(t *testing.T) {
 	for _, tc := range []struct {
-		kind string
-		want bool
-	}{{"command", true}, {"prompt", false}} {
-		settings := claudemanaged.Template(opts.Binary)
-		for _, groups := range settings.Hooks {
-			for i := range groups {
-				for j := range groups[i].Hooks {
-					groups[i].Hooks[j].Type = tc.kind
+		name     string
+		handler  func(*claudemanaged.Handler)
+		dropIns  map[string]string
+		governed bool
+	}{
+		{name: "command handlers", governed: true},
+		{name: "prompt handlers", handler: func(h *claudemanaged.Handler) { h.Type = "prompt" }},
+		{name: "conditional handlers", handler: func(h *claudemanaged.Handler) { h.Extra = map[string]any{"if": "Bash(*)"} }},
+		{name: "later drop-in re-enables hooks", dropIns: map[string]string{"10-off.json": `{"disableAllHooks":true}`, "99-on.json": `{"disableAllHooks":false}`}, governed: true},
+		{name: "later drop-in disables hooks", dropIns: map[string]string{"10-on.json": `{"disableAllHooks":false}`, "99-off.json": `{"disableAllHooks":true}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, _ := fixture(t, User)
+			settings := claudemanaged.Template(opts.Binary)
+			for _, groups := range settings.Hooks {
+				for i := range groups {
+					for j := range groups[i].Hooks {
+						if tc.handler != nil {
+							tc.handler(&groups[i].Hooks[j])
+						}
+					}
 				}
 			}
-		}
-		data, _ := json.Marshal(settings)
-		write(t, machineClaudeDropIn, string(data), 0644)
-		if got := CoworkGoverned(machineClaudeDropIn, managed); got != tc.want {
-			t.Fatalf("%s handlers: CoworkGoverned = %v, want %v", tc.kind, got, tc.want)
-		}
+			data, _ := json.Marshal(settings)
+			write(t, machineClaudeDropIn, string(data), 0644)
+			for name, content := range tc.dropIns {
+				write(t, filepath.Join(filepath.Dir(machineClaudeDropIn), name), content, 0644)
+			}
+			managed := filepath.Join(filepath.Dir(filepath.Dir(machineClaudeDropIn)), "managed-settings.json")
+			if got := CoworkGoverned(machineClaudeDropIn, managed); got != tc.governed {
+				t.Fatalf("CoworkGoverned = %v, want %v", got, tc.governed)
+			}
+		})
 	}
 }

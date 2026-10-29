@@ -107,21 +107,20 @@ func diagnoseCursorLayers(out io.Writer, user, machine string) bool {
 // CLAUDE_CONFIG_DIR, so only those reach it; self-serve never writes them, but
 // a drop-in from an earlier setup or an organization's settings still govern it.
 func CoworkGoverned(dropin, managedSettings string) bool {
+	var sources [][]byte
 	covered := map[string]bool{}
 	for _, path := range claudemanaged.MachineSettingsFiles(dropin, managedSettings) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		if claudemanaged.DisablesAllHooks(raw) {
-			return false
-		}
+		sources = append(sources, raw)
 		// Hooks that name a binary an upgrade or uninstall removed cannot run.
 		for event := range claudemanaged.RunnableEvents(raw) {
 			covered[event] = true
 		}
 	}
-	return len(covered) == len(claudemanaged.SupportedEvents)
+	return !claudemanaged.MachineHooksDisabled(sources) && len(covered) == len(claudemanaged.SupportedEvents)
 }
 
 func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string) bool, userConfig, otherCodexHooks string) bool {

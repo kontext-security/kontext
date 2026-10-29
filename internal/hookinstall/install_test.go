@@ -824,15 +824,22 @@ func TestUserClaudeCopyMirrorsMixedMachineSources(t *testing.T) {
 
 // Claude merges every drop-in in managed-settings.d, and a handler written as a
 // command with args runs like the one-string form, so the user copy repeats it.
+// The exec-form path holds a space, and one handler carries an `if` condition
+// Kontext never writes itself; the copy keeps both.
 func TestUserClaudeCopyMirrorsEveryMachineDropIn(t *testing.T) {
 	opts, defs := fixture(t, User)
-	org := claudemanaged.Template(opts.Binary)
+	binary := filepath.Join(t.TempDir(), "Kontext CLI", "kontext")
+	write(t, binary, "#!/bin/sh\n", 0755)
+	org := claudemanaged.Template(binary)
 	for name, groups := range org.Hooks {
 		for i := range groups {
 			for j := range groups[i].Hooks {
 				h := &groups[i].Hooks[j]
 				fields, _ := agenthooks.SplitCommand(h.Command)
 				h.Command, h.Args, h.Timeout = fields[0], fields[1:], 30
+				if name == "PreToolUse" {
+					h.Extra = map[string]any{"if": "Bash(*)"}
+				}
 			}
 		}
 		org.Hooks[name] = groups

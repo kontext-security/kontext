@@ -36,6 +36,8 @@ type CommandHook struct {
 	Args    []string
 	Timeout int
 	Async   *bool
+	// Extra holds further handler fields, written as given.
+	Extra map[string]any
 }
 
 type EventPlan struct {
@@ -122,6 +124,11 @@ func (p EventPlan) nativeGroup() (map[string]any, error) {
 	}
 	if p.Command.Async != nil {
 		handler["async"] = *p.Command.Async
+	}
+	for key, value := range p.Command.Extra {
+		if _, set := handler[key]; !set {
+			handler[key] = value
+		}
 	}
 	return map[string]any{
 		"matcher": p.Match.Pattern,

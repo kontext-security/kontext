@@ -658,6 +658,21 @@ func TestManagedObserveHooksFact(t *testing.T) {
 		}
 	})
 
+	t.Run("a later drop-in re-enables hooks", func(t *testing.T) {
+		dir := t.TempDir()
+		dropIn := filepath.Join(dir, "20-kontext.json")
+		for path, content := range map[string][]byte{dropIn: template, filepath.Join(dir, "10-off.json"): []byte(`{"disableAllHooks":true}`), filepath.Join(dir, "99-on.json"): []byte(`{"disableAllHooks":false}`)} {
+			if err := os.WriteFile(path, content, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		swapManagedSettingsPaths(t, dropIn, filepath.Join(dir, "missing", "managed-settings.json"))
+
+		if fact, ok := managedObserveHooksFact(managedconfig.ScopeSystem); !ok || !fact.Present || fact.DisabledAllHooks {
+			t.Fatalf("managedObserveHooksFact(managedconfig.ScopeSystem) = %+v, %v; want present", fact, ok)
+		}
+	})
+
 	t.Run("hooks deleted", func(t *testing.T) {
 		dir := t.TempDir()
 		swapManagedSettingsPaths(t,
