@@ -702,15 +702,20 @@ func TestRunCompletesWhenUserHooksCannotBeInstalled(t *testing.T) {
 		prepare  func(*testing.T, string)
 		readOnly bool
 		warns    bool
+		// deniesWrite marks a case that needs Kontext's write to fail.
+		deniesWrite bool
 	}{
 		{name: "invalid JSON", prepare: write("{not json"), warns: true},
 		{name: "hooks not an object", prepare: write(`{"hooks":[]}`), warns: true},
-		{name: "read-only symlink target", prepare: readOnlyTarget, warns: true},
-		{name: "unwritable directory", prepare: write(`{"model":"opus"}`), readOnly: true, warns: true},
+		{name: "read-only symlink target", prepare: readOnlyTarget, warns: true, deniesWrite: true},
+		{name: "unwritable directory", prepare: write(`{"model":"opus"}`), readOnly: true, warns: true, deniesWrite: true},
 		// User-level disableAllHooks cannot disable managed hooks.
 		{name: "user disableAllHooks", prepare: write(`{"disableAllHooks":true}`)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.deniesWrite && !modeBitsDenyWrites(t) {
+				t.Skip("environment does not deny writes to a read-only directory (running as root?)")
+			}
 			h := newHarness(t)
 			allowLoopback(t)
 			settingsDir := filepath.Join(h.home, ".claude")
@@ -747,6 +752,18 @@ func TestRunCompletesWhenUserHooksCannotBeInstalled(t *testing.T) {
 			}
 		})
 	}
+}
+
+// modeBitsDenyWrites reports whether a directory without write permission
+// refuses a new file. Root writes regardless of mode bits.
+func modeBitsDenyWrites(t *testing.T) bool {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(dir, 0o700) }()
+	return os.WriteFile(filepath.Join(dir, "probe"), nil, 0o600) != nil
 }
 
 func TestRunRefusesEnvOverride(t *testing.T) {
