@@ -16,6 +16,11 @@ jobs:
   e2e:
     runs-on: macos-15
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # "" upgrades from the published cask; 1.16.1 from setups that wrote root files.
+        baseline: ["", "1.16.1"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -23,11 +28,11 @@ jobs:
           go-version-file: go.mod
       - name: Self-serve install, upgrade, self-update and self-heal
         env:
-          KONTEXT_E2E_BASELINE: ${{ inputs.baseline }}
+          KONTEXT_E2E_BASELINE: ${{ inputs.baseline || matrix.baseline }}
         run: scripts/e2e/e2e-self-serve.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/e2e"
       - name: Upload artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-self-serve
+          name: e2e-self-serve-${{ matrix.baseline || 'published' }}
           path: ${{ runner.temp }}/e2e
