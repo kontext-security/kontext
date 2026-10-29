@@ -1619,10 +1619,11 @@ func TestRunWaitsForTheBackgroundAgent(t *testing.T) {
 		exited     bool
 		wantLine   string
 		wantStderr bool
+		wantNote   bool
 	}{
 		// The old six tries (about three seconds) gave up on an agent like this one.
 		{name: "up after four seconds", upAfter: 8, wantLine: "  ✓ Background agent running"},
-		{name: "still starting", upAfter: 1 << 30, wantLine: "  • Background agent is still starting; `kontext doctor` shows when it runs"},
+		{name: "still starting", upAfter: 1 << 30, wantLine: "  • Background agent is still starting; `kontext doctor` shows when it runs", wantNote: true},
 		// A process that is not running when the wait ends did not start.
 		{name: "process exited", upAfter: 1 << 30, exited: true, wantLine: "  ! Background agent did not start", wantStderr: true},
 		// launchd restarts an agent that exited early; it counts once it answers.
@@ -1649,8 +1650,12 @@ func TestRunWaitsForTheBackgroundAgent(t *testing.T) {
 			if !strings.Contains(h.out.String(), tc.wantLine) {
 				t.Fatalf("stdout missing %q:\n%s", tc.wantLine, h.out.String())
 			}
-			if got := strings.Contains(h.errOut.String(), "background agent"); got != tc.wantStderr {
+			if got := strings.Contains(h.errOut.String(), "warning:"); got != tc.wantStderr {
 				t.Fatalf("stderr warning = %v, want %v:\n%s", got, tc.wantStderr, h.errOut.String())
+			}
+			// A running agent that never opened its socket keeps the reason.
+			if got := strings.Contains(h.errOut.String(), "note: the background agent has not opened its socket yet (connection refused)"); got != tc.wantNote {
+				t.Fatalf("socket note = %v, want %v:\n%s", got, tc.wantNote, h.errOut.String())
 			}
 		})
 	}
@@ -1677,7 +1682,7 @@ func TestRunTreatsAStuckLaunchctlAsStillStarting(t *testing.T) {
 	if err := Run(context.Background(), h.options("tok", pingServer(t, "tok"))); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(h.out.String(), "Background agent is still starting") || strings.Contains(h.errOut.String(), "background agent") {
+	if !strings.Contains(h.out.String(), "Background agent is still starting") || strings.Contains(h.errOut.String(), "warning:") {
 		t.Fatalf("stdout:\n%s\nstderr:\n%s", h.out.String(), h.errOut.String())
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {

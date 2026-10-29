@@ -588,6 +588,8 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		fmt.Fprintf(opts.Stderr, "warning: %v; check `tail -f %s`\n", err, logPath)
 	} else if err != nil {
 		fmt.Fprintf(opts.Stdout, "  • Background agent is still starting; `kontext doctor` shows when it runs (log: %s)\n", logPath)
+		// Its process runs but its socket is not open yet; keep the reason.
+		fmt.Fprintf(opts.Stderr, "note: the background agent has not opened its socket yet (%v)\n", err)
 	} else {
 		fmt.Fprintln(opts.Stdout, "  ✓ Background agent running")
 	}
