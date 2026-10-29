@@ -162,7 +162,9 @@ func runUpdateSchedule(ctx context.Context, source string, interval time.Duratio
 		if ctx.Err() != nil {
 			return
 		}
-		state = UpdateState{CheckedAt: time.Now(), Source: source, Notice: notice}
+		// Round(0) drops the monotonic reading, which pauses in sleep: the
+		// in-memory fallback must compare wall clocks like the saved file.
+		state = UpdateState{CheckedAt: time.Now().Round(0), Source: source, Notice: notice}
 		if err != nil {
 			state.Error = err.Error()
 			logHomebrewUpdater(log, "daemon updater: %v\n", err)
