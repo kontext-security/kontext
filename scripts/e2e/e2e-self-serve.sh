@@ -102,9 +102,17 @@ render_cask() { # version -> stdout: the real cask template, pointed at the loca
     | sed "s|https://github.com/kontext-security/kontext/releases/download/v#{version}/kontext_#{version}_darwin_[a-z0-9]*.tar.gz|file://$art/dist/kontext_#{version}_darwin_$arch.tar.gz|"
 }
 
-step "A0. Install the published $old cask and run its setup (writes root files with sudo, as setups before this change did)"
-brew install --cask kontext-security/tap/kontext
-"$prefix/bin/kontext" --version | grep -F "$old" || fail "published cask is not $old"
+step "A0. Install the published $old cask and run its setup (writes root files with sudo, as setups before 1.17.0 did)"
+# The tap publishes newer releases; pin its cask file to $old, the last version
+# whose setup wrote root files, and keep Homebrew from resetting the tap.
+brew tap kontext-security/tap
+tap="$(brew --repo kontext-security/tap)"
+pin="$(git -C "$tap" log --format=%H -1 --grep="to $old\$" -- Casks/kontext.rb)"
+[ -n "$pin" ] || fail "no $old cask in the tap history"
+git -C "$tap" checkout -q "$pin" -- Casks/kontext.rb
+git -C "$tap" -c user.email=e2e@kontext.invalid -c user.name=e2e commit -qm "kontext $old (e2e pin)"
+HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask kontext-security/tap/kontext
+"$prefix/bin/kontext" --version | grep -F "$old" || fail "installed cask is not $old"
 "$prefix/bin/kontext" setup --token e2e-token --cloud-url "http://127.0.0.1:$port" --allow-http-loopback
 hash_root > "$art/root-before.txt"
 grep -q 20-kontext.json "$art/root-before.txt" || fail "$old setup wrote no Claude drop-in"
