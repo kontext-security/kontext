@@ -114,8 +114,9 @@ func TestDiagnoseReportsLegacyInstall(t *testing.T) {
 	if !report.LegacyInstall {
 		t.Error("LegacyInstall = false, want true for an unprofiled install")
 	}
-	if !strings.Contains(out.String(), "profile: none") {
-		t.Errorf("output does not report the profile state:\n%s", out.String())
+	// One workspace without profiles is what setup writes; it is not a legacy install to fix.
+	if !strings.Contains(out.String(), "profile: none (one workspace)") || strings.Contains(out.String(), "migrate") {
+		t.Errorf("output does not report the profile state plainly:\n%s", out.String())
 	}
 }
 

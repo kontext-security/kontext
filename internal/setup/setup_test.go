@@ -842,8 +842,13 @@ func TestUninstallReversesSetupKeepingIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	h.out.Reset()
 	if err := Uninstall(context.Background(), h.options("", pingServer(t, "unused"))); err != nil {
 		t.Fatalf("Uninstall() error = %v", err)
+	}
+	// Every result line shares the two-space indent.
+	if !strings.Contains(h.out.String(), "\n  ✓ Codex hooks removed from ~/.codex/hooks.json\n") {
+		t.Fatalf("uninstall output:\n%s", h.out.String())
 	}
 
 	if len(h.keychain) != 0 {
@@ -1600,5 +1605,44 @@ func TestRunKeepsCodexTrustAndSkipsTheHint(t *testing.T) {
 	}
 	if untrusted, err := codexmanaged.UntrustedHooks(hooks, config); err != nil || len(untrusted) > 0 {
 		t.Fatalf("rerun lost the saved trust: %v %v", untrusted, err)
+	}
+}
+
+// A first start can take several seconds; setup waits for it and, if it is
+// still not up, reports it as progress rather than a warning.
+func TestRunWaitsForTheBackgroundAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		upAfter  int
+		wantLine string
+	}{
+		// The old six tries (about three seconds) gave up on an agent like this one.
+		{name: "up after four seconds", upAfter: 8, wantLine: "  ✓ Background agent running"},
+		{name: "still starting", upAfter: 1 << 30, wantLine: "  • Background agent is still starting; `kontext doctor` shows when it runs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			allowLoopback(t)
+			overrideVar(t, &daemonStartWait, 6*time.Second)
+			if tc.upAfter > 100 {
+				daemonStartWait = time.Second
+			}
+			tries := 0
+			overrideVar(t, &dialSocket, func(string, time.Duration) error {
+				if tries++; tries > tc.upAfter {
+					return nil
+				}
+				return errors.New("connection refused")
+			})
+			if err := Run(context.Background(), h.options("tok", pingServer(t, "tok"))); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(h.out.String(), tc.wantLine) {
+				t.Fatalf("stdout missing %q:\n%s", tc.wantLine, h.out.String())
+			}
+			if strings.Contains(h.errOut.String(), "background agent") {
+				t.Fatalf("stderr warns about the background agent:\n%s", h.errOut.String())
+			}
+		})
 	}
 }

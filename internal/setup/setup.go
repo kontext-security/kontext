@@ -584,8 +584,7 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	fmt.Fprintf(opts.Stdout, "  ✓ Background agent installed (%s)\n", plistPath)
 
 	if err := waitForDaemon(opts.Stdout); err != nil {
-		fmt.Fprintln(opts.Stdout, "  ! Background agent is still starting")
-		fmt.Fprintf(opts.Stderr, "warning: the background agent has not come up yet (%v); check `tail -f %s`\n", err, logPath)
+		fmt.Fprintf(opts.Stdout, "  • Background agent is still starting; `kontext doctor` shows when it runs (log: %s)\n", logPath)
 	} else {
 		fmt.Fprintln(opts.Stdout, "  ✓ Background agent running")
 	}
@@ -1118,18 +1117,21 @@ func isTerminalWriter(w io.Writer) bool {
 	return ok && term.IsTerminal(int(file.Fd()))
 }
 
+// daemonStartWait bounds how long setup waits for a new background agent. Its
+// first start reads the keychain and creates its database, which can take
+// several seconds.
+var daemonStartWait = 15 * time.Second
+
 func probeDaemon() error {
 	socket := managedobserve.DefaultSocketPath()
-	var lastErr error
-	for attempt := 0; attempt < 6; attempt++ {
-		if attempt > 0 {
-			time.Sleep(500 * time.Millisecond)
+	deadline := time.Now().Add(daemonStartWait)
+	for {
+		err := dialSocket(socket, 500*time.Millisecond)
+		if err == nil || !time.Now().Before(deadline) {
+			return err
 		}
-		if lastErr = dialSocket(socket, 500*time.Millisecond); lastErr == nil {
-			return nil
-		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	return lastErr
 }
 
 func summariseInventory(inv agentinventory.Inventory) string {
