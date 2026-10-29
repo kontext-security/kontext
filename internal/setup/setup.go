@@ -25,6 +25,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
+	"github.com/kontext-security/kontext/internal/buildinfo"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
@@ -577,6 +578,9 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		fmt.Fprintf(opts.Stderr, "warning: the background agent has not come up yet (%v); check `tail -f %s`\n", err, logPath)
 	} else {
 		fmt.Fprintln(opts.Stdout, "  ✓ Background agent running")
+	}
+	if buildinfo.HomebrewBuild() {
+		fmt.Fprintln(opts.Stdout, "  • Updates: run `brew upgrade kontext`. For automatic updates, switch to the cask: brew uninstall --formula kontext && brew install --cask kontext-security/tap/kontext")
 	}
 
 	fmt.Fprintln(opts.Stdout, "\nNext")
