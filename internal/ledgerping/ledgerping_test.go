@@ -25,19 +25,19 @@ func pingServer(t *testing.T, status int, body string) *httptest.Server {
 }
 
 func TestPingResolvesWorkspace(t *testing.T) {
-	server := pingServer(t, http.StatusOK, `{"organization_id":"org_katana","organization_name":"Katana"}`)
+	server := pingServer(t, http.StatusOK, `{"organization_id":"org_acme","organization_name":"Acme"}`)
 
 	got, err := Ping(context.Background(), server.Client(), server.URL+"/", "test-token", "")
 	if err != nil {
 		t.Fatalf("Ping() error = %v", err)
 	}
-	if got.OrganizationID != "org_katana" || got.OrganizationName != "Katana" {
+	if got.OrganizationID != "org_acme" || got.OrganizationName != "Acme" {
 		t.Fatalf("Ping() = %+v", got)
 	}
 }
 
 func TestPingTreatsNullOrganizationNameAsEmpty(t *testing.T) {
-	server := pingServer(t, http.StatusOK, `{"organization_id":"org_katana","organization_name":null}`)
+	server := pingServer(t, http.StatusOK, `{"organization_id":"org_acme","organization_name":null}`)
 
 	got, err := Ping(context.Background(), server.Client(), server.URL, "test-token", "")
 	if err != nil {

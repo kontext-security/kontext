@@ -276,7 +276,7 @@ where id = 'act_legacy_deny'
 // keeps the old deployment as last-known-good, so its evidence still names
 // that deployment's mode. The decided row must still be written; before this
 // guard, the fact failed the contract check and the PreToolUse write rolled
-// back, which is how Katana lost every decision on 2026-09-07.
+// back, which is how a customer lost every decision on 2026-09-07.
 func TestSaveDecisionRecordsWithdrawnDeploymentAsDisabledFact(t *testing.T) {
 	for _, tc := range []struct {
 		state      string

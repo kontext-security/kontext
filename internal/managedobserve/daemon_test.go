@@ -1124,12 +1124,12 @@ func TestDeviceKeySource(t *testing.T) {
 					t.Fatalf("ping installation id = %q", installationID)
 				}
 				pings++
-				return ledgerping.Response{OrganizationID: "org_katana"}, nil
+				return ledgerping.Response{OrganizationID: "org_acme"}, nil
 			})
 
 		source := &deviceKeySource{}
 		key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet)
-		if key != "dk_r9NpM1vh94fxqPIcsnx6DalBNVfubPTNYHUBLGUoUcc" {
+		if key != "dk_UGFHI3h-97Mpwk-odh5SGTOJwzLHaxCx_lW2QY5Vtzk" {
 			t.Fatalf("resolve() = %q, want the pinned deviceid vector", key)
 		}
 		if again := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); again != key {
@@ -1145,7 +1145,7 @@ func TestDeviceKeySource(t *testing.T) {
 		// NOT restart the daemon. Serving the old cached key there would hand
 		// the new workspace the previous workspace's stable pseudonym, so an
 		// identity change must invalidate the cache and derive fresh.
-		org := "org_katana"
+		org := "org_acme"
 		pings := 0
 		stubDeviceKeyResolution(t,
 			func(context.Context) (string, error) { return testUUID, nil },
@@ -1165,7 +1165,7 @@ func TestDeviceKeySource(t *testing.T) {
 			t.Fatalf("resolve() after workspace change = %q, want the other workspace's pinned vector (first was %q)", second, first)
 		}
 		// A rotation back within one workspace re-pings but derives the same key.
-		org = "org_katana"
+		org = "org_acme"
 		if rotated := source.resolve(context.Background(), "https://api.test", "token-c", "ins_test", nil, quiet); rotated != first {
 			t.Fatalf("resolve() after rotation = %q, want %q re-derived", rotated, first)
 		}
@@ -1177,7 +1177,7 @@ func TestDeviceKeySource(t *testing.T) {
 			func(context.Context) (string, error) { return testUUID, nil },
 			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
 				err := pingErr
-				return ledgerping.Response{OrganizationID: "org_katana"}, err
+				return ledgerping.Response{OrganizationID: "org_acme"}, err
 			})
 
 		source := &deviceKeySource{}
@@ -1203,7 +1203,7 @@ func TestDeviceKeySource(t *testing.T) {
 				return testUUID, nil
 			},
 			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
-				return ledgerping.Response{OrganizationID: "org_katana"}, nil
+				return ledgerping.Response{OrganizationID: "org_acme"}, nil
 			})
 
 		source := &deviceKeySource{}

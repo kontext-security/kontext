@@ -31,7 +31,7 @@ func TestCoworkDiscovery(t *testing.T) {
 	}{
 		{"vm", nil, []sidecar{{"local_vm.json", "vm", now.Add(-time.Minute), boolPointer(false)}}, nil, false, "true", true},
 		{"host", nil, []sidecar{{"local_host.json", "host", now.Add(-time.Minute), boolPointer(true)}}, map[string]bool{"host": true}, false, "false", true},
-		{"katana", []string{coworkVMBundle}, []sidecar{{"local_old_vm.json", "old-vm", now.Add(-2 * time.Minute), boolPointer(false)}, {"local_host.json", "host", now.Add(-time.Minute), nil}}, map[string]bool{"host": true}, false, "false", true},
+		{"newest-wins", []string{coworkVMBundle}, []sidecar{{"local_old_vm.json", "old-vm", now.Add(-2 * time.Minute), boolPointer(false)}, {"local_host.json", "host", now.Add(-time.Minute), nil}}, map[string]bool{"host": true}, false, "false", true},
 		{"neither", nil, nil, nil, false, "", true},
 		{"host directory only", []string{coworkHostSessions}, nil, nil, false, "null", false},
 		{"bundle only", []string{coworkVMBundle}, nil, nil, false, "null", false},
