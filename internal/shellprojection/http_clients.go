@@ -3,6 +3,7 @@ package shellprojection
 import (
 	"encoding/json"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -354,7 +355,9 @@ func standardUtilityPath(program string) bool {
 	if !strings.ContainsRune(program, '/') {
 		return true
 	}
-	switch filepath.Dir(program) {
+	// Shell text is POSIX on every host: path, not filepath, which on
+	// Windows would read /bin/cat as \bin.
+	switch path.Dir(program) {
 	case "/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin":
 		return true
 	}
