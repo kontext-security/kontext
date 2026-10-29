@@ -65,7 +65,7 @@ func newHarness(t *testing.T) *harness {
 	overrideVar(t, &geteuid, func() int { return 501 })
 	overrideVar(t, &executablePath, func() (string, error) { return "/opt/homebrew/bin/kontext", nil })
 	overrideVar(t, &dialSocket, func(string, time.Duration) error { return nil })
-	// Never ask the real launchd; a test whose dial fails stops after the grace period.
+	// Never ask the real launchd.
 	overrideVar(t, &daemonRunning, func() bool { return false })
 	overrideVar(t, &isTerminal, func(int) bool { return false })
 	overrideVar(t, &readPassword, func(int) ([]byte, error) { return nil, errors.New("no tty in tests") })
@@ -1623,16 +1623,17 @@ func TestRunWaitsForTheBackgroundAgent(t *testing.T) {
 		// The old six tries (about three seconds) gave up on an agent like this one.
 		{name: "up after four seconds", upAfter: 8, wantLine: "  ✓ Background agent running"},
 		{name: "still starting", upAfter: 1 << 30, wantLine: "  • Background agent is still starting; `kontext doctor` shows when it runs"},
-		// A process that exited cannot start by waiting: setup says so at once.
+		// A process that is not running when the wait ends did not start.
 		{name: "process exited", upAfter: 1 << 30, exited: true, wantLine: "  ! Background agent did not start", wantStderr: true},
+		// launchd restarts an agent that exited early; it counts once it answers.
+		{name: "restarted by launchd", upAfter: 8, exited: true, wantLine: "  ✓ Background agent running"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
 			allowLoopback(t)
 			overrideVar(t, &daemonStartWait, 6*time.Second)
-			overrideVar(t, &daemonExitGrace, 500*time.Millisecond)
 			overrideVar(t, &daemonRunning, func() bool { return !tc.exited })
-			if tc.upAfter > 100 && !tc.exited {
+			if tc.upAfter > 100 {
 				daemonStartWait = time.Second
 			}
 			tries := 0

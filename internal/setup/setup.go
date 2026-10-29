@@ -1125,12 +1125,8 @@ func isTerminalWriter(w io.Writer) bool {
 // several seconds.
 var daemonStartWait = 15 * time.Second
 
-// daemonExitGrace is how long setup waits before it asks launchd whether the
-// agent's process still runs; launchd may not have started it yet.
-var daemonExitGrace = 3 * time.Second
-
-// errDaemonNotRunning marks an agent whose process exited instead of starting:
-// waiting longer cannot help.
+// errDaemonNotRunning marks an agent whose process is not running when the
+// wait ends: it exited instead of starting, and waiting longer cannot help.
 var errDaemonNotRunning = errors.New("the background agent's process is not running")
 
 // daemonRunning reports whether launchd has the background agent's process up.
@@ -1139,16 +1135,22 @@ var daemonRunning = func() bool {
 	return err == nil && strings.Contains(out, "state = running")
 }
 
+// probeDaemon waits the whole window, because launchd restarts an agent that
+// exits early (KeepAlive, about ten seconds later), then asks launchd whether
+// the process still runs.
 func probeDaemon() error {
 	socket := managedobserve.DefaultSocketPath()
 	start := time.Now()
 	for {
 		err := dialSocket(socket, 500*time.Millisecond)
-		if err == nil || time.Since(start) >= daemonStartWait {
-			return err
+		if err == nil {
+			return nil
 		}
-		if time.Since(start) >= daemonExitGrace && !daemonRunning() {
-			return fmt.Errorf("%w (%v)", errDaemonNotRunning, err)
+		if time.Since(start) >= daemonStartWait {
+			if !daemonRunning() {
+				return fmt.Errorf("%w (%v)", errDaemonNotRunning, err)
+			}
+			return err
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
