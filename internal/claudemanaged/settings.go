@@ -333,7 +333,8 @@ func ManagedObserveHookBinary(data []byte) (string, bool) {
 }
 
 // MachineHooksDisabled is the disableAllHooks value Claude ends with after
-// merging sources in order: a later Boolean or null replaces an earlier value.
+// merging sources in order: a later Boolean or null replaces an earlier value;
+// a value of another type is invalid and changes nothing.
 func MachineHooksDisabled(sources [][]byte) bool {
 	disabled := false
 	for _, data := range sources {
@@ -341,8 +342,10 @@ func MachineHooksDisabled(sources [][]byte) bool {
 		if json.Unmarshal(data, &settings) != nil {
 			continue
 		}
-		if value, set := settings["disableAllHooks"]; set {
-			disabled = value == true
+		if value, set := settings["disableAllHooks"]; set && value == nil {
+			disabled = false
+		} else if value, ok := value.(bool); ok {
+			disabled = value
 		}
 	}
 	return disabled

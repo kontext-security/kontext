@@ -201,6 +201,7 @@ func TestCoworkGovernedNeedsUnconditionalEnabledCommandHandlers(t *testing.T) {
 		{name: "conditional handlers", handler: func(h *claudemanaged.Handler) { h.Extra = map[string]any{"if": "Bash(*)"} }},
 		{name: "later drop-in re-enables hooks", dropIns: map[string]string{"10-off.json": `{"disableAllHooks":true}`, "99-on.json": `{"disableAllHooks":false}`}, governed: true},
 		{name: "later drop-in disables hooks", dropIns: map[string]string{"10-on.json": `{"disableAllHooks":false}`, "99-off.json": `{"disableAllHooks":true}`}},
+		{name: "invalid later value changes nothing", dropIns: map[string]string{"10-off.json": `{"disableAllHooks":true}`, "99-bad.json": `{"disableAllHooks":"false"}`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts, _ := fixture(t, User)
