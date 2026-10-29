@@ -2,6 +2,7 @@ package managedobserve
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -95,7 +96,7 @@ func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logge
 		// repair of another.
 		for _, kinds := range [][]string{{"claude-user"}, {"codex", "feature"}, {"cursor"}} {
 			err := hookinstall.Install(hookinstall.Options{
-				Scope: hookinstall.User, Home: home, Binary: binary, NoBackup: true,
+				Scope: hookinstall.User, Home: home, Binary: binary, NoBackup: true, SetupPaths: true,
 				Skip: func(file hookinstall.File) bool {
 					if !slices.Contains(kinds, file.Kind) {
 						return true
@@ -129,19 +130,24 @@ func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logge
 	}
 }
 
-// hookFilesFingerprint covers every hook file either scope can install (size,
-// time and permissions, so a chmod that hides a file counts), plus
-// Claude's managed-settings.json, whose hooks and disableAllHooks count too. It
-// never touches a path in a macOS privacy-guarded folder: from the background
-// that would ask the user for folder access.
+// hookFilesFingerprint covers the content of every hook file either scope can
+// install (a file that turns unreadable counts too), plus every machine-wide
+// Claude source, whose hooks and disableAllHooks count too. It never touches a
+// path in a macOS privacy-guarded folder: from the background that would ask
+// the user for folder access.
 func hookFilesFingerprint() string {
 	home, _ := os.UserHomeDir()
 	var b strings.Builder
-	// Every machine-wide Claude source: the user copy mirrors their handlers.
-	for _, path := range claudemanaged.MachineSettingsFiles(managedSettingsDropInPath, managedSettingsFilePath) {
-		if info, err := os.Stat(path); err == nil {
-			fmt.Fprintf(&b, "%s:%d:%d:%v;", path, info.Size(), info.ModTime().UnixNano(), info.Mode())
+	add := func(path string) {
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return
 		}
+		fmt.Fprintf(&b, "%s:%x:%v;", path, sha256.Sum256(data), err)
+	}
+	// The user copy mirrors the handlers of every machine-wide Claude source.
+	for _, path := range claudemanaged.MachineSettingsFiles(managedSettingsDropInPath, managedSettingsFilePath) {
+		add(path)
 	}
 	for _, scope := range []hookinstall.Scope{hookinstall.User, hookinstall.System} {
 		defs, err := hookinstall.Definitions(scope, home)
@@ -150,11 +156,8 @@ func hookFilesFingerprint() string {
 		}
 		for _, def := range defs {
 			for _, file := range def.Files {
-				if privacyfolder.Guarded(home, file.Path) {
-					continue
-				}
-				if info, err := os.Stat(file.Path); err == nil {
-					fmt.Fprintf(&b, "%s:%d:%d:%v;", file.Path, info.Size(), info.ModTime().UnixNano(), info.Mode())
+				if !privacyfolder.Guarded(home, file.Path) {
+					add(file.Path)
 				}
 			}
 		}

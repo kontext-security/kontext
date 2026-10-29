@@ -1350,3 +1350,33 @@ func TestHookHealerNeverRunsForOrganizationConfig(t *testing.T) {
 		t.Fatal("organization-managed config got a hook healer")
 	}
 }
+
+// An edit that keeps a hook file's size and time still triggers a rescan.
+func TestHookFilesFingerprintSeesSameSizeEdits(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	swapManagedSettingsPaths(t, filepath.Join(home, "missing", "20-kontext.json"), filepath.Join(home, "missing", "managed-settings.json"))
+	settings := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"a":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(settings, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	before := hookFilesFingerprint()
+	if err := os.WriteFile(settings, []byte(`{"b":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(settings, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if hookFilesFingerprint() == before {
+		t.Fatal("same-size edit with the old timestamp left the fingerprint unchanged")
+	}
+}

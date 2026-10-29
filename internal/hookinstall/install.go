@@ -175,6 +175,9 @@ type Options struct {
 	// repairs only re-add Kontext's own entries; a backup per repair would
 	// pile up while something keeps removing them.
 	NoBackup bool
+	// SetupPaths writes the files setup wrote, ~/.codex even when CODEX_HOME
+	// is set, without setup's other behavior.
+	SetupPaths bool
 }
 
 type change struct {
@@ -190,7 +193,7 @@ func run(opts Options, remove bool) error {
 	codexHome := os.Getenv("CODEX_HOME")
 	// Setup historically writes ~/.codex regardless of CODEX_HOME. Preserve
 	// existing self-serve paths while the explicit commands follow Codex.
-	if opts.Setup {
+	if opts.Setup || opts.SetupPaths {
 		codexHome = ""
 	}
 	defs, err := definitions(opts.Scope, opts.Home, codexHome)
