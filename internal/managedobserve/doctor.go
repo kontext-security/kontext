@@ -702,6 +702,7 @@ func printAgentInventory(out io.Writer, inv *agentinventory.Inventory, now time.
 func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
 	install, ok := currentHomebrewInstall()
 	var trustErr error
+	trustChecked := false
 	switch {
 	case !ok:
 		fmt.Fprintf(out, "  auto-update: off (%s is not a Homebrew install under /opt/homebrew or /usr/local)\n", selfExecutablePath())
@@ -715,6 +716,7 @@ func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
 	default:
 		fmt.Fprintf(out, "  auto-update: on (%s %s, version %s)\n", updateSource(install), homebrewFormula, install.version)
 		// Homebrew 7 refuses updates from a tap the user has not trusted.
+		trustChecked = true
 		if trustErr = checkTapTrust(context.Background(), install); trustErr != nil {
 			warn("%v", trustErr)
 		}
@@ -726,7 +728,11 @@ func printAutoUpdate(out io.Writer, warn func(string, ...any)) {
 		return
 	}
 	fmt.Fprintf(out, "  last update check: %s\n", state.CheckedAt.Local().Format(time.RFC3339))
-	if state.Error != "" && (trustErr == nil || state.Error != trustErr.Error()) {
+	// When doctor's own trust check answered, a saved untrusted-tap failure is
+	// either the warning above or fixed since (`brew trust` before the next
+	// check). A check that failed to answer (a timeout) verified nothing.
+	trustAnswered := trustChecked && (trustErr == nil || strings.HasPrefix(trustErr.Error(), untrustedTapPrefix))
+	if state.Error != "" && !(trustAnswered && strings.HasPrefix(state.Error, untrustedTapPrefix)) {
 		warn("the last update check failed: %s", state.Error)
 	}
 	// For homebrew-core the outdated check above already printed the notice.
