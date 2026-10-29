@@ -28,7 +28,7 @@ uid="$(id -u)"
 prefix="$(brew --prefix)"
 label=security.kontext.managed-observe
 mlog="$HOME/Library/Logs/Kontext/managed-observe.log"
-old=1.16.1 v1=9.0.1 v2=9.0.2
+v1=9.0.1 v2=9.0.2
 port=8787
 
 step() { printf '\n== %s (%s)\n' "$*" "$(date -u +%H:%M:%S)"; }
@@ -102,27 +102,43 @@ render_cask() { # version -> stdout: the real cask template, pointed at the loca
     | sed "s|https://github.com/kontext-security/kontext/releases/download/v#{version}/kontext_#{version}_darwin_[a-z0-9]*.tar.gz|file://$art/dist/kontext_#{version}_darwin_$arch.tar.gz|"
 }
 
-step "A0. Install the published $old cask and run its setup (writes root files with sudo, as setups before 1.17.0 did)"
-# The tap publishes newer releases; pin its cask file to $old, the last version
-# whose setup wrote root files, and keep Homebrew from resetting the tap.
+step "A0. Install the last release's cask and run its setup"
 brew tap kontext-security/tap
 tap="$(brew --repo kontext-security/tap)"
-pin="$(git -C "$tap" log --format=%H -1 --grep="to $old\$" -- Casks/kontext.rb)"
-[ -n "$pin" ] || fail "no $old cask in the tap history"
-git -C "$tap" checkout -q "$pin" -- Casks/kontext.rb
-git -C "$tap" -c user.email=e2e@kontext.invalid -c user.name=e2e commit -qm "kontext $old (e2e pin)"
+published="$(sed -n 's/^ *version "\(.*\)"$/\1/p' "$tap/Casks/kontext.rb" | head -1)"
+# The baseline is the last release, so the run upgrades "last release -> this
+# build". KONTEXT_E2E_BASELINE pins an older release, such as 1.16.1, whose
+# setup still wrote root files with sudo.
+old="${KONTEXT_E2E_BASELINE:-$published}"
+echo "baseline $old (published $published)"
+if [ "$old" != "$published" ]; then
+  pin="$(git -C "$tap" log --format=%H -1 --grep="to $old\$" -- Casks/kontext.rb)"
+  [ -n "$pin" ] || fail "no $old cask in the tap history"
+  git -C "$tap" checkout -q "$pin" -- Casks/kontext.rb
+  git -C "$tap" -c user.email=e2e@kontext.invalid -c user.name=e2e commit -qm "kontext $old (e2e pin)"
+fi
+legacy=false
+[ "$(printf '%s\n' "$old" 1.17.0 | sort -V | head -1)" != 1.17.0 ] && legacy=true
 HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask kontext-security/tap/kontext
 "$prefix/bin/kontext" --version | grep -F "$old" || fail "installed cask is not $old"
 "$prefix/bin/kontext" setup --token e2e-token --cloud-url "http://127.0.0.1:$port" --allow-http-loopback
 hash_root > "$art/root-before.txt"
-grep -q 20-kontext.json "$art/root-before.txt" || fail "$old setup wrote no Claude drop-in"
-grep -q Cursor "$art/root-before.txt" || fail "$old setup wrote no Cursor machine-wide file"
-[ -s "$art/sudo-calls.log" ] && pass "positive control: the shim logged $old setup's sudo ($(wc -l < "$art/sudo-calls.log" | tr -d ' ') calls)" || fail "shim saw no sudo from the $old setup"
-pass "$old install has root hook files"
-# Cursor support arrived in 1.15.0. Drop its machine-wide file, so this Mac
-# looks like one set up before Cursor: the update must add Cursor's hooks.
-/usr/bin/sudo rm "/Library/Application Support/Cursor/hooks.json"
-hash_root > "$art/root-before.txt"
+if $legacy; then
+  grep -q 20-kontext.json "$art/root-before.txt" || fail "$old setup wrote no Claude drop-in"
+  grep -q Cursor "$art/root-before.txt" || fail "$old setup wrote no Cursor machine-wide file"
+  [ -s "$art/sudo-calls.log" ] && pass "positive control: the shim logged $old setup's sudo ($(wc -l < "$art/sudo-calls.log" | tr -d ' ') calls)" || fail "shim saw no sudo from the $old setup"
+  pass "$old install has root hook files"
+  # Cursor support arrived in 1.15.0. Drop its machine-wide file, so this Mac
+  # looks like one set up before Cursor: the update must add Cursor's hooks.
+  /usr/bin/sudo rm "/Library/Application Support/Cursor/hooks.json"
+  hash_root > "$art/root-before.txt"
+else
+  [ -s "$art/root-before.txt" ] && fail "$old setup wrote root files"
+  [ -s "$art/sudo-calls.log" ] && fail "$old setup called sudo"
+  pass "$old setup wrote only home-folder files and called no sudo"
+  sudo -n true >/dev/null 2>&1 || true
+  [ -s "$art/sudo-calls.log" ] && pass "positive control: the shim logs sudo" || fail "the sudo shim logged nothing"
+fi
 
 step "Point the tap at a local copy, so the test controls what is newest"
 tap="$(brew --repo kontext-security/tap)"
@@ -139,12 +155,16 @@ mark="$(wc -l < "$art/prompts.log")" smark="$(wc -l < "$art/sudo-calls.log")"
 publish "$v1"
 HOMEBREW_NO_AUTO_UPDATE=1 brew upgrade --cask --no-ask kontext-security/tap/kontext
 wait_for 180 "daemon restarted on $v1" sh -c "[ \"\$(grep -o 'managed-observe daemon [^ ]* (pid [0-9]*) started' '$mlog' | tail -1 | awk '{print \$3}')\" = $v1 ]"
-wait_for 90 "Cursor hooks added to ~/.cursor/hooks.json without a prompt" sh -c "[ \"\$(grep -c \"kontext' hook\" '$HOME/.cursor/hooks.json')\" -ge 9 ]"
+wait_for 90 "Cursor hooks in ~/.cursor/hooks.json without a prompt" sh -c "[ \"\$(grep -c \"kontext' hook\" '$HOME/.cursor/hooks.json')\" -ge 9 ]"
 hash_root > "$art/root-after.txt"
 diff "$art/root-before.txt" "$art/root-after.txt" && pass "root files untouched"
-drop="$(grep -o "'[^']*kontext' hook" "/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json" | head -1)"
-grep -qF "$drop" "$HOME/.claude/settings.json" && pass "Claude user copy repeats the drop-in's handler ($drop), so each event runs once"
-claude_probe "root drop-in plus user file"
+if $legacy; then
+  drop="$(grep -o "'[^']*kontext' hook" "/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json" | head -1)"
+  grep -qF "$drop" "$HOME/.claude/settings.json" && pass "Claude user copy repeats the drop-in's handler ($drop), so each event runs once"
+  claude_probe "root drop-in plus user file"
+else
+  claude_probe "user file after the upgrade"
+fi
 wait_for 240 "doctor healthy after the upgrade" "$prefix/bin/kontext" doctor
 "$prefix/bin/kontext" doctor | tee "$art/doctor-upgrade.txt"
 

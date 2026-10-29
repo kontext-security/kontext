@@ -2,6 +2,10 @@ name: e2e-self-serve
 # Self-serve install/update E2E on a clean macOS runner. Runs on demand only.
 on:
   workflow_dispatch:
+    inputs:
+      baseline:
+        description: "Release to upgrade from (default: the published cask; 1.16.1 covers root files from earlier setups)"
+        required: false
   pull_request:
     paths: [".github/workflows/e2e-self-serve.yml", "scripts/e2e/**"]
 
@@ -18,6 +22,8 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Self-serve install, upgrade, self-update and self-heal
+        env:
+          KONTEXT_E2E_BASELINE: ${{ inputs.baseline }}
         run: scripts/e2e/e2e-self-serve.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/e2e"
       - name: Upload artifact
         if: always()
