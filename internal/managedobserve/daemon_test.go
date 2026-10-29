@@ -1380,3 +1380,30 @@ func TestHookFilesFingerprintSeesSameSizeEdits(t *testing.T) {
 		t.Fatal("same-size edit with the old timestamp left the fingerprint unchanged")
 	}
 }
+
+// The fingerprint never follows a machine-wide Claude file into a guarded folder.
+func TestHookFilesFingerprintSkipsGuardedMachineFiles(t *testing.T) {
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	target := filepath.Join(home, "Documents", "managed-settings.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	root := filepath.Join(dir, "managed-settings.json")
+	if err := os.Symlink(target, root); err != nil {
+		t.Fatal(err)
+	}
+	swapManagedSettingsPaths(t, filepath.Join(dir, "missing", "20-kontext.json"), root)
+	if strings.Contains(hookFilesFingerprint(), root) {
+		t.Fatal("fingerprint read a machine-wide file linked into ~/Documents")
+	}
+}

@@ -139,6 +139,9 @@ func hookFilesFingerprint() string {
 	home, _ := os.UserHomeDir()
 	var b strings.Builder
 	add := func(path string) {
+		if privacyfolder.Guarded(home, path) {
+			return
+		}
 		data, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {
 			return
@@ -156,9 +159,7 @@ func hookFilesFingerprint() string {
 		}
 		for _, def := range defs {
 			for _, file := range def.Files {
-				if !privacyfolder.Guarded(home, file.Path) {
-					add(file.Path)
-				}
+				add(file.Path)
 			}
 		}
 	}
