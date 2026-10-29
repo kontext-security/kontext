@@ -501,7 +501,9 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	if codexHooks != "" {
 		// Codex runs a user hook only once it is trusted in the Codex CLI's /hooks.
 		untrusted, err := codexmanaged.UntrustedHooks(codexHooks, filepath.Join(filepath.Dir(codexHooks), "config.toml"))
-		if err != nil || len(untrusted) > 0 {
+		if err != nil {
+			fmt.Fprintf(opts.Stdout, "  • Codex: could not check whether you trust the Kontext hooks (%v). If Codex skips them, run `codex`, open /hooks and trust each Kontext hook\n", err)
+		} else if len(untrusted) > 0 {
 			fmt.Fprintln(opts.Stdout, codexTrustHint)
 		}
 	}

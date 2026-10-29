@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1557,5 +1558,47 @@ func TestRunStopsBeforeWritingWhenAHookFileCannotBeWritten(t *testing.T) {
 				t.Fatalf("setup wrote state before refusing: %v", err)
 			}
 		})
+	}
+}
+
+// Trust the user gave in Codex's /hooks survives a rerun, and setup then says
+// nothing about it. The hashes are the ones Codex 0.165 saved for the hooks of
+// /opt/homebrew/bin/kontext, the path the harness installs.
+func TestRunKeepsCodexTrustAndSkipsTheHint(t *testing.T) {
+	h := newHarness(t)
+	allowLoopback(t)
+	server := pingServer(t, "tok")
+	if err := Run(context.Background(), h.options("tok", server)); err != nil {
+		t.Fatal(err)
+	}
+	hooks := filepath.Join(h.home, ".codex", "hooks.json")
+	config := filepath.Join(h.home, ".codex", "config.toml")
+	var trust strings.Builder
+	for label, hash := range map[string]string{
+		"pre_tool_use":       "sha256:3fb17ca4bc5d5442e2001ac26cff40bd9551ffa01c031e0e07da97bd1518ab6d",
+		"post_tool_use":      "sha256:78cd2df2d9f321f271c39f8312e973c9f03cefd21a3efb02be7efa10f49b0615",
+		"session_start":      "sha256:bd02c5c30eb90cd88ce8df7d45b80663c4f44b86af5743dcc582bbc5155e52a2",
+		"user_prompt_submit": "sha256:4dd5b7ee023876a6f96a298f913182898c88b5de473183167f2dcf4da444c77d",
+		"stop":               "sha256:fa8ab0488c932c615fa2c1f833da5ba875de8f08ed93f22ea12575f2d3d6f670",
+	} {
+		fmt.Fprintf(&trust, "\n[hooks.state.%q]\ntrusted_hash = %q\n", hooks+":"+label+":0:0", hash)
+	}
+	f, err := os.OpenFile(config, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(trust.String()); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	h.out.Reset()
+	if err := Run(context.Background(), h.options("tok", server)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(h.out.String(), "Codex:") {
+		t.Fatalf("a trusted rerun printed a Codex trust line:\n%s", h.out.String())
+	}
+	if untrusted, err := codexmanaged.UntrustedHooks(hooks, config); err != nil || len(untrusted) > 0 {
+		t.Fatalf("rerun lost the saved trust: %v %v", untrusted, err)
 	}
 }
