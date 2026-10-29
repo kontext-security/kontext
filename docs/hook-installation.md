@@ -148,9 +148,14 @@ There is no need to modify the console user's home during a system install.
 
 User and trusted project configuration can override system defaults. Doctor
 checks the channel's hook files and feature flag and reports a user-level
-`hooks = false` override as unhealthy. This is a configuration check, not proof
-of hook trust approval or session-specific/project overrides. Codex may require
-review in `/hooks` before hooks run; installation does not grant that trust.
+`hooks = false` override as unhealthy. It does not see session-specific or
+project overrides.
+
+Codex runs a user hook only after you trust it in the Codex CLI: run `codex`,
+open `/hooks` and trust each Kontext hook. Codex saves that trust in
+`~/.codex/config.toml` for the hook's exact command, so a hook whose binary path
+changed needs trusting again. Installation never grants trust. Setup and doctor
+name the Kontext hooks Codex has not trusted yet.
 
 Doctor applies the same rule to both scopes. It detects agent executables on
 PATH and common install paths, plus `/Applications` and `~/Applications` app

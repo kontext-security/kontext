@@ -472,6 +472,7 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		return err
 	}
 	// Every hook file is in the user's home, so setup never asks for a password.
+	codexHooks := ""
 	if err := hookinstall.Install(hookinstall.Options{
 		Scope: hookinstall.User, Home: home, Binary: binary, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
 		Report: func(r hookinstall.Result) {
@@ -482,6 +483,7 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 					fmt.Fprintf(opts.Stderr, "warning: disableAllHooks in %s switches Claude Code hooks off; remove it so Kontext can observe Claude Code.\n", r.File.Path)
 				}
 			case "codex":
+				codexHooks = r.File.Path
 				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", r.File.Path)
 			case "cursor":
 				fmt.Fprintf(opts.Stdout, "  ✓ Cursor hooks installed (%s)\n", r.File.Path)
@@ -496,7 +498,15 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	}); err != nil {
 		return err
 	}
-	fmt.Fprintln(opts.Stderr, "note: Codex hooks require review before they run; open `/hooks` in Codex to trust the Kontext hooks.")
+	if codexHooks != "" {
+		// Codex runs a user hook only once it is trusted in the Codex CLI's /hooks.
+		untrusted, err := codexmanaged.UntrustedHooks(codexHooks, filepath.Join(filepath.Dir(codexHooks), "config.toml"))
+		if err != nil {
+			fmt.Fprintf(opts.Stdout, "  • Codex: could not check whether you trust the Kontext hooks (%v). If Codex skips them, run `codex`, open /hooks and trust each Kontext hook\n", err)
+		} else if len(untrusted) > 0 {
+			fmt.Fprintln(opts.Stdout, codexTrustHint)
+		}
+	}
 	if !hookinstall.CoworkGoverned(managedSettingsPath, managedSettingsFile) {
 		fmt.Fprintln(opts.Stdout, "  • Cowork: not governed. Cowork reads only machine-wide Claude settings, which need an organization install")
 	}
@@ -1045,6 +1055,11 @@ func writableDir(path string) error {
 	}
 	return nil
 }
+
+// codexTrustHint tells the user how to trust the Kontext hooks in Codex.
+// Codex keeps that trust in ~/.codex/config.toml, which the Codex CLI's /hooks
+// writes; a hook whose command changed needs trusting again.
+const codexTrustHint = "  • Codex: runs the Kontext hooks only after you trust them. Run `codex`, open /hooks and trust each Kontext hook"
 
 func preflightCodexUserHooks(binary string) error {
 	path, err := codexmanaged.UserHooksPathNoCreate()

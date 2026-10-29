@@ -268,7 +268,7 @@ it receives, which events can block, and how each integration is installed.
 | Agent | What Kontext records | Pre-action blocking | Installation |
 | --- | --- | --- | --- |
 | **Claude Code** | Session lifecycle, pre-tool-use, successful and failed post-tool-use | Pre-tool-use | Installed by `kontext setup` |
-| **Codex** | Session start, pre-tool-use, post-tool-use, prompt submission, stop | Pre-tool-use | Installed by `kontext setup`; hooks must be trusted in Codex |
+| **Codex** | Session start, pre-tool-use, post-tool-use, prompt submission, stop | Pre-tool-use | Installed by `kontext setup`; trust the hooks once in the Codex CLI's `/hooks` |
 | **Claude Cowork** | Claude Code-compatible session and tool events | Pre-tool-use | Configure the hook inside the Cowork environment |
 
 See the [agent support matrix](docs/coverage.md) for exact behavior, deployment
