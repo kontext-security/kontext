@@ -970,6 +970,9 @@ func preflightCursorHooks(binary, path string) error {
 	if err == nil {
 		err = cursormanaged.MergeManagedHooks(settings, binary)
 	}
+	if err == nil {
+		err = writableDir(path)
+	}
 	if err != nil {
 		return fmt.Errorf("check Cursor hooks: %w\n\nFix or move %s, then rerun setup.\nNothing changed.", err, path)
 	}
@@ -1015,22 +1018,28 @@ func danglingLink(path string) error {
 	return nil
 }
 
-// writableDir checks that the folder holding path (through a symlink, its
-// target's) takes the backup and atomic replace hook installation writes.
+// writableDir checks that the folders hook installation writes in take a new
+// file: the one holding path, for the backup, and through a symlink the
+// target's, for the atomic replace.
 func writableDir(path string) error {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
+	dirs := []string{filepath.Dir(path)}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil && filepath.Dir(resolved) != dirs[0] {
+		dirs = append(dirs, filepath.Dir(resolved))
 	}
-	dir := filepath.Dir(path)
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		return nil
+	for _, dir := range dirs {
+		if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		probe, err := os.CreateTemp(dir, ".kontext-setup-check-*")
+		if err != nil {
+			return fmt.Errorf("%s is not writable: %w", dir, err)
+		}
+		probe.Close()
+		if err := os.Remove(probe.Name()); err != nil {
+			return err
+		}
 	}
-	probe, err := os.CreateTemp(dir, ".kontext-setup-check-*")
-	if err != nil {
-		return fmt.Errorf("%s is not writable: %w", dir, err)
-	}
-	probe.Close()
-	return os.Remove(probe.Name())
+	return nil
 }
 
 func preflightCodexUserHooks(binary string) error {

@@ -186,3 +186,28 @@ func TestCoworkCoverageSplitAcrossMachineSourcesAndDisabledMirror(t *testing.T) 
 		t.Fatalf("doctor accepted a mirrored copy with disableAllHooks: %s", &out)
 	}
 }
+
+// Claude runs only command handlers; a Kontext command under another handler
+// type governs nothing.
+func TestCoworkGovernedNeedsCommandHandlers(t *testing.T) {
+	opts, _ := fixture(t, User)
+	managed := filepath.Join(filepath.Dir(filepath.Dir(machineClaudeDropIn)), "managed-settings.json")
+	for _, tc := range []struct {
+		kind string
+		want bool
+	}{{"command", true}, {"prompt", false}} {
+		settings := claudemanaged.Template(opts.Binary)
+		for _, groups := range settings.Hooks {
+			for i := range groups {
+				for j := range groups[i].Hooks {
+					groups[i].Hooks[j].Type = tc.kind
+				}
+			}
+		}
+		data, _ := json.Marshal(settings)
+		write(t, machineClaudeDropIn, string(data), 0644)
+		if got := CoworkGoverned(machineClaudeDropIn, managed); got != tc.want {
+			t.Fatalf("%s handlers: CoworkGoverned = %v, want %v", tc.kind, got, tc.want)
+		}
+	}
+}

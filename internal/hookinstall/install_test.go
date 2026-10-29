@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -818,5 +819,75 @@ func TestUserClaudeCopyMirrorsMixedMachineSources(t *testing.T) {
 	}
 	if read(t, defs[0].Files[0].Path) != user {
 		t.Fatal("a second install rewrote the mirrored copy")
+	}
+}
+
+// Claude merges every drop-in in managed-settings.d, and a handler written as a
+// command with args runs like the one-string form, so the user copy repeats it.
+func TestUserClaudeCopyMirrorsEveryMachineDropIn(t *testing.T) {
+	opts, defs := fixture(t, User)
+	org := claudemanaged.Template(opts.Binary)
+	for name, groups := range org.Hooks {
+		for i := range groups {
+			for j := range groups[i].Hooks {
+				h := &groups[i].Hooks[j]
+				fields, _ := agenthooks.SplitCommand(h.Command)
+				h.Command, h.Args, h.Timeout = fields[0], fields[1:], 30
+			}
+		}
+		org.Hooks[name] = groups
+	}
+	data, _ := json.Marshal(org)
+	write(t, filepath.Join(filepath.Dir(machineClaudeDropIn), "10-org.json"), string(data), 0644)
+	if err := runDefinitions(opts, defs[:1], false); err != nil {
+		t.Fatal(err)
+	}
+	user := read(t, defs[0].Files[0].Path)
+	var got claudemanaged.Settings
+	if err := json.Unmarshal([]byte(user), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Hooks, org.Hooks) {
+		t.Fatalf("user copy does not repeat the other drop-in's handlers:\n%s", user)
+	}
+	var out bytes.Buffer
+	if !diagnose(&out, User, defs[:1], func(string) bool { return true }, "", "") {
+		t.Fatalf("doctor rejected the mirrored copy: %s", &out)
+	}
+	if err := runDefinitions(opts, defs[:1], false); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, defs[0].Files[0].Path) != user {
+		t.Fatal("a second install rewrote the mirrored copy")
+	}
+}
+
+// A dotfiles link whose file held only Kontext's Cursor hooks stays a link
+// when a complete machine-wide set makes the user copy redundant.
+func TestUserCursorLinkSurvivesWhenTheMachineFileCoversEverything(t *testing.T) {
+	opts, defs := fixture(t, User)
+	machine := map[string]any{}
+	if err := cursormanaged.MergeManagedHooks(machine, opts.Binary); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(machine)
+	write(t, machineCursorHooks, string(raw), 0644)
+	target := filepath.Join(t.TempDir(), "dotfiles", "hooks.json")
+	write(t, target, string(raw), 0644)
+	user := defs[2].Files[0].Path
+	if err := os.MkdirAll(filepath.Dir(user), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, user); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDefinitions(opts, defs, false); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(user); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("user hooks link replaced or removed: %v", err)
+	}
+	if got := cursormanaged.Coverage([]byte(read(t, target))); len(got) != 0 {
+		t.Fatalf("link target still runs %d Kontext hooks next to the machine-wide set", len(got))
 	}
 }

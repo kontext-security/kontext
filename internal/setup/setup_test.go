@@ -1494,9 +1494,9 @@ func TestSetupRejectsPersonalKeyBeforeSavingCredentials(t *testing.T) {
 }
 
 func TestRunStopsBeforeWritingWhenAHookFileCannotBeWritten(t *testing.T) {
-	for _, name := range []string{"dangling Claude settings link", "Cursor folder not writable"} {
+	for _, name := range []string{"dangling Claude settings link", "Cursor folder not writable", "Claude settings link in a read-only folder", "Cursor file in a read-only folder"} {
 		t.Run(name, func(t *testing.T) {
-			if name == "Cursor folder not writable" && !modeBitsDenyWrites(t) {
+			if name != "dangling Claude settings link" && !modeBitsDenyWrites(t) {
 				t.Skip("environment does not deny writes to a read-only directory (running as root?)")
 			}
 			h := newHarness(t)
@@ -1513,6 +1513,38 @@ func TestRunStopsBeforeWritingWhenAHookFileCannotBeWritten(t *testing.T) {
 			case "Cursor folder not writable":
 				dir := filepath.Join(h.home, ".cursor")
 				if err := os.MkdirAll(dir, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+			case "Claude settings link in a read-only folder":
+				// The target takes the write, but the backup lands next to the link.
+				target := filepath.Join(h.home, "dotfiles", "claude-settings.json")
+				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				dir := filepath.Join(h.home, ".claude")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(dir, "settings.json")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(dir, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+			case "Cursor file in a read-only folder":
+				dir := filepath.Join(h.home, ".cursor")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "hooks.json"), []byte(`{"version":1}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(dir, 0o500); err != nil {
 					t.Fatal(err)
 				}
 				t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })

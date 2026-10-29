@@ -464,7 +464,8 @@ func machineClaudeHooksFact() (managedstream.HooksFact, bool) {
 func claudeHooksFact(userSettings string) (managedstream.HooksFact, bool) {
 	covered := map[string]bool{}
 	managedDisabled, userDisabled := false, false
-	for _, path := range []string{managedSettingsDropInPath, managedSettingsFilePath, userSettings} {
+	paths := append(claudemanaged.MachineSettingsFiles(managedSettingsDropInPath, managedSettingsFilePath), userSettings)
+	for _, path := range paths {
 		if path == "" {
 			continue
 		}
@@ -472,8 +473,11 @@ func claudeHooksFact(userSettings string) (managedstream.HooksFact, bool) {
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		if err != nil {
+		if err != nil && (path == managedSettingsDropInPath || path == managedSettingsFilePath || path == userSettings) {
 			return managedstream.HooksFact{}, false
+		}
+		if err != nil {
+			continue // another product's drop-in Claude cannot read either
 		}
 		if claudemanaged.DisablesAllHooks(data) {
 			if path == userSettings {
@@ -482,7 +486,8 @@ func claudeHooksFact(userSettings string) (managedstream.HooksFact, bool) {
 			}
 			managedDisabled = true
 		}
-		for event := range claudemanaged.CoveredEvents(data) {
+		// Hooks that name a binary an upgrade or uninstall removed cannot run.
+		for event := range claudemanaged.RunnableEvents(data) {
 			covered[event] = true
 		}
 	}

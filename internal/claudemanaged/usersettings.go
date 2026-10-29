@@ -96,7 +96,7 @@ func UserHooksMatch(data []byte, binary string, machine ...[]byte) bool {
 	return err == nil && reflect.DeepEqual(owned, canonical)
 }
 
-// RunnableEvents lists the events data carries a Kontext hook for whose
+// RunnableEvents lists the events data carries a valid Kontext hook for whose
 // binary exists and is executable.
 func RunnableEvents(data []byte) map[string]bool {
 	var settings Settings
@@ -107,15 +107,46 @@ func RunnableEvents(data []byte) map[string]bool {
 	for _, event := range SupportedEvents {
 		for _, group := range settings.Hooks[event.Name.String()] {
 			for _, handler := range group.Hooks {
-				fields, ok := agenthooks.SplitCommand(handler.Command)
-				if ok && len(fields) == 3 && filepath.Base(fields[0]) == "kontext" && fields[1] == "hook" && fields[2] == event.Alias &&
-					isAllMatcher(group.Matcher) && len(handler.Args) == 0 && runnable(fields[0]) {
+				if binary, ok := kontextHook(group, handler, event); ok && runnable(binary) && validateAsync(event, handler.Async) == nil {
 					covered[event.Name.String()] = true
 				}
 			}
 		}
 	}
 	return covered
+}
+
+// kontextHook returns the binary of a Kontext hook for event: a command
+// handler for every tool that runs `<dir>/kontext hook <alias>`, as one command
+// string or as a command with args.
+func kontextHook(group MatcherGroup, handler Handler, event Event) (string, bool) {
+	if handler.Type != "command" || !isAllMatcher(group.Matcher) {
+		return "", false
+	}
+	fields, ok := agenthooks.SplitCommand(handler.Command)
+	if !ok || len(handler.Args) > 0 && len(fields) != 1 {
+		return "", false
+	}
+	fields = append(fields, handler.Args...)
+	if len(fields) != 3 || filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != event.Alias {
+		return "", false
+	}
+	return fields[0], true
+}
+
+// MachineSettingsFiles lists the machine-wide files Claude Code merges hooks
+// from: managedSettings, dropIn and every other JSON drop-in in its folder
+// (Claude skips hidden ones).
+func MachineSettingsFiles(dropIn, managedSettings string) []string {
+	files := []string{managedSettings, dropIn}
+	entries, _ := os.ReadDir(filepath.Dir(dropIn))
+	for _, entry := range entries {
+		path := filepath.Join(filepath.Dir(dropIn), entry.Name())
+		if !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") && strings.HasSuffix(entry.Name(), ".json") && path != dropIn {
+			files = append(files, path)
+		}
+	}
+	return files
 }
 
 // KontextBinaries lists the distinct binaries data's Kontext hook commands name.
@@ -128,9 +159,8 @@ func KontextBinaries(data []byte) []string {
 	for _, event := range SupportedEvents {
 		for _, group := range settings.Hooks[event.Name.String()] {
 			for _, handler := range group.Hooks {
-				fields, ok := agenthooks.SplitCommand(handler.Command)
-				if ok && len(fields) == 3 && filepath.Base(fields[0]) == "kontext" && fields[1] == "hook" && !slices.Contains(binaries, fields[0]) {
-					binaries = append(binaries, fields[0])
+				if binary, ok := kontextHook(group, handler, event); ok && !slices.Contains(binaries, binary) {
+					binaries = append(binaries, binary)
 				}
 			}
 		}
@@ -164,14 +194,10 @@ func expectedUserHooks(binary string, machine [][]byte) Settings {
 		for _, event := range SupportedEvents {
 			for _, group := range settings.Hooks[event.Name.String()] {
 				for _, handler := range group.Hooks {
-					fields, ok := agenthooks.SplitCommand(handler.Command)
-					if !ok || len(fields) != 3 || filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != event.Alias || !isAllMatcher(group.Matcher) || len(handler.Args) != 0 {
-						continue
-					}
 					// Repeat it exactly, whatever binary it names: a machine-wide
 					// source with another binary (managed-settings.json next to an
 					// earlier drop-in) still runs, and a differing copy runs twice.
-					if !runnable(fields[0]) {
+					if binary, ok := kontextHook(group, handler, event); !ok || !runnable(binary) {
 						continue
 					}
 					expected.Hooks[event.Name.String()] = []MatcherGroup{{Matcher: group.Matcher, Hooks: []Handler{handler}}}
@@ -364,7 +390,7 @@ func managedHookPlanFrom(settings Settings) agenthooks.Plan {
 			Match: agenthooks.MatchSpec{
 				Pattern: group.Matcher,
 			},
-			Command:   agenthooks.CommandHook{Command: handler.Command, Timeout: handler.Timeout, Async: handler.Async},
+			Command:   agenthooks.CommandHook{Command: handler.Command, Args: handler.Args, Timeout: handler.Timeout, Async: handler.Async},
 			Placement: agenthooks.PlacementAppend,
 		}
 	}

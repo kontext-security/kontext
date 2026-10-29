@@ -108,7 +108,7 @@ func diagnoseCursorLayers(out io.Writer, user, machine string) bool {
 // a drop-in from an earlier setup or an organization's settings still govern it.
 func CoworkGoverned(dropin, managedSettings string) bool {
 	covered := map[string]bool{}
-	for _, path := range []string{dropin, managedSettings} {
+	for _, path := range claudemanaged.MachineSettingsFiles(dropin, managedSettings) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			continue

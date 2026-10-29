@@ -605,7 +605,12 @@ func TestLegacyCoworkRejectsDisabledManagedSettingsSource(t *testing.T) {
 }
 
 func TestManagedObserveHooksFact(t *testing.T) {
-	template, err := claudemanaged.TemplateJSON("/opt/homebrew/bin/kontext")
+	// Hooks count only when the binary they name can run.
+	binary := filepath.Join(t.TempDir(), "kontext")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	template, err := claudemanaged.TemplateJSON(binary)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,6 +625,35 @@ func TestManagedObserveHooksFact(t *testing.T) {
 
 		fact, ok := managedObserveHooksFact(managedconfig.ScopeSystem)
 		if !ok || !fact.Present || fact.DisabledAllHooks {
+			t.Fatalf("managedObserveHooksFact(managedconfig.ScopeSystem) = %+v, %v; want present", fact, ok)
+		}
+	})
+
+	t.Run("binary removed", func(t *testing.T) {
+		dir := t.TempDir()
+		gone, err := claudemanaged.TemplateJSON(filepath.Join(dir, "gone", "kontext"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dropIn := filepath.Join(dir, "20-kontext.json")
+		if err := os.WriteFile(dropIn, gone, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		swapManagedSettingsPaths(t, dropIn, filepath.Join(dir, "missing", "managed-settings.json"))
+
+		if fact, ok := managedObserveHooksFact(managedconfig.ScopeSystem); !ok || fact.Present {
+			t.Fatalf("managedObserveHooksFact(managedconfig.ScopeSystem) = %+v, %v; want missing", fact, ok)
+		}
+	})
+
+	t.Run("another drop-in carries the hooks", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "10-org.json"), template, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		swapManagedSettingsPaths(t, filepath.Join(dir, "20-kontext.json"), filepath.Join(dir, "missing", "managed-settings.json"))
+
+		if fact, ok := managedObserveHooksFact(managedconfig.ScopeSystem); !ok || !fact.Present {
 			t.Fatalf("managedObserveHooksFact(managedconfig.ScopeSystem) = %+v, %v; want present", fact, ok)
 		}
 	})

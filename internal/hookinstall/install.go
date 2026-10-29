@@ -87,16 +87,17 @@ var (
 	machineCursorHooks  = cursormanaged.SystemHooksPath
 )
 
-// machineClaudeSources returns Claude's machine-wide managed settings: the
-// drop-in an earlier self-serve setup wrote and managed-settings.json. A user
-// copy repeats the Kontext handlers they declare, so each runs once.
+// machineClaudeSources returns Claude's machine-wide managed settings:
+// managed-settings.json and every drop-in, including the one an earlier
+// self-serve setup wrote. A user copy repeats the Kontext handlers they
+// declare, so each runs once.
 func machineClaudeSources(opts Options) [][]byte {
 	dropIn := opts.ClaudePath
 	if dropIn == "" {
 		dropIn = machineClaudeDropIn
 	}
 	var sources [][]byte
-	for _, path := range []string{dropIn, filepath.Join(filepath.Dir(filepath.Dir(dropIn)), "managed-settings.json")} {
+	for _, path := range claudemanaged.MachineSettingsFiles(dropIn, filepath.Join(filepath.Dir(filepath.Dir(dropIn)), "managed-settings.json")) {
 		if raw, err := os.ReadFile(path); err == nil {
 			sources = append(sources, raw)
 		}
@@ -339,8 +340,9 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		}
 		c.after, err = json.MarshalIndent(settings, "", "  ")
 		c.after = append(c.after, '\n')
-		// Only delete an empty file when all of its content was our hooks.
-		if removeHere && (!opts.Setup || file.Kind == "cursor") && len(settings) == 0 && file.Kind != "claude-user" {
+		// Only delete an empty file when all of its content was our hooks. A
+		// dotfiles symlink stays; its target gets the emptied settings.
+		if removeHere && (!opts.Setup || file.Kind == "cursor") && len(settings) == 0 && file.Kind != "claude-user" && info.Mode()&os.ModeSymlink == 0 {
 			c.after = nil
 		}
 	case "feature":
