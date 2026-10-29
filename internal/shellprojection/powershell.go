@@ -70,7 +70,7 @@ func powerShellCalls(command string, w walk, top bool) []cedareval.ShellProjecti
 	if reason != "" {
 		return scriptParseFailure(reason, command)
 	}
-	if strings.Contains(strings.ToLower(command), "psdefaultparametervalues") {
+	if strings.Contains(strings.ToLower(command), "psdefaultparameter") {
 		w.cmdletDefaults = true
 	}
 	return projectStatements(statements, nested, dialectPowerShell, w, top)

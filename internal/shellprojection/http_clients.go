@@ -76,31 +76,72 @@ func powerShellDash(word string) string {
 	return word
 }
 
+// quotedValue marks a word written in quotes, which PowerShell always binds
+// as a value, even when it starts with a dash ('-s').
+const quotedValue = "\x01"
+
+// aliasUnreadable is added to the arguments of a curl or wget alias call that
+// Windows PowerShell 5.1 binds in part but that windowsPowerShellWebArgs
+// cannot follow to the end: such a call may still run.
+const aliasUnreadable = "\x00alias"
+
+// ignorableInName are characters PowerShell's culture-aware comparison skips
+// in a parameter name, such as the soft hyphen in -M\u00adethod; removing
+// them can only make more names match.
+var ignorableInName = strings.NewReplacer("\u00ad", "", "\u200b", "", "\u200c", "", "\u200d", "", "\u2060", "", "\ufeff", "")
+
+// endOfParameters reports --, written with any two of PowerShell's dashes.
+func endOfParameters(word string) bool {
+	word = powerShellDash(word)
+	return len(word) > 1 && word[0] == '-' && powerShellDash(word[1:]) == "-"
+}
+
+// webValue returns a word as the value PowerShell binds.
+func webValue(word string) string {
+	return strings.TrimPrefix(word, quotedValue)
+}
+
+// commaValue extends a value PowerShell reads as an array (-Method Get, Delete)
+// to the list form 'Get,Delete'; next is the index of the word after it, and
+// the index after the array comes back.
+func commaValue(args []string, value string, next int) (string, int) {
+	for next < len(args) && (strings.HasSuffix(value, ",") || strings.HasPrefix(webValue(args[next]), ",")) {
+		value += webValue(args[next])
+		next++
+	}
+	return value, next
+}
+
 // windowsPowerShellWebArgs binds arguments as Windows PowerShell 5.1 does for
-// its curl and wget aliases of Invoke-WebRequest, and returns them with each
-// parameter under its full name. ok is false when the call is not read as the
-// cmdlet: without a named parameter (5.1 sends the same GET as the program),
-// or when 5.1 refuses it and runs nothing: a parameter Invoke-WebRequest does
-// not have there or an ambiguous prefix, a missing value, or not exactly one
-// URI. After --, every word is positional.
-func windowsPowerShellWebArgs(args []string) (_ []string, ok bool) {
+// its curl and wget aliases of Invoke-WebRequest. read is false when no word
+// binds as one of its parameters there: 5.1 then sends the same GET as the
+// program, or refuses the call. When 5.1 binds the call, each parameter comes
+// back under its full name. When a word binds but the rest cannot be followed
+// (an unknown or ambiguous parameter, a missing value, not exactly one URI),
+// the words come back as written with aliasUnreadable: a call this reading
+// cannot follow may still run, so it is read as unreadable, never dropped;
+// without any URI, 5.1 refuses for certain. After --, every word is
+// positional.
+func windowsPowerShellWebArgs(args []string) (_ []string, read bool) {
 	var out []string
-	named, uris, positional := false, 0, false
+	named, refused, uris, positional := false, false, 0, false
 	for i := 0; i < len(args); i++ {
 		arg := powerShellDash(args[i])
-		if !positional && arg == "--" {
+		if !positional && endOfParameters(arg) {
 			positional = true
+			out = append(out, "--")
 			continue
 		}
-		if positional || len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
-			out = append(out, arg)
+		if positional || !parameterToken(arg) {
+			out = append(out, args[i])
 			uris++
 			continue
 		}
 		name, value, hasValue := strings.Cut(arg[1:], ":")
 		p, found := lookupWebCmdletParameter(strings.ToLower(name), true)
 		if !found {
-			return nil, false
+			refused = true
+			continue
 		}
 		named = true
 		if p.role == "uri" {
@@ -108,21 +149,33 @@ func windowsPowerShellWebArgs(args []string) (_ []string, ok bool) {
 		}
 		switch {
 		case hasValue && value != "":
-			out = append(out, "-"+p.name+":"+value)
-		case hasValue && i+1 < len(args):
-			// -Name: value binds the next word, as -Name value does.
-			out = append(out, "-"+p.name+":"+args[i+1])
-			i++
-		case !hasValue && p.value && i+1 < len(args) && !parameterToken(powerShellDash(args[i+1])):
-			out = append(out, "-"+p.name, args[i+1])
-			i++
-		case p.value || hasValue:
-			return nil, false
+			v, next := commaValue(args, value, i+1)
+			out = append(out, "-"+p.name+":"+v)
+			i = next - 1
+		case (hasValue || p.value) && i+1 < len(args) && !parameterToken(powerShellDash(args[i+1])):
+			// -Name value binds the next word, and so does -Name: value.
+			v, next := commaValue(args, args[i+1], i+2)
+			out = append(out, "-"+p.name, v)
+			i = next - 1
+		case hasValue:
+			// -Name: before a parameter: the scanner drops an empty quoted
+			// value ('' in -UserAgent:''), so read it as empty.
+			out = append(out, "-"+p.name, "")
+		case p.value:
+			refused = true
 		default:
 			out = append(out, "-"+p.name)
 		}
 	}
-	return out, named && uris == 1
+	switch {
+	case !named || uris == 0:
+		// Without a URI, 5.1 refuses the call (curl -s <url> binds the URL
+		// as -SessionVariable).
+		return nil, false
+	case refused || uris != 1:
+		return append(slices.Clone(args), aliasUnreadable), true
+	}
+	return out, true
 }
 
 // webCmdletParameter is a parameter of Invoke-WebRequest and Invoke-RestMethod
@@ -182,6 +235,7 @@ var webCmdletParameters = []webCmdletParameter{
 // parameters count.
 func lookupWebCmdletParameter(name string, windowsPowerShell bool) (webCmdletParameter, bool) {
 	var match []webCmdletParameter
+	name = ignorableInName.Replace(name)
 	for _, p := range webCmdletParameters {
 		if windowsPowerShell && !p.v51 {
 			continue
@@ -226,11 +280,11 @@ func webRequestMethod(value string) (string, bool) {
 		part = strings.TrimSpace(part)
 		n := slices.IndexFunc(webRequestMethods, func(m struct{ name, method string }) bool { return strings.EqualFold(m.name, part) })
 		if n < 0 {
-			v, err := strconv.ParseInt(part, 0, 64)
-			if err != nil || v < 0 || v >= int64(len(webRequestMethods)) {
+			v, ok := powerShellNumber(part)
+			if !ok || v >= len(webRequestMethods) {
 				return "", false
 			}
-			n = int(v)
+			n = v
 		}
 		combined |= n
 	}
@@ -238,6 +292,29 @@ func webRequestMethod(value string) (string, bool) {
 		return "", false
 	}
 	return webRequestMethods[combined].method, true
+}
+
+// powerShellNumber reads a number as PowerShell does when it converts a string
+// to an enum: decimal, leading zeros included (09 is 9), or hex after 0x, with
+// a type suffix such as l. Reading more forms than PowerShell accepts only
+// reads a request where PowerShell would refuse the call.
+func powerShellNumber(s string) (int, bool) {
+	s = strings.TrimPrefix(strings.ToLower(s), "+")
+	for _, suffix := range []string{"ul", "lu", "uy", "us", "u", "l", "y", "s", "n"} {
+		if rest, ok := strings.CutSuffix(s, suffix); ok && rest != "" {
+			s = rest
+			break
+		}
+	}
+	base := 10
+	if rest, ok := strings.CutPrefix(s, "0x"); ok {
+		s, base = rest, 16
+	}
+	v, err := strconv.ParseUint(s, base, 31)
+	if err != nil {
+		return 0, false
+	}
+	return int(v), true
 }
 
 // webCmdletArgs translates Invoke-WebRequest and Invoke-RestMethod arguments
@@ -265,11 +342,14 @@ func webCmdletArgs(args []string, stdin bool) []string {
 		case arg == cmdletDefaults:
 			out = append(out, "-K", "unreadable-web-cmdlet-defaults")
 			continue
-		case !positional && arg == "--":
+		case arg == aliasUnreadable:
+			out = append(out, "-K", "unreadable-web-cmdlet-alias")
+			continue
+		case !positional && endOfParameters(arg):
 			positional = true
 			continue
-		case positional || len(arg) < 2 || arg[0] != '-':
-			out = append(out, "--url", strings.TrimSuffix(arg, computedValue))
+		case positional || len(arg) < 2 || arg[0] != '-' || !parameterToken(arg) && arg[1] != '-':
+			out = append(out, "--url", webValue(strings.TrimSuffix(args[i], computedValue)))
 			uri()
 			continue
 		}
@@ -281,21 +361,25 @@ func webCmdletArgs(args []string, stdin bool) []string {
 		}
 		value := ""
 		if p.value || hasValue {
+			next := i + 1
 			switch {
 			case hasValue && attached != "":
 				value = attached
-			case hasValue && i+1 < len(args):
-				// -Name: value binds the next word, as -Name value does.
-				i++
-				value = args[i]
-			case !hasValue && i+1 < len(args) && !parameterToken(powerShellDash(args[i+1])):
-				i++
-				value = args[i]
+			case next < len(args) && !parameterToken(powerShellDash(args[next])):
+				// -Name value binds the next word, and so does -Name: value.
+				value = args[next]
+				next++
+			case hasValue:
+				// -Name: before a parameter or at the end: the scanner drops
+				// an empty quoted value ('' in -UserAgent:''), so read it as
+				// empty rather than missing.
 			default:
 				// PowerShell refuses a parameter with its value missing.
 				out = append(out, "-K", "unreadable-web-cmdlet-parameter")
 				continue
 			}
+			value, next = commaValue(args, webValue(value), next)
+			i = next - 1
 		}
 		computed := value == "" || value == computedValue
 		if computed {

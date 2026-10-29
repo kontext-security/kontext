@@ -73,6 +73,8 @@ func webCmdletWords(words []scriptWord, w walk) []string {
 	args := make([]string, len(words), len(words)+1)
 	for i, word := range words {
 		switch name := powerShellDash(word.value); {
+		case word.literal && word.quoted && name != "" && name[0] == '-':
+			args[i] = quotedValue + word.value
 		case word.literal:
 			args[i] = word.value
 		case !word.quoted && parameterToken(name) && strings.HasSuffix(name, ":"):

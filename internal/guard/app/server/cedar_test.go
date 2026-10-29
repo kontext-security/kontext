@@ -182,6 +182,15 @@ func TestCedarPowerShellWebCmdletsEnforceGitHubPolicy(t *testing.T) {
 		{"Invoke-WebRequest -CM DELETE -Uri " + repo, risk.DecisionDeny},
 		{"curl -UseB -Meth Delete -- " + repo, risk.DecisionDeny},
 		{"curl -d -Method " + repo, risk.DecisionDeny},
+		{"irm " + repo + " -UserAgent:'' -Method:Delete", risk.DecisionDeny},
+		{"irm " + repo + " -Method Get, Delete", risk.DecisionDeny},
+		{"irm -Method 09 " + repo, risk.DecisionDeny},
+		{"irm -Method 5l " + repo, risk.DecisionDeny},
+		{"irm -M\u00adethod Delete " + repo, risk.DecisionDeny},
+		{"curl -UseB -UserAgent: '' -Method:Delete -Uri " + repo, risk.DecisionDeny},
+		{"curl -UseB -method:Delete -UserAgent '-s' " + repo, risk.DecisionDeny},
+		{"curl -UseB -method:Delete -\u2013 " + repo, risk.DecisionDeny},
+		{"curl -s " + repo, risk.DecisionAllow},
 	} {
 		t.Run(test.command, func(t *testing.T) {
 			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubWritePolicy)
