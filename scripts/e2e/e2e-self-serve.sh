@@ -19,6 +19,14 @@
 # usage: e2e-self-serve.sh <repo checkout> <artifact dir>
 set -euo pipefail
 
+# It installs and upgrades Kontext with Homebrew, repoints the Kontext tap,
+# edits Homebrew's trust store, removes system hooks and uninstalls Kontext: run
+# it only on a throwaway CI runner.
+[ "${GITHUB_ACTIONS:-}" = true ] || [ "${KONTEXT_E2E_DESTRUCTIVE:-}" = 1 ] || {
+  echo "refusing to run outside GitHub Actions: it changes this Mac's Homebrew and Kontext install (set KONTEXT_E2E_DESTRUCTIVE=1 on a throwaway Mac)" >&2
+  exit 2
+}
+
 repo="$(cd "$1" && pwd)"
 art="$(mkdir -p "$2" && cd "$2" && pwd)"
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -52,12 +60,13 @@ chmod +x "$art/shim/sudo"
 : > "$art/sudo-calls.log"
 export PATH="$art/shim:$PATH"
 python3 "$here/stub_api.py" "$port" > "$art/stub-api.log" 2>&1 &
+stub=$!
 # Admin dialogs, plus sudo aimed at Kontext or agent hook files (the runner
 # runs its own sudo jobs, e.g. provjobd, which are not ours).
-( while :; do ps -axo pid=,command= | grep -E '(^|[ /])(osascript|security_authtrampoline|SecurityAgent) |(^|[ /])sudo (-v$|.*(kontext|ClaudeCode|Cursor|/etc/codex))' | grep -v grep | sed "s/^/$(date -u +%H:%M:%S) /"; sleep 0.2; done ) >> "$art/prompts.log" 2>/dev/null &
+( while :; do ps -axo pid=,command= | grep -E '(^|[ /])(osascript|security_authtrampoline|SecurityAgent) |(^|[ /])sudo (-v$|.*(kontext|ClaudeCode|Cursor|/etc/codex))' | grep -v grep | sed "s/^/$(date -u +%H:%M:%S) /" || true; sleep 0.2; done ) >> "$art/prompts.log" 2>/dev/null &
 watcher=$!
 finish() {
-  kill "$watcher" 2>/dev/null || true
+  kill "$watcher" "$stub" 2>/dev/null || true
   cp "$mlog" "$art/managed-observe.log" 2>/dev/null || true
   "$prefix/bin/kontext" doctor > "$art/doctor-final.txt" 2>&1 || true
 }
@@ -162,10 +171,10 @@ HOMEBREW_NO_AUTO_UPDATE=1 brew upgrade --cask --no-ask kontext-security/tap/kont
 wait_for 180 "daemon restarted on $v1" sh -c "[ \"\$(grep -o 'managed-observe daemon [^ ]* (pid [0-9]*) started' '$mlog' | tail -1 | awk '{print \$3}')\" = $v1 ]"
 wait_for 90 "Cursor hooks in ~/.cursor/hooks.json without a prompt" sh -c "[ \"\$(grep -c \"kontext' hook\" '$HOME/.cursor/hooks.json')\" -ge 9 ]"
 hash_root > "$art/root-after.txt"
-diff "$art/root-before.txt" "$art/root-after.txt" && pass "root files untouched"
+diff "$art/root-before.txt" "$art/root-after.txt" && pass "root files untouched" || fail "root files untouched"
 if $legacy; then
   drop="$(grep -o "'[^']*kontext' hook" "/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json" | head -1)"
-  grep -qF "$drop" "$HOME/.claude/settings.json" && pass "Claude user copy repeats the drop-in's handler ($drop), so each event runs once"
+  grep -qF "$drop" "$HOME/.claude/settings.json" && pass "Claude user copy repeats the drop-in's handler ($drop), so each event runs once" || fail "Claude user copy repeats the drop-in's handler ($drop), so each event runs once"
   claude_probe "root drop-in plus user file"
 else
   claude_probe "user file after the upgrade"
@@ -195,7 +204,7 @@ if brew info --json=v2 --cask kontext-security/tap/kontext > "$art/info-untruste
   fail "the cask still loads without trust"
 fi
 cat "$art/info-untrusted.out"
-brew trust --json=v1 > "$art/trust-untrusted.json"
+shasum -a 256 "$trust_file" > "$art/trust-untrusted.sha256"
 "$prefix/bin/kontext" doctor > "$art/doctor-untrusted.txt" 2>&1 || true
 grep -F "trust --cask kontext-security/tap/kontext" "$art/doctor-untrusted.txt" >/dev/null && pass "doctor names the brew trust command for an untrusted cask" || fail "doctor does not name brew trust"
 publish "$v2"
@@ -203,7 +212,7 @@ recheck
 wait_for 240 "the updater refused an untrusted cask" grep -q "does not trust" "$state"
 cat "$state"; echo
 [ "$(daemon_version)" = "$v1" ] && pass "no upgrade from an untrusted tap (still $v1)" || fail "upgraded from an untrusted tap"
-brew trust --json=v1 | diff "$art/trust-untrusted.json" - && pass "the updater left Homebrew's trust store alone" || fail "the updater changed Homebrew's trust store"
+shasum -a 256 -c "$art/trust-untrusted.sha256" >/dev/null && pass "the updater left Homebrew's trust store byte-identical" || fail "the updater changed Homebrew's trust store"
 
 step "B. The user trusts the cask; the daemon updates itself to $v2"
 brew trust --cask kontext-security/tap/kontext
@@ -247,7 +256,7 @@ sys_bytes() { # binary -> hashes of the system files it writes, as a package ins
 }
 sys_bytes "$old_bin" > "$art/system-old.txt"
 sys_bytes "$prefix/bin/kontext" > "$art/system-new.txt"
-diff "$art/system-old.txt" "$art/system-new.txt" && pass "system-scope output byte-identical to $old"
+diff "$art/system-old.txt" "$art/system-new.txt" && pass "system-scope output byte-identical to $old" || fail "system-scope output byte-identical to $old"
 /usr/bin/sudo /usr/local/bin/kontext hooks remove --scope system >/dev/null
 /usr/bin/sudo rm -f /usr/local/bin/kontext
 
@@ -255,20 +264,21 @@ step "D. Fresh install on a Mac without root files"
 "$prefix/bin/kontext" setup --uninstall
 brew uninstall --cask kontext
 [ -z "$(hash_root)" ] || fail "root files remain before the fresh install"
+sleep 1 # the watcher's last sample of phase E's own sudo lands before the mark
 mark="$(wc -l < "$art/prompts.log")" smark="$(wc -l < "$art/sudo-calls.log")"
 brew install --cask kontext-security/tap/kontext
 "$prefix/bin/kontext" setup --token e2e-token --cloud-url "http://127.0.0.1:$port" --allow-http-loopback | tee "$art/setup-fresh.txt"
-[ -z "$(hash_root)" ] && pass "fresh setup wrote no root file"
+[ -z "$(hash_root)" ] && pass "fresh setup wrote no root file" || fail "fresh setup wrote no root file"
 for f in .claude/settings.json .codex/hooks.json .cursor/hooks.json; do
-  [ "$(count_kontext "$HOME/$f")" -gt 0 ] && pass "hooks in ~/$f"
+  [ "$(count_kontext "$HOME/$f")" -gt 0 ] && pass "hooks in ~/$f" || fail "hooks in ~/$f"
 done
-grep -q "Cowork: not governed" "$art/setup-fresh.txt" && pass "setup reports Cowork as not governed"
+grep -q "Cowork: not governed" "$art/setup-fresh.txt" && pass "setup reports Cowork as not governed" || fail "setup reports Cowork as not governed"
 if tail -n +"$((mark + 1))" "$art/prompts.log" | grep -q .; then tail -n +"$((mark + 1))" "$art/prompts.log"; fail "fresh setup showed an admin dialog"; fi
 if tail -n +"$((smark + 1))" "$art/sudo-calls.log" | grep -q .; then tail -n +"$((smark + 1))" "$art/sudo-calls.log"; fail "fresh setup called sudo"; fi
 pass "fresh install and setup: no sudo call, no admin dialog"
 wait_for 240 "doctor healthy after the fresh setup" "$prefix/bin/kontext" doctor
 "$prefix/bin/kontext" doctor | tee "$art/doctor-fresh.txt"
-grep -q "auto-update: on (cask" "$art/doctor-fresh.txt" && pass "doctor reports auto-update on"
+grep -q "auto-update: on (cask" "$art/doctor-fresh.txt" && pass "doctor reports auto-update on" || fail "doctor reports auto-update on"
 claude_probe "user file only"
 
 step "ALL PASSED"
