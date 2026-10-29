@@ -294,6 +294,7 @@ func TestCursorWiredSkipsGuardedBinaries(t *testing.T) {
 	t.Cleanup(func() { privacyfolder.Enabled = enabled })
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	swapCursorSystemHooks(t, filepath.Join(home, "missing", "hooks.json"))
 	settings := map[string]any{}
 	if err := cursormanaged.MergeManagedHooks(settings, filepath.Join(home, "Downloads", "kontext")); err != nil {
 		t.Fatal(err)
@@ -308,4 +309,46 @@ func TestCursorWiredSkipsGuardedBinaries(t *testing.T) {
 	if got := cursorWired(managedconfig.ScopeUser); got != agentinventory.WiredError {
 		t.Fatalf("cursorWired = %v, want %v for a binary in ~/Downloads", got, agentinventory.WiredError)
 	}
+}
+
+// A complete machine-wide Cursor set wires Cursor whatever the user's file holds.
+func TestCursorWiredCompleteMachineSetIgnoresUserFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	binary := filepath.Join(home, "bin", "kontext")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	machine := map[string]any{}
+	if err := cursormanaged.MergeManagedHooks(machine, binary); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(machine)
+	system := filepath.Join(home, "system", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(system), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(system, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	swapCursorSystemHooks(t, system)
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".cursor", "hooks.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := cursorWired(managedconfig.ScopeUser); got != agentinventory.WiredYes {
+		t.Fatalf("cursorWired = %v, want %v", got, agentinventory.WiredYes)
+	}
+}
+
+func swapCursorSystemHooks(t *testing.T, path string) {
+	t.Helper()
+	previous := cursorSystemHooksPath
+	cursorSystemHooksPath = path
+	t.Cleanup(func() { cursorSystemHooksPath = previous })
 }
