@@ -229,8 +229,11 @@ func homebrewOutdatedWarning(ctx context.Context, brewPath string) (string, erro
 // package, with the command that trusts it in the Homebrew that installed it
 // (a Mac can have both /opt/homebrew and /usr/local).
 func tapTrustError(install homebrewInstall) error {
-	return fmt.Errorf("Homebrew does not trust %s, so it cannot update Kontext. Run: %s trust %s %s", homebrewFormula, install.brewPath, install.kind, homebrewFormula)
+	return fmt.Errorf("%s%s, so it cannot update Kontext. Run: %s trust %s %s", untrustedTapPrefix, homebrewFormula, install.brewPath, install.kind, homebrewFormula)
 }
+
+// untrustedTapPrefix starts every untrusted-tap failure the updater saves.
+const untrustedTapPrefix = "Homebrew does not trust "
 
 // checkTapTrust asks Homebrew to load the package without trusting it.
 // `brew upgrade` and `brew install` trust a package named in full on their

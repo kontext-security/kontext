@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -746,4 +747,44 @@ func deadPID(t *testing.T) int {
 	}
 	t.Fatal("could not find a dead pid")
 	return 0
+}
+
+// After the user runs the brew trust command, doctor stops repeating the
+// update check that failed before it; the next check runs within the hour.
+func TestDoctorDropsAFixedTrustFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		trusted   bool
+		wantTrust int
+	}{
+		{name: "trusted since the failed check", trusted: true},
+		{name: "still untrusted", wantTrust: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetUpdaterSeams(t)
+			runtimeGOOS = "darwin"
+			homebrewBuild = func() bool { return false }
+			t.Setenv(envNoUpdateCheck, "")
+			executablePath = func() (string, error) { return "/opt/homebrew/bin/kontext", nil }
+			evalSymlinksPath = func(string) (string, error) { return "/opt/homebrew/Caskroom/kontext/1.17.0/kontext", nil }
+			statPath = func(string) (os.FileInfo, error) { return fakeFileInfo{name: "brew"}, nil }
+			state := filepath.Join(t.TempDir(), "update-check.json")
+			updateStatePath = func() string { return state }
+			install := homebrewInstall{brewPath: "/opt/homebrew/bin/brew", kind: "--cask"}
+			if err := writeJSONBreadcrumb(state, UpdateState{CheckedAt: time.Now(), Source: "cask", Error: tapTrustError(install).Error()}); err != nil {
+				t.Fatal(err)
+			}
+			runCommand = func(_ context.Context, _ []string, _ string, args ...string) (string, error) {
+				if tc.trusted {
+					return "{}", nil
+				}
+				return "Error: Refusing to load cask kontext-security/tap/kontext from untrusted tap kontext-security/tap.", errors.New("exit status 1")
+			}
+			var out bytes.Buffer
+			printAutoUpdate(&out, func(format string, args ...any) { fmt.Fprintf(&out, "WARNING: "+format+"\n", args...) })
+			if got := strings.Count(out.String(), "brew trust --cask"); got != tc.wantTrust {
+				t.Fatalf("brew trust lines = %d, want %d:\n%s", got, tc.wantTrust, out.String())
+			}
+		})
+	}
 }
