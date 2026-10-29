@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/managedconfig"
@@ -136,8 +137,11 @@ func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logge
 func hookFilesFingerprint() string {
 	home, _ := os.UserHomeDir()
 	var b strings.Builder
-	if info, err := os.Stat(managedSettingsFilePath); err == nil {
-		fmt.Fprintf(&b, "%s:%d:%d:%v;", managedSettingsFilePath, info.Size(), info.ModTime().UnixNano(), info.Mode())
+	// Every machine-wide Claude source: the user copy mirrors their handlers.
+	for _, path := range claudemanaged.MachineSettingsFiles(managedSettingsDropInPath, managedSettingsFilePath) {
+		if info, err := os.Stat(path); err == nil {
+			fmt.Fprintf(&b, "%s:%d:%d:%v;", path, info.Size(), info.ModTime().UnixNano(), info.Mode())
+		}
 	}
 	for _, scope := range []hookinstall.Scope{hookinstall.User, hookinstall.System} {
 		defs, err := hookinstall.Definitions(scope, home)
