@@ -14,6 +14,7 @@ import (
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/hermetic"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 func fixture(t *testing.T, scope Scope) (Options, []Definition) {
@@ -896,5 +897,35 @@ func TestUserCursorLinkSurvivesWhenTheMachineFileCoversEverything(t *testing.T) 
 	}
 	if got := cursormanaged.Coverage([]byte(read(t, target))); len(got) != 0 {
 		t.Fatalf("link target still runs %d Kontext hooks next to the machine-wide set", len(got))
+	}
+}
+
+// The daemon's background repair never follows a machine-wide file into a
+// privacy-guarded folder.
+func TestUserInstallSkipsGuardedMachineFiles(t *testing.T) {
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	opts, defs := fixture(t, User)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, link := range []string{machineClaudeDropIn, machineCursorHooks} {
+		target := filepath.Join(home, "Documents", filepath.Base(link))
+		write(t, target, "{not json", 0644)
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := machineClaudeSources(opts); len(got) != 0 {
+		t.Fatalf("read %d machine-wide Claude files through a guarded link", len(got))
+	}
+	if got := machineCursorCoverage(opts); got != nil {
+		t.Fatalf("read the machine-wide Cursor file through a guarded link: %v", got)
+	}
+	if err := runDefinitions(opts, defs, false); err != nil {
+		t.Fatal(err)
 	}
 }

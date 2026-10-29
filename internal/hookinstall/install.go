@@ -18,6 +18,7 @@ import (
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 type Scope string
@@ -98,6 +99,11 @@ func machineClaudeSources(opts Options) [][]byte {
 	}
 	var sources [][]byte
 	for _, path := range claudemanaged.MachineSettingsFiles(dropIn, filepath.Join(filepath.Dir(filepath.Dir(dropIn)), "managed-settings.json")) {
+		// The daemon's repair runs in the background, where a file linked into
+		// ~/Documents or iCloud would prompt for folder access.
+		if privacyfolder.Guarded("", path) {
+			continue
+		}
 		if raw, err := os.ReadFile(path); err == nil {
 			sources = append(sources, raw)
 		}
@@ -112,13 +118,16 @@ func machineCursorCoverage(opts Options) map[string]bool {
 	if path == "" {
 		path = machineCursorHooks
 	}
+	if privacyfolder.Guarded("", path) {
+		return nil
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
 	covered := map[string]bool{}
 	for event, binary := range cursormanaged.Coverage(raw) {
-		if executable(binary) {
+		if !privacyfolder.Guarded("", binary) && executable(binary) {
 			covered[event] = true
 		}
 	}

@@ -218,7 +218,12 @@ func expectedUserHooks(binary string, machine [][]byte) Settings {
 	return expected
 }
 
+// runnable never stats a binary in a privacy-guarded folder: the daemon calls
+// it in the background, where that would prompt for folder access.
 func runnable(path string) bool {
+	if privacyfolder.Guarded("", path) {
+		return false
+	}
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0
 }
