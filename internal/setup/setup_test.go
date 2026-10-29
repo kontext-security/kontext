@@ -65,6 +65,8 @@ func newHarness(t *testing.T) *harness {
 	overrideVar(t, &geteuid, func() int { return 501 })
 	overrideVar(t, &executablePath, func() (string, error) { return "/opt/homebrew/bin/kontext", nil })
 	overrideVar(t, &dialSocket, func(string, time.Duration) error { return nil })
+	// Never ask the real launchd.
+	overrideVar(t, &daemonRunning, func(context.Context) (bool, bool) { return false, true })
 	overrideVar(t, &isTerminal, func(int) bool { return false })
 	overrideVar(t, &readPassword, func(int) ([]byte, error) { return nil, errors.New("no tty in tests") })
 	overrideVar(t, &resolveToken, func(_ context.Context, ref managedconfig.TokenRef) (string, error) {
@@ -842,8 +844,13 @@ func TestUninstallReversesSetupKeepingIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	h.out.Reset()
 	if err := Uninstall(context.Background(), h.options("", pingServer(t, "unused"))); err != nil {
 		t.Fatalf("Uninstall() error = %v", err)
+	}
+	// Every result line shares the two-space indent.
+	if !strings.Contains(h.out.String(), "\n  ✓ Codex hooks removed from ~/.codex/hooks.json\n") {
+		t.Fatalf("uninstall output:\n%s", h.out.String())
 	}
 
 	if len(h.keychain) != 0 {
@@ -1600,5 +1607,85 @@ func TestRunKeepsCodexTrustAndSkipsTheHint(t *testing.T) {
 	}
 	if untrusted, err := codexmanaged.UntrustedHooks(hooks, config); err != nil || len(untrusted) > 0 {
 		t.Fatalf("rerun lost the saved trust: %v %v", untrusted, err)
+	}
+}
+
+// A first start can take several seconds; setup waits for it and, if it is
+// still not up, reports it as progress rather than a warning.
+func TestRunWaitsForTheBackgroundAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		upAfter    int
+		exited     bool
+		wantLine   string
+		wantStderr bool
+		wantNote   bool
+	}{
+		// The old six tries (about three seconds) gave up on an agent like this one.
+		{name: "up after four seconds", upAfter: 8, wantLine: "  ✓ Background agent running"},
+		{name: "still starting", upAfter: 1 << 30, wantLine: "  • Background agent is still starting; `kontext doctor` shows when it runs", wantNote: true},
+		// A process that is not running when the wait ends did not start.
+		{name: "process exited", upAfter: 1 << 30, exited: true, wantLine: "  ! Background agent did not start", wantStderr: true},
+		// launchd restarts an agent that exited early; it counts once it answers.
+		{name: "restarted by launchd", upAfter: 8, exited: true, wantLine: "  ✓ Background agent running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			allowLoopback(t)
+			overrideVar(t, &daemonStartWait, 6*time.Second)
+			overrideVar(t, &daemonRunning, func(context.Context) (bool, bool) { return !tc.exited, true })
+			if tc.upAfter > 100 {
+				daemonStartWait = time.Second
+			}
+			tries := 0
+			overrideVar(t, &dialSocket, func(string, time.Duration) error {
+				if tries++; tries > tc.upAfter {
+					return nil
+				}
+				return errors.New("connection refused")
+			})
+			if err := Run(context.Background(), h.options("tok", pingServer(t, "tok"))); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(h.out.String(), tc.wantLine) {
+				t.Fatalf("stdout missing %q:\n%s", tc.wantLine, h.out.String())
+			}
+			if got := strings.Contains(h.errOut.String(), "warning:"); got != tc.wantStderr {
+				t.Fatalf("stderr warning = %v, want %v:\n%s", got, tc.wantStderr, h.errOut.String())
+			}
+			// A running agent that never opened its socket keeps the reason.
+			if got := strings.Contains(h.errOut.String(), "note: the background agent has not opened its socket yet (connection refused)"); got != tc.wantNote {
+				t.Fatalf("socket note = %v, want %v:\n%s", got, tc.wantNote, h.errOut.String())
+			}
+		})
+	}
+}
+
+// A launchctl that hangs ends at its own deadline; setup then reports the agent
+// as still starting instead of waiting on, or calling it stopped.
+func TestRunTreatsAStuckLaunchctlAsStillStarting(t *testing.T) {
+	h := newHarness(t)
+	allowLoopback(t)
+	overrideVar(t, &daemonStartWait, time.Second)
+	overrideVar(t, &launchctlTimeout, 200*time.Millisecond)
+	overrideVar(t, &daemonRunning, launchdDaemonRunning)
+	overrideVar(t, &dialSocket, func(string, time.Duration) error { return errors.New("connection refused") })
+	exec := execCommand
+	overrideVar(t, &execCommand, func(ctx context.Context, stdin, name string, args ...string) (string, error) {
+		if name == "launchctl" && len(args) > 0 && args[0] == "print" && strings.Contains(strings.Join(args, " "), LaunchAgentLabel) && !strings.Contains(strings.Join(args, " "), "LaunchAgents") {
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+		return exec(ctx, stdin, name, args...)
+	})
+	start := time.Now()
+	if err := Run(context.Background(), h.options("tok", pingServer(t, "tok"))); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.out.String(), "Background agent is still starting") || strings.Contains(h.errOut.String(), "warning:") {
+		t.Fatalf("stdout:\n%s\nstderr:\n%s", h.out.String(), h.errOut.String())
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("setup took %s", elapsed)
 	}
 }

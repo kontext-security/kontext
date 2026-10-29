@@ -183,8 +183,8 @@ func (i Inventory) WriteJSON(out io.Writer) error {
 func (i Inventory) WriteText(out io.Writer) error {
 	if len(i.Profiles) == 0 {
 		if i.LegacyInstall {
-			fmt.Fprintln(out, "No profiles yet — this Mac has an install that predates profiles.")
-			fmt.Fprintf(out, "Run `kontext profile migrate` to move it into the %q profile.\n", profile.DefaultName)
+			fmt.Fprintln(out, "No profiles yet. This Mac has one workspace, set up without a profile.")
+			fmt.Fprintf(out, "`kontext profile add` moves it into the %q profile when you add another.\n", profile.DefaultName)
 			return nil
 		}
 		fmt.Fprintln(out, "No profiles yet. Run `kontext profile add <name> --cloud-url <url>` to create one.")

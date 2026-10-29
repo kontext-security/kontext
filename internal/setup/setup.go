@@ -583,9 +583,13 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	}
 	fmt.Fprintf(opts.Stdout, "  ✓ Background agent installed (%s)\n", plistPath)
 
-	if err := waitForDaemon(opts.Stdout); err != nil {
-		fmt.Fprintln(opts.Stdout, "  ! Background agent is still starting")
-		fmt.Fprintf(opts.Stderr, "warning: the background agent has not come up yet (%v); check `tail -f %s`\n", err, logPath)
+	if err := waitForDaemon(ctx, opts.Stdout); errors.Is(err, errDaemonNotRunning) {
+		fmt.Fprintln(opts.Stdout, "  ! Background agent did not start")
+		fmt.Fprintf(opts.Stderr, "warning: %v; check `tail -f %s`\n", err, logPath)
+	} else if err != nil {
+		fmt.Fprintf(opts.Stdout, "  • Background agent is still starting; `kontext doctor` shows when it runs (log: %s)\n", logPath)
+		// Its process runs but its socket is not open yet; keep the reason.
+		fmt.Fprintf(opts.Stderr, "note: the background agent has not opened its socket yet (%v)\n", err)
 	} else {
 		fmt.Fprintln(opts.Stdout, "  ✓ Background agent running")
 	}
@@ -1081,8 +1085,8 @@ func preflightCodexUserHooks(binary string) error {
 	return nil
 }
 
-func waitForDaemon(out io.Writer) error {
-	return runWithStatus(out, "Waiting for background agent", probeDaemon)
+func waitForDaemon(ctx context.Context, out io.Writer) error {
+	return runWithStatus(out, "Waiting for background agent", func() error { return probeDaemon(ctx) })
 }
 
 func runWithStatus(out io.Writer, label string, fn func() error) error {
@@ -1118,18 +1122,59 @@ func isTerminalWriter(w io.Writer) bool {
 	return ok && term.IsTerminal(int(file.Fd()))
 }
 
-func probeDaemon() error {
+// daemonStartWait bounds how long setup waits for a new background agent. Its
+// first start reads the keychain and creates its database, which can take
+// several seconds.
+var daemonStartWait = 15 * time.Second
+
+// errDaemonNotRunning marks an agent whose process is not running when the
+// wait ends: it exited instead of starting, and waiting longer cannot help.
+var errDaemonNotRunning = errors.New("the background agent's process is not running")
+
+// launchctlTimeout bounds the launchd status query, so a stuck launchctl
+// cannot hold setup past its wait.
+var launchctlTimeout = 5 * time.Second
+
+// daemonRunning asks launchd whether the background agent's process is up. ok
+// is false when launchd could not answer.
+var daemonRunning = launchdDaemonRunning
+
+func launchdDaemonRunning(ctx context.Context) (running, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, launchctlTimeout)
+	defer cancel()
+	out, err := execCommand(ctx, "", "launchctl", "print", "gui/"+strconv.Itoa(os.Getuid())+"/"+LaunchAgentLabel)
+	switch {
+	case err == nil:
+		return strings.Contains(out, "state = running"), true
+	case ctx.Err() == nil && managedobserve.LaunchctlPrintMeansAbsent(out):
+		return false, true
+	}
+	return false, false
+}
+
+// probeDaemon waits the whole window, because launchd restarts an agent that
+// exits early (KeepAlive, about ten seconds later), then asks launchd whether
+// the process still runs. An unknown answer counts as still starting.
+func probeDaemon(ctx context.Context) error {
 	socket := managedobserve.DefaultSocketPath()
-	var lastErr error
-	for attempt := 0; attempt < 6; attempt++ {
-		if attempt > 0 {
-			time.Sleep(500 * time.Millisecond)
-		}
-		if lastErr = dialSocket(socket, 500*time.Millisecond); lastErr == nil {
+	start := time.Now()
+	for {
+		err := dialSocket(socket, 500*time.Millisecond)
+		if err == nil {
 			return nil
 		}
+		if time.Since(start) >= daemonStartWait {
+			if running, ok := daemonRunning(ctx); ok && !running {
+				return fmt.Errorf("%w (%v)", errDaemonNotRunning, err)
+			}
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
-	return lastErr
 }
 
 func summariseInventory(inv agentinventory.Inventory) string {

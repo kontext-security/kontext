@@ -74,7 +74,7 @@ func Uninstall(ctx context.Context, opts Options) error {
 				} else if r.Reason == "absent" {
 					fmt.Fprintln(opts.Stdout, "  • No Codex hooks file; no hooks to remove")
 				} else {
-					fmt.Fprintln(opts.Stdout, "✓ Codex hooks removed from ~/.codex/hooks.json")
+					fmt.Fprintln(opts.Stdout, "  ✓ Codex hooks removed from ~/.codex/hooks.json")
 				}
 			case "cursor":
 				switch {

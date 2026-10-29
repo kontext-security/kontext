@@ -190,7 +190,9 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 			}
 		}
 		if report.LegacyInstall {
-			fmt.Fprintln(out, "  profile: none (pre-profile install; `kontext profile migrate` moves it into \"default\")")
+			// The layout setup writes for one workspace; `kontext profile add`
+			// moves it into a profile when a second one is added.
+			fmt.Fprintln(out, "  profile: none (one workspace)")
 		} else {
 			fmt.Fprintln(out, "  profile: none")
 		}
