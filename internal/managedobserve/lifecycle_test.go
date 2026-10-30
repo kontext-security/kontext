@@ -619,9 +619,9 @@ func TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget(t *testing.T) {
 	}
 }
 
-// A PostToolUse whose output compaction may shorten asks the daemon a second
-// time, beside the ordinary event, and carries back what it says. Any other
-// event costs no second call.
+// A PostToolUse whose answer offers compaction asks the daemon a second time
+// and carries back what it says. Without the offer (an older daemon, the
+// switch off) or for any other event, no second call is made.
 func TestLifecycleCompactsLargeClaudeOutputs(t *testing.T) {
 	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-compaction.sock")
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
@@ -644,7 +644,10 @@ func TestLifecycleCompactsLargeClaudeOutputs(t *testing.T) {
 					compactions.Add(1)
 					_ = localruntime.WriteMessage(conn, localruntime.CompactResult{Type: "compact_result", UpdatedToolOutput: replacement})
 				} else {
-					_ = localruntime.WriteMessage(conn, localruntime.EvaluateResult{Decision: "allow", Allowed: true})
+					var response map[string]any
+					_ = json.Unmarshal(request.ToolResponse, &response)
+					offer := request.HookEvent == "PostToolUse" && response["stderr"] != "no offer"
+					_ = localruntime.WriteMessage(conn, localruntime.EvaluateResult{Decision: "allow", Allowed: true, CompactToolOutput: offer})
 				}
 			}
 			_ = conn.Close()
@@ -664,7 +667,9 @@ func TestLifecycleCompactsLargeClaudeOutputs(t *testing.T) {
 	small.ToolResponse = map[string]any{"stdout": "ok"}
 	codex := event
 	codex.Agent = "codex"
-	for _, other := range []hook.Event{small, codex, {Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash"}} {
+	unoffered := event
+	unoffered.ToolResponse = map[string]any{"stdout": large, "stderr": "no offer"}
+	for _, other := range []hook.Event{small, codex, unoffered, {Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash"}} {
 		if result := lifecycle.Process(context.Background(), other); result.UpdatedToolOutput != nil {
 			t.Fatalf("%+v got %+v", other, result)
 		}

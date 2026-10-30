@@ -27,6 +27,7 @@ type Service struct {
 	transform     func(hook.Event, hook.Result) hook.Result
 	onFailure     func(hook.Event, error) hook.Result
 	compact       func(context.Context, hook.Event) map[string]any
+	offers        func(hook.Event) bool
 	observe       func(context.Context, hook.Event)
 	diagnostic    diagnostic.Logger
 	cancel        context.CancelFunc
@@ -48,6 +49,10 @@ type Options struct {
 	// response the agent should see instead, or nil to leave it unchanged.
 	// Without it every such request is answered with no change.
 	CompactToolOutput func(context.Context, hook.Event) map[string]any
+	// OffersCompaction reports, for a PostToolUse, whether its answer offers
+	// compaction; the hook asks only after an offer, so it never waits on a
+	// second call that cannot change anything.
+	OffersCompaction func(hook.Event) bool
 	// Observe sees every evaluated event once its response is written and
 	// its ingest is done, so it never delays a hook.
 	Observe    func(context.Context, hook.Event)
@@ -70,6 +75,7 @@ func NewService(opts Options) (*Service, error) {
 		transform:   opts.Transform,
 		onFailure:   opts.OnFailure,
 		compact:     opts.CompactToolOutput,
+		offers:      opts.OffersCompaction,
 		observe:     opts.Observe,
 		diagnostic:  opts.Diagnostic,
 	}, nil
@@ -281,7 +287,11 @@ func (s *Service) process(ctx context.Context, req *EvaluateRequest) EvaluateRes
 			s.diagnostic.Printf("local runtime observe async event: %v\n", err)
 			return s.result(event, processFailureResult(event))
 		}
-		return s.result(event, hook.Result{Decision: hook.DecisionAllow})
+		result := hook.Result{Decision: hook.DecisionAllow}
+		if event.HookName == hook.HookPostToolUse && s.compact != nil && s.offers != nil {
+			result.CompactToolOutput = s.offers(event)
+		}
+		return s.result(event, result)
 	}
 	result, err := s.core.ProcessHook(ctx, event)
 	if err != nil {

@@ -43,6 +43,10 @@ type EvaluateResult struct {
 	// its response with the eventual record.
 	EventID      string         `json:"event_id,omitempty"`
 	UpdatedInput map[string]any `json:"updated_input,omitempty"`
+	// CompactToolOutput offers tool output compaction for this PostToolUse:
+	// the hook may then send a CompactRequestType request. A daemon that
+	// predates the request never offers it.
+	CompactToolOutput bool `json:"compact_tool_output,omitempty"`
 }
 
 // CompactRequestType marks a request for tool output compaction instead of

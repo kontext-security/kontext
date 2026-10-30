@@ -55,9 +55,12 @@ func eachString(value any, visit func(string) bool) bool {
 
 // touchesPrivacyFolder reports whether a call runs in, or names a path in, a
 // folder macOS guards with a privacy prompt (internal/privacyfolder). Nothing
-// from there is sent. Paths are read from the input's words as a shell would
-// split them, with ~ and $HOME expanded and relative ones taken from cwd.
-// This cannot see a path a command builds at run time.
+// from there is sent. Each input string is checked whole when it is a path,
+// such as a Read's file_path, and word by word as a shell would split it:
+// ~, $HOME and $PWD are expanded, and a relative path is taken from cwd and
+// from every directory a cd moves to. A path only known at run time cannot be
+// checked, so a command substitution, any other expansion in a path word, or
+// a wildcard in a directory counts as touching one.
 func touchesPrivacyFolder(home, cwd string, input any, paths ...string) bool {
 	if home == "" {
 		home, _ = os.UserHomeDir()
@@ -68,17 +71,51 @@ func touchesPrivacyFolder(home, cwd string, input any, paths ...string) bool {
 		}
 	}
 	checked, guarded := 0, false
+	touches := func(path string) bool {
+		if path == "" {
+			return false
+		}
+		checked++
+		return checked > maxPathWords || privacyfolder.Guarded(home, path)
+	}
 	eachString(input, func(value string) bool {
-		for _, word := range shellWords(value) {
-			for _, candidate := range pathCandidates(word) {
-				path := resolvePath(home, cwd, candidate)
-				if path == "" {
-					continue
+		if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~/") {
+			// A path value may hold spaces that splitting would cut.
+			if guarded = touches(resolvePath(home, cwd, value)); guarded {
+				return false
+			}
+		}
+		words, substitutes := shellWords(value)
+		if substitutes {
+			guarded = true
+			return false
+		}
+		dirs := []string{cwd}
+		for i, word := range words {
+			if guarded = word.unverifiable(); guarded {
+				return false
+			}
+			for _, candidate := range pathCandidates(word.text) {
+				for _, dir := range dirs {
+					if guarded = touches(resolvePath(home, dir, candidate)); guarded {
+						return false
+					}
 				}
-				if checked++; checked > maxPathWords || privacyfolder.Guarded(home, path) {
+			}
+			if word.text != "cd" && word.text != "pushd" {
+				continue
+			}
+			// Later relative paths may be taken from where this moves to.
+			target := home
+			if i+1 < len(words) {
+				if words[i+1].text == "-" {
 					guarded = true
 					return false
 				}
+				target = resolvePath(home, dirs[len(dirs)-1], words[i+1].text)
+			}
+			if target != "" {
+				dirs = append(dirs, target)
 			}
 		}
 		return true
@@ -86,45 +123,84 @@ func touchesPrivacyFolder(home, cwd string, input any, paths ...string) bool {
 	return guarded
 }
 
+// shellWord is a word as a shell would split it, with where it expands.
+type shellWord struct {
+	text string
+	// expansions are the offsets in text of each $ the shell expands.
+	expansions []int
+}
+
+// unverifiable reports a word that may name a path only known at run time:
+// one with an expansion other than a leading $HOME or $PWD (all of it, or
+// in a path), another user's home, or a wildcard in a directory.
+func (w shellWord) unverifiable() bool {
+	switch w.text {
+	case "$HOME", "${HOME}", "$PWD", "${PWD}":
+		return false
+	}
+	known := false
+	for _, prefix := range []string{"$HOME/", "${HOME}/", "$PWD/", "${PWD}/"} {
+		known = known || strings.HasPrefix(w.text, prefix)
+	}
+	for _, at := range w.expansions {
+		if known && at == 0 {
+			continue
+		}
+		if at == 0 || strings.Contains(w.text, "/") {
+			return true
+		}
+	}
+	if strings.HasPrefix(w.text, "~") && w.text != "~" && !strings.HasPrefix(w.text, "~/") {
+		return true
+	}
+	slash := strings.LastIndex(w.text, "/")
+	return slash > 0 && strings.ContainsAny(w.text[:slash], "*?[")
+}
+
 // shellWords splits text into words as a shell would, honouring quotes and
-// backslash escapes, and also breaks at the operators that join commands.
-func shellWords(text string) []string {
-	var words []string
+// backslash escapes, and also breaks at the operators that join commands. It
+// reports whether text substitutes a command's output (`...` or $(...)).
+func shellWords(text string) ([]shellWord, bool) {
+	var words []shellWord
 	var word strings.Builder
-	inWord := false
+	var expansions []int
+	inWord, escaped, dollar, substitutes := false, false, false, false
 	var quote rune
-	escaped := false
 	flush := func() {
 		if inWord {
-			words = append(words, word.String())
+			words = append(words, shellWord{text: word.String(), expansions: expansions})
 			word.Reset()
-			inWord = false
+			expansions, inWord = nil, false
 		}
 	}
 	for _, c := range text {
+		expands := quote != '\'' && !escaped
+		if expands && (c == '`' || c == '(' && dollar) {
+			substitutes = true
+		}
+		dollar = expands && c == '$'
 		switch {
 		case escaped:
 			word.WriteRune(c)
 			escaped, inWord = false, true
 		case c == '\\' && quote != '\'':
 			escaped, inWord = true, true
-		case quote != 0:
-			if c == quote {
-				quote = 0
-			} else {
-				word.WriteRune(c)
-			}
-		case c == '\'' || c == '"':
+		case quote != 0 && c == quote:
+			quote = 0
+		case quote == 0 && (c == '\'' || c == '"'):
 			quote, inWord = c, true
-		case strings.ContainsRune(" \t\r\n;|&<>()`", c):
+		case quote == 0 && strings.ContainsRune(" \t\r\n;|&<>()`", c):
 			flush()
 		default:
+			if dollar {
+				expansions = append(expansions, word.Len())
+			}
 			word.WriteRune(c)
 			inWord = true
 		}
 	}
 	flush()
-	return words
+	return words, substitutes
 }
 
 // pathCandidates returns a word and the parts of it an option or a path list
@@ -148,11 +224,18 @@ func resolvePath(home, cwd, word string) string {
 			return filepath.Join(home, rest)
 		}
 	}
+	for _, prefix := range []string{"$PWD/", "${PWD}/"} {
+		if rest, found := strings.CutPrefix(word, prefix); found && cwd != "" {
+			return filepath.Join(cwd, rest)
+		}
+	}
 	switch {
 	case word == "" || strings.HasPrefix(word, "-"):
 		return ""
 	case (word == "~" || word == "$HOME" || word == "${HOME}") && home != "":
 		return home
+	case (word == "$PWD" || word == "${PWD}") && cwd != "":
+		return cwd
 	case filepath.IsAbs(word):
 		return filepath.Clean(word)
 	case cwd != "" && filepath.IsAbs(cwd):

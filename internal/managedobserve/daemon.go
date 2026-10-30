@@ -239,6 +239,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// Close drains pending writes before the store shuts.
 		AsyncDecisionRecording: true,
 		CompactToolOutput:      compactor.Compact,
+		OffersCompaction:       compactor.Offers,
 		ObserveEvent:           compactor.Observe,
 	})
 	if err != nil {

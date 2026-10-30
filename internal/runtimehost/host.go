@@ -48,6 +48,7 @@ type Options struct {
 	// CompactToolOutput and ObserveEvent are passed to the local runtime
 	// service (see localruntime.Options).
 	CompactToolOutput func(context.Context, hook.Event) map[string]any
+	OffersCompaction  func(hook.Event) bool
 	ObserveEvent      func(context.Context, hook.Event)
 }
 
@@ -178,6 +179,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		AsyncIngest:       !opts.DisableAsyncIngest,
 		Transform:         clientResultTransform(mode),
 		CompactToolOutput: opts.CompactToolOutput,
+		OffersCompaction:  opts.OffersCompaction,
 		Observe:           opts.ObserveEvent,
 		Diagnostic:        opts.Diagnostic,
 	})

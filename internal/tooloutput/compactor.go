@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -102,6 +103,8 @@ type record struct {
 	// compacted Read.
 	FilePath string   `json:"filePath,omitempty"`
 	Omitted  [][2]int `json:"omitted,omitempty"`
+	// At orders a session's records, newest last, across a restart.
+	At time.Time `json:"at"`
 }
 
 func New(opts Options) *Compactor {
@@ -133,6 +136,14 @@ func New(opts Options) *Compactor {
 
 func (c *Compactor) on() bool {
 	return c != nil && c.client != nil && c.dir != "" && c.enabled != nil && c.enabled()
+}
+
+// Offers reports whether a PostToolUse is one live compaction would take up,
+// for the daemon's answer to offer it: the switch is on and the output is a
+// candidate. It is cheap; Compact makes the rest of the checks.
+func (c *Compactor) Offers(event hook.Event) bool {
+	_, ok := liveOutput(event)
+	return ok && c.on()
 }
 
 // Compact runs live compaction for a Claude Code PostToolUse and returns the
@@ -174,7 +185,7 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 	if response.Decision != DecisionReplace || !out.acceptable(*response.Text) {
 		return nil
 	}
-	compaction := record{EventID: response.EventID, ToolUseID: event.ToolUseID, Kind: out.kind}
+	compaction := record{EventID: response.EventID, ToolUseID: event.ToolUseID, Kind: out.kind, At: c.now()}
 	if out.kind == KindText {
 		// The full output must be readable before the agent is told where.
 		if err := writePrivate(c.dir, saved, []byte(out.text)); err != nil {
@@ -278,7 +289,7 @@ func (c *Compactor) sendShadow(ctx context.Context, job shadowJob) {
 }
 
 func (c *Compactor) request(mode string, event hook.Event, out output, goal string) Request {
-	context, model := requestContext(event, goal, c.home)
+	context, model := requestContext(event, goal, c.home, c.namesSaveDir)
 	agent := event.Agent
 	if agent == "claude" {
 		agent = "claude-code"
@@ -315,19 +326,26 @@ func encode(request Request) ([]byte, bool) {
 }
 
 // readsBack reports whether a call reads a compacted output back: it names
-// the save directory, or reads a compacted file from inside a range the
-// compaction left out. Such a call is never compacted itself.
+// the save directory, or reads lines of a compacted file that the compaction
+// left out. Such a call is never compacted itself.
 func (c *Compactor) readsBack(event hook.Event) bool {
-	named := false
-	eachString(event.ToolInput, func(value string) bool {
-		named = strings.Contains(normalizedPath(value), c.dirName)
-		return !named
-	})
-	if named {
+	if c.namesSaveDir(event.ToolInput) {
 		return true
 	}
 	_, found := c.omittedReadBack(event)
 	return found
+}
+
+// namesSaveDir reports whether a call's input names the save directory. A
+// call that does reads saved outputs, which never leave the machine again:
+// not as its own output, and not in the history sent with a later one.
+func (c *Compactor) namesSaveDir(input any) bool {
+	named := false
+	eachString(input, func(value string) bool {
+		named = strings.Contains(normalizedPath(value), c.dirName)
+		return !named
+	})
+	return named
 }
 
 // reportReadBacks queues a read-back for each compaction a call reads back,
@@ -346,14 +364,28 @@ func (c *Compactor) reportReadBacks(event hook.Event) {
 		found = append(found, compaction)
 	}
 	for _, compaction := range found {
-		if compaction.ToolUseID == event.ToolUseID || !c.firstReport(event.SessionID, event.ToolUseID, compaction.EventID) {
-			continue
+		if compaction.ToolUseID != event.ToolUseID {
+			c.queueReadBack(ReadBack{SessionID: event.SessionID, EventID: compaction.EventID, ToolUseID: event.ToolUseID})
 		}
-		select {
-		case c.readBacks <- ReadBack{SessionID: event.SessionID, EventID: compaction.EventID, ToolUseID: event.ToolUseID}:
-		default:
-			c.diagnostic.Printf("tool output compaction: read-back queue full; read-back not reported\n")
-		}
+	}
+}
+
+// queueReadBack queues a read-back unless it already was. It counts as
+// queued only once the queue takes it, so a full queue leaves it to the
+// call's next hook event.
+func (c *Compactor) queueReadBack(readBack ReadBack) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	reported := c.session(readBack.SessionID).reported
+	key := [2]string{readBack.ToolUseID, readBack.EventID}
+	if reported[key] {
+		return
+	}
+	select {
+	case c.readBacks <- readBack:
+		reported[key] = true
+	default:
+		c.diagnostic.Printf("tool output compaction: read-back queue full; read-back not reported yet\n")
 	}
 }
 
@@ -372,13 +404,20 @@ func (c *Compactor) saved(sessionID, name string) (record, bool) {
 	return record{}, false
 }
 
-// omittedReadBack finds the compaction of the file a Read names whose omitted
-// lines include the Read's offset, the latest first.
+// omittedReadBack finds the latest compaction of the file a Read names whose
+// omitted lines the Read covers. A Read without an offset starts at line 1,
+// and one without a limit runs to the end of the file.
 func (c *Compactor) omittedReadBack(event hook.Event) (record, bool) {
 	path, _ := event.ToolInput["file_path"].(string)
-	offset, numbered := lineNumber(event.ToolInput["offset"])
-	if event.ToolName != "Read" || path == "" || !numbered {
+	if event.ToolName != "Read" || path == "" {
 		return record{}, false
+	}
+	first, last := 1, math.MaxInt
+	if offset, ok := lineNumber(event.ToolInput["offset"]); ok {
+		first = offset
+	}
+	if limit, ok := lineNumber(event.ToolInput["limit"]); ok && limit <= math.MaxInt-first {
+		last = first + limit - 1
 	}
 	path = filepath.Clean(path)
 	c.mu.Lock()
@@ -389,24 +428,12 @@ func (c *Compactor) omittedReadBack(event hook.Event) (record, bool) {
 			continue
 		}
 		for _, lines := range compaction.Omitted {
-			if offset >= lines[0] && offset <= lines[1] {
+			if first <= lines[1] && last >= lines[0] {
 				return compaction, true
 			}
 		}
 	}
 	return record{}, false
-}
-
-func (c *Compactor) firstReport(sessionID, toolUseID, eventID string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	reported := c.session(sessionID).reported
-	key := [2]string{toolUseID, eventID}
-	if reported[key] {
-		return false
-	}
-	reported[key] = true
-	return true
 }
 
 func (c *Compactor) goal(sessionID string) string {
@@ -463,6 +490,8 @@ func (c *Compactor) load(sessionID string) []record {
 			records = append(records, compaction)
 		}
 	}
+	// Directory order is file name order; the search wants time order.
+	slices.SortStableFunc(records, func(a, b record) int { return a.At.Compare(b.At) })
 	return records
 }
 

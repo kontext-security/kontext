@@ -119,16 +119,19 @@ func (l Lifecycle) Process(ctx context.Context, event hook.Event) hook.Result {
 		return l.processWithKickstart(ctx, event, preToolUseWait)
 	default:
 		result := l.processIfAvailable(ctx, event, asyncHookWait)
-		if tooloutput.LiveCandidate(event) {
+		// Only a daemon that just answered, and offered, is asked: a daemon
+		// that is away, has the switch off or predates compaction costs the
+		// hook nothing more.
+		if result.CompactToolOutput && !result.FailedOpen && tooloutput.LiveCandidate(event) {
 			result.UpdatedToolOutput = l.compactToolOutput(ctx, event)
 		}
 		return result
 	}
 }
 
-// compactToolOutput asks the daemon, beside the ordinary PostToolUse above,
-// for a compacted tool output within tooloutput.HookWait. A daemon that is
-// away, slow or has nothing to say leaves the output unchanged.
+// compactToolOutput asks the daemon, after the ordinary PostToolUse above
+// offered it, for a compacted tool output within tooloutput.HookWait. A
+// daemon that is slow or has nothing to say leaves the output unchanged.
 func (l Lifecycle) compactToolOutput(ctx context.Context, event hook.Event) map[string]any {
 	ctx, cancel := context.WithTimeout(ctx, tooloutput.HookWait)
 	defer cancel()

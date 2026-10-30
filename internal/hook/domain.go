@@ -118,6 +118,10 @@ type Result struct {
 	// UpdatedToolOutput replaces the tool response the agent sees after a
 	// PostToolUse (tool output compaction). Nil leaves the output unchanged.
 	UpdatedToolOutput map[string]any
+	// CompactToolOutput is the daemon's offer, on its PostToolUse answer, to
+	// compact this event's output when the hook asks. Only a daemon that
+	// understands the request makes it.
+	CompactToolOutput bool
 	// FailedOpen marks an allow that Kontext could not decide: the policy
 	// daemon was unreachable, late, or unintelligible. Agent encoders emit no
 	// permission decision for it, so the agent's own permission flow applies

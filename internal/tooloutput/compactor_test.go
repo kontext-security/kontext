@@ -3,6 +3,7 @@ package tooloutput
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -432,9 +433,12 @@ func TestReadBacksAreReportedOncePerCall(t *testing.T) {
 		CWD: c.cwd, ToolInput: map[string]any{"file_path": path}}
 	c.Observe(context.Background(), whole)
 
+	// A Read of the whole file covers the omitted lines too; one from line 45
+	// on does not.
 	want := []ReadBack{
 		{SessionID: testSession, EventID: "evt_bash", ToolUseID: "toolu_cat"},
 		{SessionID: testSession, EventID: "evt_read", ToolUseID: "toolu_reread"},
+		{SessionID: testSession, EventID: "evt_read", ToolUseID: "toolu_whole"},
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -634,19 +638,227 @@ func TestHistoryLengthAndClipping(t *testing.T) {
 	padding := user(strings.Repeat("p", 8<<10))
 
 	event := hook.Event{Agent: "claude", ToolUseID: testToolUseID, TranscriptPath: write(padding, user("one"), user("two"), call)}
-	if context, _ := requestContext(event, "goal", ""); context.HistoryLength != nil || len(context.History) != 2 {
+	if context, _ := requestContext(event, "goal", "", nil); context.HistoryLength != nil || len(context.History) != 2 {
 		t.Fatalf("a partial read sent historyLength %v with %d items", context.HistoryLength, len(context.History))
 	}
 	event.TranscriptPath = write(padding, `{"type":"system","subtype":"compact_boundary"}`, user("one"), user("two"), call)
-	if context, _ := requestContext(event, "goal", ""); context.HistoryLength == nil || *context.HistoryLength != 2 {
+	if context, _ := requestContext(event, "goal", "", nil); context.HistoryLength == nil || *context.HistoryLength != 2 {
 		t.Fatalf("after a compaction historyLength = %v", context.HistoryLength)
 	}
 
 	transcriptTail = previous
 	medium, large := strings.Repeat("m", 20<<10), strings.Repeat("l", 70<<10)
 	event.TranscriptPath = write(user(medium), user(large), call)
-	context, _ := requestContext(event, "goal", "")
+	context, _ := requestContext(event, "goal", "", nil)
 	if len(context.History) != 2 || context.History[0].Content != medium || len(context.History[1].Content) > maxHistoryText || !strings.Contains(context.History[1].Content, "[...]") {
 		t.Fatalf("history sizes = %d, %d", len(context.History[0].Content), len(context.History[1].Content))
+	}
+}
+
+// The daemon offers compaction only with the switch on, and only for an
+// output it would take up.
+func TestOffers(t *testing.T) {
+	c := newTestCompactor(t, replace("short"))
+	if !c.Offers(c.bash("make test", bigText(80))) {
+		t.Fatal("a large Bash output was not offered")
+	}
+	if c.Offers(c.bash("ls", "small")) {
+		t.Fatal("a small output was offered")
+	}
+	c.on.Store(false)
+	if c.Offers(c.bash("make test", bigText(80))) {
+		t.Fatal("an output was offered with the switch off")
+	}
+}
+
+// A call that reads a saved output back stays on the machine: it is not sent
+// as the next call's history either.
+func TestHistoryLeavesOutSavedOutputReads(t *testing.T) {
+	c := newTestCompactor(t, replace("short"))
+	saved := filepath.Join(c.dir, testSession, "toolu_old.txt")
+	input, _ := json.Marshal(map[string]any{"command": "sed -n 1,99p " + saved})
+	transcript := filepath.Join(c.cwd, "session.jsonl")
+	rows := []string{
+		`{"type":"user","message":{"role":"user","content":"Find the failure"}}`,
+		`{"type":"assistant","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_back","name":"Bash","input":` + string(input) + `}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_back","content":"the saved output"}]}}`,
+		`{"type":"assistant","message":{"id":"m2","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"` + testToolUseID + `","name":"Bash","input":{"command":"make test"}}]}}`,
+	}
+	if err := os.WriteFile(transcript, []byte(strings.Join(rows, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	event := c.bash("make test", bigText(80))
+	event.TranscriptPath = transcript
+	if c.Compact(context.Background(), event) == nil {
+		t.Fatal("not compacted")
+	}
+	requests, _, _ := c.api.calls()
+	history := requests[0].Context.History
+	if len(history) != 1 || history[0].Content != "Find the failure" {
+		got, _ := json.Marshal(history)
+		t.Fatalf("history = %s", got)
+	}
+}
+
+// A read-back the full queue turned away is still reported by the call's
+// next hook event, and only once.
+func TestReadBackRetriesAfterAFullQueue(t *testing.T) {
+	c := newTestCompactor(t, replace("short"))
+	if c.Compact(context.Background(), c.bash("make test", bigText(80))) == nil {
+		t.Fatal("not compacted")
+	}
+	for range queueSize {
+		c.readBacks <- ReadBack{}
+	}
+	saved := filepath.Join(c.dir, testSession, testToolUseID+".txt")
+	back := hook.Event{SessionID: testSession, Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolUseID: "toolu_back",
+		CWD: c.cwd, ToolInput: map[string]any{"command": "cat " + saved}}
+	c.Observe(context.Background(), back)
+	for range queueSize {
+		<-c.readBacks
+	}
+	back.HookName = hook.HookPostToolUse
+	c.Observe(context.Background(), back)
+	c.Observe(context.Background(), back)
+	if len(c.readBacks) != 1 {
+		t.Fatalf("queued read-backs = %d, want 1", len(c.readBacks))
+	}
+	if got := <-c.readBacks; got.ToolUseID != "toolu_back" || got.EventID != testEventID {
+		t.Fatalf("read-back = %+v", got)
+	}
+}
+
+// After a restart, a read-back goes to the latest compaction of the file,
+// whatever the order of the tool use IDs.
+func TestRestartKeepsCompactionOrder(t *testing.T) {
+	content := bigText(60)
+	lines := strings.Split(content, "\n")
+	cut := strings.Join(lines[:20], "\n") + "\n[omitted]" + strings.Repeat("\n", 20) + strings.Join(lines[40:], "\n")
+	events := 0
+	c := newTestCompactor(t, func(Request) (int, any) {
+		events++
+		return http.StatusOK, map[string]any{"decision": "replace", "eventId": fmt.Sprintf("evt_%d", events), "text": cut}
+	})
+	now := time.Now()
+	c.now = func() time.Time { now = now.Add(time.Second); return now }
+	path := filepath.Join(c.cwd, "main.go")
+	// Lines 1-60, then 41-100: neither read covers the other's omitted lines.
+	// The later compaction has the lexically smaller ID.
+	for _, read := range []struct {
+		id    string
+		start int
+	}{{"toolu_b", 1}, {"toolu_a", 41}} {
+		event := c.read(path, content, read.start)
+		event.ToolUseID = read.id
+		event.ToolInput = map[string]any{"file_path": path, "offset": json.Number(strconv.Itoa(read.start))}
+		if c.Compact(context.Background(), event) == nil {
+			t.Fatalf("%s not compacted", read.id)
+		}
+	}
+	restarted := New(Options{Client: c.client, Enabled: c.on.Load, Dir: c.dir, Home: c.home})
+	whole := hook.Event{SessionID: testSession, Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Read", ToolUseID: "toolu_whole",
+		ToolInput: map[string]any{"file_path": path}}
+	if compaction, ok := restarted.omittedReadBack(whole); !ok || compaction.EventID != "evt_2" {
+		t.Fatalf("restarted read-back = %+v, %v, want evt_2", compaction, ok)
+	}
+}
+
+// Any Read that covers omitted lines reads them back, wherever it starts: it
+// is reported, and never cut again.
+func TestReadsCoveringOmittedLinesAreReadBacks(t *testing.T) {
+	content := bigText(60)
+	lines := strings.Split(content, "\n")
+	cut := strings.Join(lines[:20], "\n") + "\n[omitted]" + strings.Repeat("\n", 20) + strings.Join(lines[40:], "\n")
+	c := newTestCompactor(t, replace(cut))
+	path := filepath.Join(c.cwd, "main.go")
+	if c.Compact(context.Background(), c.read(path, content, 1)) == nil {
+		t.Fatal("not compacted")
+	}
+	for name, test := range map[string]struct {
+		input map[string]any
+		want  bool
+	}{
+		"whole file":          {map[string]any{"file_path": path}, true},
+		"from before":         {map[string]any{"file_path": path, "offset": json.Number("10"), "limit": json.Number("20")}, true},
+		"inside":              {map[string]any{"file_path": path, "offset": json.Number("30"), "limit": json.Number("5")}, true},
+		"ends before":         {map[string]any{"file_path": path, "offset": json.Number("1"), "limit": json.Number("20")}, false},
+		"starts after":        {map[string]any{"file_path": path, "offset": json.Number("41")}, false},
+		"another file":        {map[string]any{"file_path": path + ".bak"}, false},
+		"from before, to end": {map[string]any{"file_path": path, "offset": json.Number("5")}, true},
+	} {
+		event := c.read(path, content, 1)
+		event.ToolUseID = "toolu_again"
+		event.ToolInput = test.input
+		if got := c.readsBack(event); got != test.want {
+			t.Errorf("%s: readsBack = %v, want %v", name, got, test.want)
+		}
+	}
+	again := c.read(path, content, 1)
+	again.ToolUseID = "toolu_again"
+	if c.Compact(context.Background(), again) != nil {
+		t.Fatal("a whole-file re-read was cut again")
+	}
+}
+
+// Shell-built paths, paths with spaces and directory changes cannot slip a
+// privacy folder's contents past the check.
+func TestPrivacyCheckSeesThroughShellPaths(t *testing.T) {
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	home := t.TempDir()
+	cwd := filepath.Join(home, "code")
+	for command, want := range map[string]bool{
+		`p=Documents; cat "$HOME/$p/secret.txt"`:   true,
+		`cat $f`:                                   true,
+		`cat "$(ls ~/Doc*)"`:                       true,
+		"cat `echo notes.txt`":                     true,
+		`cd ~ && cat Documents/notes.txt`:          true,
+		`cd .. && cat Downloads/report.csv`:        true,
+		`cd - && cat notes.txt`:                    true,
+		`ls ~/Doc*/`:                               true,
+		`cat ~root/notes.txt`:                      true,
+		`awk '{print $2}' data.txt`:                false,
+		`cat "$PWD/notes.txt" $HOME/code/a.go`:     false,
+		`sed -n '1,$p' notes.txt`:                  false,
+		`find . -name '*.go' | xargs grep -n TODO`: false,
+		`go test ./... && ls *.go`:                 false,
+	} {
+		if got := touchesPrivacyFolder(home, cwd, map[string]any{"command": command}); got != want {
+			t.Errorf("touchesPrivacyFolder(%q) = %v, want %v", command, got, want)
+		}
+	}
+	icloud := filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "secret.txt")
+	if !touchesPrivacyFolder(home, cwd, map[string]any{"file_path": icloud}) {
+		t.Error("a Read of an iCloud file was not caught")
+	}
+}
+
+// A slow install token lookup holds up only its own caller.
+func TestTokenLookupKeepsToItsCaller(t *testing.T) {
+	stalled := make(chan struct{})
+	t.Cleanup(func() { close(stalled) })
+	calls := atomic.Int32{}
+	client, err := NewClient("https://api.example.test", "ins_test", func(ctx context.Context) (string, error) {
+		if calls.Add(1) == 1 {
+			select {
+			case <-stalled:
+			case <-ctx.Done():
+			}
+			return "", ctx.Err()
+		}
+		return "install-token", nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = client.installToken(context.Background()) }()
+	for calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if token, err := client.installToken(ctx); err != nil || token != "install-token" {
+		t.Fatalf("installToken() = %q, %v while another lookup stalls", token, err)
 	}
 }

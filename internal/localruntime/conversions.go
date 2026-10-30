@@ -119,6 +119,8 @@ func EvaluateResultFromResult(result hook.Result) EvaluateResult {
 		Epoch:        result.Epoch,
 		EventID:      result.EventID,
 		UpdatedInput: result.UpdatedInput,
+		// Set on the daemon side only; a hook never echoes it back.
+		CompactToolOutput: result.CompactToolOutput,
 	}
 }
 
@@ -128,14 +130,15 @@ func ResultFromEvaluateResult(result EvaluateResult) hook.Result {
 		decision = resultFromBool(result.Allowed).Decision
 	}
 	return hook.Result{
-		Decision:     decision,
-		Reason:       result.Reason,
-		ReasonCode:   result.ReasonCode,
-		RequestID:    result.RequestID,
-		Mode:         result.Mode,
-		Epoch:        result.Epoch,
-		EventID:      result.EventID,
-		UpdatedInput: result.UpdatedInput,
+		Decision:          decision,
+		Reason:            result.Reason,
+		ReasonCode:        result.ReasonCode,
+		RequestID:         result.RequestID,
+		Mode:              result.Mode,
+		Epoch:             result.Epoch,
+		EventID:           result.EventID,
+		UpdatedInput:      result.UpdatedInput,
+		CompactToolOutput: result.CompactToolOutput,
 	}
 }
 

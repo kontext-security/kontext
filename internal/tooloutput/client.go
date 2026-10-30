@@ -228,10 +228,13 @@ func (c *Client) post(ctx context.Context, endpoint string, body []byte, want in
 
 func (c *Client) installToken(ctx context.Context) (string, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.cached != "" && c.now().Sub(c.cachedAt) < tokenLifetime {
-		return c.cached, nil
+	cached, fresh := c.cached, c.cached != "" && c.now().Sub(c.cachedAt) < tokenLifetime
+	c.mu.Unlock()
+	if fresh {
+		return cached, nil
 	}
+	// Resolved outside the lock and under the caller's own deadline: a slow
+	// keychain read for a background request must not hold up a live one.
 	token, err := c.tokens(ctx)
 	if err != nil {
 		return "", err
@@ -240,7 +243,9 @@ func (c *Client) installToken(ctx context.Context) (string, error) {
 	if token == "" {
 		return "", errors.New("empty install token")
 	}
+	c.mu.Lock()
 	c.cached, c.cachedAt = token, c.now()
+	c.mu.Unlock()
 	return token, nil
 }
 
