@@ -15,27 +15,72 @@ import (
 
 // Reuse curl's route/body classification after reading each client's argv.
 // Unsupported options stay unrecognized rather than vouching for a request.
-func classifyHTTPClient(program string, args []string, complete, opaqueValues, stdin bool) cedareval.ShellProjectionV2 {
-	var converted []string
-	offline := false
-	switch {
-	case webCmdlet(program):
-		converted = webCmdletArgs(args, stdin)
-	case program == "wget":
-		converted = wgetArgs(args)
-	default:
-		converted, offline = httpieArgs(program, args, stdin)
-	}
+// source lines up with args, with the source text of each computed word, or
+// is nil: a request that cannot be read keeps the literal host of a URL with
+// a computed part.
+func classifyHTTPClient(program string, args, source []string, complete, opaqueValues, stdin bool) cedareval.ShellProjectionV2 {
+	converted, offline := httpClientArgs(program, args, stdin)
 	if offline && (complete || opaqueValues) {
 		return projection(program, nil, []string{"offline-preview"}, true)
 	}
-	result := classifyCurl(converted, complete, opaqueValues, false)
+	result := classifyCurl(converted, nil, complete, opaqueValues, false)
 	result.Program = program
 	if !result.ParseComplete {
 		facts, _ := httpClientTargetFacts(converted)
+		// The source text only adds targets: a filled word can also read
+		// as an option and take a literal target as its value.
+		if filled, ok := withComputedSource(args, source); ok {
+			refilled, _ := httpClientArgs(program, filled, stdin)
+			more, _ := httpClientTargetFacts(refilled)
+			facts = append(facts, more...)
+		}
 		result.Facts = sortedUnique(append(result.Facts, facts...))
 	}
 	return result
+}
+
+// httpClientArgs converts a wget, HTTPie or web cmdlet call to curl's
+// arguments, and reports an HTTPie call that only prints its request.
+func httpClientArgs(program string, args []string, stdin bool) ([]string, bool) {
+	switch {
+	case webCmdlet(program):
+		return webCmdletArgs(args, stdin), false
+	case program == "wget":
+		return wgetArgs(args), false
+	default:
+		return httpieArgs(program, args, stdin)
+	}
+}
+
+// withComputedSource returns args with each computed word ("") written as
+// its source text, for reading the targets a request names.
+func withComputedSource(args, source []string) ([]string, bool) {
+	if len(source) != len(args) {
+		return nil, false
+	}
+	filled, changed := slices.Clone(args), false
+	for i, arg := range args {
+		if arg == "" && source[i] != "" {
+			filled[i], changed = source[i], true
+		}
+	}
+	return filled, changed
+}
+
+// computedTargetHints returns the provider facts that a computed URL
+// operand's source text still names: its literal host, read as
+// httpTargetFacts reads one. A computed scheme or host names none, a host in
+// a path or query is not the target, and a word that is an option with its
+// value attached (--referer=…, -d…) is no URL, except --url=.
+func computedTargetHints(source string) []string {
+	if strings.HasPrefix(strings.TrimLeft(source, `"'`), "-") && !strings.HasPrefix(source, "--url=") {
+		return nil
+	}
+	facts, resolved := httpTargetFacts(strings.TrimPrefix(source, "--url="))
+	if !resolved {
+		return nil
+	}
+	return facts
 }
 
 // webCmdlet reports PowerShell's web cmdlets, by name or alias.

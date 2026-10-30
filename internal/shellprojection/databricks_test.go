@@ -234,7 +234,7 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl computed body is opaque", `curl --json "$BODY" ` + dbHost + "/api/2.1/clusters/delete", []string{dbCat, dbD, dbP("compute"), dbW}, true},
 		{"curl computed header is opaque", `curl -sS -X POST -H "Authorization: Bearer $DATABRICKS_TOKEN" -H 'Content-Type: application/json' -d '{"job_id":1}' ` + dbHost + "/api/2.2/jobs/run-now", []string{dbCat, dbP("execution"), dbW}, true},
 		{"curl computed header on a read", `curl -sS -H "Authorization: Bearer $DATABRICKS_TOKEN" '` + dbHost + "/api/2.2/jobs/get?job_id=1'", []string{dbCat, dbP("workloads")}, true},
-		{"curl computed path hides the host (Q1)", `curl -H "Authorization: Bearer $T" -X DELETE ` + dbHost + `/api/2.0/repos/"$ID"`, nil, false},
+		{"curl computed path keeps the host, unrecognized (Q1)", `curl -H "Authorization: Bearer $T" -X DELETE ` + dbHost + `/api/2.0/repos/"$ID"`, []string{dbUnk}, false},
 		{"curl computed method is unrecognized", `curl -H "Authorization: Bearer $T" -X "$M" ` + dbHost + "/api/2.0/repos/12", []string{dbUnk}, false},
 		{"curl unquoted computed header can split into options", `curl -H $HDR ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
 		{"curl computed list header can split into options", `curl -H "$@" ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
