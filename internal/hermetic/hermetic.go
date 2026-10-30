@@ -3,6 +3,7 @@
 package hermetic
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -29,13 +30,19 @@ func SetHome(t testing.TB, dir string) {
 // MainHome points the home directory at a fresh temp dir for the whole test
 // binary, as Home does for one test, and returns the dir. TestMain calls it
 // before m.Run and removes the dir after; a test that sets a home of its own
-// gets this one back when it ends.
+// gets this one back when it ends. An error means the home may be only partly
+// set, so TestMain must stop without running the tests.
 func MainHome() (string, error) {
 	home, err := os.MkdirTemp("", "kontext-home")
 	if err != nil {
 		return "", err
 	}
-	setHome(func(key, value string) { _ = os.Setenv(key, value) }, home)
+	var errs []error
+	setHome(func(key, value string) { errs = append(errs, os.Setenv(key, value)) }, home)
+	if err := errors.Join(errs...); err != nil {
+		_ = os.RemoveAll(home)
+		return "", err
+	}
 	return home, nil
 }
 

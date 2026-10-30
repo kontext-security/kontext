@@ -572,9 +572,16 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	// Besides each agent's ConfigEnv, the agent scans follow these.
+	dirVars := []string{"CLINE_DATA_DIR", "KIMI_SHARE_DIR", "OPENCLAW_HOME", "XDG_DATA_HOME"}
 	for _, agent := range agentinventory.Catalog {
 		if agent.ConfigEnv != "" {
-			_ = os.Unsetenv(agent.ConfigEnv)
+			dirVars = append(dirVars, agent.ConfigEnv)
+		}
+	}
+	for _, name := range dirVars {
+		if err := os.Unsetenv(name); err != nil {
+			panic(err)
 		}
 	}
 	code := m.Run()
