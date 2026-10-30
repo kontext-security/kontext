@@ -45,6 +45,18 @@ type EvaluateResult struct {
 	UpdatedInput map[string]any `json:"updated_input,omitempty"`
 }
 
+// CompactRequestType marks a request for tool output compaction instead of
+// an evaluation. It carries the PostToolUse event; the answer is a
+// CompactResult.
+const CompactRequestType = "compact_tool_output"
+
+// CompactResult answers a CompactRequestType request: the tool response the
+// agent should see instead, or none to leave the output unchanged.
+type CompactResult struct {
+	Type              string          `json:"type"`
+	UpdatedToolOutput json.RawMessage `json:"updated_tool_output,omitempty"`
+}
+
 func WriteMessage(conn net.Conn, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {

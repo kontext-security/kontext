@@ -115,6 +115,9 @@ type Result struct {
 	Mode         string
 	Epoch        string
 	UpdatedInput map[string]any
+	// UpdatedToolOutput replaces the tool response the agent sees after a
+	// PostToolUse (tool output compaction). Nil leaves the output unchanged.
+	UpdatedToolOutput map[string]any
 	// FailedOpen marks an allow that Kontext could not decide: the policy
 	// daemon was unreachable, late, or unintelligible. Agent encoders emit no
 	// permission decision for it, so the agent's own permission flow applies

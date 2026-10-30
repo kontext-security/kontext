@@ -3,6 +3,7 @@ package claudemanaged
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -123,6 +124,10 @@ func TestTemplateIncludesManagedKontextHooks(t *testing.T) {
 	}
 	if settings.DisableAllHooks != nil {
 		t.Fatal("DisableAllHooks set, want omitted")
+	}
+	// Saved outputs can be read back without a prompt; nothing else is allowed.
+	if settings.Permissions == nil || !reflect.DeepEqual(settings.Permissions.Allow, []string{SavedOutputReadRule}) {
+		t.Fatalf("Permissions = %+v, want only the saved-output read rule", settings.Permissions)
 	}
 
 	for _, event := range SupportedEvents {
@@ -442,6 +447,19 @@ func TestIsManagedSettingsDropIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Drop-ins written before tool output compaction carry hooks alone.
+	hooksOnlySettings := Template("/opt/homebrew/bin/kontext")
+	hooksOnlySettings.Permissions = nil
+	hooksOnly, err := json.Marshal(hooksOnlySettings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	widerSettings := Template("/opt/homebrew/bin/kontext")
+	widerSettings.Permissions.Allow = append(widerSettings.Permissions.Allow, "Read(~/**)")
+	wider, err := json.Marshal(widerSettings)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name string
@@ -450,6 +468,9 @@ func TestIsManagedSettingsDropIn(t *testing.T) {
 	}{
 		{"our template", string(ours), true},
 		{"stale binary path still ours", string(stale), true},
+		{"hooks-only template still ours", string(hooksOnly), true},
+		{"wider permissions", string(wider), false},
+		{"permissions alone", `{"permissions":{"allow":["` + SavedOutputReadRule + `"]}}`, false},
 		{"ours plus foreign top-level key", `{"hooks":{"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"'/opt/homebrew/bin/kontext' hook 'pre-tool-use'"}]}]},"permissions":{"deny":["x"]}}`, false},
 		{"partial managed hook file", `{"hooks":{"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"'/opt/homebrew/bin/kontext' hook 'pre-tool-use'","timeout":20}]}]}}`, false},
 		{"non canonical matcher", strings.Replace(string(ours), `"matcher": ""`, `"matcher": "*"`, 1), false},

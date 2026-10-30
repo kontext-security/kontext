@@ -23,7 +23,7 @@ func TestClientFetchAndConditionalRefresh(t *testing.T) {
 			t.Fatalf("path = %q", request.URL.Path)
 		}
 		query := request.URL.Query()
-		if len(query) != 1 || query.Get("response_version") != "3" {
+		if len(query) != 1 || query.Get("response_version") != "4" {
 			t.Fatalf("query = %v", query)
 		}
 		if request.Header.Get("Authorization") != "Bearer token" {

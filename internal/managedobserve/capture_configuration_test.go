@@ -16,8 +16,8 @@ func TestCaptureConfigurationCarriesWorkTypeSwitchOnlyWhenConfirmed(t *testing.T
 	if got := captureConfiguration(cache.Current()); got.WorkTypeClassification || got.Confirmed {
 		t.Fatalf("unconfirmed configuration enables the switch: %+v", got)
 	}
-	on := true
-	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on}
+	on, off := true, false
+	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off}
 	identity, err := endpointconfig.ComputeIdentity(config)
 	if err != nil {
 		t.Fatal(err)

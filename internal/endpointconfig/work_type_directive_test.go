@@ -13,7 +13,7 @@ import (
 
 func workTypeResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Response {
 	t.Helper()
-	config := Config{PayloadCaptureMode: mode, WorkTypeClassification: enabled}
+	config := Config{PayloadCaptureMode: mode, WorkTypeClassification: enabled, ToolOutputCompaction: boolPtr(false)}
 	identity, err := ComputeIdentity(config)
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func workTypeResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Res
 
 func boolPtr(value bool) *bool { return &value }
 
-// The switch is required under v3: a response without it is rejected rather
+// The switch is required under v4: a response without it is rejected rather
 // than resolved either way, and leaves the confirmed value untouched.
 func TestResponseWithoutTheSwitchIsRejected(t *testing.T) {
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
@@ -36,7 +36,7 @@ func TestResponseWithoutTheSwitchIsRejected(t *testing.T) {
 
 	silent := Response{
 		ResponseVersion: ResponseVersion,
-		Config:          Config{PayloadCaptureMode: payloadcapture.ModeFull},
+		Config:          Config{PayloadCaptureMode: payloadcapture.ModeFull, ToolOutputCompaction: boolPtr(false)},
 		ConfigIdentity:  off.ConfigIdentity,
 	}
 	if err := cache.Apply(FetchResult{Response: &silent, ETag: silent.ConfigIdentity}, now.Add(time.Minute)); err == nil {
@@ -74,27 +74,35 @@ func TestWorkTypeSwitchOffUntilConfirmed(t *testing.T) {
 	}
 }
 
-// A cache persisted by a v2 build holds the retired guardrail flag inside its
-// config, which the strict v3 decoder would reject. It is discarded, not
-// reported invalid.
+// A cache persisted by an earlier build holds a config shape the strict v4
+// decoder would reject: v2's retired guardrail flag, or v3 without the
+// compaction switch. It is discarded, not reported invalid.
 func TestPreviousVersionCacheIsDiscarded(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "endpoint-config.json")
-	v2 := `{"version":2,"fetchedAt":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","response":{"responseVersion":2,` +
-		`"config":{"payloadCaptureMode":"full","guardrailLlmEnabled":false},"configIdentity":"` + strings.Repeat("a", 64) + `"},"guardrailLlmDirective":false}`
-	if err := os.WriteFile(path, []byte(v2), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	fetchedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	for name, cached := range map[string]string{
+		"v2": `{"version":2,"fetchedAt":"` + fetchedAt + `","response":{"responseVersion":2,` +
+			`"config":{"payloadCaptureMode":"full","guardrailLlmEnabled":false},"configIdentity":"` + strings.Repeat("a", 64) + `"},"guardrailLlmDirective":false}`,
+		"v3": `{"version":2,"fetchedAt":"` + fetchedAt + `","response":{"responseVersion":3,` +
+			`"config":{"payloadCaptureMode":"full","workTypeClassification":true},"configIdentity":"` + strings.Repeat("a", 64) + `"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "endpoint-config.json")
+			if err := os.WriteFile(path, []byte(cached), 0o600); err != nil {
+				t.Fatal(err)
+			}
 
-	cache := NewCache(path)
-	if err := cache.Load(); err != nil {
-		t.Fatalf("load across a version upgrade should not fail: %v", err)
-	}
-	snapshot := cache.Current()
-	if snapshot.Confirmed || snapshot.Status.Invalid || snapshot.LastKnownGood != nil {
-		t.Errorf("a discarded cache must read as unconfirmed, valid and empty: %+v", snapshot)
-	}
-	if snapshot.Config.PayloadCaptureMode != payloadcapture.ModeSummary || snapshot.Config.WorkTypeClassificationEnabled() {
-		t.Errorf("discarded cache must leave the privacy-safe default: %+v", snapshot.Config)
+			cache := NewCache(path)
+			if err := cache.Load(); err != nil {
+				t.Fatalf("load across a version upgrade should not fail: %v", err)
+			}
+			snapshot := cache.Current()
+			if snapshot.Confirmed || snapshot.Status.Invalid || snapshot.LastKnownGood != nil {
+				t.Errorf("a discarded cache must read as unconfirmed, valid and empty: %+v", snapshot)
+			}
+			if snapshot.Config.PayloadCaptureMode != payloadcapture.ModeSummary || snapshot.Config.WorkTypeClassificationEnabled() || snapshot.Config.ToolOutputCompactionEnabled() {
+				t.Errorf("discarded cache must leave the privacy-safe default: %+v", snapshot.Config)
+			}
+		})
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/tooloutput"
 )
 
 const (
@@ -117,8 +118,28 @@ func (l Lifecycle) Process(ctx context.Context, event hook.Event) hook.Result {
 		// decision budget and a kickstart of a dead daemon.
 		return l.processWithKickstart(ctx, event, preToolUseWait)
 	default:
-		return l.processIfAvailable(ctx, event, asyncHookWait)
+		result := l.processIfAvailable(ctx, event, asyncHookWait)
+		if tooloutput.LiveCandidate(event) {
+			result.UpdatedToolOutput = l.compactToolOutput(ctx, event)
+		}
+		return result
 	}
+}
+
+// compactToolOutput asks the daemon, beside the ordinary PostToolUse above,
+// for a compacted tool output within tooloutput.HookWait. A daemon that is
+// away, slow or has nothing to say leaves the output unchanged.
+func (l Lifecycle) compactToolOutput(ctx context.Context, event hook.Event) map[string]any {
+	ctx, cancel := context.WithTimeout(ctx, tooloutput.HookWait)
+	defer cancel()
+	client := localruntime.NewClient(l.SocketPath)
+	client.Timeout = tooloutput.HookWait
+	updated, err := client.CompactToolOutput(ctx, event)
+	if err != nil {
+		l.Diagnostic.Printf("managed observe compaction: %v\n", err)
+		return nil
+	}
+	return updated
 }
 
 func (l Lifecycle) processWithKickstart(ctx context.Context, event hook.Event, budget time.Duration) hook.Result {

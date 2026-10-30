@@ -25,6 +25,7 @@ import (
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/internal/runtimehost"
+	"github.com/kontext-security/kontext/internal/tooloutput"
 )
 
 type DaemonOptions struct {
@@ -42,6 +43,7 @@ type DaemonOptions struct {
 	PolicyHTTPClient              *http.Client
 	EndpointConfigRefreshInterval time.Duration
 	EndpointConfigHTTPClient      *http.Client
+	ToolOutputHTTPClient          *http.Client
 	AgentInventoryInterval        time.Duration
 	Diagnostic                    diagnostic.Logger
 	// BinaryVersion is this process's linked CLI version, used for startup
@@ -191,6 +193,25 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err != nil {
 		return fmt.Errorf("configure endpoint configuration client: %w", err)
 	}
+	installTokenSource := func(refreshCtx context.Context) (string, error) {
+		loaded, err := managedconfig.Load()
+		if err != nil {
+			return "", err
+		}
+		return managedconfig.ResolveInstallToken(refreshCtx, loaded.Config.Credentials.InstallTokenRef)
+	}
+	// Tool output compaction stays off until a confirmed configuration turns
+	// it on: an unreachable, invalid or older configuration reads as off.
+	compactionClient, err := tooloutput.NewClient(loadedConfig.Config.CloudURL, installationState.InstallationID, installTokenSource, opts.ToolOutputHTTPClient)
+	if err != nil {
+		return fmt.Errorf("configure tool output compaction client: %w", err)
+	}
+	compactor := tooloutput.New(tooloutput.Options{
+		Client:     compactionClient,
+		Enabled:    func() bool { return endpointConfigCache.Current().Config.ToolOutputCompactionEnabled() },
+		Dir:        tooloutput.DefaultDirForDB(dbPath),
+		Diagnostic: opts.Diagnostic,
+	})
 
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          managedconfig.Agent,
@@ -217,6 +238,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// as a dead daemon, so the call fails open without a policy check.
 		// Close drains pending writes before the store shuts.
 		AsyncDecisionRecording: true,
+		CompactToolOutput:      compactor.Compact,
+		ObserveEvent:           compactor.Observe,
 	})
 	if err != nil {
 		return err
@@ -248,16 +271,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			default:
 			}
 		},
-		Client:     cedarClient,
-		Cache:      cedarCache,
-		Diagnostic: opts.Diagnostic,
-		TokenSource: func(refreshCtx context.Context) (string, error) {
-			loaded, err := managedconfig.Load()
-			if err != nil {
-				return "", err
-			}
-			return managedconfig.ResolveInstallToken(refreshCtx, loaded.Config.Credentials.InstallTokenRef)
-		},
+		Client:         cedarClient,
+		Cache:          cedarCache,
+		Diagnostic:     opts.Diagnostic,
+		TokenSource:    installTokenSource,
 		InstallationID: installationState.InstallationID,
 		Interval:       opts.PolicyRefreshInterval,
 	}
@@ -267,16 +284,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		cedarRefresher.Run(policyCtx)
 	}()
 	endpointConfigRefresher := endpointconfig.Refresher{
-		Client:     endpointConfigClient,
-		Cache:      endpointConfigCache,
-		Diagnostic: opts.Diagnostic,
-		TokenSource: func(refreshCtx context.Context) (string, error) {
-			loaded, err := managedconfig.Load()
-			if err != nil {
-				return "", err
-			}
-			return managedconfig.ResolveInstallToken(refreshCtx, loaded.Config.Credentials.InstallTokenRef)
-		},
+		Client:         endpointConfigClient,
+		Cache:          endpointConfigCache,
+		Diagnostic:     opts.Diagnostic,
+		TokenSource:    installTokenSource,
 		InstallationID: installationState.InstallationID,
 		Interval:       opts.EndpointConfigRefreshInterval,
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
@@ -287,6 +298,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	go func() {
 		defer background.Done()
 		endpointConfigRefresher.Run(policyCtx)
+	}()
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		compactor.Run(policyCtx)
 	}()
 
 	// A rescan after hook changes refreshes the authority report too, so a

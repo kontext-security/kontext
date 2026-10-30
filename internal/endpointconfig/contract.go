@@ -17,10 +17,11 @@ const (
 	// ResponseVersion is the contract this build negotiates. The server serves
 	// every version side by side and keys the response off the requested one,
 	// so moving here changes only what this build asks for; released binaries
-	// keep getting their shape and identity hashes. v3 drops the retired
-	// guardrail LLM flag and adds the workspace's work-type switch.
-	ResponseVersion  = 3
-	identityDomain   = "kontext:endpoint-config:v3"
+	// keep getting their shape and identity hashes. v3 dropped the retired
+	// guardrail LLM flag and added the workspace's work-type switch; v4 adds
+	// the endpoint's tool output compaction switch.
+	ResponseVersion  = 4
+	identityDomain   = "kontext:endpoint-config:v4"
 	MaxResponseBytes = 64 * 1024
 )
 
@@ -32,11 +33,19 @@ type Config struct {
 	// classification: when set and capture is not omitted, each turn record
 	// carries a redacted, bounded prompt excerpt. Part of the hashed contract.
 	WorkTypeClassification *bool `json:"workTypeClassification"`
+	// ToolOutputCompaction is the endpoint's switch for tool output
+	// compaction. Part of the hashed contract.
+	ToolOutputCompaction *bool `json:"toolOutputCompaction"`
 }
 
 // WorkTypeClassificationEnabled reports the switch; absent reads as off.
 func (c Config) WorkTypeClassificationEnabled() bool {
 	return c.WorkTypeClassification != nil && *c.WorkTypeClassification
+}
+
+// ToolOutputCompactionEnabled reports the switch; absent reads as off.
+func (c Config) ToolOutputCompactionEnabled() bool {
+	return c.ToolOutputCompaction != nil && *c.ToolOutputCompaction
 }
 
 func (c Config) Validate() error {
@@ -45,11 +54,14 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("endpoint configuration: unsupported payload capture mode %q", c.PayloadCaptureMode)
 	}
-	// v3 always emits the switch. Guessing a value for a missing one would put
-	// this side's identity out of step with the server's and fail every
+	// v4 always emits both switches. Guessing a value for a missing one would
+	// put this side's identity out of step with the server's and fail every
 	// response, so reject it as the contract violation it is.
 	if c.WorkTypeClassification == nil {
 		return errors.New("endpoint configuration: workTypeClassification is required")
+	}
+	if c.ToolOutputCompaction == nil {
+		return errors.New("endpoint configuration: toolOutputCompaction is required")
 	}
 	return nil
 }
@@ -93,6 +105,7 @@ func ComputeIdentity(config Config) (string, error) {
 		ResponseVersion,
 		string(config.PayloadCaptureMode),
 		*config.WorkTypeClassification,
+		*config.ToolOutputCompaction,
 	})
 	if err != nil {
 		return "", fmt.Errorf("endpoint configuration: encode identity preimage: %w", err)

@@ -407,8 +407,37 @@ kontext setup --uninstall
 - Kontext does not store model reasoning or full conversation history.
 - Managed deployments can export redacted records to the organization
   dashboard.
+- Tool output compaction, when an administrator turns it on, sends large tool
+  outputs and recent conversation context to the Kontext API (below).
 
 See the [Guard documentation](docs/guard.md) for the runtime and data boundary.
+
+### Tool output compaction
+
+Tool output compaction is off unless an administrator turns it on for an
+endpoint in the dashboard. When it is on, the managed daemon sends each Claude
+Code Bash or Read output over 2 KB to the Kontext API, with the latest prompt,
+the assistant's text for that call and up to six recent transcript items. If
+the API returns a shorter version, Claude Code shows that version instead:
+
+- The full Bash output is saved first, readable by the user only, under
+  `managed-observe/tool-output/` in the daemon's data directory, and deleted
+  after seven days. Kontext's machine-wide Claude Code settings let the agent
+  read that folder without a prompt. With the hooks in the user's own
+  settings, the Read tool asks once; reading it from the shell does not.
+- A shortened Read result keeps its line numbers; the agent reads the file
+  itself for any lines it needs.
+- When a later call reads a saved output or a left-out part of a file back, the
+  daemon reports that to the API, without content.
+- Nothing is sent for a call that runs in, or names a path in, a macOS
+  privacy-guarded folder (Desktop, Documents, Downloads, iCloud Drive,
+  cloud storage, external volumes), and such calls are left out of the
+  context sent for others.
+- Codex outputs are sent for measurement only and are never changed.
+- The round trip gets at most three seconds. Any timeout, error or unexpected
+  reply leaves the output unchanged. Turning the switch off stops the daemon's
+  compaction and read-back requests from its next configuration refresh,
+  normally within a minute.
 
 ---
 

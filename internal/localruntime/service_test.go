@@ -2,6 +2,7 @@ package localruntime
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"os"
@@ -391,13 +392,15 @@ func newTestServiceWithOptions(t *testing.T, opts Options) *Service {
 		opts.Diagnostic = diagnostic.New(io.Discard, false)
 	}
 	service, err := NewService(Options{
-		SocketPath:  opts.SocketPath,
-		Core:        opts.Core,
-		SessionID:   opts.SessionID,
-		AgentName:   opts.AgentName,
-		AsyncIngest: opts.AsyncIngest,
-		OnFailure:   opts.OnFailure,
-		Diagnostic:  opts.Diagnostic,
+		SocketPath:        opts.SocketPath,
+		Core:              opts.Core,
+		SessionID:         opts.SessionID,
+		AgentName:         opts.AgentName,
+		AsyncIngest:       opts.AsyncIngest,
+		OnFailure:         opts.OnFailure,
+		CompactToolOutput: opts.CompactToolOutput,
+		Observe:           opts.Observe,
+		Diagnostic:        opts.Diagnostic,
 	})
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -529,4 +532,94 @@ func (s *stubRuntime) IngestEvent(ctx context.Context, event hook.Event) (hook.R
 		s.ingested <- event
 	}
 	return hook.Result{Decision: hook.DecisionAllow}, nil
+}
+
+// A compaction request is answered by the compactor alone: it is neither
+// evaluated nor ingested, since the same PostToolUse also arrives as an
+// ordinary event.
+func TestServiceAnswersCompactionRequests(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{ingested: make(chan hook.Event, 1)}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compacted := make(chan hook.Event, 1)
+	observed := make(chan hook.Event, 1)
+	service := newTestServiceWithOptions(t, Options{
+		Core:        core,
+		AsyncIngest: true,
+		CompactToolOutput: func(_ context.Context, event hook.Event) map[string]any {
+			compacted <- event
+			return map[string]any{"stdout": "short", "exitCode": json.Number("9007199254740993")}
+		},
+		Observe: func(_ context.Context, event hook.Event) { observed <- event },
+	})
+	client := NewClient(service.SocketPath())
+
+	updated, err := client.CompactToolOutput(context.Background(), hook.Event{
+		SessionID: "s1", Agent: "claude", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "toolu_1",
+		ToolInput: map[string]any{"command": "make"}, ToolResponse: map[string]any{"stdout": "long"},
+	})
+	if err != nil {
+		t.Fatalf("CompactToolOutput() error = %v", err)
+	}
+	if updated["stdout"] != "short" || updated["exitCode"] != json.Number("9007199254740993") {
+		t.Fatalf("CompactToolOutput() = %#v", updated)
+	}
+	if event := <-compacted; event.ToolUseID != "toolu_1" || event.ToolResponse["stdout"] != "long" || event.ToolInput["command"] != "make" {
+		t.Fatalf("compactor saw %+v", event)
+	}
+	if runtime.evaluateCalls.Load() != 0 || runtime.ingestCalls.Load() != 0 || runtime.observeCalls.Load() != 0 {
+		t.Fatal("a compaction request reached the runtime")
+	}
+	select {
+	case event := <-observed:
+		t.Fatalf("a compaction request was observed: %+v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestServiceWithoutCompactorLeavesTheOutput(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t, &stubRuntime{}, true)
+	updated, err := NewClient(service.SocketPath()).CompactToolOutput(context.Background(), hook.Event{
+		HookName: hook.HookPostToolUse, ToolName: "Bash", ToolResponse: map[string]any{"stdout": "long"},
+	})
+	if err != nil || updated != nil {
+		t.Fatalf("CompactToolOutput() = %v, %v, want no change", updated, err)
+	}
+}
+
+// Every evaluated event reaches Observe once its response is written.
+func TestServiceObservesEventsAfterAnswering(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow}, ingested: make(chan hook.Event, 1)}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan hook.Event, 2)
+	service := newTestServiceWithOptions(t, Options{
+		Core:        core,
+		AsyncIngest: true,
+		Observe:     func(_ context.Context, event hook.Event) { observed <- event },
+	})
+	client := NewClient(service.SocketPath())
+	for _, name := range []hook.HookName{hook.HookPreToolUse, hook.HookPostToolUse} {
+		if _, err := client.Process(context.Background(), hook.Event{SessionID: "s1", HookName: name, ToolName: "Read", ToolUseID: "toolu_2"}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case event := <-observed:
+			if event.HookName != name || event.ToolUseID != "toolu_2" || event.Agent != "claude" {
+				t.Fatalf("observed %+v", event)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s was not observed", name)
+		}
+	}
 }
