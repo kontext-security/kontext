@@ -1,6 +1,7 @@
 package mcpconfig
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -226,5 +227,37 @@ func TestDesktopConnectorDecodesOnlyTheCallersRecord(t *testing.T) {
 	write(own, `"title": "`+strings.Repeat("t", 2*recordHeadBytes)+`", `, "session-own", time.Now().Add(-time.Hour))
 	if got, _, _ := r.desktopConnector(home, "session-own", connector); got != url {
 		t.Fatalf("desktopConnector() for a cliSessionId past the head = %q", got)
+	}
+}
+
+// A daemon that shuts down cancels its warm-up, which then reads no further
+// record, so the walk of the session records does not outlive the daemon.
+func TestWarmStopsOnceItsContextIsDone(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions/acct/org")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("local_%d.json", i)), []byte(`{"cliSessionId": "session"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Resolver{Home: home}
+	cached := func() int {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return len(r.cache)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r.Warm(ctx)
+	if n := cached(); n != 0 {
+		t.Fatalf("Warm() with a done context cached %d files", n)
+	}
+	// Each record is cached by its head and whole.
+	r.Warm(context.Background())
+	if n := cached(); n != 4 {
+		t.Fatalf("Warm() cached %d files, want 4", n)
 	}
 }

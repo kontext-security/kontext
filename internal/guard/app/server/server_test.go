@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/guard/risk"
@@ -570,5 +571,33 @@ func TestSessionsKeepPersistedModeAfterSessionChanges(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0].SessionID != "enforced-session" || sessions[0].Current || sessions[0].Mode != "enforce" {
 		t.Fatalf("sessions = %+v, want historical enforce mode", sessions)
+	}
+}
+
+// Close stops the MCP config warm-up through startWarm's stop: it cancels the
+// warm-up and returns only once the warm-up has, so a closed server leaves no
+// goroutine reading config files behind.
+func TestStartWarmStopCancelsAndWaits(t *testing.T) {
+	started, returned := make(chan struct{}), make(chan struct{})
+	stop := startWarm(func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(returned)
+	})
+	<-started
+	stopped := make(chan struct{})
+	go func() {
+		stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not cancel the warm-up")
+	}
+	select {
+	case <-returned:
+	default:
+		t.Fatal("stop returned while the warm-up was still running")
 	}
 }

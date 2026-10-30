@@ -37,6 +37,7 @@ type Server struct {
 	classifier       *riskclassifier.Classifier
 	stepSafety       *stepsafety.Evaluator
 	hookSlots        chan struct{}
+	stopWarm         func()
 }
 
 type ProcessResponse struct {
@@ -102,7 +103,6 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		policy = NewRiskPolicyProvider()
 	}
 	policy = newCedarPolicyProvider(policy, opts.CedarPolicies, opts.CedarEnforcement)
-	go mcpServers.Warm()
 	currentSessionID := strings.TrimSpace(opts.CurrentSessionID)
 	mode := strings.TrimSpace(opts.Mode)
 	if currentSessionID != "" && mode == "" {
@@ -128,7 +128,29 @@ func NewServerWithPolicyAndOptions(store *sqlite.Store, policy PolicyProvider, o
 		hookSlots:        make(chan struct{}, runtimecore.MaxPendingHookRequests),
 	}
 	server.routes()
+	server.stopWarm = startWarm(mcpServers.Warm)
 	return server, nil
+}
+
+// Close stops the server's warm-up of the MCP config cache and waits for it
+// to return. The store stays open; whoever opened it closes it.
+func (s *Server) Close() {
+	s.stopWarm()
+}
+
+// startWarm runs warm in the background. stop cancels warm's context and
+// returns once warm has.
+func startWarm(warm func(context.Context)) (stop func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		warm(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // newRiskClassifier builds the in-path classifier. A binary-model failure
@@ -515,6 +537,8 @@ func OpenDefaultServer(dbPath string) (*Server, func() error, error) {
 	return OpenDefaultServerWithOptions(dbPath, Options{})
 }
 
+// OpenDefaultServerWithOptions opens the store at dbPath and a server on it.
+// The returned func closes the server, then the store.
 func OpenDefaultServerWithOptions(dbPath string, opts Options) (*Server, func() error, error) {
 	store, err := sqlite.OpenStore(dbPath)
 	if err != nil {
@@ -525,7 +549,10 @@ func OpenDefaultServerWithOptions(dbPath string, opts Options) (*Server, func() 
 		_ = store.Close()
 		return nil, nil, err
 	}
-	return server, store.Close, nil
+	return server, func() error {
+		server.Close()
+		return store.Close()
+	}, nil
 }
 
 // redactEvidence removes credentials from text that will be stored as classifier
