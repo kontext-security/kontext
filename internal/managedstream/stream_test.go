@@ -662,6 +662,8 @@ func TestFlushRetriesWithSmallerBatchWhenHostedBackendRejectsSize(t *testing.T) 
 	for i := 0; i < 4; i++ {
 		saveTestDecision(t, store, fmt.Sprintf("session-%03d", i), fmt.Sprintf("toolu_%03d", i))
 	}
+	// The page sizes asserted below hold only while the export follows write order.
+	sequenceTestActionCursors(t, dbPath)
 
 	var actionCounts []int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -722,6 +724,26 @@ func TestFlushRetriesWithSmallerBatchWhenHostedBackendRejectsSize(t *testing.T) 
 	}
 	if state.UpdatedAfter == nil {
 		t.Fatal("updated_after was not persisted after smaller retry")
+	}
+}
+
+// sequenceTestActionCursors gives every action its own cursor key, in write
+// order, as a fine-grained clock does. Windows' clock is coarse enough for rows
+// written together to share a key, and the export breaks those ties by random
+// action ID. A page's receipts can then straddle rows it did not select, and
+// LedgerBatch widens the page to keep the receipt range contiguous, so a
+// smaller batch limit need not send fewer actions.
+func sequenceTestActionCursors(t *testing.T, dbPath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// rowid is write order; it becomes the nanoseconds of the store's fixed-width key.
+	base := time.Now().Add(-time.Minute).UTC().Format("2006-01-02T15:04:05")
+	if _, err := db.Exec(`update authorization_actions set updated_at_cursor_key = printf('%s.%09dZ', ?, rowid)`, base); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1380,6 +1402,10 @@ func TestFlushRestoresBatchLimitAfterReduction(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		saveTestDecision(t, store, "session-1", fmt.Sprintf("toolu_%02d", i))
 	}
+	// Out of write order, pages above the minimum can widen past
+	// MaxPayloadBytes, shrinking the limit to 1 before the first post, where
+	// the one 413 below would end the flush.
+	sequenceTestActionCursors(t, dbPath)
 
 	var batchSizes []int
 	requests := 0
@@ -1414,10 +1440,9 @@ func TestFlushRestoresBatchLimitAfterReduction(t *testing.T) {
 	}
 
 	// The first post is rejected with 413 → the page limit halves to 4; each
-	// accepted post then increments it by one toward the cap. Payload action counts
-	// exceed the page size (the receipt rowid range pulls in neighbors), so
-	// assert recovery via the essential property: without it every remaining
-	// page stays at 4 and no accepted payload ever reaches the original cap.
+	// accepted post then increments it by one toward the cap. Assert recovery
+	// via the essential property: without it every remaining page stays at 4
+	// and no accepted payload ever reaches the original cap.
 	maxSize := 0
 	for _, size := range batchSizes {
 		maxSize = max(maxSize, size)
