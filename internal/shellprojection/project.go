@@ -1727,7 +1727,11 @@ func readCurl(args, source []string, complete, opaqueValues, urlGlobs bool) (ced
 			unknown = !curlSwitches[arg]
 		default:
 			op.urls = append(op.urls, arg)
-			hint(i)
+			if !unknownBefore {
+				// Else it may be the value of an option the parser does
+				// not know (--noproxy).
+				hint(i)
+			}
 		}
 		if isBody {
 			op.bodies = append(op.bodies, body)

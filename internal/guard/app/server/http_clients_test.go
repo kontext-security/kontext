@@ -133,8 +133,10 @@ func TestHTTPClientPolicyDecisions(t *testing.T) {
 		{"curl computed attached referer is data", `curl --referer="https://api.github.com/$X" https://example.com`, githubGuard, false},
 		{"curl value of an unknown option is data", `curl --noproxy "api.github.com,$X" https://example.com`, githubGuard, false},
 		{"curl URL value of an unknown option is data", `curl --doh-url "https://api.github.com/$X" https://example.com`, githubGuard, false},
-		{"curl computed scheme names no host", `curl -X DELETE "$SCHEME://api.github.com/repos/acme/sandbox"`, githubGuard, false},
-		{"curl provider host in a computed URL's query is data", `curl "$BASE/cb?next=https://api.github.com/$X"`, githubGuard, false},
+		// A provider host with a computed part around it may still be the
+		// target, so the request is unrecognized, as for wget and HTTPie.
+		{"curl computed scheme keeps the named host", `curl -X DELETE "$SCHEME://api.github.com/repos/acme/sandbox"`, githubGuard, true},
+		{"curl computed base keeps a named host", `curl "$BASE/cb?next=https://api.github.com/$X"`, githubGuard, true},
 		{"httpie computed first target keeps a later literal target", `http "$SCHEME://example.com" DELETE http://api.github.com/repos/acme/sandbox`, githubGuard, true},
 		{"absolute grep", `/usr/bin/grep -n api.github.com README.md`, githubGuard, false},
 		{"wget SQL file", `wget --method POST --body-file drop.json https://dbc-1234.cloud.databricks.com/api/2.0/sql/statements`, databricksPresets["block-databricks-deletion"], true},

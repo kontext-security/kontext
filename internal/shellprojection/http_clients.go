@@ -31,7 +31,8 @@ func classifyHTTPClient(program string, args, source []string, complete, opaqueV
 		// as an option and take a literal target as its value.
 		if filled, ok := withComputedSource(args, source); ok {
 			refilled, _ := httpClientArgs(program, filled, stdin)
-			facts = append(facts, readableTargetFacts(refilled)...)
+			more, _ := httpClientTargetFacts(refilled)
+			facts = append(facts, more...)
 		}
 		result.Facts = sortedUnique(append(result.Facts, facts...))
 	}
@@ -67,10 +68,10 @@ func withComputedSource(args, source []string) ([]string, bool) {
 }
 
 // computedTargetHints returns the provider facts that a computed URL
-// operand's source text still names: its literal host, read as
-// httpTargetFacts reads one. A computed scheme or host names none, a host in
-// a path or query is not the target, and a word that is an option with its
-// value attached (--referer=…, -d…) is no URL, except --url=.
+// operand's source text names, read as httpTargetFacts reads a target. A
+// provider host with a computed part around it may still be the target, so
+// it counts, as for wget and HTTPie; a word that is an option with its value
+// attached (--referer=…, -d…) is no URL, except --url=.
 func computedTargetHints(source string) []string {
 	if text := strings.TrimLeft(source, `"'`); strings.HasPrefix(text, "-") {
 		var ok bool
@@ -78,10 +79,7 @@ func computedTargetHints(source string) []string {
 			return nil
 		}
 	}
-	facts, resolved := httpTargetFacts(source)
-	if !resolved {
-		return nil
-	}
+	facts, _ := httpTargetFacts(source)
 	return facts
 }
 
@@ -471,24 +469,11 @@ func webCmdletArgs(args []string, stdin bool) []string {
 // The translators mark request operands with --url. Inspect only their
 // authority: URLs in bodies, headers, output paths or request paths are data.
 func httpClientTargetFacts(converted []string) ([]string, bool) {
-	return clientTargetFacts(converted, false)
-}
-
-// readableTargetFacts returns the provider facts of the targets whose scheme
-// and host are literal: a computed one (api.github.com$SUFFIX) names none.
-func readableTargetFacts(converted []string) []string {
-	facts, _ := clientTargetFacts(converted, true)
-	return facts
-}
-
-func clientTargetFacts(converted []string, readableOnly bool) ([]string, bool) {
 	var facts []string
 	resolved, sawTarget := true, false
 	addTarget := func(target string) {
 		hints, known := httpTargetFacts(target)
-		if known || !readableOnly {
-			facts = append(facts, hints...)
-		}
+		facts = append(facts, hints...)
 		resolved, sawTarget = resolved && known, true
 	}
 	for i := 0; i < len(converted); i++ {

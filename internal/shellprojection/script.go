@@ -26,10 +26,6 @@ type scriptWord struct {
 	expression bool
 	assign     bool // the assignment operator after a leading variable
 	cast       bool // starts with a type literal, as in [string]$x
-	// elided is set when the value leaves out part of the word: an
-	// unquoted variable, subexpression, splat or grouping. A quoted string
-	// keeps its text, $ included.
-	elided bool
 }
 
 type scriptStatement struct {
@@ -94,12 +90,12 @@ func webCmdletWords(words []scriptWord, w walk) []string {
 
 // scriptSource returns a call's values with each computed word written as
 // its source text instead of "", lined up with its words; values past the
-// words (a marker webCmdletWords adds) stay as they are. A word whose value
-// leaves out part of it stays "": what remains is not its source.
+// words (a marker webCmdletWords adds) stay as they are. The value of an
+// unquoted word leaves out its variables, which keeps any host it names.
 func scriptSource(values []string, words []scriptWord) []string {
 	source := slices.Clone(values)
 	for i := 1; i < len(source) && i < len(words); i++ {
-		if source[i] == "" && !words[i].literal && !words[i].elided {
+		if source[i] == "" && !words[i].literal {
 			source[i] = words[i].value
 		}
 	}
@@ -457,7 +453,6 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 			}
 			leading := (current.literal || current.cast) && word.Len() == 0
 			current.literal = false
-			current.elided = true
 			current.variable = current.variable || leading
 			current.expression = current.expression || leading
 			switch next := src[i+1]; {
@@ -503,7 +498,7 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 					break
 				}
 				beginWord()
-				current.literal, current.elided = false, true
+				current.literal = false
 				// An array subexpression holds statements; a hashtable
 				// holds keys and values, and each value is a statement.
 				if next == '(' {
@@ -532,7 +527,7 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 			case isNameByte(next):
 				// Splatting passes a variable's elements as arguments.
 				beginWord()
-				current.literal, current.elided = false, true
+				current.literal = false
 				j := i + 1
 				for j < len(src) && isNameByte(src[j]) {
 					j++
@@ -548,7 +543,7 @@ func scanScript(src string, dialect scriptDialect) (statements []scriptStatement
 				break
 			}
 			beginWord()
-			current.literal, current.elided = false, true
+			current.literal = false
 			// A grouping or a script block holds statements, and so may a
 			// method call's arguments or a cast's operand ([void](...)); an
 			// argument list that is only strings and variables projects to
