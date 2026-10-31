@@ -199,19 +199,21 @@ select id, action_id, session_id, coalesce(tool_use_id, ''), tool_name,
 from step_safety_verdicts
 `
 
-func scanStepSafetyVerdict(scanner interface{ Scan(...any) error }) (StepSafetyRecord, error) {
+// scanStepSafetyVerdict scans stepSafetyVerdictSelect's columns, then any
+// columns a query selects after them into extra.
+func scanStepSafetyVerdict(scanner interface{ Scan(...any) error }, extra ...any) (StepSafetyRecord, error) {
 	var record StepSafetyRecord
 	var probability sql.NullFloat64
 	var feedbackAt sql.NullString
 	var createdAt, reviewJSON string
-	if err := scanner.Scan(
+	if err := scanner.Scan(append([]any{
 		&record.ID, &record.ActionID, &record.SessionID, &record.ToolUseID, &record.ToolName,
 		&probability, &record.ShadowDecision, &record.Threshold, &record.ModelVersion,
 		&record.LatencyMS, &record.ErrorCode, &record.Enforced,
 		&record.UserRequestPresent, &record.HistoryPresent, &record.HistoryOmitted, &record.ToolSchemasPresent,
 		&record.UserFeedback,
 		&feedbackAt, &createdAt, &reviewJSON,
-	); err != nil {
+	}, extra...)...); err != nil {
 		return StepSafetyRecord{}, err
 	}
 	if err := json.Unmarshal([]byte(reviewJSON), &record.ReviewContext); err != nil {

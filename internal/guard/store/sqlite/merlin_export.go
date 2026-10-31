@@ -23,6 +23,9 @@ type MerlinAnnotationCursor struct {
 	AnnotationID string
 }
 
+// MerlinAnnotations returns one append-only cursor page for managed upload.
+// With ActionUpdatedThrough set, the page ends before the first annotation
+// whose action is past that cursor (see annotationActionExported).
 func (s *Store) MerlinAnnotations(ctx context.Context, opts MerlinAnnotationExportOptions) ([]MerlinAnnotationRecord, *MerlinAnnotationCursor, error) {
 	query := strings.ReplaceAll(stepSafetyVerdictSelect, "from step_safety_verdicts", "from step_safety_verdicts annotation")
 	args := []any{}
@@ -40,23 +43,11 @@ func (s *Store) MerlinAnnotations(ctx context.Context, opts MerlinAnnotationExpo
 		}
 	}
 	if opts.ActionUpdatedThrough != nil {
-		updated := ledgerTimestampCursorKeyFromTime(*opts.ActionUpdatedThrough)
-		if opts.ActionUpdatedThroughID != "" {
-			conditions = append(conditions, `exists (
-  select 1 from authorization_actions action
-  where action.id = annotation.action_id
-    and (action.updated_at_cursor_key < ? or (action.updated_at_cursor_key = ? and action.id <= ?))
-)`)
-			args = append(args, updated, updated, opts.ActionUpdatedThroughID)
-		} else {
-			conditions = append(conditions, `exists (
-  select 1 from authorization_actions action
-  where action.id = annotation.action_id
-    and action.updated_at_cursor_key < ?
-)`)
-			args = append(args, updated)
-		}
+		conditions = append(conditions, "exists (select 1 from authorization_actions action where action.id = annotation.action_id)")
 	}
+	exported, exportedArgs := annotationActionExported(opts.ActionUpdatedThrough, opts.ActionUpdatedThroughID)
+	query = strings.Replace(query, "\nfrom ", ",\n  "+exported+"\nfrom ", 1)
+	args = append(exportedArgs, args...)
 	if len(conditions) > 0 {
 		query += "\nwhere " + strings.Join(conditions, "\nand ")
 	}
@@ -72,9 +63,13 @@ func (s *Store) MerlinAnnotations(ctx context.Context, opts MerlinAnnotationExpo
 	defer rows.Close()
 	records := []MerlinAnnotationRecord{}
 	for rows.Next() {
-		record, err := scanStepSafetyVerdict(rows)
+		var actionExported bool
+		record, err := scanStepSafetyVerdict(rows, &actionExported)
 		if err != nil {
 			return nil, nil, err
+		}
+		if !actionExported {
+			break
 		}
 		record.UserFeedback = ""
 		record.FeedbackAt = nil

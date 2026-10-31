@@ -328,7 +328,9 @@ func flushLedger(ctx context.Context, opts Options) error {
 		// same batch or in an earlier accepted batch. Independent cursors can put
 		// a recent annotation beside an unrelated old action during backlog
 		// recovery, so co-paging the two streams can permanently stall on an
-		// unknown-action rejection.
+		// unknown-action rejection. An annotation page ends at the first
+		// annotation whose action is past the persisted action cursor, so the
+		// annotation cursors below never pass one still waiting for its action.
 		var riskTypeAnnotations []sqlite.RiskTypeAnnotationRecord
 		var riskTypeCursor *sqlite.RiskTypeAnnotationCursor
 		if len(batch.Actions) == 0 && state.UpdatedAfter != nil {
