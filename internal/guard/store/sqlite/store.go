@@ -738,23 +738,36 @@ where id = ?
 // ledgerTimestampCursorKeyLayout.
 const annotationCreatedAtUnnormalized = "created_at not glob '????-??-??T??:??:??.?????????Z'"
 
-// normalizeAnnotationCreatedAt rewrites a table's annotation created_at into
+// normalizeAnnotationCreatedAt keeps a table's annotation created_at in
 // ledgerTimestampCursorKeyLayout. The export cursors and the prune mirror
 // compare it as text, and earlier releases wrote RFC3339Nano, which trims
 // trailing zeros: "…:20.5Z" sorts before "…:20Z", so an annotation that became
 // eligible after the cursor passed a rounder stamp in its second was never
-// uploaded. Unlike the action cursor-key backfill this runs on every open: an
-// older release can still write here (a daemon left running across an
-// upgrade, a downgrade), and a trimmed stamp sorts after its own fixed-width
-// cursor, so the export would send that row again on every page. The partial
-// index holds only the rows left to rewrite, so the check is cheap; "indexed
-// by" keeps the planner off the covering created_at index, which it prefers
-// and which would scan every row.
+// uploaded. Those releases can still write here while this one runs (a daemon
+// left running across an upgrade, a downgrade), and a trimmed stamp sorts
+// after its own fixed-width cursor, so the export would return it on every
+// page. The trigger rewrites such a stamp inside the insert, whichever release
+// makes it, so no reader sees one. The pass below rewrites rows from before
+// the trigger existed; the partial index holds only rows left to rewrite, so
+// the pass is cheap on every open, and "indexed by" keeps the planner off the
+// covering created_at index, which it prefers and which would scan every row.
 func (s *Store) normalizeAnnotationCreatedAt(ctx context.Context, table string) error {
 	index := "idx_" + table + "_created_unnormalized"
+	// Go writes a UTC time as RFC3339Nano with at most eight fraction digits
+	// once trailing zeros go; with nine it already is the fixed-width layout.
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
-create index if not exists %s
-on %s(id) where %s
+create index if not exists %[1]s
+on %[2]s(id) where %[3]s;
+
+create trigger if not exists %[2]s_created_at_fixed_width
+after insert on %[2]s
+when new.created_at glob '????-??-??T??:??:??*Z' and length(new.created_at) < 30
+begin
+  update %[2]s
+  set created_at = substr(new.created_at, 1, 19) || '.'
+    || substr(substr(new.created_at, 21, max(length(new.created_at) - 21, 0)) || '000000000', 1, 9) || 'Z'
+  where rowid = new.rowid;
+end;
 	`, index, table, annotationCreatedAtUnnormalized)); err != nil {
 		return err
 	}
