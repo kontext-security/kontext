@@ -132,6 +132,7 @@ func TestHTTPClientPolicyDecisions(t *testing.T) {
 		{"curl computed attached body is data", `curl -d"{\"url\":\"https://api.github.com/$X\"}" https://example.com/hooks`, githubGuard, false},
 		{"curl computed attached referer is data", `curl --referer="https://api.github.com/$X" https://example.com`, githubGuard, false},
 		{"curl value of an unknown option is data", `curl --noproxy "api.github.com,$X" https://example.com`, githubGuard, false},
+		{"curl unknown option with its value attached keeps the next URL", `curl -X DELETE --retry=3 "https://api.github.com/repos/$OWNER/$REPO"`, githubGuard, true},
 		{"curl URL value of an unknown option is data", `curl --doh-url "https://api.github.com/$X" https://example.com`, githubGuard, false},
 		// A provider host with a computed part around it may still be the
 		// target, so the request is unrecognized, as for wget and HTTPie.

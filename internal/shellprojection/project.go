@@ -1727,9 +1727,10 @@ func readCurl(args, source []string, complete, opaqueValues, urlGlobs bool) (ced
 			unknown = !curlSwitches[arg]
 		default:
 			op.urls = append(op.urls, arg)
-			if !unknownBefore {
-				// Else it may be the value of an option the parser does
-				// not know (--noproxy).
+			// After an option the parser does not know, the word may be its
+			// value (--noproxy); one written with its value (--retry=3)
+			// cannot take it.
+			if !unknownBefore || strings.Contains(args[i-1], "=") {
 				hint(i)
 			}
 		}
