@@ -31,8 +31,7 @@ var transcriptTail int64 = 2 << 20
 // latest prompt, what the assistant said with this call, and the visible
 // transcript items before it. goal is the prompt the hooks last reported.
 // The transcript is read for the rest, and for the model. History leaves out
-// every call withheld (with its result), as well as calls touching a privacy
-// folder.
+// every call withheld (with its result).
 func requestContext(event hook.Event, goal, home string, withheld func(input any) bool) (Context, *string) {
 	path, subagent := event.TranscriptPath, false
 	if event.AgentTranscriptPath != "" {
@@ -46,7 +45,7 @@ func requestContext(event hook.Event, goal, home string, withheld func(input any
 		}
 	}
 	assistantText, before := splitCurrent(conversation.Messages, event.ToolUseID)
-	items, length := history(before, home, event.CWD, withheld)
+	items, length := history(before, withheld)
 	context := Context{
 		Goal: clip(goal, maxContextText),
 		Current: Current{
@@ -68,8 +67,9 @@ func requestContext(event hook.Event, goal, home string, withheld func(input any
 }
 
 // readConversation reads the end of an agent's transcript, and reports
-// whether that was all of it. A transcript it cannot read, or one in a privacy
-// folder, gives no context.
+// whether that was all of it. A transcript it cannot read gives no context,
+// and neither does one in a folder macOS guards, which the daemon never
+// opens.
 func readConversation(agent, path string, subagent bool, home string) (modelusage.Conversation, bool) {
 	if path == "" || privacyfolder.Guarded(home, path) {
 		return modelusage.Conversation{}, false
@@ -143,10 +143,10 @@ func splitCurrent(messages []modelusage.Message, toolUseID string) (string, []mo
 }
 
 // history is the last visible items before the current call, and how many
-// there are in all. Every call that touches a privacy folder, or that withheld
-// reports, is left out with its result, and so is a result whose call is no
-// longer in view, which cannot be checked.
-func history(messages []modelusage.Message, home, cwd string, withheld func(input any) bool) ([]HistoryItem, int) {
+// there are in all. Every call withheld reports is left out with its result,
+// and so is a result whose call is no longer in view, which cannot be
+// checked.
+func history(messages []modelusage.Message, withheld func(input any) bool) ([]HistoryItem, int) {
 	calls := map[string]*modelusage.ToolCall{}
 	for _, message := range messages {
 		if message.ToolCall != nil {
@@ -164,7 +164,7 @@ func history(messages []modelusage.Message, home, cwd string, withheld func(inpu
 			if json.Unmarshal(call.Input, &input) != nil {
 				input = string(call.Input)
 			}
-			verdict = withheld != nil && withheld(input) || touchesPrivacyFolder(home, cwd, input)
+			verdict = withheld != nil && withheld(input)
 			verdicts[call.ID] = verdict
 		}
 		return verdict

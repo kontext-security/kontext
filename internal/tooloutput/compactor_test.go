@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
@@ -279,34 +278,33 @@ func TestPersistedBashOutputIsLeftToClaudeCode(t *testing.T) {
 	}
 }
 
-func TestPrivacyFolderOutputsNeverLeave(t *testing.T) {
+// Calls in the folders macOS guards (Desktop, Documents, Downloads, iCloud
+// Drive...) are compacted like any other: the output comes with the event.
+func TestCompactsInPrivacyFolders(t *testing.T) {
 	enabled := privacyfolder.Enabled
 	privacyfolder.Enabled = true
 	t.Cleanup(func() { privacyfolder.Enabled = enabled })
 	c := newTestCompactor(t, replace("short"))
-	documents := filepath.Join(c.home, "Documents")
+	project := filepath.Join(c.home, "Desktop", "projects", "app")
 
-	inside := c.bash("make test", bigText(80))
-	inside.CWD = filepath.Join(documents, "project")
-	named := c.bash(`cat "$HOME/Documents/notes.txt" | sort`, bigText(80))
-	tilde := c.bash(`grep -r TODO ~/Library/Mobile\ Documents/com~apple~CloudDocs`, bigText(80))
-	read := c.read(filepath.Join(c.home, "Desktop", "plan.md"), bigText(60), 1)
-	for name, event := range map[string]hook.Event{"cwd": inside, "named": named, "escaped": tilde, "read": read} {
-		if got := c.Compact(context.Background(), event); got != nil {
-			t.Errorf("%s: Compact() = %v", name, got)
-		}
+	bash := c.bash("make test", bigText(80))
+	bash.CWD = project
+	read := c.read(filepath.Join(c.home, "Documents", "plan.md"), bigText(60), 1)
+	read.ToolUseID = "toolu_read"
+	read.CWD = project
+	if c.Compact(context.Background(), bash) == nil {
+		t.Fatal("a Bash output from a Desktop project was not compacted")
 	}
-	codex := hook.Event{SessionID: "codex-1", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", CWD: c.cwd,
-		ToolInput: map[string]any{"command": []any{"bash", "-lc", "cat ~/Downloads/report.csv"}}, ToolResponse: map[string]any{"content": bigText(80)}}
+	if c.Compact(context.Background(), read) != nil {
+		t.Fatal("the Read's fake reply keeps one line, so it must be refused, not skipped")
+	}
+	codex := hook.Event{SessionID: "codex-1", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1", CWD: project,
+		ToolInput: map[string]any{"command": "cat ~/Downloads/report.csv"}, ToolResponse: map[string]any{"content": bigText(80)}}
 	c.Observe(context.Background(), codex)
 	c.sendShadow(context.Background(), <-c.shadow)
-	if _, _, calls := c.api.calls(); calls != 0 {
-		t.Fatalf("API calls = %d", calls)
-	}
-
-	outside := c.bash("cat ./notes.txt ~/code/notes.txt", bigText(80))
-	if got := c.Compact(context.Background(), outside); got == nil {
-		t.Fatal("an output outside privacy folders was not compacted")
+	requests, _, _ := c.api.calls()
+	if len(requests) != 3 || requests[0].ToolName != "Bash" || requests[1].Output.FilePath != read.ToolResponse["file"].(map[string]any)["filePath"] || requests[2].Mode != ModeShadow {
+		t.Fatalf("requests = %+v", requests)
 	}
 }
 
@@ -801,66 +799,6 @@ func TestReadsCoveringOmittedLinesAreReadBacks(t *testing.T) {
 	}
 }
 
-// Shell-built paths, paths with spaces and directory changes cannot slip a
-// privacy folder's contents past the check.
-func TestPrivacyCheckSeesThroughShellPaths(t *testing.T) {
-	enabled := privacyfolder.Enabled
-	privacyfolder.Enabled = true
-	t.Cleanup(func() { privacyfolder.Enabled = enabled })
-	home := t.TempDir()
-	cwd := filepath.Join(home, "code")
-	for command, want := range map[string]bool{
-		`p=Documents; cat "$HOME/$p/secret.txt"`:   true,
-		`cat $f`:                                   true,
-		`cat "$(ls ~/Doc*)"`:                       true,
-		"cat `echo notes.txt`":                     true,
-		`cd ~ && cat Documents/notes.txt`:          true,
-		`cd .. && cat Downloads/report.csv`:        true,
-		`cd - && cat notes.txt`:                    true,
-		`ls ~/Doc*/`:                               true,
-		`cat ~root/notes.txt`:                      true,
-		`awk '{print $2}' data.txt`:                false,
-		`cat "$PWD/notes.txt" $HOME/code/a.go`:     false,
-		`sed -n '1,$p' notes.txt`:                  false,
-		`find . -name '*.go' | xargs grep -n TODO`: false,
-		`go test ./... && ls *.go`:                 false,
-		// A command handed to another shell is read as one.
-		`bash -c 'cat ~/Documents/secret.txt'`:             true,
-		`sh -lc "grep -r token ~/Desktop"`:                 true,
-		`zsh -c 'p=Documents; cat "$HOME/$p/secret.txt"'`:  true,
-		`eval "cat ~/Downloads/report.csv"`:                true,
-		`python3 -c "print(open('~/Documents/a').read())"`: true,
-		`bash -c 'cd "$PWD" && ls src'`:                    false,
-		// Wildcards, and folders that hold a guarded one.
-		`grep -r token ~/Doc*`:        true,
-		`ls $HOME/Down*`:              true,
-		`cd ~/Doc* && cat notes.txt`:  true,
-		`grep -r secret ~`:            true,
-		`ls -la /`:                    true,
-		`du -sh ~/code ~/code/vendor`: false,
-		`ls ~/code/*.go`:              false,
-	} {
-		if got := touchesPrivacyFolder(home, cwd, map[string]any{"command": command}); got != want {
-			t.Errorf("touchesPrivacyFolder(%q) = %v, want %v", command, got, want)
-		}
-	}
-	hermetic.Symlinks(t)
-	if err := os.MkdirAll(cwd, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	homeLink := filepath.Join(t.TempDir(), "home-link")
-	if err := os.Symlink(home, homeLink); err != nil {
-		t.Fatal(err)
-	}
-	if !touchesPrivacyFolder(home, cwd, map[string]any{"command": "grep -r secret " + homeLink}) {
-		t.Error("a recursive read through a link to the home folder was not caught")
-	}
-	icloud := filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "secret.txt")
-	if !touchesPrivacyFolder(home, cwd, map[string]any{"file_path": icloud}) {
-		t.Error("a Read of an iCloud file was not caught")
-	}
-}
-
 // A slow install token lookup holds up only its own caller.
 func TestTokenLookupKeepsToItsCaller(t *testing.T) {
 	stalled := make(chan struct{})
@@ -904,6 +842,7 @@ func TestSavedOutputPathSpellings(t *testing.T) {
 		parent + "/./tool-output/" + name,
 		parent + "/elsewhere/../tool-output/" + name,
 		"./tool-output/" + name,
+		"sh -c 'tail -n 5 " + parent + "/tool-output/" + name + "'",
 	} {
 		input := map[string]any{"command": "tail -n 20 " + spelling}
 		if !c.namesSaveDir(input, parent) {
@@ -913,7 +852,7 @@ func TestSavedOutputPathSpellings(t *testing.T) {
 			ToolUseID: "toolu_" + strconv.Itoa(len(spelling)), CWD: parent, ToolInput: input}
 		c.reportReadBacks(event)
 	}
-	if len(c.readBacks) != 4 {
-		t.Fatalf("read-backs queued = %d, want 4", len(c.readBacks))
+	if len(c.readBacks) != 5 {
+		t.Fatalf("read-backs queued = %d, want 5", len(c.readBacks))
 	}
 }

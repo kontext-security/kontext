@@ -55,8 +55,9 @@ type Options struct {
 	// Dir is where full outputs are saved (DefaultDirForDB).
 	Dir        string
 	Diagnostic diagnostic.Logger
-	// Home is the user's home directory for privacy checks; "" means the
-	// current user's.
+	// Home is the user's home directory, for ~ in paths and the check that
+	// keeps the daemon out of folders macOS guards; "" means the current
+	// user's.
 	Home string
 	Now  func() time.Time
 }
@@ -148,11 +149,12 @@ func (c *Compactor) Offers(event hook.Event) bool {
 
 // Compact runs live compaction for a Claude Code PostToolUse and returns the
 // tool response the agent should see instead, or nil to leave the output
-// unchanged: when the switch is off, the output is not a candidate or touches
-// a privacy folder, the call reads a saved output back, or anything fails.
+// unchanged: when the switch is off, the output is not a candidate, the call
+// reads a saved output back, or anything fails. The output comes with the
+// event, so no file of the call is opened, wherever it is.
 func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]any {
 	out, ok := liveOutput(event)
-	if !ok || !c.on() || c.readsBack(event) || touchesPrivacyFolder(c.home, event.CWD, event.ToolInput, out.filePath) {
+	if !ok || !c.on() || c.readsBack(event) {
 		return nil
 	}
 	if !safeSegment(event.SessionID) || !safeSegment(event.ToolUseID) {
@@ -274,7 +276,7 @@ func (c *Compactor) Run(ctx context.Context) {
 
 // sendShadow sends a Codex output in shadow mode. The answer changes nothing.
 func (c *Compactor) sendShadow(ctx context.Context, job shadowJob) {
-	if !c.on() || touchesPrivacyFolder(c.home, job.event.CWD, job.event.ToolInput) {
+	if !c.on() {
 		return
 	}
 	body, fits := encode(c.request(ModeShadow, job.event, job.out, job.goal))
@@ -362,7 +364,7 @@ func (c *Compactor) eachPath(input any, cwd string, visit func(path string) bool
 	}
 	scan := pathScan{home: home, visit: visit}
 	eachString(input, func(value string) bool {
-		scan.value(value, cwd, 0, true)
+		scan.value(value, cwd, 0)
 		return !scan.stopped
 	})
 }

@@ -429,10 +429,11 @@ the API returns a shorter version, Claude Code shows that version instead:
   itself for any lines it needs.
 - When a later call reads a saved output or a left-out part of a file back, the
   daemon reports that to the API, without content.
-- Nothing is sent for a call that runs in, or names a path in, a macOS
-  privacy-guarded folder (Desktop, Documents, Downloads, iCloud Drive,
-  cloud storage, external volumes), and such calls are left out of the
-  context sent for others.
+- Outputs are compacted in every folder. The daemon still never opens files
+  in the folders macOS guards with a permission prompt (Desktop, Documents,
+  Downloads, iCloud Drive, cloud storage, external volumes): the output
+  arrives with the hook, and a transcript kept in one is not read for
+  context.
 - Codex outputs are sent for measurement only and are never changed.
 - The round trip gets at most three seconds. Any timeout, error or unexpected
   reply leaves the output unchanged. Turning the switch off stops the daemon's

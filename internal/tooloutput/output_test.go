@@ -73,28 +73,10 @@ func TestLiveCandidates(t *testing.T) {
 }
 
 func TestShellWords(t *testing.T) {
-	words, substitutes := shellWords(`cat "a b/c" 'd e' f\ g|grep -n x>out;ls $HOME/x&&echo "it's" '$lit' \$esc "$q"`)
-	var got []string
-	for _, word := range words {
-		got = append(got, word.text)
-	}
-	want := []string{"cat", "a b/c", "d e", "f g", "grep", "-n", "x", "out", "ls", "$HOME/x", "echo", "it's", "$lit", "$esc", "$q"}
-	if !reflect.DeepEqual(got, want) || substitutes {
-		t.Fatalf("shellWords() = %q, %v, want %q", got, substitutes, want)
-	}
-	// Only unquoted and double-quoted dollars expand.
-	for _, word := range words {
-		if expands := len(word.expansions) > 0; expands != (word.text == "$HOME/x" || word.text == "$q") {
-			t.Errorf("%q expansions = %v", word.text, word.expansions)
-		}
-	}
-	for _, text := range []string{"echo `whoami`", `cat "$(ls)"`, "x=$(pwd)"} {
-		if _, substitutes := shellWords(text); !substitutes {
-			t.Errorf("shellWords(%q) missed the command substitution", text)
-		}
-	}
-	if _, substitutes := shellWords(`echo '$(not)' \$(neither)`); substitutes {
-		t.Error("a quoted or escaped $( was read as a substitution")
+	got := shellWords(`cat "a b/c" 'd e' f\ g|grep -n x>out;ls $HOME/x&&echo "it's" '$lit'`)
+	want := []string{"cat", "a b/c", "d e", "f g", "grep", "-n", "x", "out", "ls", "$HOME/x", "echo", "it's", "$lit"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("shellWords() = %q, want %q", got, want)
 	}
 }
 
