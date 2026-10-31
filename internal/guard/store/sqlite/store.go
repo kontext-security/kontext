@@ -390,6 +390,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureRiskTypeAnnotations(ctx); err != nil {
 		return err
 	}
+	for _, table := range []string{"step_safety_verdicts", "risk_type_annotations"} {
+		if err := s.normalizeAnnotationCreatedAt(ctx, table); err != nil {
+			return err
+		}
+	}
 	if _, err := s.db.ExecContext(ctx, toolUsageDDL); err != nil {
 		return err
 	}
@@ -727,6 +732,95 @@ where id = ?
 		}
 	}
 	return nil
+}
+
+// annotationCreatedAtUnnormalized matches a created_at that is not in
+// ledgerTimestampCursorKeyLayout.
+const annotationCreatedAtUnnormalized = "created_at not glob '????-??-??T??:??:??.?????????Z'"
+
+// normalizeAnnotationCreatedAt keeps a table's annotation created_at in
+// ledgerTimestampCursorKeyLayout. The export cursors and the prune mirror
+// compare it as text, and earlier releases wrote RFC3339Nano, which trims
+// trailing zeros: "…:20.5Z" sorts before "…:20Z", so an annotation that became
+// eligible after the cursor passed a rounder stamp in its second was never
+// uploaded. Those releases can still write here while this one runs (a daemon
+// left running across an upgrade, a downgrade), and a trimmed stamp sorts
+// after its own fixed-width cursor, so the export would return it on every
+// page. The trigger rewrites such a stamp inside the insert, whichever release
+// makes it, so no reader sees one. The pass below rewrites rows from before
+// the trigger existed; the partial index holds only rows left to rewrite, so
+// the pass is cheap on every open, and "indexed by" keeps the planner off the
+// covering created_at index, which it prefers and which would scan every row.
+func (s *Store) normalizeAnnotationCreatedAt(ctx context.Context, table string) error {
+	index := "idx_" + table + "_created_unnormalized"
+	// Go writes a UTC time as RFC3339Nano with at most eight fraction digits
+	// once trailing zeros go; with nine it already is the fixed-width layout.
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+create index if not exists %[1]s
+on %[2]s(id) where %[3]s;
+
+create trigger if not exists %[2]s_created_at_fixed_width
+after insert on %[2]s
+when new.created_at glob '????-??-??T??:??:??*Z' and length(new.created_at) < 30
+begin
+  update %[2]s
+  set created_at = substr(new.created_at, 1, 19) || '.'
+    || substr(substr(new.created_at, 21, max(length(new.created_at) - 21, 0)) || '000000000', 1, 9) || 'Z'
+  where rowid = new.rowid;
+end;
+	`, index, table, annotationCreatedAtUnnormalized)); err != nil {
+		return err
+	}
+	// On macOS and Windows the first open rewrites every row: their clocks
+	// tick in microseconds and 100ns, so no RFC3339Nano stamp there has nine
+	// digits. Pages bound memory and how long each write holds the lock
+	// against the hook path. Paging by id steps past a value that does not
+	// parse; it stays as it is, and reading the row reports it.
+	page := fmt.Sprintf(`select id, created_at from %s indexed by %s where %s and id > ? order by id limit 500`,
+		table, index, annotationCreatedAtUnnormalized)
+	update := fmt.Sprintf(`update %s set created_at = ? where id = ?`, table)
+	for after := ""; ; {
+		rows, err := s.db.QueryContext(ctx, page, after)
+		if err != nil {
+			return err
+		}
+		scanned := 0
+		var ids, keys []string
+		for rows.Next() {
+			var id, createdAt string
+			if err := rows.Scan(&id, &createdAt); err != nil {
+				rows.Close()
+				return err
+			}
+			scanned++
+			after = id
+			if parsed, err := parseStoredTime(table+" created_at", createdAt); err == nil {
+				ids, keys = append(ids, id), append(keys, ledgerTimestampCursorKeyFromTime(parsed))
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if scanned == 0 {
+			return nil
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		for i := range ids {
+			if _, err := tx.ExecContext(ctx, update, keys[i], ids[i]); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
 }
 
 func (s *Store) OpenSession(ctx context.Context, sessionID, agent, cwd, source, externalID string) (SessionRecord, error) {

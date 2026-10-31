@@ -114,12 +114,12 @@ where a.updated_at_cursor_key < ?
 		switch {
 		case pending.createdAt == nil:
 		case pending.id != "":
-			created := pending.createdAt.UTC().Format(time.RFC3339Nano)
+			created := ledgerTimestampCursorKeyFromTime(*pending.createdAt)
 			condition += " and (annotation.created_at > ? or (annotation.created_at = ? and annotation.id > ?))"
 			args = append(args, created, created, pending.id)
 		default:
 			condition += " and annotation.created_at > ?"
-			args = append(args, pending.createdAt.UTC().Format(time.RFC3339Nano))
+			args = append(args, ledgerTimestampCursorKeyFromTime(*pending.createdAt))
 		}
 		eligible += condition + ")"
 	}

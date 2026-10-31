@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 )
 
 func TestPruneExportedLedgerDeletesOnlyAcceptedOldRows(t *testing.T) {
@@ -152,6 +155,87 @@ func TestPruneExportedLedgerRequiresCursorAndHonorsLimit(t *testing.T) {
 	actions, err := queryStrings(ctx, store.db, `select id from authorization_actions`)
 	if err != nil || !slices.Equal(actions, []string{"act_3"}) {
 		t.Fatalf("oldest rows must go first: %v %v", actions, err)
+	}
+}
+
+// The pending-annotation check mirrors the export cursors: an annotation half
+// a second after a cursor on a whole second is still waiting for upload, so
+// its action stays.
+func TestPruneExportedLedgerKeepsActionOfSameSecondPendingAnnotation(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	model, err := riskclassifier.LoadRiskTypeSVM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-60 * 24 * time.Hour).Truncate(time.Second)
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"act_exported", "act_risk_pending", "act_merlin_pending"} {
+		insertLedgerTestAction(t, tx, id, base.Add(time.Duration(i)*time.Second))
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	exported := base.Add(time.Hour)
+	saveRiskType := func(actionID string, createdAt time.Time) string {
+		t.Helper()
+		record, _, err := store.SaveRiskTypeAnnotation(ctx, riskclassifier.RiskTypeRecord{
+			ActionID:    actionID,
+			SessionID:   "session-1",
+			CommandHash: "h",
+			InputKind:   riskclassifier.RiskTypeInputStoredRedactedCommand,
+			Verdict:     model.Classify("launchctl load ~/Library/LaunchAgents/example.plist"),
+			CreatedAt:   createdAt,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record.ID
+	}
+	saveMerlin := func(actionID string, createdAt time.Time) string {
+		t.Helper()
+		record, err := store.SaveStepSafetyVerdict(ctx, StepSafetyRecord{
+			ActionID:       actionID,
+			SessionID:      "session-1",
+			ToolName:       "Bash",
+			ShadowDecision: stepsafety.DecisionSafe,
+			ModelVersion:   stepsafety.ModelVersion,
+			CreatedAt:      createdAt,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record.ID
+	}
+	riskCursorID, merlinCursorID := saveRiskType("act_exported", exported), saveMerlin("act_exported", exported)
+	saveRiskType("act_risk_pending", exported.Add(500*time.Millisecond))
+	saveMerlin("act_merlin_pending", exported.Add(500*time.Millisecond))
+
+	verifiedAfter := base.Add(-time.Hour)
+	pruned, err := store.PruneExportedLedger(ctx, LedgerPruneOptions{
+		ActionsExportedBefore: time.Now(),
+		VerifiedAfter:         &verifiedAfter,
+		RiskTypeCreatedAfter:  &exported,
+		RiskTypeAnnotationID:  riskCursorID,
+		MerlinCreatedAfter:    &exported,
+		MerlinAnnotationID:    merlinCursorID,
+		OlderThan:             time.Now().Add(-30 * 24 * time.Hour),
+		MaxRowBytes:           1 << 20,
+		Limit:                 10,
+	})
+	if err != nil || pruned != 1 {
+		t.Fatalf("pruned %d, err %v; want only act_exported", pruned, err)
+	}
+	actions, err := queryStrings(ctx, store.db, `select id from authorization_actions order by id`)
+	if err != nil || !slices.Equal(actions, []string{"act_merlin_pending", "act_risk_pending"}) {
+		t.Fatalf("remaining actions = %v, err %v", actions, err)
 	}
 }
 

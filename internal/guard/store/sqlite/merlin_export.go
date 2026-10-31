@@ -28,7 +28,7 @@ func (s *Store) MerlinAnnotations(ctx context.Context, opts MerlinAnnotationExpo
 	args := []any{}
 	conditions := []string{}
 	if opts.CreatedAfter != nil {
-		created := opts.CreatedAfter.UTC().Format(time.RFC3339Nano)
+		created := ledgerTimestampCursorKeyFromTime(*opts.CreatedAfter)
 		if opts.CreatedAfterID != "" {
 			conditions = append(conditions, "(annotation.created_at > ? or (annotation.created_at = ? and annotation.id > ?))")
 			args = append(args, created, created, opts.CreatedAfterID)

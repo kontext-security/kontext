@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
+	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 )
 
@@ -239,6 +241,117 @@ func TestFlushUploadsRiskTypeAnnotationAfterReferencedAction(t *testing.T) {
 	}
 	if actionPost == 0 || annotationPost <= actionPost {
 		t.Fatalf("action/annotation posts = %d/%d, want annotation after its accepted action", actionPost, annotationPost)
+	}
+}
+
+// Annotations become eligible as the lagged action cursor passes their
+// actions, which need not follow created_at order. Call a stamps its
+// annotations on a whole second and b half a second later, but b's action
+// commits after the first flush's lag boundary, so b uploads one flush after
+// a. RFC3339Nano trims trailing zeros, which puts "…:20.5Z" before "…:20Z" as
+// text.
+func TestFlushUploadsSameSecondAnnotationsThatBecomeEligibleLater(t *testing.T) {
+	store, dbPath := testStore(t)
+	ctx := context.Background()
+	model, err := riskclassifier.LoadRiskTypeSVM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	second := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for _, call := range []struct {
+		toolUseID          string
+		committed, stamped time.Duration
+	}{
+		{"toolu_a", -100 * time.Millisecond, 0},
+		{"toolu_b", 200 * time.Millisecond, 500 * time.Millisecond},
+	} {
+		saveTestDecision(t, store, "session-1", call.toolUseID)
+		committed := second.Add(call.committed)
+		if _, err := db.Exec(`update authorization_actions set updated_at = ?, updated_at_cursor_key = ? where tool_use_id = ?`,
+			committed.Format(time.RFC3339Nano), committed.Format("2006-01-02T15:04:05.000000000Z07:00"), call.toolUseID); err != nil {
+			t.Fatal(err)
+		}
+		actions, err := store.AuthorizationActions(ctx, sqlite.LedgerExportOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var actionID string
+		for _, action := range actions {
+			if action["tool_use_id"] == call.toolUseID && action["canonical_event_type"] == "request.decided" {
+				actionID, _ = action["id"].(string)
+			}
+		}
+		stamped := second.Add(call.stamped)
+		if _, err := store.SaveStepSafetyVerdict(ctx, sqlite.StepSafetyRecord{
+			ActionID:       actionID,
+			SessionID:      "session-1",
+			ToolUseID:      call.toolUseID,
+			ToolName:       "Read",
+			ShadowDecision: stepsafety.DecisionSafe,
+			ModelVersion:   stepsafety.ModelVersion,
+			CreatedAt:      stamped,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := store.SaveRiskTypeAnnotation(ctx, riskclassifier.RiskTypeRecord{
+			ActionID:    actionID,
+			SessionID:   "session-1",
+			ToolUseID:   call.toolUseID,
+			CommandHash: "redacted-command-hash",
+			InputKind:   riskclassifier.RiskTypeInputStoredRedactedCommand,
+			Verdict:     model.Classify("launchctl load ~/Library/LaunchAgents/example.plist"),
+			CreatedAt:   stamped,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	uploaded := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var payload Payload
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, annotation := range payload.MerlinAnnotations {
+			uploaded["merlin "+annotation.ToolUseID] = true
+		}
+		for _, annotation := range payload.RiskTypeAnnotations {
+			uploaded["risk type "+annotation.ToolUseID] = true
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(server.Close)
+	opts := Options{
+		DBPath:         dbPath,
+		StatePath:      filepath.Join(t.TempDir(), "stream-state.json"),
+		CloudURL:       server.URL,
+		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		InstallToken:   "test-install-token",
+		HTTPClient:     server.Client(),
+	}
+	// The lag boundary falls between the two actions: only a is eligible.
+	opts.Now = func() time.Time { return second.Add(cursorSafetyLag + 100*time.Millisecond) }
+	if err := Flush(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]bool{"merlin toolu_a": true, "risk type toolu_a": true}; !maps.Equal(uploaded, want) {
+		t.Fatalf("first flush uploaded %v, want %v", uploaded, want)
+	}
+	opts.Now = func() time.Time { return second.Add(cursorSafetyLag + 10*time.Second) }
+	if err := Flush(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"merlin toolu_b", "risk type toolu_b"} {
+		if !uploaded[key] {
+			t.Errorf("%s annotation never uploaded; uploaded %v", key, uploaded)
+		}
 	}
 }
 

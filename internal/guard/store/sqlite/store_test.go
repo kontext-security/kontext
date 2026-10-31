@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier"
 	"github.com/kontext-security/kontext/internal/ledgerfact"
 )
 
@@ -1974,5 +1977,167 @@ func TestOpenStoreGatesCursorBackfillOnUserVersion(t *testing.T) {
 	}
 	if key != "sentinel" {
 		t.Fatalf("cursor key = %q, want the backfill skipped on reopen (user_version already 1)", key)
+	}
+}
+
+// A database from before fixed-width annotation stamps holds RFC3339Nano rows.
+// Opening it rewrites them page by page and leaves a value that does not parse
+// as it is; the export still sends the same instant.
+func TestOpenStoreRewritesLegacyAnnotationCreatedAt(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/guard.db"
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables := []string{"step_safety_verdicts", "risk_type_annotations"}
+	for _, table := range tables {
+		// Back to the schema of an earlier release.
+		if _, err := store.db.ExecContext(ctx, `drop trigger `+table+`_created_at_fixed_width; drop index idx_`+table+`_created_unnormalized`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	second := time.Date(2026, 10, 31, 12, 0, 20, 0, time.UTC)
+	legacy := map[string]string{"whole": "2026-10-31T12:00:20Z", "half": "2026-10-31T12:00:20.5Z", "garbage": "not a time"}
+	// Enough rows a day earlier to take several pages.
+	for i := range 1200 {
+		legacy[fmt.Sprintf("old_%04d", i)] = second.Add(-24*time.Hour + time.Duration(i)*time.Millisecond).Format(time.RFC3339Nano)
+	}
+	for id, value := range legacy {
+		if _, err := store.db.ExecContext(ctx, `insert into step_safety_verdicts(id, action_id, session_id, tool_name, shadow_decision, threshold, model_version, latency_ms, created_at)
+values(?, ?, 'session-1', 'Bash', 'safe', 0.5, 'm1', 1, ?)`, "ssv_"+id, "act_"+id, value); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `insert into risk_type_annotations(id, action_id, session_id, command_hash, input_kind, schema_version, model_version, annotation_json, created_at)
+values(?, ?, 'session-1', 'h', 'shell', 'v1', 'm1', '{}', ?)`, "rta_"+id, "act_"+id, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	want := []string{"2026-10-31T12:00:20.000000000Z", "2026-10-31T12:00:20.500000000Z", "not a time"}
+	for _, table := range tables {
+		stored, err := queryStrings(ctx, store.db, `select created_at from `+table+` where created_at > '2026-10-31' order by created_at`)
+		if err != nil || !slices.Equal(stored, want) {
+			t.Fatalf("%s created_at = %v, err %v; want %v", table, stored, err, want)
+		}
+		rewritten, err := queryStrings(ctx, store.db, `select created_at from `+table+` where id not like '%garbage'`)
+		if err != nil || len(rewritten) != len(legacy)-1 {
+			t.Fatalf("%s rows = %d, err %v; want %d", table, len(rewritten), err, len(legacy)-1)
+		}
+		for _, value := range rewritten {
+			if parsed, err := parseStoredTime("created_at", value); err != nil || value != ledgerTimestampCursorKeyFromTime(parsed) {
+				t.Fatalf("%s created_at %q is not in the fixed-width layout", table, value)
+			}
+		}
+	}
+	records, _, err := store.MerlinAnnotations(ctx, MerlinAnnotationExportOptions{CreatedAfter: &second, CreatedAfterID: "ssv_whole", Limit: 1})
+	if err != nil || len(records) != 1 || records[0].ID != "ssv_half" {
+		t.Fatalf("records after the whole second = %+v, err %v; want ssv_half", records, err)
+	}
+	wire, err := json.Marshal(records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"created_at":"2026-10-31T12:00:20.5Z"`) {
+		t.Fatalf("wire record = %s, want the RFC3339Nano instant", wire)
+	}
+}
+
+// An older release still running beside this one (a daemon left running
+// across an upgrade) writes RFC3339Nano while the store is open. A trimmed
+// stamp sorts after its own fixed-width cursor, so unless the row is rewritten
+// as it is written, the export returns it again on every page.
+func TestAnnotationExportAdvancesPastRowsAnOlderReleaseWritesWhileOpen(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/guard.db"
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	model, err := riskclassifier.LoadRiskTypeSVM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verdict := model.Classify("launchctl load ~/Library/LaunchAgents/example.plist")
+	annotationJSON, err := json.Marshal(verdict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer older.Close()
+	rows := []struct{ id, createdAt, stored string }{
+		{"whole", "2026-10-31T12:00:20Z", "2026-10-31T12:00:20.000000000Z"},
+		{"eight", "2026-10-31T12:00:20.12345678Z", "2026-10-31T12:00:20.123456780Z"},
+		{"half", "2026-10-31T12:00:20.5Z", "2026-10-31T12:00:20.500000000Z"},
+	}
+	for _, row := range rows {
+		if _, err := older.ExecContext(ctx, `insert into step_safety_verdicts(id, action_id, session_id, tool_name, shadow_decision, threshold, model_version, latency_ms, created_at)
+values(?, ?, 'session-1', 'Bash', 'safe', 0.5, 'm1', 1, ?)`, "ssv_"+row.id, "act_"+row.id, row.createdAt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := older.ExecContext(ctx, `insert into risk_type_annotations(id, action_id, session_id, command_hash, input_kind, schema_version, model_version, annotation_json, created_at)
+values(?, ?, 'session-1', 'h', ?, ?, ?, ?, ?)`, "rta_"+row.id, "act_"+row.id, riskclassifier.RiskTypeInputRawCommand,
+			verdict.SchemaVersion, verdict.Provenance.ModelVersion, string(annotationJSON), row.createdAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, table := range []string{"step_safety_verdicts", "risk_type_annotations"} {
+		for _, row := range rows {
+			var stored string
+			if err := store.db.QueryRowContext(ctx, `select created_at from `+table+` where action_id = ?`, "act_"+row.id).Scan(&stored); err != nil || stored != row.stored {
+				t.Errorf("%s created_at for %q = %q, err %v; want %q", table, row.createdAt, stored, err, row.stored)
+			}
+		}
+	}
+
+	page := map[string]func(*time.Time, string) (string, *time.Time, string){
+		"merlin": func(after *time.Time, afterID string) (string, *time.Time, string) {
+			records, cursor, err := store.MerlinAnnotations(ctx, MerlinAnnotationExportOptions{CreatedAfter: after, CreatedAfterID: afterID, Limit: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cursor == nil {
+				return "", nil, ""
+			}
+			return records[0].ID, &cursor.CreatedAt, cursor.AnnotationID
+		},
+		"risk type": func(after *time.Time, afterID string) (string, *time.Time, string) {
+			records, cursor, err := store.RiskTypeAnnotations(ctx, RiskTypeAnnotationExportOptions{CreatedAfter: after, CreatedAfterID: afterID, Limit: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cursor == nil {
+				return "", nil, ""
+			}
+			return records[0].ID, &cursor.CreatedAt, cursor.AnnotationID
+		},
+	}
+	for name, next := range page {
+		var exported []string
+		var after *time.Time
+		var afterID string
+		for range len(rows) + 1 {
+			id, cursorAt, cursorID := next(after, afterID)
+			if id == "" {
+				break
+			}
+			exported = append(exported, id[strings.Index(id, "_")+1:])
+			after, afterID = cursorAt, cursorID
+		}
+		if want := []string{"whole", "eight", "half"}; !slices.Equal(exported, want) {
+			t.Errorf("%s pages = %v, want one page each for %v in time order", name, exported, want)
+		}
 	}
 }
