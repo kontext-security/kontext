@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
@@ -842,6 +843,17 @@ func TestPrivacyCheckSeesThroughShellPaths(t *testing.T) {
 		if got := touchesPrivacyFolder(home, cwd, map[string]any{"command": command}); got != want {
 			t.Errorf("touchesPrivacyFolder(%q) = %v, want %v", command, got, want)
 		}
+	}
+	hermetic.Symlinks(t)
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	homeLink := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(home, homeLink); err != nil {
+		t.Fatal(err)
+	}
+	if !touchesPrivacyFolder(home, cwd, map[string]any{"command": "grep -r secret " + homeLink}) {
+		t.Error("a recursive read through a link to the home folder was not caught")
 	}
 	icloud := filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "secret.txt")
 	if !touchesPrivacyFolder(home, cwd, map[string]any{"file_path": icloud}) {

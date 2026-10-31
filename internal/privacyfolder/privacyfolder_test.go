@@ -145,3 +145,49 @@ func TestGuardedPattern(t *testing.T) {
 		}
 	}
 }
+
+// A link to a folder holding a guarded one holds it too, and a wildcard is
+// checked against what it matches.
+func TestLinksToEnclosingFolders(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the macOS privacy-folder guard does not read Windows paths")
+	}
+	enabled := Enabled
+	Enabled = true
+	t.Cleanup(func() { Enabled = enabled })
+	hermetic.Symlinks(t)
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	code := filepath.Join(home, "code")
+	for _, dir := range []string{filepath.Join(home, "Documents"), code} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := func(target, path string) string {
+		t.Helper()
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	homeLink := link(home, filepath.Join(root, "home-link"))
+	codeLink := link(code, filepath.Join(root, "code-link"))
+	link(filepath.Join(home, "Documents"), filepath.Join(code, "docs"))
+
+	if !Encloses(home, homeLink) {
+		t.Error("a link to the home folder was not seen to hold its guarded folders")
+	}
+	if Encloses(home, codeLink) {
+		t.Error("a link to a plain folder was reported")
+	}
+	if !GuardedPattern(home, filepath.Join(homeLink, "Doc*")) {
+		t.Error("a wildcard through a link to the home folder was not caught")
+	}
+	if !GuardedPattern(home, filepath.Join(code, "d*")) {
+		t.Error("a wildcard matching a link into Documents was not caught")
+	}
+	if GuardedPattern(home, filepath.Join(code, "*.go")) {
+		t.Error("a plain wildcard was reported")
+	}
+}
