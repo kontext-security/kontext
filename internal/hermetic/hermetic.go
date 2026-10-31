@@ -3,6 +3,7 @@
 package hermetic
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,11 +24,34 @@ func Home(t testing.TB) string {
 // profile from HOMEDRIVE and HOMEPATH, so all of them are set.
 func SetHome(t testing.TB, dir string) {
 	t.Helper()
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
+	setHome(t.Setenv, dir)
+}
+
+// MainHome points the home directory at a fresh temp dir for the whole test
+// binary, as Home does for one test, and returns the dir. TestMain calls it
+// before m.Run and removes the dir after; a test that sets a home of its own
+// gets this one back when it ends. An error means the home may be only partly
+// set, so TestMain must stop without running the tests.
+func MainHome() (string, error) {
+	home, err := os.MkdirTemp("", "kontext-home")
+	if err != nil {
+		return "", err
+	}
+	var errs []error
+	setHome(func(key, value string) { errs = append(errs, os.Setenv(key, value)) }, home)
+	if err := errors.Join(errs...); err != nil {
+		_ = os.RemoveAll(home)
+		return "", err
+	}
+	return home, nil
+}
+
+func setHome(setenv func(key, value string), dir string) {
+	setenv("HOME", dir)
+	setenv("USERPROFILE", dir)
 	if volume := filepath.VolumeName(dir); volume != "" {
-		t.Setenv("HOMEDRIVE", volume)
-		t.Setenv("HOMEPATH", dir[len(volume):])
+		setenv("HOMEDRIVE", volume)
+		setenv("HOMEPATH", dir[len(volume):])
 	}
 }
 

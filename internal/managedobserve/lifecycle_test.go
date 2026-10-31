@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext/internal/hermetic"
@@ -562,7 +563,30 @@ func TestMain(m *testing.M) {
 	// long after, so the 2 s waits in the stream tests time out.
 	// internal/guard/stepsafety tests the model.
 	_ = os.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "false")
-	os.Exit(m.Run())
+	// Point the home at a temp dir and clear the agents' config dir
+	// variables, so no test, nor any daemon a test starts, reads the
+	// developer's agent configs, Claude Desktop records or Kontext state;
+	// the guard server a daemon runs finds the records through the home. A
+	// test that needs such files sets a home of its own.
+	home, err := hermetic.MainHome()
+	if err != nil {
+		panic(err)
+	}
+	// Besides each agent's ConfigEnv, the agent scans follow these.
+	dirVars := []string{"CLINE_DATA_DIR", "KIMI_SHARE_DIR", "OPENCLAW_HOME", "XDG_DATA_HOME"}
+	for _, agent := range agentinventory.Catalog {
+		if agent.ConfigEnv != "" {
+			dirVars = append(dirVars, agent.ConfigEnv)
+		}
+	}
+	for _, name := range dirVars {
+		if err := os.Unsetenv(name); err != nil {
+			panic(err)
+		}
+	}
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
 }
 
 func TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget(t *testing.T) {

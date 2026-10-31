@@ -21,6 +21,27 @@ func TestHomeSetsEveryHomeVariable(t *testing.T) {
 	}
 }
 
+func TestMainHomeSetsEveryHomeVariable(t *testing.T) {
+	// t.Setenv puts back what MainHome sets when the test ends.
+	for _, name := range []string{"HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"} {
+		t.Setenv(name, "")
+	}
+	home, err := MainHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	for _, name := range []string{"HOME", "USERPROFILE"} {
+		if got := os.Getenv(name); got != home {
+			t.Errorf("%s = %q, want %q", name, got, home)
+		}
+	}
+	got, err := os.UserHomeDir()
+	if err != nil || got != home {
+		t.Fatalf("os.UserHomeDir() = %q, %v; want %q", got, err, home)
+	}
+}
+
 func TestSocketDirFitsASocketPath(t *testing.T) {
 	// Even with a long temp root, the directory must leave room for the
 	// longest socket name the tests use.
