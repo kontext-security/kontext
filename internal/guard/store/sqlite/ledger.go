@@ -186,8 +186,10 @@ func (s *Store) authorizationActions(ctx context.Context, opts LedgerExportOptio
 	if opts.UpdatedAfter != nil {
 		updatedAfter := ledgerTimestampCursorKeyFromTime(*opts.UpdatedAfter)
 		if opts.UpdatedAfterID != "" {
-			query += "\nwhere updated_at_cursor_key > ? or (updated_at_cursor_key = ? and id > ?)"
-			args = append(args, updatedAfter, updatedAfter, opts.UpdatedAfterID)
+			// The row value lets SQLite seek idx_authorization_actions_cursor
+			// to the cursor; the equivalent OR form walks it from the start.
+			query += "\nwhere (updated_at_cursor_key, id) > (?, ?)"
+			args = append(args, updatedAfter, opts.UpdatedAfterID)
 		} else {
 			query += "\nwhere updated_at_cursor_key > ?"
 			args = append(args, updatedAfter)

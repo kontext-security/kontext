@@ -30,8 +30,10 @@ func (s *Store) MerlinAnnotations(ctx context.Context, opts MerlinAnnotationExpo
 	if opts.CreatedAfter != nil {
 		created := ledgerTimestampCursorKeyFromTime(*opts.CreatedAfter)
 		if opts.CreatedAfterID != "" {
-			conditions = append(conditions, "(annotation.created_at > ? or (annotation.created_at = ? and annotation.id > ?))")
-			args = append(args, created, created, opts.CreatedAfterID)
+			// The row value lets SQLite seek idx_step_safety_created to the
+			// cursor; the equivalent OR form walks it from the start.
+			conditions = append(conditions, "(annotation.created_at, annotation.id) > (?, ?)")
+			args = append(args, created, opts.CreatedAfterID)
 		} else {
 			conditions = append(conditions, "annotation.created_at > ?")
 			args = append(args, created)
