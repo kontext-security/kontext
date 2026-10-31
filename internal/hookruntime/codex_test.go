@@ -120,6 +120,17 @@ func TestDecodeCodexEventNullTranscriptPath(t *testing.T) {
 	}
 }
 
+// Codex names the model in its hook input; compaction requests carry it.
+func TestDecodeCodexEventKeepsTheModel(t *testing.T) {
+	t.Parallel()
+
+	event, err := DecodeCodexEvent([]byte(`{"session_id":"s1","hook_event_name":"PostToolUse","model":"gpt-6.1-sol","tool_name":"Bash",`+
+		`"tool_use_id":"call_1","tool_input":{"command":"seq 1 3"},"tool_response":"1\n2\n3\n"}`), "codex")
+	if err != nil || event.Model != "gpt-6.1-sol" {
+		t.Fatalf("DecodeCodexEvent() = %+v, %v", event, err)
+	}
+}
+
 func TestDecodeCodexEventTopLevelPromptTakesPrecedence(t *testing.T) {
 	t.Parallel()
 

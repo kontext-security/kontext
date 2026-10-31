@@ -314,6 +314,11 @@ func (c *Compactor) sendShadow(ctx context.Context, job shadowJob) {
 func (c *Compactor) request(mode string, event hook.Event, out output, goal string) Request {
 	withheld := func(input any) bool { return c.namesSaveDir(input, event.CWD) }
 	context, model := requestContext(event, goal, c.home, withheld)
+	if event.Model != "" {
+		// What the hook names beats the transcript, whose last model may lie
+		// before the part read, or in a folder macOS guards.
+		model = &event.Model
+	}
 	agent := event.Agent
 	if agent == "claude" {
 		agent = "claude-code"

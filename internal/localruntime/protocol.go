@@ -20,6 +20,7 @@ type EvaluateRequest struct {
 	CWD                 string          `json:"cwd"`
 	TranscriptPath      string          `json:"transcript_path,omitempty"`
 	AgentTranscriptPath string          `json:"agent_transcript_path,omitempty"`
+	Model               string          `json:"model,omitempty"`
 	PermissionMode      string          `json:"permission_mode,omitempty"`
 	FullDiskAccess      *bool           `json:"full_disk_access,omitempty"`
 	DurationMs          *int64          `json:"duration_ms,omitempty"`

@@ -29,6 +29,25 @@ func TestTranscriptPathSurvivesLocalProtocolRoundTrip(t *testing.T) {
 	}
 }
 
+func TestModelSurvivesLocalProtocolRoundTrip(t *testing.T) {
+	req, err := EvaluateRequestFromEvent(hook.Event{SessionID: "codex-s", Agent: "codex", HookName: hook.HookPostToolUse, Model: "gpt-6.1-sol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received EvaluateRequest
+	if err := json.Unmarshal(wire, &received); err != nil {
+		t.Fatal(err)
+	}
+	event, err := EventFromEvaluateRequest("", "", &received)
+	if err != nil || event.Model != "gpt-6.1-sol" {
+		t.Fatalf("round trip: model=%q, err=%v", event.Model, err)
+	}
+}
+
 func TestEvaluateRequestFromEventPreservesHookFields(t *testing.T) {
 	t.Parallel()
 

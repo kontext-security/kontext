@@ -14,6 +14,7 @@ const codexSessionPrefix = "codex-"
 type codexHookInput struct {
 	SessionID        string          `json:"session_id"`
 	TranscriptPath   string          `json:"transcript_path"`
+	Model            string          `json:"model"`
 	HookEventName    string          `json:"hook_event_name"`
 	ToolName         string          `json:"tool_name"`
 	ToolInput        json.RawMessage `json:"tool_input"`
@@ -72,6 +73,7 @@ func DecodeCodexEvent(input []byte, agentName string) (hook.Event, error) {
 	return hook.Event{
 		SessionID:            codexSessionID(h.SessionID),
 		TranscriptPath:       h.TranscriptPath,
+		Model:                h.Model,
 		Agent:                agentName,
 		HookName:             hookName,
 		ToolName:             h.ToolName,

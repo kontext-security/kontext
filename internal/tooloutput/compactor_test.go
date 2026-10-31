@@ -562,9 +562,12 @@ func TestLiveCodexShowsTheExitThenTheShorterOutput(t *testing.T) {
 	c := newTestCompactor(t, replace("kept head\n[omitted]\nkept tail\n"))
 	output := bigText(80)
 	log := c.codexLog(t,
+		`{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}`,
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the failing test"}]}}`,
 		codexCall("exec_command", "call_1"), codexExited("call_1", 1))
 	event := c.codex(log, output)
+	// The model the hook names beats the transcript's.
+	event.Model = "gpt-5.5"
 	got := c.Compact(context.Background(), event)
 	want := map[string]any{"content": "Process exited with code 1\nkept head\n[omitted]\nkept tail\n"}
 	if !reflect.DeepEqual(got, want) {
@@ -573,7 +576,8 @@ func TestLiveCodexShowsTheExitThenTheShorterOutput(t *testing.T) {
 	requests, _, _ := c.api.calls()
 	saved := filepath.Join(c.dir, "codex-019a", "call_1.txt")
 	if len(requests) != 1 || requests[0].Mode != ModeLive || requests[0].Agent != "codex" || requests[0].ToolUseID != "call_1" ||
-		requests[0].Output.Text != output || requests[0].Output.RecoveryPath != saved || requests[0].Context.Goal != "Fix the failing test" {
+		requests[0].Output.Text != output || requests[0].Output.RecoveryPath != saved || requests[0].Context.Goal != "Fix the failing test" ||
+		requests[0].Model == nil || *requests[0].Model != "gpt-5.5" {
 		t.Fatalf("requests = %+v", requests)
 	}
 	if data, err := os.ReadFile(saved); err != nil || string(data) != output {

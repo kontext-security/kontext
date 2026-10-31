@@ -104,6 +104,9 @@ type Event struct {
 	IsInterrupt          *bool
 	UserRequest          string
 	AvailableToolSchemas any
+	// Model is the model the agent's hook input names for the event, where
+	// it names one (Codex does).
+	Model string
 }
 
 type Result struct {
