@@ -47,6 +47,15 @@ from the user files and names `sudo kontext hooks remove --scope system` when
 an earlier setup's machine-wide hooks remain. It leaves an empty user settings
 object rather than deleting that file.
 
+The daemon also catches a double install. When an agent runs Kontext's hook
+twice for one event, because two hook files name it or an old copy was left
+behind, the daemon evaluates the event once and records one ledger event. A
+copy that arrives within three seconds of the first, for the same agent,
+session, hook and tool call id, gets the first copy's decision. Prompts, session
+starts and stops carry no tool call id, so their copies must match the first
+exactly. If the first copy fails or has no answer within three seconds, the
+daemon evaluates the copy on its own. The agent still runs both handlers.
+
 ## Package commands
 
 ```sh
