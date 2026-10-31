@@ -68,38 +68,60 @@ func requestContext(event hook.Event, goal, home string, withheld func(input any
 
 // readConversation reads the end of an agent's transcript, and reports
 // whether that was all of it. A transcript it cannot read gives no context,
-// and neither does one in a folder macOS guards, which the daemon never
-// opens.
-func readConversation(agent, path string, subagent bool, home string) (modelusage.Conversation, bool) {
+// and neither does one in a folder macOS guards (see readTail).
+func readConversation(agent, path string, subagent bool, home string) (conversation modelusage.Conversation, whole bool) {
+	readTail(path, home, func(tail io.Reader, all bool) {
+		if agent == "codex" {
+			conversation = modelusage.ReadCodexConversation(tail)
+		} else {
+			conversation = modelusage.ReadClaudeConversation(tail, subagent)
+		}
+		whole = all
+	})
+	return conversation, whole
+}
+
+// codexExitCode reads the end of a Codex call's session log for the exit code
+// of its command (see modelusage.CodexCommandExit). A log it cannot read
+// tells it nothing.
+func codexExitCode(event hook.Event, home string) (code int, finished bool) {
+	readTail(event.TranscriptPath, home, func(tail io.Reader, _ bool) {
+		code, finished = modelusage.CodexCommandExit(tail, event.ToolUseID)
+	})
+	return code, finished
+}
+
+// readTail calls read with the end of a transcript, from the first whole
+// line of its last transcriptTail bytes, and whether that is all of it. It
+// never opens a transcript in a folder macOS guards, and does not call read
+// for one it cannot open.
+func readTail(path, home string, read func(tail io.Reader, whole bool)) {
 	if path == "" || privacyfolder.Guarded(home, path) {
-		return modelusage.Conversation{}, false
+		return
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return modelusage.Conversation{}, false
+		return
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		return modelusage.Conversation{}, false
+		return
 	}
 	var reader io.Reader = file
 	offset := info.Size() - transcriptTail
 	if offset > 0 {
 		if _, err := file.Seek(offset, io.SeekStart); err != nil {
-			return modelusage.Conversation{}, false
+			return
 		}
 		// Start at the first whole line.
 		buffered := bufio.NewReader(io.LimitReader(file, transcriptTail))
 		if _, err := buffered.ReadBytes('\n'); err != nil {
-			return modelusage.Conversation{}, false
+			return
 		}
 		reader = buffered
 	}
-	if agent == "codex" {
-		return modelusage.ReadCodexConversation(reader), offset <= 0
-	}
-	return modelusage.ReadClaudeConversation(reader, subagent), offset <= 0
+	read(reader, offset <= 0)
 }
 
 // latestUserText is the last text a person sent, or with prompts set, the

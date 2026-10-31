@@ -41,18 +41,26 @@ func TestNeverOpensGuardedPaths(t *testing.T) {
 	read.ToolUseID, read.CWD, read.TranscriptPath = "toolu_read", project, transcript
 	reread := hook.Event{SessionID: testSession, Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolUseID: "toolu_tail",
 		CWD: project, TranscriptPath: transcript, ToolInput: map[string]any{"command": "tail " + log}}
+	// Codex's session log says how the command exited; without it, the output
+	// stays as it is.
+	codex := hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1",
+		CWD: project, TranscriptPath: transcript, ToolInput: map[string]any{"command": "cat out.log"}, ToolResponse: map[string]any{"content": bigText(80)}}
 
-	done := make(chan map[string]any, 1)
+	type compacted struct{ bash, codex map[string]any }
+	done := make(chan compacted, 1)
 	go func() {
-		compacted := c.Compact(context.Background(), bash)
+		bashOutput := c.Compact(context.Background(), bash)
 		c.Compact(context.Background(), read)
 		c.Observe(context.Background(), reread)
-		done <- compacted
+		done <- compacted{bash: bashOutput, codex: c.Compact(context.Background(), codex)}
 	}()
 	select {
-	case compacted := <-done:
-		if compacted == nil {
+	case got := <-done:
+		if got.bash == nil {
 			t.Fatal("a Bash output from a Documents project was not compacted")
+		}
+		if got.codex != nil {
+			t.Fatal("a Codex output was compacted without reading its session log")
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("compaction opened a path in a guarded folder")

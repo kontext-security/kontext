@@ -1,9 +1,10 @@
 // Package tooloutput implements tool output compaction. The daemon sends a
 // large tool output to the Kontext API and applies what comes back: Claude
-// Code outputs are shortened live, with the full output saved where the agent
-// can read it back; Codex outputs are sent in shadow mode, never waited for
-// or changed. The endpoint configuration's switch turns it on, and every
-// failure leaves the output as it was.
+// Code and Codex outputs are shortened live, with the full output saved where
+// the agent can read it back. Shell calls Codex makes from code mode cannot
+// be shortened; they are sent in shadow mode, never waited for or changed.
+// The endpoint configuration's switch turns it on, and every failure leaves
+// the output as it was.
 package tooloutput
 
 import (
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +94,8 @@ type session struct {
 	touched  time.Time
 	records  []record
 	reported map[[2]string]bool
+	// claimed holds the calls whose output was taken up (see claim).
+	claimed map[string]bool
 }
 
 // record is a compaction the agent saw, kept to recognize its read-backs. It
@@ -147,17 +151,18 @@ func (c *Compactor) Offers(event hook.Event) bool {
 	return ok && c.on()
 }
 
-// Compact runs live compaction for a Claude Code PostToolUse and returns the
-// tool response the agent should see instead, or nil to leave the output
+// Compact runs live compaction for a PostToolUse and returns the tool
+// response the agent should see instead, or nil to leave the output
 // unchanged: when the switch is off, the output is not a candidate, the call
-// reads a saved output back, or anything fails. The output comes with the
-// event, so no file of the call is opened, wherever it is.
+// reads a saved output back or was taken up already, or anything fails. The
+// output comes with the event, so no file of the call is opened, wherever it
+// is.
 func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]any {
 	out, ok := liveOutput(event)
 	if !ok || !c.on() || c.readsBack(event) {
 		return nil
 	}
-	if !safeSegment(event.SessionID) || !safeSegment(event.ToolUseID) {
+	if !safeSegment(event.SessionID) || !safeSegment(event.ToolUseID) || !c.claim(event) {
 		return nil
 	}
 	select {
@@ -170,6 +175,17 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 	ctx, cancel := context.WithTimeout(ctx, apiWait)
 	defer cancel()
 
+	// Codex's model gets the shorter output in place of the whole tool
+	// result, which starts with how the command exited. A call whose command
+	// has not finished, or whose output the model already has, is left as is.
+	head := ""
+	if event.Agent == "codex" {
+		code, finished := codexExitCode(event, c.home)
+		if !finished {
+			return nil
+		}
+		head = "Process exited with code " + strconv.Itoa(code) + "\n"
+	}
 	saved := filepath.Join(c.dir, event.SessionID, event.ToolUseID+".txt")
 	request := c.request(ModeLive, event, out, c.goal(event.SessionID))
 	if out.kind == KindText {
@@ -187,6 +203,11 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 	if response.Decision != DecisionReplace || !out.acceptable(*response.Text) {
 		return nil
 	}
+	text := head + *response.Text
+	if out.limit > 0 && len(text) > out.limit {
+		c.diagnostic.Printf("tool output compaction: shortened output too long for the agent; output left as is\n")
+		return nil
+	}
 	compaction := record{EventID: response.EventID, ToolUseID: event.ToolUseID, Kind: out.kind, At: c.now()}
 	if out.kind == KindText {
 		// The full output must be readable before the agent is told where.
@@ -199,13 +220,13 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 		compaction.Omitted = omittedLines(out.text, *response.Text, out.startLine)
 	}
 	c.remember(event.SessionID, compaction)
-	return out.rebuild(*response.Text)
+	return out.rebuild(text)
 }
 
 // Observe follows the hook events the daemon answers: the person's prompts,
-// for context; Claude Code calls that read a compacted output back, which
-// are reported; and Codex outputs, sent in shadow mode. It only queues
-// network work, so it never delays a hook.
+// for context; calls that read a compacted output back, which are reported;
+// and the Codex outputs live compaction leaves alone, sent in shadow mode. It
+// only queues network work, so it never delays a hook.
 func (c *Compactor) Observe(_ context.Context, event hook.Event) {
 	if c == nil || event.SessionID == "" {
 		return
@@ -222,10 +243,10 @@ func (c *Compactor) Observe(_ context.Context, event hook.Event) {
 		if !c.on() {
 			return
 		}
-		if event.Agent == "claude" {
+		if event.Agent == "claude" || event.Agent == "codex" {
 			c.reportReadBacks(event)
 		}
-		if out, ok := shadowOutput(event); ok {
+		if out, ok := shadowOutput(event); ok && c.claim(event) {
 			select {
 			case c.shadow <- shadowJob{event: event, out: out, goal: c.goal(event.SessionID)}:
 			default:
@@ -474,6 +495,24 @@ func (c *Compactor) omittedReadBack(event hook.Event) (record, bool) {
 	return record{}, false
 }
 
+// claim reports whether a call's output is the first of its call the
+// compactor takes up. With two Kontext installs hooking an agent, every
+// output arrives twice, and Codex shows its model the reason of every hook
+// that blocks: answering both would show the shorter output twice.
+func (c *Compactor) claim(event hook.Event) bool {
+	if event.ToolUseID == "" {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	claimed := c.session(event.SessionID).claimed
+	if claimed[event.ToolUseID] {
+		return false
+	}
+	claimed[event.ToolUseID] = true
+	return true
+}
+
 func (c *Compactor) goal(sessionID string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -501,7 +540,7 @@ func (c *Compactor) remember(sessionID string, compaction record) {
 func (c *Compactor) session(sessionID string) *session {
 	state := c.sessions[sessionID]
 	if state == nil {
-		state = &session{reported: map[[2]string]bool{}, records: c.load(sessionID)}
+		state = &session{reported: map[[2]string]bool{}, claimed: map[string]bool{}, records: c.load(sessionID)}
 		c.sessions[sessionID] = state
 	}
 	state.touched = c.now()

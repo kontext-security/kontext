@@ -9,9 +9,14 @@ import (
 	"github.com/kontext-security/kontext/internal/hook"
 )
 
-// minOutputBytes is the smallest output worth sending: anything at or below
-// it stays as it is.
-const minOutputBytes = 2048
+const (
+	// minOutputBytes is the smallest output worth sending: anything at or
+	// below it stays as it is.
+	minOutputBytes = 2048
+	// maxCodexText bounds what Codex's model is shown in place of an output.
+	// Codex cuts a hook's reason at about 10 KB.
+	maxCodexText = 9728
+)
 
 // output is a tool result's text that compaction may shorten, and how to put
 // a shortened text back into the tool response.
@@ -20,22 +25,34 @@ type output struct {
 	text      string
 	filePath  string
 	startLine int
-	rebuild   func(text string) map[string]any
+	// limit, when set, bounds the text the agent can be shown instead.
+	limit   int
+	rebuild func(text string) map[string]any
 }
 
 // LiveCandidate reports whether a PostToolUse carries an output live
-// compaction handles: a Claude Code Bash stdout or Read text over 2048 bytes.
-// The hook asks the daemon only about these, so every other call costs
-// nothing extra.
+// compaction handles: a Claude Code Bash stdout or Read text, or a Codex shell
+// call's output, over 2048 bytes. The hook asks the daemon only about these,
+// so every other call costs nothing extra.
 func LiveCandidate(event hook.Event) bool {
 	_, ok := liveOutput(event)
 	return ok
 }
 
 func liveOutput(event hook.Event) (output, bool) {
-	if event.Agent != "claude" || event.HookName != hook.HookPostToolUse {
+	if event.HookName != hook.HookPostToolUse {
 		return output{}, false
 	}
+	switch event.Agent {
+	case "claude":
+		return claudeOutput(event)
+	case "codex":
+		return codexOutput(event)
+	}
+	return output{}, false
+}
+
+func claudeOutput(event hook.Event) (output, bool) {
 	response := event.ToolResponse
 	switch event.ToolName {
 	case "Bash":
@@ -69,10 +86,35 @@ func liveOutput(event hook.Event) (output, bool) {
 	return output{}, false
 }
 
-// shadowOutput is a Codex shell call's output. Codex reports it as a plain
-// string, which the hook adapter keeps under "content".
+// codexOutput is a Codex shell call's output, which Codex reports as a plain
+// string the hook adapter keeps under "content". Codex lets a hook change
+// what its model sees only by blocking the call, which hands the model the
+// block's reason in place of the output; from code mode, where a script
+// makes the call, a block fails the whole script, so those calls are left
+// to shadow mode.
+func codexOutput(event hook.Event) (output, bool) {
+	text, ok := event.ToolResponse["content"].(string)
+	if event.ToolName != "Bash" || !ok || len(text) <= minOutputBytes || codeModeCall(event.ToolUseID) {
+		return output{}, false
+	}
+	return output{kind: KindText, text: text, limit: maxCodexText, rebuild: func(text string) map[string]any {
+		return map[string]any{"content": text}
+	}}, true
+}
+
+// codeModeCall reports whether a Codex call id is one Codex gives a shell
+// call a code mode script makes.
+func codeModeCall(toolUseID string) bool {
+	return strings.HasPrefix(toolUseID, "exec-")
+}
+
+// shadowOutput is a Codex shell call's output that live compaction leaves to
+// shadow mode.
 func shadowOutput(event hook.Event) (output, bool) {
 	if event.Agent != "codex" || event.HookName != hook.HookPostToolUse || event.ToolName != "Bash" {
+		return output{}, false
+	}
+	if _, live := codexOutput(event); live {
 		return output{}, false
 	}
 	text, ok := event.ToolResponse["content"].(string)

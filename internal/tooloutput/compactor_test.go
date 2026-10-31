@@ -3,6 +3,7 @@ package tooloutput
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -298,7 +299,8 @@ func TestCompactsInPrivacyFolders(t *testing.T) {
 	if c.Compact(context.Background(), read) != nil {
 		t.Fatal("the Read's fake reply keeps one line, so it must be refused, not skipped")
 	}
-	codex := hook.Event{SessionID: "codex-1", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1", CWD: project,
+	// A shell call from Codex code mode, which goes to shadow mode.
+	codex := hook.Event{SessionID: "codex-1", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "exec-0b3c", CWD: project,
 		ToolInput: map[string]any{"command": "cat ~/Downloads/report.csv"}, ToolResponse: map[string]any{"content": bigText(80)}}
 	c.Observe(context.Background(), codex)
 	c.sendShadow(context.Background(), <-c.shadow)
@@ -480,8 +482,12 @@ func TestCodexShadowNeverBlocksOrChangesTheOutput(t *testing.T) {
 	t.Cleanup(func() { once.Do(func() { close(release) }); cancel(); <-done })
 
 	output := bigText(80)
-	event := hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1",
-		CWD: c.cwd, ToolInput: map[string]any{"command": "go test ./..."}, ToolResponse: map[string]any{"content": output}}
+	// Shell calls from code mode, which live compaction leaves alone.
+	codeMode := func(n int) hook.Event {
+		return hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: fmt.Sprintf("exec-%d", n),
+			CWD: c.cwd, ToolInput: map[string]any{"command": "go test ./..."}, ToolResponse: map[string]any{"content": output}}
+	}
+	event := codeMode(0)
 	c.Observe(context.Background(), hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookUserPromptSubmit,
 		ToolInput: map[string]any{"prompt": "fix the failing test"}})
 	// The server answers nothing until the test ends: an Observe that waited
@@ -489,8 +495,9 @@ func TestCodexShadowNeverBlocksOrChangesTheOutput(t *testing.T) {
 	observed := make(chan struct{})
 	go func() {
 		defer close(observed)
-		for range queueSize + 10 {
-			c.Observe(context.Background(), event)
+		c.Observe(context.Background(), event)
+		for n := range queueSize + 10 {
+			c.Observe(context.Background(), codeMode(n+1))
 		}
 	}()
 	select {
@@ -502,7 +509,7 @@ func TestCodexShadowNeverBlocksOrChangesTheOutput(t *testing.T) {
 		t.Fatal("the Codex output was changed")
 	}
 	if got := c.Compact(context.Background(), event); got != nil {
-		t.Fatal("a Codex output was compacted live")
+		t.Fatal("a code mode output was compacted live")
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -519,6 +526,133 @@ func TestCodexShadowNeverBlocksOrChangesTheOutput(t *testing.T) {
 			t.Fatal("no shadow request was sent")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// codexLog writes a Codex session log as it stands when PostToolUse hooks
+// run, and returns its path.
+func (c testCompactor) codexLog(t *testing.T, rows ...string) string {
+	t.Helper()
+	path := filepath.Join(c.home, ".codex", "sessions", "2026", "10", "31", "rollout-test.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(rows, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func codexCall(name, id string) string {
+	return `{"type":"response_item","payload":{"type":"function_call","name":"` + name + `","arguments":"{\"cmd\":\"go test ./...\"}","call_id":"` + id + `"}}`
+}
+
+func codexExited(id string, code int) string {
+	return fmt.Sprintf(`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":%q,"status":"failed","aggregated_output":"FAIL","exit_code":%d}}}`, id, code)
+}
+
+func (c testCompactor) codex(transcript, output string) hook.Event {
+	return hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1",
+		TranscriptPath: transcript, CWD: c.cwd, ToolInput: map[string]any{"command": "go test ./..."}, ToolResponse: map[string]any{"content": output}}
+}
+
+// Codex's model gets the shorter output in place of the whole tool result,
+// so it starts with how the command exited, as Codex's own result does.
+func TestLiveCodexShowsTheExitThenTheShorterOutput(t *testing.T) {
+	c := newTestCompactor(t, replace("kept head\n[omitted]\nkept tail\n"))
+	output := bigText(80)
+	log := c.codexLog(t,
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the failing test"}]}}`,
+		codexCall("exec_command", "call_1"), codexExited("call_1", 1))
+	event := c.codex(log, output)
+	got := c.Compact(context.Background(), event)
+	want := map[string]any{"content": "Process exited with code 1\nkept head\n[omitted]\nkept tail\n"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Compact() = %#v, want %#v", got, want)
+	}
+	requests, _, _ := c.api.calls()
+	saved := filepath.Join(c.dir, "codex-019a", "call_1.txt")
+	if len(requests) != 1 || requests[0].Mode != ModeLive || requests[0].Agent != "codex" || requests[0].ToolUseID != "call_1" ||
+		requests[0].Output.Text != output || requests[0].Output.RecoveryPath != saved || requests[0].Context.Goal != "Fix the failing test" {
+		t.Fatalf("requests = %+v", requests)
+	}
+	if data, err := os.ReadFile(saved); err != nil || string(data) != output {
+		t.Fatalf("saved output = %q, %v", data, err)
+	}
+
+	// A second Kontext install's hook asks too; Codex would show the model
+	// both answers.
+	if again := c.Compact(context.Background(), event); again != nil {
+		t.Fatalf("second Compact() = %#v", again)
+	}
+	// Reading the saved output back is reported, and never compacted.
+	readBack := c.codex(log, output)
+	readBack.HookName, readBack.ToolUseID, readBack.ToolResponse = hook.HookPreToolUse, "call_2", nil
+	readBack.ToolInput = map[string]any{"command": "sed -n '20,60p' '" + saved + "'"}
+	c.Observe(context.Background(), readBack)
+	select {
+	case got := <-c.readBacks:
+		if got != (ReadBack{SessionID: "codex-019a", EventID: testEventID, ToolUseID: "call_2"}) {
+			t.Fatalf("read-back = %+v", got)
+		}
+	default:
+		t.Fatal("reading the saved output back was not reported")
+	}
+	readBack.HookName, readBack.ToolResponse = hook.HookPostToolUse, map[string]any{"content": output}
+	if c.Compact(context.Background(), readBack) != nil {
+		t.Fatal("a read-back was compacted")
+	}
+	if requests, _, _ := c.api.calls(); len(requests) != 1 {
+		t.Fatalf("requests = %d, want the first only", len(requests))
+	}
+}
+
+// A Codex output is changed only when the session log shows an exec_command
+// call whose command finished, of which the model has nothing yet, and only
+// with a reason Codex shows whole.
+func TestCodexCallsLeftAsTheyAre(t *testing.T) {
+	tests := []struct {
+		name  string
+		rows  []string
+		id    string
+		reply string
+		calls int
+	}{
+		{name: "not finished", rows: []string{codexCall("exec_command", "call_1")}},
+		{name: "answered while running", rows: []string{codexCall("exec_command", "call_1"),
+			`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"Process running with session ID 7"}}`,
+			codexCall("write_stdin", "call_2"), codexExited("call_1", 0)}},
+		{name: "write_stdin", rows: []string{codexCall("write_stdin", "call_1"), codexExited("call_1", 0)}},
+		{name: "code mode", id: "exec-0b3c", rows: []string{codexExited("exec-0b3c", 0)}},
+		{name: "no session log"},
+		{name: "too long for Codex", rows: []string{codexCall("exec_command", "call_1"), codexExited("call_1", 0)},
+			reply: strings.Repeat("y", maxCodexText-len("Process exited with code 0\n")+1), calls: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reply := test.reply
+			if reply == "" {
+				reply = "short"
+			}
+			c := newTestCompactor(t, replace(reply))
+			log := ""
+			if test.rows != nil {
+				log = c.codexLog(t, test.rows...)
+			}
+			event := c.codex(log, bigText(400))
+			if test.id != "" {
+				event.ToolUseID = test.id
+			}
+			if got := c.Compact(context.Background(), event); got != nil {
+				t.Fatalf("Compact() = %#v", got)
+			}
+			if _, _, calls := c.api.calls(); calls != test.calls {
+				t.Fatalf("API calls = %d, want %d", calls, test.calls)
+			}
+			if _, err := os.Stat(filepath.Join(c.dir, "codex-019a")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("saved outputs: %v", err)
+			}
+		})
 	}
 }
 
@@ -663,6 +797,14 @@ func TestOffers(t *testing.T) {
 	}
 	if c.Offers(c.bash("ls", "small")) {
 		t.Fatal("a small output was offered")
+	}
+	codex := c.codex("", bigText(80))
+	if !c.Offers(codex) {
+		t.Fatal("a large Codex output was not offered")
+	}
+	codex.ToolUseID = "exec-0b3c"
+	if c.Offers(codex) {
+		t.Fatal("a code mode output was offered")
 	}
 	c.on.Store(false)
 	if c.Offers(c.bash("make test", bigText(80))) {

@@ -74,6 +74,51 @@ func TestReadCodexConversation(t *testing.T) {
 	}
 }
 
+// Rows as Codex writes them by the time PostToolUse hooks run, cut down to
+// the fields that matter.
+func TestCodexCommandExit(t *testing.T) {
+	call := func(name, id string) string {
+		return `{"type":"response_item","payload":{"type":"function_call","name":"` + name + `","arguments":"{}","call_id":"` + id + `"}}`
+	}
+	completed := func(id, status, exitCode string) string {
+		return `{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"` + id +
+			`","command":["/bin/zsh","-lc","seq 1 3000"],"status":"` + status + `","aggregated_output":"1\n2\n","exit_code":` + exitCode + `}}}`
+	}
+	output := func(id string) string {
+		return `{"type":"response_item","payload":{"type":"function_call_output","call_id":"` + id + `","output":"Process running with session ID 7"}}`
+	}
+	tests := []struct {
+		name     string
+		rows     []string
+		callID   string
+		wantCode int
+		want     bool
+	}{
+		{name: "finished", rows: []string{`ion_id":"x"}}`, call("exec_command", "call_1"), completed("call_1", "completed", "0")}, callID: "call_1", want: true},
+		{name: "failed command", rows: []string{call("exec_command", "call_1"), completed("call_1", "failed", "3")}, callID: "call_1", wantCode: 3, want: true},
+		{name: "parallel calls", rows: []string{call("exec_command", "call_1"), call("exec_command", "call_2"), completed("call_2", "failed", "2"),
+			completed("call_1", "completed", "0")}, callID: "call_2", wantCode: 2, want: true},
+		{name: "not finished", rows: []string{call("exec_command", "call_1")}, callID: "call_1"},
+		{name: "no exit code", rows: []string{call("exec_command", "call_1"), completed("call_1", "completed", "null")}, callID: "call_1"},
+		// The command outlived exec_command, which answered first; PostToolUse
+		// comes once write_stdin sees it finish.
+		{name: "answered while running", rows: []string{call("exec_command", "call_1"), output("call_1"), call("write_stdin", "call_2"),
+			completed("call_1", "completed", "0")}, callID: "call_1"},
+		{name: "write_stdin", rows: []string{call("write_stdin", "call_2"), completed("call_2", "completed", "0")}, callID: "call_2"},
+		{name: "code mode", rows: []string{`{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"text(await tools.exec_command({cmd:\"seq 1 3000\"}));","call_id":"call_1"}}`,
+			completed("exec-0b3c", "completed", "0")}, callID: "exec-0b3c"},
+		{name: "no call id", rows: []string{call("exec_command", ""), completed("", "completed", "0")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			code, ok := CodexCommandExit(strings.NewReader(strings.Join(test.rows, "\n")), test.callID)
+			if code != test.wantCode || ok != test.want {
+				t.Fatalf("CodexCommandExit() = %d, %v, want %d, %v", code, ok, test.wantCode, test.want)
+			}
+		})
+	}
+}
+
 // A compaction starts the model's view over: what came before is gone.
 func TestReadClaudeConversationStartsAfterACompaction(t *testing.T) {
 	transcript := strings.Join([]string{

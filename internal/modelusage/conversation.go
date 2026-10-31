@@ -248,6 +248,51 @@ func ReadCodexConversation(reader io.Reader) Conversation {
 	return conversation
 }
 
+// CodexCommandExit reads a Codex rollout for how the command of an
+// exec_command call ended: its exit code, once the command finished and
+// before any of the call's output went to the model. Codex writes the
+// finished command before it runs PostToolUse hooks, and the output after.
+// A call from code mode or write_stdin, and one whose command was still
+// running when exec_command returned, reports false.
+func CodexCommandExit(reader io.Reader, callID string) (int, bool) {
+	var called, answered bool
+	var exitCode *int
+	scanLines(reader, func(line []byte) {
+		if callID == "" || !bytes.Contains(line, []byte(callID)) {
+			return
+		}
+		var row struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type   string `json:"type"`
+				Name   string `json:"name"`
+				CallID string `json:"call_id"`
+				Item   struct {
+					Type     string `json:"type"`
+					ID       string `json:"id"`
+					ExitCode *int   `json:"exit_code"`
+				} `json:"item"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(line, &row) != nil {
+			return
+		}
+		payload := row.Payload
+		switch {
+		case row.Type == "response_item" && payload.Type == "function_call" && payload.CallID == callID:
+			called = payload.Name == "exec_command"
+		case row.Type == "response_item" && payload.Type == "function_call_output" && payload.CallID == callID:
+			answered = true
+		case row.Type == "event_msg" && payload.Type == "item_completed" && payload.Item.Type == "CommandExecution" && payload.Item.ID == callID:
+			exitCode = payload.Item.ExitCode
+		}
+	})
+	if !called || answered || exitCode == nil {
+		return 0, false
+	}
+	return *exitCode, true
+}
+
 func codexMessageText(content json.RawMessage) string {
 	var parts []struct {
 		Text string `json:"text"`

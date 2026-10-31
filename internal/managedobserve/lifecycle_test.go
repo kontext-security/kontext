@@ -622,7 +622,7 @@ func TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget(t *testing.T) {
 // A PostToolUse whose answer offers compaction asks the daemon a second time
 // and carries back what it says. Without the offer (an older daemon, the
 // switch off) or for any other event, no second call is made.
-func TestLifecycleCompactsLargeClaudeOutputs(t *testing.T) {
+func TestLifecycleCompactsLargeOutputs(t *testing.T) {
 	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-compaction.sock")
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 	listener, err := net.Listen("unix", socketPath)
@@ -663,18 +663,24 @@ func TestLifecycleCompactsLargeClaudeOutputs(t *testing.T) {
 		t.Fatalf("result = %+v after %d compactions", result, compactions.Load())
 	}
 
+	codex := hook.Event{Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1",
+		ToolResponse: map[string]any{"content": large}}
+	if result := lifecycle.Process(context.Background(), codex); result.UpdatedToolOutput == nil || compactions.Load() != 2 {
+		t.Fatalf("codex result = %+v after %d compactions", result, compactions.Load())
+	}
+
 	small := event
 	small.ToolResponse = map[string]any{"stdout": "ok"}
-	codex := event
-	codex.Agent = "codex"
+	codeMode := codex
+	codeMode.ToolUseID = "exec-0b3c"
 	unoffered := event
 	unoffered.ToolResponse = map[string]any{"stdout": large, "stderr": "no offer"}
-	for _, other := range []hook.Event{small, codex, unoffered, {Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash"}} {
+	for _, other := range []hook.Event{small, codeMode, unoffered, {Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash"}} {
 		if result := lifecycle.Process(context.Background(), other); result.UpdatedToolOutput != nil {
 			t.Fatalf("%+v got %+v", other, result)
 		}
 	}
-	if compactions.Load() != 1 {
+	if compactions.Load() != 2 {
 		t.Fatalf("compactions = %d, want no more", compactions.Load())
 	}
 }

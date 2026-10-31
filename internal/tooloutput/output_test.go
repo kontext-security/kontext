@@ -61,7 +61,16 @@ func TestLiveCandidates(t *testing.T) {
 		{name: "other tool", event: hook.Event{Agent: "claude", HookName: hook.HookPostToolUse, ToolName: "Grep", ToolResponse: map[string]any{"stdout": long}}},
 		{name: "pre tool use", event: hook.Event{Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolResponse: map[string]any{"stdout": long}}},
 		{name: "cowork", event: hook.Event{Agent: "cowork", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolResponse: map[string]any{"stdout": long}}},
-		{name: "codex", event: hook.Event{Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolResponse: map[string]any{"content": long}}},
+		{name: "codex", event: hook.Event{Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1",
+			ToolResponse: map[string]any{"content": long}}, want: true},
+		{name: "codex small", event: hook.Event{Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1",
+			ToolResponse: map[string]any{"content": "ok"}}},
+		{name: "codex code mode", event: hook.Event{Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "exec-0b3c",
+			ToolResponse: map[string]any{"content": long}}},
+		{name: "codex structured", event: hook.Event{Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1",
+			ToolResponse: map[string]any{"stdout": long}}},
+		{name: "codex other tool", event: hook.Event{Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "apply_patch", ToolUseID: "call_1",
+			ToolResponse: map[string]any{"content": long}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

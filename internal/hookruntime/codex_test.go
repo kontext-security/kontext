@@ -276,6 +276,29 @@ func TestEncodeCodexAllowNoOpOmitsSuppressOutput(t *testing.T) {
 	}
 }
 
+// Codex cannot replace a tool output: a compacted one reaches the model as
+// the reason of a blocked PostToolUse, after a fail-open ingest too, but
+// never over a deny.
+func TestEncodeCodexCompactedOutputBlocksWithIt(t *testing.T) {
+	t.Parallel()
+
+	result := hook.FailOpen("managed policy daemon unavailable")
+	result.UpdatedToolOutput = map[string]any{"content": "Process exited with code 0\nshort"}
+	out, err := EncodeCodexResult("PostToolUse", result)
+	if want := `{"decision":"block","reason":"Process exited with code 0\nshort"}`; err != nil || string(out) != want {
+		t.Fatalf("EncodeCodexResult() = %s, %v, want %s", out, err, want)
+	}
+	out, err = EncodeCodexResult("PreToolUse", hook.Result{Decision: hook.DecisionAllow, UpdatedToolOutput: result.UpdatedToolOutput})
+	if err != nil || string(out) != "{}" {
+		t.Fatalf("EncodeCodexResult(PreToolUse) = %s, %v", out, err)
+	}
+	out, err = EncodeCodexResult("PostToolUse", hook.Result{Decision: hook.DecisionDeny, Reason: "Output withheld by policy",
+		UpdatedToolOutput: result.UpdatedToolOutput})
+	if err != nil || !strings.Contains(string(out), "Output withheld by policy") || strings.Contains(string(out), "short") {
+		t.Fatalf("EncodeCodexResult(deny) = %s, %v", out, err)
+	}
+}
+
 func TestEncodeCodexUserPromptSubmitDenyBlocks(t *testing.T) {
 	t.Parallel()
 
