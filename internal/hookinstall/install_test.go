@@ -22,10 +22,13 @@ func fixture(t *testing.T, scope Scope) (Options, []Definition) {
 	t.Setenv("CODEX_HOME", "")
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	root := t.TempDir()
-	claudeDropIn, cursorHooks := machineClaudeDropIn, machineCursorHooks
+	claudeDropIn, cursorHooks, codexHooks := machineClaudeDropIn, machineCursorHooks, machineCodexHooks
 	machineClaudeDropIn = filepath.Join(root, claudemanaged.ManagedSettingsDropInPath)
 	machineCursorHooks = filepath.Join(root, cursormanaged.SystemHooksPath)
-	t.Cleanup(func() { machineClaudeDropIn, machineCursorHooks = claudeDropIn, cursorHooks })
+	machineCodexHooks = filepath.Join(root, codexmanaged.SystemHooksPath)
+	t.Cleanup(func() {
+		machineClaudeDropIn, machineCursorHooks, machineCodexHooks = claudeDropIn, cursorHooks, codexHooks
+	})
 	opts := Options{Scope: scope, Home: "/Users/test", Binary: filepath.Join(root, "kontext")}
 	write(t, opts.Binary, "#!/bin/sh\n", 0755)
 	defs, err := Definitions(scope, opts.Home)
@@ -633,34 +636,42 @@ func TestDoctorCodexLayers(t *testing.T) {
 				}
 				var out bytes.Buffer
 				healthy := diagnose(&out, opts.Scope, defs, func(id string) bool { return id == "codex" }, filepath.Join(home, ".codex", "config.toml"), other)
-				wantHealthy := state == "only owned" || state == "same binary" || state == "only other" || state == "empty owned"
+				// A layer without Kontext hooks is inert; two runnable complete
+				// layers run every hook twice, whatever binaries they name.
+				wantHealthy := state == "only owned" || state == "only other" || state == "empty owned" || state == "incomplete owned" || state == "foreign owned" || state == "foreign other"
 				if healthy != wantHealthy {
 					t.Fatalf("healthy=%v, want %v: %s", healthy, wantHealthy, &out)
 				}
+				twice := state == "same binary" || state == "different binary"
 				wantWarnings := 0
-				if state == "different binary" {
+				if twice && scope == System {
 					wantWarnings = 1
 					warning := "Codex hooks: another Kontext install also hooks Codex (~/.codex/hooks.json → " + otherBinary + "); run kontext setup --uninstall on an organization-managed Mac\n"
 					if !strings.Contains(out.String(), warning) {
 						t.Fatal(&out)
 					}
-					if strings.Contains(out.String(), "incomplete") || strings.Contains(out.String(), "different binary paths") {
+				}
+				if twice && scope == User {
+					warning := "Codex hooks: SessionStart, PreToolUse, PostToolUse, UserPromptSubmit, Stop run twice, from " + other + " and " + owned + ". Run `kontext hooks install --scope user` to drop the user copies.\n"
+					if !strings.Contains(out.String(), warning) {
 						t.Fatal(&out)
 					}
+				}
+				if twice && (strings.Contains(out.String(), "incomplete") || strings.Contains(out.String(), "different binary paths")) {
+					t.Fatal(&out)
 				}
 				if got := strings.Count(out.String(), "another Kontext install"); got != wantWarnings {
 					t.Fatalf("warnings=%d, want %d: %s", got, wantWarnings, &out)
 				}
-				if state == "only other" || state == "empty owned" {
-					installed := "Codex hooks: installed (" + other + "; binary " + opts.Binary + ")\n"
-					if !strings.Contains(out.String(), installed) {
-						t.Fatal(&out)
-					}
-				} else if state != "foreign owned" && state != "malformed owned" && state != "both empty" && state != "incomplete owned" {
-					installed := "Codex hooks: installed (" + owned + "; binary " + opts.Binary + ")\n"
-					if !strings.Contains(out.String(), installed) {
-						t.Fatal(&out)
-					}
+				installedLayer := owned
+				switch state {
+				case "only other", "empty owned", "incomplete owned", "foreign owned", "malformed owned":
+					installedLayer = other
+				case "both empty":
+					installedLayer = ""
+				}
+				if installed := "Codex hooks: installed (" + installedLayer + "; binary " + opts.Binary + ")\n"; installedLayer != "" && !strings.Contains(out.String(), installed) {
+					t.Fatal(&out)
 				}
 			})
 		}
@@ -775,6 +786,134 @@ func TestUserCursorCoversWhatTheMachineFileDoesNot(t *testing.T) {
 				t.Fatal("a second run rewrote the user file")
 			}
 		})
+	}
+}
+
+// Codex runs /etc/codex/hooks.json and the user's hooks.json without
+// deduplicating, so the user file leaves out, and drops its copies of, what a
+// runnable machine-wide Kontext hook covers. Both channels, then a rerun.
+func TestUserCodexCoversWhatTheMachineFileDoesNot(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		machine, user      bool   // Kontext's hooks in each file before the run
+		foreign            bool   // the user's own Stop hook next to Kontext's
+		drop               string // event left out of the machine-wide set
+		deadBinary         bool
+		unloadable         bool // a top-level key Codex rejects the file for
+		wantUserHooks      int
+		wantAction, reason string
+	}{
+		{name: "machine-wide hooks only", machine: true, wantAction: "skip", reason: "covered"},
+		{name: "user hooks only", wantUserHooks: 5, wantAction: "write", reason: "missing"},
+		{name: "both", machine: true, user: true, wantAction: "remove", reason: "covered"},
+		{name: "both, with the user's own hook", machine: true, user: true, foreign: true, wantAction: "write", reason: "covered"},
+		{name: "machine-wide binary missing", machine: true, user: true, deadBinary: true, wantUserHooks: 5, wantAction: "skip", reason: "unchanged"},
+		{name: "machine-wide set without the prompt hook", machine: true, user: true, drop: "UserPromptSubmit", wantUserHooks: 1, wantAction: "write", reason: "stale"},
+		{name: "machine-wide file Codex does not load", machine: true, unloadable: true, wantUserHooks: 5, wantAction: "write", reason: "missing"},
+	} {
+		for _, setup := range []bool{false, true} {
+			t.Run(tc.name+map[bool]string{false: "/hooks install", true: "/setup"}[setup], func(t *testing.T) {
+				opts, defs := fixture(t, User)
+				opts.Setup = setup
+				codex := defs[1:2]
+				user := codex[0].Files[0].Path
+				if tc.user {
+					if err := runDefinitions(opts, codex, false); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.foreign {
+					settings, err := codexmanaged.ReadHooks(user)
+					if err != nil {
+						t.Fatal(err)
+					}
+					hooks := settings["hooks"].(map[string]any)
+					hooks["Stop"] = append(hooks["Stop"].([]any), map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "/usr/local/bin/audit-stop"}}})
+					if err := codexmanaged.WriteHooks(user, settings); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.machine {
+					legacy := filepath.Join(t.TempDir(), "old", "kontext")
+					write(t, legacy, "#!/bin/sh\n", 0755)
+					machine := codexmanaged.Template(legacy)
+					delete(machine.Hooks, tc.drop)
+					raw, _ := json.Marshal(machine)
+					if tc.unloadable {
+						raw = append([]byte(`{"version":1,`), raw[1:]...)
+					}
+					write(t, machineCodexHooks, string(raw), 0644)
+					if tc.deadBinary {
+						if err := os.Remove(legacy); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				var got Result
+				opts.Report = func(r Result) {
+					if r.File.Kind == "codex" {
+						got = r
+					}
+				}
+				if err := runDefinitions(opts, codex, false); err != nil {
+					t.Fatal(err)
+				}
+				if got.Action != tc.wantAction || got.Reason != tc.reason {
+					t.Fatalf("result %s/%s, want %s/%s", got.Action, got.Reason, tc.wantAction, tc.reason)
+				}
+				data, err := os.ReadFile(user)
+				if got := len(codexmanaged.Coverage(data)); got != tc.wantUserHooks {
+					t.Fatalf("user file covers %d events, want %d: %s", got, tc.wantUserHooks, data)
+				}
+				if tc.wantUserHooks == 0 && !tc.foreign && !os.IsNotExist(err) {
+					t.Fatalf("user file left behind without Kontext's hooks: %v %s", err, data)
+				}
+				if tc.foreign && !strings.Contains(string(data), "/usr/local/bin/audit-stop") {
+					t.Fatalf("the user's own hook was dropped: %s", data)
+				}
+				// Every event runs once; doctor fails only on the dead or
+				// unloadable machine-wide file, never on the user file.
+				var out bytes.Buffer
+				if healthy := diagnoseCodexHooks(&out, User, user, machineCodexHooks); healthy != (!tc.deadBinary && !tc.unloadable) || strings.Contains(out.String(), "run twice") || strings.Contains(out.String(), promptHookMissing) {
+					t.Fatalf("doctor: %s", &out)
+				}
+				if err := runDefinitions(opts, codex, false); err != nil {
+					t.Fatal(err)
+				}
+				if again, _ := os.ReadFile(user); !bytes.Equal(again, data) || got.Action != "skip" {
+					t.Fatalf("a second run changed the user file (%s): %s", got.Action, again)
+				}
+			})
+		}
+	}
+}
+
+// Before the fix the user file repeated every machine-wide Codex hook, and
+// doctor called both copies healthy.
+func TestDoctorNamesCodexHooksThatRunTwice(t *testing.T) {
+	opts, defs := fixture(t, User)
+	user := defs[1].Files[0].Path
+	for _, path := range []string{user, machineCodexHooks} {
+		raw, err := codexmanaged.TemplateJSON(opts.Binary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, path, string(raw), 0644)
+	}
+	var out bytes.Buffer
+	if diagnoseCodexHooks(&out, User, user, machineCodexHooks) {
+		t.Fatalf("doctor called duplicate hooks healthy: %s", &out)
+	}
+	want := "Codex hooks: SessionStart, PreToolUse, PostToolUse, UserPromptSubmit, Stop run twice, from " + machineCodexHooks + " and " + user + ". Run `kontext hooks install --scope user` to drop the user copies.\n"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("doctor = %q, want line %q", &out, want)
+	}
+	if err := runDefinitions(opts, defs[1:2], false); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if !diagnoseCodexHooks(&out, User, user, machineCodexHooks) {
+		t.Fatalf("doctor after the fix: %s", &out)
 	}
 }
 

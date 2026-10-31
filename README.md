@@ -363,10 +363,11 @@ kontext doctor
 It exits non-zero when a configured installation is unhealthy.
 
 Claude hook validation accepts equivalent shell quoting while still requiring
-the expected executable, arguments, and event settings. Codex hook diagnostics
-check both system and user files: an absent or empty file is valid when the other
-contains a complete installation. Malformed or incomplete nonempty files and
-conflicting installations still report an unhealthy setup.
+the expected executable, arguments, and event settings. Codex runs the hooks in
+both its system and user files, so doctor checks the two together: each event
+needs one runnable Kontext hook. A file without Kontext hooks is fine; a
+malformed file, a missing event, or an event both files run report an unhealthy
+setup.
 
 When an owned Claude drop-in is missing only events required by the current
 version, doctor names the missing events and the scope-specific `hooks install`

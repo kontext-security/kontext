@@ -26,6 +26,7 @@ type Service struct {
 	transform     func(hook.Event, hook.Result) hook.Result
 	onFailure     func(hook.Event, error) hook.Result
 	diagnostic    diagnostic.Logger
+	duplicates    *duplicateHooks
 	cancel        context.CancelFunc
 	serveDone     chan struct{}
 	wg            sync.WaitGroup
@@ -60,6 +61,7 @@ func NewService(opts Options) (*Service, error) {
 		transform:   opts.Transform,
 		onFailure:   opts.OnFailure,
 		diagnostic:  opts.Diagnostic,
+		duplicates:  newDuplicateHooks(),
 	}, nil
 }
 
@@ -186,14 +188,15 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 	ctx, finish := runtimecore.WithResponseWork(ctx)
 	// A failed response write still owes the settled decision its audit record.
 	defer finish()
-	result := s.process(ctx, &req)
+	result, duplicate := s.process(ctx, &req)
 	if err := WriteMessage(conn, result); err != nil {
 		s.diagnostic.Printf("local runtime write: %v\n", err)
 	}
 	_ = conn.Close()
 	finish()
 
-	if s.asyncIngest && shouldAsyncIngest(&req) {
+	// A duplicate's first copy ingests the event.
+	if s.asyncIngest && shouldAsyncIngest(&req) && !duplicate {
 		// Detach from the accept-loop context: shutdown cancels it, and a
 		// pending telemetry write must drain rather than abort — Shutdown
 		// already bounds the drain with its own context via wg.Wait.
@@ -225,33 +228,54 @@ func shouldAsyncIngest(req *EvaluateRequest) bool {
 	return ok && !hookName.CanBlock()
 }
 
-func (s *Service) process(ctx context.Context, req *EvaluateRequest) EvaluateResult {
+// process answers one hook request. duplicate reports a copy of an event
+// another connection already processed: it gets that copy's result, and the
+// ledger work stays with that copy.
+func (s *Service) process(ctx context.Context, req *EvaluateRequest) (EvaluateResult, bool) {
 	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
 	if err != nil {
 		s.diagnostic.Printf("local runtime decode: %v\n", err)
-		return EvaluateResultFromResult(decodeFailureResult(req))
+		return EvaluateResultFromResult(decodeFailureResult(req)), false
 	}
 	if s.asyncIngest && !event.HookName.CanBlock() {
 		// Capture ordering-sensitive in-memory context before acknowledging the
 		// hook. The agent can issue its next PreToolUse as soon as this result is
 		// written, while durable ingestion intentionally continues in the
 		// background.
-		if err := s.core.ObserveAsyncEvent(event); err != nil {
+		result, duplicate, err := s.duplicates.do(event, req, func() (hook.Result, error) {
+			if err := s.core.ObserveAsyncEvent(event); err != nil {
+				return hook.Result{}, err
+			}
+			return hook.Result{Decision: hook.DecisionAllow}, nil
+		})
+		if err != nil {
 			s.diagnostic.Printf("local runtime observe async event: %v\n", err)
-			return s.result(event, processFailureResult(event))
+			return s.result(event, processFailureResult(event)), false
 		}
-		return s.result(event, hook.Result{Decision: hook.DecisionAllow})
+		s.noteDuplicate(event, duplicate)
+		return s.result(event, result), duplicate
 	}
-	result, err := s.core.ProcessHook(ctx, event)
+	result, duplicate, err := s.duplicates.do(event, req, func() (hook.Result, error) {
+		return s.core.ProcessHook(ctx, event)
+	})
 	if err != nil {
 		s.diagnostic.Printf("local runtime process: %v\n", err)
 		if s.onFailure != nil {
-			return s.result(event, s.onFailure(event, err))
+			return s.result(event, s.onFailure(event, err)), false
 		}
-		return s.result(event, processFailureResult(event))
+		return s.result(event, processFailureResult(event)), false
 	}
-	s.closeSessionEnd(ctx, event)
-	return s.result(event, result)
+	s.noteDuplicate(event, duplicate)
+	if !duplicate {
+		s.closeSessionEnd(ctx, event)
+	}
+	return s.result(event, result), duplicate
+}
+
+func (s *Service) noteDuplicate(event hook.Event, duplicate bool) {
+	if duplicate {
+		s.diagnostic.Printf("local runtime: duplicate %s hook answered from its first copy\n", event.HookName)
+	}
 }
 
 func (s *Service) result(event hook.Event, result hook.Result) EvaluateResult {

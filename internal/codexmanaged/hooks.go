@@ -141,13 +141,70 @@ func ValidateInstalled(data []byte) (string, error) {
 	if settings.Hooks == nil {
 		return "", errors.New("hooks missing")
 	}
-	var binary string
-	var differentBinaries bool
-	var problems []string
-	for _, event := range SupportedEvents {
-		groups := settings.Hooks[event.Name.String()]
-		found := false
+	binary, _, problems := inspect(settings, true)
+	if len(problems) > 0 {
+		return "", errors.New(strings.Join(problems, "; "))
+	}
+	return binary, nil
+}
+
+// Coverage maps each Codex event that carries a valid Kontext hook in data to
+// the binary that hook runs. Codex skips a hooks.json it cannot load as a
+// whole, so such a file covers nothing.
+func Coverage(data []byte) map[string]string {
+	var settings Settings
+	if loadable(data) != nil || json.Unmarshal(data, &settings) != nil {
+		return map[string]string{}
+	}
+	_, covered, _ := inspect(settings, false)
+	return covered
+}
+
+// loadable mirrors where Codex rejects a whole hooks.json: a top-level key
+// other than description and hooks, or a handler of a type it does not know.
+func loadable(data []byte) error {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return err
+	}
+	for key := range keys {
+		if key != "description" && key != "hooks" {
+			return fmt.Errorf("Codex does not load a hooks.json with the top-level key %q", key)
+		}
+	}
+	var file struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Type string `json:"type"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return err
+	}
+	for event, groups := range file.Hooks {
 		for _, group := range groups {
+			for _, handler := range group.Hooks {
+				switch handler.Type {
+				case "command", "mcp_tool", "prompt", "agent":
+				default:
+					return fmt.Errorf("Codex does not load a hooks.json with a %s handler of type %q", event, handler.Type)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// inspect checks Kontext's handlers event by event. covered maps each event
+// with a valid handler to the binary it names; a missing event is a problem
+// only when every event is required.
+func inspect(settings Settings, requireAll bool) (binary string, covered map[string]string, problems []string) {
+	covered = map[string]string{}
+	var differentBinaries bool
+	for _, event := range SupportedEvents {
+		name := event.Name.String()
+		for _, group := range settings.Hooks[name] {
 			for _, handler := range group.Hooks {
 				if !IsManagedHookCommand(handler.Command) {
 					continue
@@ -161,7 +218,7 @@ func ValidateInstalled(data []byte) (string, error) {
 					problems = append(problems, fmt.Sprintf("%s hook uses %q, want %q", event.Name, fields[4], event.Alias))
 					continue
 				}
-				found = true
+				covered[name] = fields[0]
 				if binary == "" {
 					binary = fields[0]
 				} else if binary != fields[0] {
@@ -172,14 +229,11 @@ func ValidateInstalled(data []byte) (string, error) {
 				}
 			}
 		}
-		if !found {
+		if covered[name] == "" && requireAll {
 			problems = append(problems, fmt.Sprintf("%s hook missing", event.Name))
 		}
 	}
-	if len(problems) > 0 {
-		return "", errors.New(strings.Join(problems, "; "))
-	}
-	return binary, nil
+	return binary, covered, problems
 }
 
 // IsManagedHookCommand reports whether a hook command is one of OUR Codex
@@ -199,27 +253,6 @@ func IsManagedHookCommand(command string) bool {
 		}
 	}
 	return false
-}
-
-// LacksPromptHook reports a hooks file carrying Kontext's managed Codex hooks
-// but none for UserPromptSubmit, so its sessions mint no turns.
-func LacksPromptHook(data []byte) bool {
-	var settings Settings
-	if json.Unmarshal(data, &settings) != nil {
-		return false
-	}
-	managed, prompt := false, false
-	for name, groups := range settings.Hooks {
-		for _, group := range groups {
-			for _, handler := range group.Hooks {
-				if IsManagedHookCommand(handler.Command) {
-					managed = true
-					prompt = prompt || name == hook.HookUserPromptSubmit.String()
-				}
-			}
-		}
-	}
-	return managed && !prompt
 }
 
 func isManagedHookHandler(handler agenthooks.CommandHandler) bool {
@@ -258,11 +291,31 @@ func managedHookPlan(kontextBinary string) agenthooks.Plan {
 }
 
 func MergeManagedHooks(settings map[string]any, kontextBinary string) error {
+	return MergeManagedHooksExcept(settings, kontextBinary, nil)
+}
+
+// MergeManagedHooksExcept leaves out the events in skip (hooks.json names) and
+// drops Kontext's entries there. Codex runs every hooks.json it finds without
+// deduplicating, so a user file skips the events a machine-wide file covers.
+func MergeManagedHooksExcept(settings map[string]any, kontextBinary string, skip map[string]bool) error {
 	config := agenthooks.Config{
 		Settings:         settings,
 		HooksDescription: "hooks.json hooks",
 	}
-	return config.Merge(managedHookPlan(kontextBinary), isManagedHookHandler)
+	plan, covered := managedHookPlan(kontextBinary), managedHookPlan(kontextBinary)
+	for event := range plan.Events {
+		if skip[event.String()] {
+			delete(plan.Events, event)
+		} else {
+			delete(covered.Events, event)
+		}
+	}
+	if len(covered.Events) > 0 {
+		if err := config.Remove(covered, isManagedHookHandler); err != nil || len(plan.Events) == 0 {
+			return err
+		}
+	}
+	return config.Merge(plan, isManagedHookHandler)
 }
 
 func RemoveManagedHooks(settings map[string]any) error {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/hermetic"
@@ -23,6 +24,8 @@ func TestInspectInstallationLayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreign := []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/enterprise/audit"}]}]}}`)
+	// Codex rejects a whole hooks.json with a top-level key it does not know.
+	unloadable := append([]byte(`{"version":1,`), valid[1:]...)
 	for _, tc := range []struct {
 		name                string
 		system, user        []byte
@@ -32,15 +35,16 @@ func TestInspectInstallationLayers(t *testing.T) {
 	}{
 		{name: "system only", system: valid, source: "system"},
 		{name: "system with empty user hooks", system: valid, user: []byte(`{"hooks":{}}`), source: "system"},
-		{name: "system with foreign user hooks", system: valid, user: foreign, source: "system", wantErr: true, incomplete: true},
-		{name: "foreign system with user hooks", system: foreign, user: valid, source: "user", wantErr: true, incomplete: true},
+		{name: "system with foreign user hooks", system: valid, user: foreign, source: "system"},
+		{name: "foreign system with user hooks", system: foreign, user: valid, source: "user"},
 		{name: "user only", user: valid, source: "user"},
 		{name: "both same binary", system: valid, user: valid, layers: 2},
 		{name: "both different binaries", system: valid, user: other, layers: 2},
-		{name: "partial system with valid user", system: partialJSON, user: valid, source: "user", wantErr: true, incomplete: true},
-		{name: "valid system with partial user", system: valid, user: partialJSON, source: "system", wantErr: true, incomplete: true},
+		{name: "partial system with valid user", system: partialJSON, user: valid, layers: 2},
+		{name: "valid system with partial user", system: valid, user: partialJSON, layers: 2},
 		{name: "missing", wantErr: true, incomplete: true},
-		{name: "partial system", system: partialJSON, wantErr: true, incomplete: true},
+		{name: "partial system", system: partialJSON, wantErr: true, incomplete: true, layers: 1},
+		{name: "system Codex does not load with valid user", system: unloadable, user: valid, source: "user", wantErr: true},
 		{name: "corrupt system with valid user", system: []byte(`{`), user: valid, source: "user", wantErr: true},
 		{name: "valid system with corrupt user", system: valid, user: []byte(`{`), source: "system", wantErr: true},
 	} {
@@ -65,8 +69,11 @@ func TestInspectInstallationLayers(t *testing.T) {
 			if len(got.Layers) != wantLayers {
 				t.Fatalf("installation=%+v, want %d complete layers", got, wantLayers)
 			}
-			if tc.source != "" && got.Layers[0] != (InstallationLayer{Path: filepath.Join(dir, tc.source), Binary: "/opt/homebrew/bin/kontext"}) {
+			if tc.source != "" && (got.Layers[0].Path != filepath.Join(dir, tc.source) || got.Layers[0].Binary != "/opt/homebrew/bin/kontext" || len(got.Layers[0].Events) != len(SupportedEvents)) {
 				t.Fatalf("installation=%+v", got)
+			}
+			if got.Complete() == tc.incomplete {
+				t.Fatalf("complete=%v, err=%v", got.Complete(), err)
 			}
 			for path, data := range map[string][]byte{paths.SystemHooks: tc.system, paths.UserHooks: tc.user} {
 				after, err := os.ReadFile(path)
@@ -82,7 +89,9 @@ func TestInspectInstallationLayers(t *testing.T) {
 	}
 }
 
-func TestInspectInstallationRejectsEventsSplitAcrossLayers(t *testing.T) {
+// Codex runs both layers, so a self-serve user file covers only what the
+// machine-wide file leaves out.
+func TestInspectInstallationAcceptsEventsSplitAcrossLayers(t *testing.T) {
 	dir := t.TempDir()
 	paths := InstallationPaths{SystemHooks: filepath.Join(dir, "system"), UserHooks: filepath.Join(dir, "user")}
 	system := Template("/opt/homebrew/bin/kontext")
@@ -95,7 +104,7 @@ func TestInspectInstallationRejectsEventsSplitAcrossLayers(t *testing.T) {
 		}
 	}
 	got, err := InspectInstallation(paths)
-	if !errors.Is(err, ErrIncompleteInstallation) || len(got.Layers) != 0 {
+	if err != nil || !got.Complete() || len(got.Layers) != 2 || len(got.Layers[0].Events) != 4 || !reflect.DeepEqual(got.Layers[1].Events, []string{"Stop"}) {
 		t.Fatalf("installation=%+v, err=%v", got, err)
 	}
 }
