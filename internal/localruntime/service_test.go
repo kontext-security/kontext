@@ -2,6 +2,7 @@ package localruntime
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"os"
@@ -391,13 +392,16 @@ func newTestServiceWithOptions(t *testing.T, opts Options) *Service {
 		opts.Diagnostic = diagnostic.New(io.Discard, false)
 	}
 	service, err := NewService(Options{
-		SocketPath:  opts.SocketPath,
-		Core:        opts.Core,
-		SessionID:   opts.SessionID,
-		AgentName:   opts.AgentName,
-		AsyncIngest: opts.AsyncIngest,
-		OnFailure:   opts.OnFailure,
-		Diagnostic:  opts.Diagnostic,
+		SocketPath:        opts.SocketPath,
+		Core:              opts.Core,
+		SessionID:         opts.SessionID,
+		AgentName:         opts.AgentName,
+		AsyncIngest:       opts.AsyncIngest,
+		OnFailure:         opts.OnFailure,
+		CompactToolOutput: opts.CompactToolOutput,
+		OffersCompaction:  opts.OffersCompaction,
+		Observe:           opts.Observe,
+		Diagnostic:        opts.Diagnostic,
 	})
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
@@ -529,4 +533,159 @@ func (s *stubRuntime) IngestEvent(ctx context.Context, event hook.Event) (hook.R
 		s.ingested <- event
 	}
 	return hook.Result{Decision: hook.DecisionAllow}, nil
+}
+
+// A compaction request is answered by the compactor alone: it is neither
+// evaluated nor ingested, since the same PostToolUse also arrives as an
+// ordinary event.
+func TestServiceAnswersCompactionRequests(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{ingested: make(chan hook.Event, 1)}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compacted := make(chan hook.Event, 1)
+	observed := make(chan hook.Event, 1)
+	service := newTestServiceWithOptions(t, Options{
+		Core:        core,
+		AsyncIngest: true,
+		CompactToolOutput: func(_ context.Context, event hook.Event) map[string]any {
+			compacted <- event
+			return map[string]any{"stdout": "short", "exitCode": json.Number("9007199254740993")}
+		},
+		Observe: func(_ context.Context, event hook.Event) { observed <- event },
+	})
+	client := NewClient(service.SocketPath())
+
+	updated, err := client.CompactToolOutput(context.Background(), hook.Event{
+		SessionID: "s1", Agent: "claude", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "toolu_1",
+		ToolInput: map[string]any{"command": "make"}, ToolResponse: map[string]any{"stdout": "long"},
+	})
+	if err != nil {
+		t.Fatalf("CompactToolOutput() error = %v", err)
+	}
+	if updated["stdout"] != "short" || updated["exitCode"] != json.Number("9007199254740993") {
+		t.Fatalf("CompactToolOutput() = %#v", updated)
+	}
+	if event := <-compacted; event.ToolUseID != "toolu_1" || event.ToolResponse["stdout"] != "long" || event.ToolInput["command"] != "make" {
+		t.Fatalf("compactor saw %+v", event)
+	}
+	if runtime.evaluateCalls.Load() != 0 || runtime.ingestCalls.Load() != 0 || runtime.observeCalls.Load() != 0 {
+		t.Fatal("a compaction request reached the runtime")
+	}
+	select {
+	case event := <-observed:
+		t.Fatalf("a compaction request was observed: %+v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestServiceWithoutCompactorLeavesTheOutput(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(t, &stubRuntime{}, true)
+	updated, err := NewClient(service.SocketPath()).CompactToolOutput(context.Background(), hook.Event{
+		HookName: hook.HookPostToolUse, ToolName: "Bash", ToolResponse: map[string]any{"stdout": "long"},
+	})
+	if err != nil || updated != nil {
+		t.Fatalf("CompactToolOutput() = %v, %v, want no change", updated, err)
+	}
+}
+
+// Every evaluated event reaches Observe once its response is written.
+func TestServiceObservesEventsAfterAnswering(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow}, ingested: make(chan hook.Event, 1)}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan hook.Event, 2)
+	service := newTestServiceWithOptions(t, Options{
+		Core:        core,
+		AsyncIngest: true,
+		Observe:     func(_ context.Context, event hook.Event) { observed <- event },
+	})
+	client := NewClient(service.SocketPath())
+	for _, name := range []hook.HookName{hook.HookPreToolUse, hook.HookPostToolUse} {
+		if _, err := client.Process(context.Background(), hook.Event{SessionID: "s1", HookName: name, ToolName: "Read", ToolUseID: "toolu_2"}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case event := <-observed:
+			if event.HookName != name || event.ToolUseID != "toolu_2" || event.Agent != "claude" {
+				t.Fatalf("observed %+v", event)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s was not observed", name)
+		}
+	}
+}
+
+// The PostToolUse answer offers compaction only when the daemon can and will
+// compact that output; a hook asks for nothing otherwise.
+func TestServiceOffersCompactionOnPostToolUse(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct {
+		compact func(context.Context, hook.Event) map[string]any
+		offers  func(hook.Event) bool
+		event   hook.HookName
+		want    bool
+	}{
+		"offered":           {compact: func(context.Context, hook.Event) map[string]any { return nil }, offers: func(hook.Event) bool { return true }, event: hook.HookPostToolUse, want: true},
+		"declined":          {compact: func(context.Context, hook.Event) map[string]any { return nil }, offers: func(hook.Event) bool { return false }, event: hook.HookPostToolUse},
+		"no compactor":      {offers: func(hook.Event) bool { return true }, event: hook.HookPostToolUse},
+		"not a PostToolUse": {compact: func(context.Context, hook.Event) map[string]any { return nil }, offers: func(hook.Event) bool { return true }, event: hook.HookPostToolUseFailed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			core, err := runtimecore.New(&stubRuntime{ingested: make(chan hook.Event, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := newTestServiceWithOptions(t, Options{Core: core, AsyncIngest: true, CompactToolOutput: test.compact, OffersCompaction: test.offers})
+			result, err := NewClient(service.SocketPath()).Process(context.Background(), hook.Event{SessionID: "s1", HookName: test.event, ToolName: "Bash"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.CompactToolOutput != test.want {
+				t.Fatalf("offer = %v, want %v", result.CompactToolOutput, test.want)
+			}
+		})
+	}
+}
+
+// A compaction still waiting on the API holds up no other hook.
+func TestServiceAnswersOtherHooksDuringACompaction(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	core, err := runtimecore.New(&stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newTestServiceWithOptions(t, Options{Core: core, AsyncIngest: true,
+		CompactToolOutput: func(context.Context, hook.Event) map[string]any {
+			close(started)
+			<-release
+			return nil
+		}})
+	// Registered after the service, so it runs before the service's Stop,
+	// which waits for the compaction to finish.
+	t.Cleanup(func() { close(release) })
+	go func() {
+		_, _ = NewClient(service.SocketPath()).CompactToolOutput(context.Background(), hook.Event{HookName: hook.HookPostToolUse, ToolName: "Bash"})
+	}()
+	<-started
+	begun := time.Now()
+	if _, err := NewClient(service.SocketPath()).Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Bash"}); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(begun); elapsed > 250*time.Millisecond {
+		t.Fatalf("PreToolUse took %v behind a compaction", elapsed)
+	}
 }

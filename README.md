@@ -407,8 +407,47 @@ kontext setup --uninstall
 - Kontext does not store model reasoning or full conversation history.
 - Managed deployments can export redacted records to the organization
   dashboard.
+- Tool output compaction, when an administrator turns it on, sends large tool
+  outputs and recent conversation context to the Kontext API (below).
 
 See the [Guard documentation](docs/guard.md) for the runtime and data boundary.
+
+### Tool output compaction
+
+Tool output compaction is off unless an administrator turns it on for an
+endpoint in the dashboard. When it is on, the managed daemon sends each Claude
+Code Bash or Read output, and each Codex shell output, over 2 KB to the Kontext
+API, with the latest prompt, the assistant's text for that call and up to six
+recent transcript items. If the API returns a shorter version, the agent gets
+that version instead:
+
+- The full shell output is saved first, readable by the user only, under
+  `managed-observe/tool-output/` in the daemon's data directory, and deleted
+  after seven days. Kontext's machine-wide Claude Code settings let the agent
+  read that folder without a prompt. With the hooks in the user's own
+  settings, the Read tool asks once; reading it from the shell does not.
+- A shortened Read result keeps its line numbers; the agent reads the file
+  itself for any lines it needs.
+- When a later call reads a saved output or a left-out part of a file back, the
+  daemon reports that to the API, without content.
+- Outputs are compacted in every folder. The daemon still never opens files
+  in the folders macOS guards with a permission prompt (Desktop, Documents,
+  Downloads, iCloud Drive, cloud storage, external volumes): the output
+  arrives with the hook, and a transcript kept in one is not read for
+  context.
+- Codex has no way for a hook to replace a tool output, so the hook blocks the
+  finished call with the shorter version as the reason: the model gets
+  `Process exited with code N` and the shorter output in place of the result,
+  while the person still sees the full output. Codex logs each such call as a
+  tool error. Calls whose command was still running when the call returned,
+  and shorter versions over about 9.5 KB, which Codex would cut, are left as
+  they are.
+- Shell calls that Codex makes from code mode are sent for measurement only
+  and never changed: there, a blocked call fails the whole script.
+- The round trip gets at most three seconds. Any timeout, error or unexpected
+  reply leaves the output unchanged. Turning the switch off stops the daemon's
+  compaction and read-back requests from its next configuration refresh,
+  normally within a minute.
 
 ---
 

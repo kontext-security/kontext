@@ -2,6 +2,7 @@ package localruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -25,6 +26,9 @@ type Service struct {
 	asyncIngest   bool
 	transform     func(hook.Event, hook.Result) hook.Result
 	onFailure     func(hook.Event, error) hook.Result
+	compact       func(context.Context, hook.Event) map[string]any
+	offers        func(hook.Event) bool
+	observe       func(context.Context, hook.Event)
 	diagnostic    diagnostic.Logger
 	cancel        context.CancelFunc
 	serveDone     chan struct{}
@@ -41,7 +45,18 @@ type Options struct {
 	AsyncIngest bool
 	Transform   func(hook.Event, hook.Result) hook.Result
 	OnFailure   func(hook.Event, error) hook.Result
-	Diagnostic  diagnostic.Logger
+	// CompactToolOutput answers CompactRequestType requests with the tool
+	// response the agent should see instead, or nil to leave it unchanged.
+	// Without it every such request is answered with no change.
+	CompactToolOutput func(context.Context, hook.Event) map[string]any
+	// OffersCompaction reports, for a PostToolUse, whether its answer offers
+	// compaction; the hook asks only after an offer, so it never waits on a
+	// second call that cannot change anything.
+	OffersCompaction func(hook.Event) bool
+	// Observe sees every evaluated event once its response is written and
+	// its ingest is done, so it never delays a hook.
+	Observe    func(context.Context, hook.Event)
+	Diagnostic diagnostic.Logger
 }
 
 func NewService(opts Options) (*Service, error) {
@@ -59,6 +74,9 @@ func NewService(opts Options) (*Service, error) {
 		asyncIngest: opts.AsyncIngest,
 		transform:   opts.Transform,
 		onFailure:   opts.OnFailure,
+		compact:     opts.CompactToolOutput,
+		offers:      opts.OffersCompaction,
+		observe:     opts.Observe,
 		diagnostic:  opts.Diagnostic,
 	}, nil
 }
@@ -182,6 +200,10 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 		s.diagnostic.Printf("local runtime read: %v\n", err)
 		return
 	}
+	if req.Type == CompactRequestType {
+		s.handleCompact(ctx, conn, &req)
+		return
+	}
 
 	ctx, finish := runtimecore.WithResponseWork(ctx)
 	// A failed response write still owes the settled decision its audit record.
@@ -201,6 +223,31 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 		// The response is already sent. Keep this work in the bounded request
 		// handler instead of spawning another unbounded ingestion goroutine.
 		s.ingestEvent(ingestCtx, &req)
+	}
+	if s.observe != nil {
+		if event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, &req); err == nil {
+			s.observe(context.WithoutCancel(ctx), event)
+		}
+	}
+}
+
+// handleCompact answers a tool output compaction request. It records nothing:
+// the same event also arrives as an ordinary PostToolUse, which is ingested
+// as usual.
+func (s *Service) handleCompact(ctx context.Context, conn net.Conn, req *EvaluateRequest) {
+	result := CompactResult{Type: "compact_result"}
+	if s.compact != nil {
+		event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
+		if err != nil {
+			s.diagnostic.Printf("local runtime compact decode: %v\n", err)
+		} else if updated := s.compact(ctx, event); updated != nil {
+			if encoded, err := json.Marshal(updated); err == nil {
+				result.UpdatedToolOutput = encoded
+			}
+		}
+	}
+	if err := WriteMessage(conn, result); err != nil {
+		s.diagnostic.Printf("local runtime write: %v\n", err)
 	}
 }
 
@@ -240,7 +287,11 @@ func (s *Service) process(ctx context.Context, req *EvaluateRequest) EvaluateRes
 			s.diagnostic.Printf("local runtime observe async event: %v\n", err)
 			return s.result(event, processFailureResult(event))
 		}
-		return s.result(event, hook.Result{Decision: hook.DecisionAllow})
+		result := hook.Result{Decision: hook.DecisionAllow}
+		if event.HookName == hook.HookPostToolUse && s.compact != nil && s.offers != nil {
+			result.CompactToolOutput = s.offers(event)
+		}
+		return s.result(event, result)
 	}
 	result, err := s.core.ProcessHook(ctx, event)
 	if err != nil {

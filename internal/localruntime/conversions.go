@@ -21,6 +21,7 @@ func EvaluateRequestFromEvent(event hook.Event) (EvaluateRequest, error) {
 		CWD:                 event.CWD,
 		TranscriptPath:      event.TranscriptPath,
 		AgentTranscriptPath: event.AgentTranscriptPath,
+		Model:               event.Model,
 		PermissionMode:      event.PermissionMode,
 		FullDiskAccess:      event.FullDiskAccess,
 		DurationMs:          event.DurationMs,
@@ -80,6 +81,7 @@ func EventFromEvaluateRequest(sessionID, fallbackAgent string, req *EvaluateRequ
 		CWD:                 req.CWD,
 		TranscriptPath:      req.TranscriptPath,
 		AgentTranscriptPath: req.AgentTranscriptPath,
+		Model:               req.Model,
 		PermissionMode:      req.PermissionMode,
 		FullDiskAccess:      req.FullDiskAccess,
 		DurationMs:          req.DurationMs,
@@ -119,6 +121,8 @@ func EvaluateResultFromResult(result hook.Result) EvaluateResult {
 		Epoch:        result.Epoch,
 		EventID:      result.EventID,
 		UpdatedInput: result.UpdatedInput,
+		// Set on the daemon side only; a hook never echoes it back.
+		CompactToolOutput: result.CompactToolOutput,
 	}
 }
 
@@ -128,14 +132,15 @@ func ResultFromEvaluateResult(result EvaluateResult) hook.Result {
 		decision = resultFromBool(result.Allowed).Decision
 	}
 	return hook.Result{
-		Decision:     decision,
-		Reason:       result.Reason,
-		ReasonCode:   result.ReasonCode,
-		RequestID:    result.RequestID,
-		Mode:         result.Mode,
-		Epoch:        result.Epoch,
-		EventID:      result.EventID,
-		UpdatedInput: result.UpdatedInput,
+		Decision:          decision,
+		Reason:            result.Reason,
+		ReasonCode:        result.ReasonCode,
+		RequestID:         result.RequestID,
+		Mode:              result.Mode,
+		Epoch:             result.Epoch,
+		EventID:           result.EventID,
+		UpdatedInput:      result.UpdatedInput,
+		CompactToolOutput: result.CompactToolOutput,
 	}
 }
 

@@ -1,0 +1,138 @@
+{
+  "schemaVersion": "endpoint-config-identity-fixture-v4",
+  "identityDomain": "kontext:endpoint-config:v4",
+  "vectors": [
+    {
+      "name": "omitted-work-type-on-compaction-on",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"omitted\",true,true]",
+      "configIdentity": "367083ca618015e62e96e82c74e5c8955a7581811ddcf96cf127b5253eff84fb"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-off",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"omitted\",true,false]",
+      "configIdentity": "5053919d03c42ffa89948975963921ca3f83826446a1d54f86d70f7c718b8211"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-on",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"omitted\",false,true]",
+      "configIdentity": "f800fe30bf15ba0a660f25cde2362811b7c808d2a64268f3b6967068ed87e1a8"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-off",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"omitted\",false,false]",
+      "configIdentity": "850a26fbb4e173ca5eafeb7f546286360a5bdc143c4cd1f89de57569b7b39db9"
+    },
+    {
+      "name": "summary-work-type-on-compaction-on",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"summary\",true,true]",
+      "configIdentity": "3b78fa95c08daa6d79139ffd71117fbf4d7e78ede5750b89ba95e75aaf2d4289"
+    },
+    {
+      "name": "summary-work-type-on-compaction-off",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"summary\",true,false]",
+      "configIdentity": "2ded92abbae9250891d81191f9d75d0caad1c492c9357f8bbc62ea1c460947ce"
+    },
+    {
+      "name": "summary-work-type-off-compaction-on",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"summary\",false,true]",
+      "configIdentity": "404f3a0b2d95b28c955e35e2b6d633a76309ddcd8e7ca9a0d5c80ac2bad203cd"
+    },
+    {
+      "name": "summary-work-type-off-compaction-off",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"summary\",false,false]",
+      "configIdentity": "8860d13fc106936a4628dc28cb21d261cb1b96d6051dfda22670039cd3bdee75"
+    },
+    {
+      "name": "full-work-type-on-compaction-on",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"full\",true,true]",
+      "configIdentity": "4970d8e4fb287c12d594c8646e3f9fc5b1a87147092e88c8f7a404d62fb2e07d"
+    },
+    {
+      "name": "full-work-type-on-compaction-off",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"full\",true,false]",
+      "configIdentity": "5fefbb34c0457058cba7f4a46f63bd03892ca41d9ec10076febbb9c943b349c6"
+    },
+    {
+      "name": "full-work-type-off-compaction-on",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"full\",false,true]",
+      "configIdentity": "3b2d0f13b64e6695f43f4e7a14761efcf9b8845f3f696fb45164bf7eecaeb026"
+    },
+    {
+      "name": "full-work-type-off-compaction-off",
+      "responseVersion": 4,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v4\",4,\"full\",false,false]",
+      "configIdentity": "6fca9096c8123c64c917b8c2ae9b011aaa214011c0293f30b71ce3b3dd26b0e7"
+    }
+  ]
+}

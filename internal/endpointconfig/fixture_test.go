@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-const identityFixturePath = "testdata/portable/v3/identity-v3.json"
+const identityFixturePath = "testdata/portable/v4/identity-v4.json"
 
 // Update only when deliberately revising the portable fixture bytes. The cloud
-// pins the same digest (FIXTURE_V3_DIGEST in packages/shared endpoint-config).
-const identityFixtureSHA256 = "3da75190da4298b16ff781017d06cb82ff342924e57da20b0b6600ae02bcc785"
+// pins the same digest (FIXTURE_V4_DIGEST in packages/shared endpoint-config).
+const identityFixtureSHA256 = "97754c4d0d3fc70b05ca1324bf68c352a4a2d0e075acde9bcb2d055c53f560a9"
 
 type identityFixture struct {
 	SchemaVersion  string                  `json:"schemaVersion"`
@@ -41,13 +41,13 @@ func TestPortableIdentityFixture(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.SchemaVersion != "endpoint-config-identity-fixture-v3" || fixture.IdentityDomain != identityDomain {
+	if fixture.SchemaVersion != "endpoint-config-identity-fixture-v4" || fixture.IdentityDomain != identityDomain {
 		t.Fatalf("fixture metadata = %#v", fixture)
 	}
-	// Six: three capture modes crossed with the work-type switch, which is
-	// what makes the switch observably part of the identity.
-	if len(fixture.Vectors) != 6 {
-		t.Fatalf("fixture vector count = %d, want 6", len(fixture.Vectors))
+	// Twelve: three capture modes crossed with both switches, which is what
+	// makes each switch observably part of the identity.
+	if len(fixture.Vectors) != 12 {
+		t.Fatalf("fixture vector count = %d, want 12", len(fixture.Vectors))
 	}
 	for _, vector := range fixture.Vectors {
 		t.Run(vector.Name, func(t *testing.T) {
@@ -66,6 +66,7 @@ func TestPortableIdentityFixture(t *testing.T) {
 				ResponseVersion,
 				string(vector.Config.PayloadCaptureMode),
 				*vector.Config.WorkTypeClassification,
+				*vector.Config.ToolOutputCompaction,
 			})
 			if err != nil {
 				t.Fatal(err)

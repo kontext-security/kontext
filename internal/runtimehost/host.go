@@ -45,6 +45,11 @@ type Options struct {
 	// without a policy check. Close drains pending writes before the store
 	// closes.
 	AsyncDecisionRecording bool
+	// CompactToolOutput and ObserveEvent are passed to the local runtime
+	// service (see localruntime.Options).
+	CompactToolOutput func(context.Context, hook.Event) map[string]any
+	OffersCompaction  func(hook.Event) bool
+	ObserveEvent      func(context.Context, hook.Event)
 }
 
 type Host struct {
@@ -167,13 +172,16 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		serviceSessionID = ""
 	}
 	runtimeService, err := localruntime.NewService(localruntime.Options{
-		SocketPath:  socketPath,
-		Core:        localServer.RuntimeCore(),
-		SessionID:   serviceSessionID,
-		AgentName:   opts.AgentName,
-		AsyncIngest: !opts.DisableAsyncIngest,
-		Transform:   clientResultTransform(mode),
-		Diagnostic:  opts.Diagnostic,
+		SocketPath:        socketPath,
+		Core:              localServer.RuntimeCore(),
+		SessionID:         serviceSessionID,
+		AgentName:         opts.AgentName,
+		AsyncIngest:       !opts.DisableAsyncIngest,
+		Transform:         clientResultTransform(mode),
+		CompactToolOutput: opts.CompactToolOutput,
+		OffersCompaction:  opts.OffersCompaction,
+		Observe:           opts.ObserveEvent,
+		Diagnostic:        opts.Diagnostic,
 	})
 	if err != nil {
 		_ = host.Close(context.Background())

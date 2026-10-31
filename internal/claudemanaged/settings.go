@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
@@ -19,6 +20,11 @@ const (
 	WindowsManagedSettingsPath = `C:\Program Files\ClaudeCode\managed-settings.json`
 	DefaultKontextBinary       = "/usr/local/bin/kontext"
 	DefaultHookTimeout         = 20
+	// SavedOutputReadRule lets Claude Code read back, without asking, the
+	// full outputs that tool output compaction saves in the daemon's data
+	// directory (internal/tooloutput). The Read tool otherwise asks before
+	// reading outside the project. It names that directory only.
+	SavedOutputReadRule = "Read(~/Library/Application Support/Kontext/**/managed-observe/tool-output/**)"
 )
 
 type Event struct {
@@ -57,8 +63,13 @@ func managedSettingsPathForGOOS(goos string) string {
 
 type Settings struct {
 	Hooks                 map[string][]MatcherGroup `json:"hooks"`
+	Permissions           *Permissions              `json:"permissions,omitempty"`
 	DisableAllHooks       *bool                     `json:"disableAllHooks,omitempty"`
 	AllowManagedHooksOnly *bool                     `json:"allowManagedHooksOnly,omitempty"`
+}
+
+type Permissions struct {
+	Allow []string `json:"allow,omitempty"`
 }
 
 type MatcherGroup struct {
@@ -121,7 +132,10 @@ func Template(kontextBinary string) Settings {
 	if kontextBinary == "" {
 		kontextBinary = DefaultKontextBinary
 	}
-	settings := Settings{Hooks: make(map[string][]MatcherGroup, len(SupportedEvents))}
+	settings := Settings{
+		Hooks:       make(map[string][]MatcherGroup, len(SupportedEvents)),
+		Permissions: &Permissions{Allow: []string{SavedOutputReadRule}},
+	}
 	for _, event := range SupportedEvents {
 		handler := Handler{
 			Type:    "command",
@@ -183,10 +197,12 @@ func Validate(data []byte, kontextBinary string) error {
 // settings drop-in — a file we are safe to refresh (setup) or delete
 // (uninstall) without destroying state we don't own. It is ours iff:
 //
-//  1. The ONLY top-level key is "hooks" — exactly what Template emits. A file
-//     carrying any other top-level field (enterprise policy, metadata, or a
-//     future Claude managed-settings key) is not solely ours, so we leave it
-//     untouched even when its hooks match.
+//  1. Its top-level keys are what Template emits: "hooks", and "permissions"
+//     allowing exactly SavedOutputReadRule (templates before tool output
+//     compaction carry hooks alone). A file carrying any other top-level field
+//     or permission (enterprise policy, metadata, or a future Claude
+//     managed-settings key) is not solely ours, so we leave it untouched even
+//     when its hooks match.
 //  2. Every handler command is one of our flagless managed-observe hooks
 //     (IsManagedHookCommand). Matching on the alias, not the binary path, means
 //     a drop-in from an older self-serve run (a stale path after `brew upgrade`)
@@ -198,11 +214,11 @@ func IsManagedSettingsDropIn(data []byte) bool {
 	if err := json.Unmarshal(data, &top); err != nil {
 		return false
 	}
-	if len(top) != 1 {
+	if _, ok := top["hooks"]; !ok {
 		return false
 	}
-	for key := range top {
-		if key != "hooks" {
+	for key, value := range top {
+		if key != "hooks" && (key != "permissions" || !ownPermissions(value)) {
 			return false
 		}
 	}
@@ -237,6 +253,14 @@ func IsManagedSettingsDropIn(data []byte) bool {
 		}
 	}
 	return true
+}
+
+// ownPermissions reports whether a drop-in's permissions are exactly the ones
+// Template writes.
+func ownPermissions(data json.RawMessage) bool {
+	var permissions map[string][]string
+	return json.Unmarshal(data, &permissions) == nil && len(permissions) == 1 &&
+		slices.Equal(permissions["allow"], []string{SavedOutputReadRule})
 }
 
 // MissingRequiredEvents returns missing event names and the configured binary
