@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.17.2](https://github.com/kontext-security/kontext/compare/v1.17.1...v1.17.2) (2026-10-31)
+
+
+### Bug Fixes
+
+* **guard:** stop the MCP config warm-up when the server closes ([#664](https://github.com/kontext-security/kontext/issues/664)) ([f6d6656](https://github.com/kontext-security/kontext/commit/f6d66561d3484ac641dab8023f12766b562207c4))
+* **ledger:** order annotation export cursors by time, not RFC3339Nano text ([#670](https://github.com/kontext-security/kontext/issues/670)) ([ed79c67](https://github.com/kontext-security/kontext/commit/ed79c67fc193a66a85f755c3988c02606daed7ac))
+* **shell:** keep the provider host of a URL with a computed part ([#666](https://github.com/kontext-security/kontext/issues/666)) ([f9a5c80](https://github.com/kontext-security/kontext/commit/f9a5c808f3fd3dd43b0c587282e6c04d12f99ad8))
+* **sqlite:** order sessions by created_at time, not its text ([#669](https://github.com/kontext-security/kontext/issues/669)) ([086c9e9](https://github.com/kontext-security/kontext/commit/086c9e91606a2f5846ef5b421e44e198782e6459))
+
+
+### Performance Improvements
+
+* **ledger:** export pages seek to their cursor instead of walking the index ([#671](https://github.com/kontext-security/kontext/issues/671)) ([43fa4d5](https://github.com/kontext-security/kontext/commit/43fa4d5da76e468acde4fa099267815d4e6a3191))
+
 ## [1.17.1](https://github.com/kontext-security/kontext/compare/v1.17.0...v1.17.1) (2026-10-29)
 
 
