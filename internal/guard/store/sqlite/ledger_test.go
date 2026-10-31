@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"slices"
 	"testing"
 	"time"
 )
@@ -87,6 +88,49 @@ func TestAuthorizationActionsByIDsOrdersMergedChunks(t *testing.T) {
 		if record["id"] != want {
 			t.Fatalf("record %d id = %v, want %s", i, record["id"], want)
 		}
+	}
+}
+
+// created_at is RFC3339Nano text, which trims trailing zeros, so it does not
+// sort by time: "...:20.87Z" sorts after "...:20.871Z" because 'Z' > '1'.
+// Windows' coarse clock makes such stamps common. The ids run against time,
+// so the tiebreak cannot produce the order by chance.
+func TestAgentSessionsOrderByCreatedAtTime(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for _, session := range []struct{ id, createdAt string }{
+		{"session-a", "2026-10-19T10:00:20.871Z"},
+		{"session-b", "2026-10-19T10:00:20.87Z"},
+		{"session-c", "2026-10-19T10:00:20.5Z"},
+		{"session-d", "2026-10-19T10:00:20Z"},
+		{"session-e", "2026-10-19T10:00:20.87Z"}, // ties with session-b
+	} {
+		if _, err := store.EnsureObservedSession(ctx, session.id, "claude", "/tmp"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `update agent_sessions set created_at = ? where id = ?`, session.createdAt, session.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sessions, err := store.AgentSessions(ctx, []string{"session-a", "session-b", "session-c", "session-d", "session-e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, session := range sessions {
+		got = append(got, session["id"].(string))
+	}
+	if want := []string{"session-d", "session-c", "session-b", "session-e", "session-a"}; !slices.Equal(got, want) {
+		t.Fatalf("sessions = %v, want %v", got, want)
+	}
+	// Only the order changes: the text on the wire stays RFC3339Nano.
+	if created := sessions[0]["created_at"]; created != "2026-10-19T10:00:20Z" {
+		t.Fatalf("created_at = %v, want RFC3339Nano text", created)
 	}
 }
 

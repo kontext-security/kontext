@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -158,7 +157,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 		}
 	}
 	slices.SortStableFunc(pending, func(a, b toolUsageUpdate) int {
-		return strings.Compare(a.source.checkedAt, b.source.checkedAt)
+		return compareLedgerTimestamps(a.source.checkedAt, b.source.checkedAt)
 	})
 	for _, update := range pending[:min(len(pending), toolUsageReadLimit)] {
 		if err := ctx.Err(); err != nil {
