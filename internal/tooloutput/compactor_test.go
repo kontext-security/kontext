@@ -880,3 +880,25 @@ func TestOversizedInputFailsClosed(t *testing.T) {
 		t.Fatal("an ordinary command read as naming the save directory")
 	}
 }
+
+// A read-back late in an input too long for the compaction check is still
+// reported: that check fails closed, while reporting reads every word.
+func TestReadBackPastTheScanCap(t *testing.T) {
+	c := newTestCompactor(t, replace("short"))
+	if c.Compact(context.Background(), c.bash("make test", bigText(80))) == nil {
+		t.Fatal("not compacted")
+	}
+	command := "echo " + strings.Repeat("-x ", maxScanBytes) + "; cd " + filepath.Join(c.dir, testSession) + " && cat " + testToolUseID + ".txt"
+	back := hook.Event{SessionID: testSession, Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolUseID: "toolu_late",
+		CWD: c.cwd, ToolInput: map[string]any{"command": command}}
+	if !c.namesSaveDir(back.ToolInput, back.CWD) {
+		t.Fatal("the compaction check did not fail closed")
+	}
+	c.reportReadBacks(back)
+	if len(c.readBacks) != 1 {
+		t.Fatalf("read-backs queued = %d, want 1", len(c.readBacks))
+	}
+	if got := <-c.readBacks; got.ToolUseID != "toolu_late" || got.EventID != testEventID {
+		t.Fatalf("read-back = %+v", got)
+	}
+}

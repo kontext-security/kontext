@@ -11,8 +11,17 @@ import (
 	"github.com/kontext-security/kontext/internal/fsperm"
 )
 
-// maxPathWords bounds how many paths are read from one call's input.
-const maxPathWords = 1024
+// maxPathWords and maxScanBytes bound the scan that decides whether a call
+// may be compacted: how many paths it reads and how much of the input,
+// nested commands included. Past either it stops short and fails closed.
+// Read-back reporting reads further, up to readBackPaths and
+// readBackScanBytes: more than one hook message can carry.
+const (
+	maxPathWords      = 1024
+	maxScanBytes      = 1 << 20
+	readBackPaths     = 1 << 16
+	readBackScanBytes = 16 << 20
+)
 
 // DefaultDirForDB is where the daemon saves full outputs: next to its
 // database, in the data directory only its user can read.
@@ -55,10 +64,6 @@ func eachString(value any, visit func(string) bool) bool {
 // bash -c, are read.
 const maxShellDepth = 3
 
-// maxScanBytes bounds how much of a call's input one scan reads, nested
-// commands included. A scan that would read more stops short.
-const maxScanBytes = 1 << 20
-
 // pathScan finds the paths a call's input names, as text only: it never
 // touches the filesystem, so no folder macOS guards is ever opened. Each
 // string is read whole when it is a path (a Read's file_path may hold
@@ -69,12 +74,13 @@ const maxScanBytes = 1 << 20
 type pathScan struct {
 	home string
 	// visit gets each absolute, cleaned path; returning false stops the scan.
-	visit   func(path string) bool
-	checked int
-	read    int
-	stopped bool
-	// short is set when the scan stopped before reading the whole input,
-	// past maxScanBytes or maxPathWords; what it did not read is unknown.
+	visit func(path string) bool
+	// maxPaths and maxBytes bound the scan; past either it stops short.
+	maxPaths, maxBytes int
+	checked, read      int
+	stopped            bool
+	// short is set when the scan stopped before reading the whole input;
+	// what it did not read is unknown.
 	short bool
 }
 
@@ -82,7 +88,7 @@ func (s *pathScan) value(value, cwd string, depth int) {
 	if s.stopped {
 		return
 	}
-	if s.read += len(value); s.read > maxScanBytes {
+	if s.read += len(value); s.read > s.maxBytes {
 		s.short, s.stopped = true, true
 		return
 	}
@@ -116,7 +122,7 @@ func (s *pathScan) path(path string) {
 	if path == "" || s.stopped {
 		return
 	}
-	if s.checked++; s.checked > maxPathWords {
+	if s.checked++; s.checked > s.maxPaths {
 		s.short, s.stopped = true, true
 		return
 	}

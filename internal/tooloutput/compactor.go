@@ -353,7 +353,7 @@ func (c *Compactor) namesSaveDir(input any, cwd string) bool {
 	if named {
 		return true
 	}
-	whole := c.eachPath(input, cwd, func(path string) bool {
+	whole := c.eachPath(input, cwd, maxPathWords, maxScanBytes, func(path string) bool {
 		named = inside(path, c.dir)
 		return !named
 	})
@@ -361,13 +361,14 @@ func (c *Compactor) namesSaveDir(input any, cwd string) bool {
 }
 
 // eachPath calls visit with each path a call's input names (see pathScan),
-// and reports whether it read the whole input.
-func (c *Compactor) eachPath(input any, cwd string, visit func(path string) bool) bool {
+// reading at most maxPaths paths and maxBytes of input, and reports whether
+// it read the whole input.
+func (c *Compactor) eachPath(input any, cwd string, maxPaths, maxBytes int, visit func(path string) bool) bool {
 	home := c.home
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	scan := pathScan{home: home, visit: visit}
+	scan := pathScan{home: home, visit: visit, maxPaths: maxPaths, maxBytes: maxBytes}
 	eachString(input, func(value string) bool {
 		scan.value(value, cwd, 0)
 		return !scan.stopped
@@ -379,6 +380,8 @@ func (c *Compactor) eachPath(input any, cwd string, visit func(path string) bool
 // once per call and compaction.
 func (c *Compactor) reportReadBacks(event hook.Event) {
 	var found []record
+	// Unlike the scan that decides on compaction, this one reads every word a
+	// hook message can carry, so a reference late in a long input counts.
 	refer := func(text string) {
 		for _, match := range c.refs.FindAllStringSubmatch(text, -1) {
 			compaction, ok := c.saved(match[1], match[2])
@@ -391,7 +394,7 @@ func (c *Compactor) reportReadBacks(event hook.Event) {
 		refer(normalizedPath(value))
 		return true
 	})
-	c.eachPath(event.ToolInput, event.CWD, func(path string) bool {
+	c.eachPath(event.ToolInput, event.CWD, readBackPaths, readBackScanBytes, func(path string) bool {
 		refer(filepath.ToSlash(path))
 		return true
 	})
