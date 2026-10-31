@@ -62,6 +62,7 @@ func newHarness(t *testing.T) *harness {
 	overrideVar(t, &managedSettingsPath, filepath.Join(h.home, "Library", "Application Support", "ClaudeCode", "managed-settings.d", "20-kontext.json"))
 	overrideVar(t, &managedSettingsFile, filepath.Join(h.home, "Library", "Application Support", "ClaudeCode", "managed-settings.json"))
 	overrideVar(t, &cursorHooksPath, filepath.Join(h.home, "Library", "Application Support", "Cursor", "hooks.json"))
+	overrideVar(t, &codexSystemHooks, filepath.Join(h.home, "etc/codex/hooks.json"))
 	overrideVar(t, &geteuid, func() int { return 501 })
 	overrideVar(t, &executablePath, func() (string, error) { return "/opt/homebrew/bin/kontext", nil })
 	overrideVar(t, &dialSocket, func(string, time.Duration) error { return nil })
@@ -235,7 +236,7 @@ func TestRunFullFlow(t *testing.T) {
 
 	// Self-serve writes only files in the user's home, with the stable binary
 	// path, and never asks for a password.
-	for _, machineWide := range []string{managedSettingsPath, cursorHooksPath} {
+	for _, machineWide := range []string{managedSettingsPath, cursorHooksPath, codexSystemHooks} {
 		if _, err := os.Stat(machineWide); !os.IsNotExist(err) {
 			t.Fatalf("setup wrote machine-wide %s: %v", machineWide, err)
 		}
@@ -1687,5 +1688,55 @@ func TestRunTreatsAStuckLaunchctlAsStillStarting(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Fatalf("setup took %s", elapsed)
+	}
+}
+
+// Codex runs /etc/codex/hooks.json and ~/.codex/hooks.json without
+// deduplicating: a rerun next to a complete machine-wide set from an earlier
+// setup takes Kontext out of the user file, and uninstall names the machine-wide
+// hooks that keep running.
+func TestRunLeavesCodexEventsToTheMachineWideFile(t *testing.T) {
+	h := newHarness(t)
+	allowLoopback(t)
+	server := pingServer(t, "tok")
+	if err := Run(context.Background(), h.options("tok", server)); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(h.home, "usr", "local", "bin", "kontext")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	machine, err := codexmanaged.TemplateJSON(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(codexSystemHooks), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexSystemHooks, machine, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.out.Reset()
+	if err := Run(context.Background(), h.options("tok", server)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(h.home, ".codex", "hooks.json")); !os.IsNotExist(err) {
+		t.Fatalf("user Codex hooks kept next to the machine-wide set: %v", err)
+	}
+	if !strings.Contains(h.out.String(), "  ✓ Codex hooks installed ("+codexSystemHooks+")\n") || strings.Contains(h.out.String(), "Codex:") {
+		t.Fatalf("setup output:\n%s", h.out.String())
+	}
+	h.out.Reset()
+	if err := Uninstall(context.Background(), h.options("", pingServer(t, "unused"))); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.out.String(), "Machine-wide hooks from an earlier setup remain") {
+		t.Fatalf("uninstall output:\n%s", h.out.String())
+	}
+	if got, err := os.ReadFile(codexSystemHooks); err != nil || !bytes.Equal(got, machine) {
+		t.Fatalf("uninstall changed the machine-wide file: %v", err)
 	}
 }

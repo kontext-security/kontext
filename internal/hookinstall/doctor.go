@@ -144,7 +144,7 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 				continue
 			}
 			if def.Agent == "codex" {
-				if !diagnoseCodexHooks(out, file.Path, otherCodexHooks) {
+				if !diagnoseCodexHooks(out, scope, file.Path, otherCodexHooks) {
 					healthy = false
 				}
 				continue
@@ -203,22 +203,28 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 	return healthy
 }
 
-// Both Codex hook layers are additive. An absent or empty preferred layer is
-// fine when the other is complete; a malformed or partial layer still fails.
-// Validate both before choosing the installed binary instead of requiring the
-// daemon's setup scope to contain hooks of its own.
-func diagnoseCodexHooks(out io.Writer, preferred, other string) bool {
+// Both Codex hook layers are additive, and Codex runs a hook found in both
+// twice. Self-serve leaves out of the user file what a runnable machine-wide
+// hook covers, so together the layers must run each event once; a malformed
+// layer or a missing event still fails. Validate both before choosing the
+// installed binary instead of requiring the daemon's setup scope to contain
+// hooks of its own.
+func diagnoseCodexHooks(out io.Writer, scope Scope, preferred, other string) bool {
 	installation, err := codexmanaged.InspectInstallation(codexmanaged.InstallationPaths{SystemHooks: preferred, UserHooks: other})
 	healthy := err == nil
 	if err != nil {
 		fmt.Fprintf(out, "Codex hooks: %v\n", err)
 	}
-	for _, path := range []string{preferred, other} {
-		if raw, readErr := os.ReadFile(path); path != "" && readErr == nil && codexmanaged.LacksPromptHook(raw) {
-			fmt.Fprintf(out, "Codex hooks: %s (%s)\n", promptHookMissing, path)
+	if missing := installation.Missing(); len(installation.Layers) > 0 && slices.Contains(missing, hook.HookUserPromptSubmit.String()) {
+		files := make([]string, len(installation.Layers))
+		for i, layer := range installation.Layers {
+			files[i] = layer.Path
 		}
+		fmt.Fprintf(out, "Codex hooks: %s (%s)\n", promptHookMissing, strings.Join(files, ", "))
 	}
-	var binary string
+	runs := map[string]int{}
+	var twice []string
+	var repeated codexmanaged.InstallationLayer
 	for _, layer := range installation.Layers {
 		if !executable(layer.Binary) {
 			fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s; binary %s)\n", layer.Path, layer.Binary)
@@ -237,18 +243,26 @@ func diagnoseCodexHooks(out io.Writer, preferred, other string) bool {
 				fmt.Fprintf(out, "Codex hooks: not trusted in Codex (%s); Codex skips them until you run `codex`, open /hooks and trust each Kontext hook\n", strings.Join(untrusted, ", "))
 			}
 		}
-		if binary == "" {
-			binary = layer.Binary
-		} else if layer.Binary != binary {
-			path := layer.Path
-			if home, err := os.UserHomeDir(); err == nil && path == filepath.Join(home, ".codex", "hooks.json") {
-				path = "~/.codex/hooks.json"
+		for _, event := range layer.Events {
+			if runs[event]++; runs[event] == 2 {
+				twice = append(twice, event)
+				repeated = layer
 			}
-			fmt.Fprintf(out, "Codex hooks: another Kontext install also hooks Codex (%s → %s); run kontext setup --uninstall on an organization-managed Mac\n", path, layer.Binary)
-			healthy = false
 		}
 	}
-	return healthy
+	if len(twice) == 0 {
+		return healthy
+	}
+	if scope == User {
+		fmt.Fprintf(out, "Codex hooks: %s run twice, from %s and %s. Run `kontext hooks install --scope user` to drop the user copies.\n", strings.Join(twice, ", "), other, preferred)
+	} else {
+		path := repeated.Path
+		if home, err := os.UserHomeDir(); err == nil && path == filepath.Join(home, ".codex", "hooks.json") {
+			path = "~/.codex/hooks.json"
+		}
+		fmt.Fprintf(out, "Codex hooks: another Kontext install also hooks Codex (%s → %s); run kontext setup --uninstall on an organization-managed Mac\n", path, repeated.Binary)
+	}
+	return false
 }
 
 func checkFeature(installed, user string) error {

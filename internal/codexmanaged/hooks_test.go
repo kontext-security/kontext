@@ -302,3 +302,55 @@ func TestValidateInstalledReportsMixedBinariesOnce(t *testing.T) {
 		t.Fatalf("error=%v, want a single mixed-binary diagnostic", err)
 	}
 }
+
+// Codex loads a hooks.json whole or not at all, so coverage follows its rules.
+func TestCoverageCountsOnlyHooksCodexRuns(t *testing.T) {
+	valid, err := TemplateJSON(testBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Coverage(valid); len(got) != len(SupportedEvents) || got[hook.HookStop.String()] != testBinary {
+		t.Fatalf("coverage = %v", got)
+	}
+	for name, raw := range map[string]string{
+		"top-level key Codex rejects": `{"version":1,` + string(valid[1:]),
+		"handler type Codex rejects":  strings.Replace(string(valid), `"hooks": [`, `"hooks": [{"type": "http", "url": "https://audit.example"},`, 1),
+		"malformed":                   `{`,
+	} {
+		if got := Coverage([]byte(raw)); len(got) != 0 {
+			t.Fatalf("%s: coverage = %v", name, got)
+		}
+	}
+	async := strings.Replace(string(valid), `"timeout": 20`, `"timeout": 20, "async": true`, 1)
+	if got := Coverage([]byte(async)); len(got) != len(SupportedEvents)-1 {
+		t.Fatalf("an async Kontext hook counted: %v", got)
+	}
+}
+
+func TestMergeManagedHooksExceptDropsCoveredEvents(t *testing.T) {
+	settings := decode(t, `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"/usr/local/bin/audit-stop"}]}]}}`)
+	if err := MergeManagedHooks(settings, testBinary); err != nil {
+		t.Fatal(err)
+	}
+	skip := map[string]bool{}
+	for _, event := range SupportedEvents {
+		skip[event.Name.String()] = event.Name != hook.HookUserPromptSubmit
+	}
+	if err := MergeManagedHooksExcept(settings, testBinary, skip); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(settings)
+	if got := Coverage(raw); len(got) != 1 || got[hook.HookUserPromptSubmit.String()] == "" {
+		t.Fatalf("coverage = %v: %s", got, raw)
+	}
+	if !strings.Contains(string(raw), "/usr/local/bin/audit-stop") {
+		t.Fatalf("foreign hook dropped: %s", raw)
+	}
+	skip[hook.HookUserPromptSubmit.String()] = true
+	if err := MergeManagedHooksExcept(settings, testBinary, skip); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := json.Marshal(settings); string(raw) != `{"hooks":{"Stop":[{"hooks":[{"command":"/usr/local/bin/audit-stop","type":"command"}],"matcher":""}]}}` {
+		t.Fatalf("settings = %s", raw)
+	}
+}

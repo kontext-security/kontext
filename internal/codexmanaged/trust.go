@@ -27,9 +27,13 @@ import (
 const defaultContextLimit = 2500
 
 // UntrustedHooks lists, by Codex event label, the Kontext hooks in hooksPath
-// that Codex skips because configPath holds no matching trust.
+// that Codex skips because configPath holds no matching trust. A missing
+// hooksPath has none: the machine-wide file may cover every event.
 func UntrustedHooks(hooksPath, configPath string) ([]string, error) {
 	raw, err := os.ReadFile(hooksPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}

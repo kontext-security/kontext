@@ -31,12 +31,21 @@ managed ones.
 Machine-wide files an earlier self-serve setup wrote stay untouched and keep
 governing. Claude runs a handler present in two files once only when both are
 identical (differing paths or timeouts run twice), so the user copy repeats the
-binary path the earlier drop-in names. Cursor runs every hooks file it finds
-without deduplication, so the user file stays free of Kontext while the
-machine-wide file carries the complete set. Uninstall removes only Kontext's
-handlers from the user files and names `sudo kontext hooks remove --scope
-system` when an earlier setup's machine-wide hooks remain. It leaves an empty
-user settings object rather than deleting that file.
+binary path the earlier drop-in names. Cursor and Codex run every hooks file
+they find without deduplication, so the user file leaves out each event a
+runnable machine-wide Kontext hook covers and drops its own copies of those
+hooks. Codex runs `/etc/codex/hooks.json` without the `/hooks` trust step and
+skips a whole file it cannot load (a top-level key other than `description`
+and `hooks`, or a handler type it does not know); such a file, or a hook
+naming a missing binary, covers nothing. The user file stays free of Kontext
+while the machine-wide file carries the complete set, and setup names that
+file. With a Homebrew install the daemon's repair applies the same rule, so the
+user file takes an event back within a minute of its machine-wide hook
+disappearing. Doctor and the agent scan count both files together; doctor
+names an event that runs from both. Uninstall removes only Kontext's handlers
+from the user files and names `sudo kontext hooks remove --scope system` when
+an earlier setup's machine-wide hooks remain. It leaves an empty user settings
+object rather than deleting that file.
 
 ## Package commands
 
@@ -162,4 +171,5 @@ PATH and common install paths, plus `/Applications` and `~/Applications` app
 bundles. Inert `.claude`/`.codex` files are not evidence of agent presence.
 Absent agents print `<Agent> hooks: not installed (agent not present)` and do
 not affect health. Present agents require a complete valid channel hook set,
-a runnable Kontext binary, and Codex feature enablement.
+a runnable Kontext binary, and Codex feature enablement. Codex's two hooks
+files, and Cursor's for a self-serve install, count together, each event once.

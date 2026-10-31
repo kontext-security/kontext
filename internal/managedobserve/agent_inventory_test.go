@@ -252,11 +252,24 @@ func TestAgentWiringCodexLayers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Self-serve leaves out of the user file what the machine-wide one covers.
+	split := func(event string) (system, user []byte) {
+		machine := codexmanaged.Template("/opt/homebrew/bin/kontext")
+		rest := codexmanaged.Settings{Hooks: map[string][]codexmanaged.MatcherGroup{event: machine.Hooks[event]}}
+		delete(machine.Hooks, event)
+		system, _ = json.Marshal(machine)
+		user, _ = json.Marshal(rest)
+		return system, user
+	}
+	partialSystem, promptOnly := split("UserPromptSubmit")
 	for _, tc := range []struct {
 		name         string
 		system, user []byte
 		want         agentinventory.Wired
 	}{
+		{"split across both", partialSystem, promptOnly, agentinventory.WiredYes},
+		{"partial system only", partialSystem, nil, agentinventory.WiredNo},
+		{"partial system with foreign user", partialSystem, foreign, agentinventory.WiredNo},
 		{"system only", valid, nil, agentinventory.WiredYes},
 		{"user only", nil, valid, agentinventory.WiredYes},
 		{"both same", valid, valid, agentinventory.WiredYes},

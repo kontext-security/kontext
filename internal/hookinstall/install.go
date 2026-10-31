@@ -92,6 +92,7 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 var (
 	machineClaudeDropIn = claudemanaged.ManagedSettingsDropInPath
 	machineCursorHooks  = cursormanaged.SystemHooksPath
+	machineCodexHooks   = codexmanaged.SystemHooksPath
 )
 
 // machineClaudeSources returns Claude's machine-wide managed settings:
@@ -124,6 +125,20 @@ func machineCursorCoverage(opts Options) map[string]bool {
 	if path == "" {
 		path = machineCursorHooks
 	}
+	return runnableCoverage(path, cursormanaged.Coverage)
+}
+
+// machineCodexCoverage does the same for Codex, which runs the hooks in
+// /etc/codex/hooks.json without asking the user to trust them.
+func machineCodexCoverage(opts Options) map[string]bool {
+	path := opts.CodexPath
+	if path == "" {
+		path = machineCodexHooks
+	}
+	return runnableCoverage(path, codexmanaged.Coverage)
+}
+
+func runnableCoverage(path string, coverage func([]byte) map[string]string) map[string]bool {
 	if privacyfolder.Guarded("", path) {
 		return nil
 	}
@@ -132,7 +147,7 @@ func machineCursorCoverage(opts Options) map[string]bool {
 		return nil
 	}
 	covered := map[string]bool{}
-	for event, binary := range cursormanaged.Coverage(raw) {
+	for event, binary := range coverage(raw) {
 		if !privacyfolder.Guarded("", binary) && executable(binary) {
 			covered[event] = true
 		}
@@ -166,8 +181,8 @@ type Options struct {
 	KeepSystem bool
 	// ClaudePath and CursorPath override the machine-wide files: where system
 	// scope writes, and what user scope checks for hooks an earlier self-serve
-	// setup put there.
-	ClaudePath, CursorPath string
+	// setup put there. CodexPath overrides only the latter.
+	ClaudePath, CursorPath, CodexPath string
 	// WriteSystem and RemoveSystem change machine-wide files for an
 	// unprivileged caller; nil writes them directly (root). The last argument
 	// fails when the file changed since planning; call it after any password
@@ -275,6 +290,9 @@ func setupTolerates(opts Options, kind string, remove bool) bool {
 
 func plan(file File, opts Options, remove bool) (change, error) {
 	c := change{result: Result{File: file, Action: "skip", Reason: "unchanged"}}
+	// A user file whose every event a machine-wide Kontext hook already runs
+	// keeps none of Kontext's entries.
+	var coveredAll bool
 	if remove && (file.Scope == System && opts.KeepSystem || file.Kind == "feature" && opts.Setup) {
 		c.result.Reason = "kept"
 		return c, nil
@@ -321,14 +339,24 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		if file.Kind == "claude-user" && !remove {
 			machine = machineClaudeSources(opts)
 		}
-		// Cursor runs every hooks.json it finds and does not deduplicate, so the
-		// user file leaves out the events an earlier setup's machine-wide file
-		// already covers.
+		// Cursor and Codex run every hooks.json they find and do not
+		// deduplicate, so the user file leaves out the events a machine-wide
+		// file from an earlier setup or an organization already covers.
 		var covered map[string]bool
-		if file.Kind == "cursor" && file.Scope == User && !remove {
-			covered = machineCursorCoverage(opts)
+		events := 0
+		if file.Scope == User && !remove {
+			switch file.Kind {
+			case "cursor":
+				covered, events = machineCursorCoverage(opts), len(cursormanaged.Events)
+			case "codex":
+				covered, events = machineCodexCoverage(opts), len(codexmanaged.SupportedEvents)
+			}
 		}
-		removeHere := remove || len(covered) == len(cursormanaged.Events)
+		coveredAll = events > 0 && len(covered) == events
+		if coveredAll {
+			c.result.Reason = "covered"
+		}
+		removeHere := remove || coveredAll
 		if file.Kind == "claude-user" && !remove && claudemanaged.UserHooksMatch(c.before, binary, machine...) {
 			return c, nil
 		}
@@ -351,10 +379,10 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			err = cursormanaged.RemoveManagedHooks(settings)
 		} else if file.Kind == "cursor" {
 			err = cursormanaged.MergeManagedHooksExcept(settings, binary, covered)
-		} else if remove {
+		} else if removeHere {
 			err = codexmanaged.RemoveManagedHooks(settings)
 		} else {
-			err = codexmanaged.MergeManagedHooks(settings, opts.Binary)
+			err = codexmanaged.MergeManagedHooksExcept(settings, opts.Binary, covered)
 		}
 		if err != nil {
 			return c, err
@@ -362,14 +390,14 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		after, _ := json.Marshal(settings)
 		// Setup rewrites Codex's file as is; a machine-wide file is only
 		// rewritten when Kontext's entries change, so a rerun asks for no password.
-		if bytes.Equal(before, after) && (!opts.Setup || file.Kind == "claude-user" || file.Kind == "cursor") {
+		if bytes.Equal(before, after) && (!opts.Setup || file.Kind == "claude-user" || file.Kind == "cursor" || coveredAll) {
 			return c, nil
 		}
 		c.after, err = json.MarshalIndent(settings, "", "  ")
 		c.after = append(c.after, '\n')
 		// Only delete an empty file when all of its content was our hooks. A
 		// dotfiles symlink stays; its target gets the emptied settings.
-		if removeHere && (!opts.Setup || file.Kind == "cursor") && len(settings) == 0 && file.Kind != "claude-user" && info.Mode()&os.ModeSymlink == 0 {
+		if removeHere && (!opts.Setup || file.Kind == "cursor" || coveredAll) && len(settings) == 0 && file.Kind != "claude-user" && info.Mode()&os.ModeSymlink == 0 {
 			c.after = nil
 		}
 	case "feature":
@@ -391,15 +419,18 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		return c, nil
 	}
 	c.result.Action = "write"
-	c.result.Reason = "stale"
-	if c.missing {
-		c.result.Reason = "missing"
-	}
-	if remove {
+	switch {
+	case remove:
 		c.result.Reason = "owned"
-		if c.after == nil {
-			c.result.Action = "remove"
-		}
+	case coveredAll:
+		c.result.Reason = "covered"
+	case c.missing:
+		c.result.Reason = "missing"
+	default:
+		c.result.Reason = "stale"
+	}
+	if c.after == nil {
+		c.result.Action = "remove"
 	}
 	return c, nil
 }
