@@ -72,11 +72,23 @@ func TestLiveCandidates(t *testing.T) {
 	}
 }
 
-func TestShellWords(t *testing.T) {
-	got := shellWords(`cat "a b/c" 'd e' f\ g|grep -n x>out;ls $HOME/x&&echo "it's" '$lit'`)
+func TestEachWord(t *testing.T) {
+	var got []string
+	eachWord(`cat "a b/c" 'd e' f\ g|grep -n x>out;ls $HOME/x&&echo "it's" '$lit'`, func(word string) bool {
+		got = append(got, word)
+		return true
+	})
 	want := []string{"cat", "a b/c", "d e", "f g", "grep", "-n", "x", "out", "ls", "$HOME/x", "echo", "it's", "$lit"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("shellWords() = %q, want %q", got, want)
+		t.Fatalf("eachWord() = %q, want %q", got, want)
+	}
+	got = nil
+	eachWord("a b c d", func(word string) bool {
+		got = append(got, word)
+		return len(got) < 2
+	})
+	if !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Fatalf("eachWord() after stopping = %q", got)
 	}
 }
 

@@ -856,3 +856,27 @@ func TestSavedOutputPathSpellings(t *testing.T) {
 		t.Fatalf("read-backs queued = %d, want 5", len(c.readBacks))
 	}
 }
+
+// An input too large to read in full is not compacted and stays out of
+// history: an unread part could name a saved output. Reading it stops at
+// the cap instead of splitting all of it.
+func TestOversizedInputFailsClosed(t *testing.T) {
+	c := newTestCompactor(t, replace("short"))
+	huge := strings.Repeat("-x ", maxScanBytes)
+	started := time.Now()
+	if !c.namesSaveDir(map[string]any{"command": "echo " + huge}, c.cwd) {
+		t.Fatal("an input past the scan cap read as not naming the save directory")
+	}
+	if !c.namesSaveDir(map[string]any{"command": strings.Repeat("a/ ", maxPathWords+1)}, c.cwd) {
+		t.Fatal("an input past the path cap read as not naming the save directory")
+	}
+	if c.Compact(context.Background(), c.bash("echo "+huge, bigText(80))) != nil {
+		t.Fatal("a call with an oversized input was compacted")
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("scanning took %v", elapsed)
+	}
+	if c.namesSaveDir(map[string]any{"command": "go test ./..."}, c.cwd) {
+		t.Fatal("an ordinary command read as naming the save directory")
+	}
+}

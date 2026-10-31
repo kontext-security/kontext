@@ -342,22 +342,27 @@ func (c *Compactor) readsBack(event hook.Event) bool {
 // namesSaveDir reports whether a call's input names the save directory,
 // however the path is spelled. A call that does reads saved outputs, which
 // never leave the machine again: not as its own output, and not in the
-// history sent with a later one.
+// history sent with a later one. An input too large to read in full counts
+// as naming it.
 func (c *Compactor) namesSaveDir(input any, cwd string) bool {
 	named := false
 	eachString(input, func(value string) bool {
 		named = strings.Contains(normalizedPath(value), c.dirName)
 		return !named
 	})
-	c.eachPath(input, cwd, func(path string) bool {
-		named = named || inside(path, c.dir)
+	if named {
+		return true
+	}
+	whole := c.eachPath(input, cwd, func(path string) bool {
+		named = inside(path, c.dir)
 		return !named
 	})
-	return named
+	return named || !whole
 }
 
-// eachPath calls visit with each path a call's input names (see pathScan).
-func (c *Compactor) eachPath(input any, cwd string, visit func(path string) bool) {
+// eachPath calls visit with each path a call's input names (see pathScan),
+// and reports whether it read the whole input.
+func (c *Compactor) eachPath(input any, cwd string, visit func(path string) bool) bool {
 	home := c.home
 	if home == "" {
 		home, _ = os.UserHomeDir()
@@ -367,6 +372,7 @@ func (c *Compactor) eachPath(input any, cwd string, visit func(path string) bool
 		scan.value(value, cwd, 0)
 		return !scan.stopped
 	})
+	return !scan.short
 }
 
 // reportReadBacks queues a read-back for each compaction a call reads back,

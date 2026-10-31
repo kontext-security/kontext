@@ -55,6 +55,10 @@ func eachString(value any, visit func(string) bool) bool {
 // bash -c, are read.
 const maxShellDepth = 3
 
+// maxScanBytes bounds how much of a call's input one scan reads, nested
+// commands included. A scan that would read more stops short.
+const maxScanBytes = 1 << 20
+
 // pathScan finds the paths a call's input names, as text only: it never
 // touches the filesystem, so no folder macOS guards is ever opened. Each
 // string is read whole when it is a path (a Read's file_path may hold
@@ -67,18 +71,33 @@ type pathScan struct {
 	// visit gets each absolute, cleaned path; returning false stops the scan.
 	visit   func(path string) bool
 	checked int
+	read    int
 	stopped bool
+	// short is set when the scan stopped before reading the whole input,
+	// past maxScanBytes or maxPathWords; what it did not read is unknown.
+	short bool
 }
 
 func (s *pathScan) value(value, cwd string, depth int) {
+	if s.stopped {
+		return
+	}
+	if s.read += len(value); s.read > maxScanBytes {
+		s.short, s.stopped = true, true
+		return
+	}
 	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~/") {
 		s.path(resolvePath(s.home, cwd, value))
 	}
-	words := shellWords(value)
 	dirs := []string{cwd}
-	for i, word := range words {
-		if s.stopped {
-			return
+	moving := false // the word before was cd or pushd
+	eachWord(value, func(word string) bool {
+		if moving {
+			// Later relative paths may be taken from where it moves to.
+			if target := resolvePath(s.home, dirs[len(dirs)-1], word); target != "" {
+				dirs = append(dirs, target)
+			}
+			moving = false
 		}
 		if depth < maxShellDepth && strings.ContainsAny(word, " \t\r\n;|&<>()`") {
 			s.value(word, dirs[len(dirs)-1], depth+1)
@@ -88,18 +107,9 @@ func (s *pathScan) value(value, cwd string, depth int) {
 				s.path(resolvePath(s.home, dir, candidate))
 			}
 		}
-		if word != "cd" && word != "pushd" {
-			continue
-		}
-		// Later relative paths may be taken from where this moves to.
-		target := s.home
-		if i+1 < len(words) {
-			target = resolvePath(s.home, dirs[len(dirs)-1], words[i+1])
-		}
-		if target != "" {
-			dirs = append(dirs, target)
-		}
-	}
+		moving = word == "cd" || word == "pushd"
+		return !s.stopped
+	})
 }
 
 func (s *pathScan) path(path string) {
@@ -107,25 +117,27 @@ func (s *pathScan) path(path string) {
 		return
 	}
 	if s.checked++; s.checked > maxPathWords {
-		s.stopped = true
+		s.short, s.stopped = true, true
 		return
 	}
 	s.stopped = !s.visit(filepath.Clean(path))
 }
 
-// shellWords splits text into words as a shell would, honouring quotes and
-// backslash escapes, and also breaks at the operators that join commands.
-func shellWords(text string) []string {
-	var words []string
+// eachWord calls visit with each word of text as a shell would split it,
+// honouring quotes and backslash escapes and breaking at the operators that
+// join commands, until visit returns false. It holds one word at a time.
+func eachWord(text string, visit func(word string) bool) {
 	var word strings.Builder
 	inWord, escaped := false, false
 	var quote rune
-	flush := func() {
-		if inWord {
-			words = append(words, word.String())
-			word.Reset()
-			inWord = false
+	flush := func() bool {
+		if !inWord {
+			return true
 		}
+		done := word.String()
+		word.Reset()
+		inWord = false
+		return visit(done)
 	}
 	for _, c := range text {
 		switch {
@@ -139,14 +151,15 @@ func shellWords(text string) []string {
 		case quote == 0 && (c == '\'' || c == '"'):
 			quote, inWord = c, true
 		case quote == 0 && strings.ContainsRune(" \t\r\n;|&<>()`", c):
-			flush()
+			if !flush() {
+				return
+			}
 		default:
 			word.WriteRune(c)
 			inWord = true
 		}
 	}
 	flush()
-	return words
 }
 
 // pathCandidates returns a word and the parts of it an option or a path list
