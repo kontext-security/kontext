@@ -289,7 +289,8 @@ func (c *Compactor) sendShadow(ctx context.Context, job shadowJob) {
 }
 
 func (c *Compactor) request(mode string, event hook.Event, out output, goal string) Request {
-	context, model := requestContext(event, goal, c.home, c.namesSaveDir)
+	withheld := func(input any) bool { return c.namesSaveDir(input, event.CWD) }
+	context, model := requestContext(event, goal, c.home, withheld)
 	agent := event.Agent
 	if agent == "claude" {
 		agent = "claude-code"
@@ -329,35 +330,61 @@ func encode(request Request) ([]byte, bool) {
 // the save directory, or reads lines of a compacted file that the compaction
 // left out. Such a call is never compacted itself.
 func (c *Compactor) readsBack(event hook.Event) bool {
-	if c.namesSaveDir(event.ToolInput) {
+	if c.namesSaveDir(event.ToolInput, event.CWD) {
 		return true
 	}
 	_, found := c.omittedReadBack(event)
 	return found
 }
 
-// namesSaveDir reports whether a call's input names the save directory. A
-// call that does reads saved outputs, which never leave the machine again:
-// not as its own output, and not in the history sent with a later one.
-func (c *Compactor) namesSaveDir(input any) bool {
+// namesSaveDir reports whether a call's input names the save directory,
+// however the path is spelled. A call that does reads saved outputs, which
+// never leave the machine again: not as its own output, and not in the
+// history sent with a later one.
+func (c *Compactor) namesSaveDir(input any, cwd string) bool {
 	named := false
 	eachString(input, func(value string) bool {
 		named = strings.Contains(normalizedPath(value), c.dirName)
 		return !named
 	})
+	c.eachPath(input, cwd, func(path string) bool {
+		named = named || inside(path, c.dir)
+		return !named
+	})
 	return named
+}
+
+// eachPath calls visit with each path a call's input names (see pathScan).
+func (c *Compactor) eachPath(input any, cwd string, visit func(path string) bool) {
+	home := c.home
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	scan := pathScan{home: home, visit: visit}
+	eachString(input, func(value string) bool {
+		scan.value(value, cwd, 0, true)
+		return !scan.stopped
+	})
 }
 
 // reportReadBacks queues a read-back for each compaction a call reads back,
 // once per call and compaction.
 func (c *Compactor) reportReadBacks(event hook.Event) {
 	var found []record
-	eachString(event.ToolInput, func(value string) bool {
-		for _, match := range c.refs.FindAllStringSubmatch(normalizedPath(value), -1) {
-			if compaction, ok := c.saved(match[1], match[2]); ok {
+	refer := func(text string) {
+		for _, match := range c.refs.FindAllStringSubmatch(text, -1) {
+			compaction, ok := c.saved(match[1], match[2])
+			if ok && !slices.ContainsFunc(found, func(other record) bool { return other.EventID == compaction.EventID }) {
 				found = append(found, compaction)
 			}
 		}
+	}
+	eachString(event.ToolInput, func(value string) bool {
+		refer(normalizedPath(value))
+		return true
+	})
+	c.eachPath(event.ToolInput, event.CWD, func(path string) bool {
+		refer(filepath.ToSlash(path))
 		return true
 	})
 	if compaction, ok := c.omittedReadBack(event); ok {

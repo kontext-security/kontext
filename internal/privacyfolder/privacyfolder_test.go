@@ -88,3 +88,60 @@ func TestGuardedOffMacOS(t *testing.T) {
 		t.Error("Guarded() off macOS")
 	}
 }
+
+// A folder holding a guarded one is reached by any recursive read from it.
+func TestEncloses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the macOS privacy-folder guard does not read Windows paths")
+	}
+	enabled := Enabled
+	Enabled = true
+	t.Cleanup(func() { Enabled = enabled })
+	home := t.TempDir()
+	for path, want := range map[string]bool{
+		"/":                                      true,
+		home:                                     true,
+		filepath.Join(home, "Library"):           true,
+		"/Volumes":                               true,
+		filepath.Join(home, "Documents"):         false, // guarded itself: Guarded's case
+		filepath.Join(home, "code"):              false,
+		filepath.Join(home, "Library", "Caches"): false,
+		"relative":                               false,
+	} {
+		if got := Encloses(home, path); got != want {
+			t.Errorf("Encloses(%q) = %v, want %v", path, got, want)
+		}
+	}
+	Enabled = false
+	if Encloses(home, "/") {
+		t.Error("Encloses reported a folder with the guard off")
+	}
+}
+
+// A wildcard counts as guarded when anything it may match would.
+func TestGuardedPattern(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the macOS privacy-folder guard does not read Windows paths")
+	}
+	enabled := Enabled
+	Enabled = true
+	t.Cleanup(func() { Enabled = enabled })
+	home := t.TempDir()
+	for pattern, want := range map[string]bool{
+		filepath.Join(home, "Doc*"):               true,
+		filepath.Join(home, "D*"):                 true,
+		filepath.Join(home, "down?oads"):          true, // APFS is case-insensitive
+		filepath.Join(home, "Lib*"):               true, // holds Mobile Documents
+		filepath.Join(home, "*", "notes.txt"):     true, // a wildcard above the last element
+		filepath.Join(home, "Documents", "*.txt"): true,
+		"/Vol*":                             true,
+		"/Volumes/*":                        true,
+		filepath.Join(home, "code", "*.go"): false,
+		filepath.Join(home, "Pictures*"):    false,
+		filepath.Join(home, "Library", "Caches", "*"): false,
+	} {
+		if got := GuardedPattern(home, pattern); got != want {
+			t.Errorf("GuardedPattern(%q) = %v, want %v", pattern, got, want)
+		}
+	}
+}

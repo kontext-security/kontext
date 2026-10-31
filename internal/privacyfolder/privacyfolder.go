@@ -86,6 +86,61 @@ func Guarded(home, path string) bool {
 	return false
 }
 
+// Encloses reports whether path holds a guarded folder, so that reading
+// everything below it reaches one: the root, /Users, the home directory,
+// ~/Library or /Volumes, say. home is as for Guarded.
+func Encloses(home, path string) bool {
+	if !Enabled || !filepath.IsAbs(path) {
+		return false
+	}
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	path = filepath.Clean(path)
+	if path == "/" || strings.EqualFold(path, "/Volumes") {
+		return true
+	}
+	roots, _ := guardedRoots(home)
+	for _, root := range append(roots, "/Volumes") {
+		if within(root, path) && !strings.EqualFold(filepath.Clean(root), path) {
+			return true
+		}
+	}
+	return false
+}
+
+// GuardedPattern reports whether a shell wildcard pattern may name a
+// guarded folder, a path inside one, or a folder that holds one (see
+// Encloses). Wildcards above its last element cannot be checked and count
+// as guarded. home is as for Guarded.
+func GuardedPattern(home, pattern string) bool {
+	if !Enabled || !filepath.IsAbs(pattern) {
+		return false
+	}
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	dir, base := filepath.Split(filepath.Clean(pattern))
+	dir = filepath.Clean(dir)
+	if strings.ContainsAny(dir, "*?[") || Guarded(home, dir) || strings.EqualFold(dir, "/Volumes") {
+		return true
+	}
+	roots, _ := guardedRoots(home)
+	for _, root := range append(roots, "/Volumes") {
+		// The element of the root's path right below dir is what the
+		// pattern would have to match.
+		rel, err := filepath.Rel(strings.ToLower(dir), strings.ToLower(filepath.Clean(root)))
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+			continue
+		}
+		first, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+		if matched, _ := filepath.Match(strings.ToLower(base), first); matched {
+			return true
+		}
+	}
+	return false
+}
+
 // guardedRoots lists the guarded folders under home: as given, with its
 // symlinks resolved (/var/folders is /private/var/folders), and through the
 // data volume firmlink (/System/Volumes/Data/Users/...), which is no symlink

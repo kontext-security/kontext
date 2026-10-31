@@ -823,6 +823,21 @@ func TestPrivacyCheckSeesThroughShellPaths(t *testing.T) {
 		`sed -n '1,$p' notes.txt`:                  false,
 		`find . -name '*.go' | xargs grep -n TODO`: false,
 		`go test ./... && ls *.go`:                 false,
+		// A command handed to another shell is read as one.
+		`bash -c 'cat ~/Documents/secret.txt'`:             true,
+		`sh -lc "grep -r token ~/Desktop"`:                 true,
+		`zsh -c 'p=Documents; cat "$HOME/$p/secret.txt"'`:  true,
+		`eval "cat ~/Downloads/report.csv"`:                true,
+		`python3 -c "print(open('~/Documents/a').read())"`: true,
+		`bash -c 'cd "$PWD" && ls src'`:                    false,
+		// Wildcards, and folders that hold a guarded one.
+		`grep -r token ~/Doc*`:        true,
+		`ls $HOME/Down*`:              true,
+		`cd ~/Doc* && cat notes.txt`:  true,
+		`grep -r secret ~`:            true,
+		`ls -la /`:                    true,
+		`du -sh ~/code ~/code/vendor`: false,
+		`ls ~/code/*.go`:              false,
 	} {
 		if got := touchesPrivacyFolder(home, cwd, map[string]any{"command": command}); got != want {
 			t.Errorf("touchesPrivacyFolder(%q) = %v, want %v", command, got, want)
@@ -860,5 +875,33 @@ func TestTokenLookupKeepsToItsCaller(t *testing.T) {
 	defer cancel()
 	if token, err := client.installToken(ctx); err != nil || token != "install-token" {
 		t.Fatalf("installToken() = %q, %v while another lookup stalls", token, err)
+	}
+}
+
+// Any spelling of a saved output's path counts: redundant separators, dot
+// elements and paths relative to the working directory.
+func TestSavedOutputPathSpellings(t *testing.T) {
+	c := newTestCompactor(t, replace("short"))
+	if c.Compact(context.Background(), c.bash("make test", bigText(80))) == nil {
+		t.Fatal("not compacted")
+	}
+	parent := filepath.Dir(c.dir)
+	name := filepath.Join(testSession, testToolUseID+".txt")
+	for _, spelling := range []string{
+		parent + "//tool-output/" + name,
+		parent + "/./tool-output/" + name,
+		parent + "/elsewhere/../tool-output/" + name,
+		"./tool-output/" + name,
+	} {
+		input := map[string]any{"command": "tail -n 20 " + spelling}
+		if !c.namesSaveDir(input, parent) {
+			t.Errorf("%q not recognized as the save directory", spelling)
+		}
+		event := hook.Event{SessionID: testSession, Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash",
+			ToolUseID: "toolu_" + strconv.Itoa(len(spelling)), CWD: parent, ToolInput: input}
+		c.reportReadBacks(event)
+	}
+	if len(c.readBacks) != 4 {
+		t.Fatalf("read-backs queued = %d, want 4", len(c.readBacks))
 	}
 }

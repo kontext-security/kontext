@@ -53,14 +53,15 @@ func eachString(value any, visit func(string) bool) bool {
 	return true
 }
 
+// maxShellDepth bounds how deep commands handed to another shell, as in
+// bash -c '...', are read.
+const maxShellDepth = 3
+
 // touchesPrivacyFolder reports whether a call runs in, or names a path in, a
-// folder macOS guards with a privacy prompt (internal/privacyfolder). Nothing
-// from there is sent. Each input string is checked whole when it is a path,
-// such as a Read's file_path, and word by word as a shell would split it:
-// ~, $HOME and $PWD are expanded, and a relative path is taken from cwd and
-// from every directory a cd moves to. A path only known at run time cannot be
-// checked, so a command substitution, any other expansion in a path word, or
-// a wildcard in a directory counts as touching one.
+// folder macOS guards with a privacy prompt (internal/privacyfolder), or a
+// folder holding one, which a recursive read reaches. Nothing from there is
+// sent. Paths are found as pathScan finds them; one only known at run time
+// cannot be checked, so it counts as touching one.
 func touchesPrivacyFolder(home, cwd string, input any, paths ...string) bool {
 	if home == "" {
 		home, _ = os.UserHomeDir()
@@ -70,57 +71,114 @@ func touchesPrivacyFolder(home, cwd string, input any, paths ...string) bool {
 			return true
 		}
 	}
-	checked, guarded := 0, false
-	touches := func(path string) bool {
-		if path == "" {
-			return false
+	guarded := false
+	scan := pathScan{home: home, visit: func(path string) bool {
+		if strings.ContainsAny(path, "*?[") {
+			guarded = privacyfolder.GuardedPattern(home, path)
+		} else {
+			guarded = privacyfolder.Guarded(home, path) || privacyfolder.Encloses(home, path)
 		}
-		checked++
-		return checked > maxPathWords || privacyfolder.Guarded(home, path)
-	}
+		return !guarded
+	}}
 	eachString(input, func(value string) bool {
-		if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~/") {
-			// A path value may hold spaces that splitting would cut.
-			if guarded = touches(resolvePath(home, cwd, value)); guarded {
-				return false
+		scan.value(value, cwd, 0, true)
+		return !scan.stopped && !scan.unknown
+	})
+	return guarded || scan.unknown
+}
+
+// pathScan finds the paths a call's input names: each string whole when it
+// is a path (a Read's file_path may hold spaces), and word by word as a shell
+// would split it. ~, $HOME and $PWD are expanded, a relative path is taken
+// from cwd and from every directory a cd moves to, and every path is cleaned.
+// A command handed to another shell, as with bash -c or eval, is read as a
+// command in turn; any other word of several words, an awk program or
+// python -c code, say, is read only for the paths it spells out. In a
+// command, a command substitution, any other expansion in a path word or
+// another user's home names a path only known at run time, which it marks
+// as unknown.
+type pathScan struct {
+	home string
+	// visit gets each absolute, cleaned path; returning false stops the scan.
+	visit   func(path string) bool
+	checked int
+	stopped bool
+	unknown bool
+}
+
+// value scans one input string; command says whether a shell runs it.
+func (s *pathScan) value(value, cwd string, depth int, command bool) {
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~/") {
+		s.path(resolvePath(s.home, cwd, value))
+	}
+	words, substitutes := shellWords(value)
+	s.unknown = s.unknown || command && substitutes
+	dirs := []string{cwd}
+	for i, word := range words {
+		if s.stopped {
+			return
+		}
+		if word.unverifiable() {
+			s.unknown = s.unknown || command
+			continue
+		}
+		if depth < maxShellDepth && strings.ContainsAny(word.text, " \t\r\n;|&<>()`") {
+			s.value(word.text, dirs[len(dirs)-1], depth+1, command && shellArgument(words, i))
+		}
+		for _, candidate := range pathCandidates(word.text) {
+			for _, dir := range dirs {
+				s.path(resolvePath(s.home, dir, candidate))
 			}
 		}
-		words, substitutes := shellWords(value)
-		if substitutes {
-			guarded = true
-			return false
+		if word.text != "cd" && word.text != "pushd" {
+			continue
 		}
-		dirs := []string{cwd}
-		for i, word := range words {
-			if guarded = word.unverifiable(); guarded {
-				return false
-			}
-			for _, candidate := range pathCandidates(word.text) {
-				for _, dir := range dirs {
-					if guarded = touches(resolvePath(home, dir, candidate)); guarded {
-						return false
-					}
-				}
-			}
-			if word.text != "cd" && word.text != "pushd" {
+		// Later relative paths may be taken from where this moves to.
+		target := s.home
+		if i+1 < len(words) {
+			if words[i+1].text == "-" {
+				s.unknown = true
 				continue
 			}
-			// Later relative paths may be taken from where this moves to.
-			target := home
-			if i+1 < len(words) {
-				if words[i+1].text == "-" {
-					guarded = true
-					return false
-				}
-				target = resolvePath(home, dirs[len(dirs)-1], words[i+1].text)
-			}
-			if target != "" {
-				dirs = append(dirs, target)
-			}
+			target = resolvePath(s.home, dirs[len(dirs)-1], words[i+1].text)
 		}
+		if target != "" {
+			dirs = append(dirs, target)
+		}
+	}
+}
+
+// shellArgument reports whether words[i] is a command handed to another
+// shell: eval's argument, or the one after a -c flag given to a shell.
+func shellArgument(words []shellWord, i int) bool {
+	if i == 0 {
+		return false
+	}
+	if words[i-1].text == "eval" {
 		return true
-	})
-	return guarded
+	}
+	flag := words[i-1].text
+	if flag != "--command" && (!strings.HasPrefix(flag, "-") || strings.HasPrefix(flag, "--") || !strings.Contains(flag, "c")) {
+		return false
+	}
+	for _, word := range words[:i-1] {
+		switch filepath.Base(word.text) {
+		case "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh":
+			return true
+		}
+	}
+	return false
+}
+
+func (s *pathScan) path(path string) {
+	if path == "" || s.stopped {
+		return
+	}
+	if s.checked++; s.checked > maxPathWords {
+		s.unknown, s.stopped = true, true
+		return
+	}
+	s.stopped = !s.visit(filepath.Clean(path))
 }
 
 // shellWord is a word as a shell would split it, with where it expands.
@@ -132,7 +190,8 @@ type shellWord struct {
 
 // unverifiable reports a word that may name a path only known at run time:
 // one with an expansion other than a leading $HOME or $PWD (all of it, or
-// in a path), another user's home, or a wildcard in a directory.
+// in a path), or another user's home. Wildcards are checked against the
+// guarded folders once the path is resolved.
 func (w shellWord) unverifiable() bool {
 	switch w.text {
 	case "$HOME", "${HOME}", "$PWD", "${PWD}":
@@ -150,11 +209,7 @@ func (w shellWord) unverifiable() bool {
 			return true
 		}
 	}
-	if strings.HasPrefix(w.text, "~") && w.text != "~" && !strings.HasPrefix(w.text, "~/") {
-		return true
-	}
-	slash := strings.LastIndex(w.text, "/")
-	return slash > 0 && strings.ContainsAny(w.text[:slash], "*?[")
+	return strings.HasPrefix(w.text, "~") && w.text != "~" && !strings.HasPrefix(w.text, "~/")
 }
 
 // shellWords splits text into words as a shell would, honouring quotes and
@@ -242,6 +297,12 @@ func resolvePath(home, cwd, word string) string {
 		return filepath.Join(cwd, word)
 	}
 	return ""
+}
+
+// inside reports path at or below root, ignoring case as APFS does.
+func inside(path, root string) bool {
+	path, root = strings.ToLower(filepath.Clean(path)), strings.ToLower(filepath.Clean(root))
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
 // savedRef is a saved output a call's input names.
