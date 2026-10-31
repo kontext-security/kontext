@@ -37,6 +37,7 @@ package mcpconfig
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -400,7 +401,8 @@ func (r *Resolver) claudeAIConnector(home, server string) (url string, found boo
 // Warm parses the Claude Desktop session records into the cache, so the
 // first connector lookup after the daemon starts, for a session without a
 // record, costs one stat per record instead of a full scan that times out.
-func (r *Resolver) Warm() {
+// Once ctx is done it reads no further file.
+func (r *Resolver) Warm(ctx context.Context) {
 	home := r.Home
 	if home == "" {
 		var err error
@@ -409,7 +411,13 @@ func (r *Resolver) Warm() {
 		}
 	}
 	for _, path := range desktopRecords(home, "*/*") {
+		if ctx.Err() != nil {
+			return
+		}
 		loadHead(r, path, recordHeadBytes, parseSessionID)
+		if ctx.Err() != nil {
+			return
+		}
 		load(r, path, parseJSON[desktopSession])
 	}
 }

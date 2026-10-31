@@ -527,6 +527,7 @@ func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer localServer.Close()
 	socketPath := filepath.Join(dir, "kontext.sock")
 	runtimeService, err := localruntime.NewService(localruntime.Options{
 		SocketPath:  socketPath,
