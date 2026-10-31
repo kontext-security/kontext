@@ -220,7 +220,6 @@ forbid(principal, action, resource) when { context has shell && context.shell.fa
 		want    risk.Decision
 	}{
 		{`irm "https://api.github.com/repos/$o/$r" -Method Delete`, risk.DecisionDeny},
-		{`irm https://api.github.com/repos/$o/$r -Method Delete`, risk.DecisionDeny},
 		{`Invoke-RestMethod -Uri "https://api.github.com/repos/$o/$r" -Method Delete`, risk.DecisionDeny},
 		{`iwr -Method Delete -- "https://api.github.com/repos/$o/$r"`, risk.DecisionDeny},
 		{`curl -X DELETE "https://api.github.com/repos/$o/$r"`, risk.DecisionDeny},
@@ -229,6 +228,10 @@ forbid(principal, action, resource) when { context has shell && context.shell.fa
 		{`iwr -OutFile$f https://github.com/acme/app/archive/main.zip`, risk.DecisionDeny},
 		{`irm "https://example.com/repos/$o/$r" -Method Delete`, risk.DecisionAllow},
 		{`irm "https://$h/repos/acme/app" -Method Delete`, risk.DecisionAllow},
+		// An unquoted variable is left out of the word's value, so the host
+		// that remains is not the target's.
+		{`irm https://api.github.com$suffix/repos/$o -Method Delete`, risk.DecisionAllow},
+		{`irm "https://api.github.com$suffix/repos/$o" -Method Delete`, risk.DecisionAllow},
 		{`irm "https://example.com/hooks" -Method Post -Body "{\"url\":\"https://api.github.com/$x\"}"`, risk.DecisionAllow},
 	} {
 		t.Run(test.command, func(t *testing.T) {

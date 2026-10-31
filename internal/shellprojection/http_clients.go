@@ -31,8 +31,7 @@ func classifyHTTPClient(program string, args, source []string, complete, opaqueV
 		// as an option and take a literal target as its value.
 		if filled, ok := withComputedSource(args, source); ok {
 			refilled, _ := httpClientArgs(program, filled, stdin)
-			more, _ := httpClientTargetFacts(refilled)
-			facts = append(facts, more...)
+			facts = append(facts, readableTargetFacts(refilled)...)
 		}
 		result.Facts = sortedUnique(append(result.Facts, facts...))
 	}
@@ -469,11 +468,24 @@ func webCmdletArgs(args []string, stdin bool) []string {
 // The translators mark request operands with --url. Inspect only their
 // authority: URLs in bodies, headers, output paths or request paths are data.
 func httpClientTargetFacts(converted []string) ([]string, bool) {
+	return clientTargetFacts(converted, false)
+}
+
+// readableTargetFacts returns the provider facts of the targets whose scheme
+// and host are literal: a computed one (api.github.com$SUFFIX) names none.
+func readableTargetFacts(converted []string) []string {
+	facts, _ := clientTargetFacts(converted, true)
+	return facts
+}
+
+func clientTargetFacts(converted []string, readableOnly bool) ([]string, bool) {
 	var facts []string
 	resolved, sawTarget := true, false
 	addTarget := func(target string) {
 		hints, known := httpTargetFacts(target)
-		facts = append(facts, hints...)
+		if known || !readableOnly {
+			facts = append(facts, hints...)
+		}
 		resolved, sawTarget = resolved && known, true
 	}
 	for i := 0; i < len(converted); i++ {
