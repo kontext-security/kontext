@@ -206,6 +206,49 @@ func TestCedarPowerShellWebCmdletsEnforceGitHubPolicy(t *testing.T) {
 	}
 }
 
+// A web request whose URL has a computed part keeps the literal host, so a
+// policy that refuses unrecognized GitHub requests refuses it, as it does
+// through Bash.
+func TestCedarPowerShellComputedURLKeepsHost(t *testing.T) {
+	const guard = `@id("allow")
+permit(principal, action == Kontext::Action::"ToolUse", resource);
+
+@id("github-guard")
+forbid(principal, action, resource) when { context has shell && context.shell.facts.contains("github/route=unrecognized") };`
+	for _, test := range []struct {
+		command string
+		want    risk.Decision
+	}{
+		{`irm "https://api.github.com/repos/$o/$r" -Method Delete`, risk.DecisionDeny},
+		{`Invoke-RestMethod -Uri "https://api.github.com/repos/$o/$r" -Method Delete`, risk.DecisionDeny},
+		{`iwr -Method Delete -- "https://api.github.com/repos/$o/$r"`, risk.DecisionDeny},
+		{`curl -X DELETE "https://api.github.com/repos/$o/$r"`, risk.DecisionDeny},
+		{`wget "https://api.github.com/repos/$o/$r"`, risk.DecisionDeny},
+		{`wget -O$f https://github.com/acme/app/archive/main.zip`, risk.DecisionDeny},
+		{`iwr -OutFile$f https://github.com/acme/app/archive/main.zip`, risk.DecisionDeny},
+		{`irm "https://example.com/repos/$o/$r" -Method Delete`, risk.DecisionAllow},
+		{`irm "https://$h/repos/acme/app" -Method Delete`, risk.DecisionAllow},
+		// A provider host followed by a computed part may still be the
+		// target ($suffix may be empty), as for wget and HTTPie.
+		{`irm https://api.github.com$suffix/repos/$o -Method Delete`, risk.DecisionDeny},
+		{`irm "https://api.github.com$suffix/repos/$o" -Method Delete`, risk.DecisionDeny},
+		{`irm https://api.github.com/repos/$o/$r -Method Delete`, risk.DecisionDeny},
+		{`irm "https://example.com/hooks" -Method Post -Body "{\"url\":\"https://api.github.com/$x\"}"`, risk.DecisionAllow},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, guard)
+			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+			decision, err := provider.DecideHook(context.Background(), cedarHookEvent("PowerShell", map[string]any{"command": test.command, "description": "Call the GitHub API"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != test.want {
+				t.Fatalf("decision = %s, want %s; shell evidence %#v", decision.Decision, test.want, decision.Cedar)
+			}
+		})
+	}
+}
+
 func TestCedarCodexShellOnWindowsReadsBothDialects(t *testing.T) {
 	for _, test := range []struct {
 		name, agent, hostOS, command string

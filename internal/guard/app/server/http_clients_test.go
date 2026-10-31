@@ -18,6 +18,7 @@ func TestHTTPClientPolicyDecisions(t *testing.T) {
 	const githubWrite = `forbid(principal, action, resource) when { context has shell && context.shell.facts.contains("github/write=true") };`
 	const githubForce = `forbid(principal, action, resource) when { context has shell && context.shell.facts.contains("github/operation=force-push") };`
 	const githubGuard = `forbid(principal, action, resource) when { context has shell && context.shell.facts.contains("github/route=unrecognized") };`
+	const databricksGuard = `forbid(principal, action, resource) when { context has shell && context.shell.facts.contains("databricks/route=unrecognized") };`
 	tests := []struct {
 		name, command, policy string
 		blocked               bool
@@ -112,6 +113,32 @@ func TestHTTPClientPolicyDecisions(t *testing.T) {
 		{"computed code emitter", `printf "%s" "curl -X DELETE https://api.github.com/repos/acme/sandbox -H 'Authorization: Bearer $TOKEN'" | bash`, githubGuard, true},
 		{"wget computed URL host", `wget "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
 		{"httpie computed URL host", `http --ignore-stdin GET "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
+		// curl keeps the literal host of a URL with a computed part too.
+		{"curl computed URL host", `curl -X DELETE "https://api.github.com/repos/$OWNER/$REPO"`, githubGuard, true},
+		{"curl partly computed URL host", `curl -X DELETE "https://api.github.com/repos/acme/$REPO"`, githubGuard, true},
+		{"curl unquoted computed URL host", `curl -X DELETE https://api.github.com/repos/$OWNER/sandbox`, githubGuard, true},
+		{"curl computed --url host", `curl -X DELETE --url "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
+		{"curl computed attached --url host", `curl -X DELETE --url="https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
+		{"curl wholly quoted computed --url host", `curl -X DELETE "--url=https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
+		{"curl computed URL after option terminator", `curl -X DELETE -- "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
+		{"curl short cluster before computed URL", `curl -sX DELETE "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
+		{"wrapped curl computed URL host", `env TZ=UTC curl -X DELETE "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
+		{"curl computed Databricks URL host", `curl -X POST "https://dbc-1234.cloud.databricks.com/api/2.2/jobs/$ACTION"`, databricksGuard, true},
+		{"curl computed host stays unknown", `curl -X DELETE "https://$HOST/repos/acme/sandbox"`, githubGuard, false},
+		{"curl fully computed URL stays unknown", `curl -X DELETE "$URL"`, githubGuard, false},
+		{"curl computed body is data", `curl -X POST -d "{\"url\":\"https://api.github.com/$X\"}" https://example.com/hooks`, githubGuard, false},
+		{"curl computed header is data", `curl -H "Referer: https://api.github.com/$X" https://example.com`, githubGuard, false},
+		{"curl computed output path is data", `curl -o "api.github.com/$X.json" https://example.com/file`, githubGuard, false},
+		{"curl computed attached body is data", `curl -d"{\"url\":\"https://api.github.com/$X\"}" https://example.com/hooks`, githubGuard, false},
+		{"curl computed attached referer is data", `curl --referer="https://api.github.com/$X" https://example.com`, githubGuard, false},
+		{"curl value of an unknown option is data", `curl --noproxy "api.github.com,$X" https://example.com`, githubGuard, false},
+		{"curl unknown option with its value attached keeps the next URL", `curl -X DELETE --retry=3 "https://api.github.com/repos/$OWNER/$REPO"`, githubGuard, true},
+		{"curl URL value of an unknown option is data", `curl --doh-url "https://api.github.com/$X" https://example.com`, githubGuard, false},
+		// A provider host with a computed part around it may still be the
+		// target, so the request is unrecognized, as for wget and HTTPie.
+		{"curl computed scheme keeps the named host", `curl -X DELETE "$SCHEME://api.github.com/repos/acme/sandbox"`, githubGuard, true},
+		{"curl computed base keeps a named host", `curl "$BASE/cb?next=https://api.github.com/$X"`, githubGuard, true},
+		{"httpie computed first target keeps a later literal target", `http "$SCHEME://example.com" DELETE http://api.github.com/repos/acme/sandbox`, githubGuard, true},
 		{"absolute grep", `/usr/bin/grep -n api.github.com README.md`, githubGuard, false},
 		{"wget SQL file", `wget --method POST --body-file drop.json https://dbc-1234.cloud.databricks.com/api/2.0/sql/statements`, databricksPresets["block-databricks-deletion"], true},
 		{"httpie github delete", `http DELETE https://api.github.com/repos/acme/sandbox`, githubWrite, true},

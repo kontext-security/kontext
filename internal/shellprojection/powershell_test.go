@@ -327,3 +327,26 @@ func FuzzProjectPowerShell(f *testing.F) {
 		}
 	})
 }
+
+// Every reading of a web request whose URL has a computed part keeps the
+// literal host: the program and, for a bare curl or wget, Windows
+// PowerShell 5.1's Invoke-WebRequest.
+func TestPowerShellComputedURLKeepsHostInEveryReading(t *testing.T) {
+	for _, command := range []string{
+		`curl -UseB -Method Delete -Uri "https://api.github.com/repos/$o/$r"`,
+		`wget -Method Delete "https://api.github.com/repos/$o/$r"`,
+		`irm -Method Delete "https://api.github.com/repos/$o/$r"`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			projections := ProjectPowerShell(command)
+			if command[0] != 'i' && len(projections) != 2 {
+				t.Fatalf("readings = %d, want the program and the cmdlet: %#v", len(projections), projections)
+			}
+			for _, p := range projections {
+				if !slices.Contains(p.Facts, FactRouteUnrecognized) {
+					t.Errorf("%s reading facts = %v, want %s", p.Program, p.Facts, FactRouteUnrecognized)
+				}
+			}
+		})
+	}
+}

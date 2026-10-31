@@ -1,6 +1,7 @@
 package shellprojection
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
@@ -87,6 +88,20 @@ func webCmdletWords(words []scriptWord, w walk) []string {
 	return args
 }
 
+// scriptSource returns a call's values with each computed word written as
+// its source text instead of "", lined up with its words; values past the
+// words (a marker webCmdletWords adds) stay as they are. The value of an
+// unquoted word leaves out its variables, which keeps any host it names.
+func scriptSource(values []string, words []scriptWord) []string {
+	source := slices.Clone(values)
+	for i := 1; i < len(source) && i < len(words); i++ {
+		if source[i] == "" && !words[i].literal {
+			source[i] = words[i].value
+		}
+	}
+	return source
+}
+
 // webCmdletAlias returns the arguments of curl or wget, named bare, as
 // Invoke-WebRequest's when Windows PowerShell 5.1, where both are its
 // aliases, would bind them; PowerShell 7 runs the program. A path or an .exe
@@ -143,6 +158,7 @@ func projectStatements(statements []scriptStatement, nested []string, dialect sc
 		if cmdlet {
 			values = append(values[:1], webCmdletWords(words[1:], w)...)
 		}
+		cw.source = scriptSource(values, words)
 		projections = append(projections, classify(values, complete, cw, helpAllowed && direct)...)
 		if dialect != dialectPowerShell || len(values) == 0 {
 			continue
@@ -154,6 +170,12 @@ func projectStatements(statements []scriptStatement, nested []string, dialect sc
 				args = append(args, cmdletDefaults)
 			}
 			aw := walk{depth: w.depth, oneArgumentEach: true, stdin: statement.piped && index > 0, cmdlet: true}
+			if source, ok := webCmdletAlias(words[0].value, scriptSource(webCmdletWords(words, walk{}), words)[1:]); ok {
+				if w.cmdletDefaults {
+					source = append(source, cmdletDefaults)
+				}
+				aw.source = append([]string{"invoke-webrequest"}, source...)
+			}
 			projections = append(projections, classify(append([]string{"invoke-webrequest"}, args...), complete, aw, false)...)
 		}
 	}

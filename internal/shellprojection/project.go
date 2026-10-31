@@ -68,6 +68,10 @@ type walk struct {
 	// cmdletDefaults is set in a PowerShell script that touches
 	// $PSDefaultParameterValues, which can change any cmdlet's parameters.
 	cmdletDefaults bool
+	// source is the call's words as classify receives them, with each word
+	// the shell computes written as its source text instead of "": the
+	// literal host of a URL with a computed part still names the provider.
+	source []string
 }
 
 func project(command string, w walk) []cedareval.ShellProjectionV2 {
@@ -319,6 +323,7 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 				}
 			}
 		}
+		cw.source = sourceWords(call, command)
 		classified := classify(words, complete, cw, helpAllowed && direct)
 		// A computed URL may still name a provider literally. Retain that
 		// hint for the new clients when no route could be established.
@@ -373,14 +378,37 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 
 // rawCallWords preserves visible syntax where expansion hides a whole word.
 func rawCallWords(call *syntax.CallExpr, command string) []string {
+	words, _, _, _ := unwrap(sourceWords(call, command), true)
+	return words
+}
+
+// sourceWords returns a call's words as literalWords does, with each word
+// the shell computes written as its source text instead of "".
+func sourceWords(call *syntax.CallExpr, command string) []string {
 	words, _ := literalWords(call.Args)
 	for i, arg := range call.Args {
 		if _, literal := literalWord(arg); !literal {
 			words[i] = command[arg.Pos().Offset():arg.End().Offset()]
 		}
 	}
-	words, _, _, _ = unwrap(words, true)
 	return words
+}
+
+// alignedSource returns the source words that line up with words, which
+// unwrapping may have shortened from the front, or nil when they do not:
+// every literal word must be the same in both.
+func alignedSource(source, words []string) []string {
+	offset := len(source) - len(words)
+	if source == nil || offset < 0 {
+		return nil
+	}
+	source = source[offset:]
+	for i, word := range words {
+		if word != "" && word != source[i] {
+			return nil
+		}
+	}
+	return source
 }
 
 // Direct printf/echo output is independent of stdin. Compound commands
@@ -676,8 +704,12 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 	// Case-insensitive file systems (macOS, Windows) run ACLI as acli.
 	program := strings.TrimSuffix(strings.ToLower(filepath.Base(words[0])), ".exe")
 	args := words[1:]
+	var sourceArgs []string
+	if source := alignedSource(w.source, words); source != nil {
+		sourceArgs = source[1:]
+	}
 	if w.cmdlet && webCmdlet(program) {
-		return single(classifyHTTPClient(program, args, complete && w.oneArgumentEach, !wordsComplete && wrapperComplete && w.oneArgumentEach, w.stdin))
+		return single(classifyHTTPClient(program, args, sourceArgs, complete && w.oneArgumentEach, !wordsComplete && wrapperComplete && w.oneArgumentEach, w.stdin))
 	}
 	switch program {
 	case "git":
@@ -685,9 +717,9 @@ func classify(words []string, complete bool, w walk, helpAllowed bool) []cedarev
 	case "gh":
 		return single(classifyGH(args, complete, helpAllowed))
 	case "curl":
-		return single(classifyCurl(args, complete, !wordsComplete && wrapperComplete && w.oneArgumentEach, true))
+		return single(classifyCurl(args, sourceArgs, complete, !wordsComplete && wrapperComplete && w.oneArgumentEach, true))
 	case "wget", "http", "https":
-		return single(classifyHTTPClient(program, args, complete && w.oneArgumentEach, !wordsComplete && wrapperComplete && w.oneArgumentEach, w.stdin))
+		return single(classifyHTTPClient(program, args, sourceArgs, complete && w.oneArgumentEach, !wordsComplete && wrapperComplete && w.oneArgumentEach, w.stdin))
 	case "acli":
 		return single(acliCLI.classify(args, complete))
 	case "jira":
@@ -1540,7 +1572,20 @@ func (op curlOperation) withUpload(index int, urlText string) (_ curlOperation, 
 // Bearer $TOKEN"), while one in a URL, method or target still leaves it
 // unclear. Other providers keep main's reading: any computed word leaves
 // their request incomplete. urlGlobs is false for clients without curl globbing.
-func classifyCurl(args []string, complete, opaqueValues, urlGlobs bool) cedareval.ShellProjectionV2 {
+func classifyCurl(args, source []string, complete, opaqueValues, urlGlobs bool) cedareval.ShellProjectionV2 {
+	result, hints := readCurl(args, source, complete, opaqueValues, urlGlobs)
+	// A hint comes only from a computed URL, which leaves the request
+	// unreadable, so it never joins a catalogued route.
+	if len(hints) > 0 {
+		result.Facts = sortedUnique(append(result.Facts, hints...))
+	}
+	return result
+}
+
+// readCurl classifies a curl command's requests and returns, as hints, the
+// provider facts that the source text of its computed URL operands still
+// names (see computedTargetHints); source lines up with args, or is nil.
+func readCurl(args, source []string, complete, opaqueValues, urlGlobs bool) (cedareval.ShellProjectionV2, []string) {
 	// unclear is set when the request cannot be read exactly: a word the
 	// shell computes where an option, URL or method goes, a config file
 	// (-K), which can set any option, or an option the parser does not know
@@ -1555,6 +1600,16 @@ func classifyCurl(args []string, complete, opaqueValues, urlGlobs bool) cedareva
 	}
 	isComputed := func(word string) bool { return computed && word == "" }
 	args = slices.Clone(args)
+	if len(source) != len(args) {
+		source = nil
+	}
+	source = slices.Clone(source)
+	var hints []string
+	hint := func(j int) {
+		if source != nil && isComputed(args[j]) {
+			hints = append(hints, computedTargetHints(source[j])...)
+		}
+	}
 	var operations []curlOperation
 	var op curlOperation
 	safeFlags := map[string]bool{"-s": true, "-S": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
@@ -1564,6 +1619,9 @@ func classifyCurl(args []string, complete, opaqueValues, urlGlobs bool) cedareva
 		if expanded, ok := expandCurlShortCluster(arg); ok {
 			// -sX DELETE is -s -X DELETE; -sd@f is -s -d @f.
 			args = slices.Concat(args[:i], expanded, args[i+1:])
+			if source != nil {
+				source = slices.Concat(source[:i], expanded, source[i+1:])
+			}
 			i--
 			continue
 		}
@@ -1577,6 +1635,9 @@ func classifyCurl(args []string, complete, opaqueValues, urlGlobs bool) cedareva
 		if arg == "--" && !unknownBefore {
 			// Everything after the option terminator is a URL.
 			op.urls = append(op.urls, args[i+1:]...)
+			for j := i + 1; j < len(args); j++ {
+				hint(j)
+			}
 			break
 		}
 		unknown := false
@@ -1621,6 +1682,7 @@ func classifyCurl(args []string, complete, opaqueValues, urlGlobs bool) cedareva
 		case arg == "--url" || strings.HasPrefix(arg, "--url="):
 			if urlText, ok := value("--url"); ok {
 				op.urls = append(op.urls, urlText)
+				hint(i)
 			}
 		case isCurlDataFlag(arg):
 			if i+1 >= len(args) {
@@ -1665,6 +1727,12 @@ func classifyCurl(args []string, complete, opaqueValues, urlGlobs bool) cedareva
 			unknown = !curlSwitches[arg]
 		default:
 			op.urls = append(op.urls, arg)
+			// After an option the parser does not know, the word may be its
+			// value (--noproxy); one written with its value (--retry=3)
+			// cannot take it.
+			if !unknownBefore || strings.Contains(args[i-1], "=") {
+				hint(i)
+			}
 		}
 		if isBody {
 			op.bodies = append(op.bodies, body)
@@ -1715,11 +1783,11 @@ func classifyCurl(args []string, complete, opaqueValues, urlGlobs bool) cedareva
 	}
 	if len(requests) <= 1 && len(operations) == 1 && len(unrecognized) == 0 {
 		if len(requests) == 0 {
-			return classifyCurlURL("", op.method(), op.bodies, complete && !opaqueValues, op.bodyFile)
+			return classifyCurlURL("", op.method(), op.bodies, complete && !opaqueValues, op.bodyFile), hints
 		}
 		// The opaque reading is for Databricks requests only.
 		requestComplete := complete && (!opaqueValues || databricksURL(requests[0].urlText))
-		return classifyCurlURL(requests[0].urlText, requests[0].method, requests[0].bodies, requestComplete, requests[0].bodyFile)
+		return classifyCurlURL(requests[0].urlText, requests[0].method, requests[0].bodies, requestComplete, requests[0].bodyFile), hints
 	}
 	// Several requests, or one that is unrecognized: each is judged, and the
 	// whole is never a catalogued route.
@@ -1736,7 +1804,7 @@ func classifyCurl(args []string, complete, opaqueValues, urlGlobs bool) cedareva
 		// One request must not lend the SQL exemption to another's write.
 		facts = slices.DeleteFunc(facts, func(fact string) bool { return fact == databricksProductFact(databricksSQLProduct) })
 	}
-	return projection("curl", facts, features, false)
+	return projection("curl", facts, features, false), hints
 }
 
 // curlSwitches are common curl options that take no value.
