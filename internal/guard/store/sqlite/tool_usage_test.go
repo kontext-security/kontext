@@ -413,6 +413,45 @@ func TestToolUsageReadLimitDoesNotStarveChangedSources(t *testing.T) {
 	}
 }
 
+// checked_at is RFC3339Nano text, which trims trailing zeros, so the oldest
+// check is found by time: "...:20.87Z" sorts after "...:20.871Z" as text.
+func TestToolUsageReadLimitReadsOldestCheckFirst(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	line := `{"type":"user","sessionId":"s","message":{"content":"hello"}}` + "\n"
+	for i := 0; i <= toolUsageReadLimit; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("session-%03d.jsonl", i))
+		if err := os.WriteFile(path, []byte(line), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.TrackToolTranscript(ctx, hook.Event{SessionID: "s", Agent: "claude", HookName: hook.HookPostToolUse, TranscriptPath: path}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Every source changed since its last read; the last one registered was
+	// checked a millisecond before the others.
+	oldest := filepath.Join(dir, fmt.Sprintf("session-%03d.jsonl", toolUsageReadLimit))
+	if _, err := store.db.ExecContext(ctx, `update tool_usage_sources set fingerprint = 'stale', checked_at = case when transcript_path = ? then ? else ? end`,
+		oldest, "2026-10-19T10:00:20.87Z", "2026-10-19T10:00:20.871Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var waiting, oldestWaiting int
+	if err := store.db.QueryRowContext(ctx, `select count(*), coalesce(sum(transcript_path = ?), 0) from tool_usage_sources where fingerprint = 'stale'`, oldest).Scan(&waiting, &oldestWaiting); err != nil {
+		t.Fatal(err)
+	}
+	if waiting != 1 || oldestWaiting != 0 {
+		t.Fatalf("%d sources wait after one pass, the oldest check among them: %v", waiting, oldestWaiting == 1)
+	}
+}
+
 func TestToolUsageFailedReadWaitsForChange(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

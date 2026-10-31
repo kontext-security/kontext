@@ -158,8 +158,8 @@ where id in (%s)
 	sort.Slice(records, func(i, j int) bool {
 		createdI, _ := records[i]["created_at"].(string)
 		createdJ, _ := records[j]["created_at"].(string)
-		if createdI != createdJ {
-			return createdI < createdJ
+		if order := compareLedgerTimestamps(createdI, createdJ); order != 0 {
+			return order < 0
 		}
 		idI, _ := records[i]["id"].(string)
 		idJ, _ := records[j]["id"].(string)
@@ -473,6 +473,15 @@ func parseLedgerTimestamp(value string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("invalid timestamp %q", value)
+}
+
+// compareLedgerTimestamps orders stored timestamps by time, with one that does
+// not parse first. Their text does not sort by time: time.RFC3339Nano trims
+// trailing zeros, so "...:20.87Z" sorts after "...:20.871Z" ('Z' > '1').
+func compareLedgerTimestamps(a, b string) int {
+	timeA, _ := parseLedgerTimestamp(a)
+	timeB, _ := parseLedgerTimestamp(b)
+	return timeA.Compare(timeB)
 }
 
 func ledgerTimestampCursorKeyFromTime(value time.Time) string {
