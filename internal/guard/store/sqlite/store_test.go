@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1974,5 +1976,87 @@ func TestOpenStoreGatesCursorBackfillOnUserVersion(t *testing.T) {
 	}
 	if key != "sentinel" {
 		t.Fatalf("cursor key = %q, want the backfill skipped on reopen (user_version already 1)", key)
+	}
+}
+
+// Earlier releases stored annotation created_at as RFC3339Nano, and one can
+// keep writing it after this release migrated the file. Every open rewrites
+// those rows into the fixed-width layout; the export still sends the same
+// instant.
+func TestOpenStoreNormalizesAnnotationCreatedAtOnEveryOpen(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/guard.db"
+	insertLegacy := func(createdAt map[string]string) {
+		t.Helper()
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		for id, value := range createdAt {
+			if _, err := db.ExecContext(ctx, `insert into step_safety_verdicts(id, action_id, session_id, tool_name, shadow_decision, threshold, model_version, latency_ms, created_at)
+values(?, ?, 'session-1', 'Bash', 'safe', 0.5, 'm1', 1, ?)`, "ssv_"+id, "act_"+id, value); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(ctx, `insert into risk_type_annotations(id, action_id, session_id, command_hash, input_kind, schema_version, model_version, annotation_json, created_at)
+values(?, ?, 'session-1', 'h', 'shell', 'v1', 'm1', '{}', ?)`, "rta_"+id, "act_"+id, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	reopen := func() {
+		t.Helper()
+		store, err := OpenStore(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reopen()
+	second := time.Date(2026, 10, 31, 12, 0, 20, 0, time.UTC)
+	legacy := map[string]string{"whole": "2026-10-31T12:00:20Z", "half": "2026-10-31T12:00:20.5Z"}
+	// Enough rows a day earlier to take several pages.
+	for i := range 1200 {
+		legacy[fmt.Sprintf("old_%04d", i)] = second.Add(-24*time.Hour + time.Duration(i)*time.Millisecond).Format(time.RFC3339Nano)
+	}
+	insertLegacy(legacy)
+	reopen()
+	// Written by an older release after the first migration, and a value
+	// that does not parse, which stays as it is.
+	insertLegacy(map[string]string{"late": "2026-10-31T12:00:20.87Z", "garbage": "not a time"})
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	want := []string{"2026-10-31T12:00:20.000000000Z", "2026-10-31T12:00:20.500000000Z", "2026-10-31T12:00:20.870000000Z", "not a time"}
+	for _, table := range []string{"step_safety_verdicts", "risk_type_annotations"} {
+		stored, err := queryStrings(ctx, store.db, `select created_at from `+table+` where created_at > '2026-10-31' order by created_at`)
+		if err != nil || !slices.Equal(stored, want) {
+			t.Fatalf("%s created_at = %v, err %v; want %v", table, stored, err, want)
+		}
+		rewritten, err := queryStrings(ctx, store.db, `select created_at from `+table+` where id not like '%garbage'`)
+		if err != nil || len(rewritten) != len(legacy)+1 {
+			t.Fatalf("%s rows = %d, err %v; want %d", table, len(rewritten), err, len(legacy)+1)
+		}
+		for _, value := range rewritten {
+			if parsed, err := parseStoredTime("created_at", value); err != nil || value != ledgerTimestampCursorKeyFromTime(parsed) {
+				t.Fatalf("%s created_at %q is not in the fixed-width layout", table, value)
+			}
+		}
+	}
+	records, _, err := store.MerlinAnnotations(ctx, MerlinAnnotationExportOptions{CreatedAfter: &second, CreatedAfterID: "ssv_whole", Limit: 1})
+	if err != nil || len(records) != 1 || records[0].ID != "ssv_half" {
+		t.Fatalf("records after the whole second = %+v, err %v; want ssv_half", records, err)
+	}
+	wire, err := json.Marshal(records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"created_at":"2026-10-31T12:00:20.5Z"`) {
+		t.Fatalf("wire record = %s, want the RFC3339Nano instant", wire)
 	}
 }

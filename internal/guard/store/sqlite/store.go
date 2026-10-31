@@ -390,6 +390,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureRiskTypeAnnotations(ctx); err != nil {
 		return err
 	}
+	for _, table := range []string{"step_safety_verdicts", "risk_type_annotations"} {
+		if err := s.normalizeAnnotationCreatedAt(ctx, table); err != nil {
+			return err
+		}
+	}
 	if _, err := s.db.ExecContext(ctx, toolUsageDDL); err != nil {
 		return err
 	}
@@ -727,6 +732,82 @@ where id = ?
 		}
 	}
 	return nil
+}
+
+// annotationCreatedAtUnnormalized matches a created_at that is not in
+// ledgerTimestampCursorKeyLayout.
+const annotationCreatedAtUnnormalized = "created_at not glob '????-??-??T??:??:??.?????????Z'"
+
+// normalizeAnnotationCreatedAt rewrites a table's annotation created_at into
+// ledgerTimestampCursorKeyLayout. The export cursors and the prune mirror
+// compare it as text, and earlier releases wrote RFC3339Nano, which trims
+// trailing zeros: "…:20.5Z" sorts before "…:20Z", so an annotation that became
+// eligible after the cursor passed a rounder stamp in its second was never
+// uploaded. Unlike the action cursor-key backfill this runs on every open: an
+// older release can still write here (a daemon left running across an
+// upgrade, a downgrade), and a trimmed stamp sorts after its own fixed-width
+// cursor, so the export would send that row again on every page. The partial
+// index holds only the rows left to rewrite, so the check is cheap; "indexed
+// by" keeps the planner off the covering created_at index, which it prefers
+// and which would scan every row.
+func (s *Store) normalizeAnnotationCreatedAt(ctx context.Context, table string) error {
+	index := "idx_" + table + "_created_unnormalized"
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+create index if not exists %s
+on %s(id) where %s
+	`, index, table, annotationCreatedAtUnnormalized)); err != nil {
+		return err
+	}
+	// On macOS and Windows the first open rewrites every row: their clocks
+	// tick in microseconds and 100ns, so no RFC3339Nano stamp there has nine
+	// digits. Pages bound memory and how long each write holds the lock
+	// against the hook path. Paging by id steps past a value that does not
+	// parse; it stays as it is, and reading the row reports it.
+	page := fmt.Sprintf(`select id, created_at from %s indexed by %s where %s and id > ? order by id limit 500`,
+		table, index, annotationCreatedAtUnnormalized)
+	update := fmt.Sprintf(`update %s set created_at = ? where id = ?`, table)
+	for after := ""; ; {
+		rows, err := s.db.QueryContext(ctx, page, after)
+		if err != nil {
+			return err
+		}
+		scanned := 0
+		var ids, keys []string
+		for rows.Next() {
+			var id, createdAt string
+			if err := rows.Scan(&id, &createdAt); err != nil {
+				rows.Close()
+				return err
+			}
+			scanned++
+			after = id
+			if parsed, err := parseStoredTime(table+" created_at", createdAt); err == nil {
+				ids, keys = append(ids, id), append(keys, ledgerTimestampCursorKeyFromTime(parsed))
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if scanned == 0 {
+			return nil
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		for i := range ids {
+			if _, err := tx.ExecContext(ctx, update, keys[i], ids[i]); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
 }
 
 func (s *Store) OpenSession(ctx context.Context, sessionID, agent, cwd, source, externalID string) (SessionRecord, error) {

@@ -125,7 +125,7 @@ insert into step_safety_verdicts(
 		record.UnsafeProbability, record.ShadowDecision, record.Threshold, record.ModelVersion,
 		record.LatencyMS, nullIfEmpty(record.ErrorCode), record.Enforced,
 		record.UserRequestPresent, record.HistoryPresent, record.HistoryOmitted, record.ToolSchemasPresent,
-		nullIfEmpty(record.UserFeedback), storedOptionalTime(record.FeedbackAt), record.CreatedAt.Format(time.RFC3339Nano), string(reviewJSON),
+		nullIfEmpty(record.UserFeedback), storedOptionalTime(record.FeedbackAt), ledgerTimestampCursorKeyFromTime(record.CreatedAt), string(reviewJSON),
 	)
 	if err != nil {
 		return StepSafetyRecord{}, err

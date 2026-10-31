@@ -117,7 +117,7 @@ insert into risk_type_annotations(
 where exists (select 1 from authorization_actions where id = ?)
 on conflict(action_id, model_version) do nothing
 	`, id, record.ActionID, record.SessionID, nullIfEmpty(record.ToolUseID), record.CommandHash, record.InputKind,
-		record.Verdict.SchemaVersion, record.Verdict.Provenance.ModelVersion, string(annotationJSON), record.CreatedAt.Format(time.RFC3339Nano),
+		record.Verdict.SchemaVersion, record.Verdict.Provenance.ModelVersion, string(annotationJSON), ledgerTimestampCursorKeyFromTime(record.CreatedAt),
 		record.ActionID)
 	if err != nil {
 		return RiskTypeAnnotationRecord{}, false, err
@@ -191,7 +191,7 @@ func (s *Store) RiskTypeAnnotations(ctx context.Context, opts RiskTypeAnnotation
 	args := []any{}
 	conditions := []string{}
 	if opts.CreatedAfter != nil {
-		created := opts.CreatedAfter.UTC().Format(time.RFC3339Nano)
+		created := ledgerTimestampCursorKeyFromTime(*opts.CreatedAfter)
 		if opts.CreatedAfterID != "" {
 			conditions = append(conditions, "(annotation.created_at > ? or (annotation.created_at = ? and annotation.id > ?))")
 			args = append(args, created, created, opts.CreatedAfterID)
