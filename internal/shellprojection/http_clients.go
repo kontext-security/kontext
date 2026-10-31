@@ -72,10 +72,13 @@ func withComputedSource(args, source []string) ([]string, bool) {
 // a path or query is not the target, and a word that is an option with its
 // value attached (--referer=…, -d…) is no URL, except --url=.
 func computedTargetHints(source string) []string {
-	if strings.HasPrefix(strings.TrimLeft(source, `"'`), "-") && !strings.HasPrefix(source, "--url=") {
-		return nil
+	if text := strings.TrimLeft(source, `"'`); strings.HasPrefix(text, "-") {
+		var ok bool
+		if source, ok = strings.CutPrefix(text, "--url="); !ok {
+			return nil
+		}
 	}
-	facts, resolved := httpTargetFacts(strings.TrimPrefix(source, "--url="))
+	facts, resolved := httpTargetFacts(source)
 	if !resolved {
 		return nil
 	}

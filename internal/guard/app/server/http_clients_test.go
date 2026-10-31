@@ -119,6 +119,7 @@ func TestHTTPClientPolicyDecisions(t *testing.T) {
 		{"curl unquoted computed URL host", `curl -X DELETE https://api.github.com/repos/$OWNER/sandbox`, githubGuard, true},
 		{"curl computed --url host", `curl -X DELETE --url "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
 		{"curl computed attached --url host", `curl -X DELETE --url="https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
+		{"curl wholly quoted computed --url host", `curl -X DELETE "--url=https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
 		{"curl computed URL after option terminator", `curl -X DELETE -- "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
 		{"curl short cluster before computed URL", `curl -sX DELETE "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
 		{"wrapped curl computed URL host", `env TZ=UTC curl -X DELETE "https://api.github.com/repos/$OWNER/sandbox"`, githubGuard, true},
