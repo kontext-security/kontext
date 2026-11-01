@@ -47,9 +47,10 @@ type claudeHookOutput struct {
 }
 
 type claudeHookSpecificOutput struct {
-	HookEventName            string `json:"hookEventName"`
-	PermissionDecision       string `json:"permissionDecision,omitempty"`
-	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+	HookEventName            string         `json:"hookEventName"`
+	PermissionDecision       string         `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string         `json:"permissionDecisionReason,omitempty"`
+	UpdatedToolOutput        map[string]any `json:"updatedToolOutput,omitempty"`
 }
 
 func DecodeClaudeEvent(input []byte, agentName string) (hook.Event, error) {
@@ -170,6 +171,16 @@ func decodeUseNumber(data []byte, dst any) error {
 }
 
 func EncodeClaudeResult(hookEventName string, result hook.Result) ([]byte, error) {
+	// A compacted tool output is not a decision: it applies whatever the
+	// daemon said about the event itself, which a PostToolUse cannot block.
+	if hook.HookName(hookEventName) == hook.HookPostToolUse && result.UpdatedToolOutput != nil {
+		return json.Marshal(claudeHookOutput{
+			HookSpecificOutput: &claudeHookSpecificOutput{
+				HookEventName:     hookEventName,
+				UpdatedToolOutput: result.UpdatedToolOutput,
+			},
+		})
+	}
 	// Kontext only blocks; approving stays with Claude Code's own permission
 	// flow. Anything but a PreToolUse deny carries no decision. Unknown
 	// decisions block.

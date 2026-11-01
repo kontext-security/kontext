@@ -159,3 +159,26 @@ func TestEncodeClaudeFailOpenOmitsPermissionDecision(t *testing.T) {
 		t.Fatalf("EncodeClaudeResult() = %s, want no permission decision", got)
 	}
 }
+
+// A compacted output replaces what the agent sees, whatever the daemon said
+// about the event: a PostToolUse cannot be blocked, and a fail-open ingest
+// does not undo the compaction.
+func TestEncodeClaudeUpdatedToolOutput(t *testing.T) {
+	t.Parallel()
+
+	result := hook.FailOpen("managed policy daemon unavailable")
+	result.UpdatedToolOutput = map[string]any{"stdout": "short", "stderr": "", "interrupted": false}
+	out, err := EncodeClaudeResult("PostToolUse", result)
+	if err != nil {
+		t.Fatalf("EncodeClaudeResult() error = %v", err)
+	}
+	want := `{"hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":{"interrupted":false,"stderr":"","stdout":"short"}}}`
+	if string(out) != want {
+		t.Fatalf("EncodeClaudeResult() = %s, want %s", out, want)
+	}
+	// Only a PostToolUse carries one.
+	out, err = EncodeClaudeResult("PreToolUse", hook.Result{Decision: hook.DecisionAllow, UpdatedToolOutput: result.UpdatedToolOutput})
+	if err != nil || string(out) != `{"suppressOutput":true}` {
+		t.Fatalf("EncodeClaudeResult(PreToolUse) = %s, %v", out, err)
+	}
+}

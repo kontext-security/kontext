@@ -20,6 +20,7 @@ type EvaluateRequest struct {
 	CWD                 string          `json:"cwd"`
 	TranscriptPath      string          `json:"transcript_path,omitempty"`
 	AgentTranscriptPath string          `json:"agent_transcript_path,omitempty"`
+	Model               string          `json:"model,omitempty"`
 	PermissionMode      string          `json:"permission_mode,omitempty"`
 	FullDiskAccess      *bool           `json:"full_disk_access,omitempty"`
 	DurationMs          *int64          `json:"duration_ms,omitempty"`
@@ -43,6 +44,22 @@ type EvaluateResult struct {
 	// its response with the eventual record.
 	EventID      string         `json:"event_id,omitempty"`
 	UpdatedInput map[string]any `json:"updated_input,omitempty"`
+	// CompactToolOutput offers tool output compaction for this PostToolUse:
+	// the hook may then send a CompactRequestType request. A daemon that
+	// predates the request never offers it.
+	CompactToolOutput bool `json:"compact_tool_output,omitempty"`
+}
+
+// CompactRequestType marks a request for tool output compaction instead of
+// an evaluation. It carries the PostToolUse event; the answer is a
+// CompactResult.
+const CompactRequestType = "compact_tool_output"
+
+// CompactResult answers a CompactRequestType request: the tool response the
+// agent should see instead, or none to leave the output unchanged.
+type CompactResult struct {
+	Type              string          `json:"type"`
+	UpdatedToolOutput json.RawMessage `json:"updated_tool_output,omitempty"`
 }
 
 func WriteMessage(conn net.Conn, v any) error {

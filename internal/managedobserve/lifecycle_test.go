@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -638,5 +640,86 @@ func TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("restarted daemon did not receive the request")
+	}
+}
+
+// A PostToolUse whose answer offers compaction asks the daemon a second time
+// and carries back what it says. Without the offer (an older daemon, the
+// switch off) or for any other event, no second call is made.
+func TestLifecycleCompactsLargeOutputs(t *testing.T) {
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-compaction.sock")
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer listener.Close()
+	var compactions atomic.Int32
+	replacement := json.RawMessage(`{"stdout":"short","stderr":""}`)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			var request localruntime.EvaluateRequest
+			if localruntime.ReadMessage(conn, &request) == nil {
+				if request.Type == localruntime.CompactRequestType {
+					compactions.Add(1)
+					_ = localruntime.WriteMessage(conn, localruntime.CompactResult{Type: "compact_result", UpdatedToolOutput: replacement})
+				} else {
+					var response map[string]any
+					_ = json.Unmarshal(request.ToolResponse, &response)
+					offer := request.HookEvent == "PostToolUse" && response["stderr"] != "no offer"
+					_ = localruntime.WriteMessage(conn, localruntime.EvaluateResult{Decision: "allow", Allowed: true, CompactToolOutput: offer})
+				}
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	lifecycle := Lifecycle{SocketPath: socketPath, Label: DefaultLaunchdLabel}
+	large := strings.Repeat("output line\n", 300)
+	event := hook.Event{Agent: "claude", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "toolu_1",
+		ToolResponse: map[string]any{"stdout": large, "stderr": ""}}
+	result := lifecycle.Process(context.Background(), event)
+	if result.UpdatedToolOutput["stdout"] != "short" || compactions.Load() != 1 {
+		t.Fatalf("result = %+v after %d compactions", result, compactions.Load())
+	}
+
+	codex := hook.Event{Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "call_1",
+		ToolResponse: map[string]any{"content": large}}
+	if result := lifecycle.Process(context.Background(), codex); result.UpdatedToolOutput == nil || compactions.Load() != 2 {
+		t.Fatalf("codex result = %+v after %d compactions", result, compactions.Load())
+	}
+
+	small := event
+	small.ToolResponse = map[string]any{"stdout": "ok"}
+	codeMode := codex
+	codeMode.ToolUseID = "exec-0b3c"
+	unoffered := event
+	unoffered.ToolResponse = map[string]any{"stdout": large, "stderr": "no offer"}
+	for _, other := range []hook.Event{small, codeMode, unoffered, {Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Bash"}} {
+		if result := lifecycle.Process(context.Background(), other); result.UpdatedToolOutput != nil {
+			t.Fatalf("%+v got %+v", other, result)
+		}
+	}
+	if compactions.Load() != 2 {
+		t.Fatalf("compactions = %d, want no more", compactions.Load())
+	}
+}
+
+// A daemon that is not there leaves the output unchanged, quickly.
+func TestLifecycleCompactionWithoutDaemonLeavesOutput(t *testing.T) {
+	lifecycle := Lifecycle{SocketPath: filepath.Join(t.TempDir(), "missing.sock"), Label: DefaultLaunchdLabel,
+		Kickstart: func(context.Context, string) error { return nil }}
+	started := time.Now()
+	result := lifecycle.Process(context.Background(), hook.Event{Agent: "claude", HookName: hook.HookPostToolUse, ToolName: "Bash",
+		ToolResponse: map[string]any{"stdout": strings.Repeat("x", 4096)}})
+	if result.UpdatedToolOutput != nil {
+		t.Fatalf("result = %+v", result)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("took %v", elapsed)
 	}
 }
