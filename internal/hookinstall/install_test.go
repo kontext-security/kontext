@@ -981,6 +981,41 @@ func TestCodexInstallAndDoctorAgreeOnAMachineHookWithARemovedBinary(t *testing.T
 	}
 }
 
+// The reverse: the machine-wide file's first hooks name a removed binary and
+// its Stop hook one that runs. Doctor still counts that Stop, so a stale user
+// copy of it shows as running twice, and the suggested reinstall clears it.
+func TestCodexDoctorCountsAMachineHookBesideARemovedBinary(t *testing.T) {
+	opts, defs := fixture(t, User)
+	codex := defs[1:2]
+	user := codex[0].Files[0].Path
+	live := filepath.Join(t.TempDir(), "kontext")
+	write(t, live, "#!/bin/sh\n", 0755)
+	machine := codexmanaged.Template(filepath.Join(t.TempDir(), "removed", "kontext"))
+	machine.Hooks["Stop"] = codexmanaged.Template(live).Hooks["Stop"]
+	raw, _ := json.Marshal(machine)
+	write(t, machineCodexHooks, string(raw), 0644)
+	stale, err := codexmanaged.TemplateJSON(opts.Binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, user, string(stale), 0644)
+
+	var out bytes.Buffer
+	diagnoseCodexHooks(&out, User, user, machineCodexHooks)
+	want := "Codex hooks: Stop run twice, from " + machineCodexHooks + " and " + user + "."
+	if !strings.Contains(out.String(), want) || !strings.Contains(out.String(), "installed ("+machineCodexHooks+"; binary "+live+")") {
+		t.Fatalf("doctor = %s, want %q", &out, want)
+	}
+	if err := runDefinitions(opts, codex, false); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	diagnoseCodexHooks(&out, User, user, machineCodexHooks)
+	if strings.Contains(out.String(), "run twice") || strings.Contains(out.String(), "missing") {
+		t.Fatalf("doctor after the reinstall = %s", &out)
+	}
+}
+
 // writeMixedMachineSources leaves Stop and SubagentStop out of the drop-in and
 // puts them in managed-settings.json with another binary, as an organization's
 // settings next to an earlier self-serve drop-in would.

@@ -226,12 +226,21 @@ func diagnoseCodexHooks(out io.Writer, scope Scope, preferred, other string) boo
 	var twice []string
 	var repeated codexmanaged.InstallationLayer
 	for _, layer := range installation.Layers {
-		if !executable(layer.Binary) {
-			fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s; binary %s)\n", layer.Path, layer.Binary)
-			healthy = false
+		// A layer's hooks can name more than one binary: name each that cannot
+		// run, and count the events of those that can.
+		running := ""
+		for _, binary := range layerBinaries(layer) {
+			if !executable(binary) {
+				fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s; binary %s)\n", layer.Path, binary)
+				healthy = false
+			} else if running == "" {
+				running = binary
+			}
+		}
+		if running == "" {
 			continue
 		}
-		fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", layer.Path, layer.Binary)
+		fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", layer.Path, running)
 		// Codex skips a user hook the user has not trusted in the Codex CLI's
 		// /hooks; the trust lives in config.toml next to hooks.json.
 		if layer.Path != codexmanaged.SystemHooksPath {
@@ -303,6 +312,20 @@ func checkFeature(installed, user string) error {
 func executable(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0
+}
+
+// layerBinaries lists the binaries a Codex layer's Kontext hooks run, in event
+// order.
+func layerBinaries(layer codexmanaged.InstallationLayer) []string {
+	var binaries []string
+	for _, event := range layer.Events {
+		for _, binary := range layer.Binaries[event] {
+			if !slices.Contains(binaries, binary) {
+				binaries = append(binaries, binary)
+			}
+		}
+	}
+	return binaries
 }
 
 func AgentPresent(agent, home string) bool {
