@@ -9,6 +9,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	moderncsqlite "modernc.org/sqlite"
 )
 
 func TestAuthorizationActionsByIDsChunksBeyondSQLiteVariableLimit(t *testing.T) {
@@ -169,6 +171,84 @@ func TestLedgerBatchReturnsCursorWhenReceiptRangeExceedsLimit(t *testing.T) {
 	}
 }
 
+// An idle flush pages every export from its persisted cursor, which carries
+// an id once the newest row is older than the stream's safety lag. That page
+// must seek the export index to the cursor, as a cursor without an id does,
+// not walk the history before it: annotations are never deleted.
+func TestExportPagesFromCursorWithIDSeekPastHistory(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Enough history that walking an export index reads several times the
+	// pages that seeking it does.
+	const history = 2_000
+	base := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range history {
+		at := base.Add(time.Duration(i) * time.Second)
+		id := fmt.Sprintf("%05d", i)
+		insertLedgerTestAction(t, tx, "act_"+id, at)
+		created := ledgerTimestampCursorKeyFromTime(at)
+		if _, err := tx.ExecContext(ctx, `insert into risk_type_annotations(id, action_id, session_id, command_hash, input_kind, schema_version, model_version, annotation_json, created_at)
+values(?, ?, 'session-1', 'h', 'shell', 'v1', 'm1', '{}', ?)`, "rta_"+id, "act_"+id, created); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `insert into step_safety_verdicts(id, action_id, session_id, tool_name, shadow_decision, threshold, model_version, latency_ms, created_at)
+values(?, ?, 'session-1', 'Bash', 'allow', 0.5, 'm1', 1, ?)`, "ssv_"+id, "act_"+id, created); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every cursor is on the newest row, so every page is empty.
+	newest := base.Add((history - 1) * time.Second)
+	newestID := fmt.Sprintf("%05d", history-1)
+	for _, export := range []struct {
+		name string
+		page func(withID bool) error
+	}{
+		{"actions", func(withID bool) error {
+			opts := LedgerExportOptions{UpdatedAfter: &newest, Limit: 100}
+			if withID {
+				opts.UpdatedAfterID = "act_" + newestID
+			}
+			_, err := store.LedgerBatch(ctx, opts)
+			return err
+		}},
+		{"risk-type annotations", func(withID bool) error {
+			opts := RiskTypeAnnotationExportOptions{CreatedAfter: &newest, ActionUpdatedThrough: &newest, ActionUpdatedThroughID: "act_" + newestID, Limit: 100}
+			if withID {
+				opts.CreatedAfterID = "rta_" + newestID
+			}
+			_, _, err := store.RiskTypeAnnotations(ctx, opts)
+			return err
+		}},
+		{"Merlin annotations", func(withID bool) error {
+			opts := MerlinAnnotationExportOptions{CreatedAfter: &newest, ActionUpdatedThrough: &newest, ActionUpdatedThroughID: "act_" + newestID, Limit: 100}
+			if withID {
+				opts.CreatedAfterID = "ssv_" + newestID
+			}
+			_, _, err := store.MerlinAnnotations(ctx, opts)
+			return err
+		}},
+	} {
+		seek := pagesRead(t, store, func() error { return export.page(false) })
+		withID := pagesRead(t, store, func() error { return export.page(true) })
+		if withID > seek {
+			t.Errorf("%s page from a cursor with an id read %d pages, want at most the %d of a cursor without one", export.name, withID, seek)
+		}
+	}
+}
+
 func insertLedgerTestAction(t *testing.T, tx *sql.Tx, id string, updatedAt time.Time) {
 	t.Helper()
 	timestamp := updatedAt.Format(time.RFC3339Nano)
@@ -190,4 +270,37 @@ insert into authorization_receipts(
 	`, id, actionID, "hash_"+id, createdAt.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// pagesRead counts the pages SQLite reads while fn runs. The store holds a
+// single connection, so its page cache counters cover every query fn makes.
+func pagesRead(t *testing.T, store *Store, fn func() error) int {
+	t.Helper()
+	counters := func(reset bool) int {
+		conn, err := store.db.Conn(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		pages := 0
+		if err := conn.Raw(func(driverConn any) error {
+			status := driverConn.(moderncsqlite.DBStatus)
+			for _, op := range []moderncsqlite.DBStatusOp{moderncsqlite.DBStatusCacheHit, moderncsqlite.DBStatusCacheMiss} {
+				count, _, err := status.Status(op, reset)
+				if err != nil {
+					return err
+				}
+				pages += count
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return pages
+	}
+	counters(true)
+	if err := fn(); err != nil {
+		t.Fatal(err)
+	}
+	return counters(false)
 }

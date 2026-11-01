@@ -158,6 +158,43 @@ func TestPruneExportedLedgerRequiresCursorAndHonorsLimit(t *testing.T) {
 	}
 }
 
+// The verified cursor is an export cursor position: an action at its instant
+// is verified only when its id sorts after the cursor's.
+func TestPruneExportedLedgerVerifiedCursorBreaksTiesByID(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	verifiedAfter := time.Now().UTC().Add(-60 * 24 * time.Hour)
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"act_1", "act_2", "act_3"} {
+		insertLedgerTestAction(t, tx, id, verifiedAfter)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	opts := LedgerPruneOptions{
+		ActionsExportedBefore: time.Now(),
+		VerifiedAfter:         &verifiedAfter,
+		VerifiedAfterID:       "act_2",
+		OlderThan:             time.Now(),
+		MaxRowBytes:           1 << 20,
+		Limit:                 10,
+	}
+	if pruned, err := store.PruneExportedLedger(ctx, opts); err != nil || pruned != 1 {
+		t.Fatalf("pruned %d, err %v; want act_3", pruned, err)
+	}
+	actions, err := queryStrings(ctx, store.db, `select id from authorization_actions order by id`)
+	if err != nil || !slices.Equal(actions, []string{"act_1", "act_2"}) {
+		t.Fatalf("remaining actions = %v, err %v", actions, err)
+	}
+}
+
 // The pending-annotation check mirrors the export cursors: an annotation half
 // a second after a cursor on a whole second is still waiting for upload, so
 // its action stays.

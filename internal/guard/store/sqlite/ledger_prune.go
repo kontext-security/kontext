@@ -94,8 +94,8 @@ where a.updated_at_cursor_key < ?
 	// batches whose responses reported every alteration.
 	verified := ledgerTimestampCursorKeyFromTime(*opts.VerifiedAfter)
 	if opts.VerifiedAfterID != "" {
-		eligible += "\n  and (a.updated_at_cursor_key > ? or (a.updated_at_cursor_key = ? and a.id > ?))"
-		args = append(args, verified, verified, opts.VerifiedAfterID)
+		eligible += "\n  and (a.updated_at_cursor_key, a.id) > (?, ?)"
+		args = append(args, verified, opts.VerifiedAfterID)
 	} else {
 		eligible += "\n  and a.updated_at_cursor_key > ?"
 		args = append(args, verified)
@@ -114,9 +114,8 @@ where a.updated_at_cursor_key < ?
 		switch {
 		case pending.createdAt == nil:
 		case pending.id != "":
-			created := ledgerTimestampCursorKeyFromTime(*pending.createdAt)
-			condition += " and (annotation.created_at > ? or (annotation.created_at = ? and annotation.id > ?))"
-			args = append(args, created, created, pending.id)
+			condition += " and (annotation.created_at, annotation.id) > (?, ?)"
+			args = append(args, ledgerTimestampCursorKeyFromTime(*pending.createdAt), pending.id)
 		default:
 			condition += " and annotation.created_at > ?"
 			args = append(args, ledgerTimestampCursorKeyFromTime(*pending.createdAt))

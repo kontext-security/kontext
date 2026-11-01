@@ -100,5 +100,10 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Read(~/Library/Application Support/Kontext/**/managed-observe/tool-output/**)"
+    ]
   }
 }
