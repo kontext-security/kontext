@@ -5,9 +5,11 @@
 ./internal/agent
 ./internal/agent/claude
 ./internal/agent/codex
+./internal/agenthooks
 ./internal/buildinfo
 ./internal/cedareval
 ./internal/cedarpolicy
+./internal/claudemanaged
 ./internal/cloudhttp
 ./internal/deviceid
 ./internal/diagnostic
@@ -31,6 +33,7 @@
 ./internal/payloadcapture
 ./internal/privacyfolder
 ./internal/runtimecore
+./internal/runtimehost
 ./internal/shellprojection
 ./internal/toolcatalog
 ./pkg/agentauthority/readers

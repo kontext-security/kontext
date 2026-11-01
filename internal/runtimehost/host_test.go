@@ -162,6 +162,9 @@ func TestStartRejectsUnsafeSessionID(t *testing.T) {
 }
 
 func TestStartDoesNotChmodCustomDBParent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no mode bits to change")
+	}
 	parent := filepath.Join(t.TempDir(), "project")
 	if err := os.Mkdir(parent, 0o755); err != nil {
 		t.Fatalf("Mkdir() error = %v", err)

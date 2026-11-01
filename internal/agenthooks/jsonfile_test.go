@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,7 +22,7 @@ func TestReadWriteJSONFilePreservesPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("new file mode = %v, want 0600", info.Mode().Perm())
 	}
 
@@ -35,7 +36,7 @@ func TestReadWriteJSONFilePreservesPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 		t.Fatalf("rewritten file mode = %v, want 0644 preserved", info.Mode().Perm())
 	}
 
@@ -118,7 +119,7 @@ func TestBackupFilePreservesModeAndContent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o640 {
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
 			t.Fatalf("backup mode = %v, want original 0640", info.Mode().Perm())
 		}
 		data, err := os.ReadFile(backupPath)

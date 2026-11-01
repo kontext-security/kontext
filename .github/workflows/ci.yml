@@ -90,7 +90,16 @@ jobs:
   # cannot regress unseen. Not a required check yet; the list grows as the
   # Windows port fixes packages (.github/windows-test-packages.txt).
   verify-windows:
-    runs-on: windows-latest
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: verify-windows
+            runner: windows-latest
+          - name: verify-windows-arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - name: Checkout
