@@ -16,13 +16,15 @@ const (
 	errorPrefix = "error: "
 )
 
-func windowsFolder(t *testing.T, id *windows.KNOWNFOLDERID) string {
+// wantProgramData is where this machine's system directories belong, read
+// without the environment and whether or not ProgramData was moved.
+func wantProgramData(t *testing.T) string {
 	t.Helper()
-	dir, err := windows.KnownFolderPath(id, windows.KF_FLAG_DONT_VERIFY)
+	windowsDir, err := windows.GetSystemWindowsDirectory()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return dir
+	return filepath.VolumeName(windowsDir) + `\ProgramData`
 }
 
 // TestProbeDirectories is the child of the tests below: it prints the
@@ -86,7 +88,7 @@ func TestProgramDataIsOnTheDriveOfTheWindowsFolder(t *testing.T) {
 // A system directory is one a process trusts, so a variable a user can set
 // must not move it.
 func TestSystemDirectoriesIgnoreTheEnvironment(t *testing.T) {
-	programData := windowsFolder(t, windows.FOLDERID_ProgramData)
+	programData := wantProgramData(t)
 	elsewhere := t.TempDir()
 	var env []string
 	for _, name := range []string{"ProgramData", "ALLUSERSPROFILE", "ProgramFiles", "ProgramW6432", "SystemDrive", "SystemRoot", "windir", "PUBLIC"} {
@@ -151,7 +153,7 @@ func TestUserStateDirRefusesARelativeLocalAppData(t *testing.T) {
 // A hook started with a filtered environment reads the same system files as
 // its daemon.
 func TestSystemDirectoriesWithoutTheEnvironment(t *testing.T) {
-	programData := windowsFolder(t, windows.FOLDERID_ProgramData)
+	programData := wantProgramData(t)
 	dirs := probe(t)
 	for name, want := range map[string]string{
 		"system": filepath.Join(programData, "Kontext"),
