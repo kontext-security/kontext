@@ -7,15 +7,34 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/codexroute"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/managedobserve"
 	"github.com/kontext-security/kontext/internal/profile"
 )
+
+// codexDrainWait bounds how long uninstall waits for Codex processes that may
+// still call the Codex proxy before it unloads the proxy anyway.
+const codexDrainWait = 5 * time.Second
+
+// removeCodexRoute takes the Codex route and proxy away (see
+// codexroute.Router.Remove) and reports how many Codex processes may still
+// have called it.
+var removeCodexRoute = func(ctx context.Context) (int, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return 0, err
+	}
+	router := codexroute.New(codexroute.Options{Home: home, StateDir: codexroute.StateDir(managedobserve.DefaultDBPath())})
+	return router.Remove(ctx, codexDrainWait)
+}
 
 // Uninstall reverses Run in reverse order. Every step tolerates
 // already-removed state so a partially-failed uninstall can simply be re-run.
@@ -59,6 +78,15 @@ func Uninstall(ctx context.Context, opts Options) error {
 			return err
 		}
 		fmt.Fprintf(opts.Stdout, "  ✓ Background agent removed (%s)\n", plistPath)
+	}
+
+	// The Codex route goes after the daemon, which would otherwise route
+	// Codex again, and before the proxy, which Codex threads that read the
+	// route keep calling until they end.
+	if left, err := removeCodexRoute(ctx); err != nil {
+		fmt.Fprintf(opts.Stderr, "  ! Codex proxy not removed: %v\n", err)
+	} else if left > 0 {
+		fmt.Fprintf(opts.Stdout, "  • Codex proxy removed; restart Codex: %d Codex process(es) started while it was routed through the proxy\n", left)
 	}
 
 	home, err := os.UserHomeDir()

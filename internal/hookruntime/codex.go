@@ -71,7 +71,7 @@ func DecodeCodexEvent(input []byte, agentName string) (hook.Event, error) {
 		return hook.Event{}, err
 	}
 	return hook.Event{
-		SessionID:            codexSessionID(h.SessionID),
+		SessionID:            CodexSessionID(h.SessionID),
 		TranscriptPath:       h.TranscriptPath,
 		Model:                h.Model,
 		Agent:                agentName,
@@ -185,7 +185,9 @@ func codexSupportedHook(hookName hook.HookName) bool {
 	}
 }
 
-func codexSessionID(sessionID string) string {
+// CodexSessionID is the session id the daemon knows a Codex session by: the
+// one Codex reports, prefixed.
+func CodexSessionID(sessionID string) string {
 	if sessionID == "" || strings.HasPrefix(sessionID, codexSessionPrefix) {
 		return sessionID
 	}

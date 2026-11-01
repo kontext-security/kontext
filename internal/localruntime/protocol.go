@@ -28,6 +28,9 @@ type EvaluateRequest struct {
 	IsInterrupt         *bool           `json:"is_interrupt,omitempty"`
 	UserRequest         string          `json:"user_request,omitempty"`
 	ToolSchemas         json.RawMessage `json:"available_tool_schemas,omitempty"`
+	// CodexProxy is a CodexProxyRequestType request's question, as the Codex
+	// proxy encodes it.
+	CodexProxy json.RawMessage `json:"codex_proxy,omitempty"`
 }
 
 type EvaluateResult struct {
@@ -54,6 +57,16 @@ type EvaluateResult struct {
 // an evaluation. It carries the PostToolUse event; the answer is a
 // CompactResult.
 const CompactRequestType = "compact_tool_output"
+
+// CodexProxyRequestType marks a request from the Codex proxy about a model
+// request it carries, instead of a hook's. The answer is a CodexProxyResult.
+const CodexProxyRequestType = "codex_proxy"
+
+// CodexProxyResult answers a CodexProxyRequestType request.
+type CodexProxyResult struct {
+	Type   string          `json:"type"`
+	Answer json.RawMessage `json:"answer,omitempty"`
+}
 
 // CompactResult answers a CompactRequestType request: the tool response the
 // agent should see instead, or none to leave the output unchanged.

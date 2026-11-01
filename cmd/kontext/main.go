@@ -64,6 +64,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(profileCmd())
 	root.AddCommand(hookCmd())
 	root.AddCommand(managedObserveDaemonCmd())
+	root.AddCommand(codexProxyCmd())
 	root.AddCommand(doctorCmd())
 	root.AddCommand(hooksCmd())
 	root.AddCommand(reportCmd())
@@ -160,7 +161,8 @@ func doctorCmd() *cobra.Command {
 			}
 			managed := managedobserve.PrintStatus(cmd.OutOrStdout(), version)
 			hooksHealthy, localHooksHealthy := checkHooks(cmd.OutOrStdout(), managed)
-			healthy := overallHealthy(managed, hooksHealthy, localHooksHealthy)
+			codexProxyHealthy := checkCodexProxy(cmd.Context(), cmd.OutOrStdout())
+			healthy := overallHealthy(managed, hooksHealthy, localHooksHealthy) && codexProxyHealthy
 			if fix {
 				if !managed.Repairable {
 					if healthy {
@@ -196,7 +198,7 @@ func doctorCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "\nAfter repair:")
 				managed = managedobserve.PrintStatus(cmd.OutOrStdout(), version)
 				hooksHealthy, localHooksHealthy = checkHooks(cmd.OutOrStdout(), managed)
-				healthy = overallHealthy(managed, hooksHealthy, localHooksHealthy)
+				healthy = overallHealthy(managed, hooksHealthy, localHooksHealthy) && codexProxyHealthy
 			}
 			if !healthy {
 				return errDoctorUnhealthy
@@ -493,6 +495,7 @@ func shouldUseManagedObserve(explicitSocket, explicitMode bool) bool {
 
 func managedObserveDaemonCmd() *cobra.Command {
 	var socketPath, dbPath, idleTimeout string
+	var noCodexRoute bool
 	cmd := &cobra.Command{
 		Use:    "managed-observe-daemon",
 		Short:  "Run the managed observe socket daemon",
@@ -510,6 +513,7 @@ func managedObserveDaemonCmd() *cobra.Command {
 			return managedobserve.RunDaemon(context.Background(), managedobserve.DaemonOptions{
 				SocketPath:    socketPath,
 				DBPath:        dbPath,
+				NoCodexRoute:  noCodexRoute,
 				IdleTimeout:   timeout,
 				Diagnostic:    diagnostic.New(cmd.ErrOrStderr(), diagnostic.EnabledFromEnv()),
 				BinaryVersion: version,
@@ -522,6 +526,8 @@ func managedObserveDaemonCmd() *cobra.Command {
 	cmd.Flags().StringVar(&socketPath, "socket", "", "managed observe socket path")
 	cmd.Flags().StringVar(&dbPath, "db", "", "managed observe database path")
 	cmd.Flags().StringVar(&idleTimeout, "idle-timeout", "", "managed observe stale session timeout")
+	cmd.Flags().BoolVar(&noCodexRoute, "no-codex-route", false, "never route Codex through the Codex proxy")
+	_ = cmd.Flags().MarkHidden("no-codex-route")
 	_ = cmd.Flags().MarkHidden("socket")
 	_ = cmd.Flags().MarkHidden("db")
 	_ = cmd.Flags().MarkHidden("idle-timeout")

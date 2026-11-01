@@ -163,59 +163,7 @@ func claudeResultText(content json.RawMessage) string {
 // replaces what came before it with the history it carries, which is what the
 // model sees from then on. Lines that do not parse are skipped.
 func ReadCodexConversation(reader io.Reader) Conversation {
-	var conversation Conversation
-	responses, inResponse := 0, false
-	// Consecutive assistant items are one response.
-	response := func() string {
-		if !inResponse {
-			responses, inResponse = responses+1, true
-		}
-		return strconv.Itoa(responses)
-	}
-	addItem := func(raw json.RawMessage) {
-		var item struct {
-			Type      string          `json:"type"`
-			Role      string          `json:"role"`
-			Content   json.RawMessage `json:"content"`
-			Name      string          `json:"name"`
-			Arguments string          `json:"arguments"`
-			Input     string          `json:"input"`
-			CallID    string          `json:"call_id"`
-			Output    json.RawMessage `json:"output"`
-		}
-		if json.Unmarshal(raw, &item) != nil {
-			return
-		}
-		switch item.Type {
-		case "message":
-			text := codexMessageText(item.Content)
-			switch item.Role {
-			case "user":
-				inResponse = false
-				if text != "" && !codexHarnessMessage(item.Content) {
-					conversation.addUserText(text)
-				}
-			case "assistant":
-				if text != "" {
-					conversation.Messages = append(conversation.Messages, Message{Role: "assistant", Text: text, Response: response()})
-				}
-			}
-		case "function_call", "custom_tool_call":
-			// A function call's arguments are JSON text; a custom tool's input
-			// is free text.
-			input := json.RawMessage(item.Arguments)
-			if item.Type == "custom_tool_call" {
-				input, _ = json.Marshal(item.Input)
-			} else if !json.Valid(input) {
-				input, _ = json.Marshal(item.Arguments)
-			}
-			conversation.Messages = append(conversation.Messages, Message{Role: "assistant", Response: response(),
-				ToolCall: &ToolCall{ID: item.CallID, Name: item.Name, Input: input}})
-		case "function_call_output", "custom_tool_call_output":
-			inResponse = false
-			conversation.Messages = append(conversation.Messages, Message{Role: "tool", Text: codexOutputText(item.Output), ToolUseID: item.CallID})
-		}
-	}
+	var items codexItems
 	scanLines(reader, func(line []byte) {
 		var row struct {
 			Type    string          `json:"type"`
@@ -230,22 +178,99 @@ func ReadCodexConversation(reader io.Reader) Conversation {
 				Model string `json:"model"`
 			}
 			if json.Unmarshal(row.Payload, &context) == nil && context.Model != "" {
-				conversation.Model = context.Model
+				items.conversation.Model = context.Model
 			}
 		case "compacted":
 			var compacted struct {
 				ReplacementHistory []json.RawMessage `json:"replacement_history"`
 			}
 			_ = json.Unmarshal(row.Payload, &compacted)
-			conversation.Messages, conversation.Compacted, inResponse = nil, true, false
+			items.restart()
 			for _, item := range compacted.ReplacementHistory {
-				addItem(item)
+				items.add(item)
 			}
 		case "response_item":
-			addItem(row.Payload)
+			items.add(row.Payload)
 		}
 	})
-	return conversation
+	return items.conversation
+}
+
+// CodexItemsConversation reads the model-visible messages of Codex response
+// items given in order, such as a Responses request's input, the way
+// ReadCodexConversation reads a rollout's.
+func CodexItemsConversation(raw []json.RawMessage) Conversation {
+	var items codexItems
+	for _, item := range raw {
+		items.add(item)
+	}
+	return items.conversation
+}
+
+// codexItems builds a Conversation from Codex response items.
+type codexItems struct {
+	conversation Conversation
+	responses    int
+	inResponse   bool
+}
+
+// restart drops what was read so far, which a compaction replaces.
+func (b *codexItems) restart() {
+	b.conversation.Messages, b.conversation.Compacted, b.inResponse = nil, true, false
+}
+
+// response names the model response of an assistant item. Consecutive
+// assistant items are one response.
+func (b *codexItems) response() string {
+	if !b.inResponse {
+		b.responses, b.inResponse = b.responses+1, true
+	}
+	return strconv.Itoa(b.responses)
+}
+
+func (b *codexItems) add(raw json.RawMessage) {
+	var item struct {
+		Type      string          `json:"type"`
+		Role      string          `json:"role"`
+		Content   json.RawMessage `json:"content"`
+		Name      string          `json:"name"`
+		Arguments string          `json:"arguments"`
+		Input     string          `json:"input"`
+		CallID    string          `json:"call_id"`
+		Output    json.RawMessage `json:"output"`
+	}
+	if json.Unmarshal(raw, &item) != nil {
+		return
+	}
+	switch item.Type {
+	case "message":
+		text := codexMessageText(item.Content)
+		switch item.Role {
+		case "user":
+			b.inResponse = false
+			if text != "" && !codexHarnessMessage(item.Content) {
+				b.conversation.addUserText(text)
+			}
+		case "assistant":
+			if text != "" {
+				b.conversation.Messages = append(b.conversation.Messages, Message{Role: "assistant", Text: text, Response: b.response()})
+			}
+		}
+	case "function_call", "custom_tool_call":
+		// A function call's arguments are JSON text; a custom tool's input
+		// is free text.
+		input := json.RawMessage(item.Arguments)
+		if item.Type == "custom_tool_call" {
+			input, _ = json.Marshal(item.Input)
+		} else if !json.Valid(input) {
+			input, _ = json.Marshal(item.Arguments)
+		}
+		b.conversation.Messages = append(b.conversation.Messages, Message{Role: "assistant", Response: b.response(),
+			ToolCall: &ToolCall{ID: item.CallID, Name: item.Name, Input: input}})
+	case "function_call_output", "custom_tool_call_output":
+		b.inResponse = false
+		b.conversation.Messages = append(b.conversation.Messages, Message{Role: "tool", Text: codexOutputText(item.Output), ToolUseID: item.CallID})
+	}
 }
 
 // CodexCommandExit reads a Codex rollout for how the command of an

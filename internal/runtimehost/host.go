@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -49,7 +50,9 @@ type Options struct {
 	// service (see localruntime.Options).
 	CompactToolOutput func(context.Context, hook.Event) map[string]any
 	OffersCompaction  func(hook.Event) bool
-	ObserveEvent      func(context.Context, hook.Event)
+	// CodexProxy answers the Codex proxy's questions (see localruntime).
+	CodexProxy   func(context.Context, json.RawMessage) json.RawMessage
+	ObserveEvent func(context.Context, hook.Event)
 }
 
 type Host struct {
@@ -180,6 +183,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		Transform:         clientResultTransform(mode),
 		CompactToolOutput: opts.CompactToolOutput,
 		OffersCompaction:  opts.OffersCompaction,
+		CodexProxy:        opts.CodexProxy,
 		Observe:           opts.ObserveEvent,
 		Diagnostic:        opts.Diagnostic,
 	})

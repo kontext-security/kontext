@@ -108,6 +108,8 @@ func newHarness(t *testing.T) *harness {
 			return "", nil
 		}
 	})
+	// Uninstall never reaches the real Codex route or launchd job.
+	overrideVar(t, &removeCodexRoute, func(context.Context) (int, error) { return 0, nil })
 	overrideVar(t, &runPrivilegedCommand, func(_ context.Context, name string, args ...string) error {
 		h.calls = append(h.calls, execCall{name: name, args: args})
 		return nil
