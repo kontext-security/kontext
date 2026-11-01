@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/kontext-security/kontext/internal/platform"
 )
 
 func DefaultSocketPath() string {
@@ -17,16 +19,15 @@ func DefaultSocketPath() string {
 // SocketPath returns the per-user path of the socket called name. On Unix it
 // is /tmp/kontext-<name>-<uid>/kontext.sock, short because sun_path is 104
 // bytes on macOS. On Windows os.Getuid returns -1, so that path would be one
-// directory for every user; the socket lives in the user's local app data
+// directory for every user; the socket lives in the user's state directory
 // instead, as %LOCALAPPDATA%\Kontext\run\<name>.sock, kept short because
-// Windows limits a socket path too (see CheckSocketPath). Without
-// LOCALAPPDATA the Unix form remains, as before; the daemon's owner check
-// refuses it to a second user, the guard socket's directory has no such check
-// yet (ENG-816).
+// Windows limits a socket path too (see CheckSocketPath). Only if that directory
+// cannot be named does the Unix form remain; the daemon's owner check refuses it
+// to a second user, the guard socket's directory has no such check yet (ENG-816).
 func SocketPath(name string) string {
 	if runtime.GOOS == "windows" {
-		if dir, err := os.UserCacheDir(); err == nil {
-			return filepath.Join(dir, "Kontext", "run", name+".sock")
+		if dir, err := platform.UserStateDir(); err == nil {
+			return filepath.Join(dir, "run", name+".sock")
 		}
 	}
 	return filepath.Join("/tmp", fmt.Sprintf("kontext-%s-%d", name, os.Getuid()), "kontext.sock")
