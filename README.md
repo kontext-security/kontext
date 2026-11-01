@@ -439,11 +439,12 @@ that version instead:
   finished call with the shorter version as the reason: the model gets
   `Process exited with code N` and the shorter output in place of the result,
   while the person still sees the full output. Codex logs each such call as a
-  tool error. Calls whose command was still running when the call returned,
-  and shorter versions over about 9.5 KB, which Codex would cut, are left as
-  they are.
-- Shell calls that Codex makes from code mode are sent for measurement only
-  and never changed: there, a blocked call fails the whole script.
+  tool error. Shorter versions over about 9.5 KB, which Codex would cut, are
+  left as they are.
+- Other Codex shell calls are sent for measurement only and never changed:
+  calls whose command was still running when the call returned, calls whose
+  session log can't be read, and calls that Codex makes from code mode, where
+  a blocked call fails the whole script.
 - The round trip gets at most three seconds. Any timeout, error or unexpected
   reply leaves the output unchanged. Turning the switch off stops the daemon's
   compaction and read-back requests from its next configuration refresh,

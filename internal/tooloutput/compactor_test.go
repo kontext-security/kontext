@@ -391,6 +391,12 @@ func TestReadingASavedOutputBackIsNeverCompacted(t *testing.T) {
 	if _, _, calls := c.api.calls(); calls != 0 {
 		t.Fatalf("API calls = %d", calls)
 	}
+	// Nor is one read from Codex's code mode sent in shadow mode.
+	c.Observe(context.Background(), hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "exec-1",
+		CWD: c.cwd, ToolInput: map[string]any{"command": "cat " + saved}, ToolResponse: map[string]any{"content": bigText(80)}})
+	if len(c.shadow) != 0 {
+		t.Fatal("a code mode read of a saved output went in shadow mode")
+	}
 }
 
 func TestReadBacksAreReportedOncePerCall(t *testing.T) {
@@ -613,22 +619,24 @@ func TestLiveCodexShowsTheExitThenTheShorterOutput(t *testing.T) {
 
 // A Codex output is changed only when the session log shows an exec_command
 // call whose command finished, of which the model has nothing yet, and only
-// with a reason Codex shows whole.
+// with a reason Codex shows whole. The calls it cannot change still go in
+// shadow mode, once.
 func TestCodexCallsLeftAsTheyAre(t *testing.T) {
 	tests := []struct {
-		name  string
-		rows  []string
-		id    string
-		reply string
-		calls int
+		name   string
+		rows   []string
+		id     string
+		reply  string
+		calls  int
+		shadow bool
 	}{
-		{name: "not finished", rows: []string{codexCall("exec_command", "call_1")}},
+		{name: "not finished", rows: []string{codexCall("exec_command", "call_1")}, shadow: true},
 		{name: "answered while running", rows: []string{codexCall("exec_command", "call_1"),
 			`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"Process running with session ID 7"}}`,
-			codexCall("write_stdin", "call_2"), codexExited("call_1", 0)}},
-		{name: "write_stdin", rows: []string{codexCall("write_stdin", "call_1"), codexExited("call_1", 0)}},
+			codexCall("write_stdin", "call_2"), codexExited("call_1", 0)}, shadow: true},
+		{name: "write_stdin", rows: []string{codexCall("write_stdin", "call_1"), codexExited("call_1", 0)}, shadow: true},
 		{name: "code mode", id: "exec-0b3c", rows: []string{codexExited("exec-0b3c", 0)}},
-		{name: "no session log"},
+		{name: "no session log", shadow: true},
 		{name: "too long for Codex", rows: []string{codexCall("exec_command", "call_1"), codexExited("call_1", 0)},
 			reply: strings.Repeat("y", maxCodexText-len("Process exited with code 0\n")+1), calls: 1},
 	}
@@ -655,6 +663,21 @@ func TestCodexCallsLeftAsTheyAre(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(c.dir, "codex-019a")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("saved outputs: %v", err)
+			}
+			select {
+			case job := <-c.shadow:
+				if !test.shadow || job.event.ToolUseID != event.ToolUseID || job.out.text != event.ToolResponse["content"] {
+					t.Fatalf("shadow job for %q, want none", job.event.ToolUseID)
+				}
+			default:
+				if test.shadow {
+					t.Fatal("the output was not sent in shadow mode")
+				}
+			}
+			// A second Kontext install's hook asks too.
+			c.Compact(context.Background(), event)
+			if len(c.shadow) != 0 {
+				t.Fatal("the output went in shadow mode twice")
 			}
 		})
 	}

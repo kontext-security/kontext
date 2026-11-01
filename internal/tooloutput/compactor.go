@@ -1,10 +1,10 @@
 // Package tooloutput implements tool output compaction. The daemon sends a
 // large tool output to the Kontext API and applies what comes back: Claude
 // Code and Codex outputs are shortened live, with the full output saved where
-// the agent can read it back. Shell calls Codex makes from code mode cannot
-// be shortened; they are sent in shadow mode, never waited for or changed.
-// The endpoint configuration's switch turns it on, and every failure leaves
-// the output as it was.
+// the agent can read it back. Codex outputs that cannot be shortened, such as
+// those of shell calls a code mode script makes, are sent in shadow mode,
+// never waited for or changed. The endpoint configuration's switch turns it
+// on, and every failure leaves the output as it was.
 package tooloutput
 
 import (
@@ -154,7 +154,8 @@ func (c *Compactor) Offers(event hook.Event) bool {
 // Compact runs live compaction for a PostToolUse and returns the tool
 // response the agent should see instead, or nil to leave the output
 // unchanged: when the switch is off, the output is not a candidate, the call
-// reads a saved output back or was taken up already, or anything fails. The
+// reads a saved output back or was taken up already, or anything fails. A
+// Codex output whose call cannot be changed goes in shadow mode instead. The
 // output comes with the event, so no file of the call is opened, wherever it
 // is.
 func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]any {
@@ -177,11 +178,13 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 
 	// Codex's model gets the shorter output in place of the whole tool
 	// result, which starts with how the command exited. A call whose command
-	// has not finished, or whose output the model already has, is left as is.
+	// has not finished, or whose output the model already has, is left as is
+	// and measured in shadow mode.
 	head := ""
 	if event.Agent == "codex" {
 		code, finished := codexExitCode(event, c.home)
 		if !finished {
+			c.queueShadow(event, out)
 			return nil
 		}
 		head = "Process exited with code " + strconv.Itoa(code) + "\n"
@@ -246,13 +249,19 @@ func (c *Compactor) Observe(_ context.Context, event hook.Event) {
 		if event.Agent == "claude" || event.Agent == "codex" {
 			c.reportReadBacks(event)
 		}
-		if out, ok := shadowOutput(event); ok && c.claim(event) {
-			select {
-			case c.shadow <- shadowJob{event: event, out: out, goal: c.goal(event.SessionID)}:
-			default:
-				c.diagnostic.Printf("tool output compaction: shadow queue full; output not sent\n")
-			}
+		if out, ok := shadowOutput(event); ok && !c.readsBack(event) && c.claim(event) {
+			c.queueShadow(event, out)
 		}
+	}
+}
+
+// queueShadow queues a Codex output for shadow mode, without waiting for
+// room.
+func (c *Compactor) queueShadow(event hook.Event, out output) {
+	select {
+	case c.shadow <- shadowJob{event: event, out: out, goal: c.goal(event.SessionID)}:
+	default:
+		c.diagnostic.Printf("tool output compaction: shadow queue full; output not sent\n")
 	}
 }
 
@@ -356,7 +365,7 @@ func encode(request Request) ([]byte, bool) {
 
 // readsBack reports whether a call reads a compacted output back: it names
 // the save directory, or reads lines of a compacted file that the compaction
-// left out. Such a call is never compacted itself.
+// left out. Such a call is never compacted itself, nor sent in shadow mode.
 func (c *Compactor) readsBack(event hook.Event) bool {
 	if c.namesSaveDir(event.ToolInput, event.CWD) {
 		return true
