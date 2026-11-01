@@ -1,0 +1,88 @@
+package platform_test
+
+import (
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/hookinstall"
+	"github.com/kontext-security/kontext/internal/installation"
+	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/mcpconfig"
+	"github.com/kontext-security/kontext/internal/platform"
+	"github.com/kontext-security/kontext/internal/profile"
+)
+
+func join(t *testing.T, dir func() (string, error), elem ...string) string {
+	t.Helper()
+	base, err := dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(append([]string{base}, elem...)...)
+}
+
+// The values on macOS and Linux, spelled out: the tests below compare with
+// constants that will derive from this package once their call sites move.
+func TestDirectoriesOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("platform_windows_test.go covers Windows")
+	}
+	claude := "/Library/Application Support/ClaudeCode"
+	if runtime.GOOS == "linux" {
+		claude = "/etc/claude-code"
+	}
+	for _, test := range []struct{ got, want string }{
+		{join(t, platform.SystemConfigDir), "/Library/Application Support/Kontext"},
+		{join(t, platform.ClaudeManagedDir), claude},
+		{join(t, platform.CodexSystemDir), "/etc/codex"},
+	} {
+		if test.got != test.want {
+			t.Errorf("directory = %q, want %q", test.got, test.want)
+		}
+	}
+}
+
+// The directories give the paths the packages use today. On Windows those
+// literals are still the macOS ones, except Claude Code's managed settings.
+func TestDirectoriesMatchTodaysPaths(t *testing.T) {
+	if got, want := join(t, platform.ClaudeManagedDir, "managed-settings.json"), claudemanaged.DefaultManagedSettingsPath(); got != want {
+		t.Errorf("Claude Code's managed settings = %q, want %q", got, want)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	for _, test := range []struct{ got, want string }{
+		{join(t, platform.SystemConfigDir, "managed.json"), managedconfig.DefaultPath},
+		{join(t, platform.SystemConfigDir, "install-token"), managedconfig.InstallTokenFilePath},
+		{join(t, platform.SystemConfigDir, "deployment-version"), managedconfig.DeploymentVersionPath},
+		{join(t, platform.SystemConfigDir, "installation.json"), installation.DefaultPath},
+		{join(t, platform.CodexSystemDir, "hooks.json"), codexmanaged.SystemHooksPath},
+		{join(t, platform.CodexSystemDir, "config.toml"), hookinstall.SystemConfigPath},
+	} {
+		if test.got != test.want {
+			t.Errorf("path = %q, want %q", test.got, test.want)
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		if got, want := join(t, platform.ClaudeManagedDir, "managed-settings.d", "20-kontext.json"), claudemanaged.ManagedSettingsDropInPath; got != want {
+			t.Errorf("Claude Code's drop-in = %q, want %q", got, want)
+		}
+		if got, want := join(t, platform.ClaudeManagedDir, "managed-mcp.json"), mcpconfig.ManagedMCPPath; got != want {
+			t.Errorf("Claude Code's managed MCP file = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestUserStateDirIsTheProfileRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("profile.Root moves to the user state directory in its own change")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(profile.EnvRoot, "")
+	if got, want := join(t, platform.UserStateDir), profile.Root(); got != want {
+		t.Fatalf("UserStateDir() = %q, want profile.Root() %q", got, want)
+	}
+}
