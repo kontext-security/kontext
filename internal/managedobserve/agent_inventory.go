@@ -97,12 +97,14 @@ func cursorWired(scope managedconfig.Scope) agentinventory.Wired {
 		if err != nil || !json.Valid(raw) {
 			return agentinventory.WiredError
 		}
-		for event, binary := range cursormanaged.Coverage(raw) {
-			if privacyfolder.Guarded(home, binary) {
-				return agentinventory.WiredError
-			}
-			if info, err := os.Stat(binary); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
-				covered[event] = true
+		for event, binaries := range cursormanaged.Coverage(raw) {
+			for _, binary := range binaries {
+				if privacyfolder.Guarded(home, binary) {
+					return agentinventory.WiredError
+				}
+				if info, err := os.Stat(binary); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+					covered[event] = true
+				}
 			}
 		}
 	}

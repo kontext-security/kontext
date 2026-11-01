@@ -180,14 +180,14 @@ type handler struct {
 }
 
 // Coverage maps each Cursor event that carries a valid Kontext hook in data to
-// the binary that hook runs. Cursor ignores a file without a valid version, so
-// such a file covers nothing.
-func Coverage(data []byte) map[string]string {
+// the binaries its Kontext hooks run. Cursor ignores a file without a valid
+// version, so such a file covers nothing.
+func Coverage(data []byte) map[string][]string {
 	var settings struct {
 		Version any                  `json:"version"`
 		Hooks   map[string][]handler `json:"hooks"`
 	}
-	covered := map[string]string{}
+	covered := map[string][]string{}
 	if json.Unmarshal(data, &settings) != nil || !validVersion(settings.Version) {
 		return covered
 	}
@@ -198,7 +198,7 @@ func Coverage(data []byte) map[string]string {
 			}
 			fields, _ := agenthooks.SplitCommand(h.Command)
 			if fields[4] == event.Alias && (h.Type == "" || h.Type == "command") && h.Timeout > 0 && (h.Matcher == "" || h.Matcher == "*") {
-				covered[event.Cursor] = fields[0]
+				covered[event.Cursor] = append(covered[event.Cursor], fields[0])
 			}
 		}
 	}

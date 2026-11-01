@@ -68,8 +68,8 @@ func diagnoseCursorLayers(out io.Writer, user, machine string) bool {
 	var twice []string
 	for _, path := range []string{machine, user} {
 		if raw, err := os.ReadFile(path); err == nil {
-			for event, binary := range cursormanaged.Coverage(raw) {
-				if !executable(binary) {
+			for event, binaries := range cursormanaged.Coverage(raw) {
+				if !slices.ContainsFunc(binaries, executable) {
 					continue
 				}
 				if covered[event] != "" {

@@ -149,12 +149,12 @@ func ValidateInstalled(data []byte) (string, error) {
 }
 
 // Coverage maps each Codex event that carries a valid Kontext hook in data to
-// the binary that hook runs. Codex skips a hooks.json it cannot load as a
-// whole, so such a file covers nothing.
-func Coverage(data []byte) map[string]string {
+// the binaries its Kontext hooks run. Codex skips a hooks.json it cannot load
+// as a whole, so such a file covers nothing.
+func Coverage(data []byte) map[string][]string {
 	var settings Settings
 	if loadable(data) != nil || json.Unmarshal(data, &settings) != nil {
-		return map[string]string{}
+		return map[string][]string{}
 	}
 	_, covered, _ := inspect(settings, false)
 	return covered
@@ -197,10 +197,10 @@ func loadable(data []byte) error {
 }
 
 // inspect checks Kontext's handlers event by event. covered maps each event
-// with a valid handler to the binary it names; a missing event is a problem
-// only when every event is required.
-func inspect(settings Settings, requireAll bool) (binary string, covered map[string]string, problems []string) {
-	covered = map[string]string{}
+// with a valid handler to the binaries those handlers name; a missing event is
+// a problem only when every event is required.
+func inspect(settings Settings, requireAll bool) (binary string, covered map[string][]string, problems []string) {
+	covered = map[string][]string{}
 	var differentBinaries bool
 	for _, event := range SupportedEvents {
 		name := event.Name.String()
@@ -218,7 +218,7 @@ func inspect(settings Settings, requireAll bool) (binary string, covered map[str
 					problems = append(problems, fmt.Sprintf("%s hook uses %q, want %q", event.Name, fields[4], event.Alias))
 					continue
 				}
-				covered[name] = fields[0]
+				covered[name] = append(covered[name], fields[0])
 				if binary == "" {
 					binary = fields[0]
 				} else if binary != fields[0] {
@@ -229,7 +229,7 @@ func inspect(settings Settings, requireAll bool) (binary string, covered map[str
 				}
 			}
 		}
-		if covered[name] == "" && requireAll {
+		if len(covered[name]) == 0 && requireAll {
 			problems = append(problems, fmt.Sprintf("%s hook missing", event.Name))
 		}
 	}

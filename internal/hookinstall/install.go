@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -138,7 +139,9 @@ func machineCodexCoverage(opts Options) map[string]bool {
 	return runnableCoverage(path, codexmanaged.Coverage)
 }
 
-func runnableCoverage(path string, coverage func([]byte) map[string]string) map[string]bool {
+// runnableCoverage counts an event as covered when any of its Kontext hooks
+// names a binary that can run.
+func runnableCoverage(path string, coverage func([]byte) map[string][]string) map[string]bool {
 	if privacyfolder.Guarded("", path) {
 		return nil
 	}
@@ -147,8 +150,8 @@ func runnableCoverage(path string, coverage func([]byte) map[string]string) map[
 		return nil
 	}
 	covered := map[string]bool{}
-	for event, binary := range coverage(raw) {
-		if !privacyfolder.Guarded("", binary) && executable(binary) {
+	for event, binaries := range coverage(raw) {
+		if slices.ContainsFunc(binaries, func(binary string) bool { return !privacyfolder.Guarded("", binary) && executable(binary) }) {
 			covered[event] = true
 		}
 	}

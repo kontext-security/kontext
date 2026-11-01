@@ -101,7 +101,7 @@ func InspectInstallation(paths InstallationPaths) (Installation, error) {
 		}
 		layer := InstallationLayer{Path: path, Binary: binary}
 		for _, event := range SupportedEvents {
-			if covered[event.Name.String()] != "" {
+			if len(covered[event.Name.String()]) > 0 {
 				layer.Events = append(layer.Events, event.Name.String())
 			}
 		}

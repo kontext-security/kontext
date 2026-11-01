@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -309,7 +310,7 @@ func TestCoverageCountsOnlyHooksCodexRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := Coverage(valid); len(got) != len(SupportedEvents) || got[hook.HookStop.String()] != testBinary {
+	if got := Coverage(valid); len(got) != len(SupportedEvents) || !slices.Equal(got[hook.HookStop.String()], []string{testBinary}) {
 		t.Fatalf("coverage = %v", got)
 	}
 	for name, raw := range map[string]string{
@@ -340,7 +341,7 @@ func TestMergeManagedHooksExceptDropsCoveredEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(settings)
-	if got := Coverage(raw); len(got) != 1 || got[hook.HookUserPromptSubmit.String()] == "" {
+	if got := Coverage(raw); len(got) != 1 || len(got[hook.HookUserPromptSubmit.String()]) == 0 {
 		t.Fatalf("coverage = %v: %s", got, raw)
 	}
 	if !strings.Contains(string(raw), "/usr/local/bin/audit-stop") {

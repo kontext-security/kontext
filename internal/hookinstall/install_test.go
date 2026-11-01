@@ -1085,3 +1085,22 @@ func TestSetupPathsIgnoreCodexHome(t *testing.T) {
 		t.Fatalf("wrote into CODEX_HOME: %v", err)
 	}
 }
+
+// A machine-wide event with a runnable Kontext hook stays covered when another
+// Kontext hook for it names a removed binary; otherwise the user file adds the
+// event again and Codex runs it twice.
+func TestMachineCodexCoverageCountsAnyRunnableHook(t *testing.T) {
+	opts, _ := fixture(t, User)
+	live := filepath.Join(t.TempDir(), "kontext")
+	write(t, live, "#!/bin/sh\n", 0755)
+	machine := codexmanaged.Template(live)
+	dead := codexmanaged.Template(filepath.Join(t.TempDir(), "removed", "kontext"))
+	for name, groups := range machine.Hooks {
+		machine.Hooks[name] = append(groups, dead.Hooks[name]...)
+	}
+	raw, _ := json.Marshal(machine)
+	write(t, machineCodexHooks, string(raw), 0644)
+	if got := machineCodexCoverage(opts); len(got) != len(codexmanaged.SupportedEvents) {
+		t.Fatalf("covered %v, want every event", got)
+	}
+}
