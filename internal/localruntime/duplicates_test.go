@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/runtimecore"
 )
 
 // Codex runs every hooks.json handler for an event at once, so a Kontext hook
@@ -96,6 +98,75 @@ func TestServiceIngestsDuplicatePostToolUseOnce(t *testing.T) {
 	}
 	if got := runtime.ingestCalls.Load(); got != 1 {
 		t.Fatalf("IngestEvent calls = %d, want 1", got)
+	}
+}
+
+// Both copies of a doubled PostToolUse carry the compaction offer. Each hook
+// asks; the compactor answers only the call's first request.
+func TestServiceOffersCompactionToBothCopies(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newTestServiceWithOptions(t, Options{
+		Core:              core,
+		AsyncIngest:       true,
+		CompactToolOutput: func(context.Context, hook.Event) map[string]any { return nil },
+		OffersCompaction:  func(hook.Event) bool { return true },
+	})
+	client := NewClient(service.SocketPath())
+
+	for range 2 {
+		result, err := client.Process(context.Background(), codexToolEvent(hook.HookPostToolUse, "call_1"))
+		if err != nil {
+			t.Fatalf("Process() error = %v", err)
+		}
+		if !result.CompactToolOutput {
+			t.Fatal("a copy was not offered compaction")
+		}
+	}
+	shutdown(t, service)
+	if got := runtime.ingestCalls.Load(); got != 1 {
+		t.Fatalf("IngestEvent calls = %d, want 1", got)
+	}
+}
+
+// Compaction requests bypass the duplicate guard: replaying the first
+// replacement to the second hook would show the model the output twice.
+func TestServiceSendsEveryCompactionRequestToTheCompactor(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	core, err := runtimecore.New(&stubRuntime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newTestServiceWithOptions(t, Options{
+		Core:        core,
+		AsyncIngest: true,
+		CompactToolOutput: func(context.Context, hook.Event) map[string]any {
+			if calls.Add(1) == 1 {
+				return map[string]any{"stdout": "short"}
+			}
+			return nil
+		},
+	})
+	client := NewClient(service.SocketPath())
+	event := codexToolEvent(hook.HookPostToolUse, "call_1")
+
+	first, err := client.CompactToolOutput(context.Background(), event)
+	if err != nil || first["stdout"] != "short" {
+		t.Fatalf("first CompactToolOutput() = %v, %v, want the replacement", first, err)
+	}
+	second, err := client.CompactToolOutput(context.Background(), event)
+	if err != nil || second != nil {
+		t.Fatalf("second CompactToolOutput() = %v, %v, want no change", second, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("compactor calls = %d, want 2", got)
 	}
 }
 
