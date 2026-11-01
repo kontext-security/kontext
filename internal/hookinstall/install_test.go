@@ -917,6 +917,42 @@ func TestDoctorNamesCodexHooksThatRunTwice(t *testing.T) {
 	}
 }
 
+// A broken Kontext hook in the machine-wide file, here a Stop hook that runs
+// session-start, leaves the file's other hooks running, though they name two
+// binaries. The user install adds only Stop, and doctor counts the same: every
+// event once, with the broken hook named instead of events called missing.
+func TestCodexInstallAndDoctorAgreeOnABrokenMachineHook(t *testing.T) {
+	opts, defs := fixture(t, User)
+	codex := defs[1:2]
+	user := codex[0].Files[0].Path
+	first, second := filepath.Join(t.TempDir(), "kontext"), filepath.Join(t.TempDir(), "kontext")
+	for _, binary := range []string{first, second} {
+		write(t, binary, "#!/bin/sh\n", 0755)
+	}
+	machine := codexmanaged.Template(first)
+	machine.Hooks["Stop"] = machine.Hooks["SessionStart"]
+	machine.Hooks["PreToolUse"] = codexmanaged.Template(second).Hooks["PreToolUse"]
+	raw, _ := json.Marshal(machine)
+	write(t, machineCodexHooks, string(raw), 0644)
+
+	if err := runDefinitions(opts, codex, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(user)
+	if covered := codexmanaged.Coverage(data); err != nil || len(covered) != 1 || len(covered["Stop"]) != 1 {
+		t.Fatalf("user file = %s, %v; want Stop alone", data, err)
+	}
+	installation, err := codexmanaged.InspectInstallation(codexmanaged.InstallationPaths{SystemHooks: machineCodexHooks, UserHooks: user})
+	if !installation.Complete() || len(installation.Layers) != 2 || err == nil {
+		t.Fatalf("installation = %+v, %v; want both layers, complete, with the broken hook named", installation, err)
+	}
+	var out bytes.Buffer
+	diagnoseCodexHooks(&out, User, user, machineCodexHooks)
+	if !strings.Contains(out.String(), `Stop hook uses "session-start", want "stop"`) || strings.Contains(out.String(), "missing") || strings.Contains(out.String(), "run twice") {
+		t.Fatalf("doctor = %s", &out)
+	}
+}
+
 // writeMixedMachineSources leaves Stop and SubagentStop out of the drop-in and
 // puts them in managed-settings.json with another binary, as an organization's
 // settings next to an earlier self-serve drop-in would.

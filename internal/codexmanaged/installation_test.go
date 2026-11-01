@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/hermetic"
@@ -106,6 +107,31 @@ func TestInspectInstallationAcceptsEventsSplitAcrossLayers(t *testing.T) {
 	got, err := InspectInstallation(paths)
 	if err != nil || !got.Complete() || len(got.Layers) != 2 || len(got.Layers[0].Events) != 4 || !reflect.DeepEqual(got.Layers[1].Events, []string{"Stop"}) {
 		t.Fatalf("installation=%+v, err=%v", got, err)
+	}
+}
+
+// A broken Kontext hook leaves its file's other hooks running, as the
+// installer counts them: the layer keeps those events and the broken hook is
+// reported.
+func TestInspectInstallationKeepsALayerWithABrokenHook(t *testing.T) {
+	dir := t.TempDir()
+	paths := InstallationPaths{SystemHooks: filepath.Join(dir, "system"), UserHooks: filepath.Join(dir, "user")}
+	system := Template("/opt/homebrew/bin/kontext")
+	user := Settings{Hooks: map[string][]MatcherGroup{"Stop": system.Hooks["Stop"]}}
+	system.Hooks["Stop"] = system.Hooks["SessionStart"]
+	system.Hooks["PreToolUse"] = Template("/Applications/Kontext/runtime/bin/kontext").Hooks["PreToolUse"]
+	for path, settings := range map[string]Settings{paths.SystemHooks: system, paths.UserHooks: user} {
+		raw, _ := json.Marshal(settings)
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := InspectInstallation(paths)
+	if !got.Complete() || len(got.Layers) != 2 || len(got.Layers[0].Events) != 4 {
+		t.Fatalf("installation=%+v, err=%v", got, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), `Stop hook uses "session-start", want "stop"`) || !strings.Contains(err.Error(), "different binary paths") {
+		t.Fatalf("err=%v, want the broken hook and the second binary named", err)
 	}
 }
 

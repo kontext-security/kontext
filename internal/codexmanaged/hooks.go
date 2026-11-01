@@ -1,12 +1,18 @@
 package codexmanaged
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/hook"
@@ -160,40 +166,217 @@ func Coverage(data []byte) map[string][]string {
 	return covered
 }
 
-// loadable mirrors where Codex rejects a whole hooks.json: a top-level key
-// other than description and hooks, or a handler of a type it does not know.
+// loadable reports why Codex would skip data as a hooks.json. Codex skips a
+// whole file it cannot parse into its HooksFile type (codex-rs config and
+// protocol hooks), so this follows that type: only description and hooks at
+// the top, each field of its type, each handler of a type Codex knows with
+// its required fields. Where it cannot tell it rejects too: at worst a user
+// hook then runs beside the machine-wide one, never an event without a hook.
 func loadable(data []byte) error {
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(data, &keys); err != nil {
+	if !utf8.Valid(data) {
+		return errors.New("not UTF-8")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	value, err := decodeUnique(decoder, 0)
+	if err != nil {
 		return err
 	}
-	for key := range keys {
-		if key != "description" && key != "hooks" {
-			return fmt.Errorf("Codex does not load a hooks.json with the top-level key %q", key)
+	if _, err := decoder.Token(); err != io.EOF {
+		return errors.New("data after the top-level object")
+	}
+	file, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("not an object")
+	}
+	for key, value := range file {
+		switch key {
+		case "description":
+			if !optionalString(value, true) {
+				return errors.New("description is not a string")
+			}
+		case "hooks":
+			events, ok := value.(map[string]any)
+			if !ok {
+				return errors.New("hooks is not an object")
+			}
+			for event, groups := range events {
+				if err := loadableGroups(groups); err != nil {
+					return fmt.Errorf("%s: %w", event, err)
+				}
+			}
+		default:
+			return fmt.Errorf("the top-level key %q", key)
 		}
 	}
-	var file struct {
-		Hooks map[string][]struct {
-			Hooks []struct {
-				Type string `json:"type"`
-			} `json:"hooks"`
-		} `json:"hooks"`
+	return nil
+}
+
+// maxCodexDepth stays under the 128 levels serde_json, which Codex parses
+// with, nests.
+const maxCodexDepth = 100
+
+// decodeUnique decodes one value like encoding/json with UseNumber, but fails
+// on a key repeated within an object, which Codex rejects, or on nesting past
+// maxCodexDepth.
+func decodeUnique(decoder *json.Decoder, depth int) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(data, &file); err != nil {
-		return err
+	if token != json.Delim('[') && token != json.Delim('{') {
+		return token, nil
 	}
-	for event, groups := range file.Hooks {
-		for _, group := range groups {
-			for _, handler := range group.Hooks {
-				switch handler.Type {
-				case "command", "mcp_tool", "prompt", "agent":
-				default:
-					return fmt.Errorf("Codex does not load a hooks.json with a %s handler of type %q", event, handler.Type)
-				}
+	if depth == maxCodexDepth {
+		return nil, errors.New("nested too deep")
+	}
+	if token == json.Delim('[') {
+		var items []any
+		for decoder.More() {
+			item, err := decodeUnique(decoder, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+		}
+		_, err := decoder.Token()
+		return items, err
+	}
+	object := map[string]any{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		key := token.(string)
+		if _, repeated := object[key]; repeated {
+			return nil, fmt.Errorf("the key %q twice", key)
+		}
+		if object[key], err = decodeUnique(decoder, depth+1); err != nil {
+			return nil, err
+		}
+	}
+	_, err = decoder.Token()
+	return object, err
+}
+
+// loadableGroups checks one event's matcher groups.
+func loadableGroups(value any) error {
+	groups, ok := value.([]any)
+	if !ok {
+		return errors.New("not a list")
+	}
+	for _, value := range groups {
+		group, ok := value.(map[string]any)
+		if !ok {
+			return errors.New("a matcher group is not an object")
+		}
+		if !optionalString(group["matcher"], true) {
+			return errors.New("a matcher is not a string")
+		}
+		handlers, present := group["hooks"]
+		list, ok := handlers.([]any)
+		if present && !ok {
+			return errors.New("a group's hooks is not a list")
+		}
+		for _, handler := range list {
+			if err := loadableHandler(handler); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+// codexHandlerFields is how Codex parses each field of a handler, by type; it
+// ignores fields not listed.
+var codexHandlerFields = map[string]map[string]func(value any, present bool) bool{
+	"command": {
+		"command": requiredString, "commandWindows": optionalString, "command_windows": optionalString,
+		"timeout": optionalUint, "async": presentBool, "statusMessage": optionalString, "additionalContextLimit": optionalUint,
+	},
+	"mcp_tool": {
+		"server": requiredString, "tool": requiredString, "input": tomlTable,
+		"timeout": optionalUint, "statusMessage": optionalString,
+	},
+	"prompt": {},
+	"agent":  {},
+}
+
+func loadableHandler(value any) error {
+	handler, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("a handler is not an object")
+	}
+	kind, _ := handler["type"].(string)
+	fields, known := codexHandlerFields[kind]
+	if !known {
+		return fmt.Errorf("a handler of type %v", handler["type"])
+	}
+	for name, parses := range fields {
+		value, present := handler[name]
+		if !parses(value, present) {
+			return fmt.Errorf("a %s handler with a missing or mistyped %s", kind, name)
+		}
+	}
+	// command_windows is an alias of commandWindows: both is a repeated field.
+	_, windows := handler["commandWindows"]
+	if _, alias := handler["command_windows"]; kind == "command" && windows && alias {
+		return errors.New("a command handler with both commandWindows and command_windows")
+	}
+	return nil
+}
+
+func requiredString(value any, _ bool) bool {
+	_, ok := value.(string)
+	return ok
+}
+
+// optionalString accepts an absent or null field, like Option<String>.
+func optionalString(value any, _ bool) bool {
+	return value == nil || requiredString(value, true)
+}
+
+// optionalUint accepts an absent or null field, or a whole number in u64.
+func optionalUint(value any, _ bool) bool {
+	number, ok := value.(json.Number)
+	if !ok {
+		return value == nil
+	}
+	_, err := strconv.ParseUint(string(number), 10, 64)
+	return err == nil
+}
+
+// presentBool accepts an absent field, which defaults, but not a null one.
+func presentBool(value any, present bool) bool {
+	_, ok := value.(bool)
+	return !present || ok
+}
+
+// tomlTable accepts an absent field or an object Codex can hash as TOML: no
+// null and no whole number above i64 anywhere in it.
+func tomlTable(value any, present bool) bool {
+	table, ok := value.(map[string]any)
+	return !present || ok && representable(table)
+}
+
+func representable(value any) bool {
+	switch value := value.(type) {
+	case nil:
+		return false
+	case json.Number:
+		n, err := strconv.ParseUint(string(value), 10, 64)
+		return err != nil || n <= math.MaxInt64
+	case []any:
+		return !slices.ContainsFunc(value, func(item any) bool { return !representable(item) })
+	case map[string]any:
+		for _, item := range value {
+			if !representable(item) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // inspect checks Kontext's handlers event by event. covered maps each event

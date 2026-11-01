@@ -91,13 +91,15 @@ func InspectInstallation(paths InstallationPaths) (Installation, error) {
 			continue
 		}
 		if err := loadable(raw); err != nil {
-			problems = append(problems, fmt.Errorf("parse %s: %w", path, err))
+			problems = append(problems, fmt.Errorf("Codex does not load %s: %w", path, err))
 			continue
 		}
+		// Codex runs a layer's valid Kontext hooks beside a broken one, and the
+		// installer counts them so: report the broken hook, keep what the rest
+		// cover.
 		binary, covered, invalid := inspect(settings, false)
 		if len(invalid) > 0 {
 			problems = append(problems, fmt.Errorf("%w (%s): %s", ErrIncompleteInstallation, path, strings.Join(invalid, "; ")))
-			continue
 		}
 		layer := InstallationLayer{Path: path, Binary: binary}
 		for _, event := range SupportedEvents {
