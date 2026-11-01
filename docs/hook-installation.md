@@ -43,8 +43,9 @@ while the machine-wide file carries the complete set, and setup names that
 file. With a Homebrew install the daemon's repair applies the same rule, so the
 user file takes an event back within a minute of its machine-wide hook
 disappearing. Doctor and the agent scan count both files together; doctor
-names an event that runs from both, and a broken Kontext hook, whose file's
-other hooks still count. Uninstall removes only Kontext's handlers
+names an event that runs from both, not counting a hook whose binary cannot
+run, and a broken Kontext hook, whose file's other hooks still count.
+Uninstall removes only Kontext's handlers
 from the user files and names `sudo kontext hooks remove --scope system` when
 an earlier setup's machine-wide hooks remain. It leaves an empty user settings
 object rather than deleting that file.

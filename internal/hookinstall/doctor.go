@@ -244,6 +244,11 @@ func diagnoseCodexHooks(out io.Writer, scope Scope, preferred, other string) boo
 			}
 		}
 		for _, event := range layer.Events {
+			// A hook whose binary cannot run runs nothing, and the installer
+			// keeps its event in the user file.
+			if !slices.ContainsFunc(layer.Binaries[event], executable) {
+				continue
+			}
 			if runs[event]++; runs[event] == 2 {
 				twice = append(twice, event)
 				repeated = layer

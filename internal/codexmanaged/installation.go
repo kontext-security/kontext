@@ -46,8 +46,10 @@ type Installation struct {
 
 type InstallationLayer struct {
 	Path, Binary string
-	// Events lists the hooks.json events the layer's Kontext hooks cover.
-	Events []string
+	// Events lists the hooks.json events the layer's Kontext hooks cover, and
+	// Binaries the binaries each event's hooks run.
+	Events   []string
+	Binaries map[string][]string
 }
 
 // Missing lists the events no layer covers.
@@ -101,7 +103,7 @@ func InspectInstallation(paths InstallationPaths) (Installation, error) {
 		if len(invalid) > 0 {
 			problems = append(problems, fmt.Errorf("%w (%s): %s", ErrIncompleteInstallation, path, strings.Join(invalid, "; ")))
 		}
-		layer := InstallationLayer{Path: path, Binary: binary}
+		layer := InstallationLayer{Path: path, Binary: binary, Binaries: covered}
 		for _, event := range SupportedEvents {
 			if len(covered[event.Name.String()]) > 0 {
 				layer.Events = append(layer.Events, event.Name.String())

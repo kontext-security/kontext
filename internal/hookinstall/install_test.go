@@ -953,6 +953,34 @@ func TestCodexInstallAndDoctorAgreeOnABrokenMachineHook(t *testing.T) {
 	}
 }
 
+// A machine-wide Stop hook naming a removed binary runs nothing, though the
+// file's other hooks name one that runs. The user install keeps Stop, and
+// doctor counts it once instead of saying it runs from both files.
+func TestCodexInstallAndDoctorAgreeOnAMachineHookWithARemovedBinary(t *testing.T) {
+	opts, defs := fixture(t, User)
+	codex := defs[1:2]
+	user := codex[0].Files[0].Path
+	live := filepath.Join(t.TempDir(), "kontext")
+	write(t, live, "#!/bin/sh\n", 0755)
+	machine := codexmanaged.Template(live)
+	machine.Hooks["Stop"] = codexmanaged.Template(filepath.Join(t.TempDir(), "removed", "kontext")).Hooks["Stop"]
+	raw, _ := json.Marshal(machine)
+	write(t, machineCodexHooks, string(raw), 0644)
+
+	if err := runDefinitions(opts, codex, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(user)
+	if covered := codexmanaged.Coverage(data); err != nil || len(covered) != 1 || len(covered["Stop"]) != 1 {
+		t.Fatalf("user file = %s, %v; want Stop alone", data, err)
+	}
+	var out bytes.Buffer
+	diagnoseCodexHooks(&out, User, user, machineCodexHooks)
+	if !strings.Contains(out.String(), "different binary paths") || strings.Contains(out.String(), "missing") || strings.Contains(out.String(), "run twice") {
+		t.Fatalf("doctor = %s", &out)
+	}
+}
+
 // writeMixedMachineSources leaves Stop and SubagentStop out of the drop-in and
 // puts them in managed-settings.json with another binary, as an organization's
 // settings next to an earlier self-serve drop-in would.
