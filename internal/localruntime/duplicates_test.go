@@ -190,6 +190,42 @@ func TestServiceEvaluatesPromptCopiesOnce(t *testing.T) {
 	}
 }
 
+// The same prompt sent again is a new prompt: once copyGap has passed since
+// the first arrived, it gets its own policy check and its own record.
+func TestServiceEvaluatesPromptSentAgain(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{
+		evaluate: func(call int32, _ hook.Event) (hook.Result, error) {
+			return hook.Result{Decision: hook.DecisionAllow, EventID: fmt.Sprintf("act_%d", call)}, nil
+		},
+	}
+	service := newTestService(t, runtime, true)
+	clock := &testClock{now: time.Now()}
+	service.duplicates.mu.Lock()
+	service.duplicates.now = clock.Now
+	service.duplicates.mu.Unlock()
+	client := NewClient(service.SocketPath())
+	prompt := hook.Event{SessionID: "codex-a", Agent: "codex", HookName: hook.HookUserPromptSubmit, ToolInput: map[string]any{"prompt": "fix the build"}}
+	send := func(wantEventID string) {
+		t.Helper()
+		result, err := client.Process(context.Background(), prompt)
+		if err != nil || result.EventID != wantEventID {
+			t.Fatalf("Process() = %+v, %v; want event %s", result, err, wantEventID)
+		}
+	}
+
+	send("act_1")
+	clock.advance(copyGap - time.Millisecond)
+	send("act_1") // The second hooks file's copy, late.
+	clock.advance(time.Millisecond)
+	send("act_2") // Sent again.
+	send("act_2") // And its copy.
+	if got := runtime.evaluateCalls.Load(); got != 2 {
+		t.Fatalf("EvaluateHook calls = %d, want 2", got)
+	}
+}
+
 // A failed evaluation is never shared: the copy evaluates on its own.
 func TestServiceEvaluatesCopyWhenFirstFails(t *testing.T) {
 	t.Parallel()
@@ -287,6 +323,90 @@ func TestServiceEvaluatesCopyWhenFirstHangs(t *testing.T) {
 	unblock()
 	if result := <-first; result.Reason != "evaluation 1" {
 		t.Fatalf("first Process() = %+v, want its own evaluation", result)
+	}
+}
+
+// copyGap bounds copies of an event without a tool call id only; a tool call
+// id names one call, so its copies stay copies for the whole window.
+func TestDuplicateHooksBoundPromptCopiesByArrival(t *testing.T) {
+	t.Parallel()
+
+	clock := &testClock{now: time.Now()}
+	duplicates := newDuplicateHooks()
+	duplicates.now = clock.Now
+	prompt := hook.Event{SessionID: "codex-a", Agent: "codex", HookName: hook.HookUserPromptSubmit, ToolInput: map[string]any{"prompt": "fix the build"}}
+	call := codexToolEvent(hook.HookPreToolUse, "call_1")
+	answeredAsCopy := func(event hook.Event) bool {
+		t.Helper()
+		req, err := EvaluateRequestFromEvent(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, duplicate, err := duplicates.do(event, &req, allowHook)
+		if err != nil {
+			t.Fatalf("do() error = %v", err)
+		}
+		return duplicate
+	}
+
+	answeredAsCopy(prompt)
+	answeredAsCopy(call)
+	clock.advance(copyGap)
+	if answeredAsCopy(prompt) {
+		t.Fatal("the same prompt sent copyGap after the first was answered as a copy")
+	}
+	if !answeredAsCopy(call) {
+		t.Fatal("a tool call copy inside the window was evaluated again")
+	}
+}
+
+// A copy that arrives while the first is still being decided waits for that
+// decision, however long it takes; copyGap only limits reusing a settled one.
+func TestDuplicateHooksAnswerCopiesOfASlowPrompt(t *testing.T) {
+	t.Parallel()
+
+	clock := &testClock{now: time.Now()}
+	arrivals := make(chan struct{}, 3)
+	duplicates := newDuplicateHooks()
+	duplicates.now = func() time.Time {
+		arrivals <- struct{}{}
+		return clock.Now()
+	}
+	prompt := hook.Event{SessionID: "codex-a", Agent: "codex", HookName: hook.HookUserPromptSubmit, ToolInput: map[string]any{"prompt": "fix the build"}}
+	req, err := EvaluateRequestFromEvent(prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	first := make(chan hook.Result, 1)
+	go func() {
+		result, _, _ := duplicates.do(prompt, &req, func() (hook.Result, error) {
+			<-release
+			return hook.Result{Decision: hook.DecisionAllow, EventID: "act_1"}, nil
+		})
+		first <- result
+	}()
+	<-arrivals
+	clock.advance(2 * copyGap)
+	copied := make(chan bool, 1)
+	go func() {
+		result, duplicate, _ := duplicates.do(prompt, &req, func() (hook.Result, error) {
+			return hook.Result{Decision: hook.DecisionAllow, EventID: "act_2"}, nil
+		})
+		copied <- duplicate && result.EventID == "act_1"
+	}()
+	// The copy has read the clock under the lock, so it finds the first in
+	// flight even if the first settles right away.
+	<-arrivals
+	close(release)
+	if result := <-first; result.EventID != "act_1" {
+		t.Fatalf("first do() = %+v", result)
+	}
+	if !<-copied {
+		t.Fatal("the copy of an undecided prompt did not get the first copy's decision")
+	}
+	if _, duplicate, _ := duplicates.do(prompt, &req, allowHook); duplicate {
+		t.Fatal("a settled prompt answered a copy after copyGap")
 	}
 }
 

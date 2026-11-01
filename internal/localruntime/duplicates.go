@@ -11,12 +11,17 @@ import (
 )
 
 const (
-	// duplicateHookWindow is how long a settled hook event stays known, and the
+	// duplicateHookWindow is how long a settled tool call stays known, and the
 	// longest a copy waits for an unsettled first. An agent starts every hook
 	// configured for an event at once, so a second Kontext hook arrives
-	// milliseconds after the first; a legitimate repeat carries a new tool call
-	// id, different content, or comes later.
+	// milliseconds after the first; another call carries a new tool call id.
 	duplicateHookWindow = 3 * time.Second
+	// copyGap bounds how long after its first copy an event without a tool
+	// call id is still answered as a copy. Only timing tells a copy from the
+	// same prompt or stop sent again: copies start together and arrive within
+	// milliseconds, while a new prompt or turn comes seconds later. A copy that
+	// arrives while the first is still being decided waits for it regardless.
+	copyGap = time.Second
 	// maxTrackedHookEvents bounds the events held at once. Past it, a new event
 	// is processed untracked.
 	maxTrackedHookEvents = 4096
@@ -36,6 +41,7 @@ type duplicateHooks struct {
 	mu        sync.Mutex
 	now       func() time.Time
 	window    time.Duration
+	copyGap   time.Duration
 	events    map[hookKey]*hookCall
 	nextSweep time.Time
 }
@@ -47,13 +53,17 @@ type hookCall struct {
 	result  hook.Result
 	ok      bool
 	expires time.Time // zero while the first copy is in flight
+	// lastCopy, for an event without a tool call id, is the latest a copy can
+	// arrive; a settled result expires then rather than a window later.
+	lastCopy time.Time
 }
 
 func newDuplicateHooks() *duplicateHooks {
 	return &duplicateHooks{
-		now:    time.Now,
-		window: duplicateHookWindow,
-		events: map[hookKey]*hookCall{},
+		now:     time.Now,
+		window:  duplicateHookWindow,
+		copyGap: copyGap,
+		events:  map[hookKey]*hookCall{},
 	}
 }
 
@@ -61,9 +71,9 @@ func newDuplicateHooks() *duplicateHooks {
 // that names one call. An event without one (a prompt, a session start, a
 // stop) keys on its whole request instead: the agent hands every hook the same
 // stdin and Kontext decodes it deterministically, so copies of one event are
-// identical, while the same prompt typed again later falls outside the window.
-// A turn id would not do: Claude Code sends none, and a Codex turn can submit
-// more than one prompt and stop more than once.
+// identical, while the same prompt typed again arrives after copyGap. A turn id
+// would not do: Claude Code sends none, and a Codex turn can submit more than
+// one prompt and stop more than once.
 func hookEventKey(event hook.Event, req *EvaluateRequest) (hookKey, bool) {
 	var identity []byte
 	for _, field := range []string{event.Agent, event.SessionID, event.HookName.String(), event.ToolUseID} {
@@ -82,8 +92,9 @@ func hookEventKey(event hook.Event, req *EvaluateRequest) (hookKey, bool) {
 }
 
 // do runs process for the event unless a copy of it is in flight or settled
-// within the window; then it returns that copy's result and reports the
-// duplicate. Only a successful result is shared.
+// recently enough (the window, or copyGap after an event without a tool call
+// id arrived); then it returns that copy's result and reports the duplicate.
+// Only a successful result is shared.
 func (d *duplicateHooks) do(event hook.Event, req *EvaluateRequest, process func() (hook.Result, error)) (result hook.Result, duplicate bool, err error) {
 	key, ok := hookEventKey(event, req)
 	if !ok {
@@ -110,6 +121,9 @@ func (d *duplicateHooks) do(event hook.Event, req *EvaluateRequest, process func
 		return result, false, err
 	}
 	call := &hookCall{done: make(chan struct{})}
+	if event.ToolUseID == "" {
+		call.lastCopy = now.Add(d.copyGap)
+	}
 	d.events[key] = call
 	d.mu.Unlock()
 
@@ -141,13 +155,17 @@ func (d *duplicateHooks) await(call *hookCall, process func() (hook.Result, erro
 	return result, false, err
 }
 
-// settle publishes the first copy's outcome. A success stays for the window; a
-// failure is forgotten, so the next copy processes itself.
+// settle publishes the first copy's outcome. A success stays for the window,
+// or until the last copy can arrive; a failure is forgotten, so the next copy
+// processes itself.
 func (d *duplicateHooks) settle(key hookKey, call *hookCall, result hook.Result, ok bool) {
 	d.mu.Lock()
 	if ok {
 		call.result, call.ok = result, true
-		call.expires = d.now().Add(d.window)
+		call.expires = call.lastCopy
+		if call.expires.IsZero() {
+			call.expires = d.now().Add(d.window)
+		}
 	} else if d.events[key] == call {
 		delete(d.events, key)
 	}

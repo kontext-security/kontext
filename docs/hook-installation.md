@@ -35,14 +35,16 @@ binary path the earlier drop-in names. Cursor and Codex run every hooks file
 they find without deduplication, so the user file leaves out each event a
 runnable machine-wide Kontext hook covers and drops its own copies of those
 hooks. Codex runs `/etc/codex/hooks.json` without the `/hooks` trust step and
-skips a whole file it cannot load (a top-level key other than `description`
-and `hooks`, or a handler type it does not know); such a file, or a hook
+skips a whole file it cannot parse: a top-level key other than `description`
+and `hooks`, a field of the wrong type, a repeated key, or a handler of a type
+it does not know or without its required fields. Such a file, or a hook
 naming a missing binary, covers nothing. The user file stays free of Kontext
 while the machine-wide file carries the complete set, and setup names that
 file. With a Homebrew install the daemon's repair applies the same rule, so the
 user file takes an event back within a minute of its machine-wide hook
 disappearing. Doctor and the agent scan count both files together; doctor
-names an event that runs from both. Uninstall removes only Kontext's handlers
+names an event that runs from both, and a broken Kontext hook, whose file's
+other hooks still count. Uninstall removes only Kontext's handlers
 from the user files and names `sudo kontext hooks remove --scope system` when
 an earlier setup's machine-wide hooks remain. It leaves an empty user settings
 object rather than deleting that file.
@@ -53,8 +55,10 @@ behind, the daemon evaluates the event once and records one ledger event. A
 copy that arrives within three seconds of the first, for the same agent,
 session, hook and tool call id, gets the first copy's decision. Prompts, session
 starts and stops carry no tool call id, so their copies must match the first
-exactly. If the first copy fails or has no answer within three seconds, the
-daemon evaluates the copy on its own. The agent still runs both handlers.
+exactly and arrive within a second of it, or while it is still being decided.
+The same prompt sent again comes later and gets its own policy check. If the
+first copy fails or has no answer within three seconds, the daemon evaluates
+the copy on its own. The agent still runs both handlers.
 
 ## Package commands
 
