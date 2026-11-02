@@ -12,6 +12,17 @@ import (
 	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
+// Without its folder there is no system path to report on, so a caller hears
+// why instead of seeing only the user's hooks.
+func TestDefaultInstallationPathsFailsWithoutASystemFolder(t *testing.T) {
+	unlocated := errors.New("no folder")
+	errSystemDir = unlocated
+	t.Cleanup(func() { errSystemDir = nil })
+	if _, err := DefaultInstallationPaths(); !errors.Is(err, unlocated) {
+		t.Fatalf("DefaultInstallationPaths() error = %v, want %v", err, unlocated)
+	}
+}
+
 func TestInspectInstallationLayers(t *testing.T) {
 	valid, err := TemplateJSON("/opt/homebrew/bin/kontext")
 	if err != nil {
@@ -148,7 +159,7 @@ func TestDefaultInstallationPathsHonorsCodexHome(t *testing.T) {
 		if base == "" {
 			base = filepath.Join(home, ".codex")
 		}
-		if paths.SystemHooks != "/etc/codex/hooks.json" || paths.UserHooks != filepath.Join(base, "hooks.json") || paths.UserConfig != filepath.Join(base, "config.toml") {
+		if paths.SystemHooks != SystemHooksPath || paths.UserHooks != filepath.Join(base, "hooks.json") || paths.UserConfig != filepath.Join(base, "config.toml") {
 			t.Fatalf("paths=%+v", paths)
 		}
 		if _, err := os.Stat(base); !os.IsNotExist(err) {
