@@ -3,6 +3,7 @@
 package fsperm
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -59,6 +60,79 @@ func ReadAdminOnly(path string) ([]byte, error) {
 		return nil, err
 	}
 	return io.ReadAll(file)
+}
+
+// NotAdminFile describes a path that can't hold a file an administrator left for
+// users to read. String looks up an account name, which can take long on a machine
+// cut off from its domain, so a hook only asks whether there is one.
+type NotAdminFile struct {
+	path  string
+	owner *windows.SID // nil if this user can't open it
+	link  bool
+}
+
+func (f *NotAdminFile) String() string {
+	switch {
+	case f.owner == nil:
+		return f.path + " can't be opened by this user"
+	case f.link:
+		return f.path + " is a link owned by " + accountName(f.owner)
+	}
+	return f.path + " is owned by " + accountName(f.owner)
+}
+
+// FindNotAdminFile returns what rules out the file at path being one an
+// administrator left for users to read, and nil if nothing does. That is a file
+// this user can't open, since everyone has to be able to read such a file; one a
+// non-admin owns, since a user can only create what they own; or one reached
+// through a link a non-admin owns. A folder a non-admin owns doesn't rule it out:
+// an administrator may have written into it, and ReadAdminOnly refuses that
+// loudly. It follows no symlink or junction.
+func FindNotAdminFile(path string) (*NotAdminFile, error) {
+	dir := filepath.Dir(path)
+	owner, link, err := ownerOf(dir)
+	switch {
+	case errors.Is(err, os.ErrPermission):
+		return &NotAdminFile{path: dir}, nil
+	case err != nil:
+		return nil, err
+	case link && !isAdmin(owner):
+		return &NotAdminFile{path: dir, owner: owner, link: true}, nil
+	}
+	owner, _, err = ownerOf(path)
+	switch {
+	case errors.Is(err, os.ErrPermission):
+		return &NotAdminFile{path: path}, nil
+	case err != nil:
+		return nil, err
+	case !isAdmin(owner):
+		return &NotAdminFile{path: path, owner: owner}, nil
+	}
+	return nil, nil
+}
+
+// ownerOf reads who owns a file or folder and whether it is a symlink or junction,
+// without following one. Backup semantics opens a folder too, which is what a user
+// could plant under a file's name.
+func ownerOf(path string) (*windows.SID, bool, error) {
+	handle, err := openNoFollow(path, 0, windows.FILE_FLAG_BACKUP_SEMANTICS)
+	if err != nil {
+		return nil, false, err
+	}
+	defer windows.CloseHandle(handle)
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return nil, false, &os.PathError{Op: "stat", Path: path, Err: err}
+	}
+	sd, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return nil, false, &os.PathError{Op: "read owner of", Path: path, Err: err}
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return nil, false, &os.PathError{Op: "read owner of", Path: path, Err: err}
+	}
+	return owner, info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0, nil
 }
 
 func openNoFollow(path string, access, flags uint32) (windows.Handle, error) {

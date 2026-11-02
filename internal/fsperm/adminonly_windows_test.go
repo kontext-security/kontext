@@ -87,6 +87,113 @@ func TestReadAdminOnlyRefusesAUsersFile(t *testing.T) {
 	}
 }
 
+func TestFindNotAdminFileAcceptsASystemFile(t *testing.T) {
+	if found, err := FindNotAdminFile(systemFile(t)); err != nil || found != nil {
+		t.Fatalf("FindNotAdminFile() = %v, %v; want none", found, err)
+	}
+}
+
+// wantNotAdminFile fails unless the path is ruled out for the given reason.
+func wantNotAdminFile(t *testing.T, path, reason string) {
+	t.Helper()
+	found, err := FindNotAdminFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found == nil || !strings.Contains(found.String(), reason) {
+		t.Fatalf("FindNotAdminFile(%s) = %v, want %q", path, found, reason)
+	}
+}
+
+// What a standard user creates is theirs. An elevated token's files may belong
+// to Administrators, so that case can't show it.
+func TestFindNotAdminFileFindsAUsersFile(t *testing.T) {
+	if windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("needs a standard user's token")
+	}
+	path := filepath.Join(t.TempDir(), "managed.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantNotAdminFile(t, path, path+" is owned by")
+}
+
+// A user can plant a folder under a file's name, and it has to count like a file.
+func TestFindNotAdminFileFindsAUsersFolderUnderTheFilesName(t *testing.T) {
+	if windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("needs a standard user's token")
+	}
+	path := filepath.Join(t.TempDir(), "managed.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wantNotAdminFile(t, path, path+" is owned by")
+}
+
+// A user's file in a folder administrators own: ProgramData lets a user create one.
+func TestFindNotAdminFileFindsAUsersFileInAnAdminFolder(t *testing.T) {
+	if windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("needs a standard user's token")
+	}
+	file, err := os.CreateTemp(os.Getenv("ProgramData"), "kontext-owner-test-*")
+	if err != nil {
+		t.Skipf("can't create a file in ProgramData: %v", err)
+	}
+	file.Close()
+	t.Cleanup(func() { _ = os.Remove(file.Name()) })
+	wantNotAdminFile(t, file.Name(), file.Name()+" is owned by")
+}
+
+// An administrator's file through a user's junction: a junction is theirs whatever
+// it points at, so it can't take the machine from anyone by pointing at a real file.
+func TestFindNotAdminFileFindsAUsersJunction(t *testing.T) {
+	if windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("needs a standard user's token")
+	}
+	target := filepath.Dir(systemFile(t))
+	junction := filepath.Join(t.TempDir(), "junction")
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", junction, target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink: %v\n%s", err, out)
+	}
+	t.Cleanup(func() { _ = os.Remove(junction) })
+	wantNotAdminFile(t, filepath.Join(junction, filepath.Base(systemFile(t))), junction+" is a link owned by")
+}
+
+// Everyone has to be able to read an administrator's file, so one this user can't
+// open isn't that. An entry for OWNER RIGHTS takes away what an owner keeps
+// otherwise; only a token holding the backup privilege still gets through.
+func TestFindNotAdminFileFindsAFileThisUserCantOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;SY)(A;;0x80;;;OW)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatal(err)
+	}
+	if file, err := os.Open(path); err == nil {
+		file.Close()
+		t.Skip("the access list doesn't keep this token out")
+	}
+	wantNotAdminFile(t, path, path+" can't be opened by this user")
+}
+
+// Not there says nothing about an owner, and the caller has to be able to tell.
+func TestFindNotAdminFileKeepsANotFoundError(t *testing.T) {
+	path := filepath.Join(filepath.Dir(systemFile(t)), "kontext-absent.json")
+	if _, err := FindNotAdminFile(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("FindNotAdminFile() error = %v, want not-exist", err)
+	}
+}
+
 // The layout an installer leaves, built for real. Creating it needs an elevated
 // token: a standard user skips, and CI must not, because nothing else covers a
 // bad file in a good folder.

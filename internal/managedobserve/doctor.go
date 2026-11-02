@@ -201,6 +201,10 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 		warn("the active profile pointer is unusable (%v) — config resolution has fallen back to the pre-profile paths; fix or remove %s", profileErr, profile.ActivePath())
 	}
 
+	if reason := managedconfig.IgnoredSystemFile(); reason != "" {
+		fmt.Fprintf(out, "  system config: ignored, because %s; only a file administrators own counts\n", reason)
+	}
+
 	// Through the injected loader, not managedconfig.Load directly: tests pin the
 	// scope rather than inheriting whatever this Mac has under /Library.
 	loaded, err := opts.LoadConfig()
