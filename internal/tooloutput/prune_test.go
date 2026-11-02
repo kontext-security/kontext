@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 const (
@@ -181,6 +183,7 @@ func TestPruneCapNeverDeletesTheSessionWithTheNewestOutput(t *testing.T) {
 // Only a directory is a session, and only its regular files are saved
 // outputs. Nothing is followed through a link, and what is no session stays.
 func TestPruneHandlesEmptyDirectoriesAndOddEntries(t *testing.T) {
+	hermetic.Symlinks(t)
 	d := newSavedDir(t)
 	// A directory with no file goes by its own time: a new one may be a
 	// save under way.
@@ -243,27 +246,60 @@ func TestPruneHandlesEmptyDirectoriesAndOddEntries(t *testing.T) {
 	}
 }
 
-// An output saved after Prune scanned its session puts the session back in
-// use: deleting the session leaves that output and its directory.
-func TestRemoveSessionKeepsAnOutputSavedSinceTheScan(t *testing.T) {
+// Prune waits for a save under way and scans what it leaves, so a session
+// that saves while Prune runs keeps every output, its oldest and the new one.
+// The save here is writePrivate's: a temporary file renamed into place, which
+// keeps the time it was written.
+func TestPruneWaitsForASaveUnderWay(t *testing.T) {
 	d := newSavedDir(t)
 	old := d.save("resumed", "toolu_old.txt", 4096, 20*day)
-	sessions, err := os.ReadDir(d.c.dir)
-	if err != nil || len(sessions) != 1 {
-		t.Fatalf("save directory = %v, %v", sessions, err)
+	saving.RLock()
+	temporary := filepath.Join(filepath.Dir(old), ".tool-output-1.tmp")
+	if err := os.WriteFile(temporary, []byte("output"), 0o600); err != nil {
+		saving.RUnlock()
+		t.Fatal(err)
 	}
-	session, ok := scanSession(d.c.dir, sessions[0])
-	if !ok {
-		t.Fatal("session not scanned")
+	pruned := make(chan struct{})
+	go func() {
+		defer close(pruned)
+		d.c.Prune()
+	}()
+	select {
+	case <-pruned:
+		saving.RUnlock()
+		t.Fatal("Prune ran while a save was under way")
+	case <-time.After(100 * time.Millisecond):
 	}
-	fresh := d.save("resumed", "toolu_new.txt", 4096, 0)
-	if removed := d.c.removeSession(session); removed != 4096 {
-		t.Fatalf("removed %d bytes, want 4096", removed)
+	fresh := filepath.Join(filepath.Dir(old), "toolu_new.txt")
+	err := os.Rename(temporary, fresh)
+	saving.RUnlock()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if d.exists(old) {
-		t.Fatal("output from before the scan kept")
+	<-pruned
+	for _, path := range []string{old, fresh} {
+		if !d.exists(path) {
+			t.Fatalf("%s deleted from a session that saved while Prune ran", filepath.Base(path))
+		}
 	}
-	if !d.exists(fresh) {
-		t.Fatal("output saved since the scan deleted")
+}
+
+// A save waits while Prune scans and deletes.
+func TestASaveWaitsForPrune(t *testing.T) {
+	d := newSavedDir(t)
+	saving.Lock()
+	saved := make(chan error, 1)
+	go func() {
+		saved <- writePrivate(d.c.dir, filepath.Join(d.c.dir, "session", "toolu_1.txt"), []byte("output"))
+	}()
+	select {
+	case err := <-saved:
+		saving.Unlock()
+		t.Fatalf("save ran while Prune held the directory: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	saving.Unlock()
+	if err := <-saved; err != nil {
+		t.Fatal(err)
 	}
 }

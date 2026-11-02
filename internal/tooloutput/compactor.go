@@ -599,7 +599,8 @@ func (c *Compactor) load(sessionID string) []record {
 // newest file never goes for size, as the one most likely in use: when it
 // alone holds more, it is kept whole and every other session goes. It goes
 // like any other once another session saves an output after it, or
-// Retention after its own newest file.
+// Retention after its own newest file. Saves wait while it scans and deletes
+// (see saving).
 func (c *Compactor) Prune() {
 	if c == nil {
 		return
@@ -615,6 +616,8 @@ func (c *Compactor) Prune() {
 	if c.dir == "" {
 		return
 	}
+	saving.Lock()
+	defer saving.Unlock()
 	sessions, err := os.ReadDir(c.dir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -640,7 +643,9 @@ func (c *Compactor) Prune() {
 	// the session with the newest file, never goes for size.
 	slices.SortStableFunc(kept, func(a, b savedSession) int { return a.last.Compare(b.last) })
 	for i := 0; i < len(kept)-1 && total > maxSavedBytes; i++ {
-		total -= c.removeSession(kept[i])
+		if c.removeSession(kept[i]) {
+			total -= kept[i].bytes
+		}
 	}
 }
 
@@ -684,41 +689,12 @@ func scanSession(root string, entry os.DirEntry) (savedSession, bool) {
 	return session, true
 }
 
-// removeSession deletes a session directory and all it holds, but for a
-// file modified after the session's last as Prune found it: an output saved
-// since then, which keeps the directory, and the session, in place. It
-// returns how many bytes of files it deleted.
-func (c *Compactor) removeSession(session savedSession) int64 {
-	entries, err := os.ReadDir(session.dir)
-	if err != nil {
-		return 0
+// removeSession deletes a session directory and all it holds, following no
+// link, and reports whether it is gone.
+func (c *Compactor) removeSession(session savedSession) bool {
+	if err := os.RemoveAll(session.dir); err != nil {
+		c.diagnostic.Printf("tool output compaction prune: %v\n", err)
+		return false
 	}
-	var removed int64
-	var failed error
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		path := filepath.Join(session.dir, entry.Name())
-		switch {
-		case !info.Mode().IsRegular():
-			err = os.RemoveAll(path)
-		case info.ModTime().After(session.last):
-			continue
-		default:
-			if err = os.Remove(path); err == nil {
-				removed += info.Size()
-			}
-		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) && failed == nil {
-			failed = err
-		}
-	}
-	if failed != nil {
-		c.diagnostic.Printf("tool output compaction prune: %v\n", failed)
-	}
-	// Fails while anything is left in it.
-	_ = os.Remove(session.dir)
-	return removed
+	return true
 }
