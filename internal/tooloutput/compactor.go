@@ -1,10 +1,11 @@
 // Package tooloutput implements tool output compaction. The daemon sends a
 // large tool output to the Kontext API and applies what comes back: Claude
 // Code and Codex outputs are shortened live, with the full output saved where
-// the agent can read it back. Codex outputs that cannot be shortened, such as
-// those of shell calls a code mode script makes, are sent in shadow mode,
-// never waited for or changed. The endpoint configuration's switch turns it
-// on, and every failure leaves the output as it was.
+// the agent can read it back. An output no hook can change, such as that of a
+// shell call a code mode script makes, is never sent; the Codex proxy
+// shortens code mode results in the model's requests instead (see
+// ProxyOutput). The endpoint configuration's switch turns it on, and every
+// failure leaves the output as it was.
 package tooloutput
 
 import (
@@ -35,12 +36,15 @@ const HookWait = 3 * time.Second
 var apiWait = 2750 * time.Millisecond
 
 const (
-	shadowWait   = 10 * time.Second
 	readBackWait = 10 * time.Second
 	// maxLive bounds live calls in flight. Each holds a hook connection, and
 	// policy decisions must never queue behind them.
-	maxLive   = 8
-	queueSize = 32
+	maxLive = 8
+	// maxProxyLive bounds the Codex proxy's calls in flight. A model request's
+	// parts share one connection, so they wait for a call, within the
+	// proxy's budget, and take none of the hooks'.
+	maxProxyLive = 8
+	queueSize    = 32
 	// Retention is how long a session's saved outputs are kept after the
 	// newest of them was saved.
 	Retention = 7 * 24 * time.Hour
@@ -79,17 +83,11 @@ type Compactor struct {
 	now        func() time.Time
 
 	live      chan struct{}
-	shadow    chan shadowJob
+	proxyLive chan struct{}
 	readBacks chan ReadBack
 
 	mu       sync.Mutex
 	sessions map[string]*session
-}
-
-type shadowJob struct {
-	event hook.Event
-	out   output
-	goal  string
 }
 
 // session is what the compactor knows about one agent session.
@@ -100,6 +98,9 @@ type session struct {
 	reported map[[2]string]bool
 	// claimed holds the calls whose output was taken up (see claim).
 	claimed map[string]bool
+	// decided holds the proxy's answers by call and part (see proxyName), so
+	// asking again gets the same answer. Nil keeps the part.
+	decided map[string]*string
 }
 
 // record is a compaction the agent saw, kept to recognize its read-backs. It
@@ -107,7 +108,9 @@ type session struct {
 type record struct {
 	EventID   string `json:"eventId"`
 	ToolUseID string `json:"toolUseId"`
-	Kind      string `json:"kind"`
+	// Part is set on a printed part of a code mode result the proxy changed.
+	Part int    `json:"part,omitempty"`
+	Kind string `json:"kind"`
 	// FilePath and Omitted (file line ranges, both ends included) describe a
 	// compacted Read.
 	FilePath string   `json:"filePath,omitempty"`
@@ -137,7 +140,7 @@ func New(opts Options) *Compactor {
 		home:       opts.Home,
 		now:        now,
 		live:       make(chan struct{}, maxLive),
-		shadow:     make(chan shadowJob, queueSize),
+		proxyLive:  make(chan struct{}, maxProxyLive),
 		readBacks:  make(chan ReadBack, queueSize),
 		sessions:   map[string]*session{},
 	}
@@ -158,8 +161,7 @@ func (c *Compactor) Offers(event hook.Event) bool {
 // Compact runs live compaction for a PostToolUse and returns the tool
 // response the agent should see instead, or nil to leave the output
 // unchanged: when the switch is off, the output is not a candidate, the call
-// reads a saved output back or was taken up already, or anything fails. A
-// Codex output whose call cannot be changed goes in shadow mode instead. The
+// reads a saved output back or was taken up already, or anything fails. The
 // output comes with the event, so no file of the call is opened, wherever it
 // is.
 func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]any {
@@ -182,19 +184,17 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 
 	// Codex's model gets the shorter output in place of the whole tool
 	// result, which starts with how the command exited. A call whose command
-	// has not finished, or whose output the model already has, is left as is
-	// and measured in shadow mode.
+	// has not finished, or whose output the model already has, is left as is.
 	head := ""
 	if event.Agent == "codex" {
 		code, finished := codexExitCode(event, c.home)
 		if !finished {
-			c.queueShadow(event, out)
 			return nil
 		}
 		head = "Process exited with code " + strconv.Itoa(code) + "\n"
 	}
 	saved := filepath.Join(c.dir, event.SessionID, event.ToolUseID+".txt")
-	request := c.request(ModeLive, event, out, c.goal(event.SessionID))
+	request := c.request(event, out, c.goal(event.SessionID))
 	if out.kind == KindText {
 		request.Output.RecoveryPath = saved
 	}
@@ -231,9 +231,8 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 }
 
 // Observe follows the hook events the daemon answers: the person's prompts,
-// for context; calls that read a compacted output back, which are reported;
-// and the Codex outputs live compaction leaves alone, sent in shadow mode. It
-// only queues network work, so it never delays a hook.
+// for context, and calls that read a compacted output back, which are
+// reported. It only queues network work, so it never delays a hook.
 func (c *Compactor) Observe(_ context.Context, event hook.Event) {
 	if c == nil || event.SessionID == "" {
 		return
@@ -253,39 +252,12 @@ func (c *Compactor) Observe(_ context.Context, event hook.Event) {
 		if event.Agent == "claude" || event.Agent == "codex" {
 			c.reportReadBacks(event)
 		}
-		if out, ok := shadowOutput(event); ok && !c.readsBack(event) && c.claim(event) {
-			c.queueShadow(event, out)
-		}
 	}
 }
 
-// queueShadow queues a Codex output for shadow mode, without waiting for
-// room.
-func (c *Compactor) queueShadow(event hook.Event, out output) {
-	select {
-	case c.shadow <- shadowJob{event: event, out: out, goal: c.goal(event.SessionID)}:
-	default:
-		c.diagnostic.Printf("tool output compaction: shadow queue full; output not sent\n")
-	}
-}
-
-// Run sends queued shadow requests and read-backs, and prunes saved outputs
-// (see Prune), until ctx ends.
+// Run sends queued read-backs, and prunes saved outputs (see Prune), until
+// ctx ends.
 func (c *Compactor) Run(ctx context.Context) {
-	var workers sync.WaitGroup
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case job := <-c.shadow:
-				c.sendShadow(ctx, job)
-			}
-		}
-	}()
-	defer workers.Wait()
 	c.Prune()
 	ticker := time.NewTicker(pruneInterval)
 	defer ticker.Stop()
@@ -308,23 +280,7 @@ func (c *Compactor) Run(ctx context.Context) {
 	}
 }
 
-// sendShadow sends a Codex output in shadow mode. The answer changes nothing.
-func (c *Compactor) sendShadow(ctx context.Context, job shadowJob) {
-	if !c.on() {
-		return
-	}
-	body, fits := encode(c.request(ModeShadow, job.event, job.out, job.goal))
-	if !fits {
-		return
-	}
-	ctx, cancel := context.WithTimeout(ctx, shadowWait)
-	defer cancel()
-	if _, err := c.client.Compact(ctx, body); err != nil {
-		c.diagnostic.Printf("%v (shadow)\n", err)
-	}
-}
-
-func (c *Compactor) request(mode string, event hook.Event, out output, goal string) Request {
+func (c *Compactor) request(event hook.Event, out output, goal string) Request {
 	withheld := func(input any) bool { return c.namesSaveDir(input, event.CWD) }
 	context, model := requestContext(event, goal, c.home, withheld)
 	if event.Model != "" {
@@ -337,7 +293,7 @@ func (c *Compactor) request(mode string, event hook.Event, out output, goal stri
 		agent = "claude-code"
 	}
 	return Request{
-		Mode:      mode,
+		Mode:      ModeLive,
 		Agent:     agent,
 		SessionID: event.SessionID,
 		ToolUseID: event.ToolUseID,
@@ -369,7 +325,7 @@ func encode(request Request) ([]byte, bool) {
 
 // readsBack reports whether a call reads a compacted output back: it names
 // the save directory, or reads lines of a compacted file that the compaction
-// left out. Such a call is never compacted itself, nor sent in shadow mode.
+// left out. Such a call is never compacted itself.
 func (c *Compactor) readsBack(event hook.Event) bool {
 	if c.namesSaveDir(event.ToolInput, event.CWD) {
 		return true
@@ -474,7 +430,7 @@ func (c *Compactor) saved(sessionID, name string) (record, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, compaction := range c.session(sessionID).records {
-		if compaction.Kind == KindText && compaction.ToolUseID == name {
+		if compaction.Kind == KindText && compaction.name() == name {
 			return compaction, true
 		}
 	}
@@ -546,7 +502,7 @@ func (c *Compactor) remember(sessionID string, compaction record) {
 	c.mu.Unlock()
 	data, err := json.Marshal(compaction)
 	if err == nil {
-		err = writePrivate(c.dir, filepath.Join(c.dir, sessionID, compaction.ToolUseID+".json"), data)
+		err = writePrivate(c.dir, filepath.Join(c.dir, sessionID, compaction.name()+".json"), data)
 	}
 	if err != nil {
 		c.diagnostic.Printf("tool output compaction: %v\n", err)
@@ -558,7 +514,7 @@ func (c *Compactor) remember(sessionID string, compaction record) {
 func (c *Compactor) session(sessionID string) *session {
 	state := c.sessions[sessionID]
 	if state == nil {
-		state = &session{reported: map[[2]string]bool{}, claimed: map[string]bool{}, records: c.load(sessionID)}
+		state = &session{reported: map[[2]string]bool{}, claimed: map[string]bool{}, decided: map[string]*string{}, records: c.load(sessionID)}
 		c.sessions[sessionID] = state
 	}
 	state.touched = c.now()

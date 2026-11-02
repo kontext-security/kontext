@@ -187,9 +187,6 @@ func TestSwitchOffSendsNothing(t *testing.T) {
 	if _, _, calls := c.api.calls(); calls != 0 {
 		t.Fatalf("API calls with the switch off = %d", calls)
 	}
-	if len(c.shadow) != 0 {
-		t.Fatal("a shadow request was queued with the switch off")
-	}
 }
 
 func TestLiveBashReplacesStdoutAndSavesTheFullOutput(t *testing.T) {
@@ -218,7 +215,9 @@ func TestLiveBashReplacesStdoutAndSavesTheFullOutput(t *testing.T) {
 		request.ToolName != "Bash" || request.Output.Kind != KindText || request.Output.Text != stdout || request.Output.RecoveryPath != saved {
 		t.Fatalf("request = %+v", request)
 	}
-	if request.ToolInput["command"] != "make test" || request.Context.Current.ToolName != "Bash" || request.Context.Current.ToolInput["command"] != "make test" {
+	input, _ := request.ToolInput.(map[string]any)
+	current, _ := request.Context.Current.ToolInput.(map[string]any)
+	if input["command"] != "make test" || request.Context.Current.ToolName != "Bash" || current["command"] != "make test" {
 		t.Fatalf("request tool input = %+v, current = %+v", request.ToolInput, request.Context.Current)
 	}
 
@@ -299,13 +298,8 @@ func TestCompactsInPrivacyFolders(t *testing.T) {
 	if c.Compact(context.Background(), read) != nil {
 		t.Fatal("the Read's fake reply keeps one line, so it must be refused, not skipped")
 	}
-	// A shell call from Codex code mode, which goes to shadow mode.
-	codex := hook.Event{SessionID: "codex-1", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "exec-0b3c", CWD: project,
-		ToolInput: map[string]any{"command": "cat ~/Downloads/report.csv"}, ToolResponse: map[string]any{"content": bigText(80)}}
-	c.Observe(context.Background(), codex)
-	c.sendShadow(context.Background(), <-c.shadow)
 	requests, _, _ := c.api.calls()
-	if len(requests) != 3 || requests[0].ToolName != "Bash" || requests[1].Output.FilePath != read.ToolResponse["file"].(map[string]any)["filePath"] || requests[2].Mode != ModeShadow {
+	if len(requests) != 2 || requests[0].ToolName != "Bash" || requests[1].Output.FilePath != read.ToolResponse["file"].(map[string]any)["filePath"] {
 		t.Fatalf("requests = %+v", requests)
 	}
 }
@@ -391,11 +385,11 @@ func TestReadingASavedOutputBackIsNeverCompacted(t *testing.T) {
 	if _, _, calls := c.api.calls(); calls != 0 {
 		t.Fatalf("API calls = %d", calls)
 	}
-	// Nor is one read from Codex's code mode sent in shadow mode.
+	// Nor does a read from Codex's code mode send anything.
 	c.Observe(context.Background(), hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "exec-1",
 		CWD: c.cwd, ToolInput: map[string]any{"command": "cat " + saved}, ToolResponse: map[string]any{"content": bigText(80)}})
-	if len(c.shadow) != 0 {
-		t.Fatal("a code mode read of a saved output went in shadow mode")
+	if _, _, calls := c.api.calls(); calls != 0 {
+		t.Fatalf("API calls after a code mode read = %d", calls)
 	}
 }
 
@@ -474,64 +468,21 @@ func TestReadBacksAreReportedOncePerCall(t *testing.T) {
 	}
 }
 
-func TestCodexShadowNeverBlocksOrChangesTheOutput(t *testing.T) {
-	release := make(chan struct{})
-	var once sync.Once
-	t.Cleanup(func() { once.Do(func() { close(release) }) })
-	c := newTestCompactor(t, func(Request) (int, any) {
-		<-release
-		return http.StatusOK, map[string]any{"decision": "keep", "eventId": testEventID}
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { defer close(done); c.Run(ctx) }()
-	t.Cleanup(func() { once.Do(func() { close(release) }); cancel(); <-done })
-
+// A shell call a code mode script makes is never sent: no hook can change
+// what Codex's model sees of it, so only the Codex proxy can shorten it.
+func TestCodexCodeModeOutputsAreNeverSent(t *testing.T) {
+	c := newTestCompactor(t, replace("short"))
 	output := bigText(80)
-	// Shell calls from code mode, which live compaction leaves alone.
-	codeMode := func(n int) hook.Event {
-		return hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: fmt.Sprintf("exec-%d", n),
-			CWD: c.cwd, ToolInput: map[string]any{"command": "go test ./..."}, ToolResponse: map[string]any{"content": output}}
-	}
-	event := codeMode(0)
+	event := hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolUseID: "exec-0",
+		CWD: c.cwd, ToolInput: map[string]any{"command": "go test ./..."}, ToolResponse: map[string]any{"content": output}}
 	c.Observe(context.Background(), hook.Event{SessionID: "codex-019a", Agent: "codex", HookName: hook.HookUserPromptSubmit,
 		ToolInput: map[string]any{"prompt": "fix the failing test"}})
-	// The server answers nothing until the test ends: an Observe that waited
-	// for it, or for room in a full queue, would not return.
-	observed := make(chan struct{})
-	go func() {
-		defer close(observed)
-		c.Observe(context.Background(), event)
-		for n := range queueSize + 10 {
-			c.Observe(context.Background(), codeMode(n+1))
-		}
-	}()
-	select {
-	case <-observed:
-	case <-time.After(10 * time.Second):
-		t.Fatal("Observe blocked on the shadow request")
+	c.Observe(context.Background(), event)
+	if got := c.Compact(context.Background(), event); got != nil || event.ToolResponse["content"] != output {
+		t.Fatal("a code mode output was compacted or changed")
 	}
-	if event.ToolResponse["content"] != output {
-		t.Fatal("the Codex output was changed")
-	}
-	if got := c.Compact(context.Background(), event); got != nil {
-		t.Fatal("a code mode output was compacted live")
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		requests, _, _ := c.api.calls()
-		if len(requests) > 0 {
-			request := requests[0]
-			if request.Mode != ModeShadow || request.Agent != "codex" || request.Output.Kind != KindText || request.Output.Text != output ||
-				request.Output.RecoveryPath != "" || request.Context.Goal != "fix the failing test" {
-				t.Fatalf("shadow request = %+v", request)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no shadow request was sent")
-		}
-		time.Sleep(10 * time.Millisecond)
+	if _, _, calls := c.api.calls(); calls != 0 {
+		t.Fatalf("API calls for a code mode output = %d", calls)
 	}
 }
 
@@ -619,24 +570,23 @@ func TestLiveCodexShowsTheExitThenTheShorterOutput(t *testing.T) {
 
 // A Codex output is changed only when the session log shows an exec_command
 // call whose command finished, of which the model has nothing yet, and only
-// with a reason Codex shows whole. The calls it cannot change still go in
-// shadow mode, once.
+// with a reason Codex shows whole. The calls it cannot change are sent
+// nowhere, however often a hook asks.
 func TestCodexCallsLeftAsTheyAre(t *testing.T) {
 	tests := []struct {
-		name   string
-		rows   []string
-		id     string
-		reply  string
-		calls  int
-		shadow bool
+		name  string
+		rows  []string
+		id    string
+		reply string
+		calls int
 	}{
-		{name: "not finished", rows: []string{codexCall("exec_command", "call_1")}, shadow: true},
+		{name: "not finished", rows: []string{codexCall("exec_command", "call_1")}},
 		{name: "answered while running", rows: []string{codexCall("exec_command", "call_1"),
 			`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"Process running with session ID 7"}}`,
-			codexCall("write_stdin", "call_2"), codexExited("call_1", 0)}, shadow: true},
-		{name: "write_stdin", rows: []string{codexCall("write_stdin", "call_1"), codexExited("call_1", 0)}, shadow: true},
+			codexCall("write_stdin", "call_2"), codexExited("call_1", 0)}},
+		{name: "write_stdin", rows: []string{codexCall("write_stdin", "call_1"), codexExited("call_1", 0)}},
 		{name: "code mode", id: "exec-0b3c", rows: []string{codexExited("exec-0b3c", 0)}},
-		{name: "no session log", shadow: true},
+		{name: "no session log"},
 		{name: "too long for Codex", rows: []string{codexCall("exec_command", "call_1"), codexExited("call_1", 0)},
 			reply: strings.Repeat("y", maxCodexText-len("Process exited with code 0\n")+1), calls: 1},
 	}
@@ -664,20 +614,10 @@ func TestCodexCallsLeftAsTheyAre(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(c.dir, "codex-019a")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("saved outputs: %v", err)
 			}
-			select {
-			case job := <-c.shadow:
-				if !test.shadow || job.event.ToolUseID != event.ToolUseID || job.out.text != event.ToolResponse["content"] {
-					t.Fatalf("shadow job for %q, want none", job.event.ToolUseID)
-				}
-			default:
-				if test.shadow {
-					t.Fatal("the output was not sent in shadow mode")
-				}
-			}
 			// A second Kontext install's hook asks too.
 			c.Compact(context.Background(), event)
-			if len(c.shadow) != 0 {
-				t.Fatal("the output went in shadow mode twice")
+			if _, _, calls := c.api.calls(); calls != test.calls {
+				t.Fatalf("API calls after a second ask = %d, want %d", calls, test.calls)
 			}
 		})
 	}

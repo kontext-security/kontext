@@ -64,6 +64,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(profileCmd())
 	root.AddCommand(hookCmd())
 	root.AddCommand(managedObserveDaemonCmd())
+	root.AddCommand(codexProxyCmd())
 	root.AddCommand(doctorCmd())
 	root.AddCommand(hooksCmd())
 	root.AddCommand(reportCmd())
@@ -156,11 +157,12 @@ func doctorCmd() *cobra.Command {
 				if fix {
 					return errors.New("--json and --fix cannot be combined; run the repair first, then re-run with --json")
 				}
-				return runDoctorJSON(cmd.OutOrStdout())
+				return runDoctorJSON(cmd.Context(), cmd.OutOrStdout())
 			}
 			managed := managedobserve.PrintStatus(cmd.OutOrStdout(), version)
 			hooksHealthy, localHooksHealthy := checkHooks(cmd.OutOrStdout(), managed)
-			healthy := overallHealthy(managed, hooksHealthy, localHooksHealthy)
+			codexProxyHealthy := checkCodexProxy(cmd.Context(), cmd.OutOrStdout())
+			healthy := overallHealthy(managed, hooksHealthy, localHooksHealthy, codexProxyHealthy)
 			if fix {
 				if !managed.Repairable {
 					if healthy {
@@ -196,7 +198,9 @@ func doctorCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "\nAfter repair:")
 				managed = managedobserve.PrintStatus(cmd.OutOrStdout(), version)
 				hooksHealthy, localHooksHealthy = checkHooks(cmd.OutOrStdout(), managed)
-				healthy = overallHealthy(managed, hooksHealthy, localHooksHealthy)
+				// The restarted daemon may have brought the proxy back.
+				codexProxyHealthy = checkCodexProxy(cmd.Context(), cmd.OutOrStdout())
+				healthy = overallHealthy(managed, hooksHealthy, localHooksHealthy, codexProxyHealthy)
 			}
 			if !healthy {
 				return errDoctorUnhealthy
@@ -230,9 +234,10 @@ func checkHooks(out io.Writer, managed managedobserve.DoctorStatus) (managedHook
 }
 
 // overallHealthy is the single definition of a healthy install. Local hook
-// health only counts once the machine is configured at all.
-func overallHealthy(managed managedobserve.DoctorStatus, managedHooks, localHooks bool) bool {
-	return managed.Healthy && managedHooks && (!managed.Configured || localHooks)
+// health only counts once the machine is configured at all; a Codex route
+// the proxy does not answer always counts.
+func overallHealthy(managed managedobserve.DoctorStatus, managedHooks, localHooks, codexProxy bool) bool {
+	return managed.Healthy && managedHooks && (!managed.Configured || localHooks) && codexProxy
 }
 
 // doctorJSONPayload is the documented shape of `kontext doctor --json`.
@@ -251,10 +256,10 @@ type doctorJSONPayload struct {
 // zero even when unhealthy: the caller reads `healthy` from the payload, and a
 // non-zero exit would leave it interpreting both a status code and a document
 // that already says the same thing.
-func runDoctorJSON(out io.Writer) error {
+func runDoctorJSON(ctx context.Context, out io.Writer) error {
 	managed, report := managedobserve.Diagnose(io.Discard, version)
 	managedHooks, localHooks := checkHooks(io.Discard, managed)
-	report.Healthy = overallHealthy(managed, managedHooks, localHooks)
+	report.Healthy = overallHealthy(managed, managedHooks, localHooks, checkCodexProxy(ctx, io.Discard))
 
 	payload := doctorJSONPayload{
 		Report:              report,
@@ -493,6 +498,7 @@ func shouldUseManagedObserve(explicitSocket, explicitMode bool) bool {
 
 func managedObserveDaemonCmd() *cobra.Command {
 	var socketPath, dbPath, idleTimeout string
+	var noCodexRoute bool
 	cmd := &cobra.Command{
 		Use:    "managed-observe-daemon",
 		Short:  "Run the managed observe socket daemon",
@@ -510,6 +516,7 @@ func managedObserveDaemonCmd() *cobra.Command {
 			return managedobserve.RunDaemon(context.Background(), managedobserve.DaemonOptions{
 				SocketPath:    socketPath,
 				DBPath:        dbPath,
+				NoCodexRoute:  noCodexRoute,
 				IdleTimeout:   timeout,
 				Diagnostic:    diagnostic.New(cmd.ErrOrStderr(), diagnostic.EnabledFromEnv()),
 				BinaryVersion: version,
@@ -522,6 +529,8 @@ func managedObserveDaemonCmd() *cobra.Command {
 	cmd.Flags().StringVar(&socketPath, "socket", "", "managed observe socket path")
 	cmd.Flags().StringVar(&dbPath, "db", "", "managed observe database path")
 	cmd.Flags().StringVar(&idleTimeout, "idle-timeout", "", "managed observe stale session timeout")
+	cmd.Flags().BoolVar(&noCodexRoute, "no-codex-route", false, "never route Codex through the Codex proxy")
+	_ = cmd.Flags().MarkHidden("no-codex-route")
 	_ = cmd.Flags().MarkHidden("socket")
 	_ = cmd.Flags().MarkHidden("db")
 	_ = cmd.Flags().MarkHidden("idle-timeout")

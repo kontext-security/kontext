@@ -91,7 +91,7 @@ func claudeOutput(event hook.Event) (output, bool) {
 // what its model sees only by blocking the call, which hands the model the
 // block's reason in place of the output; from code mode, where a script
 // makes the call, a block fails the whole script, so those calls are left
-// to shadow mode.
+// as they are, for the Codex proxy.
 func codexOutput(event hook.Event) (output, bool) {
 	text, ok := event.ToolResponse["content"].(string)
 	if event.ToolName != "Bash" || !ok || len(text) <= minOutputBytes || codeModeCall(event.ToolUseID) {
@@ -106,25 +106,6 @@ func codexOutput(event hook.Event) (output, bool) {
 // call a code mode script makes.
 func codeModeCall(toolUseID string) bool {
 	return strings.HasPrefix(toolUseID, "exec-")
-}
-
-// shadowOutput is a Codex shell call's output that live compaction leaves to
-// shadow mode.
-func shadowOutput(event hook.Event) (output, bool) {
-	if event.Agent != "codex" || event.HookName != hook.HookPostToolUse || event.ToolName != "Bash" {
-		return output{}, false
-	}
-	if _, live := codexOutput(event); live {
-		return output{}, false
-	}
-	text, ok := event.ToolResponse["content"].(string)
-	if !ok {
-		text, ok = event.ToolResponse["stdout"].(string)
-	}
-	if !ok || len(text) <= minOutputBytes {
-		return output{}, false
-	}
-	return output{kind: KindText, text: text}, true
 }
 
 // acceptable reports whether a replacement for out can stand in for it: it

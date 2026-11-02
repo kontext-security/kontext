@@ -401,6 +401,7 @@ func newTestServiceWithOptions(t *testing.T, opts Options) *Service {
 		OnFailure:         opts.OnFailure,
 		CompactToolOutput: opts.CompactToolOutput,
 		OffersCompaction:  opts.OffersCompaction,
+		CodexProxy:        opts.CodexProxy,
 		Observe:           opts.Observe,
 		Diagnostic:        opts.Diagnostic,
 	})
@@ -695,5 +696,37 @@ func TestServiceAnswersOtherHooksDuringACompaction(t *testing.T) {
 	}
 	if elapsed := time.Since(begun); elapsed > 250*time.Millisecond {
 		t.Fatalf("PreToolUse took %v behind a compaction", elapsed)
+	}
+}
+
+// A Codex proxy question still waiting on the compaction API holds up no
+// hook either: like a hook's compaction, it holds its own connection only.
+func TestServiceAnswersHooksWhileACodexProxyQuestionWaits(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	core, err := runtimecore.New(&stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newTestServiceWithOptions(t, Options{Core: core, AsyncIngest: true,
+		CodexProxy: func(context.Context, json.RawMessage) json.RawMessage {
+			close(started)
+			<-release
+			return nil
+		}})
+	// Registered after the service, so it runs before the service's Stop.
+	t.Cleanup(func() { close(release) })
+	go func() {
+		_, _ = NewClient(service.SocketPath()).CodexProxy(context.Background(), json.RawMessage(`{"sessionId":"019a"}`))
+	}()
+	<-started
+	begun := time.Now()
+	if _, err := NewClient(service.SocketPath()).Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Bash"}); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(begun); elapsed > 250*time.Millisecond {
+		t.Fatalf("PreToolUse took %v behind a Codex proxy question", elapsed)
 	}
 }
