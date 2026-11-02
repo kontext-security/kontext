@@ -3,6 +3,7 @@ package localruntime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -334,7 +335,7 @@ func TestServiceFailsClosedWhenBlockingHookPayloadCannotDecode(t *testing.T) {
 	t.Parallel()
 
 	service := newTestService(t, &stubRuntime{}, false)
-	result := service.process(context.Background(), &EvaluateRequest{
+	result, _ := service.process(context.Background(), &EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolInput: []byte(`{`),
 	})
@@ -351,7 +352,7 @@ func TestServiceAllowsNonblockingHookPayloadDecodeFailure(t *testing.T) {
 	t.Parallel()
 
 	service := newTestService(t, &stubRuntime{}, true)
-	result := service.process(context.Background(), &EvaluateRequest{
+	result, _ := service.process(context.Background(), &EvaluateRequest{
 		HookEvent: "PostToolUse",
 		ToolInput: []byte(`{`),
 	})
@@ -425,6 +426,9 @@ type stubRuntime struct {
 	observeCalls   atomic.Int32
 	startedIngest  atomic.Bool
 	afterResponse  func()
+	// evaluate, when set, answers EvaluateHook instead of evaluateResult and
+	// evaluateErr; call counts from 1.
+	evaluate func(call int32, event hook.Event) (hook.Result, error)
 }
 
 func (s *stubRuntime) ObserveAsyncEvent(event hook.Event) {
@@ -434,10 +438,13 @@ func (s *stubRuntime) ObserveAsyncEvent(event hook.Event) {
 	}
 }
 
-func (s *stubRuntime) EvaluateHook(ctx context.Context, _ hook.Event) (hook.Result, error) {
-	s.evaluateCalls.Add(1)
+func (s *stubRuntime) EvaluateHook(ctx context.Context, event hook.Event) (hook.Result, error) {
+	call := s.evaluateCalls.Add(1)
 	if s.afterResponse != nil {
 		runtimecore.AfterResponse(ctx, s.afterResponse)
+	}
+	if s.evaluate != nil {
+		return s.evaluate(call, event)
 	}
 	return s.evaluateResult, s.evaluateErr
 }
@@ -455,8 +462,9 @@ func TestServiceBoundsPostResponseWorkBeforeAdmittingAnotherHook(t *testing.T) {
 	t.Cleanup(unblock) // Release before the service cleanup waits for handlers.
 	client := NewClient(service.SocketPath())
 	client.Timeout = time.Second
-	for range runtimecore.MaxPendingHookRequests {
-		if _, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse}); err != nil {
+	// Distinct tool calls: copies of one would share a single evaluation.
+	for i := range runtimecore.MaxPendingHookRequests {
+		if _, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolUseID: fmt.Sprintf("toolu_%d", i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -464,7 +472,7 @@ func TestServiceBoundsPostResponseWorkBeforeAdmittingAnotherHook(t *testing.T) {
 	// or assigned a settled decision while every post-response slot is occupied.
 	extra := make(chan error, 1)
 	go func() {
-		_, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse})
+		_, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolUseID: "toolu_extra"})
 		extra <- err
 	}()
 	select {

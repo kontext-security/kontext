@@ -252,11 +252,33 @@ func TestAgentWiringCodexLayers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Self-serve leaves out of the user file what the machine-wide one covers.
+	split := func(event string) (system, user []byte) {
+		machine := codexmanaged.Template("/opt/homebrew/bin/kontext")
+		rest := codexmanaged.Settings{Hooks: map[string][]codexmanaged.MatcherGroup{event: machine.Hooks[event]}}
+		delete(machine.Hooks, event)
+		system, _ = json.Marshal(machine)
+		user, _ = json.Marshal(rest)
+		return system, user
+	}
+	partialSystem, promptOnly := split("UserPromptSubmit")
+	// A broken Kontext hook leaves its file's other hooks running: here Stop
+	// runs session-start, and PreToolUse names another binary.
+	flawed := codexmanaged.Template("/opt/homebrew/bin/kontext")
+	flawed.Hooks["Stop"] = flawed.Hooks["SessionStart"]
+	flawed.Hooks["PreToolUse"] = codexmanaged.Template("/Applications/Kontext/runtime/bin/kontext").Hooks["PreToolUse"]
+	flawedSystem, _ := json.Marshal(flawed)
+	_, stopOnly := split("Stop")
 	for _, tc := range []struct {
 		name         string
 		system, user []byte
 		want         agentinventory.Wired
 	}{
+		{"split across both", partialSystem, promptOnly, agentinventory.WiredYes},
+		{"partial system only", partialSystem, nil, agentinventory.WiredNo},
+		{"partial system with foreign user", partialSystem, foreign, agentinventory.WiredNo},
+		{"system with a broken hook, its event in user", flawedSystem, stopOnly, agentinventory.WiredYes},
+		{"system with a broken hook only", flawedSystem, nil, agentinventory.WiredNo},
 		{"system only", valid, nil, agentinventory.WiredYes},
 		{"user only", nil, valid, agentinventory.WiredYes},
 		{"both same", valid, valid, agentinventory.WiredYes},

@@ -68,8 +68,8 @@ func diagnoseCursorLayers(out io.Writer, user, machine string) bool {
 	var twice []string
 	for _, path := range []string{machine, user} {
 		if raw, err := os.ReadFile(path); err == nil {
-			for event, binary := range cursormanaged.Coverage(raw) {
-				if !executable(binary) {
+			for event, binaries := range cursormanaged.Coverage(raw) {
+				if !slices.ContainsFunc(binaries, executable) {
 					continue
 				}
 				if covered[event] != "" {
@@ -144,7 +144,7 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 				continue
 			}
 			if def.Agent == "codex" {
-				if !diagnoseCodexHooks(out, file.Path, otherCodexHooks) {
+				if !diagnoseCodexHooks(out, scope, file.Path, otherCodexHooks) {
 					healthy = false
 				}
 				continue
@@ -203,29 +203,44 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 	return healthy
 }
 
-// Both Codex hook layers are additive. An absent or empty preferred layer is
-// fine when the other is complete; a malformed or partial layer still fails.
-// Validate both before choosing the installed binary instead of requiring the
-// daemon's setup scope to contain hooks of its own.
-func diagnoseCodexHooks(out io.Writer, preferred, other string) bool {
+// Both Codex hook layers are additive, and Codex runs a hook found in both
+// twice. Self-serve leaves out of the user file what a runnable machine-wide
+// hook covers, so together the layers must run each event once; a malformed
+// layer or a missing event still fails. Validate both before choosing the
+// installed binary instead of requiring the daemon's setup scope to contain
+// hooks of its own.
+func diagnoseCodexHooks(out io.Writer, scope Scope, preferred, other string) bool {
 	installation, err := codexmanaged.InspectInstallation(codexmanaged.InstallationPaths{SystemHooks: preferred, UserHooks: other})
 	healthy := err == nil
 	if err != nil {
 		fmt.Fprintf(out, "Codex hooks: %v\n", err)
 	}
-	for _, path := range []string{preferred, other} {
-		if raw, readErr := os.ReadFile(path); path != "" && readErr == nil && codexmanaged.LacksPromptHook(raw) {
-			fmt.Fprintf(out, "Codex hooks: %s (%s)\n", promptHookMissing, path)
+	if missing := installation.Missing(); len(installation.Layers) > 0 && slices.Contains(missing, hook.HookUserPromptSubmit.String()) {
+		files := make([]string, len(installation.Layers))
+		for i, layer := range installation.Layers {
+			files[i] = layer.Path
 		}
+		fmt.Fprintf(out, "Codex hooks: %s (%s)\n", promptHookMissing, strings.Join(files, ", "))
 	}
-	var binary string
+	runs := map[string]int{}
+	var twice []string
+	var repeated codexmanaged.InstallationLayer
 	for _, layer := range installation.Layers {
-		if !executable(layer.Binary) {
-			fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s; binary %s)\n", layer.Path, layer.Binary)
-			healthy = false
+		// A layer's hooks can name more than one binary: name each that cannot
+		// run, and count the events of those that can.
+		running := ""
+		for _, binary := range layerBinaries(layer) {
+			if !executable(binary) {
+				fmt.Fprintf(out, "Codex hooks: configured binary is not executable (%s; binary %s)\n", layer.Path, binary)
+				healthy = false
+			} else if running == "" {
+				running = binary
+			}
+		}
+		if running == "" {
 			continue
 		}
-		fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", layer.Path, layer.Binary)
+		fmt.Fprintf(out, "Codex hooks: installed (%s; binary %s)\n", layer.Path, running)
 		// Codex skips a user hook the user has not trusted in the Codex CLI's
 		// /hooks; the trust lives in config.toml next to hooks.json.
 		if layer.Path != codexmanaged.SystemHooksPath {
@@ -237,18 +252,31 @@ func diagnoseCodexHooks(out io.Writer, preferred, other string) bool {
 				fmt.Fprintf(out, "Codex hooks: not trusted in Codex (%s); Codex skips them until you run `codex`, open /hooks and trust each Kontext hook\n", strings.Join(untrusted, ", "))
 			}
 		}
-		if binary == "" {
-			binary = layer.Binary
-		} else if layer.Binary != binary {
-			path := layer.Path
-			if home, err := os.UserHomeDir(); err == nil && path == filepath.Join(home, ".codex", "hooks.json") {
-				path = "~/.codex/hooks.json"
+		for _, event := range layer.Events {
+			// A hook whose binary cannot run runs nothing, and the installer
+			// keeps its event in the user file.
+			if !slices.ContainsFunc(layer.Binaries[event], executable) {
+				continue
 			}
-			fmt.Fprintf(out, "Codex hooks: another Kontext install also hooks Codex (%s → %s); run kontext setup --uninstall on an organization-managed Mac\n", path, layer.Binary)
-			healthy = false
+			if runs[event]++; runs[event] == 2 {
+				twice = append(twice, event)
+				repeated = layer
+			}
 		}
 	}
-	return healthy
+	if len(twice) == 0 {
+		return healthy
+	}
+	if scope == User {
+		fmt.Fprintf(out, "Codex hooks: %s run twice, from %s and %s. Run `kontext hooks install --scope user` to drop the user copies.\n", strings.Join(twice, ", "), other, preferred)
+	} else {
+		path := repeated.Path
+		if home, err := os.UserHomeDir(); err == nil && path == filepath.Join(home, ".codex", "hooks.json") {
+			path = "~/.codex/hooks.json"
+		}
+		fmt.Fprintf(out, "Codex hooks: another Kontext install also hooks Codex (%s → %s); run kontext setup --uninstall on an organization-managed Mac\n", path, repeated.Binary)
+	}
+	return false
 }
 
 func checkFeature(installed, user string) error {
@@ -284,6 +312,20 @@ func checkFeature(installed, user string) error {
 func executable(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0
+}
+
+// layerBinaries lists the binaries a Codex layer's Kontext hooks run, in event
+// order.
+func layerBinaries(layer codexmanaged.InstallationLayer) []string {
+	var binaries []string
+	for _, event := range layer.Events {
+		for _, binary := range layer.Binaries[event] {
+			if !slices.Contains(binaries, binary) {
+				binaries = append(binaries, binary)
+			}
+		}
+	}
+	return binaries
 }
 
 func AgentPresent(agent, home string) bool {

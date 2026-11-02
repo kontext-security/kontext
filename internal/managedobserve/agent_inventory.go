@@ -49,17 +49,17 @@ func agentWiring(paths codexmanaged.InstallationPaths, pathsErr error, scope man
 			if pathsErr != nil {
 				return agentinventory.WiredError
 			}
+			// Self-serve leaves out of the user file what a machine-wide file
+			// covers, so the two count together.
 			installation, err := codexmanaged.InspectInstallation(paths)
-			if len(installation.Layers) > 0 {
+			switch {
+			case installation.Complete():
 				return agentinventory.WiredYes
-			}
-			if errors.Is(err, codexmanaged.ErrIncompleteInstallation) {
+			case errors.Is(err, codexmanaged.ErrIncompleteInstallation):
 				return agentinventory.WiredNo
-			}
-			if err != nil {
+			default:
 				return agentinventory.WiredError
 			}
-			return agentinventory.WiredYes
 		},
 		"cursor": func() agentinventory.Wired { return cursorWired(scope) },
 	}
@@ -97,12 +97,14 @@ func cursorWired(scope managedconfig.Scope) agentinventory.Wired {
 		if err != nil || !json.Valid(raw) {
 			return agentinventory.WiredError
 		}
-		for event, binary := range cursormanaged.Coverage(raw) {
-			if privacyfolder.Guarded(home, binary) {
-				return agentinventory.WiredError
-			}
-			if info, err := os.Stat(binary); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
-				covered[event] = true
+		for event, binaries := range cursormanaged.Coverage(raw) {
+			for _, binary := range binaries {
+				if privacyfolder.Guarded(home, binary) {
+					return agentinventory.WiredError
+				}
+				if info, err := os.Stat(binary); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+					covered[event] = true
+				}
 			}
 		}
 	}

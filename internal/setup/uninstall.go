@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
@@ -65,7 +66,7 @@ func Uninstall(ctx context.Context, opts Options) error {
 		return err
 	}
 	if err := hookinstall.Remove(hookinstall.Options{
-		Scope: hookinstall.User, Home: home, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
+		Scope: hookinstall.User, Home: home, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath, CodexPath: codexSystemHooks,
 		Report: func(r hookinstall.Result) {
 			switch r.File.Kind {
 			case "codex":
@@ -205,9 +206,13 @@ func removeSelfServeLaunchAgentIfPresent(ctx context.Context) (bool, string, err
 }
 
 // legacyMachineHooks reports Kontext-owned machine-wide hooks: the Claude
-// drop-in or Cursor's machine-wide file that earlier setups wrote with sudo.
+// drop-in or Codex's or Cursor's machine-wide file that earlier setups wrote
+// with sudo.
 func legacyMachineHooks() bool {
 	if raw, err := os.ReadFile(managedSettingsPath); err == nil && claudemanaged.IsManagedSettingsDropIn(raw) {
+		return true
+	}
+	if raw, err := os.ReadFile(codexSystemHooks); err == nil && len(codexmanaged.Coverage(raw)) > 0 {
 		return true
 	}
 	var settings struct {

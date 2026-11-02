@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -300,5 +301,105 @@ func TestValidateInstalledReportsMixedBinariesOnce(t *testing.T) {
 	_, err = ValidateInstalled(raw)
 	if err == nil || err.Error() != "Kontext hooks use different binary paths" {
 		t.Fatalf("error=%v, want a single mixed-binary diagnostic", err)
+	}
+}
+
+// Codex loads a hooks.json whole or not at all, so coverage follows its rules.
+func TestCoverageCountsOnlyHooksCodexRuns(t *testing.T) {
+	valid, err := TemplateJSON(testBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Coverage(valid); len(got) != len(SupportedEvents) || !slices.Equal(got[hook.HookStop.String()], []string{testBinary}) {
+		t.Fatalf("coverage = %v", got)
+	}
+	top := func(field string) string { return `{` + field + `,` + string(valid[1:]) }
+	event := func(event string) string {
+		return strings.Replace(string(valid), `"hooks": {`, `"hooks": {`+event+`,`, 1)
+	}
+	group := func(group string) string {
+		return strings.Replace(string(valid), `"Stop": [`, `"Stop": [`+group+`,`, 1)
+	}
+	handler := func(handler string) string {
+		return strings.Replace(string(valid), `"hooks": [`, `"hooks": [`+handler+`,`, 1)
+	}
+	// Each file still holds all of Kontext's valid hooks, so counting any of
+	// them would remove user hooks Codex then never runs.
+	for name, raw := range map[string]string{
+		"top-level key Codex rejects":         top(`"version": 1`),
+		"description that is not a string":    top(`"description": 1`),
+		"repeated key":                        event(`"Stop": []`),
+		"event that is not a list":            event(`"Interrupt": {}`),
+		"event that is null":                  event(`"Interrupt": null`),
+		"matcher group that is not an object": group(`"*"`),
+		"matcher that is not a string":        group(`{"matcher": 1}`),
+		"group hooks that is null":            group(`{"hooks": null}`),
+		"handler type Codex rejects":          handler(`{"type": "http", "url": "https://audit.example"}`),
+		"handler without a type":              handler(`{"command": "/usr/local/bin/audit"}`),
+		"command handler without a command":   handler(`{"type": "command"}`),
+		"command that is not a string":        handler(`{"type": "command", "command": ["/usr/local/bin/audit"]}`),
+		"negative timeout":                    handler(`{"type": "command", "command": "/usr/local/bin/audit", "timeout": -1}`),
+		"fractional timeout":                  handler(`{"type": "command", "command": "/usr/local/bin/audit", "timeout": 1.5}`),
+		"timeout that is a string":            handler(`{"type": "command", "command": "/usr/local/bin/audit", "timeout": "20"}`),
+		"async that is null":                  handler(`{"type": "command", "command": "/usr/local/bin/audit", "async": null}`),
+		"status message that is not a string": handler(`{"type": "command", "command": "/usr/local/bin/audit", "statusMessage": 1}`),
+		"both spellings of commandWindows":    handler(`{"type": "command", "command": "a", "commandWindows": "a", "command_windows": "a"}`),
+		"MCP handler without a server":        handler(`{"type": "mcp_tool", "tool": "log"}`),
+		"MCP input with a null":               handler(`{"type": "mcp_tool", "server": "audit", "tool": "log", "input": {"level": null}}`),
+		"MCP input past i64":                  handler(`{"type": "mcp_tool", "server": "audit", "tool": "log", "input": {"n": 9223372036854775808}}`),
+		"nesting past serde_json's limit":     handler(`{"type": "mcp_tool", "server": "audit", "tool": "log", "input": {"n": ` + strings.Repeat("[", 130) + strings.Repeat("]", 130) + `}}`),
+		"data after the object":               string(valid) + `{}`,
+		"not UTF-8":                           strings.Replace(string(valid), `"matcher": ""`, "\"matcher\": \"\xff\"", 1),
+		"malformed":                           `{`,
+	} {
+		if got := Coverage([]byte(raw)); len(got) != 0 {
+			t.Errorf("%s: coverage = %v", name, got)
+		}
+	}
+	// Codex loads its own handler types and optional fields; Kontext's hooks
+	// beside them count.
+	for name, raw := range map[string]string{
+		"description":                    top(`"description": "Kontext hooks"`),
+		"null description":               top(`"description": null`),
+		"event Codex does not know":      event(`"FutureEvent": [{"hooks": []}]`),
+		"group with a null matcher":      group(`{"matcher": null}`),
+		"command hook with every field":  handler(`{"type": "command", "command": "/usr/local/bin/audit", "commandWindows": null, "timeout": 30, "async": false, "statusMessage": "Auditing", "additionalContextLimit": 0}`),
+		"MCP, prompt and agent handlers": handler(`{"type": "mcp_tool", "server": "audit", "tool": "log", "input": {"level": "info", "n": -1, "f": 1.5}}, {"type": "prompt", "prompt": "Is this safe?"}, {"type": "agent"}`),
+	} {
+		if got := Coverage([]byte(raw)); len(got) != len(SupportedEvents) {
+			t.Errorf("%s: coverage = %v", name, got)
+		}
+	}
+	async := strings.Replace(string(valid), `"timeout": 20`, `"timeout": 20, "async": true`, 1)
+	if got := Coverage([]byte(async)); len(got) != len(SupportedEvents)-1 {
+		t.Fatalf("an async Kontext hook counted: %v", got)
+	}
+}
+
+func TestMergeManagedHooksExceptDropsCoveredEvents(t *testing.T) {
+	settings := decode(t, `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"/usr/local/bin/audit-stop"}]}]}}`)
+	if err := MergeManagedHooks(settings, testBinary); err != nil {
+		t.Fatal(err)
+	}
+	skip := map[string]bool{}
+	for _, event := range SupportedEvents {
+		skip[event.Name.String()] = event.Name != hook.HookUserPromptSubmit
+	}
+	if err := MergeManagedHooksExcept(settings, testBinary, skip); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(settings)
+	if got := Coverage(raw); len(got) != 1 || len(got[hook.HookUserPromptSubmit.String()]) == 0 {
+		t.Fatalf("coverage = %v: %s", got, raw)
+	}
+	if !strings.Contains(string(raw), "/usr/local/bin/audit-stop") {
+		t.Fatalf("foreign hook dropped: %s", raw)
+	}
+	skip[hook.HookUserPromptSubmit.String()] = true
+	if err := MergeManagedHooksExcept(settings, testBinary, skip); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := json.Marshal(settings); string(raw) != `{"hooks":{"Stop":[{"hooks":[{"command":"/usr/local/bin/audit-stop","type":"command"}],"matcher":""}]}}` {
+		t.Fatalf("settings = %s", raw)
 	}
 }

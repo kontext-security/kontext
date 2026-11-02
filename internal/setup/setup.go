@@ -100,6 +100,7 @@ var (
 	managedSettingsPath = claudemanaged.ManagedSettingsDropInPath
 	managedSettingsFile = claudemanaged.ManagedSettingsPath
 	cursorHooksPath     = cursormanaged.SystemHooksPath
+	codexSystemHooks    = codexmanaged.SystemHooksPath
 	goos                = runtime.GOOS
 )
 
@@ -474,8 +475,14 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	// Every hook file is in the user's home, so setup never asks for a password.
 	codexHooks := ""
 	if err := hookinstall.Install(hookinstall.Options{
-		Scope: hookinstall.User, Home: home, Binary: binary, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath,
+		Scope: hookinstall.User, Home: home, Binary: binary, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath, CodexPath: codexSystemHooks,
 		Report: func(r hookinstall.Result) {
+			// A machine-wide file from an earlier setup or an organization
+			// covers every event; the user file stays free of Kontext's hooks.
+			installed := r.File.Path
+			if r.Reason == "covered" {
+				installed = map[string]string{"codex": codexSystemHooks, "cursor": cursorHooksPath}[r.File.Kind]
+			}
 			switch r.File.Kind {
 			case "claude-user":
 				fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks installed (%s)\n", r.File.Path)
@@ -484,9 +491,9 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 				}
 			case "codex":
 				codexHooks = r.File.Path
-				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", r.File.Path)
+				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", installed)
 			case "cursor":
-				fmt.Fprintf(opts.Stdout, "  ✓ Cursor hooks installed (%s)\n", r.File.Path)
+				fmt.Fprintf(opts.Stdout, "  ✓ Cursor hooks installed (%s)\n", installed)
 			case "feature":
 				if r.Err != nil {
 					fmt.Fprintf(opts.Stderr, "note: could not enable the Codex hooks feature automatically (%v); set `[features].hooks = true` in ~/.codex/config.toml or the hooks will not run.\n", r.Err)
