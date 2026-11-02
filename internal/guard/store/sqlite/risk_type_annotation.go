@@ -186,6 +186,8 @@ limit 1
 }
 
 // RiskTypeAnnotations returns one append-only cursor page for managed upload.
+// With ActionUpdatedThrough set, the page ends before the first annotation
+// whose action is past that cursor (see annotationActionExported).
 func (s *Store) RiskTypeAnnotations(ctx context.Context, opts RiskTypeAnnotationExportOptions) ([]RiskTypeAnnotationRecord, *RiskTypeAnnotationCursor, error) {
 	query := riskTypeAnnotationSelect
 	args := []any{}
@@ -203,23 +205,11 @@ func (s *Store) RiskTypeAnnotations(ctx context.Context, opts RiskTypeAnnotation
 		}
 	}
 	if opts.ActionUpdatedThrough != nil {
-		updated := ledgerTimestampCursorKeyFromTime(*opts.ActionUpdatedThrough)
-		if opts.ActionUpdatedThroughID != "" {
-			conditions = append(conditions, `exists (
-  select 1 from authorization_actions action
-  where action.id = annotation.action_id
-    and (action.updated_at_cursor_key < ? or (action.updated_at_cursor_key = ? and action.id <= ?))
-)`)
-			args = append(args, updated, updated, opts.ActionUpdatedThroughID)
-		} else {
-			conditions = append(conditions, `exists (
-  select 1 from authorization_actions action
-  where action.id = annotation.action_id
-    and action.updated_at_cursor_key < ?
-)`)
-			args = append(args, updated)
-		}
+		conditions = append(conditions, "exists (select 1 from authorization_actions action where action.id = annotation.action_id)")
 	}
+	exported, exportedArgs := annotationActionExported(opts.ActionUpdatedThrough, opts.ActionUpdatedThroughID)
+	query = strings.Replace(query, "\nfrom ", ",\n  "+exported+"\nfrom ", 1)
+	args = append(exportedArgs, args...)
 	if len(conditions) > 0 {
 		query += "\nwhere " + strings.Join(conditions, "\nand ")
 	}
@@ -235,9 +225,13 @@ func (s *Store) RiskTypeAnnotations(ctx context.Context, opts RiskTypeAnnotation
 	defer rows.Close()
 	records := []RiskTypeAnnotationRecord{}
 	for rows.Next() {
-		record, err := scanRiskTypeAnnotation(rows)
+		var actionExported bool
+		record, err := scanRiskTypeAnnotation(rows, &actionExported)
 		if err != nil {
 			return nil, nil, err
+		}
+		if !actionExported {
+			break
 		}
 		records = append(records, record)
 	}
@@ -251,6 +245,35 @@ func (s *Store) RiskTypeAnnotations(ctx context.Context, opts RiskTypeAnnotation
 	return records, &RiskTypeAnnotationCursor{CreatedAt: last.CreatedAt, AnnotationID: last.ID}, nil
 }
 
+// annotationActionExported is an annotation export column: whether the
+// annotation's action is at or before the action export cursor (through,
+// throughID), so the hosted ledger has it. Created_at order need not follow
+// action order (an enrich run stamps annotations of old actions with now,
+// deferred record workers finish out of order), so an export page ends at the
+// first annotation whose action is not exported yet instead of skipping it:
+// the stream persists the page's last annotation as its cursor, and a skipped
+// annotation would fall behind it, never upload, and count as uploaded for
+// ledger retention. Annotations whose action is gone can never upload; the
+// pages leave them out.
+func annotationActionExported(through *time.Time, throughID string) (string, []any) {
+	if through == nil {
+		return "1", nil
+	}
+	updated := ledgerTimestampCursorKeyFromTime(*through)
+	if throughID != "" {
+		return `exists (
+  select 1 from authorization_actions action
+  where action.id = annotation.action_id
+    and (action.updated_at_cursor_key < ? or (action.updated_at_cursor_key = ? and action.id <= ?))
+)`, []any{updated, updated, throughID}
+	}
+	return `exists (
+  select 1 from authorization_actions action
+  where action.id = annotation.action_id
+    and action.updated_at_cursor_key < ?
+)`, []any{updated}
+}
+
 const riskTypeAnnotationSelect = `
 select annotation.id, annotation.action_id, annotation.session_id,
   coalesce(annotation.tool_use_id, ''), annotation.command_hash,
@@ -258,11 +281,13 @@ select annotation.id, annotation.action_id, annotation.session_id,
   annotation.annotation_json, annotation.created_at
 from risk_type_annotations annotation`
 
-func scanRiskTypeAnnotation(scanner interface{ Scan(...any) error }) (RiskTypeAnnotationRecord, error) {
+// scanRiskTypeAnnotation scans riskTypeAnnotationSelect's columns, then any
+// columns a query selects after them into extra.
+func scanRiskTypeAnnotation(scanner interface{ Scan(...any) error }, extra ...any) (RiskTypeAnnotationRecord, error) {
 	var record RiskTypeAnnotationRecord
 	var schemaVersion, modelVersion, annotationJSON, created string
-	if err := scanner.Scan(&record.ID, &record.ActionID, &record.SessionID, &record.ToolUseID, &record.CommandHash,
-		&record.InputKind, &schemaVersion, &modelVersion, &annotationJSON, &created); err != nil {
+	if err := scanner.Scan(append([]any{&record.ID, &record.ActionID, &record.SessionID, &record.ToolUseID, &record.CommandHash,
+		&record.InputKind, &schemaVersion, &modelVersion, &annotationJSON, &created}, extra...)...); err != nil {
 		return RiskTypeAnnotationRecord{}, err
 	}
 	if err := json.Unmarshal([]byte(annotationJSON), &record.Verdict); err != nil {

@@ -770,6 +770,122 @@ func TestCursorAdvancesIsMonotonic(t *testing.T) {
 	}
 }
 
+// An annotation uploads once the persisted action cursor passes its action,
+// and that cursor is clamped to now-lag when the actions page posts, one post
+// before the annotation pages. z's action falls inside the first flush's lag
+// window, so z must wait, while y, stamped later for an older action (as an
+// enrich run or a slow deferred record worker stamps it), is eligible at once.
+// The annotation cursor must not move past z on y's account.
+func TestFlushUploadsAnnotationsThatWaitedForTheirAction(t *testing.T) {
+	store, dbPath := testStore(t)
+	ctx := context.Background()
+	model, err := riskclassifier.LoadRiskTypeSVM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	t0 := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for _, call := range []struct {
+		toolUseID          string
+		committed, stamped time.Duration
+	}{
+		{"toolu_y", -40 * time.Second, -20 * time.Second},
+		{"toolu_z", -29800 * time.Millisecond, -29500 * time.Millisecond},
+	} {
+		saveTestDecision(t, store, "session-1", call.toolUseID)
+		committed := t0.Add(call.committed)
+		if _, err := db.Exec(`update authorization_actions set updated_at = ?, updated_at_cursor_key = ? where tool_use_id = ?`,
+			committed.Format(time.RFC3339Nano), committed.Format("2006-01-02T15:04:05.000000000Z07:00"), call.toolUseID); err != nil {
+			t.Fatal(err)
+		}
+		actions, err := store.AuthorizationActions(ctx, sqlite.LedgerExportOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var actionID string
+		for _, action := range actions {
+			if action["tool_use_id"] == call.toolUseID && action["canonical_event_type"] == "request.decided" {
+				actionID, _ = action["id"].(string)
+			}
+		}
+		stamped := t0.Add(call.stamped)
+		if _, err := store.SaveStepSafetyVerdict(ctx, sqlite.StepSafetyRecord{
+			ActionID:       actionID,
+			SessionID:      "session-1",
+			ToolUseID:      call.toolUseID,
+			ToolName:       "Read",
+			ShadowDecision: stepsafety.DecisionSafe,
+			ModelVersion:   stepsafety.ModelVersion,
+			CreatedAt:      stamped,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := store.SaveRiskTypeAnnotation(ctx, riskclassifier.RiskTypeRecord{
+			ActionID:    actionID,
+			SessionID:   "session-1",
+			ToolUseID:   call.toolUseID,
+			CommandHash: "redacted-command-hash",
+			InputKind:   riskclassifier.RiskTypeInputStoredRedactedCommand,
+			Verdict:     model.Classify("launchctl load ~/Library/LaunchAgents/example.plist"),
+			CreatedAt:   stamped,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	uploaded := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var payload Payload
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, annotation := range payload.MerlinAnnotations {
+			uploaded["merlin "+annotation.ToolUseID] = true
+		}
+		for _, annotation := range payload.RiskTypeAnnotations {
+			uploaded["risk type "+annotation.ToolUseID] = true
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(server.Close)
+	opts := Options{
+		DBPath:         dbPath,
+		StatePath:      filepath.Join(t.TempDir(), "stream-state.json"),
+		CloudURL:       server.URL,
+		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		InstallToken:   "test-install-token",
+		HTTPClient:     server.Client(),
+	}
+	// The actions page posts at t0, clamping the action cursor to t0-30s, and
+	// the annotation pages post a second later.
+	pages := 0
+	opts.Now = func() time.Time {
+		pages++
+		if pages == 1 {
+			return t0
+		}
+		return t0.Add(time.Second)
+	}
+	if err := Flush(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	opts.Now = func() time.Time { return t0.Add(20 * time.Second) }
+	if err := Flush(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"merlin toolu_y", "merlin toolu_z", "risk type toolu_y", "risk type toolu_z"} {
+		if !uploaded[key] {
+			t.Errorf("%s annotation never uploaded; uploaded %v", key, uploaded)
+		}
+	}
+}
+
 func TestFlushRetriesWithSmallerBatchWhenHostedBackendRejectsSize(t *testing.T) {
 	store, dbPath := testStore(t)
 	for i := 0; i < 4; i++ {
