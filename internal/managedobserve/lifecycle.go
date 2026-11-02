@@ -188,13 +188,23 @@ func (l Lifecycle) reach(ctx context.Context) bool {
 
 // connectionLost reports whether the daemon went away between the probe and
 // its reply. A write that races the daemon's close fails with EPIPE on Linux
-// but can fail with ENOTCONN on macOS. Windows reports the same drops with
+// but can fail with ENOTCONN on macOS. A dial after a clean stop finds no
+// socket file, which socketRemoved covers. Windows reports the same drops with
 // Winsock errnos, which winsockConnectionLost covers.
 func connectionLost(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
 		errors.Is(err, syscall.ENOTCONN) || errors.Is(err, syscall.ECONNREFUSED) ||
-		winsockConnectionLost(err)
+		socketRemoved(err) || winsockConnectionLost(err)
+}
+
+// socketRemoved reports whether the RPC's dial found no socket file, which
+// Linux and macOS report as ENOENT. The probe had just connected through that
+// file, so the daemon removed it, as a clean stop does. Only the dial's ENOENT
+// counts; any other missing file is not a lost connection.
+func socketRemoved(err error) bool {
+	var dial *net.OpError
+	return errors.As(err, &dial) && dial.Op == "dial" && errors.Is(dial.Err, syscall.ENOENT)
 }
 
 func (l Lifecycle) processIfAvailable(ctx context.Context, event hook.Event, budget time.Duration) hook.Result {
