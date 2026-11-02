@@ -11,6 +11,7 @@ daemon_version
 export_pending
 healthy
 heartbeat_age_seconds
+ignored_system_config
 install_token_readable
 installation_id
 installed_version

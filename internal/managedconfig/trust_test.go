@@ -92,6 +92,28 @@ func TestLoadIgnoresASystemFileThatIsNotAnAdmins(t *testing.T) {
 	}
 }
 
+// Without a home there is no user path, so the system file stays selected, and
+// saying it was ignored would be false.
+func TestIgnoredSystemFileSaysNothingWithoutAUserPath(t *testing.T) {
+	t.Setenv(EnvPath, "")
+	system := filepath.Join(t.TempDir(), "managed.json")
+	if err := os.WriteFile(system, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withSystemPath(t, system)
+	hermetic.SetHome(t, "")
+	if user := UserPath(); user != "" {
+		t.Skipf("this environment still has a user path: %s", user)
+	}
+	notAdminFile = func(string) (fmt.Stringer, error) { return foundNotAdmin("owned by someone"), nil }
+	if path, scope := ResolvePath(); path != system || scope != ScopeSystem {
+		t.Fatalf("ResolvePath() = %q, %q; want the system path", path, scope)
+	}
+	if got := IgnoredSystemFile(); got != "" {
+		t.Fatalf("IgnoredSystemFile() = %q, want empty", got)
+	}
+}
+
 // What can't be determined doesn't ignore the file: the system scope stays, so a
 // self-serve config can't shadow a managed install, and the read reports it.
 func TestResolvePathKeepsTheSystemFileWhenItCantTell(t *testing.T) {

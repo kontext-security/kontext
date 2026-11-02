@@ -26,9 +26,10 @@ func systemFileIgnored() bool {
 }
 
 // IgnoredSystemFile says why a file at the system path is being ignored, and ""
-// if it isn't or there is none.
+// if it isn't or there is none. An override means the path isn't looked at, and
+// without a user path ResolvePath has nothing else to pick.
 func IgnoredSystemFile() string {
-	if strings.TrimSpace(os.Getenv(EnvPath)) != "" {
+	if strings.TrimSpace(os.Getenv(EnvPath)) != "" || UserPath() == "" {
 		return ""
 	}
 	found, err := notAdminFile(systemPath)
