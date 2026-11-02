@@ -62,10 +62,18 @@ func TestDirectoriesMatchTodaysPaths(t *testing.T) {
 			t.Errorf("path = %q, want %q", test.got, test.want)
 		}
 	}
-	if runtime.GOOS == "darwin" {
-		if got, want := filepath.Join(platform.ClaudeManagedDir(), "managed-mcp.json"), mcpconfig.ManagedMCPPath; got != want {
-			t.Errorf("Claude Code's managed MCP file = %q, want %q", got, want)
-		}
+}
+
+// Claude Code reads its managed MCP file beside its managed settings, so what
+// Kontext looks up on each OS is the file Claude Code would use there.
+func TestManagedMCPFileIsWhereClaudeCodeReadsIt(t *testing.T) {
+	want := map[string]string{
+		"darwin":  "/Library/Application Support/ClaudeCode/managed-mcp.json",
+		"linux":   "/etc/claude-code/managed-mcp.json",
+		"windows": `C:\Program Files\ClaudeCode\managed-mcp.json`,
+	}[runtime.GOOS]
+	if got := mcpconfig.ManagedMCPPath; got != want {
+		t.Fatalf("ManagedMCPPath = %q, want %q", got, want)
 	}
 }
 
