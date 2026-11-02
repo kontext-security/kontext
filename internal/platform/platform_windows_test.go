@@ -33,9 +33,9 @@ func TestProbeDirectories(t *testing.T) {
 	if os.Getenv(probeEnv) == "" {
 		t.Skip("runs as the child of the fresh-process tests")
 	}
-	dirs := map[string]string{}
+	dirs := map[string]string{"claude": ClaudeManagedDir()}
 	for name, dir := range map[string]func() (string, error){
-		"system": SystemConfigDir, "codex": CodexSystemDir, "claude": ClaudeManagedDir, "user": UserStateDir,
+		"system": SystemConfigDir, "codex": CodexSystemDir, "user": UserStateDir,
 	} {
 		path, err := dir()
 		if err != nil {

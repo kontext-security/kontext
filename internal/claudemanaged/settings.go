@@ -5,21 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/platform"
 )
 
 const (
-	ManagedSettingsPath        = "/Library/Application Support/ClaudeCode/managed-settings.json"
-	ManagedSettingsDropInPath  = "/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json"
-	LinuxManagedSettingsPath   = "/etc/claude-code/managed-settings.json"
-	WindowsManagedSettingsPath = `C:\Program Files\ClaudeCode\managed-settings.json`
-	DefaultKontextBinary       = "/usr/local/bin/kontext"
-	DefaultHookTimeout         = 20
+	DefaultKontextBinary = "/usr/local/bin/kontext"
+	DefaultHookTimeout   = 20
 	// SavedOutputReadRule lets Claude Code read back, without asking, the
 	// full outputs that tool output compaction saves in the daemon's data
 	// directory (internal/tooloutput). The Read tool otherwise asks before
@@ -46,19 +42,15 @@ var SupportedEvents = []Event{
 	{Name: hook.HookSubagentStop, Alias: "subagent-stop", Async: true},
 }
 
+// DefaultManagedSettingsPath is Claude Code's managed settings file on this OS.
 func DefaultManagedSettingsPath() string {
-	return managedSettingsPathForGOOS(runtime.GOOS)
+	return filepath.Join(platform.ClaudeManagedDir(), "managed-settings.json")
 }
 
-func managedSettingsPathForGOOS(goos string) string {
-	switch goos {
-	case "windows":
-		return WindowsManagedSettingsPath
-	case "linux":
-		return LinuxManagedSettingsPath
-	default:
-		return ManagedSettingsPath
-	}
+// DefaultManagedSettingsDropInPath is the file Kontext owns beside it, which
+// Claude Code merges into its managed settings.
+func DefaultManagedSettingsDropInPath() string {
+	return filepath.Join(platform.ClaudeManagedDir(), "managed-settings.d", "20-kontext.json")
 }
 
 type Settings struct {

@@ -97,8 +97,8 @@ var (
 	boundProfileLookup  = profileBoundToWorkspace
 	systemConfigPath    = managedconfig.DefaultPath
 	orgInstallTokenPath = managedconfig.InstallTokenFilePath
-	managedSettingsPath = claudemanaged.ManagedSettingsDropInPath
-	managedSettingsFile = claudemanaged.ManagedSettingsPath
+	managedSettingsPath = claudemanaged.DefaultManagedSettingsDropInPath()
+	managedSettingsFile = claudemanaged.DefaultManagedSettingsPath()
 	cursorHooksPath     = cursormanaged.SystemHooksPath
 	codexSystemHooks    = codexmanaged.SystemHooksPath
 	goos                = runtime.GOOS

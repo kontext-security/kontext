@@ -1740,3 +1740,13 @@ func TestRunLeavesCodexEventsToTheMachineWideFile(t *testing.T) {
 		t.Fatalf("uninstall changed the machine-wide file: %v", err)
 	}
 }
+
+// Setup checks and writes the files Claude Code reads on this OS.
+func TestManagedSettingsDefaultsFollowClaudeManaged(t *testing.T) {
+	if got, want := managedSettingsPath, claudemanaged.DefaultManagedSettingsDropInPath(); got != want {
+		t.Errorf("managedSettingsPath = %q, want %q", got, want)
+	}
+	if got, want := managedSettingsFile, claudemanaged.DefaultManagedSettingsPath(); got != want {
+		t.Errorf("managedSettingsFile = %q, want %q", got, want)
+	}
+}

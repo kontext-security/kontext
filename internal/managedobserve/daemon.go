@@ -57,7 +57,7 @@ type DaemonOptions struct {
 }
 
 var (
-	managedSettingsDropInPath = claudemanaged.ManagedSettingsDropInPath
+	managedSettingsDropInPath = claudemanaged.DefaultManagedSettingsDropInPath()
 	managedSettingsFilePath   = claudemanaged.DefaultManagedSettingsPath()
 	claudeUserSettingsPath    = func() (string, error) {
 		home, err := os.UserHomeDir()
@@ -464,7 +464,7 @@ func requireManagedHooksForLegacyCowork(cfg managedconfig.Config, scope managedc
 // Claude Code merges drop-ins into the managed settings, so a disable in
 // either file switches off hooks the other file declares. A read error yields
 // ok=false — the fact is omitted from the batch rather than reported as
-// missing, so a daemon that cannot read /Library (sandboxing, permissions)
+// missing, so a daemon that cannot read the folder (sandboxing, permissions)
 // never files a false "hooks deleted" alarm. Self-serve installs keep their
 // hooks in the user's Claude settings, which count for the user scope only.
 func managedObserveHooksFact(scope managedconfig.Scope) (managedstream.HooksFact, bool) {

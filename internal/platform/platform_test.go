@@ -5,7 +5,6 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
@@ -36,7 +35,7 @@ func TestDirectoriesOnUnix(t *testing.T) {
 	}
 	for _, test := range []struct{ got, want string }{
 		{join(t, platform.SystemConfigDir), "/Library/Application Support/Kontext"},
-		{join(t, platform.ClaudeManagedDir), claude},
+		{platform.ClaudeManagedDir(), claude},
 		{join(t, platform.CodexSystemDir), "/etc/codex"},
 	} {
 		if test.got != test.want {
@@ -45,12 +44,9 @@ func TestDirectoriesOnUnix(t *testing.T) {
 	}
 }
 
-// The directories give the paths the packages use today. On Windows those
-// literals are still the macOS ones, except Claude Code's managed settings.
+// The directories give the paths the packages not yet moved use today. On
+// Windows those literals are still the macOS ones.
 func TestDirectoriesMatchTodaysPaths(t *testing.T) {
-	if got, want := join(t, platform.ClaudeManagedDir, "managed-settings.json"), claudemanaged.DefaultManagedSettingsPath(); got != want {
-		t.Errorf("Claude Code's managed settings = %q, want %q", got, want)
-	}
 	if runtime.GOOS == "windows" {
 		return
 	}
@@ -67,10 +63,7 @@ func TestDirectoriesMatchTodaysPaths(t *testing.T) {
 		}
 	}
 	if runtime.GOOS == "darwin" {
-		if got, want := join(t, platform.ClaudeManagedDir, "managed-settings.d", "20-kontext.json"), claudemanaged.ManagedSettingsDropInPath; got != want {
-			t.Errorf("Claude Code's drop-in = %q, want %q", got, want)
-		}
-		if got, want := join(t, platform.ClaudeManagedDir, "managed-mcp.json"), mcpconfig.ManagedMCPPath; got != want {
+		if got, want := filepath.Join(platform.ClaudeManagedDir(), "managed-mcp.json"), mcpconfig.ManagedMCPPath; got != want {
 			t.Errorf("Claude Code's managed MCP file = %q, want %q", got, want)
 		}
 	}

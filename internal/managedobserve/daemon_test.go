@@ -1428,3 +1428,13 @@ func TestHookFilesFingerprintWatchesCodexHome(t *testing.T) {
 		t.Fatal("a hooks file under CODEX_HOME left the fingerprint unchanged")
 	}
 }
+
+// hooks_present reads these, so they must be the files Kontext writes.
+func TestManagedSettingsDefaultsFollowClaudeManaged(t *testing.T) {
+	if got, want := managedSettingsDropInPath, claudemanaged.DefaultManagedSettingsDropInPath(); got != want {
+		t.Errorf("managedSettingsDropInPath = %q, want %q", got, want)
+	}
+	if got, want := managedSettingsFilePath, claudemanaged.DefaultManagedSettingsPath(); got != want {
+		t.Errorf("managedSettingsFilePath = %q, want %q", got, want)
+	}
+}
