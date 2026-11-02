@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -236,23 +237,34 @@ func TestTemplateTrimsKontextBinary(t *testing.T) {
 	}
 }
 
-func TestManagedSettingsPathForGOOS(t *testing.T) {
+// The files Claude Code reads on each OS, spelled out. Each OS checks its own
+// row when its tests run. CI runs no Go tests on macOS, so platform's
+// TestClaudeManagedDirOn pins that folder on Linux as well.
+func TestManagedSettingsPaths(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		goos string
-		want string
-	}{
-		{goos: "darwin", want: ManagedSettingsPath},
-		{goos: "linux", want: LinuxManagedSettingsPath},
-		{goos: "windows", want: WindowsManagedSettingsPath},
-		{goos: "freebsd", want: ManagedSettingsPath},
+	want, ok := map[string]struct{ file, dropIn string }{
+		"darwin": {
+			"/Library/Application Support/ClaudeCode/managed-settings.json",
+			"/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json",
+		},
+		"linux": {
+			"/etc/claude-code/managed-settings.json",
+			"/etc/claude-code/managed-settings.d/20-kontext.json",
+		},
+		"windows": {
+			`C:\Program Files\ClaudeCode\managed-settings.json`,
+			`C:\Program Files\ClaudeCode\managed-settings.d\20-kontext.json`,
+		},
+	}[runtime.GOOS]
+	if !ok {
+		t.Skipf("no managed settings path pinned for %s", runtime.GOOS)
 	}
-
-	for _, tt := range tests {
-		if got := managedSettingsPathForGOOS(tt.goos); got != tt.want {
-			t.Fatalf("managedSettingsPathForGOOS(%q) = %q, want %q", tt.goos, got, tt.want)
-		}
+	if got := DefaultManagedSettingsPath(); got != want.file {
+		t.Errorf("DefaultManagedSettingsPath() = %q, want %q", got, want.file)
+	}
+	if got := DefaultManagedSettingsDropInPath(); got != want.dropIn {
+		t.Errorf("DefaultManagedSettingsDropInPath() = %q, want %q", got, want.dropIn)
 	}
 }
 

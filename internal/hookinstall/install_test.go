@@ -22,8 +22,10 @@ func fixture(t *testing.T, scope Scope) (Options, []Definition) {
 	t.Setenv("CODEX_HOME", "")
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	root := t.TempDir()
+	// The golden files pin the macOS layout whichever OS runs them.
+	goldenClaudeDropIn := filepath.Join("Library", "Application Support", "ClaudeCode", "managed-settings.d", "20-kontext.json")
 	claudeDropIn, cursorHooks, codexHooks := machineClaudeDropIn, machineCursorHooks, machineCodexHooks
-	machineClaudeDropIn = filepath.Join(root, claudemanaged.ManagedSettingsDropInPath)
+	machineClaudeDropIn = filepath.Join(root, goldenClaudeDropIn)
 	machineCursorHooks = filepath.Join(root, cursormanaged.SystemHooksPath)
 	machineCodexHooks = filepath.Join(root, codexmanaged.SystemHooksPath)
 	t.Cleanup(func() {
@@ -37,10 +39,32 @@ func fixture(t *testing.T, scope Scope) (Options, []Definition) {
 	}
 	for i := range defs {
 		for j := range defs[i].Files {
-			defs[i].Files[j].Path = filepath.Join(root, defs[i].Files[j].Path)
+			path := defs[i].Files[j].Path
+			if path == claudemanaged.DefaultManagedSettingsDropInPath() {
+				path = goldenClaudeDropIn
+			}
+			defs[i].Files[j].Path = filepath.Join(root, path)
 		}
 	}
 	return opts, defs
+}
+
+// A system install writes the drop-in where Claude Code reads it on this OS, and
+// a user install reads the same file.
+func TestClaudeDropInFollowsThisOS(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	want := claudemanaged.DefaultManagedSettingsDropInPath()
+	defs, err := Definitions(System, "/Users/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := defs[0].Files[0].Path; got != want {
+		t.Errorf("system install writes %q, want %q", got, want)
+	}
+	if machineClaudeDropIn != want {
+		t.Errorf("user install reads %q, want %q", machineClaudeDropIn, want)
+	}
 }
 func write(t *testing.T, path, content string, mode os.FileMode) {
 	t.Helper()

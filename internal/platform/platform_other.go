@@ -21,14 +21,18 @@ func UserStateDir() (string, error) {
 	return filepath.Join(home, "Library", "Application Support", "Kontext"), nil
 }
 
-// ClaudeManagedDir on Linux is where claudemanaged's managed settings point
-// today. Its drop-in and mcpconfig's managed MCP file still name the macOS
-// folder there, so moving those changes what Kontext writes and reads on Linux.
-func ClaudeManagedDir() (string, error) {
-	if runtime.GOOS == "linux" {
-		return "/etc/claude-code", nil
+// ClaudeManagedDir is where Claude Code reads its managed settings. mcpconfig's
+// managed MCP file still names the macOS folder on Linux, so moving it changes
+// what Kontext reads there.
+func ClaudeManagedDir() string {
+	return claudeManagedDirOn(runtime.GOOS)
+}
+
+func claudeManagedDirOn(goos string) string {
+	if goos == "linux" {
+		return "/etc/claude-code"
 	}
-	return "/Library/Application Support/ClaudeCode", nil
+	return "/Library/Application Support/ClaudeCode"
 }
 
 func CodexSystemDir() (string, error) {

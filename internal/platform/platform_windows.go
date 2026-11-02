@@ -32,8 +32,8 @@ func UserStateDir() (string, error) {
 
 // ClaudeManagedDir is the fixed path Claude Code reads, whichever drive Windows
 // is on.
-func ClaudeManagedDir() (string, error) {
-	return `C:\Program Files\ClaudeCode`, nil
+func ClaudeManagedDir() string {
+	return `C:\Program Files\ClaudeCode`
 }
 
 // CodexSystemDir differs from what Codex asks Windows for only if ProgramData

@@ -72,7 +72,7 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 			return nil, errors.New("CODEX_HOME must be an absolute path")
 		}
 	}
-	claude := File{"claude", claudemanaged.ManagedSettingsDropInPath, System}
+	claude := File{"claude", claudemanaged.DefaultManagedSettingsDropInPath(), System}
 	cursor := File{"cursor", cursormanaged.SystemHooksPath, System}
 	if scope == User {
 		path, err := claudemanaged.UserSettingsPathNoCreate(home)
@@ -91,7 +91,7 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 
 // Machine-wide files a user-scope install reads but never writes (test seams).
 var (
-	machineClaudeDropIn = claudemanaged.ManagedSettingsDropInPath
+	machineClaudeDropIn = claudemanaged.DefaultManagedSettingsDropInPath()
 	machineCursorHooks  = cursormanaged.SystemHooksPath
 	machineCodexHooks   = codexmanaged.SystemHooksPath
 )

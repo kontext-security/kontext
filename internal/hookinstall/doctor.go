@@ -47,7 +47,7 @@ func Diagnose(out io.Writer, scope Scope, home string) bool {
 			fmt.Fprintf(out, "Claude Code hook sources: %v\n", err)
 			return false
 		}
-		if !diagnoseClaudeSources(out, claudemanaged.ManagedSettingsDropInPath, userPath) {
+		if !diagnoseClaudeSources(out, claudemanaged.DefaultManagedSettingsDropInPath(), userPath) {
 			healthy = false
 		}
 		if scope == User {
