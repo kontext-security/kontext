@@ -10,13 +10,17 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/platform"
 )
 
 const maxFiles = 500
 const maxFileBytes = 1024 * 1024
 const maxSessionEntries = 10000
 const maxReportBytes = 64 * 1024
-const managedRoot = "/Library/Application Support/ClaudeCode"
+
+// managedRoot is the folder Claude Code reads its managed settings from.
+var managedRoot = platform.ClaudeManagedDir()
 
 // Each root is resolved relative to home once, never from configuration contents.
 // Custom discovery paths do not expand this allowlist; explicit environment
