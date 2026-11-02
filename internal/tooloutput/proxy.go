@@ -60,10 +60,10 @@ func (c *Compactor) CompactProxied(ctx context.Context, out ProxyOutput) (string
 		return "", false
 	}
 	select {
-	case c.live <- struct{}{}:
-		defer func() { <-c.live }()
-	default:
-		c.diagnostic.Printf("tool output compaction: too many calls in flight; output left as is\n")
+	case c.proxyLive <- struct{}{}:
+		defer func() { <-c.proxyLive }()
+	case <-ctx.Done():
+		c.diagnostic.Printf("tool output compaction: no call free before the proxy's deadline; output left as is\n")
 		return "", false
 	}
 	ctx, cancel := context.WithTimeout(ctx, apiWait)

@@ -288,6 +288,9 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 			// Codex must never be left calling a port nobody holds.
 			return Status{}, errors.Join(fmt.Errorf("codex proxy job not loaded: %w", err), r.unroute())
 		}
+		// Nothing reads this port yet: the next try takes a new one.
+		st.Port, st.Holder = 0, nil
+		_ = r.saveState(st)
 		return Status{}, err
 	}
 	if err := r.opts.Health(ctx, st.Port, token); err != nil {
@@ -310,6 +313,28 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 		return Status{}, errors.Join(fmt.Errorf("codex proxy did not answer %d times in a row, so Codex is routed directly again: %w",
 			maxHealthFailures, err), r.unroute())
 	}
+	// The config may have changed while the job started, by hand or by a
+	// hook repair: the line goes into the file as it is now.
+	if config, err = readConfig(r.configPath()); err != nil {
+		return Status{}, err
+	}
+	if skip := r.skip(config.content); skip != "" {
+		return Status{Skipped: skip}, r.unroute()
+	}
+	// The file is to hold the token: keep it from other users before it does,
+	// and route nothing while that fails.
+	if config.exists && config.mode&0o077 != 0 {
+		if err := os.Chmod(config.path, config.mode&^0o077); err != nil {
+			err = fmt.Errorf("keep %s from other users: %w", config.path, err)
+			if routed {
+				return Status{}, errors.Join(err, r.unroute())
+			}
+			return Status{}, err
+		}
+		if st.ConfigMode == 0 {
+			st.ConfigMode = uint32(config.mode)
+		}
+	}
 	next, err := codexmanaged.AddRoute(config.content, BaseURL(st.Port, token))
 	if err != nil {
 		return Status{}, err
@@ -320,12 +345,6 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 		}
 		if !config.exists {
 			st.CreatedConfig = true
-		}
-	}
-	// The file holds the token now: keep it from other users.
-	if config.exists && config.mode&0o077 != 0 && st.ConfigMode == 0 {
-		if err := os.Chmod(config.path, config.mode&^0o077); err == nil {
-			st.ConfigMode = uint32(config.mode)
 		}
 	}
 	st.UnroutedAt, st.Failures = time.Time{}, 0
@@ -488,7 +507,14 @@ func (r *Router) Drain(ctx context.Context) (bool, error) {
 	if left, err := r.draining(); err != nil || left > 0 {
 		return false, err
 	}
-	return true, r.removeJob(ctx)
+	if err := r.removeJob(ctx); err != nil {
+		return false, err
+	}
+	// Nothing calls the port now, and another process may take it: the next
+	// route takes a new one.
+	st := r.loadState()
+	st.Port = 0
+	return true, r.saveState(st)
 }
 
 // Remove takes everything away for uninstall, in order: the config line;

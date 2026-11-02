@@ -73,13 +73,16 @@ func (s *Store) PutIfAbsent(session, key string, replacement *string) *string {
 	if old, ok := state.m[key]; ok {
 		return old
 	}
+	// A replacement the file does not take would not be replayed after a
+	// restart, which would change the request's prefix: keep the part.
 	if state.file != nil {
 		line, _ := json.Marshal(storeLine{Key: key, Replacement: replacement})
 		if _, err := state.file.Write(append(line, '\n')); err != nil {
-			// A replacement the file did not take would not be replayed after a
-			// restart, which would change the request's prefix: keep the part.
 			replacement = nil
 		}
+	} else if s.dir != "" {
+		// The session's file did not open.
+		replacement = nil
 	}
 	state.m[key] = replacement
 	return replacement

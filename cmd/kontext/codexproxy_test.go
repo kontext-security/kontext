@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
 // Each proxy run logs where Codex's route stands at its first request, and
@@ -35,5 +37,14 @@ func TestTheProxyLogsWhereTheRouteStands(t *testing.T) {
 	}
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("logged:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// A Codex route the proxy does not answer makes the install unhealthy, in
+// the text report, after a repair, and in --json alike.
+func TestDoctorCountsAnUnansweredCodexRoute(t *testing.T) {
+	managed := managedobserve.DoctorStatus{Healthy: true}
+	if !overallHealthy(managed, true, true, true) || overallHealthy(managed, true, true, false) {
+		t.Fatal("the Codex route does not count toward a healthy install")
 	}
 }

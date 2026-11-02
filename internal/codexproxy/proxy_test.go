@@ -304,8 +304,17 @@ func TestStoreKeepsDecisionsAcrossRestarts(t *testing.T) {
 	if got := store.PutIfAbsent("s1", "k1", nil); got == nil || *got != "short" {
 		t.Fatalf("a second decision replaced the first: %v", got)
 	}
-	// An id that cannot name a file stays in memory.
-	store.PutIfAbsent("../s2", "k1", &short)
+	// A session whose decisions no file can hold, for an id that cannot name
+	// one or a file that does not open, keeps its parts: a replacement could
+	// not be replayed after a restart.
+	if err := os.Mkdir(filepath.Join(dir, "s3.jsonl"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []string{"../s2", "s3"} {
+		if got := store.PutIfAbsent(session, "k1", &short); got != nil {
+			t.Fatalf("session %s took a replacement no file holds", session)
+		}
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +322,7 @@ func TestStoreKeepsDecisionsAcrossRestarts(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("session file = %v, %v", info, err)
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
 		t.Fatalf("files = %v", entries)
 	}
 

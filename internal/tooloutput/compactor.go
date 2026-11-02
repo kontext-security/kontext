@@ -39,8 +39,12 @@ const (
 	readBackWait = 10 * time.Second
 	// maxLive bounds live calls in flight. Each holds a hook connection, and
 	// policy decisions must never queue behind them.
-	maxLive   = 8
-	queueSize = 32
+	maxLive = 8
+	// maxProxyLive bounds the Codex proxy's calls in flight. A model request's
+	// parts share one connection, so they wait for a call, within the
+	// proxy's budget, and take none of the hooks'.
+	maxProxyLive = 8
+	queueSize    = 32
 	// Retention is how long a saved output is kept.
 	Retention     = 7 * 24 * time.Hour
 	pruneInterval = time.Hour
@@ -75,6 +79,7 @@ type Compactor struct {
 	now        func() time.Time
 
 	live      chan struct{}
+	proxyLive chan struct{}
 	readBacks chan ReadBack
 
 	mu       sync.Mutex
@@ -131,6 +136,7 @@ func New(opts Options) *Compactor {
 		home:       opts.Home,
 		now:        now,
 		live:       make(chan struct{}, maxLive),
+		proxyLive:  make(chan struct{}, maxProxyLive),
 		readBacks:  make(chan ReadBack, queueSize),
 		sessions:   map[string]*session{},
 	}

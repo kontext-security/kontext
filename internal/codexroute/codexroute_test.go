@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,12 +20,14 @@ const testPort = 49321
 
 // fakeLaunchd stands in for launchctl: it remembers whether the job is
 // loaded and every command. After a bootout, it still holds the job for
-// linger prints, as launchd may, and refuses a bootstrap meanwhile.
+// linger prints, as launchd may, and refuses a bootstrap meanwhile; it also
+// refuses the first refuse bootstraps.
 type fakeLaunchd struct {
 	mu       sync.Mutex
 	loaded   bool
 	linger   int
 	held     int
+	refuse   int
 	commands []string
 }
 
@@ -42,7 +45,8 @@ func (l *fakeLaunchd) run(_ context.Context, args ...string) error {
 			return errors.New("could not find service")
 		}
 	case "bootstrap":
-		if l.loaded || l.held > 0 {
+		if l.loaded || l.held > 0 || l.refuse > 0 {
+			l.refuse = max(l.refuse-1, 0)
 			return errors.New("bootstrap failed: 5: input/output error")
 		}
 		l.loaded = true
@@ -516,11 +520,55 @@ func TestTheConfigIsPrivateWhileItHoldsTheToken(t *testing.T) {
 	if info, _ := os.Stat(configPath); info.Mode().Perm() != 0o600 {
 		t.Fatalf("routed config mode = %v", info.Mode().Perm())
 	}
+	// Opened up again while it holds the token, it is kept private again.
+	if err := os.Chmod(configPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(configPath); info.Mode().Perm() != 0o600 {
+		t.Fatalf("config mode after it was opened up again = %v", info.Mode().Perm())
+	}
 	if err := r.Disable(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if info, _ := os.Stat(configPath); info.Mode().Perm() != 0o644 {
 		t.Fatalf("mode after Disable = %v", info.Mode().Perm())
+	}
+}
+
+// Codex's config may change while Enable starts the job, by hand or by a hook
+// repair: the line goes into the file as it is then, so nothing written
+// meanwhile is lost, and a route of the person's own set meanwhile stands.
+func TestEnableKeepsWhatChangedInTheConfigMeanwhile(t *testing.T) {
+	for name, edit := range map[string]string{
+		"an edit":   original + "\n[mcp_servers.docs]\ncommand = \"docs\"\n",
+		"own route": "openai_base_url = \"https://gateway.example/v1\"\n" + original,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newTestRouter(t)
+			configPath := filepath.Join(r.home, ".codex", "config.toml")
+			writeFile(t, configPath, original, 0o600)
+			r.opts.Health = func(context.Context, int, string) error {
+				writeFile(t, configPath, edit, 0o600)
+				return nil
+			}
+			status, err := r.Enable(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := readFile(t, configPath)
+			if name == "own route" {
+				if status.Routed || got != edit {
+					t.Fatalf("Enable = %+v; config:\n%s", status, got)
+				}
+				return
+			}
+			if !status.Routed || !strings.HasSuffix(got, edit) || codexmanaged.Route(got) == "" {
+				t.Fatalf("Enable = %+v; config:\n%s", status, got)
+			}
+		})
 	}
 }
 
@@ -673,6 +721,37 @@ func TestADaemonTakesOverTheJobOfAnOlderBuild(t *testing.T) {
 	}
 	if _, err := daemon.Enable(context.Background()); err != nil || r.launchd.ran("bootstrap") != bootstraps+1 {
 		t.Fatalf("a second Enable reloaded the job again: %v", err)
+	}
+}
+
+// A port nothing calls any more, once the job drained or when the job did not
+// load before Codex was routed, is given up: another process may take it, so
+// the next route takes a new one.
+func TestAPortNothingCallsIsGivenUp(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	writeFile(t, configPath, original, 0o600)
+	next := testPort
+	r.opts.FreePort = func() (int, error) { next++; return next, nil }
+	ctx := context.Background()
+	r.launchd.refuse = 1
+	if _, err := r.Enable(ctx); err == nil {
+		t.Fatal("Enable routed Codex through a job launchd refused")
+	}
+	if status, err := r.Enable(ctx); err != nil || status.Port != testPort+2 {
+		t.Fatalf("Enable after a refused job = %+v, %v", status, err)
+	}
+	if err := r.Disable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := r.Drain(ctx); err != nil || !done {
+		t.Fatalf("Drain = %v, %v", done, err)
+	}
+	if st := r.loadState(); st.Port != 0 {
+		t.Fatalf("a drained job kept port %d", st.Port)
+	}
+	if status, err := r.Enable(ctx); err != nil || status.Port != testPort+3 || !strings.Contains(codexmanaged.Route(readFile(t, configPath)), ":"+strconv.Itoa(testPort+3)+"/") {
+		t.Fatalf("Enable after a drain = %+v, %v", status, err)
 	}
 }
 

@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/modelusage"
@@ -161,5 +163,54 @@ func TestProxyGoalSkipsWhatCodexInjects(t *testing.T) {
 	}
 	if goal := proxyGoal(messages); goal != "fix the failing test" {
 		t.Fatalf("goal = %q", goal)
+	}
+}
+
+// A model request's parts wait for a call of the proxy's own, so a request
+// with more parts than calls in flight gets each of them decided, and hooks
+// keep their calls meanwhile.
+func TestProxiedPartsWaitForACallAndLeaveHooksTheirs(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	answer := replace("2 tests failed: TestA, TestB")
+	c := newTestCompactor(t, func(request Request) (int, any) {
+		if request.Delivery == DeliveryProxy {
+			<-release
+		}
+		return answer(request)
+	})
+	// Before the API's cleanup, which waits for the calls it holds.
+	t.Cleanup(free)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const parts = maxProxyLive + 4
+	decided := make([]bool, parts)
+	var wg sync.WaitGroup
+	for i := range parts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out := c.proxyOutput("print(run_tests())", bigText(80))
+			out.Part = i + 1
+			_, decided[i] = c.CompactProxied(ctx, out)
+		}()
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if requests, _, _ := c.api.calls(); len(requests) == maxProxyLive {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("proxy calls in flight = %d, want %d", len(requests), maxProxyLive)
+		}
+	}
+	if got := c.Compact(context.Background(), c.bash("make test", bigText(80))); got == nil {
+		t.Fatal("a hook found no call free while the proxy's parts waited")
+	}
+	free()
+	wg.Wait()
+	for i, ok := range decided {
+		if !ok {
+			t.Fatalf("part %d was left as it is", i+1)
+		}
 	}
 }
