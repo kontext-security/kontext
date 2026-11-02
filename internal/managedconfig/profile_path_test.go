@@ -90,8 +90,7 @@ func TestSystemScopeStillWinsOverActiveProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvPath, "")
-	systemPath = system
-	t.Cleanup(func() { systemPath = DefaultPath })
+	withSystemPath(t, system)
 
 	path, scope := ResolvePath()
 	if scope != ScopeSystem {

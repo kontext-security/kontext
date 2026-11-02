@@ -135,8 +135,7 @@ func TestLoadRefusesLoopbackOptInInSystemConfig(t *testing.T) {
 	if err := os.WriteFile(system, loopbackConfigJSON(t, "http://localhost:8080", true), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	systemPath = system
-	t.Cleanup(func() { systemPath = DefaultPath })
+	withSystemPath(t, system)
 
 	_, err := Load()
 	if err == nil {
