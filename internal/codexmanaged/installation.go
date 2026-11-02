@@ -95,7 +95,7 @@ func InspectInstallation(paths InstallationPaths) (Installation, error) {
 		if path == "" {
 			continue
 		}
-		raw, err := readLayer(path)
+		raw, err := ReadLayer(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
