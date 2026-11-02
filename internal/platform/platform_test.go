@@ -1,7 +1,6 @@
 package platform_test
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -67,10 +66,7 @@ func TestDirectoriesMatchTodaysPaths(t *testing.T) {
 // Codex loads its System layer from this folder, so what Kontext reports on and
 // what an organization package installs have to be there on each OS.
 func TestCodexSystemFilesAreWhereCodexReadsThem(t *testing.T) {
-	dir := "/etc/codex"
-	if runtime.GOOS == "windows" {
-		dir = filepath.VolumeName(os.Getenv("SystemRoot")) + `\ProgramData\OpenAI\Codex`
-	}
+	dir := wantCodexDir(t)
 	if got, want := codexmanaged.SystemHooksPath, filepath.Join(dir, "hooks.json"); got != want {
 		t.Errorf("SystemHooksPath = %q, want %q", got, want)
 	}
