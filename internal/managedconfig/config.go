@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kontext-security/kontext/internal/platform"
 	"github.com/kontext-security/kontext/internal/profile"
 )
 
@@ -35,7 +36,6 @@ const (
 	ModeRemote  = "remote"
 	Agent       = "claude"
 
-	DefaultPath = "/Library/Application Support/Kontext/managed.json"
 	// InstallTokenFilePath is where an MDM install wrapper writes the install
 	// token (0600, owned by the GUI user). The LaunchAgent launcher reads it
 	// and exports KONTEXT_INSTALL_TOKEN for the daemon process only.
@@ -43,11 +43,24 @@ const (
 	EnvPath              = "KONTEXT_MANAGED_CONFIG"
 	EnvAllowHTTP         = "KONTEXT_MANAGED_ALLOW_HTTP_LOCALHOST"
 
-	DeploymentVersionPath    = "/Library/Application Support/Kontext/deployment-version"
 	EnvDeploymentVersionPath = "KONTEXT_DEPLOYMENT_VERSION_PATH"
 )
 
 var ErrNotManaged = errors.New("managed config not found")
+
+// The files only the installer writes, in the machine's system folder.
+var (
+	DefaultPath, errSystemDir = systemFile("managed.json")
+	DeploymentVersionPath, _  = systemFile("deployment-version")
+)
+
+func systemFile(name string) (string, error) {
+	dir, err := platform.SystemConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("locate the system config folder: %w", err)
+	}
+	return filepath.Join(dir, name), nil
+}
 
 var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
@@ -62,8 +75,8 @@ const (
 	ScopeUser   Scope = "user"
 )
 
-// Test seam: ResolvePath stats this instead of the /Library literal so tests
-// can simulate the presence/absence of an MDM install.
+// Test seam: ResolvePath stats this instead of DefaultPath so tests can
+// simulate the presence/absence of an MDM install.
 var systemPath = DefaultPath
 
 // UserPath is the self-serve managed config location, or "" when the home
@@ -100,6 +113,9 @@ func LegacyUserPath() string {
 func ResolvePath() (string, Scope) {
 	if path := strings.TrimSpace(os.Getenv(EnvPath)); path != "" {
 		return path, ScopeEnv
+	}
+	if errSystemDir != nil {
+		return systemPath, ScopeSystem
 	}
 	if _, err := os.Lstat(systemPath); err == nil || !errors.Is(err, os.ErrNotExist) {
 		return systemPath, ScopeSystem
@@ -177,11 +193,11 @@ type LoadedConfig struct {
 // DeploymentVersion returns the installed package version recorded in the
 // deployment marker, or "" if the marker is missing or unreadable.
 func DeploymentVersion() string {
-	path := DeploymentVersionPath
+	path, read := DeploymentVersionPath, readSystemFile
 	if override := strings.TrimSpace(os.Getenv(EnvDeploymentVersionPath)); override != "" {
-		path = override
+		path, read = override, os.ReadFile
 	}
-	data, err := os.ReadFile(path)
+	data, err := read(path)
 	if err != nil {
 		return ""
 	}
@@ -190,7 +206,14 @@ func DeploymentVersion() string {
 
 func Load() (LoadedConfig, error) {
 	path, scope := ResolvePath()
-	loaded, err := LoadFile(path)
+	read := os.ReadFile
+	if scope == ScopeSystem {
+		if errSystemDir != nil {
+			return LoadedConfig{}, errSystemDir
+		}
+		read = readSystemFile
+	}
+	loaded, err := loadFile(path, read)
 	if err != nil {
 		return LoadedConfig{}, err
 	}
@@ -208,7 +231,11 @@ func Load() (LoadedConfig, error) {
 }
 
 func LoadFile(path string) (LoadedConfig, error) {
-	data, err := os.ReadFile(path)
+	return loadFile(path, os.ReadFile)
+}
+
+func loadFile(path string, read func(string) ([]byte, error)) (LoadedConfig, error) {
+	data, err := read(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return LoadedConfig{}, ErrNotManaged

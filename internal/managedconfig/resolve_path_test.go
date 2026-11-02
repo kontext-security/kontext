@@ -11,12 +11,14 @@ import (
 )
 
 // withSystemPath points the ResolvePath system-path probe at a temp location
-// so tests can simulate the presence/absence of an MDM install.
+// so tests can simulate the presence/absence of an MDM install. A temp file is
+// no admin-only file, so the trust check steps aside; trust_windows_test.go has
+// it in place.
 func withSystemPath(t *testing.T, path string) {
 	t.Helper()
-	previous := systemPath
-	systemPath = path
-	t.Cleanup(func() { systemPath = previous })
+	previousPath, previousRead := systemPath, readSystemFile
+	systemPath, readSystemFile = path, os.ReadFile
+	t.Cleanup(func() { systemPath, readSystemFile = previousPath, previousRead })
 }
 
 func TestResolvePathEnvOverrideWins(t *testing.T) {
