@@ -8,9 +8,21 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/kontext-security/kontext/internal/platform"
 )
 
-const SystemHooksPath = "/etc/codex/hooks.json"
+// SystemHooksPath is the hooks file of Codex's System layer, empty if its
+// folder can't be located; errSystemDir then says why.
+var SystemHooksPath, errSystemDir = systemHooksPath()
+
+func systemHooksPath() (string, error) {
+	dir, err := platform.CodexSystemDir()
+	if err != nil {
+		return "", fmt.Errorf("locate Codex's system folder: %w", err)
+	}
+	return filepath.Join(dir, "hooks.json"), nil
+}
 
 // InstallationPaths describes the system and user hook layers. Diagnostics
 // receive explicit paths so tests never inspect the host's managed policy.
@@ -21,6 +33,9 @@ type InstallationPaths struct {
 }
 
 func DefaultInstallationPaths() (InstallationPaths, error) {
+	if errSystemDir != nil {
+		return InstallationPaths{}, errSystemDir
+	}
 	home := os.Getenv("CODEX_HOME")
 	if home == "" {
 		userHome, err := os.UserHomeDir()

@@ -1,8 +1,10 @@
 package platform_test
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/codexmanaged"
@@ -44,8 +46,8 @@ func TestDirectoriesOnUnix(t *testing.T) {
 	}
 }
 
-// The directories give the paths the packages not yet moved use today. On
-// Windows those literals are still the macOS ones.
+// The directories give the paths other packages use today. On Windows some of
+// those literals are still the macOS ones.
 func TestDirectoriesMatchTodaysPaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		return
@@ -55,12 +57,37 @@ func TestDirectoriesMatchTodaysPaths(t *testing.T) {
 		{join(t, platform.SystemConfigDir, "install-token"), managedconfig.InstallTokenFilePath},
 		{join(t, platform.SystemConfigDir, "deployment-version"), managedconfig.DeploymentVersionPath},
 		{join(t, platform.SystemConfigDir, "installation.json"), installation.DefaultPath},
-		{join(t, platform.CodexSystemDir, "hooks.json"), codexmanaged.SystemHooksPath},
-		{join(t, platform.CodexSystemDir, "config.toml"), hookinstall.SystemConfigPath},
 	} {
 		if test.got != test.want {
 			t.Errorf("path = %q, want %q", test.got, test.want)
 		}
+	}
+}
+
+// Codex loads its System layer from this folder, so what Kontext reports on and
+// what an organization package installs have to be there on each OS.
+func TestCodexSystemFilesAreWhereCodexReadsThem(t *testing.T) {
+	dir := "/etc/codex"
+	if runtime.GOOS == "windows" {
+		dir = filepath.VolumeName(os.Getenv("SystemRoot")) + `\ProgramData\OpenAI\Codex`
+	}
+	if got, want := codexmanaged.SystemHooksPath, filepath.Join(dir, "hooks.json"); got != want {
+		t.Errorf("SystemHooksPath = %q, want %q", got, want)
+	}
+	definitions, err := hookinstall.Definitions(hookinstall.System, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	for _, definition := range definitions {
+		if definition.Agent == "codex" {
+			for _, file := range definition.Files {
+				files = append(files, file.Path)
+			}
+		}
+	}
+	if want := []string{filepath.Join(dir, "hooks.json"), filepath.Join(dir, "config.toml")}; !slices.Equal(files, want) {
+		t.Errorf("Codex's system files = %q, want %q", files, want)
 	}
 }
 

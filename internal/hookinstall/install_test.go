@@ -24,10 +24,11 @@ func fixture(t *testing.T, scope Scope) (Options, []Definition) {
 	root := t.TempDir()
 	// The golden files pin the macOS layout whichever OS runs them.
 	goldenClaudeDropIn := filepath.Join("Library", "Application Support", "ClaudeCode", "managed-settings.d", "20-kontext.json")
+	goldenCodexDir := filepath.Join("etc", "codex")
 	claudeDropIn, cursorHooks, codexHooks := machineClaudeDropIn, machineCursorHooks, machineCodexHooks
 	machineClaudeDropIn = filepath.Join(root, goldenClaudeDropIn)
 	machineCursorHooks = filepath.Join(root, cursormanaged.SystemHooksPath)
-	machineCodexHooks = filepath.Join(root, codexmanaged.SystemHooksPath)
+	machineCodexHooks = filepath.Join(root, goldenCodexDir, "hooks.json")
 	t.Cleanup(func() {
 		machineClaudeDropIn, machineCursorHooks, machineCodexHooks = claudeDropIn, cursorHooks, codexHooks
 	})
@@ -42,6 +43,9 @@ func fixture(t *testing.T, scope Scope) (Options, []Definition) {
 			path := defs[i].Files[j].Path
 			if path == claudemanaged.DefaultManagedSettingsDropInPath() {
 				path = goldenClaudeDropIn
+			}
+			if filepath.Dir(path) == filepath.Dir(codexmanaged.SystemHooksPath) {
+				path = filepath.Join(goldenCodexDir, filepath.Base(path))
 			}
 			defs[i].Files[j].Path = filepath.Join(root, path)
 		}
@@ -813,7 +817,7 @@ func TestUserCursorCoversWhatTheMachineFileDoesNot(t *testing.T) {
 	}
 }
 
-// Codex runs /etc/codex/hooks.json and the user's hooks.json without
+// Codex runs its System layer's hooks.json and the user's without
 // deduplicating, so the user file leaves out, and drops its copies of, what a
 // runnable machine-wide Kontext hook covers. Both channels, then a rerun.
 func TestUserCodexCoversWhatTheMachineFileDoesNot(t *testing.T) {

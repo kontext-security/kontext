@@ -19,6 +19,7 @@ import (
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
+	"github.com/kontext-security/kontext/internal/platform"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
@@ -28,7 +29,6 @@ const (
 	User   Scope = "user"
 	System Scope = "system"
 )
-const SystemConfigPath = "/etc/codex/config.toml"
 const BackupLabel = "kontext-setup"
 const featureMarker = " # kontext-hooks-original:"
 
@@ -59,7 +59,10 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 	if scope != User && scope != System {
 		return nil, fmt.Errorf("invalid scope %q: want user or system", scope)
 	}
-	codexDir := filepath.Dir(SystemConfigPath)
+	codexDir, err := platform.CodexSystemDir()
+	if err != nil && scope == System {
+		return nil, fmt.Errorf("locate Codex's system folder: %w", err)
+	}
 	if scope == User {
 		if !filepath.IsAbs(home) {
 			return nil, errors.New("cannot resolve an absolute home directory")
@@ -129,8 +132,8 @@ func machineCursorCoverage(opts Options) map[string]bool {
 	return runnableCoverage(path, cursormanaged.Coverage)
 }
 
-// machineCodexCoverage does the same for Codex, which runs the hooks in
-// /etc/codex/hooks.json without asking the user to trust them.
+// machineCodexCoverage does the same for Codex, which runs the hooks of its
+// System layer without asking the user to trust them.
 func machineCodexCoverage(opts Options) map[string]bool {
 	path := opts.CodexPath
 	if path == "" {
