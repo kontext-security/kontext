@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"strings"
@@ -376,6 +377,71 @@ func TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC(t *testing.T) {
 	}
 }
 
+// A daemon that stops cleanly removes its socket file, so a stop that lands
+// between the probe and the RPC fails the RPC's dial: ENOENT on Linux and
+// macOS, WSAECONNREFUSED on Windows. That is a restart too: the hook waits for
+// the successor instead of failing open.
+func TestLifecycleRetriesWhenDaemonStopsBetweenProbeAndRPC(t *testing.T) {
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-stopped.sock")
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
+	stopping, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer stopping.Close()
+
+	// The dialer reports each connect before it returns, so the daemon stops
+	// as soon as the probe connects and before the RPC dials. Closing the
+	// listener removes the socket file, as a clean stop does.
+	var dials []error
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+		ConnectDone: func(_, _ string, err error) {
+			dials = append(dials, err)
+			if len(dials) == 1 {
+				_ = stopping.Close()
+			}
+		},
+	})
+
+	lifecycle := Lifecycle{
+		SocketPath: socketPath,
+		Label:      DefaultLaunchdLabel,
+		Mode:       "enforce",
+		Kickstart: func(context.Context, string) error {
+			// The successor starts as the daemon does: it removes a stale
+			// socket file, then listens.
+			_ = os.Remove(socketPath)
+			successor, err := net.Listen("unix", socketPath)
+			if err != nil {
+				return err
+			}
+			t.Cleanup(func() { _ = successor.Close() })
+			go func() {
+				for {
+					connection, err := successor.Accept()
+					if err != nil {
+						return
+					}
+					// Probes connect without an RPC.
+					var request localruntime.EvaluateRequest
+					if localruntime.ReadMessage(connection, &request) == nil {
+						_ = localruntime.WriteMessage(connection, localruntime.EvaluateResult{Decision: "deny", Reason: "local Cedar policy decision", Mode: "enforce"})
+					}
+					_ = connection.Close()
+				}
+			}()
+			return nil
+		},
+	}
+	result := lifecycle.Process(ctx, hook.Event{HookName: hook.HookPreToolUse, ToolName: "Bash"})
+	if len(dials) < 2 || dials[0] != nil || dials[1] == nil {
+		t.Fatalf("dials = %v, want the probe to connect and the RPC's dial to find the daemon gone", dials)
+	}
+	if result.Decision != hook.DecisionDeny || result.FailedOpen {
+		t.Fatalf("result = %+v, want the successor's deny after the RPC's dial failed with %v", result, dials[1])
+	}
+}
+
 // Where the daemon's close lands decides how the dropped RPC fails. Each way
 // is a lost connection and gets the retry; a slow reply is not.
 func TestConnectionLostCoversDroppedRPCs(t *testing.T) {
@@ -386,7 +452,10 @@ func TestConnectionLostCoversDroppedRPCs(t *testing.T) {
 		err  error
 		lost bool
 	}{
+		// A daemon that died leaves its socket file behind; one that stopped
+		// cleanly removed it.
 		"gone before the dial":    {&net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, true},
+		"stopped before the dial": {&net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", syscall.ENOENT)}, true},
 		"closed before the write": {failed("write length", "write", os.NewSyscallError("write", syscall.EPIPE)), true},
 		// macOS only: Linux reports this race as EPIPE.
 		"closed during the write": {failed("write payload", "write", os.NewSyscallError("write", syscall.ENOTCONN)), true},
@@ -394,6 +463,8 @@ func TestConnectionLostCoversDroppedRPCs(t *testing.T) {
 		"closed mid-reply":        {fmt.Errorf("read payload: %w", io.ErrUnexpectedEOF), true},
 		"reset":                   {failed("read length", "read", os.NewSyscallError("read", syscall.ECONNRESET)), true},
 		"slow reply":              {failed("read length", "read", os.ErrDeadlineExceeded), false},
+		// Only the dial's ENOENT means the socket file went away.
+		"another file missing": {&os.PathError{Op: "open", Path: "missing.json", Err: syscall.ENOENT}, false},
 	} {
 		if got := connectionLost(test.err); got != test.lost {
 			t.Errorf("%s: connectionLost(%v) = %v, want %v", name, test.err, got, test.lost)

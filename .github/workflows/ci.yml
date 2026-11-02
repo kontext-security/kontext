@@ -121,4 +121,4 @@ jobs:
         shell: bash
         run: |
           go test -count=1 -run '^(TestGuardedInfoStartsAtTheVolume|TestGuardedInfoRefusesAFlaggedRoot|TestStatRefusesJunctionAndPlaceholderAncestors|TestReadGuardedFailsClosed|TestDatalessRecallAttributes)$' ./pkg/agentauthority/
-          go test -count=1 -run '^(TestDefaultSocketPathListensUnderLocalAppData|TestEnsureSocketDirRefusesPathsWindowsCannotBind|TestEnsureSocketDirSetsOwnerOnlyDACL|TestEnsureSocketDirRejectsNonDirectoryParent|TestEnsureSocketDirRejectsSymlinkParent|TestConnectionLostCoversWinsockDrops|TestLifecycleRetriesWhenDaemonClosesWithRequestUnread|TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC)$' ./internal/managedobserve/
+          go test -count=1 -run '^(TestDefaultSocketPathListensUnderLocalAppData|TestEnsureSocketDirRefusesPathsWindowsCannotBind|TestEnsureSocketDirSetsOwnerOnlyDACL|TestEnsureSocketDirRejectsNonDirectoryParent|TestEnsureSocketDirRejectsSymlinkParent|TestConnectionLostCoversWinsockDrops|TestLifecycleRetriesWhenDaemonClosesWithRequestUnread|TestLifecycleRetriesWhenDaemonStopsBetweenProbeAndRPC|TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC)$' ./internal/managedobserve/
