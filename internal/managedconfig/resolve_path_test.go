@@ -2,6 +2,7 @@ package managedconfig
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,13 +13,14 @@ import (
 
 // withSystemPath points the ResolvePath system-path probe at a temp location
 // so tests can simulate the presence/absence of an MDM install. A temp file is
-// no admin-only file, so the trust check steps aside; trust_windows_test.go has
-// it in place.
+// no admin-only file, so the trust checks step aside; trust_windows_test.go has
+// them in place.
 func withSystemPath(t *testing.T, path string) {
 	t.Helper()
-	previousPath, previousRead := systemPath, readSystemFile
+	previousPath, previousRead, previousFind := systemPath, readSystemFile, notAdminFile
 	systemPath, readSystemFile = path, os.ReadFile
-	t.Cleanup(func() { systemPath, readSystemFile = previousPath, previousRead })
+	notAdminFile = func(string) (fmt.Stringer, error) { return nil, nil }
+	t.Cleanup(func() { systemPath, readSystemFile, notAdminFile = previousPath, previousRead, previousFind })
 }
 
 func TestResolvePathEnvOverrideWins(t *testing.T) {

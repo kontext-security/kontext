@@ -54,8 +54,11 @@ type Report struct {
 	LegacyInstall bool   `json:"legacy_install"`
 	ConfigPath    string `json:"config_path,omitempty"`
 	ConfigScope   string `json:"config_scope,omitempty"`
-	CloudURL      string `json:"cloud_url,omitempty"`
-	Mode          string `json:"mode,omitempty"`
+	// IgnoredSystemConfig says why a file at the system path doesn't count as the
+	// organization's config.
+	IgnoredSystemConfig string `json:"ignored_system_config,omitempty"`
+	CloudURL            string `json:"cloud_url,omitempty"`
+	Mode                string `json:"mode,omitempty"`
 	// AllowHTTPLoopback reports that this profile accepts plaintext http to a
 	// loopback backend — a local-development posture, surfaced so it is visible
 	// rather than inferred from the URL.
@@ -199,6 +202,11 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	default:
 		status.Healthy = false
 		warn("the active profile pointer is unusable (%v) — config resolution has fallen back to the pre-profile paths; fix or remove %s", profileErr, profile.ActivePath())
+	}
+
+	if reason := managedconfig.IgnoredSystemFile(); reason != "" {
+		report.IgnoredSystemConfig = reason
+		fmt.Fprintf(out, "  system config: ignored, because %s; only a file administrators own counts\n", reason)
 	}
 
 	// Through the injected loader, not managedconfig.Load directly: tests pin the

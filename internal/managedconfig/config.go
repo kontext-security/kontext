@@ -109,7 +109,8 @@ func LegacyUserPath() string {
 // setup. The system path is selected whenever it exists OR whenever its
 // existence cannot be determined (any stat error other than not-exist), so a
 // broken/unreadable MDM config surfaces as an error instead of silently
-// falling through to user config.
+// falling through to user config. A file that can't be an administrator's is no
+// MDM config, so it doesn't count as existing (IgnoredSystemFile).
 func ResolvePath() (string, Scope) {
 	if path := strings.TrimSpace(os.Getenv(EnvPath)); path != "" {
 		return path, ScopeEnv
@@ -117,7 +118,7 @@ func ResolvePath() (string, Scope) {
 	if errSystemDir != nil {
 		return systemPath, ScopeSystem
 	}
-	if _, err := os.Lstat(systemPath); err == nil || !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(systemPath); (err == nil || !errors.Is(err, os.ErrNotExist)) && !systemFileIgnored() {
 		return systemPath, ScopeSystem
 	}
 	if user := UserPath(); user != "" {

@@ -96,6 +96,7 @@ func fullyPopulatedReport() managedobserve.Report {
 		LegacyInstall:        true,
 		ConfigPath:           "/path/to/managed.json",
 		ConfigScope:          "user",
+		IgnoredSystemConfig:  "the system file is owned by someone else",
 		CloudURL:             "https://api.kontext.security",
 		Mode:                 "remote",
 		AllowHTTPLoopback:    true,
