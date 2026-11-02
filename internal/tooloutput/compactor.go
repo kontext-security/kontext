@@ -41,8 +41,12 @@ const (
 	// policy decisions must never queue behind them.
 	maxLive   = 8
 	queueSize = 32
-	// Retention is how long a saved output is kept.
-	Retention     = 7 * 24 * time.Hour
+	// Retention is how long a session's saved outputs are kept after the
+	// newest of them was saved.
+	Retention = 7 * 24 * time.Hour
+	// maxSavedBytes caps the saved outputs of all sessions together (see
+	// Prune).
+	maxSavedBytes = 512 << 20
 	pruneInterval = time.Hour
 	// sessionIdle is how long a session's state is kept in memory after its
 	// last event. Saved records reload from disk if it comes back.
@@ -265,8 +269,8 @@ func (c *Compactor) queueShadow(event hook.Event, out output) {
 	}
 }
 
-// Run sends queued shadow requests and read-backs, and deletes saved outputs
-// older than Retention, until ctx ends.
+// Run sends queued shadow requests and read-backs, and prunes saved outputs
+// (see Prune), until ctx ends.
 func (c *Compactor) Run(ctx context.Context) {
 	var workers sync.WaitGroup
 	workers.Add(1)
@@ -586,8 +590,16 @@ func (c *Compactor) load(sessionID string) []record {
 	return records
 }
 
-// Prune deletes saved outputs older than Retention, and forgets sessions idle
-// for a day.
+// Prune forgets sessions idle for a day, and deletes saved outputs a whole
+// session at a time: the agent may read any output of a session back while
+// the session goes on. A session goes once its newest file is older than
+// Retention; a directory with no file goes by its own modification time.
+// Then, while the sessions left with files hold more than maxSavedBytes
+// together, the one whose newest file is oldest goes. The session with the
+// newest file never goes for size, as the one most likely in use: when it
+// alone holds more, it is kept whole and every other session goes. It goes
+// like any other once another session saves an output after it, or
+// Retention after its own newest file.
 func (c *Compactor) Prune() {
 	if c == nil {
 		return
@@ -610,27 +622,103 @@ func (c *Compactor) Prune() {
 		}
 		return
 	}
+	var kept []savedSession
+	var total int64
 	for _, sessionDir := range sessions {
-		if !sessionDir.IsDir() {
+		session, ok := scanSession(c.dir, sessionDir)
+		if !ok {
 			continue
 		}
-		dir := filepath.Join(c.dir, sessionDir.Name())
-		files, err := os.ReadDir(dir)
+		if now.Sub(session.last) > Retention {
+			c.removeSession(session)
+		} else if session.files > 0 {
+			kept = append(kept, session)
+			total += session.bytes
+		}
+	}
+	// By newest file, oldest first, ties in directory (name) order. The last,
+	// the session with the newest file, never goes for size.
+	slices.SortStableFunc(kept, func(a, b savedSession) int { return a.last.Compare(b.last) })
+	for i := 0; i < len(kept)-1 && total > maxSavedBytes; i++ {
+		total -= c.removeSession(kept[i])
+	}
+}
+
+// savedSession is a session directory as Prune found it.
+type savedSession struct {
+	dir string
+	// last is when its newest file was modified, or the directory itself
+	// when it holds no file.
+	last  time.Time
+	files int
+	bytes int64
+}
+
+// scanSession reads a session directory, a directory and never a link to
+// one, whose regular files are the session's outputs and records. It opens
+// none of them.
+func scanSession(root string, entry os.DirEntry) (savedSession, bool) {
+	if !entry.IsDir() {
+		return savedSession{}, false
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return savedSession{}, false
+	}
+	session := savedSession{dir: filepath.Join(root, entry.Name()), last: info.ModTime()}
+	files, err := os.ReadDir(session.dir)
+	if err != nil {
+		return savedSession{}, false
+	}
+	for _, file := range files {
+		info, err := file.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if session.files == 0 || info.ModTime().After(session.last) {
+			session.last = info.ModTime()
+		}
+		session.files++
+		session.bytes += info.Size()
+	}
+	return session, true
+}
+
+// removeSession deletes a session directory and all it holds, but for a
+// file modified after the session's last as Prune found it: an output saved
+// since then, which keeps the directory, and the session, in place. It
+// returns how many bytes of files it deleted.
+func (c *Compactor) removeSession(session savedSession) int64 {
+	entries, err := os.ReadDir(session.dir)
+	if err != nil {
+		return 0
+	}
+	var removed int64
+	var failed error
+	for _, entry := range entries {
+		info, err := entry.Info()
 		if err != nil {
 			continue
 		}
-		left := len(files)
-		for _, file := range files {
-			info, err := file.Info()
-			if err != nil || file.IsDir() || now.Sub(info.ModTime()) <= Retention {
-				continue
-			}
-			if err := os.Remove(filepath.Join(dir, file.Name())); err == nil {
-				left--
+		path := filepath.Join(session.dir, entry.Name())
+		switch {
+		case !info.Mode().IsRegular():
+			err = os.RemoveAll(path)
+		case info.ModTime().After(session.last):
+			continue
+		default:
+			if err = os.Remove(path); err == nil {
+				removed += info.Size()
 			}
 		}
-		if left == 0 {
-			_ = os.Remove(dir)
+		if err != nil && !errors.Is(err, os.ErrNotExist) && failed == nil {
+			failed = err
 		}
 	}
+	if failed != nil {
+		c.diagnostic.Printf("tool output compaction prune: %v\n", failed)
+	}
+	// Fails while anything is left in it.
+	_ = os.Remove(session.dir)
+	return removed
 }
