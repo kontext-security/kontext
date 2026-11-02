@@ -3,6 +3,7 @@
 package tooloutput
 
 import (
+	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -37,6 +38,42 @@ func TestPruneNeverOpensANamedPipe(t *testing.T) {
 	for _, path := range []string{active, pipes[1]} {
 		if !d.exists(path) {
 			t.Fatalf("%s deleted from a session that saved an hour ago", filepath.Base(path))
+		}
+	}
+}
+
+// A session that only partly goes frees what did go: the cap counts what is
+// left and deletes no more sessions than that needs.
+func TestPruneCapCountsWhatAPartlyFailedDeleteFreed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	d := newSavedDir(t)
+	stuck := d.save("stuck", "toolu_1.txt", 300*mib, 3*day)
+	locked := filepath.Join(filepath.Dir(stuck), "locked")
+	if err := os.Mkdir(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "inner"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	kept := []string{
+		d.save("middle", "toolu_2.txt", 200*mib, 2*day),
+		d.save("newest", "toolu_3.txt", 100*mib, day),
+	}
+	// 600 MiB: the stuck session's output goes, its locked directory stays,
+	// and the 300 MiB left fit.
+	d.c.Prune()
+	if d.exists(stuck) {
+		t.Fatal("output kept in the session the cap deletes first")
+	}
+	for _, path := range kept {
+		if !d.exists(path) {
+			t.Fatalf("%s deleted though what was left fit the cap", filepath.Base(path))
 		}
 	}
 }

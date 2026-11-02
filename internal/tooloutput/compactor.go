@@ -599,9 +599,7 @@ func (c *Compactor) Prune() {
 	// the session with the newest file, never goes for size.
 	slices.SortStableFunc(kept, func(a, b savedSession) int { return a.last.Compare(b.last) })
 	for i := 0; i < len(kept)-1 && total > maxSavedBytes; i++ {
-		if c.removeSession(kept[i]) {
-			total -= kept[i].bytes
-		}
+		total -= c.removeSession(kept[i])
 	}
 }
 
@@ -646,11 +644,32 @@ func scanSession(root string, entry os.DirEntry) (savedSession, bool) {
 }
 
 // removeSession deletes a session directory and all it holds, following no
-// link, and reports whether it is gone.
-func (c *Compactor) removeSession(session savedSession) bool {
-	if err := os.RemoveAll(session.dir); err != nil {
-		c.diagnostic.Printf("tool output compaction prune: %v\n", err)
-		return false
+// link, and returns how many bytes of files it deleted: when part of it
+// fails to go, the size Prune counts is what is left. What is left gets
+// another try at the next Prune.
+func (c *Compactor) removeSession(session savedSession) int64 {
+	entries, failed := os.ReadDir(session.dir)
+	var removed int64
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(session.dir, entry.Name())); err != nil {
+			if failed == nil {
+				failed = err
+			}
+			continue
+		}
+		if info.Mode().IsRegular() {
+			removed += info.Size()
+		}
 	}
-	return true
+	if failed == nil {
+		failed = os.Remove(session.dir)
+	}
+	if failed != nil {
+		c.diagnostic.Printf("tool output compaction prune: %v\n", failed)
+	}
+	return removed
 }
