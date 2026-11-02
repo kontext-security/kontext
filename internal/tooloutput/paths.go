@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/kontext-security/kontext/internal/fsperm"
 )
@@ -239,9 +240,17 @@ func savedRefPattern(dirName string) *regexp.Regexp {
 	return regexp.MustCompile(regexp.QuoteMeta(dirName) + `/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)\.txt`)
 }
 
+// saving keeps saves and Prune apart. A save holds it shared from making its
+// directory to renaming its file into place, and Prune holds it while it
+// scans and deletes: Prune never sees a save half done, and no save lands in
+// a directory Prune is deleting.
+var saving sync.RWMutex
+
 // writePrivate writes data to path through a temporary file, readable by its
 // owner only, in directories only the owner can enter.
 func writePrivate(root, path string, data []byte) error {
+	saving.RLock()
+	defer saving.RUnlock()
 	for _, dir := range []string{root, filepath.Dir(path)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
