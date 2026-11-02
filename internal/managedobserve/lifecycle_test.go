@@ -352,12 +352,17 @@ func TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC(t *testing.T) {
 			if err != nil {
 				return
 			}
-			// Probes connect without an RPC.
-			var request localruntime.EvaluateRequest
-			if localruntime.ReadMessage(connection, &request) == nil {
-				rpcs.Add(1)
-			}
-			_ = connection.Close()
+			// A goroutine per connection: on Windows the read of a probe can
+			// hang past the decision budget, and the retried RPC must not
+			// wait behind it.
+			go func() {
+				defer connection.Close()
+				// Probes connect without an RPC.
+				var request localruntime.EvaluateRequest
+				if localruntime.ReadMessage(connection, &request) == nil {
+					rpcs.Add(1)
+				}
+			}()
 		}
 	}()
 
@@ -422,12 +427,16 @@ func TestLifecycleRetriesWhenDaemonStopsBetweenProbeAndRPC(t *testing.T) {
 					if err != nil {
 						return
 					}
-					// Probes connect without an RPC.
-					var request localruntime.EvaluateRequest
-					if localruntime.ReadMessage(connection, &request) == nil {
-						_ = localruntime.WriteMessage(connection, localruntime.EvaluateResult{Decision: "deny", Reason: "local Cedar policy decision", Mode: "enforce"})
-					}
-					_ = connection.Close()
+					// A goroutine per connection, as in
+					// TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC.
+					go func() {
+						defer connection.Close()
+						// Probes connect without an RPC.
+						var request localruntime.EvaluateRequest
+						if localruntime.ReadMessage(connection, &request) == nil {
+							_ = localruntime.WriteMessage(connection, localruntime.EvaluateResult{Decision: "deny", Reason: "local Cedar policy decision", Mode: "enforce"})
+						}
+					}()
 				}
 			}()
 			return nil
