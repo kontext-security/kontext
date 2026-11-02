@@ -85,8 +85,9 @@ func (i Installation) Complete() bool { return len(i.Missing()) == 0 }
 // both, so self-serve leaves out of the user file the events a machine-wide
 // file covers; together the layers need every event, and two installs need not
 // use the same binary. A layer without Kontext hooks is inert; one Codex cannot
-// load or with an invalid Kontext hook fails. This checks configuration, not
-// Codex's runtime trust or approval state.
+// load or with an invalid Kontext hook fails, and so does a system file a user
+// could have written, whatever it holds. This checks configuration, not Codex's
+// runtime trust or approval state.
 func InspectInstallation(paths InstallationPaths) (Installation, error) {
 	result := Installation{}
 	var problems []error
@@ -94,7 +95,7 @@ func InspectInstallation(paths InstallationPaths) (Installation, error) {
 		if path == "" {
 			continue
 		}
-		raw, err := os.ReadFile(path)
+		raw, err := ReadLayer(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}

@@ -129,8 +129,11 @@ func machineCursorCoverage(opts Options) map[string]bool {
 	if path == "" {
 		path = machineCursorHooks
 	}
-	return runnableCoverage(path, cursormanaged.Coverage)
+	return runnableCoverage(path, os.ReadFile, cursormanaged.Coverage)
 }
+
+// readCodexLayer applies Codex's check to the default system file (a test seam).
+var readCodexLayer = codexmanaged.ReadLayer
 
 // machineCodexCoverage does the same for Codex, which runs the hooks of its
 // System layer without asking the user to trust them.
@@ -139,16 +142,16 @@ func machineCodexCoverage(opts Options) map[string]bool {
 	if path == "" {
 		path = machineCodexHooks
 	}
-	return runnableCoverage(path, codexmanaged.Coverage)
+	return runnableCoverage(path, readCodexLayer, codexmanaged.Coverage)
 }
 
 // runnableCoverage counts an event as covered when any of its Kontext hooks
-// names a binary that can run.
-func runnableCoverage(path string, coverage func([]byte) map[string][]string) map[string]bool {
+// names a binary that can run. A file that can't be read covers nothing.
+func runnableCoverage(path string, read func(string) ([]byte, error), coverage func([]byte) map[string][]string) map[string]bool {
 	if privacyfolder.Guarded("", path) {
 		return nil
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := read(path)
 	if err != nil {
 		return nil
 	}

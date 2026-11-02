@@ -3,6 +3,7 @@ package hookinstall
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -814,6 +815,33 @@ func TestUserCursorCoversWhatTheMachineFileDoesNot(t *testing.T) {
 				t.Fatal("a second run rewrote the user file")
 			}
 		})
+	}
+}
+
+// A machine-wide file the check refuses covers nothing, so the user file keeps
+// every event instead of leaving them to a file that doesn't count.
+func TestUserCodexKeepsItsHooksWhenTheMachineFileIsRefused(t *testing.T) {
+	opts, defs := fixture(t, User)
+	codex := defs[1:2]
+	binary := filepath.Join(t.TempDir(), "old", "kontext")
+	write(t, binary, "#!/bin/sh\n", 0755)
+	raw, err := json.Marshal(codexmanaged.Template(binary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, machineCodexHooks, string(raw), 0644)
+	previous := readCodexLayer
+	readCodexLayer = func(string) ([]byte, error) { return nil, errors.New("refused") }
+	t.Cleanup(func() { readCodexLayer = previous })
+	if err := runDefinitions(opts, codex, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(codex[0].Files[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(codexmanaged.Coverage(data)); got != 5 {
+		t.Fatalf("user file covers %d events, want 5: %s", got, data)
 	}
 }
 
