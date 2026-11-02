@@ -188,11 +188,13 @@ func (l Lifecycle) reach(ctx context.Context) bool {
 
 // connectionLost reports whether the daemon went away between the probe and
 // its reply. A write that races the daemon's close fails with EPIPE on Linux
-// but can fail with ENOTCONN on macOS.
+// but can fail with ENOTCONN on macOS. Windows reports the same drops with
+// Winsock errnos, which winsockConnectionLost covers.
 func connectionLost(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
-		errors.Is(err, syscall.ENOTCONN) || errors.Is(err, syscall.ECONNREFUSED)
+		errors.Is(err, syscall.ENOTCONN) || errors.Is(err, syscall.ECONNREFUSED) ||
+		winsockConnectionLost(err)
 }
 
 func (l Lifecycle) processIfAvailable(ctx context.Context, event hook.Event, budget time.Duration) hook.Result {
