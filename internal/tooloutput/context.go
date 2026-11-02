@@ -44,14 +44,25 @@ func requestContext(event hook.Event, goal, home string, withheld func(input any
 			goal = latest
 		}
 	}
-	assistantText, before := splitCurrent(conversation.Messages, event.ToolUseID)
+	context := conversationContext(conversation, whole, goal, event.ToolUseID, event.ToolName, event.ToolInput, withheld)
+	if conversation.Model == "" {
+		return context, nil
+	}
+	return context, &conversation.Model
+}
+
+// conversationContext is what the server is told about the call toolUseID of
+// conversation; whole reports that conversation starts where the
+// conversation does.
+func conversationContext(conversation modelusage.Conversation, whole bool, goal, toolUseID, toolName string, toolInput any, withheld func(input any) bool) Context {
+	assistantText, before := splitCurrent(conversation.Messages, toolUseID)
 	items, length := history(before, withheld)
 	context := Context{
 		Goal: clip(goal, maxContextText),
 		Current: Current{
 			AssistantText: clip(assistantText, maxContextText),
-			ToolName:      event.ToolName,
-			ToolInput:     event.ToolInput,
+			ToolName:      toolName,
+			ToolInput:     toolInput,
 		},
 		History: items,
 	}
@@ -60,10 +71,7 @@ func requestContext(event hook.Event, goal, home string, withheld func(input any
 	if whole || conversation.Compacted {
 		context.HistoryLength = &length
 	}
-	if conversation.Model == "" {
-		return context, nil
-	}
-	return context, &conversation.Model
+	return context
 }
 
 // readConversation reads the end of an agent's transcript, and reports

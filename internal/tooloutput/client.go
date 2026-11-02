@@ -29,27 +29,38 @@ const (
 )
 
 const (
-	ModeLive   = "live"
-	ModeShadow = "shadow"
+	ModeLive = "live"
 
 	KindText      = "text"
 	KindFileLines = "file_lines"
 
 	DecisionKeep    = "keep"
 	DecisionReplace = "replace"
+
+	// DeliveryProxy marks a request for an output the Codex proxy found in a
+	// model request; the agent sees the answer in place of that output. A
+	// request without a delivery is a hook's.
+	DeliveryProxy = "proxy"
 )
 
 // Request is the body of POST /api/v1/installations/{id}/tool-output-compaction.
 type Request struct {
-	Mode      string         `json:"mode"`
-	Agent     string         `json:"agent"`
-	SessionID string         `json:"sessionId"`
-	ToolUseID string         `json:"toolUseId"`
-	ToolName  string         `json:"toolName"`
-	ToolInput map[string]any `json:"toolInput"`
-	Model     *string        `json:"model"`
-	Output    Output         `json:"output"`
-	Context   Context        `json:"context"`
+	Mode      string `json:"mode"`
+	Agent     string `json:"agent"`
+	SessionID string `json:"sessionId"`
+	ToolUseID string `json:"toolUseId"`
+	ToolName  string `json:"toolName"`
+	// ToolInput is a hook's decoded input, or for the proxy the string the
+	// model wrote: a script, or a function call's arguments.
+	ToolInput any     `json:"toolInput"`
+	Model     *string `json:"model"`
+	Output    Output  `json:"output"`
+	Context   Context `json:"context"`
+	// Delivery is DeliveryProxy for the proxy's requests, empty for a hook's.
+	Delivery string `json:"delivery,omitempty"`
+	// Part is the index of the printed part a proxy request carries in a code
+	// mode script's result. The call and part together name the output.
+	Part int `json:"part,omitempty"`
 }
 
 type Output struct {
@@ -73,9 +84,9 @@ type Context struct {
 }
 
 type Current struct {
-	AssistantText string         `json:"assistantText"`
-	ToolName      string         `json:"toolName"`
-	ToolInput     map[string]any `json:"toolInput"`
+	AssistantText string `json:"assistantText"`
+	ToolName      string `json:"toolName"`
+	ToolInput     any    `json:"toolInput"`
 }
 
 type HistoryItem struct {

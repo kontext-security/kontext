@@ -7,6 +7,7 @@ require (
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/google/uuid v1.6.0
 	github.com/gowebpki/jcs v1.0.1
+	github.com/klauspost/compress v1.20.3
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0

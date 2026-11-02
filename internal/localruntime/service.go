@@ -28,6 +28,7 @@ type Service struct {
 	onFailure     func(hook.Event, error) hook.Result
 	compact       func(context.Context, hook.Event) map[string]any
 	offers        func(hook.Event) bool
+	codexProxy    func(context.Context, json.RawMessage) json.RawMessage
 	observe       func(context.Context, hook.Event)
 	diagnostic    diagnostic.Logger
 	duplicates    *duplicateHooks
@@ -54,6 +55,9 @@ type Options struct {
 	// compaction; the hook asks only after an offer, so it never waits on a
 	// second call that cannot change anything.
 	OffersCompaction func(hook.Event) bool
+	// CodexProxy answers CodexProxyRequestType requests; without it they get
+	// no answer, which keeps everything as it is.
+	CodexProxy func(context.Context, json.RawMessage) json.RawMessage
 	// Observe sees every evaluated event once its response is written and
 	// its ingest is done, so it never delays a hook.
 	Observe    func(context.Context, hook.Event)
@@ -77,6 +81,7 @@ func NewService(opts Options) (*Service, error) {
 		onFailure:   opts.OnFailure,
 		compact:     opts.CompactToolOutput,
 		offers:      opts.OffersCompaction,
+		codexProxy:  opts.CodexProxy,
 		observe:     opts.Observe,
 		diagnostic:  opts.Diagnostic,
 		duplicates:  newDuplicateHooks(),
@@ -202,8 +207,18 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 		s.diagnostic.Printf("local runtime read: %v\n", err)
 		return
 	}
-	if req.Type == CompactRequestType {
+	switch req.Type {
+	case CompactRequestType:
 		s.handleCompact(ctx, conn, &req)
+		return
+	case CodexProxyRequestType:
+		result := CodexProxyResult{Type: "codex_proxy_result"}
+		if s.codexProxy != nil {
+			result.Answer = s.codexProxy(ctx, req.CodexProxy)
+		}
+		if err := WriteMessage(conn, result); err != nil {
+			s.diagnostic.Printf("local runtime write: %v\n", err)
+		}
 		return
 	}
 

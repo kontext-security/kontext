@@ -29,8 +29,11 @@ import (
 )
 
 type DaemonOptions struct {
-	SocketPath              string
-	DBPath                  string
+	SocketPath string
+	DBPath     string
+	// NoCodexRoute keeps the daemon from routing Codex through its proxy,
+	// for a daemon run by hand next to a test that routes Codex itself.
+	NoCodexRoute            bool
 	IdleTimeout             time.Duration
 	StreamStatePath         string
 	StreamInterval          time.Duration
@@ -240,6 +243,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		AsyncDecisionRecording: true,
 		CompactToolOutput:      compactor.Compact,
 		OffersCompaction:       compactor.Offers,
+		CodexProxy:             codexProxyAnswer(compactor),
 		ObserveEvent:           compactor.Observe,
 	})
 	if err != nil {
@@ -284,6 +288,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		defer background.Done()
 		cedarRefresher.Run(policyCtx)
 	}()
+	var codexRouting *codexRouting
+	if !opts.NoCodexRoute {
+		codexRouting = newCodexRouting(dbPath, socketPath, opts.Diagnostic)
+	}
 	endpointConfigRefresher := endpointconfig.Refresher{
 		Client:         endpointConfigClient,
 		Cache:          endpointConfigCache,
@@ -293,6 +301,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Interval:       opts.EndpointConfigRefreshInterval,
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot))
+			codexRouting.follow(snapshot)
 		},
 	}
 	background.Add(1)
@@ -304,6 +313,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	go func() {
 		defer background.Done()
 		compactor.Run(policyCtx)
+	}()
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		codexRouting.run(policyCtx)
 	}()
 
 	// A rescan after hook changes refreshes the authority report too, so a
