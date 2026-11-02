@@ -6,11 +6,14 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -330,6 +333,8 @@ func assertFailedOpen(t *testing.T, result hook.Result) {
 	}
 }
 
+// A daemon that takes the RPC and closes without answering looks like a
+// restart: the hook retries once, then fails open.
 func TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC(t *testing.T) {
 	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext-managedobserve-enforce-rpc.sock")
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
@@ -339,13 +344,17 @@ func TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC(t *testing.T) {
 	}
 	defer listener.Close()
 
-	done := make(chan struct{})
+	var rpcs atomic.Int32
 	go func() {
-		defer close(done)
-		for range 3 {
+		for {
 			connection, err := listener.Accept()
 			if err != nil {
 				return
+			}
+			// Probes connect without an RPC.
+			var request localruntime.EvaluateRequest
+			if localruntime.ReadMessage(connection, &request) == nil {
+				rpcs.Add(1)
 			}
 			_ = connection.Close()
 		}
@@ -362,10 +371,33 @@ func TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC(t *testing.T) {
 	}
 	result := lifecycle.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse})
 	assertFailedOpen(t, result)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("server did not receive RPC")
+	if got := rpcs.Load(); got != 2 {
+		t.Fatalf("daemon received %d RPCs, want 2: the dropped one and its retry", got)
+	}
+}
+
+// Where the daemon's close lands decides how the dropped RPC fails. Each way
+// is a lost connection and gets the retry; a slow reply is not.
+func TestConnectionLostCoversDroppedRPCs(t *testing.T) {
+	failed := func(step, op string, err error) error {
+		return fmt.Errorf("%s: %w", step, &net.OpError{Op: op, Net: "unix", Err: err})
+	}
+	for name, test := range map[string]struct {
+		err  error
+		lost bool
+	}{
+		"gone before the dial":    {&net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, true},
+		"closed before the write": {failed("write length", "write", os.NewSyscallError("write", syscall.EPIPE)), true},
+		// macOS only: Linux reports this race as EPIPE.
+		"closed during the write": {failed("write payload", "write", os.NewSyscallError("write", syscall.ENOTCONN)), true},
+		"closed before the reply": {fmt.Errorf("read length: %w", io.EOF), true},
+		"closed mid-reply":        {fmt.Errorf("read payload: %w", io.ErrUnexpectedEOF), true},
+		"reset":                   {failed("read length", "read", os.NewSyscallError("read", syscall.ECONNRESET)), true},
+		"slow reply":              {failed("read length", "read", os.ErrDeadlineExceeded), false},
+	} {
+		if got := connectionLost(test.err); got != test.lost {
+			t.Errorf("%s: connectionLost(%v) = %v, want %v", name, test.err, got, test.lost)
+		}
 	}
 }
 
