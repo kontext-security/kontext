@@ -51,13 +51,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/platform"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
 	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
-// ManagedMCPPath is where Claude Code reads the managed MCP config on macOS.
-const ManagedMCPPath = "/Library/Application Support/ClaudeCode/managed-mcp.json"
+// ManagedMCPPath is where Claude Code reads the managed MCP config.
+var ManagedMCPPath = filepath.Join(platform.ClaudeManagedDir(), "managed-mcp.json")
 
 // maxConfigBytes bounds one config read. ~/.claude.json grows with history.
 const maxConfigBytes = 64 << 20
