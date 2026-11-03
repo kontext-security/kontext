@@ -100,6 +100,30 @@ func TestRunDaemonRefusesWhileAnotherHoldsTheSocket(t *testing.T) {
 	}
 }
 
+// The host trims the path before it binds, so the lock has to go by the trimmed
+// path too, or the same socket has two locks.
+func TestRunDaemonLocksTheSocketItWillBind(t *testing.T) {
+	shortInstanceWait(t)
+	fixture := newInstanceFixture(t)
+	if err := EnsureSocketDir(fixture.socketPath); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := instancelock.Acquire(instancelock.PathForSocket(fixture.socketPath), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Release()
+
+	fixture.opts.SocketPath = fixture.socketPath + " "
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = RunDaemon(ctx, fixture.opts)
+	var held *instancelock.HeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("RunDaemon() = %v, want a refusal naming the holder", err)
+	}
+}
+
 // The lock can't see a daemon that takes none, such as one from an older release.
 // The socket shows it.
 func TestRunDaemonRefusesWhenSomethingAnswersOnTheSocket(t *testing.T) {

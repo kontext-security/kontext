@@ -160,7 +160,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err := requireManagedHooksForLegacyCowork(loadedConfig.Config, loadedConfig.Scope); err != nil {
 		return err
 	}
-	socketPath := opts.SocketPath
+	// Trimmed as the host trims it before it binds: this path names the lock too.
+	socketPath := strings.TrimSpace(opts.SocketPath)
 	if socketPath == "" {
 		socketPath = DefaultSocketPath()
 	}
