@@ -59,7 +59,7 @@ var (
 		pattern *regexp.Regexp
 		product string
 	}{
-		{regexp.MustCompile(`^actions_|job_logs|workflow`), "actions"},
+		{regexp.MustCompile(`(?:^actions_)|job_logs|workflow`), "actions"},
 		{regexp.MustCompile(`release|_tag$|_tags$`), "releases"},
 		{regexp.MustCompile(`code_scanning|dependabot|secret_scanning|security_advisor|code_quality`), "security"},
 		{regexp.MustCompile(`discussion`), "discussions"},

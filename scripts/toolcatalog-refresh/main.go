@@ -145,14 +145,14 @@ type refresher struct {
 
 var (
 	atlassianDistinctive = regexp.MustCompile(`^jira_|^confluence_|Jira|Jsm|Confluence|Bitbucket|bitbucket|Compass|Loom|Atlassian|TeamworkGraph|CapacityPlan|Talent|FocusArea`)
-	hubspotDistinctive   = regexp.MustCompile(`^manage_|hubspot|crm|campaign|aeo|marketing_email|landing_page|website_page|blog_post|intent_signals|conversation_channel|content_analytics`)
+	hubspotDistinctive   = regexp.MustCompile(`(?:^manage_)|hubspot|crm|campaign|aeo|marketing_email|landing_page|website_page|blog_post|intent_signals|conversation_channel|content_analytics`)
 	atlassianProducts    = []struct {
 		pattern *regexp.Regexp
 		product string
 	}{
 		{regexp.MustCompile(`Jsm`), "jsm"},
-		{regexp.MustCompile(`^jira_|Jira`), "jira"},
-		{regexp.MustCompile(`^confluence_|Confluence`), "confluence"},
+		{regexp.MustCompile(`(?:^jira_)|Jira`), "jira"},
+		{regexp.MustCompile(`(?:^confluence_)|Confluence`), "confluence"},
 		{regexp.MustCompile(`(?i)bitbucket`), "bitbucket"},
 		{regexp.MustCompile(`Loom`), "loom"},
 		{regexp.MustCompile(`Compass`), "compass"},
