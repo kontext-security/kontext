@@ -26,6 +26,7 @@
 ./internal/hookcmd
 ./internal/hookruntime
 ./internal/installation
+./internal/instancelock
 ./internal/ledgerfact
 ./internal/ledgerping
 ./internal/localruntime

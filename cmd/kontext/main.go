@@ -507,6 +507,10 @@ func managedObserveDaemonCmd() *cobra.Command {
 		Short:  "Run the managed observe socket daemon",
 		Hidden: true,
 		Args:   cobra.NoArgs,
+		// main reports the error. Under KeepAlive a refused start repeats, and
+		// usage text in the log for each one says nothing.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			timeout := managedobserve.DefaultIdleTimeout()
 			if idleTimeout != "" {
