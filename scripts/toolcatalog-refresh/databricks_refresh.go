@@ -53,7 +53,7 @@ var databricksMCPProducts = map[string]string{
 var databricksPerWorkspace = map[string]bool{"uc-function": true, "ai-search": true}
 
 var (
-	databricksDistinctive = regexp.MustCompile(`^genie_|databricks`)
+	databricksDistinctive = regexp.MustCompile(`(?:^genie_)|databricks`)
 	cobraUseLiteral       = regexp.MustCompile(`Use:\s*"([^"\s]+)|\.Use\s*=\s*"([^"\s]+)`)
 )
 
