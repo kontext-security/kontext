@@ -19,8 +19,9 @@ As of 3 November 2026:
 
 - The installed Homebrew cask 1.17.1 is signed by `Developer ID Application: Michel Osswald (L2LV5YHMJ3)`. Its identifier is `kontext`, its hardened runtime is enabled, and its designated requirement includes `certificate leaf[subject.OU] = L2LV5YHMJ3`.
 - The local keychain has no usable Developer ID Application identity. Apple Development certificates are not release certificates.
-- The authenticated Apple Developer portal shows `CoBrowser Technology GmbH (Pending)` under the company login. It does not yet offer Membership details or Certificates, Identifiers & Profiles. Company Team ID, active membership, certificate inventory and private-key availability remain unverified. The enrollment checkout shows EUR 99; payment alone does not prove activation.
-- Repository secret metadata confirms the five existing `MACOS_*` signing/notary secrets in `kontext-security/kontext`. Their encrypted values and ownership were not read. There are no company signing secrets or selector variables yet. No secrets were changed.
+- The authenticated company membership is active: entity `CoBrowser Technology GmbH`, enrolled as `Organization`, Team ID `GB932D44Y3`, renewal date 4 November 2027. Certificates, Identifiers & Profiles shows an empty certificate inventory for that company team. Developer ID Application and Installer creation are available; neither company identity has been issued or installed yet.
+- Apple displays a notice to accept the latest Developer Program License Agreement by 14 November 2026. Certificate resources are currently accessible. Agreement acceptance remains a separate approval step. App Store Connect also requires its first-use Terms of Service before access to notarization key setup; those terms have not been accepted.
+- Repository secret metadata confirms the five existing `MACOS_*` signing/notary secrets in `kontext-security/kontext`. Their encrypted values and ownership were not read. Company signing secrets are still missing. `MACOS_COMPANY_TEAM_ID=GB932D44Y3` is configured in the CLI and staging repositories; `MACOS_SIGNING_PROFILE` remains unset. No existing secrets were changed.
 - The fixture checks verify configuration and certificate parsing only. They use disposable self-signed certificates, not Apple identities. Signed builds, Apple acceptance and real upgrades remain release gates.
 
 ## Release ownership and current path
@@ -106,4 +107,4 @@ shellcheck scripts/check-macos-signing.sh
 actionlint .github/workflows/release-please.yml .github/workflows/validate-company-signing.yml .github/workflows/ci.yml
 ```
 
-These checks and the private package fixtures do not complete the migration. Missing inputs are an authenticated company membership view, verified company Team ID, working Application and Installer identities with private keys, company notarization credentials, and customer policy/upgrade evidence.
+These checks and the private package fixtures do not complete the migration. Membership and company Team ID are verified. Missing inputs are working Application and Installer identities with private keys, company notarization credentials, and customer policy/upgrade evidence.
