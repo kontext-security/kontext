@@ -220,11 +220,22 @@ func TestDisablingNowKeepsWhatTheDaemonHasYetToReport(t *testing.T) {
 	if err := r.job(0).Count(codexproxy.Counts{PassThroughs: 2, CodexVersion: "0.163.0"}); err != nil {
 		t.Fatal(err)
 	}
+	// A daemon may be waiting on the route's lock as the state goes: the
+	// lock stays the one it waits on.
+	lock, err := os.Stat(r.lockPath())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := r.local().Remove(context.Background(), 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(TokenPath(r.opts.StateDir)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the token stayed: %v", err)
+	for _, gone := range []string{TokenPath(r.opts.StateDir), filepath.Dir(BinaryPath(r.opts.StateDir))} {
+		if _, err := os.Stat(gone); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s stayed: %v", gone, err)
+		}
+	}
+	if after, err := os.Stat(r.lockPath()); err != nil || !os.SameFile(lock, after) {
+		t.Fatalf("the route's lock was replaced: %v", err)
 	}
 	taken := r.TakeAway()
 	if counters := r.Counters(); taken == nil || taken.Reason != ReasonDisabledLocally || counters.PassThroughs != 2 ||
@@ -238,6 +249,10 @@ func TestDisablingNowKeepsWhatTheDaemonHasYetToReport(t *testing.T) {
 	}
 	if again := r.TakeAway(); again == nil || !again.Same(*taken) || r.Counters().PassThroughs != 2 {
 		t.Fatalf("after a second disable --now: take-away %+v, counters %+v", again, r.Counters())
+	}
+	// The daemon routes Codex again from what is left.
+	if status, err := r.Enable(context.Background()); err != nil || !status.Routed || r.TakeAway() == nil {
+		t.Fatalf("Enable after disable --now = %+v, %v; take-away %+v", status, err, r.TakeAway())
 	}
 }
 

@@ -32,6 +32,8 @@ type fakeReportAPI struct {
 	conflicts, rejects int
 	accepted           []codexReport
 	refused            int
+	// accept, when set, is told of each report as it is accepted.
+	accept func(codexReport)
 }
 
 func (a *fakeReportAPI) send(_ context.Context, report codexReport) error {
@@ -51,6 +53,9 @@ func (a *fakeReportAPI) send(_ context.Context, report codexReport) error {
 		return fmt.Errorf("%w: status 400", errReportRejected)
 	}
 	a.accepted = append(a.accepted, report)
+	if a.accept != nil {
+		a.accept(report)
+	}
 	return nil
 }
 
@@ -60,11 +65,17 @@ func (a *fakeReportAPI) send(_ context.Context, report codexReport) error {
 type withTakeAway struct {
 	*codexroute.Router
 	takeAway *codexroute.TakeAway
+	// clearFails fails the next clears.
+	clearFails int
 }
 
 func (w *withTakeAway) TakeAway() *codexroute.TakeAway { return w.takeAway }
 
 func (w *withTakeAway) ClearTakeAway(t codexroute.TakeAway) error {
+	if w.clearFails > 0 {
+		w.clearFails--
+		return errors.New("route.lock: permission denied")
+	}
 	if w.takeAway != nil && w.takeAway.Same(t) {
 		w.takeAway = nil
 	}
@@ -240,6 +251,53 @@ func TestCodexReportsNeverResendAReportTurnedAway(t *testing.T) {
 				t.Fatalf("report an hour on = %s", got)
 			}
 		})
+	}
+}
+
+// A take-away route.json gets while the daemon reports an earlier one is
+// reported next, as is one that comes between two applies, at the next tick.
+// One whose report went through is never reported again, though clearing it
+// from route.json failed: the clear is tried again instead.
+func TestCodexReportsReportEachTakeAwayOnce(t *testing.T) {
+	api := &fakeReportAPI{}
+	clock := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	reports, route := newTestReports(t, api, &clock)
+	ctx := context.Background()
+	later := &codexroute.TakeAway{Reason: codexroute.ReasonProxyDownAtSessionStart, At: clock.Add(time.Second)}
+	api.accept = func(report codexReport) {
+		if report.State == codexTakenAway && *report.Reason == codexroute.ReasonDaemonStopped {
+			route.takeAway = later
+		}
+	}
+	route.takeAway = &codexroute.TakeAway{Reason: codexroute.ReasonDaemonStopped, At: clock}
+	reports.update(ctx, routeState{state: codexRouted})
+	if got := describe(api.take()); got != "taken_away/daemon_stopped 0,0,0 ; taken_away/proxy_down_at_session_start 0,0,0 ; routed/null 0,0,0 " || route.takeAway != nil {
+		t.Fatalf("reports = %s; take-away left %+v", got, route.takeAway)
+	}
+
+	// Between applies: the next tick reports it.
+	route.takeAway = &codexroute.TakeAway{Reason: codexroute.ReasonUpstreamUnreachable, At: clock.Add(time.Minute)}
+	clock = clock.Add(time.Minute)
+	reports.tick(ctx)
+	if got := describe(api.take()); got != "taken_away/upstream_unreachable 0,0,0 ; routed/null 0,0,0 " || route.takeAway != nil {
+		t.Fatalf("reports at the tick = %s; take-away left %+v", got, route.takeAway)
+	}
+
+	// Clearing fails once: the next tick clears it, and nothing is reported
+	// twice.
+	route.takeAway = &codexroute.TakeAway{Reason: codexroute.ReasonDisabledLocally, At: clock.Add(time.Minute)}
+	route.clearFails = 1
+	reports.update(ctx, routeState{state: codexRouted})
+	if got := describe(api.take()); got != "taken_away/disabled_locally 0,0,0 ; routed/null 0,0,0 " || route.takeAway == nil {
+		t.Fatalf("reports with a failed clear = %s; take-away %+v", got, route.takeAway)
+	}
+	for range 3 {
+		clock = clock.Add(time.Minute)
+		reports.tick(ctx)
+		reports.update(ctx, routeState{state: codexRouted})
+	}
+	if got := api.take(); len(got) != 0 || route.takeAway != nil {
+		t.Fatalf("after the clear was tried again: reports %s, take-away %+v", describe(got), route.takeAway)
 	}
 }
 

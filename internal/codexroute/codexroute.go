@@ -767,27 +767,34 @@ func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 	return left, r.removeState()
 }
 
-// removeState removes the proxy's state. With a DisableReason, what the
-// daemon, which routes Codex again while its switch is on, has yet to report
-// stays: the last take-away and the job's counters. The lock must be held;
-// the job is gone.
+// removeState removes the proxy's state. The lock must be held; the job is
+// gone. With a DisableReason, the folder and its locks stay, since a daemon
+// may be waiting on the route's to route Codex again, and so does what that
+// daemon has yet to report: the last take-away, in route.json, and the job's
+// counters. The rest goes: the token, the job's binary and the decisions.
 func (r *Router) removeState() error {
 	if r.opts.DisableReason == "" {
 		return os.RemoveAll(r.opts.StateDir)
 	}
-	takeAway, counters := r.loadState().TakenAway, r.loadCounters()
-	if err := os.RemoveAll(r.opts.StateDir); err != nil {
+	entries, err := os.ReadDir(r.opts.StateDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
-	if takeAway != nil {
-		if err := r.saveState(state{TakenAway: takeAway}); err != nil {
-			return err
+	kept := map[string]bool{}
+	for _, path := range []string{r.lockPath(), r.statePath(), r.countersPath(), r.countersLockPath()} {
+		kept[filepath.Base(path)] = true
+	}
+	for _, entry := range entries {
+		if !kept[entry.Name()] {
+			if err := os.RemoveAll(filepath.Join(r.opts.StateDir, entry.Name())); err != nil {
+				return err
+			}
 		}
 	}
-	if counters.UpstreamFailures+counters.PassThroughs+counters.PartsMissing > 0 || len(counters.CodexVersions) > 0 {
-		return r.saveCounters(counters)
-	}
-	return nil
+	return r.saveState(state{TakenAway: r.loadState().TakenAway})
 }
 
 // TakeAway returns what last took the line away besides a daemon, until a

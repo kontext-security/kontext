@@ -92,16 +92,18 @@ type codexReports struct {
 	now        func() time.Time
 
 	// current is the route's latest state, and sent the last the API took;
-	// takeAway is the take-away to report first, if any. reportedAt is when
-	// a report last went through: kept, or turned away for good.
-	current, sent routeState
-	takeAway      *codexroute.TakeAway
-	reportedAt    time.Time
+	// takeAway is the take-away to report first, if any, and reported one
+	// whose report went through but that route.json still holds, since
+	// clearing it there failed. reportedAt is when a report last went
+	// through: kept, or turned away for good.
+	current, sent      routeState
+	takeAway, reported *codexroute.TakeAway
+	reportedAt         time.Time
 	// failures counts the sends that failed in a row: the next waits until
 	// retryAt, unless the route changes first.
-	failures    int
-	retryAt     time.Time
-	lastFailure string
+	failures                      int
+	retryAt                       time.Time
+	lastFailure, lastClearFailure string
 }
 
 // update takes the state an apply left the route in, with any take-away
@@ -111,22 +113,42 @@ func (r *codexReports) update(ctx context.Context, state routeState) {
 	if r == nil {
 		return
 	}
-	takeAway := r.route.TakeAway()
-	changed := state != r.current || takeAway != nil && (r.takeAway == nil || !takeAway.Same(*r.takeAway))
-	r.current, r.takeAway = state, takeAway
+	before := r.takeAway
+	r.refreshTakeAway()
+	changed := state != r.current || r.takeAway != nil && (before == nil || !r.takeAway.Same(*before))
+	r.current = state
 	if changed {
 		r.flush(ctx)
 	}
 }
 
 // tick sends what is due once a failed send's wait is over: a report that
-// failed, and the latest state again once no report went through for
-// codexReportInterval.
+// failed, a take-away route.json got since, and the latest state again once
+// no report went through for codexReportInterval.
 func (r *codexReports) tick(ctx context.Context) {
 	if r == nil || r.now().Before(r.retryAt) {
 		return
 	}
+	r.refreshTakeAway()
 	r.flush(ctx)
+}
+
+// refreshTakeAway reads the take-away waiting in route.json, once a reported
+// one is cleared there: one a failed clear left behind is cleared again,
+// never reported again, and a later one that replaced it is reported next.
+func (r *codexReports) refreshTakeAway() {
+	if r.reported != nil {
+		if err := r.route.ClearTakeAway(*r.reported); err != nil {
+			if message := err.Error(); message != r.lastClearFailure {
+				diagnostic.LogAlways(r.diagnostic, "codex proxy: reported take-away not cleared: %v\n", err)
+				r.lastClearFailure = message
+			}
+			r.takeAway = nil
+			return
+		}
+		r.reported, r.lastClearFailure = nil, ""
+	}
+	r.takeAway = r.route.TakeAway()
 }
 
 // next is the report due, if any: the take-away first, then the current
@@ -165,10 +187,10 @@ func (r *codexReports) flush(ctx context.Context) {
 		r.sent, r.reportedAt = state, r.now()
 		r.failures, r.retryAt, r.lastFailure = 0, time.Time{}, ""
 		if state.state == codexTakenAway && r.takeAway != nil {
-			if err := r.route.ClearTakeAway(*r.takeAway); err != nil {
-				diagnostic.LogAlways(r.diagnostic, "codex proxy: reported take-away not cleared: %v\n", err)
-			}
-			r.takeAway = nil
+			// A later take-away may have replaced it meanwhile: that one goes
+			// next.
+			r.reported = r.takeAway
+			r.refreshTakeAway()
 		}
 		if err != nil {
 			// Its counts go with the next report.
