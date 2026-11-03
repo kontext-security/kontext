@@ -302,16 +302,25 @@ func (c *Compactor) request(event hook.Event, out output, goal string) Request {
 
 // ask sends a request, with its output's secrets hidden, and returns the
 // server's answer and its shorter text with the secrets back in place. It
-// returns false when the output stays as it is: the request does not fit,
-// the call fails, the server keeps the output, or a placeholder came back
-// changed.
+// returns false when the output stays as it is: it is too large for a
+// request, hiding its secrets or the call fails, the server keeps it, or
+// the text that comes back cannot stand in for it.
 func (c *Compactor) ask(ctx context.Context, request Request) (Response, string, bool) {
-	found, hidden := hideOutput(&request.Output)
-	if !hidden {
+	// An output no request can carry is not worth redacting, and a text
+	// stands in for an output only if it is shorter.
+	size := len(request.Output.Text)
+	if size > MaxRequestBytes {
+		c.diagnostic.Printf("tool output compaction: output too large for a request; output left as is\n")
+		return Response{}, "", false
+	}
+	found, err := hideOutput(&request.Output)
+	if err != nil {
+		c.diagnostic.Printf("tool output compaction: %v; output left as is\n", err)
 		return Response{}, "", false
 	}
 	body, fits := encode(request)
 	if !fits {
+		c.diagnostic.Printf("tool output compaction: output too large for a request; output left as is\n")
 		return Response{}, "", false
 	}
 	response, err := c.client.Compact(ctx, body)
@@ -322,9 +331,9 @@ func (c *Compactor) ask(ctx context.Context, request Request) (Response, string,
 	if response.Decision != DecisionReplace {
 		return Response{}, "", false
 	}
-	text, revealed := found.reveal(*response.Text)
-	if !revealed {
-		c.diagnostic.Printf("tool output compaction: a placeholder came back changed; output left as is\n")
+	text, err := found.reveal(*response.Text, size)
+	if err != nil {
+		c.diagnostic.Printf("tool output compaction: %v; output left as is\n", err)
 		return Response{}, "", false
 	}
 	return response, text, true

@@ -21,6 +21,9 @@ const (
 	// output out of a request.
 	maxContextText = 16 << 10
 	maxHistoryText = 64 << 10
+	// maxRedacted bounds the context text one request redacts, the call's
+	// own input aside (see redactions).
+	maxRedacted = 2 << 20
 )
 
 // transcriptTail is how much of a transcript's end is read for context. A
@@ -56,11 +59,16 @@ func requestContext(event hook.Event, goal, home string, withheld func(input any
 // where the conversation does.
 func conversationContext(conversation modelusage.Conversation, whole bool, goal, toolUseID, toolName string, toolInput any, withheld func(input any) bool) Context {
 	assistantText, before := splitCurrent(conversation.Messages, toolUseID)
-	items, length := history(before, withheld)
+	// The goal has the first claim on the budget, then what the assistant
+	// said with the call, then the history.
+	budget := &redactions{left: maxRedacted}
+	goal = budget.text(goal, maxContextText)
+	assistantText = budget.text(assistantText, maxContextText)
+	items, length := history(before, withheld, budget)
 	context := Context{
-		Goal: clip(redacted(goal), maxContextText),
+		Goal: goal,
 		Current: Current{
-			AssistantText: clip(redacted(assistantText), maxContextText),
+			AssistantText: assistantText,
 			ToolName:      toolName,
 			ToolInput:     redactedInput(toolInput),
 		},
@@ -175,8 +183,8 @@ func splitCurrent(messages []modelusage.Message, toolUseID string) (string, []mo
 // history is the last visible items before the current call, and how many
 // there are in all. Every call withheld reports is left out with its result,
 // and so is a result whose call is no longer in view, which cannot be
-// checked.
-func history(messages []modelusage.Message, withheld func(input any) bool) ([]HistoryItem, int) {
+// checked. The items' texts are redacted within budget, newest first.
+func history(messages []modelusage.Message, withheld func(input any) bool, budget *redactions) ([]HistoryItem, int) {
 	calls := map[string]*modelusage.ToolCall{}
 	for _, message := range messages {
 		if message.ToolCall != nil {
@@ -207,24 +215,61 @@ func history(messages []modelusage.Message, withheld func(input any) bool) ([]Hi
 		visible = append(visible, message)
 	}
 	kept := visible[max(len(visible)-historyItems, 0):]
-	items := make([]HistoryItem, 0, len(kept))
-	for _, message := range kept {
-		item := HistoryItem{Role: message.Role, Content: clip(redacted(message.Text), maxHistoryText), ToolUseID: message.ToolUseID}
+	items := make([]HistoryItem, len(kept))
+	for i := len(kept) - 1; i >= 0; i-- {
+		message := kept[i]
+		item := HistoryItem{Role: message.Role, Content: budget.text(message.Text, maxHistoryText), ToolUseID: message.ToolUseID}
 		if call := message.ToolCall; call != nil {
-			input := redactedJSON(call.Input)
-			if len(input) > maxHistoryText {
-				input, _ = json.Marshal(clip(string(input), maxHistoryText))
-			}
-			item.ToolCalls = []ToolCall{{ID: call.ID, Name: call.Name, Input: input}}
+			item.ToolCalls = []ToolCall{{ID: call.ID, Name: call.Name, Input: budget.input(call.Input, maxHistoryText)}}
 		}
-		items = append(items, item)
+		items[i] = item
 	}
 	return items, len(visible)
 }
 
-// clip shortens text over limit bytes to its start and end. What it clips is
-// redacted first: a cut could leave part of a secret the ruleset would no
-// longer recognize.
+// leftOut stands in for a context text past the redaction budget.
+const leftOut = "[...]"
+
+// redactions is what is left of a request's budget for redacting context.
+// Redaction reads all of a text, and clipping a text before redacting it
+// could leave part of a secret the ruleset would no longer recognize, so a
+// text larger than what is left is left out instead. The call's own input
+// is redacted whole: it is small, and the server needs it.
+type redactions struct {
+	left int
+}
+
+// text returns text redacted, then clipped to limit, or leftOut.
+func (r *redactions) text(text string, limit int) string {
+	if !r.spend(len(text)) {
+		return leftOut
+	}
+	return clip(redacted(text), limit)
+}
+
+// input returns a tool call's input redacted, then, when longer than limit,
+// clipped as text into a JSON string; or leftOut as one.
+func (r *redactions) input(raw json.RawMessage, limit int) json.RawMessage {
+	if !r.spend(len(raw)) {
+		data, _ := json.Marshal(leftOut)
+		return data
+	}
+	input := redactedJSON(raw)
+	if len(input) > limit {
+		input, _ = json.Marshal(clip(string(input), limit))
+	}
+	return input
+}
+
+func (r *redactions) spend(n int) bool {
+	if n > r.left {
+		return false
+	}
+	r.left -= n
+	return true
+}
+
+// clip shortens text over limit bytes to its start and end.
 func clip(text string, limit int) string {
 	if len(text) <= limit {
 		return text

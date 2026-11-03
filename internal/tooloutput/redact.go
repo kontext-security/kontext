@@ -3,6 +3,7 @@ package tooloutput
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,13 @@ var delimiters = [][2]string{{"\u27e6", "\u27e7"}, {"\u2983", "\u2984"}, {"\u27e
 
 const placeholderName = "REDACTED_SECRET_"
 
+var (
+	errRedaction   = errors.New("redacting the output failed")
+	errDelimiters  = errors.New("the output holds every placeholder delimiter")
+	errPlaceholder = errors.New("a placeholder came back changed")
+	errNoShorter   = errors.New("the answer is no shorter than the output with its secrets back")
+)
+
 // secrets are what an output's placeholders stand for: placeholder n, from 1,
 // stands for values[n-1].
 type secrets struct {
@@ -34,19 +42,19 @@ type secrets struct {
 // and the secrets, to put back with reveal. A secret over several lines is
 // replaced line by line, so the text keeps its line breaks and the server
 // counts lines as the agent does. echoed are what else the server may repeat
-// in its answer. It reports false when no pair of delimiters is free.
-func hideSecrets(text string, echoed ...string) (_ string, _ *secrets, ok bool) {
+// in its answer. It fails when no pair of delimiters is free.
+func hideSecrets(text string, echoed ...string) (_ string, _ *secrets, err error) {
 	// Redaction runs on untrusted content; a panic must keep the output
 	// from being sent, not take the daemon down.
 	defer func() {
 		if recover() != nil {
-			ok = false
+			err = errRedaction
 		}
 	}()
 	found := &secrets{}
 	spans := payloadcapture.RedactedSpans(text)
 	if len(spans) == 0 {
-		return text, found, true
+		return text, found, nil
 	}
 	for _, pair := range delimiters {
 		if !strings.Contains(text, pair[0]) && !strings.Contains(text, pair[1]) && !anyContains(echoed, pair[0], pair[1]) {
@@ -55,7 +63,7 @@ func hideSecrets(text string, echoed ...string) (_ string, _ *secrets, ok bool) 
 		}
 	}
 	if found.open == "" {
-		return "", nil, false
+		return "", nil, errDelimiters
 	}
 	var out strings.Builder
 	out.Grow(len(text))
@@ -74,45 +82,61 @@ func hideSecrets(text string, echoed ...string) (_ string, _ *secrets, ok bool) 
 		at = span.End
 	}
 	out.WriteString(text[at:])
-	return out.String(), found, true
+	return out.String(), found, nil
 }
 
-// reveal returns text with each placeholder replaced by its secret. It
-// reports false when a placeholder came back cut short or changed, or names
-// no secret of the output: the text is then not made of the output's lines.
-func (s *secrets) reveal(text string) (string, bool) {
+// reveal returns text with each placeholder replaced by its secret. It fails
+// when a placeholder came back cut short or changed, or names no secret of
+// the output, since the text is then not made of the output's lines. It
+// also fails, before it builds the text, when the text would reach limit
+// bytes: a placeholder the answer repeats could make it far larger than the
+// answer.
+func (s *secrets) reveal(text string, limit int) (string, error) {
 	if len(s.values) == 0 {
-		return text, true
+		return text, nil
 	}
 	var out strings.Builder
-	out.Grow(len(text))
+	out.Grow(min(len(text), limit))
+	add := func(part string) error {
+		if out.Len()+len(part) >= limit {
+			return errNoShorter
+		}
+		out.WriteString(part)
+		return nil
+	}
 	for {
 		start := strings.Index(text, s.open)
 		if start < 0 {
 			break
 		}
 		if strings.Contains(text[:start], s.close) {
-			return "", false
+			return "", errPlaceholder
 		}
-		out.WriteString(text[:start])
+		if err := add(text[:start]); err != nil {
+			return "", err
+		}
 		rest := text[start+len(s.open):]
 		end := strings.Index(rest, s.close)
 		if end < 0 {
-			return "", false
+			return "", errPlaceholder
 		}
 		number, named := strings.CutPrefix(rest[:end], placeholderName)
 		n, err := strconv.Atoi(number)
 		if !named || err != nil || n < 1 || n > len(s.values) || strconv.Itoa(n) != number {
-			return "", false
+			return "", errPlaceholder
 		}
-		out.WriteString(s.values[n-1])
+		if err := add(s.values[n-1]); err != nil {
+			return "", err
+		}
 		text = rest[end+len(s.close):]
 	}
 	if strings.Contains(text, s.close) {
-		return "", false
+		return "", errPlaceholder
 	}
-	out.WriteString(text)
-	return out.String(), true
+	if err := add(text); err != nil {
+		return "", err
+	}
+	return out.String(), nil
 }
 
 func anyContains(texts []string, subs ...string) bool {
@@ -165,17 +189,12 @@ func redactedJSON(raw json.RawMessage) json.RawMessage {
 
 // hideOutput hides the secrets of a request's output, whose text is sent
 // with placeholders the answer's are revealed from; its file path is
-// redacted for good. The server may repeat both paths in its answer. An
-// output too large for any request is never sent, so it is not redacted
-// either.
-func hideOutput(output *Output) (*secrets, bool) {
-	if len(output.Text) > MaxRequestBytes {
-		return nil, false
-	}
-	text, found, ok := hideSecrets(output.Text, output.RecoveryPath, output.FilePath)
-	if !ok {
-		return nil, false
+// redacted for good. The server may repeat both paths in its answer.
+func hideOutput(output *Output) (*secrets, error) {
+	text, found, err := hideSecrets(output.Text, output.RecoveryPath, output.FilePath)
+	if err != nil {
+		return nil, err
 	}
 	output.Text, output.FilePath = text, redacted(output.FilePath)
-	return found, true
+	return found, nil
 }

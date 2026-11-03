@@ -3,6 +3,7 @@ package tooloutput
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -224,6 +225,9 @@ func TestDamagedPlaceholdersLeaveTheOutput(t *testing.T) {
 		"stray delimiter": func(sent string) string {
 			return sent[:len(sent)/2] + "\u27e7"
 		},
+		"repeated": func(sent string) string {
+			return strings.Repeat(sentPlaceholder.FindString(sent)+"\n", 1000)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			reply := func(request Request) (int, any) {
@@ -248,9 +252,9 @@ func TestHideSecretsKeepsTheLines(t *testing.T) {
 	t.Parallel()
 
 	output := secretOutput()
-	hidden, found, ok := hideSecrets(output)
-	if !ok {
-		t.Fatal("hideSecrets failed")
+	hidden, found, err := hideSecrets(output)
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, secret := range secretsIn {
 		if strings.Contains(hidden, secret) {
@@ -268,12 +272,12 @@ func TestHideSecretsKeepsTheLines(t *testing.T) {
 	}
 	// Each line restores alone, so any choice of lines restores.
 	for i := range sent {
-		if line, ok := found.reveal(sent[i]); !ok || line != original[i] {
-			t.Fatalf("line %d restores as %q, %v; want %q", i+1, line, ok, original[i])
+		if line, err := found.reveal(sent[i], len(output)); err != nil || line != original[i] {
+			t.Fatalf("line %d restores as %q, %v; want %q", i+1, line, err, original[i])
 		}
 	}
-	if whole, ok := found.reveal(hidden); !ok || whole != output {
-		t.Fatalf("reveal = %q, %v", whole, ok)
+	if whole, err := found.reveal(hidden, len(output)+1); err != nil || whole != output {
+		t.Fatalf("reveal = %q, %v", whole, err)
 	}
 	if found.open != "\u27e6" || len(found.values) != 10 {
 		t.Fatalf("delimiters %q, %d secrets", found.open, len(found.values))
@@ -295,16 +299,83 @@ func TestHideSecretsUsesFreeDelimiters(t *testing.T) {
 		{"first echoed", secret, []string{"/home/\u27e6/saved.txt"}, "\u2983"},
 		{"all taken", secret + " \u27e6 \u2984 \u27ed", nil, ""},
 	} {
-		hidden, found, ok := hideSecrets(test.text, test.echoed...)
-		if ok != (test.open != "") || ok && (found.open != test.open || strings.Contains(hidden, "FAKEvalue123")) {
-			t.Errorf("%s: hideSecrets = %q, %+v, %v", test.name, hidden, found, ok)
+		hidden, found, err := hideSecrets(test.text, test.echoed...)
+		if test.open == "" && !errors.Is(err, errDelimiters) || test.open != "" && (err != nil || found.open != test.open || strings.Contains(hidden, "FAKEvalue123")) {
+			t.Errorf("%s: hideSecrets = %q, %+v, %v", test.name, hidden, found, err)
 		}
 	}
 	// An output without secrets needs no delimiters at all.
-	if hidden, found, ok := hideSecrets("\u27e6 \u2984 \u27ed plain"); !ok || hidden != "\u27e6 \u2984 \u27ed plain" {
-		t.Errorf("plain text: %q, %+v, %v", hidden, found, ok)
-	} else if text, ok := found.reveal("\u27e6 kept"); !ok || text != "\u27e6 kept" {
-		t.Errorf("reveal without secrets = %q, %v", text, ok)
+	if hidden, found, err := hideSecrets("\u27e6 \u2984 \u27ed plain"); err != nil || hidden != "\u27e6 \u2984 \u27ed plain" {
+		t.Errorf("plain text: %q, %+v, %v", hidden, found, err)
+	} else if text, err := found.reveal("\u27e6 kept", 100); err != nil || text != "\u27e6 kept" {
+		t.Errorf("reveal without secrets = %q, %v", text, err)
+	}
+}
+
+// An answer that repeats a placeholder could reveal into a text far larger
+// than the answer; reveal stops at the output's length before building it.
+func TestRevealStopsAtTheOutputsLength(t *testing.T) {
+	t.Parallel()
+
+	output := `password="` + strings.Repeat("x", 512<<10) + "\n" + bigText(10)
+	hidden, found, err := hideSecrets(output)
+	if err != nil || len(found.values) == 0 || len(found.values[0]) < 512<<10 {
+		t.Fatalf("hideSecrets = %d bytes, %v", len(hidden), err)
+	}
+	// About 1.3 MB, within what the client reads; about 30 GB revealed.
+	answer := strings.Repeat(sentPlaceholder.FindString(hidden)+"\n", 60_000)
+	if text, err := found.reveal(answer, len(output)); !errors.Is(err, errNoShorter) {
+		t.Fatalf("reveal = %d bytes, %v; want %v", len(text), err, errNoShorter)
+	}
+	if text, err := found.reveal(hidden, len(output)); !errors.Is(err, errNoShorter) {
+		t.Fatalf("reveal of the whole output = %d bytes, %v; want %v", len(text), err, errNoShorter)
+	}
+}
+
+// Context is redacted within a budget, its newest history first, and a text
+// past what is left of it is left out: never cut before it is redacted.
+func TestContextIsRedactedWithinABudget(t *testing.T) {
+	t.Parallel()
+
+	result := func(id string, size int) modelusage.Message {
+		return modelusage.Message{Role: "tool", ToolUseID: id, Text: "password=FAKE" + id + "secret " + strings.Repeat("y", size)}
+	}
+	call := func(id, response string, input string) modelusage.Message {
+		return modelusage.Message{Role: "assistant", Response: response, ToolCall: &modelusage.ToolCall{ID: id, Name: "exec", Input: json.RawMessage(input)}}
+	}
+	huge := `{"content":"` + strings.Repeat("z", maxRedacted) + `"}`
+	conversation := modelusage.Conversation{Messages: []modelusage.Message{
+		{Role: "user", Text: "deploy it", Prompt: true},
+		call("c1", "r1", `{"cmd":"cat old.log"}`),
+		result("c1", maxRedacted/2),
+		call("c2", "r2", huge),
+		result("c2", maxRedacted/2),
+		call("c3", "r3", `{"cmd":"cat new.log"}`),
+	}}
+	context := conversationContext(conversation, true, "token=FAKEgoalsecret deploy", "c3", "exec", "text(1)", nil)
+	if context.Goal != "token=[REDACTED_SECRET] deploy" {
+		t.Fatalf("goal = %q", context.Goal)
+	}
+	history := context.History
+	if len(history) != 5 {
+		t.Fatalf("history = %d items", len(history))
+	}
+	// Newest first: the second result fits, the call before it, too large
+	// for what is left, and the older result are left out.
+	if got := history[4].Content; !strings.HasPrefix(got, "password=[REDACTED_SECRET] yyy") || len(got) > maxHistoryText {
+		t.Fatalf("newest result = %d bytes starting %.40q", len(got), got)
+	}
+	if string(history[3].ToolCalls[0].Input) != `"[...]"` || history[2].Content != leftOut {
+		t.Fatalf("older items = %.40q, %.40q", history[3].ToolCalls[0].Input, history[2].Content)
+	}
+	if string(history[1].ToolCalls[0].Input) != `{"cmd":"cat old.log"}` || history[0].Content != "deploy it" {
+		t.Fatalf("small items = %s, %q", history[1].ToolCalls[0].Input, history[0].Content)
+	}
+	data, _ := json.Marshal(context)
+	for _, secret := range []string{"FAKEc1secret", "FAKEc2secret", "FAKEgoalsecret"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("secret %q sent", secret)
+		}
 	}
 }
 
@@ -337,12 +408,12 @@ func BenchmarkHideAndReveal(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			b.SetBytes(int64(len(text)))
 			for b.Loop() {
-				hidden, found, ok := hideSecrets(text)
-				if !ok {
-					b.Fatal("hideSecrets failed")
+				hidden, found, err := hideSecrets(text)
+				if err != nil {
+					b.Fatal(err)
 				}
-				if _, ok := found.reveal(hidden); !ok {
-					b.Fatal("reveal failed")
+				if _, err := found.reveal(hidden, len(text)+1); err != nil {
+					b.Fatal(err)
 				}
 			}
 		})
