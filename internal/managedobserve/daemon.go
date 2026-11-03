@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/installation"
+	"github.com/kontext-security/kontext/internal/instancelock"
 	"github.com/kontext-security/kontext/internal/ledgerping"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedstream"
@@ -71,6 +73,63 @@ var (
 	}
 )
 
+// instanceLockWait covers a replacement that starts while the daemon it
+// replaces is still on its way out.
+var instanceLockWait = 5 * time.Second
+
+// holdInstanceLock keeps one daemon on a socket: a live holder of the lock
+// refuses the start, and so does anything still answering on the socket once the
+// lock is held. A daemon that was leaving has gone by now, so what answers is
+// staying, such as a daemon from a release that takes no lock.
+func holdInstanceLock(socketPath string, log diagnostic.Logger) (func(), error) {
+	release, err := takeInstanceLock(socketPath, log)
+	if err != nil {
+		return nil, err
+	}
+	if socketAnswers(socketPath, log) {
+		release()
+		return nil, fmt.Errorf("another process answers on %s", socketPath)
+	}
+	return release, nil
+}
+
+// socketAnswers reports whether something lives on the socket. A connect that
+// is accepted says yes, and so does one that waits or finds the queue full,
+// which is a busy daemon. Other failures read as no: a crash leaves the file
+// behind with nothing listening, and that must not keep the next daemon out.
+func socketAnswers(socketPath string, log diagnostic.Logger) bool {
+	conn, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		log.Printf("managed-observe socket check: %v\n", err)
+		return connectFailureMeansBusy(err)
+	}
+	_ = conn.Close()
+	return true
+}
+
+// connectFailureMeansBusy is true for a full queue as well: Go counts EAGAIN, the
+// answer on Linux, as a timeout.
+func connectFailureMeansBusy(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// takeInstanceLock returns a no-op if the lock can't be taken at all, such as in
+// a socket folder on a filesystem without file locks. The daemon then runs with
+// only the socket check, because with no daemon every hook fails open.
+func takeInstanceLock(socketPath string, log diagnostic.Logger) (func(), error) {
+	lock, err := instancelock.Acquire(instancelock.PathForSocket(socketPath), instanceLockWait)
+	if err == nil {
+		return lock.Release, nil
+	}
+	var held *instancelock.HeldError
+	if errors.As(err, &held) {
+		return nil, fmt.Errorf("another daemon serves %s: %w", socketPath, err)
+	}
+	logAlways(log, "managed-observe daemon running without its instance lock: %v\n", err)
+	return func() {}, nil
+}
+
 func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	binaryVersion := opts.BinaryVersion
 	if binaryVersion == "" {
@@ -101,6 +160,22 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err := requireManagedHooksForLegacyCowork(loadedConfig.Config, loadedConfig.Scope); err != nil {
 		return err
 	}
+	// Trimmed as the host trims it before it binds: this path names the lock too.
+	socketPath := strings.TrimSpace(opts.SocketPath)
+	if socketPath == "" {
+		socketPath = DefaultSocketPath()
+	}
+	if err := EnsureSocketDir(socketPath); err != nil {
+		return fmt.Errorf("prepare managed observe socket dir: %w", err)
+	}
+	// Before anything else that changes state: a second daemon must not migrate
+	// the config, open the store or take the socket over. The socket's folder
+	// comes first because the lock lives there, under that folder's owner check.
+	releaseInstance, err := holdInstanceLock(socketPath, opts.Diagnostic)
+	if err != nil {
+		return err
+	}
+	defer releaseInstance()
 	loadedConfig = migrateSelfServeModeToRemote(loadedConfig, opts.Diagnostic)
 	installationState, err := installation.EnsureFile(installationPathForScope(loadedConfig.Scope))
 	if err != nil {
@@ -129,13 +204,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		}
 	}
 
-	socketPath := opts.SocketPath
-	if socketPath == "" {
-		socketPath = DefaultSocketPath()
-	}
-	if err := EnsureSocketDir(socketPath); err != nil {
-		return fmt.Errorf("prepare managed observe socket dir: %w", err)
-	}
 	if err := cleanupStaleSessions(ctx, dbPath, idleTimeoutOrDefault(opts.IdleTimeout)); err != nil {
 		opts.Diagnostic.Printf("managed observe cleanup: %v\n", err)
 	}
