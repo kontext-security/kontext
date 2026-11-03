@@ -28,24 +28,41 @@ func Route(content string) string {
 	return ""
 }
 
+// The settings that route Codex's model traffic somewhere of their own.
+const (
+	SettingOpenAIBaseURL  = "openai_base_url"
+	SettingModelProvider  = "model_provider"
+	SettingChatGPTBaseURL = "chatgpt_base_url"
+)
+
+// A Blocker is a setting that routes Codex's model traffic somewhere of its
+// own, so Kontext leaves it alone.
+type Blocker struct {
+	// Setting is SettingOpenAIBaseURL, SettingModelProvider or
+	// SettingChatGPTBaseURL, or "" when nothing routes Codex.
+	Setting string
+	// Text says what is set, and where, for people.
+	Text string
+}
+
 // RouteBlocker says why Kontext must leave a config's model traffic alone, or
-// "" when it may route it: the person set openai_base_url, a model provider
-// other than OpenAI's, or a ChatGPT backend of their own.
-func RouteBlocker(content string) (string, error) {
+// nothing when it may route it: the person set openai_base_url, a model
+// provider other than OpenAI's, or a ChatGPT backend of their own.
+func RouteBlocker(content string) (Blocker, error) {
 	var config map[string]any
 	if _, err := toml.Decode(content, &config); err != nil {
-		return "", err
+		return Blocker{}, err
 	}
-	if _, set := config["openai_base_url"]; set && Route(content) == "" {
-		return "openai_base_url is set", nil
+	if _, set := config[SettingOpenAIBaseURL]; set && Route(content) == "" {
+		return Blocker{SettingOpenAIBaseURL, "openai_base_url is set"}, nil
 	}
-	if provider, set := config["model_provider"]; set && provider != "openai" {
-		return fmt.Sprintf("model_provider is %v", provider), nil
+	if provider, set := config[SettingModelProvider]; set && provider != "openai" {
+		return Blocker{SettingModelProvider, fmt.Sprintf("model_provider is %v", provider)}, nil
 	}
-	if backend, set := config["chatgpt_base_url"].(string); set && strings.TrimRight(backend, "/") != "https://chatgpt.com/backend-api" {
-		return "chatgpt_base_url is set", nil
+	if backend, set := config[SettingChatGPTBaseURL].(string); set && strings.TrimRight(backend, "/") != "https://chatgpt.com/backend-api" {
+		return Blocker{SettingChatGPTBaseURL, "chatgpt_base_url is set"}, nil
 	}
-	return "", nil
+	return Blocker{}, nil
 }
 
 // AddRoute returns content with Kontext's openai_base_url line set to url. The
@@ -55,8 +72,8 @@ func AddRoute(content, url string) (string, error) {
 	if _, err := toml.Decode(content, &before); err != nil {
 		return "", err
 	}
-	if blocker, err := RouteBlocker(content); err != nil || blocker != "" {
-		return "", fmt.Errorf("%w: %s", ErrRouteNotEditable, blocker)
+	if blocker, err := RouteBlocker(content); err != nil || blocker.Setting != "" {
+		return "", fmt.Errorf("%w: %s", ErrRouteNotEditable, blocker.Text)
 	}
 	if Route(content) == url {
 		return content, nil

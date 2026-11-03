@@ -106,6 +106,11 @@ type Options struct {
 	// LeaseGrace is how long the route outlives the daemon that last renewed
 	// it.
 	LeaseGrace time.Duration
+	// DisableReason is what Disable and Remove record as having taken the
+	// line away, for the daemon's next report (see Status.TakenAway):
+	// `kontext codex-proxy disable` sets ReasonDisabledLocally. A daemon
+	// reports what it changes itself, and sets none.
+	DisableReason string
 
 	GOOS string
 	// Launchctl runs launchctl and fails when it exits non-zero.
@@ -119,9 +124,9 @@ type Options struct {
 	// gets (see proxyVariables).
 	LookupEnv func(string) (string, bool)
 	// AdminRoute says which layer of Codex's configuration that an
-	// administrator manages routes Codex, or "" (see
+	// administrator manages routes Codex, if one does (see
 	// codexmanaged.AdminRouteBlocker), given the Codex home.
-	AdminRoute func(codexHome string) (string, error)
+	AdminRoute func(codexHome string) (codexmanaged.Blocker, error)
 	// CodexSince counts the person's Codex processes started before t.
 	CodexSince func(t time.Time) (int, error)
 	// ProcessStarted reports when process pid started, or false when none
@@ -144,8 +149,16 @@ type Status struct {
 	Routed bool
 	// Skipped says why Kontext leaves Codex's traffic alone, when it does.
 	Skipped string
-	Loaded  bool
-	Port    int
+	// Reason says why Codex is not routed, in the words the daemon reports
+	// (see ReasonMacOSOnly and the others), whenever Enable leaves it so.
+	Reason string
+	// TakenAway is why something other than a daemon took the line away
+	// since a daemon's Enable last looked: the proxy job, Codex's session
+	// start hook, or `kontext codex-proxy disable`. Enable reports each
+	// take-away once, whatever else it finds.
+	TakenAway string
+	Loaded    bool
+	Port      int
 	// Answering reports that the proxy answers on the port Codex is routed
 	// to; a route without it leaves Codex retrying forever.
 	Answering bool
@@ -177,6 +190,9 @@ type state struct {
 	// Unreachable is when the job last could not reach OpenAI: Codex stays
 	// routed directly for unreachableWait after.
 	Unreachable time.Time `json:"unreachable,omitzero"`
+	// TakenAway is why something other than a daemon last took the line
+	// away, until a daemon's Enable hears of it (see Status.TakenAway).
+	TakenAway string `json:"takenAway,omitempty"`
 }
 
 // holder is a daemon's hold on the route: it lasts while that daemon runs,
@@ -278,30 +294,42 @@ func (r *Router) lock() (func(), error) {
 // themselves, or an administrator does in a layer of Codex's configuration.
 func (r *Router) Enable(ctx context.Context) (Status, error) {
 	if r.opts.GOOS != "darwin" {
-		return Status{Skipped: "the Codex proxy runs on macOS only"}, nil
+		return Status{Skipped: "the Codex proxy runs on macOS only", Reason: ReasonMacOSOnly}, nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	config, err := readConfig(r.configPath())
 	if err != nil {
-		return Status{}, err
+		return Status{Reason: configReason(err)}, err
 	}
-	if skip := r.skip(config.content); skip != "" {
-		return Status{Skipped: skip}, r.unrouteLocked()
+	if skip := r.skip(config.content); skip.reason != "" {
+		return Status{Skipped: skip.text, Reason: skip.reason}, r.unrouteLocked("")
 	}
 	unlock, err := r.lock()
 	if err != nil {
-		return Status{}, err
+		return Status{Reason: ReasonRouteError}, err
 	}
 	defer unlock()
 	// The proxy job may have taken the line away meanwhile.
 	if config, err = readConfig(r.configPath()); err != nil {
-		return Status{}, err
+		return Status{Reason: configReason(err)}, err
 	}
 	st := r.loadState()
+	// A take-away goes to the daemon once: it is gone from route.json before
+	// anything else can fail.
+	takenAway := st.TakenAway
+	if takenAway != "" {
+		st.TakenAway = ""
+		if err := r.saveState(st); err != nil {
+			return Status{Reason: ReasonRouteError}, err
+		}
+	}
+	failed := func(reason string, err error) (Status, error) {
+		return Status{Reason: reason, TakenAway: takenAway}, err
+	}
 	token, err := r.ensureToken()
 	if err != nil {
-		return Status{}, err
+		return failed(ReasonProxyInstallFailed, err)
 	}
 	// The line Codex reads names the job: keep its port and token, so every
 	// Codex process that read it keeps reaching the proxy.
@@ -309,40 +337,40 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 	if routed {
 		if routedToken != token {
 			if err := writePrivate(r.opts.StateDir, TokenPath(r.opts.StateDir), []byte(routedToken+"\n")); err != nil {
-				return Status{}, err
+				return failed(ReasonProxyInstallFailed, err)
 			}
 			token = routedToken
 		}
 		st.Port = port
 	} else if skip := r.holdOff(st); skip != "" {
-		return Status{Skipped: skip}, nil
+		return Status{Skipped: skip, Reason: ReasonUpstreamUnreachable, TakenAway: takenAway}, nil
 	}
 	if st.Port == 0 {
 		if st.Port, err = r.opts.FreePort(); err != nil {
-			return Status{}, err
+			return failed(ReasonRouteError, err)
 		}
 	}
 	if err := r.ensureBinary(&st); err != nil {
 		if routed {
-			return Status{}, errors.Join(err, r.unroute())
+			return failed(ReasonProxyInstallFailed, errors.Join(err, r.unroute("")))
 		}
-		return Status{}, err
+		return failed(ReasonProxyInstallFailed, err)
 	}
 	// The hold comes before the line, which the proxy job would otherwise
 	// find unheld and take away.
 	st.Holder = r.holder()
 	if err := r.saveState(st); err != nil {
-		return Status{}, err
+		return failed(ReasonRouteError, err)
 	}
 	if err := r.ensureJob(ctx, st.Port); err != nil {
 		if routed {
 			// Codex must never be left calling a port nobody holds.
-			return Status{}, errors.Join(fmt.Errorf("codex proxy job not loaded: %w", err), r.unroute())
+			return failed(ReasonProxyJobNotLoaded, errors.Join(fmt.Errorf("codex proxy job not loaded: %w", err), r.unroute("")))
 		}
 		// Nothing reads this port yet: the next try takes a new one.
 		st.Port, st.Holder = 0, nil
 		_ = r.saveState(st)
-		return Status{}, err
+		return failed(ReasonProxyJobNotLoaded, err)
 	}
 	if err := r.opts.Health(ctx, st.Port, token); err != nil {
 		if !routed {
@@ -351,18 +379,19 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 			_ = r.unloadJob(ctx)
 			st.Port, st.Holder = 0, nil
 			_ = r.saveState(st)
-			return Status{}, fmt.Errorf("codex proxy did not answer on its port: %w", err)
+			return failed(ReasonProxyNotAnswering, fmt.Errorf("codex proxy did not answer on its port: %w", err))
 		}
 		// Codex reads this port: the job stays, since launchd starts the
 		// proxy on demand, and the route goes only after several misses.
 		if st.Failures++; st.Failures < maxHealthFailures {
 			_ = r.saveState(st)
-			return Status{}, fmt.Errorf("codex proxy did not answer on its port (%d in a row): %w", st.Failures, err)
+			return Status{Routed: true, Loaded: true, Port: st.Port, TakenAway: takenAway},
+				fmt.Errorf("codex proxy did not answer on its port (%d in a row): %w", st.Failures, err)
 		}
 		st.Failures = 0
 		_ = r.saveState(st)
-		return Status{}, errors.Join(fmt.Errorf("codex proxy did not answer %d times in a row, so Codex is routed directly again: %w",
-			maxHealthFailures, err), r.unroute())
+		return failed(ReasonProxyNotAnswering, errors.Join(fmt.Errorf("codex proxy did not answer %d times in a row, so Codex is routed directly again: %w",
+			maxHealthFailures, err), r.unroute("")))
 	}
 	if !routed {
 		// The health check never leaves the Mac. Before Codex depends on the
@@ -376,16 +405,16 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 				st.Unreachable = r.opts.Now()
 			}
 			_ = r.saveState(st)
-			return Status{}, fmt.Errorf("codex proxy could not reach OpenAI: %w", err)
+			return failed(ReasonUpstreamUnreachable, fmt.Errorf("codex proxy could not reach OpenAI: %w", err))
 		}
 	}
 	// The config may have changed while the job started, by hand or by a
 	// hook repair: the line goes into the file as it is now.
 	if config, err = readConfig(r.configPath()); err != nil {
-		return Status{}, err
+		return failed(configReason(err), err)
 	}
-	if skip := r.skip(config.content); skip != "" {
-		return Status{Skipped: skip}, r.unroute()
+	if skip := r.skip(config.content); skip.reason != "" {
+		return Status{Skipped: skip.text, Reason: skip.reason, TakenAway: takenAway}, r.unroute("")
 	}
 	// The file is to hold the token: keep it from other users before it does,
 	// and route nothing while that fails.
@@ -393,9 +422,9 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 		if err := os.Chmod(config.path, config.mode&^0o077); err != nil {
 			err = fmt.Errorf("keep %s from other users: %w", config.path, err)
 			if routed {
-				return Status{}, errors.Join(err, r.unroute())
+				return failed(ReasonCodexConfigPermissions, errors.Join(err, r.unroute("")))
 			}
-			return Status{}, err
+			return failed(ReasonCodexConfigPermissions, err)
 		}
 		if st.ConfigMode == 0 {
 			st.ConfigMode = uint32(config.mode)
@@ -403,21 +432,22 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 	}
 	next, err := codexmanaged.AddRoute(config.content, BaseURL(st.Port, token))
 	if err != nil {
-		return Status{}, err
+		return failed(addRouteReason(err), err)
 	}
 	if next != config.content {
 		if err := config.write(next); err != nil {
-			return Status{}, err
+			return failed(configReason(err), err)
 		}
 		if !config.exists {
 			st.CreatedConfig = true
 		}
 	}
+	routedNow := Status{Routed: true, Loaded: true, Answering: true, Port: st.Port, TakenAway: takenAway}
 	st.UnroutedAt, st.Failures, st.Unreachable = time.Time{}, 0, time.Time{}
 	if err := r.saveState(st); err != nil {
-		return Status{}, err
+		return routedNow, err
 	}
-	return Status{Routed: true, Loaded: true, Answering: true, Port: st.Port}, nil
+	return routedNow, nil
 }
 
 // Disable takes the config line away, so new Codex threads call OpenAI
@@ -430,12 +460,12 @@ func (r *Router) Disable(context.Context) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.unrouteLocked()
+	return r.unrouteLocked(r.opts.DisableReason)
 }
 
 // unrouteLocked is unroute under the lock, which it takes only when there is
 // a line to take away.
-func (r *Router) unrouteLocked() error {
+func (r *Router) unrouteLocked(takenAway string) error {
 	config, err := readConfig(r.configPath())
 	if err != nil || codexmanaged.Route(config.content) == "" {
 		return err
@@ -445,7 +475,7 @@ func (r *Router) unrouteLocked() error {
 		return err
 	}
 	defer unlock()
-	return r.unroute()
+	return r.unroute(takenAway)
 }
 
 // Renew renews the daemon's hold on the route while Codex is routed; the
@@ -497,7 +527,7 @@ func (r *Router) Held(context.Context) (bool, error) {
 	if r.held(r.loadState().Holder) {
 		return true, nil
 	}
-	return false, r.unroute()
+	return false, r.unroute(ReasonDaemonStopped)
 }
 
 // Unreachable takes the config line away for the proxy job, whose requests
@@ -527,7 +557,7 @@ func (r *Router) Unreachable(context.Context) (bool, error) {
 	if err := r.saveState(st); err != nil {
 		return false, err
 	}
-	if err := r.unroute(); err != nil {
+	if err := r.unroute(ReasonUpstreamUnreachable); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -573,7 +603,7 @@ func (r *Router) UnrouteUnanswered(ctx context.Context) (bool, error) {
 	if config, err = readConfig(r.configPath()); err != nil || codexmanaged.Route(config.content) != route {
 		return false, err
 	}
-	if err := r.unroute(); err != nil {
+	if err := r.unroute(ReasonProxyDownAtSessionStart); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -616,9 +646,9 @@ func (r *Router) held(h *holder) bool {
 	return r.opts.Now().Before(h.Until)
 }
 
-// unroute takes the config line away and notes when. r.mu and the lock must
-// be held.
-func (r *Router) unroute() error {
+// unroute takes the config line away and notes when, and, unless it is
+// "", what took it (see Status.TakenAway). r.mu and the lock must be held.
+func (r *Router) unroute(takenAway string) error {
 	config, err := readConfig(r.configPath())
 	if err != nil || codexmanaged.Route(config.content) == "" {
 		return err
@@ -641,6 +671,9 @@ func (r *Router) unroute() error {
 		return err
 	}
 	st.UnroutedAt, st.ConfigMode, st.Holder = r.opts.Now(), 0, nil
+	if takenAway != "" {
+		st.TakenAway = takenAway
+	}
 	return r.saveState(st)
 }
 
@@ -683,6 +716,8 @@ func (r *Router) Drain(ctx context.Context) (bool, error) {
 // Remove takes everything away for uninstall, in order: the config line;
 // then, once the Codex processes that may have read it are gone or wait runs
 // out, the job and the proxy's state. It returns how many of them were left.
+// Of the state, only what took the line away stays, when Options has a
+// DisableReason.
 func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 	if r.opts.GOOS != "darwin" {
 		return 0, nil
@@ -703,9 +738,10 @@ func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 		return 0, err
 	}
 	defer unlock()
-	if err := r.unroute(); err != nil {
+	if err := r.unroute(r.opts.DisableReason); err != nil {
 		return 0, err
 	}
+	takenAway := r.loadState().TakenAway
 	deadline := r.opts.Now().Add(wait)
 	left, err := r.draining()
 	for err == nil && left > 0 && r.opts.Now().Before(deadline) {
@@ -722,7 +758,12 @@ func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 	if err := r.removeJob(ctx); err != nil {
 		return left, err
 	}
-	return left, os.RemoveAll(r.opts.StateDir)
+	if err := os.RemoveAll(r.opts.StateDir); err != nil || takenAway == "" || r.opts.DisableReason == "" {
+		return left, err
+	}
+	// The daemon, which routes Codex again while its switch is on, hears of
+	// the take-away at its next Enable.
+	return left, r.saveState(state{TakenAway: takenAway})
 }
 
 // Status reports the route as it stands, changing nothing.
@@ -747,7 +788,7 @@ func (r *Router) Status(ctx context.Context) Status {
 		status.Answering = st.Port != 0 && route == BaseURL(st.Port, token) && r.opts.Health(ctx, st.Port, token) == nil
 		status.Held = r.held(st.Holder)
 	} else {
-		status.Skipped = r.skip(config.content)
+		status.Skipped = r.skip(config.content).text
 		if status.Skipped == "" {
 			status.Skipped = r.holdOff(st)
 		}
@@ -758,22 +799,29 @@ func (r *Router) Status(ctx context.Context) Status {
 	return status
 }
 
-// skip says why Codex's traffic stays as it is, or "": the person routes it in
-// config, or an administrator does in a layer of their own, or such a layer
-// cannot be read. How Codex is signed in never matters: the proxy sends each
-// request where its credentials belong.
-func (r *Router) skip(config string) string {
+// skipped is why Codex's traffic stays as it is: a Reason, and what to tell
+// people.
+type skipped struct{ reason, text string }
+
+// skip says why Codex's traffic stays as it is, or nothing: the person routes
+// it in config, or an administrator does in a layer of their own, or such a
+// layer cannot be read. How Codex is signed in never matters: the proxy sends
+// each request where its credentials belong.
+func (r *Router) skip(config string) skipped {
 	blocker, err := codexmanaged.RouteBlocker(config)
 	if err != nil {
-		return "~/.codex/config.toml does not parse"
+		return skipped{ReasonCodexConfigUnparseable, "~/.codex/config.toml does not parse"}
 	}
-	if blocker != "" {
-		return blocker
+	if blocker.Setting != "" {
+		return skipped{settingReasons[blocker.Setting].user, blocker.Text}
 	}
 	if blocker, err = r.opts.AdminRoute(filepath.Dir(r.configPath())); err != nil {
-		return "Codex's administrator configuration cannot be read: " + err.Error()
+		return skipped{ReasonAdminConfigUnreadable, "Codex's administrator configuration cannot be read: " + err.Error()}
 	}
-	return blocker
+	if blocker.Setting != "" {
+		return skipped{settingReasons[blocker.Setting].admin, blocker.Text}
+	}
+	return skipped{}
 }
 
 // draining counts the Codex processes that may still call the job. r.mu must

@@ -81,9 +81,9 @@ func codexProxyCmd() *cobra.Command {
 				decider := codexproxy.SocketDecider{Client: localruntime.NewClient(socketPath)}
 				rewriter = codexproxy.NewRewriter(decider, store, codexproxy.DecideWait)
 			}
-			held, unreachable := jobRoute(home, stateDir, logger)
+			held, unreachable, count := jobRoute(home, stateDir, logger)
 			server, err := codexproxy.New(codexproxy.Options{Upstream: upstreamURL, APIUpstream: apiUpstreamURL, Token: token, Rewriter: rewriter,
-				Held: held, Unreachable: unreachable, Logf: logger.Printf})
+				Held: held, Unreachable: unreachable, Count: count, Logf: logger.Printf})
 			if err != nil {
 				return err
 			}
@@ -122,16 +122,36 @@ func codexProxyCmd() *cobra.Command {
 }
 
 // jobRoute asks, for the job, whether a daemon still holds the Codex route
-// in home, which goes once none does (see codexroute.Router.Held), and takes
-// the route away once the job's requests cannot reach the upstream (see
-// codexroute.Router.Unreachable). A proxy run by hand serves no route, and
-// asks nothing.
-func jobRoute(home, stateDir string, logger *log.Logger) (func(context.Context) bool, func(context.Context)) {
+// in home, which goes once none does (see codexroute.Router.Held), takes the
+// route away once the job's requests cannot reach the upstream (see
+// codexroute.Router.Unreachable), and counts what the daemon reports about
+// it (see codexroute.Router.Count). A proxy run by hand serves no route, and
+// asks and counts nothing.
+func jobRoute(home, stateDir string, logger *log.Logger) (func(context.Context) bool, func(context.Context), func(codexproxy.Counts)) {
 	if home == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	router := codexroute.New(codexroute.Options{Home: home, StateDir: stateDir})
-	return reportHeld(router.Held, logger.Printf), reportUnreachable(router.Unreachable, logger.Printf)
+	return reportHeld(router.Held, logger.Printf), reportUnreachable(router.Unreachable, logger.Printf), reportCount(router.Count, logger.Printf)
+}
+
+// reportCount counts with count, and logs each failure that differs from the
+// last, so a counter file that cannot be written says so once.
+func reportCount(count func(codexproxy.Counts) error, logf func(string, ...any)) func(codexproxy.Counts) {
+	var mu sync.Mutex
+	last := ""
+	return func(counts codexproxy.Counts) {
+		failure := ""
+		if err := count(counts); err != nil {
+			failure = err.Error()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if failure != "" && failure != last {
+			logf("Codex route counts not kept: %s", failure)
+		}
+		last = failure
+	}
 }
 
 // reportUnreachable takes the route away with unreachable once requests
@@ -173,13 +193,15 @@ func reportHeld(ask func(context.Context) (bool, error), logf func(string, ...an
 	}
 }
 
+// codexRouter is the router of the person's own commands: a line they take
+// away reaches the daemon's next report as disabled here.
 func codexRouter() (*codexroute.Router, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 	return codexroute.New(codexroute.Options{Home: home, StateDir: codexroute.StateDir(managedobserve.DefaultDBPath()),
-		Socket: managedobserve.DefaultSocketPath()}), nil
+		Socket: managedobserve.DefaultSocketPath(), DisableReason: codexroute.ReasonDisabledLocally}), nil
 }
 
 func codexProxyStatusCmd() *cobra.Command {

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/codexproxy"
 	"github.com/kontext-security/kontext/internal/codexroute"
 	"github.com/kontext-security/kontext/internal/diagnostic"
@@ -142,10 +143,10 @@ func TestCodexProxyAnswerKeepsPartsPastTheProxysDeadline(t *testing.T) {
 // Where Codex's route stands reaches the daemon's log with debug output off,
 // since routing edits ~/.codex/config.toml: once when the switch first
 // arrives, and again only when that changes.
-func TestCodexRoutingLogsWhereTheRouteStands(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("the router locks the route and copies the binary on macOS and Linux only")
-	}
+// testRouter is a daemon's router for a home of its own, with launchd and the
+// proxy's checks faked, and the home.
+func testRouter(t *testing.T) (*codexroute.Router, string) {
+	t.Helper()
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
 		t.Fatal(err)
@@ -160,7 +161,7 @@ func TestCodexRoutingLogsWhereTheRouteStands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer binary.Close()
+	t.Cleanup(func() { binary.Close() })
 	var mu sync.Mutex
 	loaded := false
 	launchctl := func(_ context.Context, args ...string) error {
@@ -182,9 +183,17 @@ func TestCodexRoutingLogsWhereTheRouteStands(t *testing.T) {
 		Socket: filepath.Join(home, "kontext.sock"), GOOS: "darwin", Launchctl: launchctl,
 		Health:     func(context.Context, int, string) error { return nil },
 		Reach:      func(context.Context, int, string) error { return nil },
-		AdminRoute: func(string) (string, error) { return "", nil },
+		AdminRoute: func(string) (codexmanaged.Blocker, error) { return codexmanaged.Blocker{}, nil },
 		CodexSince: func(time.Time) (int, error) { return 0, nil },
 		FreePort:   func() (int, error) { return 49321, nil }})
+	return router, home
+}
+
+func TestCodexRoutingLogsWhereTheRouteStands(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("the router locks the route and copies the binary on macOS and Linux only")
+	}
+	router, _ := testRouter(t)
 
 	stderr, err := os.CreateTemp(t.TempDir(), "stderr")
 	if err != nil {
@@ -193,7 +202,7 @@ func TestCodexRoutingLogsWhereTheRouteStands(t *testing.T) {
 	previous := os.Stderr
 	os.Stderr = stderr
 	defer func() { os.Stderr = previous; stderr.Close() }()
-	c := &codexRouting{router: router, diagnostic: diagnostic.New(io.Discard, false), switched: make(chan bool, 1)}
+	c := &codexRouting{router: router, diagnostic: diagnostic.New(io.Discard, false), switched: make(chan string, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { c.run(ctx); close(done) }()
@@ -207,11 +216,11 @@ func TestCodexRoutingLogsWhereTheRouteStands(t *testing.T) {
 		}
 	}
 
-	c.switched <- true
-	c.switched <- true
-	c.switched <- false
-	log := logged("codex proxy: not routed: switch off\n")
-	if log != "codex proxy: routed through 127.0.0.1:49321\ncodex proxy: not routed: switch off\n" {
+	c.switched <- ""
+	c.switched <- ""
+	c.switched <- codexroute.ReasonCompactionOff
+	log := logged("codex proxy: not routed: switch off (compaction_off)\n")
+	if log != "codex proxy: routed through 127.0.0.1:49321\ncodex proxy: not routed: switch off (compaction_off)\n" {
 		t.Fatalf("log:\n%s", log)
 	}
 }

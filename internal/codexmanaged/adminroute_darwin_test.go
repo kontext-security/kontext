@@ -47,7 +47,7 @@ func TestManagedPreferencesAreReadAsMDMWritesThem(t *testing.T) {
 	if err != nil || len(preferences) != 2 || len(preferences[0]) != 0 || preferences[1]["requirements_toml_base64"] != requirements {
 		t.Fatalf("readManagedPreferences = %v, %v", preferences, err)
 	}
-	if blocker, err := AdminRouteBlocker(codexHome); err != nil || blocker != "the managed preference com.openai.codex requirements_toml_base64 sets model_provider" {
-		t.Fatalf("AdminRouteBlocker = %q, %v", blocker, err)
+	if blocker, err := AdminRouteBlocker(codexHome); err != nil || blocker != (Blocker{SettingModelProvider, "the managed preference com.openai.codex requirements_toml_base64 sets model_provider"}) {
+		t.Fatalf("AdminRouteBlocker = %+v, %v", blocker, err)
 	}
 }

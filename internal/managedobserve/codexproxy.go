@@ -17,22 +17,26 @@ import (
 	"github.com/kontext-security/kontext/internal/tooloutput"
 )
 
-// codexRouting follows the endpoint's switch with the Codex route, away from
-// the refresher: while a confirmed configuration has the switch on, Codex's
-// model traffic goes through the proxy; once one has it off, the route goes,
-// and the proxy job after it, once Codex has drained. An unconfirmed
-// configuration changes nothing, so an unreachable API never churns the
-// person's Codex config.
+// codexRouting follows the endpoint's switches with the Codex route, away
+// from the refresher: while a confirmed configuration has both tool output
+// compaction and the Codex proxy on, Codex's model traffic goes through the
+// proxy; once one has either off, the route goes, and the proxy job after it,
+// once Codex has drained. An unconfirmed configuration changes nothing, so an
+// unreachable API never churns the person's Codex config. Where the route
+// stands goes to the Kontext API (see codexReports).
 type codexRouting struct {
 	router     *codexroute.Router
 	diagnostic diagnostic.Logger
-	// switched carries the latest confirmed switch; only the latest counts.
-	switched chan bool
+	// switched carries why the latest confirmed configuration has the route
+	// off, or "" when it has it on; only the latest counts.
+	switched chan string
+	reports  *codexReports
 }
 
-// newCodexRouting returns the daemon's Codex routing, or nil (which does
-// nothing) for a daemon whose home is not a person's.
-func newCodexRouting(dbPath, socketPath string, diag diagnostic.Logger) *codexRouting {
+// newCodexRouting returns the daemon's Codex routing, which reports with
+// send, or nil (which does nothing) for a daemon whose home is not a
+// person's.
+func newCodexRouting(dbPath, socketPath string, diag diagnostic.Logger, send func(context.Context, codexReport) error) *codexRouting {
 	home, err := os.UserHomeDir()
 	if err != nil || os.Getuid() == 0 {
 		return nil
@@ -50,10 +54,12 @@ func newCodexRouting(dbPath, socketPath string, diag diagnostic.Logger) *codexRo
 			return nil
 		}
 	}
+	router := codexroute.New(codexroute.Options{Home: home, Binary: binary, StateDir: codexroute.StateDir(dbPath), Socket: socketPath})
 	return &codexRouting{
-		router:     codexroute.New(codexroute.Options{Home: home, Binary: binary, StateDir: codexroute.StateDir(dbPath), Socket: socketPath}),
+		router:     router,
 		diagnostic: diag,
-		switched:   make(chan bool, 1),
+		switched:   make(chan string, 1),
+		reports:    &codexReports{send: send, router: router, diagnostic: diag, now: time.Now},
 	}
 }
 
@@ -61,12 +67,20 @@ func (c *codexRouting) follow(snapshot endpointconfig.Snapshot) {
 	if c == nil || !snapshot.Confirmed {
 		return
 	}
-	on := snapshot.Config.ToolOutputCompactionEnabled()
+	// With both switches off, compaction's is the reason: the Codex proxy
+	// has no use without it.
+	off := ""
+	switch {
+	case !snapshot.Config.ToolOutputCompactionEnabled():
+		off = codexroute.ReasonCompactionOff
+	case !snapshot.Config.CodexProxyEnabled():
+		off = codexroute.ReasonCodexProxyOff
+	}
 	select {
 	case <-c.switched:
 	default:
 	}
-	c.switched <- on
+	c.switched <- off
 }
 
 func (c *codexRouting) run(ctx context.Context) {
@@ -96,43 +110,58 @@ func (c *codexRouting) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case on := <-c.switched:
-			now := c.apply(ctx, on)
+		case off := <-c.switched:
+			now, states := c.apply(ctx, off)
 			if now != last {
 				diagnostic.LogAlways(c.diagnostic, "codex proxy: %s\n", now)
 				last = now
 			}
+			c.reports.add(ctx, states...)
 		case <-ticker.C:
 			renew()
+			c.reports.tick(ctx)
 		}
 	}
 }
 
-// apply routes or unroutes Codex, drains the job when Codex is not routed to
-// it, and describes where that left it.
-func (c *codexRouting) apply(ctx context.Context, on bool) string {
+// apply routes Codex, or unroutes it for off, drains the job when Codex is
+// not routed to it, and describes where that left it: for the log, and as
+// the states to report, a take-away it found first.
+func (c *codexRouting) apply(ctx context.Context, off string) (string, []routeState) {
 	var result string
-	if on {
+	var states []routeState
+	if off == "" {
 		status, err := c.router.Enable(ctx)
-		switch {
-		case err != nil:
-			result = fmt.Sprintf("not routed: %v", err)
-		case status.Skipped != "":
-			result = "not routed: " + status.Skipped
-		default:
-			return fmt.Sprintf("routed through 127.0.0.1:%d", status.Port)
+		if status.TakenAway != "" {
+			states = append(states, routeState{codexTakenAway, status.TakenAway})
 		}
-	} else if err := c.router.Disable(ctx); err != nil {
-		result = fmt.Sprintf("route not removed: %v", err)
+		if status.Routed {
+			states = append(states, routeState{state: codexRouted})
+			if err != nil {
+				return fmt.Sprintf("routed through 127.0.0.1:%d, but %v", status.Port, err), states
+			}
+			return fmt.Sprintf("routed through 127.0.0.1:%d", status.Port), states
+		}
+		states = append(states, routeState{codexNotRouted, status.Reason})
+		if err != nil {
+			result = fmt.Sprintf("not routed: %v", err)
+		} else {
+			result = "not routed: " + status.Skipped
+		}
 	} else {
-		result = "not routed: switch off"
+		states = append(states, routeState{codexNotRouted, off})
+		if err := c.router.Disable(ctx); err != nil {
+			result = fmt.Sprintf("route not removed: %v", err)
+		} else {
+			result = "not routed: switch off (" + off + ")"
+		}
 	}
 	if drained, err := c.router.Drain(ctx); err != nil {
 		result += fmt.Sprintf("; drain: %v", err)
 	} else if !drained {
 		result += "; job kept for running Codex sessions"
 	}
-	return result
+	return result, states
 }
 
 // decideSlack is how long before the proxy's deadline the daemon stops, for

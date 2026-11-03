@@ -67,8 +67,8 @@ func cloudCache(t *testing.T, version int, config, requirements map[string]strin
 // layers that leave Codex's model traffic as OpenAI sends it.
 func TestNoAdministratorLayerRoutesCodex(t *testing.T) {
 	system, codexHome, preferences := adminLayers(t)
-	if blocker, err := AdminRouteBlocker(codexHome); err != nil || blocker != "" {
-		t.Fatalf("AdminRouteBlocker without layers = %q, %v", blocker, err)
+	if blocker, err := AdminRouteBlocker(codexHome); err != nil || blocker != (Blocker{}) {
+		t.Fatalf("AdminRouteBlocker without layers = %+v, %v", blocker, err)
 	}
 	writeLayer(t, filepath.Join(system, "config.toml"), "model_provider = \"openai\"\nchatgpt_base_url = \"https://chatgpt.com/backend-api/\"\n")
 	writeLayer(t, filepath.Join(system, "requirements.toml"), "allowed_approval_policies = [\"on-request\"]\n# Requirements have no openai_base_url.\nopenai_base_url = \"https://gateway.example/v1\"\n")
@@ -77,8 +77,8 @@ func TestNoAdministratorLayerRoutesCodex(t *testing.T) {
 		map[string]string{"Defaults": "model = \"gpt-6.1-sol\"\n"}, map[string]string{"Policy": "allowed_sandbox_modes = [\"read-only\"]\n"}))
 	preferences(map[string]string{"config_toml_base64": base64.StdEncoding.EncodeToString([]byte("model = \"gpt-6.1-sol\"\n")),
 		"unrelated": "value"})
-	if blocker, err := AdminRouteBlocker(codexHome); err != nil || blocker != "" {
-		t.Fatalf("AdminRouteBlocker = %q, %v", blocker, err)
+	if blocker, err := AdminRouteBlocker(codexHome); err != nil || blocker != (Blocker{}) {
+		t.Fatalf("AdminRouteBlocker = %+v, %v", blocker, err)
 	}
 }
 
@@ -133,8 +133,9 @@ func TestEachAdministratorLayerThatRoutesCodexBlocks(t *testing.T) {
 			system, codexHome, preferences := adminLayers(t)
 			layer.write(t, system, codexHome, preferences)
 			want := strings.ReplaceAll(layer.want, "{system}", system)
-			if blocker, err := AdminRouteBlocker(codexHome); err != nil || blocker != want {
-				t.Fatalf("AdminRouteBlocker = %q, %v; want %q", blocker, err, want)
+			// The setting is what the text ends with.
+			if blocker, err := AdminRouteBlocker(codexHome); err != nil || blocker.Text != want || !strings.HasSuffix(want, " sets "+blocker.Setting) {
+				t.Fatalf("AdminRouteBlocker = %+v, %v; want %q", blocker, err, want)
 			}
 		})
 	}
@@ -173,8 +174,8 @@ func TestAnAdministratorLayerKontextCannotReadBlocks(t *testing.T) {
 		t.Run(layer.name, func(t *testing.T) {
 			system, codexHome, preferences := adminLayers(t)
 			layer.write(t, system, codexHome, preferences)
-			if blocker, err := AdminRouteBlocker(codexHome); err == nil || blocker != "" || !strings.Contains(err.Error(), layer.want) {
-				t.Fatalf("AdminRouteBlocker = %q, %v; want an error naming %q", blocker, err, layer.want)
+			if blocker, err := AdminRouteBlocker(codexHome); err == nil || blocker != (Blocker{}) || !strings.Contains(err.Error(), layer.want) {
+				t.Fatalf("AdminRouteBlocker = %+v, %v; want an error naming %q", blocker, err, layer.want)
 			}
 		})
 	}

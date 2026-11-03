@@ -62,15 +62,15 @@ var (
 )
 
 // AdminRouteBlocker says which layer of Codex's configuration that an
-// administrator manages routes Codex's model traffic, or "" when none does:
-// one that sets openai_base_url, a model_provider other than OpenAI's, or a
-// chatgpt_base_url of its own. codexHome is where Codex caches its
+// administrator manages routes Codex's model traffic, or nothing when none
+// does: one that sets openai_base_url, a model_provider other than OpenAI's,
+// or a chatgpt_base_url of its own. codexHome is where Codex caches its
 // cloud-managed config. A layer that cannot be read or parsed is an error,
 // since it might route Codex.
-func AdminRouteBlocker(codexHome string) (string, error) {
+func AdminRouteBlocker(codexHome string) (Blocker, error) {
 	dir, err := codexSystemDir()
 	if err != nil {
-		return "", err
+		return Blocker{}, err
 	}
 	for _, file := range []struct {
 		name         string
@@ -82,20 +82,20 @@ func AdminRouteBlocker(codexHome string) (string, error) {
 			continue
 		}
 		if err != nil {
-			return "", err
+			return Blocker{}, err
 		}
 		setting, err := routeSetting(string(data), file.requirements)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", path, err)
+			return Blocker{}, fmt.Errorf("%s: %w", path, err)
 		}
 		if setting != "" {
-			return path + " sets " + setting, nil
+			return Blocker{setting, path + " sets " + setting}, nil
 		}
 	}
 
 	preferences, err := managedPreferences()
 	if err != nil {
-		return "", err
+		return Blocker{}, err
 	}
 	for _, values := range preferences {
 		for _, key := range []struct {
@@ -112,39 +112,40 @@ func AdminRouteBlocker(codexHome string) (string, error) {
 				setting, err = routeSetting(string(content), key.requirements)
 			}
 			if err != nil {
-				return "", fmt.Errorf("managed preference %s %s: %w", codexPreferenceDomain, key.name, err)
+				return Blocker{}, fmt.Errorf("managed preference %s %s: %w", codexPreferenceDomain, key.name, err)
 			}
 			if setting != "" {
-				return fmt.Sprintf("the managed preference %s %s sets %s", codexPreferenceDomain, key.name, setting), nil
+				return Blocker{setting, fmt.Sprintf("the managed preference %s %s sets %s", codexPreferenceDomain, key.name, setting)}, nil
 			}
 		}
 	}
 
 	caches, err := filepath.Glob(filepath.Join(codexHome, "managed-config-*.json"))
 	if err != nil {
-		return "", err
+		return Blocker{}, err
 	}
 	for _, path := range append([]string{filepath.Join(codexHome, "cloud-config-bundle-cache.json")}, caches...) {
-		setting, err := cloudRouteSetting(path)
+		blocker, err := cloudRouteBlocker(path)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", path, err)
+			return Blocker{}, fmt.Errorf("%s: %w", path, err)
 		}
-		if setting != "" {
-			return "the cloud-managed " + setting, nil
+		if blocker.Setting != "" {
+			blocker.Text = "the cloud-managed " + blocker.Text
+			return blocker, nil
 		}
 	}
-	return "", nil
+	return Blocker{}, nil
 }
 
-// cloudRouteSetting reads a cloud-managed config cache Codex wrote, and names
+// cloudRouteBlocker reads a cloud-managed config cache Codex wrote, and names
 // the fragment that routes Codex's model traffic, if one does.
-func cloudRouteSetting(path string) (string, error) {
+func cloudRouteBlocker(path string) (Blocker, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
+		return Blocker{}, nil
 	}
 	if err != nil {
-		return "", err
+		return Blocker{}, err
 	}
 	type fragment struct {
 		Name     string `json:"name"`
@@ -164,10 +165,10 @@ func cloudRouteSetting(path string) (string, error) {
 		} `json:"signed_payload"`
 	}
 	if err := json.Unmarshal(data, &cache); err != nil {
-		return "", err
+		return Blocker{}, err
 	}
 	if version := cache.SignedPayload.Version; version != cloudConfigCacheVersion {
-		return "", fmt.Errorf("cache version %d, not %d", version, cloudConfigCacheVersion)
+		return Blocker{}, fmt.Errorf("cache version %d, not %d", version, cloudConfigCacheVersion)
 	}
 	bundle := cache.SignedPayload.Bundle
 	for _, layer := range []struct {
@@ -178,14 +179,14 @@ func cloudRouteSetting(path string) (string, error) {
 		for _, fragment := range layer.fragments {
 			setting, err := routeSetting(fragment.Contents, layer.requirements)
 			if err != nil {
-				return "", fmt.Errorf("%s %q: %w", layer.kind, fragment.Name, err)
+				return Blocker{}, fmt.Errorf("%s %q: %w", layer.kind, fragment.Name, err)
 			}
 			if setting != "" {
-				return fmt.Sprintf("%s %q sets %s", layer.kind, fragment.Name, setting), nil
+				return Blocker{setting, fmt.Sprintf("%s %q sets %s", layer.kind, fragment.Name, setting)}, nil
 			}
 		}
 	}
-	return "", nil
+	return Blocker{}, nil
 }
 
 // routeSetting names the setting in a layer's TOML that routes Codex's model
@@ -195,14 +196,14 @@ func routeSetting(content string, requirements bool) (string, error) {
 	if _, err := toml.Decode(content, &layer); err != nil {
 		return "", err
 	}
-	if _, set := layer["openai_base_url"]; set && !requirements {
-		return "openai_base_url", nil
+	if _, set := layer[SettingOpenAIBaseURL]; set && !requirements {
+		return SettingOpenAIBaseURL, nil
 	}
-	if provider, set := layer["model_provider"]; set && provider != "openai" {
-		return "model_provider", nil
+	if provider, set := layer[SettingModelProvider]; set && provider != "openai" {
+		return SettingModelProvider, nil
 	}
-	if backend, set := layer["chatgpt_base_url"].(string); set && strings.TrimRight(backend, "/") != defaultChatGPTBackend {
-		return "chatgpt_base_url", nil
+	if backend, set := layer[SettingChatGPTBaseURL].(string); set && strings.TrimRight(backend, "/") != defaultChatGPTBackend {
+		return SettingChatGPTBaseURL, nil
 	}
 	return "", nil
 }
