@@ -132,3 +132,21 @@ This opt-in dispatch reuses Validate company macOS signing, then tests the candi
 
 
 The asynchronous validation must still fail if either native notarization lookup never succeeds, a submission is rejected, signature/team checks fail or the source archive cannot be extracted. Retained interrupted artifacts are diagnostic candidates, not approved builds. Upgrade jobs require the validation workflow to succeed. The temporary configuration changes only `wait: true` to `wait: false`; release configurations remain intact.
+
+
+### Reusing an accepted candidate after a test failure
+
+A test-only rerun must reject a foreign repository or workflow, a non-manual source run, a missing/failed company validation job, an absent or expired artifact, a source SHA mismatch, malformed or inconsistent archive versions and checksum/signature/notarization failures. Reusing an artifact must not receive signing credentials or build/submit a new candidate. Cask and PKG upgrade results are independent gates; a cask fixture failure does not invalidate an already successful binary validation or establish package upgrade success.
+
+
+To rerun only cask upgrades against an already validated artifact, use:
+
+```sh
+gh workflow run homebrew-install.yml --repo kontext-security/kontext \
+  --ref feat/eng-888-company-signing -f company_signing=true \
+  -f candidate_run_id=41640118372
+```
+
+This skips the signing job and receives no signing secrets. It checks the original validation job, source SHA, archive version and checksums before native signature/notarization and upgrade/rollback checks. The source run's other jobs may have failed; their results remain separate gates. The artifact retains the original source and version even if test code is fixed on the PR branch.
+
+Both current architectures in `41640118372` are Apple Accepted and passed native signature/notarization validation. Their first cask test run exposed a URL-rewrite delimiter error before installation; the fixture is corrected and must be rerun. Production release configuration and signing selectors remain unchanged.

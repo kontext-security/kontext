@@ -43,7 +43,7 @@ render() {
   "$repo/scripts/render-homebrew-cask.sh" "$release_version" "$directory/checksums.txt" |
     sed -e "s/^cask \"kontext\" do/cask \"$name\" do/" \
         -e "s/^  binary \"kontext\"$/  binary \"kontext\", target: \"$name\"/" \
-        -e "s#https://github.com/kontext-security/kontext/releases/download/v#{version}#file://$directory#g" \
+        -e "s|https://github.com/kontext-security/kontext/releases/download/v#{version}|file://$directory|g" \
     > "$tap/Casks/$name.rb"
 }
 
