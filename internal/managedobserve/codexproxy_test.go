@@ -182,6 +182,7 @@ func TestCodexRoutingLogsWhereTheRouteStands(t *testing.T) {
 		Socket: filepath.Join(home, "kontext.sock"), GOOS: "darwin", Launchctl: launchctl,
 		Health:     func(context.Context, int, string) error { return nil },
 		Reach:      func(context.Context, int, string) error { return nil },
+		AdminRoute: func(string) (string, error) { return "", nil },
 		CodexSince: func(time.Time) (int, error) { return 0, nil },
 		FreePort:   func() (int, error) { return 49321, nil }})
 

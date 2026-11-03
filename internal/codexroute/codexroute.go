@@ -118,6 +118,10 @@ type Options struct {
 	// LookupEnv reads the daemon's environment, whose proxy settings the job
 	// gets (see proxyVariables).
 	LookupEnv func(string) (string, bool)
+	// AdminRoute says which layer of Codex's configuration that an
+	// administrator manages routes Codex, or "" (see
+	// codexmanaged.AdminRouteBlocker), given the Codex home.
+	AdminRoute func(codexHome string) (string, error)
 	// CodexSince counts the person's Codex processes started before t.
 	CodexSince func(t time.Time) (int, error)
 	// ProcessStarted reports when process pid started, or false when none
@@ -230,6 +234,9 @@ func New(opts Options) *Router {
 	if opts.LookupEnv == nil {
 		opts.LookupEnv = os.LookupEnv
 	}
+	if opts.AdminRoute == nil {
+		opts.AdminRoute = codexmanaged.AdminRouteBlocker
+	}
 	if opts.CodexSince == nil {
 		opts.CodexSince = codexSince
 	}
@@ -263,7 +270,7 @@ func (r *Router) lock() (func(), error) {
 // Enable routes Codex through the proxy: it starts the job and, once the
 // proxy answers on its port, writes the config line. It leaves Codex alone,
 // and takes its own line away, when the person routes Codex's model traffic
-// themselves.
+// themselves, or an administrator does in a layer of Codex's configuration.
 func (r *Router) Enable(ctx context.Context) (Status, error) {
 	if r.opts.GOOS != "darwin" {
 		return Status{Skipped: "the Codex proxy runs on macOS only"}, nil
@@ -736,12 +743,20 @@ func (r *Router) Status(ctx context.Context) Status {
 	return status
 }
 
-// skip says why Codex's traffic stays as it is, or "". How Codex is signed in
-// never matters: the proxy sends each request where its credentials belong.
+// skip says why Codex's traffic stays as it is, or "": the person routes it in
+// config, or an administrator does in a layer of their own, or such a layer
+// cannot be read. How Codex is signed in never matters: the proxy sends each
+// request where its credentials belong.
 func (r *Router) skip(config string) string {
 	blocker, err := codexmanaged.RouteBlocker(config)
 	if err != nil {
 		return "~/.codex/config.toml does not parse"
+	}
+	if blocker != "" {
+		return blocker
+	}
+	if blocker, err = r.opts.AdminRoute(filepath.Dir(r.configPath())); err != nil {
+		return "Codex's administrator configuration cannot be read: " + err.Error()
 	}
 	return blocker
 }

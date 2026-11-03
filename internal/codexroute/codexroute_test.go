@@ -107,10 +107,11 @@ type testRouter struct {
 	home    string
 	launchd *fakeLaunchd
 	healthy *bool
-	// reaches says whether the job reaches OpenAI, and env is the daemon's
-	// environment.
+	// reaches says whether the job reaches OpenAI, env is the daemon's
+	// environment, and admin what Codex's administrator layers say.
 	reaches *bool
 	env     map[string]string
+	admin   *adminAnswer
 	codex   *int
 	// binary is where the daemon's kontext binary is, and processes the
 	// processes running, the test's own as the daemon among them.
@@ -120,13 +121,19 @@ type testRouter struct {
 	clock *time.Duration
 }
 
+// adminAnswer is what Codex's administrator layers say about the route.
+type adminAnswer struct {
+	blocker string
+	err     error
+}
+
 const build2 = "kontext build 2\n"
 
 func newTestRouter(t *testing.T) testRouter {
 	t.Helper()
 	home := t.TempDir()
 	r := testRouter{home: home, launchd: &fakeLaunchd{}, healthy: new(bool), reaches: new(bool), env: map[string]string{},
-		codex: new(int), clock: new(time.Duration),
+		admin: &adminAnswer{}, codex: new(int), clock: new(time.Duration),
 		binary:    filepath.Join(home, "opt", "homebrew", "bin", "kontext"),
 		processes: &fakeProcesses{started: map[int]time.Time{os.Getpid(): time.Now().Add(-time.Hour)}}}
 	*r.healthy, *r.reaches = true, true
@@ -166,6 +173,12 @@ func (r testRouter) daemon(t *testing.T) *Router {
 		LookupEnv: func(name string) (string, bool) {
 			value, ok := r.env[name]
 			return value, ok
+		},
+		AdminRoute: func(codexHome string) (string, error) {
+			if codexHome != filepath.Join(r.home, ".codex") {
+				return "", errors.New("asked about another Codex home: " + codexHome)
+			}
+			return r.admin.blocker, r.admin.err
 		},
 		CodexSince:     func(time.Time) (int, error) { return *r.codex, nil },
 		ProcessStarted: r.processes.lookup,
@@ -1177,6 +1190,45 @@ func TestEnableRoutesOnlyThroughAJobThatReachesOpenAI(t *testing.T) {
 	}
 	if done, err := r.Drain(context.Background()); err != nil || !done || r.launchd.loaded {
 		t.Fatalf("Drain = %v, %v", done, err)
+	}
+}
+
+// A route an administrator set in a layer of Codex's configuration keeps
+// Codex as it is, as does a layer Kontext cannot read: Kontext's line goes,
+// and comes back only once no such layer routes Codex.
+func TestAnAdministratorsRouteKeepsCodexAsItIs(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	writeFile(t, configPath, original, 0o644)
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routed := readFile(t, configPath)
+
+	for _, admin := range []adminAnswer{
+		{blocker: "/etc/codex/requirements.toml sets model_provider"},
+		{err: errors.New("/etc/codex/config.toml: permission denied")},
+	} {
+		*r.admin = admin
+		status, err := r.Enable(context.Background())
+		want := admin.blocker
+		if admin.err != nil {
+			want = "Codex's administrator configuration cannot be read: " + admin.err.Error()
+		}
+		if err != nil || status.Routed || status.Skipped != want {
+			t.Fatalf("Enable with %+v = %+v, %v", admin, status, err)
+		}
+		if info, _ := os.Stat(configPath); readFile(t, configPath) != original || info.Mode().Perm() != 0o644 {
+			t.Fatalf("config with %+v (%v):\n%s", admin, info.Mode().Perm(), readFile(t, configPath))
+		}
+		if status := r.Status(context.Background()); status.Routed || status.Skipped != want {
+			t.Fatalf("Status with %+v = %+v", admin, status)
+		}
+	}
+
+	*r.admin = adminAnswer{}
+	if status, err := r.Enable(context.Background()); err != nil || !status.Routed || readFile(t, configPath) != routed {
+		t.Fatalf("Enable once no administrator routes Codex = %+v, %v", status, err)
 	}
 }
 
