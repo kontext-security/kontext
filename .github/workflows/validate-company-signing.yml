@@ -62,9 +62,9 @@ jobs:
           import os
           from pathlib import Path
           source = Path('.goreleaser.staging.yaml').read_text()
-          assert source.count('timeout: 20m') == 1
+          assert source.count('wait: true') == 1
           target = Path(os.environ['RUNNER_TEMP']) / 'company-goreleaser.yaml'
-          target.write_text(source.replace('timeout: 20m', 'timeout: 90m'))
+          target.write_text(source.replace('wait: true', 'wait: false'))
           PYCONFIG
 
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -77,6 +77,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence
+          git rev-parse HEAD > evidence/source-sha.txt
           for arch in arm64 amd64; do
             archive="dist/kontext_${GORELEASER_CURRENT_TAG#v}_darwin_${arch}.tar.gz"
             binary_dir="$(mktemp -d)"
@@ -87,20 +88,19 @@ jobs:
             codesign -d -r- "$binary" > "evidence/${arch}-requirement.txt" 2>&1
             grep -Fx "Authority=Developer ID Application: CoBrowser Technology GmbH ($MACOS_EXPECTED_TEAM_ID)" "evidence/${arch}-signature.txt"
             grep -Fx "TeamIdentifier=$MACOS_EXPECTED_TEAM_ID" "evidence/${arch}-signature.txt"
-            # Apple's lookup can lag behind an accepted notarization.
+            # GoReleaser submits without waiting; native lookup gates upgrades.
             accepted=false
-            for _ in 1 2 3 4 5; do
+            for _ in $(seq 360); do
               if codesign -vvvv -R=notarized --check-notarization "$binary" > "evidence/${arch}-notarization.txt" 2>&1; then
                 accepted=true
                 break
               fi
               sleep 15
             done
-            [[ "$accepted" == true ]]
+            [[ "$accepted" == true ]] || { echo "::error::Apple notarization is not verified for $arch after 90 minutes"; exit 1; }
             shasum -a 256 "$archive" >> evidence/checksums.txt
             rm -rf "$binary_dir"
           done
-          git rev-parse HEAD > evidence/source-sha.txt
 
       - name: Retain validation builds and evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -120,6 +120,8 @@ jobs:
           name: company-signing-interrupted
           path: |
             dist/kontext_darwin_*/kontext
+            dist/*_darwin_*.tar.gz
+            dist/checksums.txt
             evidence/
           if-no-files-found: warn
           retention-days: 14
