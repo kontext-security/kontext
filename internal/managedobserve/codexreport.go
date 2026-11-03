@@ -74,6 +74,7 @@ type codexRouteState interface {
 	Reported(codexroute.Counters) error
 	TakeAway() *codexroute.TakeAway
 	ClearTakeAway(codexroute.TakeAway) error
+	InPlace() (int, bool)
 }
 
 // codexReports sends where the Codex route stands to the Kontext API, one
@@ -83,7 +84,8 @@ type codexRouteState interface {
 // the latest report, so a state not yet sent gives way to a later one; a
 // take-away waits in route.json until a report of it went through, and so
 // outlives a daemon restart. Each report carries what the proxy job counted
-// since the last one the API kept. Only the daemon's routing goroutine uses
+// since the last one the API kept, and it reports Codex routed only while
+// Kontext's line is in config.toml. Only the daemon's routing goroutine uses
 // it; nil sends nothing.
 type codexReports struct {
 	send       func(context.Context, codexReport) error
@@ -172,6 +174,15 @@ func (r *codexReports) flush(ctx context.Context) {
 		state, due := r.next()
 		if !due {
 			return
+		}
+		if state.state == codexRouted {
+			if _, inPlace := r.route.InPlace(); !inPlace {
+				// The line went since the apply that found it, as with a
+				// take-away found at a tick: where Codex goes waits for the
+				// next apply.
+				r.current = routeState{}
+				return
+			}
 		}
 		counters := r.route.Counters()
 		err := r.send(ctx, newCodexReport(state, counters))

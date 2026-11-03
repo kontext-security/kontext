@@ -65,11 +65,15 @@ func (a *fakeReportAPI) send(_ context.Context, report codexReport) error {
 type withTakeAway struct {
 	*codexroute.Router
 	takeAway *codexroute.TakeAway
-	// clearFails fails the next clears.
+	// clearFails fails the next clears, and lineGone says Kontext's line is
+	// not in config.toml.
 	clearFails int
+	lineGone   bool
 }
 
 func (w *withTakeAway) TakeAway() *codexroute.TakeAway { return w.takeAway }
+
+func (w *withTakeAway) InPlace() (int, bool) { return 49321, !w.lineGone }
 
 func (w *withTakeAway) ClearTakeAway(t codexroute.TakeAway) error {
 	if w.clearFails > 0 {
@@ -275,18 +279,19 @@ func TestCodexReportsReportEachTakeAwayOnce(t *testing.T) {
 		t.Fatalf("reports = %s; take-away left %+v", got, route.takeAway)
 	}
 
-	// Between applies: the next tick reports it.
+	// Between applies: the next tick reports it, the line gone with it.
 	route.takeAway = &codexroute.TakeAway{Reason: codexroute.ReasonUpstreamUnreachable, At: clock.Add(time.Minute)}
+	route.lineGone = true
 	clock = clock.Add(time.Minute)
 	reports.tick(ctx)
-	if got := describe(api.take()); got != "taken_away/upstream_unreachable 0,0,0 ; routed/null 0,0,0 " || route.takeAway != nil {
+	if got := describe(api.take()); got != "taken_away/upstream_unreachable 0,0,0 " || route.takeAway != nil {
 		t.Fatalf("reports at the tick = %s; take-away left %+v", got, route.takeAway)
 	}
 
 	// Clearing fails once: the next tick clears it, and nothing is reported
-	// twice.
+	// twice. An apply routed Codex again meanwhile.
 	route.takeAway = &codexroute.TakeAway{Reason: codexroute.ReasonDisabledLocally, At: clock.Add(time.Minute)}
-	route.clearFails = 1
+	route.clearFails, route.lineGone = 1, false
 	reports.update(ctx, routeState{state: codexRouted})
 	if got := describe(api.take()); got != "taken_away/disabled_locally 0,0,0 ; routed/null 0,0,0 " || route.takeAway == nil {
 		t.Fatalf("reports with a failed clear = %s; take-away %+v", got, route.takeAway)
@@ -298,6 +303,45 @@ func TestCodexReportsReportEachTakeAwayOnce(t *testing.T) {
 	}
 	if got := api.take(); len(got) != 0 || route.takeAway != nil {
 		t.Fatalf("after the clear was tried again: reports %s, take-away %+v", describe(got), route.takeAway)
+	}
+}
+
+// A take-away found at a tick, between applies, leaves the route as the
+// take-away left it: the reports never call it routed again until an apply
+// finds the line back, nor while the line is gone for any other reason.
+func TestCodexReportsCallTheRouteRoutedOnlyWhileTheLineIsThere(t *testing.T) {
+	api := &fakeReportAPI{}
+	clock := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	reports, route := newTestReports(t, api, &clock)
+	ctx := context.Background()
+	reports.update(ctx, routeState{state: codexRouted})
+	if got := describe(api.take()); got != "routed/null 0,0,0 " {
+		t.Fatalf("reports = %s", got)
+	}
+
+	route.takeAway = &codexroute.TakeAway{Reason: codexroute.ReasonUpstreamUnreachable, At: clock}
+	route.lineGone = true
+	for range codexReportInterval / time.Minute * 2 {
+		clock = clock.Add(time.Minute)
+		reports.tick(ctx)
+	}
+	if got := describe(api.take()); got != "taken_away/upstream_unreachable 0,0,0 " {
+		t.Fatalf("reports after a take-away found at a tick = %s", got)
+	}
+	// The next apply holds Codex off, then a later one routes it again.
+	reports.update(ctx, routeState{codexNotRouted, codexroute.ReasonUpstreamUnreachable})
+	route.lineGone = false
+	reports.update(ctx, routeState{state: codexRouted})
+	if got := describe(api.take()); got != "not_routed/upstream_unreachable 0,0,0 ; routed/null 0,0,0 " {
+		t.Fatalf("reports after the next applies = %s", got)
+	}
+	// A line gone with no take-away, as by hand, is not reported as routed
+	// an hour on either.
+	route.lineGone = true
+	clock = clock.Add(codexReportInterval)
+	reports.tick(ctx)
+	if got := api.take(); len(got) != 0 {
+		t.Fatalf("a route whose line went was reported: %s", describe(got))
 	}
 }
 
