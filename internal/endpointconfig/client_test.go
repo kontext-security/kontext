@@ -237,7 +237,8 @@ func TestRefresherLogsFailureTransitions(t *testing.T) {
 
 // A server that predates v5 refuses it with 406 unsupported_version: the
 // client asks it for v4 instead, whose configuration has no Codex proxy
-// switch, which reads as on. Conditional refreshes work as before.
+// switch, which reads as on, and goes on asking for v4 alone for an hour.
+// Conditional refreshes work as before.
 func TestClientFallsBackForAServerThatPredatesV5(t *testing.T) {
 	configuration := fallbackResponse(t, payloadcapture.ModeFull, true)
 	var asked []string
@@ -261,6 +262,8 @@ func TestClientFallsBackForAServerThatPredatesV5(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	clock := time.Now()
+	client.now = func() time.Time { return clock }
 	result, err := client.Fetch(context.Background(), "token", testInstallationID, "")
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +286,11 @@ func TestClientFallsBackForAServerThatPredatesV5(t *testing.T) {
 	if snapshot := cache.Current(); !snapshot.Confirmed || !snapshot.Config.CodexProxyEnabled() {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
-	if got := strings.Join(asked, " "); got != "5 4 5 4" {
+	clock = clock.Add(fallbackFor)
+	if _, err := client.Fetch(context.Background(), "token", testInstallationID, cache.ConditionalIdentity()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(asked, " "); got != "5 4 4 5 4" {
 		t.Fatalf("versions asked = %s", got)
 	}
 }

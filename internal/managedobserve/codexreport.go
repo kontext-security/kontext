@@ -62,34 +62,41 @@ func newCodexReport(state routeState, counters codexroute.Counters) codexReport 
 	return report
 }
 
-// codexReportInterval is how long the daemon goes without a report the API
-// took before it sends the latest state again, and the longest it waits to
-// retry one that failed.
+// codexReportInterval is how long the daemon goes without a report going
+// through before it sends the latest state again, and the longest it waits
+// to retry one that failed.
 const codexReportInterval = time.Hour
 
-// maxPendingReports bounds the states kept while the API accepts none: the
-// latest matter, the oldest go first.
-const maxPendingReports = 8
+// codexRouteState is what the reports read from the proxy's state, and clear
+// there once reported: see codexroute.Router.
+type codexRouteState interface {
+	Counters() codexroute.Counters
+	Reported(codexroute.Counters) error
+	TakeAway() *codexroute.TakeAway
+	ClearTakeAway(codexroute.TakeAway) error
+}
 
 // codexReports sends where the Codex route stands to the Kontext API, one
-// report at a time, so they arrive in the order sent: every change, in order,
-// and the latest again once the API took none for codexReportInterval. Each
-// report carries what the proxy job counted since the last one the API kept,
-// so the counts of one it did not keep go with the next. Only the daemon's
-// routing goroutine uses it; nil sends nothing.
+// report at a time, so they arrive in the order sent: what took the route
+// away, when something did, then the route's latest state, and that again
+// once no report went through for codexReportInterval. The API keeps only
+// the latest report, so a state not yet sent gives way to a later one; a
+// take-away waits in route.json until a report of it went through, and so
+// outlives a daemon restart. Each report carries what the proxy job counted
+// since the last one the API kept. Only the daemon's routing goroutine uses
+// it; nil sends nothing.
 type codexReports struct {
 	send       func(context.Context, codexReport) error
-	router     *codexroute.Router
+	route      codexRouteState
 	diagnostic diagnostic.Logger
 	now        func() time.Time
 
-	// pending are the states yet to report, oldest first, and current the
-	// latest queued; reportedAt is when the API last took a report: kept
-	// it, or turned it away for a later one it keeps (see
-	// errReportSuperseded).
-	pending    []routeState
-	current    routeState
-	reportedAt time.Time
+	// current is the route's latest state, and sent the last the API took;
+	// takeAway is the take-away to report first, if any. reportedAt is when
+	// a report last went through: kept, or turned away for good.
+	current, sent routeState
+	takeAway      *codexroute.TakeAway
+	reportedAt    time.Time
 	// failures counts the sends that failed in a row: the next waits until
 	// retryAt, unless the route changes first.
 	failures    int
@@ -97,46 +104,56 @@ type codexReports struct {
 	lastFailure string
 }
 
-// add queues the states an apply left the route in, each that differs from
-// the one before it, and sends them at once: a change waits for no retry.
-func (r *codexReports) add(ctx context.Context, states ...routeState) {
+// update takes the state an apply left the route in, with any take-away
+// waiting in route.json, and sends what changed at once: a change waits for
+// no retry.
+func (r *codexReports) update(ctx context.Context, state routeState) {
 	if r == nil {
 		return
 	}
-	changed := false
-	for _, state := range states {
-		if state != r.current {
-			r.pending, r.current, changed = append(r.pending, state), state, true
-		}
-	}
-	if extra := len(r.pending) - maxPendingReports; extra > 0 {
-		r.pending = r.pending[extra:]
-	}
+	takeAway := r.route.TakeAway()
+	changed := state != r.current || takeAway != nil && (r.takeAway == nil || !takeAway.Same(*r.takeAway))
+	r.current, r.takeAway = state, takeAway
 	if changed {
 		r.flush(ctx)
 	}
 }
 
-// tick sends what is due: the states left by a send that failed, once its
-// wait is over, and the latest state again once the API took none for
+// tick sends what is due once a failed send's wait is over: a report that
+// failed, and the latest state again once no report went through for
 // codexReportInterval.
 func (r *codexReports) tick(ctx context.Context) {
 	if r == nil || r.now().Before(r.retryAt) {
 		return
 	}
-	if len(r.pending) == 0 && r.current.state != "" && r.now().Sub(r.reportedAt) >= codexReportInterval {
-		r.pending = append(r.pending, r.current)
-	}
 	r.flush(ctx)
 }
 
-// flush sends the pending states in order, and stops at the first that
-// failed, to try it again later.
+// next is the report due, if any: the take-away first, then the current
+// state, when the API took another or took none for codexReportInterval.
+func (r *codexReports) next() (routeState, bool) {
+	switch {
+	case r.takeAway != nil:
+		return routeState{codexTakenAway, r.takeAway.Reason}, true
+	case r.current.state != "" && (r.current != r.sent || r.now().Sub(r.reportedAt) >= codexReportInterval):
+		return r.current, true
+	}
+	return routeState{}, false
+}
+
+// flush sends what is due, in order, and stops at a report that failed, to
+// try it again later. A report the API turns away for good, because it keeps
+// a later one or refuses this one, goes too: sent again, it would replace
+// the later one, or be refused again.
 func (r *codexReports) flush(ctx context.Context) {
-	for len(r.pending) > 0 {
-		counters := r.router.Counters()
-		err := r.send(ctx, newCodexReport(r.pending[0], counters))
-		if err != nil && !errors.Is(err, errReportSuperseded) {
+	for {
+		state, due := r.next()
+		if !due {
+			return
+		}
+		counters := r.route.Counters()
+		err := r.send(ctx, newCodexReport(state, counters))
+		if err != nil && !errors.Is(err, errReportSuperseded) && !errors.Is(err, errReportRejected) {
 			r.failures++
 			r.retryAt = r.now().Add(min(time.Minute<<min(r.failures-1, 6), codexReportInterval))
 			if message := err.Error(); message != r.lastFailure {
@@ -145,17 +162,21 @@ func (r *codexReports) flush(ctx context.Context) {
 			}
 			return
 		}
-		r.pending = r.pending[1:]
-		r.reportedAt = r.now()
+		r.sent, r.reportedAt = state, r.now()
 		r.failures, r.retryAt, r.lastFailure = 0, time.Time{}, ""
+		if state.state == codexTakenAway && r.takeAway != nil {
+			if err := r.route.ClearTakeAway(*r.takeAway); err != nil {
+				diagnostic.LogAlways(r.diagnostic, "codex proxy: reported take-away not cleared: %v\n", err)
+			}
+			r.takeAway = nil
+		}
 		if err != nil {
-			// Sent again, the report would replace the later one the API
-			// keeps; its counts go with the next.
+			// Its counts go with the next report.
 			diagnostic.LogAlways(r.diagnostic, "codex proxy: route report not kept: %v\n", err)
 			continue
 		}
 		// The API has these counts now; what the job counted since stays.
-		if err := r.router.Reported(counters); err != nil {
+		if err := r.route.Reported(counters); err != nil {
 			diagnostic.LogAlways(r.diagnostic, "codex proxy: reported counts not taken off: %v\n", err)
 		}
 	}
@@ -188,8 +209,12 @@ func newCodexReportClient(baseURL, installationID string, tokens func(context.Co
 }
 
 // errReportSuperseded is the API's 409: it keeps a report of the endpoint's
-// that it received after this one, which it therefore did not keep.
-var errReportSuperseded = errors.New("a later report is already kept")
+// that it received after this one, which it therefore did not keep. And
+// errReportRejected is its 400 or 422: it does not take this report.
+var (
+	errReportSuperseded = errors.New("a later report is already kept")
+	errReportRejected   = errors.New("not a report the API takes")
+)
 
 // send posts report; only 204, the API keeping it as the endpoint's latest,
 // is success.
@@ -222,6 +247,8 @@ func (c *codexReportClient) send(ctx context.Context, report codexReport) error 
 		return nil
 	case http.StatusConflict:
 		return errReportSuperseded
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return fmt.Errorf("%w: status %d", errReportRejected, response.StatusCode)
 	}
 	return fmt.Errorf("unexpected status %d", response.StatusCode)
 }

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 
 	"github.com/kontext-security/kontext/internal/codexmanaged"
@@ -45,7 +46,7 @@ const (
 	ReasonProxyNotAnswering   = "proxy_not_answering"
 	ReasonUpstreamUnreachable = "upstream_unreachable"
 
-	// What took the line away besides a daemon (see Status.TakenAway): the
+	// What took the line away besides a daemon (see TakeAway): the
 	// proxy job, once no daemon held the route (or for
 	// ReasonUpstreamUnreachable); Codex's session start hook; and `kontext
 	// codex-proxy disable`.
@@ -165,14 +166,28 @@ func (r *Router) Reported(sent Counters) error {
 }
 
 // loadCounters reads the counters; one that cannot be read starts again from
-// nothing.
+// nothing. They come back within what the Kontext API takes, whatever the
+// file says, since one report it refuses would hold every later count.
 func (r *Router) loadCounters() Counters {
 	var counters Counters
 	if data, err := os.ReadFile(r.countersPath()); err == nil && json.Unmarshal(data, &counters) != nil {
 		return Counters{}
 	}
+	for _, count := range []*int{&counters.UpstreamFailures, &counters.PassThroughs, &counters.PartsMissing} {
+		*count = min(max(*count, 0), maxCount)
+	}
+	var versions []string
+	for _, version := range counters.CodexVersions {
+		if codexVersionPattern.MatchString(version) && !slices.Contains(versions, version) && len(versions) < maxCodexVersions {
+			versions = append(versions, version)
+		}
+	}
+	counters.CodexVersions = versions
 	return counters
 }
+
+// codexVersionPattern is a Codex version the Kontext API takes.
+var codexVersionPattern = regexp.MustCompile(`^[0-9A-Za-z.+_-]{1,32}$`)
 
 func (r *Router) saveCounters(counters Counters) error {
 	data, err := json.Marshal(counters)

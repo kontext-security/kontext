@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -23,29 +24,60 @@ import (
 )
 
 // fakeReportAPI keeps the reports it accepts, refuses them while down, and
-// turns the next conflicts away for a later one it keeps.
+// turns the next conflicts away for a later one it keeps, and the next
+// rejects as reports it does not take.
 type fakeReportAPI struct {
-	mu        sync.Mutex
-	down      bool
-	conflicts int
-	accepted  []codexReport
-	refused   int
+	mu                 sync.Mutex
+	down               bool
+	conflicts, rejects int
+	accepted           []codexReport
+	refused            int
 }
 
 func (a *fakeReportAPI) send(_ context.Context, report codexReport) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.down {
+	switch {
+	case a.down:
 		a.refused++
 		return errors.New("unexpected status 503")
-	}
-	if a.conflicts > 0 {
+	case a.conflicts > 0:
 		a.conflicts--
 		a.refused++
 		return errReportSuperseded
+	case a.rejects > 0:
+		a.rejects--
+		a.refused++
+		return fmt.Errorf("%w: status 400", errReportRejected)
 	}
 	a.accepted = append(a.accepted, report)
 	return nil
+}
+
+// withTakeAway is a router's state with a take-away the test sets, as the
+// proxy job, the session start hook or `kontext codex-proxy disable` would
+// leave in route.json.
+type withTakeAway struct {
+	*codexroute.Router
+	takeAway *codexroute.TakeAway
+}
+
+func (w *withTakeAway) TakeAway() *codexroute.TakeAway { return w.takeAway }
+
+func (w *withTakeAway) ClearTakeAway(t codexroute.TakeAway) error {
+	if w.takeAway != nil && w.takeAway.Same(t) {
+		w.takeAway = nil
+	}
+	return nil
+}
+
+// newTestReports is reports through api of a job's counters in a state
+// folder of their own, on a clock the test moves.
+func newTestReports(t *testing.T, api *fakeReportAPI, clock *time.Time) (*codexReports, *withTakeAway) {
+	t.Helper()
+	route := &withTakeAway{Router: codexroute.New(codexroute.Options{Home: t.TempDir(), StateDir: t.TempDir(), GOOS: "darwin"})}
+	return &codexReports{send: api.send, route: route, diagnostic: diagnostic.New(io.Discard, false),
+		now: func() time.Time { return *clock }}, route
 }
 
 func (a *fakeReportAPI) take() []codexReport {
@@ -77,43 +109,44 @@ func describe(reports []codexReport) string {
 	return strings.Join(out, "; ")
 }
 
-// The daemon reports each change of the route in order, waits after a
-// refused report, longer each time, unless the route changes, and reports the
-// latest again an hour after the API last accepted one. Each report carries
-// what the job counted since the last accepted one, a refused one's counts
-// included.
-func TestCodexReportsSendEachChangeAndKeepCountsUntilAccepted(t *testing.T) {
-	stateDir := t.TempDir()
-	job := codexroute.New(codexroute.Options{Home: t.TempDir(), StateDir: stateDir, GOOS: "darwin"})
+// The daemon reports what took the route away first, then the route's latest
+// state: a state not sent yet gives way to a later one, since the API keeps
+// only the latest. After a send that failed it waits, longer each time,
+// unless the route changes, and it reports the latest state again an hour
+// after a report last went through. Each report carries what the job counted
+// since the last accepted one, a failed one's counts included.
+func TestCodexReportsSendTheTakeAwayThenTheLatestState(t *testing.T) {
 	api := &fakeReportAPI{}
 	clock := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
-	reports := &codexReports{send: api.send, router: job, diagnostic: diagnostic.New(io.Discard, false), now: func() time.Time { return clock }}
+	reports, route := newTestReports(t, api, &clock)
 	count := func(counts codexproxy.Counts) {
 		t.Helper()
-		if err := job.Count(counts); err != nil {
+		if err := route.Count(counts); err != nil {
 			t.Fatal(err)
 		}
 	}
 	ctx := context.Background()
 
 	count(codexproxy.Counts{PassThroughs: 1, CodexVersion: "0.163.0"})
-	reports.add(ctx, routeState{codexTakenAway, codexroute.ReasonDaemonStopped}, routeState{state: codexRouted})
-	if got := describe(api.take()); got != "taken_away/daemon_stopped 0,1,0 0.163.0; routed/null 0,0,0 " {
-		t.Fatalf("reports = %s", got)
+	route.takeAway = &codexroute.TakeAway{Reason: codexroute.ReasonDaemonStopped, At: clock}
+	reports.update(ctx, routeState{state: codexRouted})
+	if got := describe(api.take()); got != "taken_away/daemon_stopped 0,1,0 0.163.0; routed/null 0,0,0 " || route.takeAway != nil {
+		t.Fatalf("reports = %s; take-away left %+v", got, route.takeAway)
 	}
 	// The same state again is no change.
-	reports.add(ctx, routeState{state: codexRouted})
+	reports.update(ctx, routeState{state: codexRouted})
 	if got := api.take(); len(got) != 0 {
 		t.Fatalf("an unchanged route was reported: %s", describe(got))
 	}
 
 	api.setDown(true)
 	count(codexproxy.Counts{UpstreamFailures: 3})
-	reports.add(ctx, routeState{codexNotRouted, codexroute.ReasonUpstreamUnreachable})
+	reports.update(ctx, routeState{codexNotRouted, codexroute.ReasonUpstreamUnreachable})
 	for _, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
 		refused := api.refused
 		clock = clock.Add(wait - time.Second)
 		reports.tick(ctx)
+		reports.update(ctx, routeState{codexNotRouted, codexroute.ReasonUpstreamUnreachable})
 		if api.refused != refused {
 			t.Fatalf("retried before %s", wait)
 		}
@@ -123,12 +156,21 @@ func TestCodexReportsSendEachChangeAndKeepCountsUntilAccepted(t *testing.T) {
 			t.Fatalf("not retried after %s", wait)
 		}
 	}
-	// A change goes at once, whatever the wait; then the API takes both, in
-	// order, with every count since the last accepted report.
+	// A take-away and a change go at once, whatever the wait. Once the API
+	// takes reports again, the take-away goes first, with every count since
+	// the last accepted report, and the state that was never sent gives way
+	// to the latest.
 	count(codexproxy.Counts{UpstreamFailures: 1, PartsMissing: 1, CodexVersion: "0.163.1"})
+	route.takeAway = &codexroute.TakeAway{Reason: codexroute.ReasonDisabledLocally, At: clock}
+	refused := api.refused
+	reports.update(ctx, routeState{codexNotRouted, codexroute.ReasonCompactionOff})
+	if api.refused != refused+1 {
+		t.Fatalf("a take-away waited for the retry")
+	}
 	api.setDown(false)
-	reports.add(ctx, routeState{codexNotRouted, codexroute.ReasonCompactionOff})
-	if got := describe(api.take()); got != "not_routed/upstream_unreachable 4,0,1 0.163.1; not_routed/compaction_off 0,0,0 " {
+	clock = clock.Add(codexReportInterval)
+	reports.tick(ctx)
+	if got := describe(api.take()); got != "taken_away/disabled_locally 4,0,1 0.163.1; not_routed/compaction_off 0,0,0 " {
 		t.Fatalf("reports = %s", got)
 	}
 
@@ -143,52 +185,61 @@ func TestCodexReportsSendEachChangeAndKeepCountsUntilAccepted(t *testing.T) {
 	if got := describe(api.take()); got != "not_routed/compaction_off 0,2,0 " {
 		t.Fatalf("hourly report = %s", got)
 	}
-	if counters := job.Counters(); counters.PassThroughs != 0 || len(counters.CodexVersions) != 0 {
+	if counters := route.Counters(); counters.PassThroughs != 0 || len(counters.CodexVersions) != 0 {
 		t.Fatalf("counters left after the reports = %+v", counters)
 	}
 }
 
-// A report the API turns away for a later one it keeps is never sent again,
-// which would replace that one: its counts go with the next report, at the
-// next change or an hour on.
-func TestCodexReportsNeverResendAReportALaterOneReplaced(t *testing.T) {
-	job := codexroute.New(codexroute.Options{Home: t.TempDir(), StateDir: t.TempDir(), GOOS: "darwin"})
-	api := &fakeReportAPI{}
-	clock := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
-	reports := &codexReports{send: api.send, router: job, diagnostic: diagnostic.New(io.Discard, false), now: func() time.Time { return clock }}
-	ctx := context.Background()
-	reports.add(ctx, routeState{state: codexRouted})
-	if got := describe(api.take()); got != "routed/null 0,0,0 " {
-		t.Fatalf("reports = %s", got)
-	}
+// A report the API turns away for good is never sent again: one it turned
+// away for a later one it keeps would replace that one, and one it refuses
+// would be refused again. Its counts go with the next report, at the next
+// change or an hour on, and a take-away turned away is cleared like one
+// reported.
+func TestCodexReportsNeverResendAReportTurnedAway(t *testing.T) {
+	for name, turnAway := range map[string]func(*fakeReportAPI){
+		"for a later one": func(api *fakeReportAPI) { api.conflicts = 1 },
+		"as no report":    func(api *fakeReportAPI) { api.rejects = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &fakeReportAPI{}
+			clock := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+			reports, route := newTestReports(t, api, &clock)
+			ctx := context.Background()
+			reports.update(ctx, routeState{state: codexRouted})
+			if got := describe(api.take()); got != "routed/null 0,0,0 " {
+				t.Fatalf("reports = %s", got)
+			}
 
-	if err := job.Count(codexproxy.Counts{PassThroughs: 1, CodexVersion: "0.163.0"}); err != nil {
-		t.Fatal(err)
-	}
-	api.conflicts = 1
-	reports.add(ctx, routeState{codexTakenAway, codexroute.ReasonDisabledLocally}, routeState{state: codexRouted})
-	// The take-away was turned away; the state after it went at once, with
-	// its counts.
-	if got := describe(api.take()); got != "routed/null 0,1,0 0.163.0" || api.refused != 1 {
-		t.Fatalf("reports = %s, refused %d", got, api.refused)
-	}
+			if err := route.Count(codexproxy.Counts{PassThroughs: 1, CodexVersion: "0.163.0"}); err != nil {
+				t.Fatal(err)
+			}
+			turnAway(api)
+			route.takeAway = &codexroute.TakeAway{Reason: codexroute.ReasonDisabledLocally, At: clock}
+			reports.update(ctx, routeState{state: codexRouted})
+			// The take-away was turned away; the state after it went at once,
+			// with its counts.
+			if got := describe(api.take()); got != "routed/null 0,1,0 0.163.0" || api.refused != 1 || route.takeAway != nil {
+				t.Fatalf("reports = %s, refused %d, take-away %+v", got, api.refused, route.takeAway)
+			}
 
-	api.conflicts = 1
-	reports.add(ctx, routeState{codexNotRouted, codexroute.ReasonCompactionOff})
-	// Within the hour, neither the minute ticks nor the same state again
-	// send it.
-	for range 59 {
-		clock = clock.Add(time.Minute)
-		reports.tick(ctx)
-		reports.add(ctx, routeState{codexNotRouted, codexroute.ReasonCompactionOff})
-	}
-	if got := api.take(); len(got) != 0 || api.refused != 2 {
-		t.Fatalf("a report turned away was sent again: %s (refused %d)", describe(got), api.refused)
-	}
-	clock = clock.Add(time.Minute)
-	reports.tick(ctx)
-	if got := describe(api.take()); got != "not_routed/compaction_off 0,0,0 " {
-		t.Fatalf("report an hour on = %s", got)
+			turnAway(api)
+			reports.update(ctx, routeState{codexNotRouted, codexroute.ReasonCompactionOff})
+			// Within the hour, neither the minute ticks nor the same state again
+			// send it.
+			for range 59 {
+				clock = clock.Add(time.Minute)
+				reports.tick(ctx)
+				reports.update(ctx, routeState{codexNotRouted, codexroute.ReasonCompactionOff})
+			}
+			if got := api.take(); len(got) != 0 || api.refused != 2 {
+				t.Fatalf("a report turned away was sent again: %s (refused %d)", describe(got), api.refused)
+			}
+			clock = clock.Add(time.Minute)
+			reports.tick(ctx)
+			if got := describe(api.take()); got != "not_routed/compaction_off 0,0,0 " {
+				t.Fatalf("report an hour on = %s", got)
+			}
+		})
 	}
 }
 
@@ -237,8 +288,10 @@ func TestCodexReportClientPostsWithTheInstallToken(t *testing.T) {
 		got.authorization != "Bearer install-token" || got.contentType != "application/json" || got.body["state"] != "routed" {
 		t.Fatalf("request = %+v", got)
 	}
-	for _, status = range []int{http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound, http.StatusConflict} {
-		if err := client.send(context.Background(), report); err == nil || errors.Is(err, errReportSuperseded) != (status == http.StatusConflict) {
+	for _, status = range []int{http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound, http.StatusConflict,
+		http.StatusUnprocessableEntity, http.StatusTooManyRequests} {
+		if err := client.send(context.Background(), report); err == nil || errors.Is(err, errReportSuperseded) != (status == http.StatusConflict) ||
+			errors.Is(err, errReportRejected) != (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity) {
 			t.Errorf("status %d: %v", status, err)
 		}
 	}
@@ -293,7 +346,7 @@ func TestCodexRoutingReportsWhereTheRouteStands(t *testing.T) {
 	router, home := testRouter(t)
 	api := &fakeReportAPI{}
 	c := &codexRouting{router: router, diagnostic: diagnostic.New(io.Discard, false), switched: make(chan string, 1),
-		reports: &codexReports{send: api.send, router: router, diagnostic: diagnostic.New(io.Discard, false), now: time.Now}}
+		reports: &codexReports{send: api.send, route: router, diagnostic: diagnostic.New(io.Discard, false), now: time.Now}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { c.run(ctx); close(done) }()
@@ -325,4 +378,38 @@ func TestCodexRoutingReportsWhereTheRouteStands(t *testing.T) {
 	reported("routed/null 0,0,0 ; taken_away/disabled_locally 0,0,0 ; routed/null 0,0,0 ")
 	c.switched <- codexroute.ReasonCodexProxyOff
 	reported("routed/null 0,0,0 ; taken_away/disabled_locally 0,0,0 ; routed/null 0,0,0 ; not_routed/codex_proxy_off 0,0,0 ")
+}
+
+// A failed Enable or Disable that leaves Kontext's line in config.toml leaves
+// Codex going through the proxy, and the route reports so.
+func TestCodexRoutingReportsTheRouteCodexStillHas(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("the router locks the route and copies the binary on macOS and Linux only")
+	}
+	router, home := testRouter(t)
+	c := &codexRouting{router: router, diagnostic: diagnostic.New(io.Discard, false), switched: make(chan string, 1)}
+	ctx := context.Background()
+	if result, state := c.apply(ctx, ""); state != (routeState{state: codexRouted}) {
+		t.Fatalf("apply = %s, %+v", result, state)
+	}
+	// Neither can take the route's lock now.
+	lock := filepath.Join(home, "state", "route.lock")
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if result, state := c.apply(ctx, ""); state != (routeState{state: codexRouted}) || !strings.Contains(result, "routed through 127.0.0.1:49321, but") {
+		t.Fatalf("apply after a failed Enable = %s, %+v", result, state)
+	}
+	if result, state := c.apply(ctx, codexroute.ReasonCompactionOff); state != (routeState{state: codexRouted}) || !strings.HasPrefix(result, "route not removed") {
+		t.Fatalf("apply after a failed Disable = %s, %+v", result, state)
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if result, state := c.apply(ctx, codexroute.ReasonCompactionOff); state != (routeState{codexNotRouted, codexroute.ReasonCompactionOff}) {
+		t.Fatalf("apply once the line went = %s, %+v", result, state)
+	}
 }

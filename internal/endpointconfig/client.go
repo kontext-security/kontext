@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/cloudhttp"
@@ -27,7 +28,18 @@ type FetchResult struct {
 type Client struct {
 	baseURL string
 	http    *http.Client
+	now     func() time.Time
+
+	mu sync.Mutex
+	// fallbackUntil is when the client next asks for ResponseVersion, after
+	// the server last refused it.
+	fallbackUntil time.Time
 }
+
+// fallbackFor is how long the client asks a server that refused
+// ResponseVersion for FallbackResponseVersion straight away, one request per
+// refresh, before it asks for ResponseVersion again.
+const fallbackFor = time.Hour
 
 func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
@@ -40,7 +52,7 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	if httpClient == nil {
 		httpClient = cloudhttp.NewClient(10 * time.Second)
 	}
-	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: httpClient}, nil
+	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: httpClient, now: time.Now}, nil
 }
 
 // errUnsupportedVersion is a server's 406 unsupported_version: it predates the
@@ -49,12 +61,21 @@ var errUnsupportedVersion = errors.New("endpoint configuration: response version
 
 // Fetch gets the configuration as ResponseVersion has it, or as
 // FallbackResponseVersion has it from a server that predates
-// ResponseVersion.
+// ResponseVersion. The conditional value may be either version's:
+// identities differ across versions, so it matches only a response of its
+// own.
 func (c *Client) Fetch(ctx context.Context, installToken, installationID, configIdentity string) (FetchResult, error) {
+	c.mu.Lock()
+	fallingBack := c.now().Before(c.fallbackUntil)
+	c.mu.Unlock()
+	if fallingBack {
+		return c.fetch(ctx, FallbackResponseVersion, installToken, installationID, configIdentity)
+	}
 	result, err := c.fetch(ctx, ResponseVersion, installToken, installationID, configIdentity)
 	if errors.Is(err, errUnsupportedVersion) {
-		// The conditional value may be either version's: identities differ
-		// across versions, so it matches only a response of its own.
+		c.mu.Lock()
+		c.fallbackUntil = c.now().Add(fallbackFor)
+		c.mu.Unlock()
 		return c.fetch(ctx, FallbackResponseVersion, installToken, installationID, configIdentity)
 	}
 	return result, err

@@ -59,7 +59,7 @@ func newCodexRouting(dbPath, socketPath string, diag diagnostic.Logger, send fun
 		router:     router,
 		diagnostic: diag,
 		switched:   make(chan string, 1),
-		reports:    &codexReports{send: send, router: router, diagnostic: diag, now: time.Now},
+		reports:    &codexReports{send: send, route: router, diagnostic: diag, now: time.Now},
 	}
 }
 
@@ -111,12 +111,12 @@ func (c *codexRouting) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case off := <-c.switched:
-			now, states := c.apply(ctx, off)
+			now, state := c.apply(ctx, off)
 			if now != last {
 				diagnostic.LogAlways(c.diagnostic, "codex proxy: %s\n", now)
 				last = now
 			}
-			c.reports.add(ctx, states...)
+			c.reports.update(ctx, state)
 		case <-ticker.C:
 			renew()
 			c.reports.tick(ctx)
@@ -126,32 +126,35 @@ func (c *codexRouting) run(ctx context.Context) {
 
 // apply routes Codex, or unroutes it for off, drains the job when Codex is
 // not routed to it, and describes where that left it: for the log, and as
-// the states to report, a take-away it found first.
-func (c *codexRouting) apply(ctx context.Context, off string) (string, []routeState) {
+// the state to report. After a failure, that is where Codex goes: a failed
+// Enable or Disable may leave the line in place.
+func (c *codexRouting) apply(ctx context.Context, off string) (string, routeState) {
 	var result string
-	var states []routeState
+	var state routeState
 	if off == "" {
 		status, err := c.router.Enable(ctx)
-		if status.TakenAway != "" {
-			states = append(states, routeState{codexTakenAway, status.TakenAway})
+		if err != nil && !status.Routed {
+			status.Port, status.Routed = c.router.InPlace()
 		}
 		if status.Routed {
-			states = append(states, routeState{state: codexRouted})
 			if err != nil {
-				return fmt.Sprintf("routed through 127.0.0.1:%d, but %v", status.Port, err), states
+				return fmt.Sprintf("routed through 127.0.0.1:%d, but %v", status.Port, err), routeState{state: codexRouted}
 			}
-			return fmt.Sprintf("routed through 127.0.0.1:%d", status.Port), states
+			return fmt.Sprintf("routed through 127.0.0.1:%d", status.Port), routeState{state: codexRouted}
 		}
-		states = append(states, routeState{codexNotRouted, status.Reason})
+		state = routeState{codexNotRouted, status.Reason}
 		if err != nil {
 			result = fmt.Sprintf("not routed: %v", err)
 		} else {
 			result = "not routed: " + status.Skipped
 		}
 	} else {
-		states = append(states, routeState{codexNotRouted, off})
+		state = routeState{codexNotRouted, off}
 		if err := c.router.Disable(ctx); err != nil {
 			result = fmt.Sprintf("route not removed: %v", err)
+			if _, inPlace := c.router.InPlace(); inPlace {
+				return result, routeState{state: codexRouted}
+			}
 		} else {
 			result = "not routed: switch off (" + off + ")"
 		}
@@ -161,7 +164,7 @@ func (c *codexRouting) apply(ctx context.Context, off string) (string, []routeSt
 	} else if !drained {
 		result += "; job kept for running Codex sessions"
 	}
-	return result, states
+	return result, state
 }
 
 // decideSlack is how long before the proxy's deadline the daemon stops, for

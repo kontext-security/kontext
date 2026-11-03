@@ -107,9 +107,10 @@ type Options struct {
 	// it.
 	LeaseGrace time.Duration
 	// DisableReason is what Disable and Remove record as having taken the
-	// line away, for the daemon's next report (see Status.TakenAway):
-	// `kontext codex-proxy disable` sets ReasonDisabledLocally. A daemon
-	// reports what it changes itself, and sets none.
+	// line away, for the daemon's next report (see TakeAway): `kontext
+	// codex-proxy disable` sets ReasonDisabledLocally, and Remove then keeps
+	// what the daemon has yet to report. A daemon reports what it changes
+	// itself, and uninstall leaves nothing, so neither sets one.
 	DisableReason string
 
 	GOOS string
@@ -152,13 +153,8 @@ type Status struct {
 	// Reason says why Codex is not routed, in the words the daemon reports
 	// (see ReasonMacOSOnly and the others), whenever Enable leaves it so.
 	Reason string
-	// TakenAway is why something other than a daemon took the line away
-	// since a daemon's Enable last looked: the proxy job, Codex's session
-	// start hook, or `kontext codex-proxy disable`. Enable reports each
-	// take-away once, whatever else it finds.
-	TakenAway string
-	Loaded    bool
-	Port      int
+	Loaded bool
+	Port   int
 	// Answering reports that the proxy answers on the port Codex is routed
 	// to; a route without it leaves Codex retrying forever.
 	Answering bool
@@ -190,9 +186,24 @@ type state struct {
 	// Unreachable is when the job last could not reach OpenAI: Codex stays
 	// routed directly for unreachableWait after.
 	Unreachable time.Time `json:"unreachable,omitzero"`
-	// TakenAway is why something other than a daemon last took the line
-	// away, until a daemon's Enable hears of it (see Status.TakenAway).
-	TakenAway string `json:"takenAway,omitempty"`
+	// TakenAway is what last took the line away besides a daemon, until a
+	// daemon reported it (see TakeAway).
+	TakenAway *TakeAway `json:"takenAway,omitempty"`
+}
+
+// A TakeAway is what took the line away besides a daemon, and when: the
+// proxy job (ReasonDaemonStopped, ReasonUpstreamUnreachable), Codex's
+// session start hook (ReasonProxyDownAtSessionStart) or `kontext codex-proxy
+// disable` (ReasonDisabledLocally). It waits in route.json until a daemon's
+// report of it went through, a later one replacing it.
+type TakeAway struct {
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// Same reports whether t and other are one take-away.
+func (t TakeAway) Same(other TakeAway) bool {
+	return t.Reason == other.Reason && t.At.Equal(other.At)
 }
 
 // holder is a daemon's hold on the route: it lasts while that daemon runs,
@@ -315,17 +326,8 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 		return Status{Reason: configReason(err)}, err
 	}
 	st := r.loadState()
-	// A take-away goes to the daemon once: it is gone from route.json before
-	// anything else can fail.
-	takenAway := st.TakenAway
-	if takenAway != "" {
-		st.TakenAway = ""
-		if err := r.saveState(st); err != nil {
-			return Status{Reason: ReasonRouteError}, err
-		}
-	}
 	failed := func(reason string, err error) (Status, error) {
-		return Status{Reason: reason, TakenAway: takenAway}, err
+		return Status{Reason: reason}, err
 	}
 	token, err := r.ensureToken()
 	if err != nil {
@@ -343,7 +345,7 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 		}
 		st.Port = port
 	} else if skip := r.holdOff(st); skip != "" {
-		return Status{Skipped: skip, Reason: ReasonUpstreamUnreachable, TakenAway: takenAway}, nil
+		return Status{Skipped: skip, Reason: ReasonUpstreamUnreachable}, nil
 	}
 	if st.Port == 0 {
 		if st.Port, err = r.opts.FreePort(); err != nil {
@@ -385,7 +387,7 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 		// proxy on demand, and the route goes only after several misses.
 		if st.Failures++; st.Failures < maxHealthFailures {
 			_ = r.saveState(st)
-			return Status{Routed: true, Loaded: true, Port: st.Port, TakenAway: takenAway},
+			return Status{Routed: true, Loaded: true, Port: st.Port},
 				fmt.Errorf("codex proxy did not answer on its port (%d in a row): %w", st.Failures, err)
 		}
 		st.Failures = 0
@@ -414,7 +416,7 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 		return failed(configReason(err), err)
 	}
 	if skip := r.skip(config.content); skip.reason != "" {
-		return Status{Skipped: skip.text, Reason: skip.reason, TakenAway: takenAway}, r.unroute("")
+		return Status{Skipped: skip.text, Reason: skip.reason}, r.unroute("")
 	}
 	// The file is to hold the token: keep it from other users before it does,
 	// and route nothing while that fails.
@@ -442,7 +444,7 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 			st.CreatedConfig = true
 		}
 	}
-	routedNow := Status{Routed: true, Loaded: true, Answering: true, Port: st.Port, TakenAway: takenAway}
+	routedNow := Status{Routed: true, Loaded: true, Answering: true, Port: st.Port}
 	st.UnroutedAt, st.Failures, st.Unreachable = time.Time{}, 0, time.Time{}
 	if err := r.saveState(st); err != nil {
 		return routedNow, err
@@ -647,7 +649,7 @@ func (r *Router) held(h *holder) bool {
 }
 
 // unroute takes the config line away and notes when, and, unless it is
-// "", what took it (see Status.TakenAway). r.mu and the lock must be held.
+// "", what took it (see TakeAway). r.mu and the lock must be held.
 func (r *Router) unroute(takenAway string) error {
 	config, err := readConfig(r.configPath())
 	if err != nil || codexmanaged.Route(config.content) == "" {
@@ -672,7 +674,7 @@ func (r *Router) unroute(takenAway string) error {
 	}
 	st.UnroutedAt, st.ConfigMode, st.Holder = r.opts.Now(), 0, nil
 	if takenAway != "" {
-		st.TakenAway = takenAway
+		st.TakenAway = &TakeAway{Reason: takenAway, At: st.UnroutedAt}
 	}
 	return r.saveState(st)
 }
@@ -716,8 +718,8 @@ func (r *Router) Drain(ctx context.Context) (bool, error) {
 // Remove takes everything away for uninstall, in order: the config line;
 // then, once the Codex processes that may have read it are gone or wait runs
 // out, the job and the proxy's state. It returns how many of them were left.
-// Of the state, only what took the line away stays, when Options has a
-// DisableReason.
+// With a DisableReason, what the daemon has yet to report stays (see
+// removeState).
 func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 	if r.opts.GOOS != "darwin" {
 		return 0, nil
@@ -731,7 +733,12 @@ func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 	_, statErr := os.Stat(r.plistPath())
 	if codexmanaged.Route(config.content) == "" && errors.Is(statErr, fs.ErrNotExist) && !r.loaded(ctx) {
 		// Never routed, or already drained: nothing can still call the job.
-		return 0, os.RemoveAll(r.opts.StateDir)
+		unlock, err := r.lock()
+		if err != nil {
+			return 0, err
+		}
+		defer unlock()
+		return 0, r.removeState()
 	}
 	unlock, err := r.lock()
 	if err != nil {
@@ -741,7 +748,6 @@ func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 	if err := r.unroute(r.opts.DisableReason); err != nil {
 		return 0, err
 	}
-	takenAway := r.loadState().TakenAway
 	deadline := r.opts.Now().Add(wait)
 	left, err := r.draining()
 	for err == nil && left > 0 && r.opts.Now().Before(deadline) {
@@ -758,12 +764,76 @@ func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 	if err := r.removeJob(ctx); err != nil {
 		return left, err
 	}
-	if err := os.RemoveAll(r.opts.StateDir); err != nil || takenAway == "" || r.opts.DisableReason == "" {
-		return left, err
+	return left, r.removeState()
+}
+
+// removeState removes the proxy's state. With a DisableReason, what the
+// daemon, which routes Codex again while its switch is on, has yet to report
+// stays: the last take-away and the job's counters. The lock must be held;
+// the job is gone.
+func (r *Router) removeState() error {
+	if r.opts.DisableReason == "" {
+		return os.RemoveAll(r.opts.StateDir)
 	}
-	// The daemon, which routes Codex again while its switch is on, hears of
-	// the take-away at its next Enable.
-	return left, r.saveState(state{TakenAway: takenAway})
+	takeAway, counters := r.loadState().TakenAway, r.loadCounters()
+	if err := os.RemoveAll(r.opts.StateDir); err != nil {
+		return err
+	}
+	if takeAway != nil {
+		if err := r.saveState(state{TakenAway: takeAway}); err != nil {
+			return err
+		}
+	}
+	if counters.UpstreamFailures+counters.PassThroughs+counters.PartsMissing > 0 || len(counters.CodexVersions) > 0 {
+		return r.saveCounters(counters)
+	}
+	return nil
+}
+
+// TakeAway returns what last took the line away besides a daemon, until a
+// daemon reported it (see ClearTakeAway), or nil.
+func (r *Router) TakeAway() *TakeAway {
+	if r.opts.GOOS != "darwin" {
+		return nil
+	}
+	return r.loadState().TakenAway
+}
+
+// ClearTakeAway forgets take-away t once a daemon's report of it went
+// through, unless something took the line away again since.
+func (r *Router) ClearTakeAway(t TakeAway) error {
+	if r.opts.GOOS != "darwin" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	unlock, err := r.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	st := r.loadState()
+	if st.TakenAway == nil || !st.TakenAway.Same(t) {
+		return nil
+	}
+	st.TakenAway = nil
+	return r.saveState(st)
+}
+
+// InPlace reports whether config.toml routes Codex through the proxy, and
+// on which port, whatever answers there: where Codex goes once Enable or
+// Disable failed.
+func (r *Router) InPlace() (int, bool) {
+	if r.opts.GOOS != "darwin" {
+		return 0, false
+	}
+	config, err := readConfig(r.configPath())
+	route := codexmanaged.Route(config.content)
+	if err != nil || route == "" {
+		return 0, false
+	}
+	port, _, _ := parseBaseURL(route)
+	return port, true
 }
 
 // Status reports the route as it stands, changing nothing.
