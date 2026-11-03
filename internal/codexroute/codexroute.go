@@ -841,19 +841,23 @@ func (r *Router) ClearTakeAway(t TakeAway) error {
 	return r.saveState(st)
 }
 
-// InPlace reports whether config.toml routes Codex through the proxy, and
-// on which port, whatever answers there: where Codex goes once Enable or
-// Disable failed.
+// InPlace reports whether config.toml routes Codex through this router's
+// proxy, and on which port, whatever answers there: where Codex goes once
+// Enable or Disable failed. A marked line edited to point elsewhere does not
+// count.
 func (r *Router) InPlace() (int, bool) {
 	if r.opts.GOOS != "darwin" {
 		return 0, false
 	}
 	config, err := readConfig(r.configPath())
-	route := codexmanaged.Route(config.content)
-	if err != nil || route == "" {
+	if err != nil {
 		return 0, false
 	}
-	port, _, _ := parseBaseURL(route)
+	port, token, ok := parseBaseURL(codexmanaged.Route(config.content))
+	data, _ := os.ReadFile(TokenPath(r.opts.StateDir))
+	if !ok || port != r.loadState().Port || token != strings.TrimSpace(string(data)) {
+		return 0, false
+	}
 	return port, true
 }
 

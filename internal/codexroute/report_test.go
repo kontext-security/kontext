@@ -256,6 +256,38 @@ func TestDisablingNowKeepsWhatTheDaemonHasYetToReport(t *testing.T) {
 	}
 }
 
+// InPlace finds the line only while it names this router's proxy: a marked
+// line edited to point elsewhere, or at another token, routes Codex
+// somewhere else.
+func TestInPlaceFindsOnlyThisRoutersLine(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	if port, inPlace := r.InPlace(); inPlace || port != 0 {
+		t.Fatalf("InPlace before any route = %d, %v", port, inPlace)
+	}
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if port, inPlace := r.InPlace(); !inPlace || port != testPort {
+		t.Fatalf("InPlace with Kontext's line = %d, %v", port, inPlace)
+	}
+	routed := readFile(t, configPath)
+	route := codexmanaged.Route(routed)
+	for _, edited := range []string{
+		"https://gateway.example/v1",
+		strings.Replace(route, "/kx", "/ky", 1),
+		strings.Replace(route, ":"+strconv.Itoa(testPort), ":49322", 1),
+	} {
+		writeFile(t, configPath, strings.Replace(routed, route, edited, 1), 0o600)
+		if codexmanaged.Route(readFile(t, configPath)) != edited {
+			t.Fatalf("the edit did not keep the marker:\n%s", readFile(t, configPath))
+		}
+		if port, inPlace := r.InPlace(); inPlace {
+			t.Fatalf("InPlace with %s = %d, %v", edited, port, inPlace)
+		}
+	}
+}
+
 // local is the router of the person's own commands, as `kontext codex-proxy
 // disable` builds it.
 func (r testRouter) local() *Router {
