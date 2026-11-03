@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // counted collects what a proxy counts.
@@ -24,12 +25,21 @@ func (c *counted) count(counts Counts) {
 	c.counts = append(c.counts, counts)
 }
 
-func (c *counted) take() []Counts {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	taken := c.counts
-	c.counts = nil
-	return taken
+// take waits for want counts and returns what has come by then, emptied. The
+// proxy counts after its response has gone out, so a client that has read the
+// response can be ahead of the count.
+func (c *counted) take(t *testing.T, want int) []Counts {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		c.mu.Lock()
+		if len(c.counts) >= want || time.Now().After(deadline) {
+			taken := c.counts
+			c.counts = nil
+			c.mu.Unlock()
+			return taken
+		}
+		c.mu.Unlock()
+	}
 }
 
 // post sends body to the proxy's responses route as Codex would, with
@@ -90,7 +100,7 @@ func TestProxyCountsWhatTheDaemonReports(t *testing.T) {
 		held = !step.unheld
 		mu.Unlock()
 		post(t, proxy.URL, step.userAgent, step.body)
-		if got := c.take(); len(got) != 1 || got[0] != step.want {
+		if got := c.take(t, 1); len(got) != 1 || got[0] != step.want {
 			t.Fatalf("%s: counted %+v, want %+v", step.name, got, step.want)
 		}
 	}
@@ -99,7 +109,7 @@ func TestProxyCountsWhatTheDaemonReports(t *testing.T) {
 	bodyLimit = 64
 	defer func() { bodyLimit = old }()
 	post(t, proxy.URL, cli, body(t, user(strings.Repeat("x", 128))))
-	if got := c.take(); len(got) != 1 || got[0] != (Counts{PassThroughs: 1, CodexVersion: "0.163.0"}) {
+	if got := c.take(t, 1); len(got) != 1 || got[0] != (Counts{PassThroughs: 1, CodexVersion: "0.163.0"}) {
 		t.Fatalf("an oversized body counted %+v", got)
 	}
 }
@@ -124,7 +134,7 @@ func TestProxyCountsEachRequestThatConnectedNowhere(t *testing.T) {
 	}
 	// The breaker counts each failure, then the request counts what else
 	// it found.
-	got := c.take()
+	got := c.take(t, 4)
 	if len(got) != 4 || got[0] != (Counts{UpstreamFailures: 1}) || got[2] != (Counts{UpstreamFailures: 1}) || got[1] != (Counts{}) || got[3] != (Counts{}) {
 		t.Fatalf("counted %+v", got)
 	}
