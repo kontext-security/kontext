@@ -16,7 +16,6 @@ import (
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/instancelock"
-	"github.com/kontext-security/kontext/internal/platform"
 )
 
 type instanceFixture struct {
@@ -27,7 +26,7 @@ type instanceFixture struct {
 func newInstanceFixture(t *testing.T) instanceFixture {
 	t.Helper()
 	hermetic.Home(t)
-	// Windows takes the state folder from here, not from the home variables.
+	// Windows keeps its state here, not under the home variables.
 	t.Setenv("LOCALAPPDATA", t.TempDir())
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -50,6 +49,17 @@ func newInstanceFixture(t *testing.T) instanceFixture {
 	}}
 }
 
+// blockInstanceLock puts a folder where the lock file goes, which no open takes.
+func blockInstanceLock(t *testing.T, socketPath string) {
+	t.Helper()
+	if err := EnsureSocketDir(socketPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(instancelock.PathForSocket(socketPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func shortInstanceWait(t *testing.T) {
 	t.Helper()
 	previous := instanceLockWait
@@ -60,10 +70,7 @@ func shortInstanceWait(t *testing.T) {
 func TestRunDaemonRefusesWhileAnotherHoldsTheSocket(t *testing.T) {
 	shortInstanceWait(t)
 	fixture := newInstanceFixture(t)
-	lockPath, err := instancelock.PathForSocket(fixture.socketPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	lockPath := instancelock.PathForSocket(fixture.socketPath)
 	holder, err := instancelock.Acquire(lockPath, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -93,8 +100,8 @@ func TestRunDaemonRefusesWhileAnotherHoldsTheSocket(t *testing.T) {
 	}
 }
 
-// The lock can't see a daemon whose lock has another name, such as one running
-// with another home. The socket shows it.
+// The lock can't see a daemon that takes none, such as one from an older release.
+// The socket shows it.
 func TestRunDaemonRefusesWhenSomethingAnswersOnTheSocket(t *testing.T) {
 	fixture := newInstanceFixture(t)
 	if err := EnsureSocketDir(fixture.socketPath); err != nil {
@@ -118,10 +125,7 @@ func TestRunDaemonRefusesWhenSomethingAnswersOnTheSocket(t *testing.T) {
 	if _, statErr := os.Stat(fixture.dbPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("the refused start opened the store: %v", statErr)
 	}
-	lockPath, err := instancelock.PathForSocket(fixture.socketPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	lockPath := instancelock.PathForSocket(fixture.socketPath)
 	lock, err := instancelock.Acquire(lockPath, 0)
 	if err != nil {
 		t.Fatalf("the refused start kept the lock: %v", err)
@@ -182,10 +186,7 @@ func TestRunDaemonReplacesASocketNothingAnswersOn(t *testing.T) {
 // or a replacement started during the old one's shutdown would be refused.
 func TestRunDaemonWaitsForADaemonThatIsLeaving(t *testing.T) {
 	fixture := newInstanceFixture(t)
-	lockPath, err := instancelock.PathForSocket(fixture.socketPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	lockPath := instancelock.PathForSocket(fixture.socketPath)
 	holder, err := instancelock.Acquire(lockPath, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -255,16 +256,7 @@ func TestConnectFailureMeansBusy(t *testing.T) {
 // Without its lock, the daemon still won't take a socket from something alive.
 func TestRunDaemonWithoutTheLockStillChecksTheSocket(t *testing.T) {
 	fixture := newInstanceFixture(t)
-	state, err := platform.UserStateDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(state, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(state, "locks"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	blockInstanceLock(t, fixture.socketPath)
 	if err := EnsureSocketDir(fixture.socketPath); err != nil {
 		t.Fatal(err)
 	}
@@ -285,16 +277,7 @@ func TestRunDaemonWithoutTheLockStillChecksTheSocket(t *testing.T) {
 // hooks fail open with no daemon.
 func TestRunDaemonStartsWhenTheLockCannotBeTaken(t *testing.T) {
 	fixture := newInstanceFixture(t)
-	state, err := platform.UserStateDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(state, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(state, "locks"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	blockInstanceLock(t, fixture.socketPath)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -315,15 +298,16 @@ func TestRunDaemonStartsWhenTheLockCannotBeTaken(t *testing.T) {
 
 func TestRunDaemonReleasesTheLockWhenItStops(t *testing.T) {
 	fixture := newInstanceFixture(t)
+	// A socket folder that isn't there yet: the daemon has to prepare and check
+	// it before taking the lock, or it runs without the lock.
+	fixture.socketPath = filepath.Join(filepath.Dir(fixture.socketPath), "new", "s.sock")
+	fixture.opts.SocketPath = fixture.socketPath
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- RunDaemon(ctx, fixture.opts) }()
 	waitForSocket(t, fixture.socketPath, errCh)
 
-	lockPath, err := instancelock.PathForSocket(fixture.socketPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	lockPath := instancelock.PathForSocket(fixture.socketPath)
 	if lock, err := instancelock.Acquire(lockPath, 0); err == nil {
 		lock.Release()
 		t.Fatal("the running daemon doesn't hold the lock")
@@ -351,10 +335,7 @@ func TestRunDaemonParkedDoesNotTakeTheLock(t *testing.T) {
 	shortInstanceWait(t)
 	fixture := newInstanceFixture(t)
 	t.Setenv(EnvExpectedConfigScope, "user") // The config resolves as scope "env".
-	lockPath, err := instancelock.PathForSocket(fixture.socketPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	lockPath := instancelock.PathForSocket(fixture.socketPath)
 	holder, err := instancelock.Acquire(lockPath, 0)
 	if err != nil {
 		t.Fatal(err)

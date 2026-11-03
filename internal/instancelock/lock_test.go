@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/hermetic"
-	"github.com/kontext-security/kontext/internal/platform"
 )
 
 const (
@@ -113,7 +111,7 @@ func (h *helper) kill() {
 
 func lockPath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), "locks", "daemon.lock")
+	return filepath.Join(t.TempDir(), "daemon.lock")
 }
 
 func TestAcquireIsRefusedWhileAnotherProcessHoldsIt(t *testing.T) {
@@ -305,9 +303,10 @@ func TestAcquireCreatesNothingThroughALink(t *testing.T) {
 	}
 }
 
-func TestPathForSocketIsTheSameThroughALink(t *testing.T) {
+// The same socket through a linked folder, as with /tmp and /private/tmp on
+// macOS, has to be the same lock: the file is, whatever its name says.
+func TestALockHoldsThroughALinkedFolder(t *testing.T) {
 	hermetic.Symlinks(t)
-	hermetic.Home(t)
 	root := t.TempDir()
 	real := filepath.Join(root, "real")
 	if err := os.Mkdir(real, 0o700); err != nil {
@@ -317,96 +316,86 @@ func TestPathForSocketIsTheSameThroughALink(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
-	direct, err := PathForSocket(filepath.Join(real, "s.sock"))
+	direct, err := Acquire(PathForSocket(filepath.Join(real, "s.sock")), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	through, err := PathForSocket(filepath.Join(link, "s.sock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if direct != through {
-		t.Errorf("one socket has two locks: %s and %s", direct, through)
-	}
-}
-
-func TestMachineKey(t *testing.T) {
-	previous := hostname
-	t.Cleanup(func() { hostname = previous })
-	hostname = func() (string, error) { return "one", nil }
-
-	if got := machineKey("linux"); got != "one" {
-		t.Errorf("Linux: key = %q, want the hostname", got)
-	}
-	for _, goos := range []string{"darwin", "windows"} {
-		if got := machineKey(goos); got != "" {
-			t.Errorf("%s: key = %q, want none", goos, got)
+	defer direct.Release()
+	through, err := Acquire(PathForSocket(filepath.Join(link, "s.sock")), 0)
+	var held *HeldError
+	if !errors.As(err, &held) {
+		if through != nil {
+			through.Release()
 		}
-	}
-	hostname = func() (string, error) { return "", errors.New("no hostname") }
-	if got := machineKey("linux"); got != "" {
-		t.Errorf("without a hostname: key = %q", got)
-	}
-}
-
-func TestPathForSocketDiffersByMachineOnLinux(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("the key is empty elsewhere; TestMachineKey covers that")
-	}
-	hermetic.Home(t)
-	socket := filepath.Join(t.TempDir(), "s.sock")
-	previous := hostname
-	t.Cleanup(func() { hostname = previous })
-
-	paths := map[string]string{}
-	for _, host := range []string{"one", "two"} {
-		hostname = func() (string, error) { return host, nil }
-		path, err := PathForSocket(socket)
-		if err != nil {
-			t.Fatal(err)
-		}
-		paths[host] = path
-	}
-	if paths["one"] == paths["two"] {
-		t.Errorf("two machines share the lock %s", paths["one"])
+		t.Errorf("through the link: err = %v, want HeldError", err)
 	}
 }
 
 func TestPathForSocket(t *testing.T) {
-	hermetic.Home(t)
-	one, err := PathForSocket(filepath.Join(t.TempDir(), "one.sock"))
+	dir := t.TempDir()
+	one, two := filepath.Join(dir, "one.sock"), filepath.Join(dir, "two.sock")
+	if PathForSocket(one) == PathForSocket(two) {
+		t.Errorf("two sockets in one folder share the lock %s", PathForSocket(one))
+	}
+	// Beside the socket: its folder's owner check is what protects the lock.
+	if got := filepath.Dir(PathForSocket(one)); got != dir {
+		t.Errorf("lock is in %s, not beside its socket in %s", got, dir)
+	}
+}
+
+// macOS deletes regular files under /tmp that nothing touched for three days,
+// even one a running daemon has locked. The next daemon would then lock a new file.
+func TestAHeldLockKeepsItsFileFresh(t *testing.T) {
+	previous := refreshInterval
+	refreshInterval = 10 * time.Millisecond
+	t.Cleanup(func() { refreshInterval = previous })
+	path := lockPath(t)
+	lock, err := Acquire(path, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := PathForSocket(filepath.Join(filepath.Dir(one), "..", "unrelated.sock"))
-	if err != nil {
+	defer lock.Release()
+
+	old := time.Now().Add(-96 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if one == again {
-		t.Errorf("two sockets share the lock %s", one)
-	}
-	if !filepath.IsAbs(one) {
-		t.Errorf("lock path %q is relative", one)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.ModTime().After(time.Now().Add(-time.Hour)) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the file still reads %v", info.ModTime())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
-	socket := filepath.Join(t.TempDir(), "same.sock")
-	first, err := PathForSocket(socket)
+	lock.Release()
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	spelled, err := PathForSocket(filepath.Join(filepath.Dir(socket), ".", "same.sock"))
-	if err != nil {
-		t.Fatal(err)
+	if info.ModTime().After(time.Now().Add(-time.Hour)) {
+		t.Error("a released lock still touches its file")
 	}
-	if first != spelled {
-		t.Errorf("one socket has two locks: %s and %s", first, spelled)
+}
+
+func TestAcquireLeavesAMissingFolderMissing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "not-there")
+	if lock, err := Acquire(filepath.Join(dir, "daemon.lock"), 0); err == nil {
+		lock.Release()
+		t.Error("took a lock in a folder nobody checked")
 	}
-	// Beside the socket is under /tmp on Unix, where another user can get first.
-	state, err := platform.UserStateDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(first, state+string(filepath.Separator)) {
-		t.Errorf("lock %s isn't in the user's state folder %s", first, state)
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the folder was created: %v", err)
 	}
 }

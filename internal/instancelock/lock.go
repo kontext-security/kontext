@@ -4,22 +4,18 @@
 package instancelock
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/kontext-security/kontext/internal/platform"
 )
 
 const pollInterval = 50 * time.Millisecond
+
+var refreshInterval = time.Hour
 
 // HeldError says another process holds the lock.
 type HeldError struct {
@@ -39,50 +35,24 @@ func (e *HeldError) Error() string {
 type Lock struct {
 	file    *os.File
 	release sync.Once
+	stop    chan struct{}
+	stopped chan struct{}
 }
 
-var hostname = os.Hostname
-
-// machineKey keeps Linux machines sharing a home over a network from refusing
-// each other's daemons. Only there: a Mac's hostname follows the network, which
-// would change the lock's name under a running daemon and leave a file for each
-// name, and Windows keeps this folder per machine.
-func machineKey(goos string) string {
-	if goos != "linux" {
-		return ""
-	}
-	host, _ := hostname()
-	return host
-}
-
-// PathForSocket names the lock for a socket. It's in the user's state folder,
-// not beside the socket: on macOS and Linux that is under /tmp, where another
-// user can create the folder first.
-func PathForSocket(socketPath string) (string, error) {
-	absolute, err := filepath.Abs(socketPath)
-	if err != nil {
-		return "", err
-	}
-	// One socket has one lock however its folder is spelled, as with /tmp and
-	// /private/tmp on macOS. A folder that isn't there yet has no second spelling.
-	if dir, err := filepath.EvalSymlinks(filepath.Dir(absolute)); err == nil {
-		absolute = filepath.Join(dir, filepath.Base(absolute))
-	}
-	state, err := platform.UserStateDir()
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(machineKey(runtime.GOOS) + "\x00" + absolute))
-	return filepath.Join(state, "locks", "socket-"+hex.EncodeToString(sum[:8])+".lock"), nil
+// PathForSocket names the lock for a socket, right beside it. One socket then has
+// one lock whatever the home, the hostname or the spelling of its folder, and a
+// folder the daemon can bind in is one it can lock in. The caller has to have
+// checked the folder first, as it does for the socket.
+func PathForSocket(socketPath string) string {
+	return socketPath + ".lock"
 }
 
 // Acquire takes the lock at path, waiting up to wait for a holder to leave. A
-// holder still there after that gives a *HeldError. The file stays after a
-// release: removing it would let two processes each lock a different file.
+// holder still there after that gives a *HeldError. The folder has to exist: it
+// decides who else can reach the file, so creating it isn't this package's call.
+// The file stays after a release: removing it would let two processes each lock
+// a different file.
 func Acquire(path string, wait time.Duration) (*Lock, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
 	// Writing the PID through a link would overwrite whatever it points at, so
 	// the open doesn't follow one, and the check is on what was opened.
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|openNoFollow, 0o600)
@@ -118,12 +88,36 @@ func Acquire(path string, wait time.Duration) (*Lock, error) {
 		file.Close()
 		return nil, err
 	}
-	return &Lock{file: file}, nil
+	lock := &Lock{file: file, stop: make(chan struct{}), stopped: make(chan struct{})}
+	go lock.keepFresh(path, refreshInterval)
+	return lock, nil
+}
+
+// keepFresh touches the file for as long as the lock is held. Cleaners go by a
+// file's age and don't care that it's locked: macOS deletes regular files under
+// /tmp after three days, and the next process would then lock a new file.
+func (l *Lock) keepFresh(path string, interval time.Duration) {
+	defer close(l.stopped)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-l.stop:
+			return
+		case <-ticker.C:
+			now := time.Now()
+			_ = os.Chtimes(path, now, now)
+		}
+	}
 }
 
 // Release gives the lock up. Calling it again does nothing.
 func (l *Lock) Release() {
-	l.release.Do(func() { l.file.Close() })
+	l.release.Do(func() {
+		close(l.stop)
+		<-l.stopped
+		l.file.Close()
+	})
 }
 
 func writePID(file *os.File) error {

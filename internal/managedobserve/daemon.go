@@ -78,10 +78,9 @@ var (
 var instanceLockWait = 5 * time.Second
 
 // holdInstanceLock keeps one daemon on a socket: a live holder of the lock
-// refuses the start, and so does anything still answering on the socket once
-// the lock is held. The lock's name follows the home, so it can't see a daemon
-// started with another one, while a daemon that was leaving has gone by now.
-// What answers is staying.
+// refuses the start, and so does anything still answering on the socket once the
+// lock is held. A daemon that was leaving has gone by now, so what answers is
+// staying, such as a daemon from a release that takes no lock.
 func holdInstanceLock(socketPath string, log diagnostic.Logger) (func(), error) {
 	release, err := takeInstanceLock(socketPath, log)
 	if err != nil {
@@ -115,21 +114,17 @@ func connectFailureMeansBusy(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-// takeInstanceLock returns a no-op if the lock can't be taken at all, such as on
-// a home folder without file locks. The daemon then runs with only the socket
-// check, because with no daemon every hook fails open.
+// takeInstanceLock returns a no-op if the lock can't be taken at all, such as in
+// a socket folder on a filesystem without file locks. The daemon then runs with
+// only the socket check, because with no daemon every hook fails open.
 func takeInstanceLock(socketPath string, log diagnostic.Logger) (func(), error) {
-	path, err := instancelock.PathForSocket(socketPath)
+	lock, err := instancelock.Acquire(instancelock.PathForSocket(socketPath), instanceLockWait)
 	if err == nil {
-		var lock *instancelock.Lock
-		lock, err = instancelock.Acquire(path, instanceLockWait)
-		if err == nil {
-			return lock.Release, nil
-		}
-		var held *instancelock.HeldError
-		if errors.As(err, &held) {
-			return nil, fmt.Errorf("another daemon serves %s: %w", socketPath, err)
-		}
+		return lock.Release, nil
+	}
+	var held *instancelock.HeldError
+	if errors.As(err, &held) {
+		return nil, fmt.Errorf("another daemon serves %s: %w", socketPath, err)
 	}
 	logAlways(log, "managed-observe daemon running without its instance lock: %v\n", err)
 	return func() {}, nil
@@ -174,7 +169,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	// Before anything else that changes state: a second daemon must not migrate
 	// the config, open the store or take the socket over. The socket's folder
-	// comes first because the lock's name follows that folder's real path.
+	// comes first because the lock lives there, under that folder's owner check.
 	releaseInstance, err := holdInstanceLock(socketPath, opts.Diagnostic)
 	if err != nil {
 		return err
