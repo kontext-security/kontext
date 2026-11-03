@@ -2,6 +2,7 @@ package endpointconfig
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -42,7 +43,24 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: httpClient}, nil
 }
 
+// errUnsupportedVersion is a server's 406 unsupported_version: it predates the
+// response version asked for.
+var errUnsupportedVersion = errors.New("endpoint configuration: response version not supported by the server")
+
+// Fetch gets the configuration as ResponseVersion has it, or as
+// FallbackResponseVersion has it from a server that predates
+// ResponseVersion.
 func (c *Client) Fetch(ctx context.Context, installToken, installationID, configIdentity string) (FetchResult, error) {
+	result, err := c.fetch(ctx, ResponseVersion, installToken, installationID, configIdentity)
+	if errors.Is(err, errUnsupportedVersion) {
+		// The conditional value may be either version's: identities differ
+		// across versions, so it matches only a response of its own.
+		return c.fetch(ctx, FallbackResponseVersion, installToken, installationID, configIdentity)
+	}
+	return result, err
+}
+
+func (c *Client) fetch(ctx context.Context, version int, installToken, installationID, configIdentity string) (FetchResult, error) {
 	if !installationIDPattern.MatchString(installationID) {
 		return FetchResult{}, errors.New("endpoint configuration: invalid installation ID")
 	}
@@ -54,9 +72,9 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, config
 		return FetchResult{}, err
 	}
 	query := endpoint.Query()
-	// Ask for the version this build implements. The server serves v1 and v2 side
-	// by side, so this is what selects the shape and the identity domain.
-	query.Set("response_version", strconv.Itoa(ResponseVersion))
+	// Ask for a version this build implements. The server serves every version
+	// side by side, so this is what selects the shape and the identity domain.
+	query.Set("response_version", strconv.Itoa(version))
 	endpoint.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
@@ -82,6 +100,16 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, config
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1))
 		return FetchResult{NotModified: true, ETag: etag}, nil
 	}
+	if response.StatusCode == http.StatusNotAcceptable && version != FallbackResponseVersion {
+		var refused struct {
+			Code string `json:"code"`
+		}
+		data, _ := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
+		if json.Unmarshal(data, &refused) == nil && refused.Code == "unsupported_version" {
+			return FetchResult{}, errUnsupportedVersion
+		}
+		return FetchResult{}, fmt.Errorf("endpoint configuration fetch: unexpected status %d", response.StatusCode)
+	}
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, MaxResponseBytes+1))
 		return FetchResult{}, fmt.Errorf("endpoint configuration fetch: unexpected status %d", response.StatusCode)
@@ -92,6 +120,9 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, config
 	}
 	if err := decoded.Validate(); err != nil {
 		return FetchResult{}, err
+	}
+	if decoded.ResponseVersion != version {
+		return FetchResult{}, fmt.Errorf("endpoint configuration: response version %d, asked for %d", decoded.ResponseVersion, version)
 	}
 	if etag == "" || etag != decoded.ConfigIdentity {
 		return FetchResult{}, errors.New("endpoint configuration: ETag does not match config identity")

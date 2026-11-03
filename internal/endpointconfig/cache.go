@@ -95,7 +95,7 @@ func (c *Cache) Load() error {
 			ResponseVersion int `json:"responseVersion"`
 		} `json:"response"`
 	}
-	if err := json.Unmarshal(data, &peek); err == nil && peek.Response != nil && peek.Response.ResponseVersion != ResponseVersion {
+	if err := json.Unmarshal(data, &peek); err == nil && peek.Response != nil && !readsVersion(peek.Response.ResponseVersion) {
 		c.discardOlderVersion()
 		return nil
 	}
@@ -111,7 +111,7 @@ func (c *Cache) Load() error {
 		// cannot be revalidated under this contract: its identity was computed
 		// over a different preimage. Discard it and start unconfirmed rather than
 		// failing startup. The next refresh repopulates it.
-		if file.Response.ResponseVersion != ResponseVersion {
+		if !readsVersion(file.Response.ResponseVersion) {
 			c.discardOlderVersion()
 			return nil
 		}

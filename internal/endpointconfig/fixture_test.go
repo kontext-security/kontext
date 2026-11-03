@@ -5,14 +5,26 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"strconv"
 	"testing"
 )
 
-const identityFixturePath = "testdata/portable/v4/identity-v4.json"
-
-// Update only when deliberately revising the portable fixture bytes. The cloud
-// pins the same digest (FIXTURE_V4_DIGEST in packages/shared endpoint-config).
-const identityFixtureSHA256 = "97754c4d0d3fc70b05ca1324bf68c352a4a2d0e075acde9bcb2d055c53f560a9"
+// The portable fixtures of the versions this build reads. Update a digest
+// only when deliberately revising that fixture's bytes. The cloud pins the
+// same digests (FIXTURE_V4_DIGEST and FIXTURE_V5_DIGEST in packages/shared
+// endpoint-config).
+var identityFixtures = []struct {
+	path    string
+	sha256  string
+	version int
+	// vectors is three capture modes crossed with both values of each
+	// switch, which is what makes each switch observably part of the
+	// identity.
+	vectors int
+}{
+	{path: "testdata/portable/v4/identity-v4.json", sha256: "97754c4d0d3fc70b05ca1324bf68c352a4a2d0e075acde9bcb2d055c53f560a9", version: FallbackResponseVersion, vectors: 12},
+	{path: "testdata/portable/v5/identity-v5.json", sha256: "afd695658eff0cea245ef62267b92b6d5029064d3fc44d4ef67e12d82aed2677", version: ResponseVersion, vectors: 24},
+}
 
 type identityFixture struct {
 	SchemaVersion  string                  `json:"schemaVersion"`
@@ -29,50 +41,53 @@ type identityFixtureVector struct {
 }
 
 func TestPortableIdentityFixture(t *testing.T) {
-	data, err := os.ReadFile(identityFixturePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256(data)
-	if got := hex.EncodeToString(digest[:]); got != identityFixtureSHA256 {
-		t.Fatalf("fixture SHA-256 = %s, want %s", got, identityFixtureSHA256)
-	}
-	var fixture identityFixture
-	if err := json.Unmarshal(data, &fixture); err != nil {
-		t.Fatal(err)
-	}
-	if fixture.SchemaVersion != "endpoint-config-identity-fixture-v4" || fixture.IdentityDomain != identityDomain {
-		t.Fatalf("fixture metadata = %#v", fixture)
-	}
-	// Twelve: three capture modes crossed with both switches, which is what
-	// makes each switch observably part of the identity.
-	if len(fixture.Vectors) != 12 {
-		t.Fatalf("fixture vector count = %d, want 12", len(fixture.Vectors))
-	}
-	for _, vector := range fixture.Vectors {
-		t.Run(vector.Name, func(t *testing.T) {
-			if vector.ResponseVersion != ResponseVersion {
-				t.Fatalf("responseVersion = %d", vector.ResponseVersion)
-			}
-			identity, err := ComputeIdentity(vector.Config)
+	for _, file := range identityFixtures {
+		t.Run(file.path, func(t *testing.T) {
+			data, err := os.ReadFile(file.path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if identity != vector.ConfigIdentity {
-				t.Fatalf("ComputeIdentity() = %s, want %s", identity, vector.ConfigIdentity)
+			digest := sha256.Sum256(data)
+			if got := hex.EncodeToString(digest[:]); got != file.sha256 {
+				t.Fatalf("fixture SHA-256 = %s, want %s", got, file.sha256)
 			}
-			preimage, err := json.Marshal([]any{
-				identityDomain,
-				ResponseVersion,
-				string(vector.Config.PayloadCaptureMode),
-				*vector.Config.WorkTypeClassification,
-				*vector.Config.ToolOutputCompaction,
-			})
-			if err != nil {
+			var fixture identityFixture
+			if err := json.Unmarshal(data, &fixture); err != nil {
 				t.Fatal(err)
 			}
-			if string(preimage) != vector.Preimage {
-				t.Fatalf("preimage = %s, want %s", preimage, vector.Preimage)
+			if fixture.SchemaVersion != "endpoint-config-identity-fixture-v"+strconv.Itoa(file.version) || fixture.IdentityDomain != identityDomain(file.version) {
+				t.Fatalf("fixture metadata = %#v", fixture)
+			}
+			if len(fixture.Vectors) != file.vectors {
+				t.Fatalf("fixture vector count = %d, want %d", len(fixture.Vectors), file.vectors)
+			}
+			for _, vector := range fixture.Vectors {
+				t.Run(vector.Name, func(t *testing.T) {
+					if vector.ResponseVersion != file.version {
+						t.Fatalf("responseVersion = %d", vector.ResponseVersion)
+					}
+					response := Response{ResponseVersion: vector.ResponseVersion, Config: vector.Config, ConfigIdentity: vector.ConfigIdentity}
+					if err := response.Validate(); err != nil {
+						t.Fatal(err)
+					}
+					fields := []any{
+						identityDomain(file.version),
+						file.version,
+						string(vector.Config.PayloadCaptureMode),
+						*vector.Config.WorkTypeClassification,
+						*vector.Config.ToolOutputCompaction,
+					}
+					if vector.Config.CodexProxy != nil {
+						fields = append(fields, *vector.Config.CodexProxy)
+					}
+					preimage, err := json.Marshal(fields)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if string(preimage) != vector.Preimage {
+						t.Fatalf("preimage = %s, want %s", preimage, vector.Preimage)
+					}
+				})
 			}
 		})
 	}
