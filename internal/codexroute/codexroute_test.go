@@ -126,7 +126,7 @@ type testRouter struct {
 
 // adminAnswer is what Codex's administrator layers say about the route.
 type adminAnswer struct {
-	blocker string
+	blocker codexmanaged.Blocker
 	err     error
 }
 
@@ -202,9 +202,9 @@ func (r testRouter) daemonIn(t *testing.T, stateDir string) *Router {
 			}
 			return r.scutil.output, r.scutil.err
 		},
-		AdminRoute: func(codexHome string) (string, error) {
+		AdminRoute: func(codexHome string) (codexmanaged.Blocker, error) {
 			if codexHome != filepath.Join(r.home, ".codex") {
-				return "", errors.New("asked about another Codex home: " + codexHome)
+				return codexmanaged.Blocker{}, errors.New("asked about another Codex home: " + codexHome)
 			}
 			return r.admin.blocker, r.admin.err
 		},
@@ -1294,16 +1294,16 @@ func TestAnAdministratorsRouteKeepsCodexAsItIs(t *testing.T) {
 	routed := readFile(t, configPath)
 
 	for _, admin := range []adminAnswer{
-		{blocker: "/etc/codex/requirements.toml sets model_provider"},
+		{blocker: codexmanaged.Blocker{Setting: codexmanaged.SettingModelProvider, Text: "/etc/codex/requirements.toml sets model_provider"}},
 		{err: errors.New("/etc/codex/config.toml: permission denied")},
 	} {
 		*r.admin = admin
 		status, err := r.Enable(context.Background())
-		want := admin.blocker
+		want, reason := admin.blocker.Text, ReasonAdminModelProvider
 		if admin.err != nil {
-			want = "Codex's administrator configuration cannot be read: " + admin.err.Error()
+			want, reason = "Codex's administrator configuration cannot be read: "+admin.err.Error(), ReasonAdminConfigUnreadable
 		}
-		if err != nil || status.Routed || status.Skipped != want {
+		if err != nil || status.Routed || status.Skipped != want || status.Reason != reason {
 			t.Fatalf("Enable with %+v = %+v, %v", admin, status, err)
 		}
 		if info, _ := os.Stat(configPath); readFile(t, configPath) != original || info.Mode().Perm() != 0o644 {

@@ -47,16 +47,17 @@ func TestAddRouteToAnEmptyConfig(t *testing.T) {
 }
 
 func TestRouteLeavesTheirOwnTrafficAlone(t *testing.T) {
-	cases := map[string]string{
-		"their base URL":        "openai_base_url = \"https://llm-gateway.example/v1\"\n",
-		"another provider":      "model_provider = \"ollama\"\n",
-		"their ChatGPT backend": "chatgpt_base_url = \"https://chatgpt.internal.example/backend-api/\"\n",
+	cases := map[string]struct{ content, setting string }{
+		"their base URL":        {"openai_base_url = \"https://llm-gateway.example/v1\"\n", SettingOpenAIBaseURL},
+		"another provider":      {"model_provider = \"ollama\"\n", SettingModelProvider},
+		"their ChatGPT backend": {"chatgpt_base_url = \"https://chatgpt.internal.example/backend-api/\"\n", SettingChatGPTBaseURL},
 	}
-	for name, content := range cases {
+	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
+			content := c.content
 			blocker, err := RouteBlocker(content)
-			if err != nil || blocker == "" {
-				t.Fatalf("RouteBlocker = %q, %v", blocker, err)
+			if err != nil || blocker.Setting != c.setting || blocker.Text == "" {
+				t.Fatalf("RouteBlocker = %+v, %v", blocker, err)
 			}
 			if _, err := AddRoute(content, proxyURL); !errors.Is(err, ErrRouteNotEditable) {
 				t.Fatalf("AddRoute error = %v", err)
@@ -64,8 +65,8 @@ func TestRouteLeavesTheirOwnTrafficAlone(t *testing.T) {
 		})
 	}
 	for _, content := range []string{"model_provider = \"openai\"\n", "chatgpt_base_url = \"https://chatgpt.com/backend-api/\"\n"} {
-		if blocker, err := RouteBlocker(content); err != nil || blocker != "" {
-			t.Fatalf("RouteBlocker(%q) = %q, %v", content, blocker, err)
+		if blocker, err := RouteBlocker(content); err != nil || blocker != (Blocker{}) {
+			t.Fatalf("RouteBlocker(%q) = %+v, %v", content, blocker, err)
 		}
 	}
 }

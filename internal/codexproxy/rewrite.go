@@ -72,11 +72,15 @@ func NewRewriter(decider Decider, store *Store, budget time.Duration) *Rewriter 
 type Stats struct {
 	Parts, Asked, Replaced, Replayed int
 	BytesBefore, BytesAfter          int
+	// PartsMissing counts the new code mode results in which no part was
+	// found, not even Codex's framing, which it sends each one with: a sign
+	// that Codex's format changed.
+	PartsMissing int
 }
 
 func (s Stats) String() string {
-	return fmt.Sprintf(" (parts=%d asked=%d replaced=%d replayed=%d bytes %d->%d)",
-		s.Parts, s.Asked, s.Replaced, s.Replayed, s.BytesBefore, s.BytesAfter)
+	return fmt.Sprintf(" (parts=%d asked=%d replaced=%d replayed=%d missing=%d bytes %d->%d)",
+		s.Parts, s.Asked, s.Replaced, s.Replayed, s.PartsMissing, s.BytesBefore, s.BytesAfter)
 }
 
 // ask is a new printed part to decide.
@@ -113,6 +117,7 @@ func (rw *Rewriter) Rewrite(ctx context.Context, id Identity, body []byte) ([]by
 			firstNew = i + 1
 		}
 	}
+	stats.PartsMissing = partsMissing(request.items, firstNew)
 	var edits []edit
 	replace := func(it item, t span, replacement string) {
 		with := encodeString(replacement)
@@ -203,6 +208,27 @@ func (rw *Rewriter) decide(ctx context.Context, id Identity, request, seen parse
 		decided[k] = &whole
 	}
 	return decided
+}
+
+// codeModeTool is the custom tool Codex runs code mode scripts with.
+const codeModeTool = "exec"
+
+// partsMissing counts the code mode results from firstNew on in which no
+// text was found, neither Codex's framing nor a printed part.
+func partsMissing(items []item, firstNew int) int {
+	codeMode := map[string]bool{}
+	for _, it := range items[:firstNew] {
+		if it.kind == "custom_tool_call" && it.name == codeModeTool {
+			codeMode[it.callID] = true
+		}
+	}
+	missing := 0
+	for _, it := range items[firstNew:] {
+		if it.kind == "custom_tool_call_output" && codeMode[it.callID] && !it.framed && len(it.texts) == 0 {
+			missing++
+		}
+	}
+	return missing
 }
 
 func (rw *Rewriter) lock(session string) func() {
@@ -363,6 +389,9 @@ type item struct {
 	// cwd is the working directory an environment context message names.
 	cwd   string
 	texts []span
+	// framed reports that a call output starts with Codex's code mode
+	// framing, which texts leaves out.
+	framed bool
 }
 
 // span is a JSON string literal inside an item, [start, end) relative to it.
@@ -417,11 +446,11 @@ func (it *item) parse(raw []byte) error {
 	case "function_call":
 		it.script = head.Arguments
 	case "custom_tool_call_output", "function_call_output":
-		texts, err := outputTexts(raw)
+		texts, framed, err := outputTexts(raw)
 		if err != nil {
 			return err
 		}
-		it.texts = texts
+		it.texts, it.framed = texts, framed
 	case "message":
 		for _, content := range head.Content {
 			if strings.Contains(content.Text, "<environment_context>") {
@@ -483,10 +512,11 @@ func encodeString(s string) []byte {
 
 // outputTexts finds the strings the model reads in an output item: "output"
 // itself when it is a string, else each part's "text". A code mode result's
-// first part ("Script completed …\nOutput:\n") is Codex's own framing and is
-// skipped.
-func outputTexts(raw []byte) ([]span, error) {
+// first part ("Script completed …\nOutput:\n") is Codex's own framing: it is
+// skipped, and reported as found.
+func outputTexts(raw []byte) ([]span, bool, error) {
 	var spans []span
+	framed := false
 	err := walkStrings(raw, func(path []string, start, end int, value string) {
 		switch {
 		case len(path) == 1 && path[0] == "output":
@@ -494,6 +524,7 @@ func outputTexts(raw []byte) ([]span, error) {
 		case len(path) == 3 && path[0] == "output" && path[2] == "text":
 			part, _ := strconv.Atoi(path[1])
 			if part == 0 && strings.HasPrefix(value, "Script ") {
+				framed = true
 				return
 			}
 			spans = append(spans, span{part: part, start: start, end: end, value: value})
@@ -502,7 +533,7 @@ func outputTexts(raw []byte) ([]span, error) {
 	for i := range spans {
 		spans[i].inner = execResultOutput(spans[i].value)
 	}
-	return spans, err
+	return spans, framed, err
 }
 
 // execResultOutput locates "output" in text when text is a printed

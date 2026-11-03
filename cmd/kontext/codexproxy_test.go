@@ -82,6 +82,31 @@ func TestTheProxyLogsWhyItGaveTheRouteUp(t *testing.T) {
 	}
 }
 
+// The proxy job counts every request, and logs a failure to keep the counts
+// once, until it changes; a count that works again logs nothing.
+func TestTheProxyLogsCountsItCannotKeep(t *testing.T) {
+	var lines []string
+	logf := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+	answers := []error{nil, errors.New("counters.json: read-only file system"), errors.New("counters.json: read-only file system"),
+		errors.New("counters.lock: permission denied"), nil, errors.New("counters.lock: permission denied")}
+	var counted []codexproxy.Counts
+	count := reportCount(func(counts codexproxy.Counts) error {
+		counted = append(counted, counts)
+		return answers[len(counted)-1]
+	}, logf)
+	for range answers {
+		count(codexproxy.Counts{PassThroughs: 1})
+	}
+	want := []string{
+		"Codex route counts not kept: counters.json: read-only file system",
+		"Codex route counts not kept: counters.lock: permission denied",
+		"Codex route counts not kept: counters.lock: permission denied",
+	}
+	if len(counted) != len(answers) || strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("counted %d times, logged:\n%s", len(counted), strings.Join(lines, "\n"))
+	}
+}
+
 // Only a Codex session start checks the route, and whatever else the hook
 // answers, the person hears what the check found.
 func TestACodexSessionStartChecksTheRoute(t *testing.T) {

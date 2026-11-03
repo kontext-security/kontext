@@ -24,6 +24,7 @@ import (
 	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,10 +84,31 @@ type Options struct {
 	// meanwhile (see breaker). The requests that follow still go upstream.
 	// Nil tells nobody.
 	Unreachable func(context.Context)
+	// Count is told what each request adds to the counts the daemon reports
+	// about the route. Nil counts nothing.
+	Count func(Counts)
 	// Transport reaches the upstream; a clone of http.DefaultTransport when nil.
 	Transport http.RoundTripper
 	// Logf receives one line per request: never headers, bodies or the token.
 	Logf func(format string, args ...any)
+}
+
+// Counts is what one request adds to the counts the daemon reports about the
+// route.
+type Counts struct {
+	// UpstreamFailures counts requests that never connected to their
+	// upstream (see breaker).
+	UpstreamFailures int
+	// PassThroughs counts model requests sent upstream as Codex wrote them
+	// because the proxy could not do its part: no daemon held the route, or
+	// the body could not be read, decoded, parsed or encoded again.
+	PassThroughs int
+	// PartsMissing counts model requests with a code mode result in which no
+	// part was found (see Stats.PartsMissing).
+	PartsMissing int
+	// CodexVersion is the Codex version the request's User-Agent names, or
+	// "".
+	CodexVersion string
 }
 
 // Server is the proxy's HTTP handler.
@@ -96,6 +118,7 @@ type Server struct {
 	token       []byte
 	rewriter    *Rewriter
 	held        func(context.Context) bool
+	count       func(Counts)
 	transport   http.RoundTripper
 	proxy       *httputil.ReverseProxy
 	logf        func(format string, args ...any)
@@ -125,8 +148,12 @@ func New(opts Options) (*Server, error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	count := opts.Count
+	if count == nil {
+		count = func(Counts) {}
+	}
 	s := &Server{upstream: upstream, apiUpstream: apiUpstream, token: []byte(opts.Token), rewriter: opts.Rewriter, held: opts.Held,
-		transport: transport, logf: logf}
+		count: count, transport: transport, logf: logf}
 	s.proxy = &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			// Out.URL is already the upstream URL the request's credentials
@@ -134,7 +161,7 @@ func New(opts Options) (*Server, error) {
 			// should see what Codex sent.
 			r.Out.Host = r.Out.URL.Host
 		},
-		Transport:     &breaker{next: transport, unreachable: opts.Unreachable},
+		Transport:     &breaker{next: transport, unreachable: opts.Unreachable, count: count},
 		FlushInterval: -1, // SSE: hand every event to Codex as it arrives
 		// ReverseProxy's own messages go through scrub: URLs carry the token.
 		ErrorLog: log.New(logWriter(func(line string) { logf("%s", scrub(line, opts.Token)) }), "", 0),
@@ -218,14 +245,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// are.
 	held := s.held == nil || s.held(r.Context())
 	note := ""
+	counts := Counts{CodexVersion: codexVersion(r.Header.Get("User-Agent"))}
 	if r.Method == http.MethodPost && route == "/responses" {
 		switch {
 		case s.rewriter == nil:
 			note = " (passed through)"
 		case !held:
 			note = " (passed through: no daemon holds the route)"
+			counts.PassThroughs = 1
 		default:
-			note = s.rewriteRequest(r)
+			var found Counts
+			note, found = s.rewriteRequest(r)
+			counts.PassThroughs, counts.PartsMissing = found.PassThroughs, found.PartsMissing
 		}
 	}
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -237,8 +268,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if note != "" || rec.status >= http.StatusBadRequest {
 			s.logf("%s %s -> %d in %s via %s%s", r.Method, route, rec.status, time.Since(start).Round(time.Millisecond), upstream.Host, note)
 		}
+		s.count(counts)
 	}()
 	s.proxy.ServeHTTP(rec, r)
+}
+
+// codexVersionPattern is what a Codex version looks like, within what the
+// Kontext API takes.
+var codexVersionPattern = regexp.MustCompile(`^[0-9][0-9A-Za-z.+_-]{0,31}$`)
+
+// codexVersion reads the version in the User-Agent Codex sends, which follows
+// the first slash, after whatever name Codex goes by: "codex_cli_rs/0.163.0
+// (Mac OS 26.1.0; arm64) iTerm.app/3.6.1", "Codex Desktop/0.163.0-alpha.11
+// (…)". It is "" for anything else.
+func codexVersion(userAgent string) string {
+	name, rest, found := strings.Cut(userAgent, "/")
+	version, _, _ := strings.Cut(rest, " ")
+	if !found || !strings.Contains(strings.ToLower(name), "codex") || !codexVersionPattern.MatchString(version) {
+		return ""
+	}
+	return version
 }
 
 // upstreamFor picks where a request goes from the credentials Codex signed
@@ -292,6 +341,8 @@ func (s *Server) reach(ctx context.Context) error {
 type breaker struct {
 	next        http.RoundTripper
 	unreachable func(context.Context)
+	// count, when set, is told of each request that did not connect.
+	count func(Counts)
 
 	mu sync.Mutex
 	// events numbers connections and failed requests as they happen, and
@@ -334,6 +385,9 @@ func (b *breaker) RoundTrip(request *http.Request) (*http.Response, error) {
 		// Codex gave up before a connection, which says nothing about the
 		// upstream.
 	default:
+		if b.count != nil {
+			b.count(Counts{UpstreamFailures: 1})
+		}
 		if b.failed(host) && b.unreachable != nil {
 			b.unreachable(context.WithoutCancel(request.Context()))
 		}
@@ -425,9 +479,11 @@ func (s *Server) strip(path string) (string, bool) {
 	return "/" + rest, true
 }
 
-// rewriteRequest replaces r.Body with the rewritten request. On any failure the
-// original bytes go upstream unchanged: compaction must never break a turn.
-func (s *Server) rewriteRequest(r *http.Request) string {
+// rewriteRequest replaces r.Body with the rewritten request, and says what
+// that counted. On any failure the original bytes go upstream unchanged:
+// compaction must never break a turn.
+func (s *Server) rewriteRequest(r *http.Request) (string, Counts) {
+	passed := Counts{PassThroughs: 1}
 	original := r.Body
 	raw, err := io.ReadAll(io.LimitReader(original, bodyLimit+1))
 	if err != nil || int64(len(raw)) > bodyLimit {
@@ -436,7 +492,7 @@ func (s *Server) rewriteRequest(r *http.Request) string {
 			io.Reader
 			io.Closer
 		}{io.MultiReader(bytes.NewReader(raw), original), original}
-		return " (body too large or unreadable; passed through)"
+		return " (body too large or unreadable; passed through)", passed
 	}
 	original.Close()
 	restore := func() {
@@ -454,29 +510,34 @@ func (s *Server) rewriteRequest(r *http.Request) string {
 		}
 		if err != nil {
 			restore()
-			return " (zstd decode failed; passed through)"
+			return " (zstd decode failed; passed through)", passed
 		}
 	}
 	out, stats, err := s.rewriter.Rewrite(r.Context(), identity(r.Header), body)
-	if err != nil || stats.Replaced == 0 {
+	if err != nil {
 		restore()
-		if err != nil {
-			return " (unparsed; passed through)"
-		}
-		return stats.String()
+		return " (unparsed; passed through)", passed
+	}
+	var found Counts
+	if stats.PartsMissing > 0 {
+		found.PartsMissing, passed.PartsMissing = 1, 1
+	}
+	if stats.Replaced == 0 {
+		restore()
+		return stats.String(), found
 	}
 	if zstdBody {
 		encoder, err := zstdEncoder()
 		if err != nil {
 			restore()
-			return " (zstd encode failed; passed through)"
+			return " (zstd encode failed; passed through)", passed
 		}
 		out = encoder.EncodeAll(out, nil)
 	}
 	r.Body = io.NopCloser(bytes.NewReader(out))
 	r.ContentLength = int64(len(out))
 	r.Header.Del("Content-Length")
-	return stats.String()
+	return stats.String(), found
 }
 
 // bodyLimit is the largest request body the proxy reads to rewrite; a

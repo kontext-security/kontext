@@ -13,7 +13,7 @@ import (
 
 func workTypeResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Response {
 	t.Helper()
-	config := Config{PayloadCaptureMode: mode, WorkTypeClassification: enabled, ToolOutputCompaction: boolPtr(false)}
+	config := Config{PayloadCaptureMode: mode, WorkTypeClassification: enabled, ToolOutputCompaction: boolPtr(false), CodexProxy: boolPtr(true)}
 	identity, err := ComputeIdentity(config)
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func workTypeResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Res
 
 func boolPtr(value bool) *bool { return &value }
 
-// The switch is required under v4: a response without it is rejected rather
+// The switch is required under v5: a response without it is rejected rather
 // than resolved either way, and leaves the confirmed value untouched.
 func TestResponseWithoutTheSwitchIsRejected(t *testing.T) {
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
@@ -36,7 +36,7 @@ func TestResponseWithoutTheSwitchIsRejected(t *testing.T) {
 
 	silent := Response{
 		ResponseVersion: ResponseVersion,
-		Config:          Config{PayloadCaptureMode: payloadcapture.ModeFull, ToolOutputCompaction: boolPtr(false)},
+		Config:          Config{PayloadCaptureMode: payloadcapture.ModeFull, ToolOutputCompaction: boolPtr(false), CodexProxy: boolPtr(true)},
 		ConfigIdentity:  off.ConfigIdentity,
 	}
 	if err := cache.Apply(FetchResult{Response: &silent, ETag: silent.ConfigIdentity}, now.Add(time.Minute)); err == nil {
@@ -74,7 +74,7 @@ func TestWorkTypeSwitchOffUntilConfirmed(t *testing.T) {
 	}
 }
 
-// A cache persisted by an earlier build holds a config shape the strict v4
+// A cache persisted by an earlier build holds a config shape the strict
 // decoder would reject: v2's retired guardrail flag, or v3 without the
 // compaction switch. It is discarded, not reported invalid.
 func TestPreviousVersionCacheIsDiscarded(t *testing.T) {
@@ -157,5 +157,35 @@ func writeCacheFileForTest(t *testing.T, path string, file cacheFile) {
 	}
 	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A cache holding the fallback version's response loads like one of
+// ResponseVersion: its identity is the conditional value for a server that
+// still predates v5.
+func TestFallbackVersionCacheLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "endpoint-config.json")
+	response := fallbackResponse(t, payloadcapture.ModeFull, true)
+	writeCacheFileForTest(t, path, cacheFile{
+		Version:   cacheFileVersion,
+		FetchedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Response:  &response,
+	})
+	cache := NewCache(path)
+	if err := cache.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := cache.Current(); snapshot.Confirmed || snapshot.Status.Invalid || snapshot.LastKnownGood == nil {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if cache.ConditionalIdentity() != response.ConfigIdentity {
+		t.Fatalf("conditional identity = %q", cache.ConditionalIdentity())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "codexProxy") {
+		t.Fatalf("a v4 response was saved with the Codex proxy switch: %s", data)
 	}
 }

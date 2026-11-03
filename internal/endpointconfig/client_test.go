@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
@@ -23,7 +25,7 @@ func TestClientFetchAndConditionalRefresh(t *testing.T) {
 			t.Fatalf("path = %q", request.URL.Path)
 		}
 		query := request.URL.Query()
-		if len(query) != 1 || query.Get("response_version") != "4" {
+		if len(query) != 1 || query.Get("response_version") != "5" {
 			t.Fatalf("query = %v", query)
 		}
 		if request.Header.Get("Authorization") != "Bearer token" {
@@ -230,5 +232,108 @@ func TestRefresherLogsFailureTransitions(t *testing.T) {
 	}
 	if failures := strings.Count(log.String(), "endpoint config refresh failed"); failures != 2 {
 		t.Fatalf("failure lines after new error = %d, want 2 (log: %q)", failures, log.String())
+	}
+}
+
+// A server that predates v5 refuses it with 406 unsupported_version: the
+// client asks it for v4 instead, whose configuration has no Codex proxy
+// switch, which reads as on, and goes on asking for v4 alone for an hour.
+// Conditional refreshes work as before.
+func TestClientFallsBackForAServerThatPredatesV5(t *testing.T) {
+	configuration := fallbackResponse(t, payloadcapture.ModeFull, true)
+	var asked []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		version := request.URL.Query().Get("response_version")
+		asked = append(asked, version)
+		if version != "4" {
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4]}`))
+			return
+		}
+		w.Header().Set("ETag", `"`+configuration.ConfigIdentity+`"`)
+		if request.Header.Get("If-None-Match") == `"`+configuration.ConfigIdentity+`"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(configuration)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	client.now = func() time.Time { return clock }
+	result, err := client.Fetch(context.Background(), "token", testInstallationID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Response == nil || result.Response.ResponseVersion != FallbackResponseVersion || result.Response.Config.CodexProxy != nil ||
+		!result.Response.Config.CodexProxyEnabled() || !result.Response.Config.ToolOutputCompactionEnabled() {
+		t.Fatalf("Fetch() = %#v", result.Response)
+	}
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	if err := cache.Apply(result, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	result, err = client.Fetch(context.Background(), "token", testInstallationID, cache.ConditionalIdentity())
+	if err != nil || !result.NotModified {
+		t.Fatalf("conditional Fetch() = %#v, %v", result, err)
+	}
+	if err := cache.Apply(result, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := cache.Current(); !snapshot.Confirmed || !snapshot.Config.CodexProxyEnabled() {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	clock = clock.Add(fallbackFor)
+	if _, err := client.Fetch(context.Background(), "token", testInstallationID, cache.ConditionalIdentity()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(asked, " "); got != "5 4 4 5 4" {
+		t.Fatalf("versions asked = %s", got)
+	}
+}
+
+// Only unsupported_version says the server predates v5. Any other 406, and
+// one for the fallback itself, fails the fetch.
+func TestClientFailsOnOtherRefusals(t *testing.T) {
+	for name, refusal := range map[string]struct {
+		body    string
+		refuses string
+		asked   string
+	}{
+		"another code":          {body: `{"code":"unauthorized"}`, refuses: "5", asked: "5"},
+		"no body":               {refuses: "5", asked: "5"},
+		"the fallback too":      {body: `{"code":"unsupported_version","supportedResponseVersions":[1,2,3]}`, refuses: "5 4", asked: "5 4"},
+		"a response of another": {body: `{"code":"unsupported_version"}`, refuses: "5", asked: "5 4"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var asked []string
+			v5 := testResponse(t, payloadcapture.ModeFull)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				version := request.URL.Query().Get("response_version")
+				asked = append(asked, version)
+				if strings.Contains(refusal.refuses, version) {
+					w.WriteHeader(http.StatusNotAcceptable)
+					_, _ = w.Write([]byte(refusal.body))
+					return
+				}
+				// Asked for v4, a server must not answer v5.
+				w.Header().Set("ETag", `"`+v5.ConfigIdentity+`"`)
+				_ = json.NewEncoder(w).Encode(v5)
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result, err := client.Fetch(context.Background(), "token", testInstallationID, ""); err == nil {
+				t.Fatalf("Fetch() = %#v", result)
+			}
+			if got := strings.Join(asked, " "); got != refusal.asked {
+				t.Fatalf("versions asked = %s, want %s", got, refusal.asked)
+			}
+		})
 	}
 }

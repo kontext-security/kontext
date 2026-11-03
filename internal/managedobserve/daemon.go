@@ -209,6 +209,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err != nil {
 		return fmt.Errorf("configure tool output compaction client: %w", err)
 	}
+	codexReportClient, err := newCodexReportClient(loadedConfig.Config.CloudURL, installationState.InstallationID, installTokenSource, nil)
+	if err != nil {
+		return fmt.Errorf("configure codex route reports: %w", err)
+	}
 	compactor := tooloutput.New(tooloutput.Options{
 		Client:     compactionClient,
 		Enabled:    func() bool { return endpointConfigCache.Current().Config.ToolOutputCompactionEnabled() },
@@ -290,7 +294,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}()
 	var codexRouting *codexRouting
 	if !opts.NoCodexRoute {
-		codexRouting = newCodexRouting(dbPath, socketPath, opts.Diagnostic)
+		codexRouting = newCodexRouting(dbPath, socketPath, opts.Diagnostic, codexReportClient.send)
 	}
 	endpointConfigRefresher := endpointconfig.Refresher{
 		Client:         endpointConfigClient,
