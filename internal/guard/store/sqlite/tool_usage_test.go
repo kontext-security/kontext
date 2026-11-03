@@ -329,8 +329,9 @@ func TestToolUsageRetiresMissingTranscripts(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `select transcript_path, error from tool_usage_sources`).Scan(&path, &message); err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(path) != "fresh.jsonl" || !strings.Contains(message, "no such file") {
-		t.Fatalf("only the fresh source should remain, with its error: %s %q", path, message)
+	_, missing := os.Stat(path)
+	if filepath.Base(path) != "fresh.jsonl" || missing == nil || message != missing.Error() {
+		t.Fatalf("only the fresh source should remain, with its error: %s %q, want %v", path, message, missing)
 	}
 	before := totalChanges(t, store)
 	if err := store.ReconcileToolUsage(ctx); err != nil {

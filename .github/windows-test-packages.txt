@@ -20,6 +20,7 @@
 ./internal/guard/risk
 ./internal/guard/riskclassifier
 ./internal/guard/stepsafety
+./internal/guard/store/sqlite
 ./internal/hermetic
 ./internal/hook
 ./internal/hookcmd

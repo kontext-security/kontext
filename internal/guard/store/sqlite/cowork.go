@@ -3,14 +3,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"net/url"
 )
 
 // HasCoworkSession reads the daemon's hook evidence without migrating or
 // creating a store. Missing or unreadable stores leave sandbox status unknown.
 func HasCoworkSession(ctx context.Context, dbPath, id string) (bool, error) {
-	u := url.URL{Scheme: "file", Path: dbPath, RawQuery: "mode=ro"}
-	db, err := sql.Open("sqlite", u.String())
+	db, err := sql.Open("sqlite", readOnlyURI(dbPath))
 	if err != nil {
 		return false, err
 	}

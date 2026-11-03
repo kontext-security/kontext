@@ -20,7 +20,7 @@ func LedgerLag(ctx context.Context, dbPath string, cursor *LedgerCursor) (newest
 		}
 		return nil, 0, err
 	}
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro")
+	db, err := sql.Open("sqlite", readOnlyURI(dbPath))
 	if err != nil {
 		return nil, 0, err
 	}
