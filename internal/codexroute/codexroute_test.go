@@ -1396,6 +1396,54 @@ func TestTheJobGetsTheDaemonsProxySettings(t *testing.T) {
 	}
 }
 
+// The job found it could not reach OpenAI through the proxy settings it had:
+// once it would get others, as when the Mac joins a network with a proxy, it
+// is asked again at once. The same settings, or none that can be read, keep
+// Codex waiting, and so does a job that is gone.
+func TestOtherProxySettingsEndTheWait(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	plistPath := filepath.Join(r.home, "Library", "LaunchAgents", Label+".plist")
+	writeFile(t, configPath, original, 0o600)
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routed := readFile(t, configPath)
+	waits := func(when string) {
+		t.Helper()
+		if status, err := r.Enable(context.Background()); err != nil || !strings.HasPrefix(status.Skipped, "the Codex proxy could not reach OpenAI") ||
+			readFile(t, configPath) != original {
+			t.Fatalf("Enable %s = %+v, %v", when, status, err)
+		}
+	}
+	if taken, err := r.job(0).Unreachable(context.Background()); err != nil || !taken {
+		t.Fatalf("Unreachable = %v, %v", taken, err)
+	}
+	// A job asked would not reach OpenAI either.
+	*r.reaches = false
+	waits("with the same settings")
+	r.scutil.err = errors.New("exit status 1")
+	waits("once scutil fails")
+
+	r.scutil.output, r.scutil.err, *r.reaches = manualProxies, nil, true
+	if status, err := r.Enable(context.Background()); err != nil || !status.Routed || readFile(t, configPath) != routed {
+		t.Fatalf("Enable through macOS's proxies = %+v, %v", status, err)
+	}
+	if env := jobEnv(readFile(t, plistPath)); !slices.Equal(env, manualEnv) {
+		t.Fatalf("the job's settings = %q", env)
+	}
+
+	if taken, err := r.job(0).Unreachable(context.Background()); err != nil || !taken {
+		t.Fatalf("Unreachable through macOS's proxies = %v, %v", taken, err)
+	}
+	*r.reaches = false
+	waits("through macOS's proxies still")
+	if drained, err := r.Drain(context.Background()); err != nil || !drained {
+		t.Fatalf("Drain = %v, %v", drained, err)
+	}
+	waits("once the job is gone")
+}
+
 // The daemon's own proxy settings, in either case, win over macOS's, which
 // nobody asks for then.
 func TestTheDaemonsProxySettingsWinOverMacOSs(t *testing.T) {

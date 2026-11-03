@@ -34,6 +34,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -196,7 +197,8 @@ const maxHealthFailures = 3
 // unreachableWait is how long Codex stays routed directly once the job could
 // not reach OpenAI, before Enable asks it again: a network that needs a proxy
 // the job does not know stays one for a while, and a Mac that was offline for
-// a moment gets its route back soon after.
+// a moment gets its route back soon after. Other proxy settings for the job
+// end the wait (see proxiesChanged).
 const unreachableWait = 10 * time.Minute
 
 // answerWait is how long a health check waits for the proxy, the daemon's and
@@ -319,7 +321,7 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 			token = routedToken
 		}
 		st.Port = port
-	} else if skip := r.holdOff(st); skip != "" {
+	} else if skip := r.holdOff(st); skip != "" && !r.proxiesChanged(ctx) {
 		return Status{Skipped: skip}, nil
 	}
 	if st.Port == 0 {
@@ -600,6 +602,15 @@ func (r *Router) holdOff(st state) string {
 		return ""
 	}
 	return "the Codex proxy could not reach OpenAI; trying again after " + until.Local().Format("15:04")
+}
+
+// proxiesChanged reports whether the job would get other proxy settings than
+// its plist gives it, as once the Mac joined another network: it found it
+// could not reach OpenAI through those. Once the job is gone, there is nothing
+// to tell.
+func (r *Router) proxiesChanged(ctx context.Context) bool {
+	current, err := os.ReadFile(r.plistPath())
+	return err == nil && !slices.Equal(r.proxyEnv(ctx, string(current)), jobEnv(string(current)))
 }
 
 // holder is this process's hold on the route.
