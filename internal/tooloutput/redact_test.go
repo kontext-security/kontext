@@ -248,6 +248,22 @@ func TestDamagedPlaceholdersLeaveTheOutput(t *testing.T) {
 	}
 }
 
+// The agent is shown the path of the saved output as the server got it, so
+// an output saved under a path with a secret in it is not sent at all.
+func TestSecretInTheSavePathKeepsTheOutput(t *testing.T) {
+	c := newTestCompactor(t, keepEnds(10, 3))
+	c.Compactor = New(Options{Client: c.client, Enabled: c.on.Load, Dir: filepath.Join(t.TempDir(), "password=FAKEdirsecret", "tool-output"), Home: c.home})
+	if got := c.Compact(context.Background(), c.bash("env", secretOutput())); got != nil {
+		t.Fatalf("Compact() = %#v, want the output left as is", got)
+	}
+	if text, ok := c.CompactProxied(context.Background(), c.proxyOutput("text(1)", secretOutput())); ok {
+		t.Fatalf("CompactProxied = %q, want the part left as is", text)
+	}
+	if _, _, sent := c.api.calls(); sent != 0 {
+		t.Fatalf("%d requests sent", sent)
+	}
+}
+
 func TestHideSecretsKeepsTheLines(t *testing.T) {
 	t.Parallel()
 

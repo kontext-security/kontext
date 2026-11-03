@@ -29,6 +29,7 @@ var (
 	errDelimiters  = errors.New("the output holds every placeholder delimiter")
 	errPlaceholder = errors.New("a placeholder came back changed")
 	errNoShorter   = errors.New("the answer is no shorter than the output with its secrets back")
+	errSecretPath  = errors.New("the path the output is saved under holds a secret")
 )
 
 // secrets are what an output's placeholders stand for: placeholder n, from 1,
@@ -189,8 +190,13 @@ func redactedJSON(raw json.RawMessage) json.RawMessage {
 
 // hideOutput hides the secrets of a request's output, whose text is sent
 // with placeholders the answer's are revealed from; its file path is
-// redacted for good. The server may repeat both paths in its answer.
+// redacted for good. The server may repeat both paths in its answer, and
+// shows the agent where the full output is saved, so that path goes as it
+// is: an output saved under a path with a secret in it is not sent.
 func hideOutput(output *Output) (*secrets, error) {
+	if len(payloadcapture.RedactedSpans(output.RecoveryPath)) > 0 {
+		return nil, errSecretPath
+	}
 	text, found, err := hideSecrets(output.Text, output.RecoveryPath, output.FilePath)
 	if err != nil {
 		return nil, err
