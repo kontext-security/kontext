@@ -47,3 +47,10 @@ func redactValue(value any) (any, bool) {
 		return value, false
 	}
 }
+
+// RedactValue is RedactJSON for any decoded JSON value: a string is run
+// through RedactText, and an object or array is redacted as RedactJSON
+// redacts one.
+func RedactValue(value any) (any, bool) {
+	return redactValue(value)
+}

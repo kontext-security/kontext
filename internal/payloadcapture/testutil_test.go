@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func loadTestdata(t *testing.T, name string, target any) {
+func loadTestdata(t testing.TB, name string, target any) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {

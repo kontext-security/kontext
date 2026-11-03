@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -39,6 +40,14 @@ type compiledRule struct {
 	id          string
 	re          *regexp.Regexp
 	replacement string
+	// pieces is the replacement split into text and the capture groups it
+	// copies; groups is set when it copies any but the whole match.
+	pieces []piece
+	groups bool
+	// needles, when filtered, are strings of which every match contains one
+	// (see needles.go).
+	needles  []string
+	filtered bool
 }
 
 var (
@@ -93,10 +102,22 @@ func compileRules(rules []redactionRule) []compiledRule {
 				rule.ID,
 			))
 		}
+		if strings.Contains(replacement, "\x00") {
+			panic(fmt.Sprintf(
+				"payloadcapture: rule %q replacement contains a NUL byte",
+				rule.ID,
+			))
+		}
+		split := pieces(re, replacement)
+		set, filtered := needles(pattern)
 		compiled = append(compiled, compiledRule{
 			id:          rule.ID,
 			re:          re,
 			replacement: replacement,
+			pieces:      split,
+			groups:      slices.ContainsFunc(split, func(p piece) bool { return p.group > 0 }),
+			needles:     set,
+			filtered:    filtered,
 		})
 	}
 	return compiled
@@ -118,13 +139,6 @@ func isSensitiveKey(key string) bool {
 // groups such as a header label or query delimiter. Key patterns do not apply:
 // a flat string carries no structure to classify.
 func RedactText(value string) (string, bool) {
-	changed := false
-	for _, rule := range compiledValueRules {
-		next := rule.re.ReplaceAllString(value, rule.replacement)
-		if next != value {
-			changed = true
-			value = next
-		}
-	}
-	return value, changed
+	redacted, _, changed := redact(value, false)
+	return redacted, changed
 }
