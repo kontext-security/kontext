@@ -2032,20 +2032,30 @@ values(?, ?, 'session-1', 'h', 'shell', 'v1', 'm1', '{}', ?)`, "rta_"+id, "act_"
 			t.Fatalf("%s created_at after open = %v, err %v; want it untouched", table, stored, err)
 		}
 	}
-	// A cancelled pass stops short, and the next one does what is left.
+	// A pass cancelled after its first page keeps that page, and the next one
+	// does only what is left: every row but the garbage one in each table.
+	all := 2 * (len(legacy) - 1)
 	cancelled, cancel := context.WithCancel(ctx)
+	store.afterAnnotationPage = cancel
+	first, err := store.RewriteAnnotationCreatedAt(cancelled)
+	store.afterAnnotationPage = nil
 	cancel()
-	if _, err := store.RewriteAnnotationCreatedAt(cancelled); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled rewrite err = %v, want context.Canceled", err)
+	if !errors.Is(err, context.Canceled) || first == 0 || first >= all {
+		t.Fatalf("cancelled rewrite = %d rows, err %v; want part of %d, context.Canceled", first, err, all)
+	}
+	left, err := queryStrings(ctx, store.db, `select id from step_safety_verdicts where id not like '%garbage' and `+annotationCreatedAtUnnormalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := len(legacy) - 1 - first; len(left) != want {
+		t.Fatalf("rows left in the first table = %d, want %d: the committed page should stay", len(left), want)
 	}
 	rewritten, err := store.RewriteAnnotationCreatedAt(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Every row but the garbage one in each table, whichever rows the earlier
-	// call got to; none of them were in the layout to begin with.
-	if want := 2 * (len(legacy) - 1); rewritten != want {
-		t.Fatalf("rewritten = %d, want %d", rewritten, want)
+	if want := all - first; rewritten != want {
+		t.Fatalf("resumed rewrite = %d rows, want %d", rewritten, want)
 	}
 	if again, err := store.RewriteAnnotationCreatedAt(ctx); err != nil || again != 0 {
 		t.Fatalf("second rewrite = %d, err %v; want nothing to do", again, err)

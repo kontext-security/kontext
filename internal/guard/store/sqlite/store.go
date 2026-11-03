@@ -26,6 +26,9 @@ type Store struct {
 	db     *sql.DB
 	path   string
 	signer receiptSigner
+	// afterAnnotationPage, when set, runs after each committed rewrite page. Tests
+	// use it to interrupt a pass partway.
+	afterAnnotationPage func()
 
 	// Capture configuration lives on Store so each persisted decision can
 	// snapshot behavior and evidence atomically.
@@ -851,6 +854,9 @@ func (s *Store) rewriteAnnotationCreatedAt(ctx context.Context, table string) (i
 			return total, err
 		}
 		total += len(ids)
+		if s.afterAnnotationPage != nil {
+			s.afterAnnotationPage()
+		}
 	}
 }
 

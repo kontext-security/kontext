@@ -410,7 +410,23 @@ func TestDaemonServesHooksWhileAnnotationRewriteRuns(t *testing.T) {
 			HomebrewUpdater: func(context.Context, managedconfig.LoadedConfig, diagnostic.Logger) <-chan struct{} {
 				return nil
 			},
-			annotationRewrite: func(ctx context.Context, _ string) (int, error) {
+			// Holds the store's write lock for as long as the test wants, as a
+			// slow rewrite page would.
+			annotationRewrite: func(ctx context.Context, path string) (int, error) {
+				db, err := sql.Open("sqlite", path)
+				if err != nil {
+					return 0, err
+				}
+				defer db.Close()
+				conn, err := db.Conn(ctx)
+				if err != nil {
+					return 0, err
+				}
+				defer conn.Close()
+				if _, err := conn.ExecContext(ctx, "begin immediate"); err != nil {
+					return 0, err
+				}
+				defer conn.ExecContext(context.Background(), "rollback")
 				close(rewriting)
 				select {
 				case <-release:
@@ -441,14 +457,23 @@ func TestDaemonServesHooksWhileAnnotationRewriteRuns(t *testing.T) {
 
 	client := localruntime.NewClient(socketPath)
 	client.Timeout = testRuntimeTimeout
-	if _, err := client.Process(context.Background(), hook.Event{
-		SessionID: "claude-rewrite-session",
-		Agent:     "claude",
-		HookName:  hook.HookPreToolUse,
-		ToolName:  "Read",
-		CWD:       "/tmp/project",
-	}); err != nil {
-		t.Fatalf("Process() during the rewrite: %v", err)
+	// A hook waits a second for its answer and then fails open, so that's the
+	// bound, with the write lock held throughout. Two calls, since the first
+	// queues its record behind the lock and the second must not wait for it.
+	for _, session := range []string{"claude-rewrite-session-1", "claude-rewrite-session-2"} {
+		started := time.Now()
+		if _, err := client.Process(context.Background(), hook.Event{
+			SessionID: session,
+			Agent:     "claude",
+			HookName:  hook.HookPreToolUse,
+			ToolName:  "Read",
+			CWD:       "/tmp/project",
+		}); err != nil {
+			t.Fatalf("Process() during the rewrite: %v", err)
+		}
+		if took := time.Since(started); took > time.Second {
+			t.Fatalf("hook took %s with the write lock held, want under a second", took)
+		}
 	}
 	select {
 	case <-batches:
