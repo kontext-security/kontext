@@ -2,6 +2,21 @@ name: Validate company macOS signing
 
 on:
   workflow_dispatch:
+  workflow_call:
+    secrets:
+      MACOS_COMPANY_SIGN_P12:
+        required: true
+      MACOS_COMPANY_SIGN_PASSWORD:
+        required: true
+      MACOS_COMPANY_NOTARY_ISSUER_ID:
+        required: true
+      MACOS_COMPANY_NOTARY_KEY_ID:
+        required: true
+      MACOS_COMPANY_NOTARY_KEY:
+        required: true
+    outputs:
+      validation_tag:
+        value: ${{ jobs.validate.outputs.validation_tag }}
 
 permissions:
   contents: read
@@ -10,6 +25,8 @@ jobs:
   validate:
     runs-on: macos-latest
     timeout-minutes: 45
+    outputs:
+      validation_tag: ${{ steps.tag.outputs.tag }}
     env:
       MACOS_SIGNING_PROFILE: company
       MACOS_EXPECTED_TEAM_ID: ${{ vars.MACOS_COMPANY_TEAM_ID }}
@@ -32,10 +49,12 @@ jobs:
         run: bash scripts/check-macos-signing.sh
 
       - name: Create local validation tag
+        id: tag
         run: |
           tag="v0.0.0-signing.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           git tag "$tag"
           echo "GORELEASER_CURRENT_TAG=$tag" >> "$GITHUB_ENV"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
@@ -78,6 +97,7 @@ jobs:
           name: company-signing-validation
           path: |
             dist/*_darwin_*.tar.gz
+            dist/checksums.txt
             evidence/
           if-no-files-found: error
           retention-days: 14

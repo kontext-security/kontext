@@ -13,6 +13,11 @@ on:
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
+    inputs:
+      company_signing:
+        description: Build a company candidate and test cask upgrade/rollback without publishing
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,7 +35,7 @@ env:
 
 jobs:
   rendered:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && !inputs.company_signing
     strategy:
       fail-fast: false
       matrix:
@@ -193,6 +198,7 @@ jobs:
           path: ${{ runner.temp }}/*.log
 
   published:
+    if: '!inputs.company_signing'
     strategy:
       fail-fast: false
       matrix:
@@ -328,3 +334,48 @@ jobs:
         with:
           name: homebrew-published-${{ matrix.runner }}
           path: ${{ runner.temp }}/published.log
+
+  company_candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.company_signing
+    uses: ./.github/workflows/validate-company-signing.yml
+    secrets:
+      MACOS_COMPANY_SIGN_P12: ${{ secrets.MACOS_COMPANY_SIGN_P12 }}
+      MACOS_COMPANY_SIGN_PASSWORD: ${{ secrets.MACOS_COMPANY_SIGN_PASSWORD }}
+      MACOS_COMPANY_NOTARY_ISSUER_ID: ${{ secrets.MACOS_COMPANY_NOTARY_ISSUER_ID }}
+      MACOS_COMPANY_NOTARY_KEY_ID: ${{ secrets.MACOS_COMPANY_NOTARY_KEY_ID }}
+      MACOS_COMPANY_NOTARY_KEY: ${{ secrets.MACOS_COMPANY_NOTARY_KEY }}
+
+  company_upgrade:
+    needs: company_candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      MACOS_EXPECTED_TEAM_ID: ${{ vars.MACOS_COMPANY_TEAM_ID }}
+      VALIDATION_TAG: ${{ needs.company_candidate.outputs.validation_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: company-signing-validation
+          path: ${{ runner.temp }}/company-signing-validation
+      - name: Upgrade and roll back the signed cask
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/test-company-cask-upgrade.sh "$RUNNER_TEMP/company-signing-validation" "${VALIDATION_TAG#v}" 2>&1 | tee "$RUNNER_TEMP/company-upgrade.log"
+      - name: Retain upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: company-upgrade-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/company-upgrade-evidence/
+            ${{ runner.temp }}/company-upgrade.log
+          if-no-files-found: error
+          retention-days: 14
