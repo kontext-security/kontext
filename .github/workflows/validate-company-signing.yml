@@ -54,7 +54,7 @@ jobs:
             binary="$binary_dir/kontext"
             codesign --verify --strict --all-architectures -R="identifier kontext and anchor apple generic and certificate leaf[subject.OU] = \"$MACOS_EXPECTED_TEAM_ID\"" "$binary"
             codesign -dv --verbose=4 "$binary" 2> "evidence/${arch}-signature.txt"
-            codesign -d -r- "$binary" 2> "evidence/${arch}-requirement.txt"
+            codesign -d -r- "$binary" > "evidence/${arch}-requirement.txt" 2>&1
             grep -Fx "Authority=Developer ID Application: CoBrowser Technology GmbH ($MACOS_EXPECTED_TEAM_ID)" "evidence/${arch}-signature.txt"
             grep -Fx "TeamIdentifier=$MACOS_EXPECTED_TEAM_ID" "evidence/${arch}-signature.txt"
             # Apple's lookup can lag behind an accepted notarization.
