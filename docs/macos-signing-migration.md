@@ -153,3 +153,10 @@ gh workflow run homebrew-install.yml --repo kontext-security/kontext \
 This skips the signing job and receives no signing secrets. It checks the original validation job, source SHA, archive version and checksums before native signature/notarization and upgrade/rollback checks. The source run's other jobs may have failed; their results remain separate gates. The artifact retains the original source and version even if test code is fixed on the PR branch.
 
 Both current architectures in `41640118372` are Apple Accepted and passed native signature/notarization validation. Cask run `41648455399` passed all three hosted Mac images after the URL-rewrite fix. Production release configuration and signing selectors remain unchanged.
+
+
+### Rollback to 1.17.1
+
+The current candidate's Claude managed-hooks drop-in includes an owned saved-output read permission that 1.17.1's stricter hooks-only ownership check does not recognize. Native rollback by direct overlay failed for that reason, independently of the Apple Team ID change. After verifying the retained rollback PKG/hash, run `sudo /usr/local/bin/kontext hooks remove --scope system` with the still-installed current CLI, then overlay the old PKG. The old postinstall recreates its supported hooks. Do not run the application uninstall script, delete installation/token data, remove general policy or force an unknown ownership check.
+
+This procedure passed native PKG upgrade/rollback on macOS 15 Apple Silicon and macOS 26, preserving identity/configuration and a separate policy file. Intel's rebuilt fixture is pending package notarization after a CloudKit transport failure. Authenticated daemon and customer PPPC/FDA/EDR remain separate gates. See the [private package runbook](https://github.com/kontext-security/enterprise-deployments/pull/38).
