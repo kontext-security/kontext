@@ -146,6 +146,12 @@ func newTestRouter(t *testing.T) testRouter {
 // daemon is the router of a daemon started now from r.binary.
 func (r testRouter) daemon(t *testing.T) *Router {
 	t.Helper()
+	return r.daemonIn(t, filepath.Join(r.home, "Library", "Application Support", "Kontext", "managed-observe", "codex-proxy"))
+}
+
+// daemonIn is daemon, keeping the proxy's state in stateDir.
+func (r testRouter) daemonIn(t *testing.T, stateDir string) *Router {
+	t.Helper()
 	binary, err := os.Open(r.binary)
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +160,7 @@ func (r testRouter) daemon(t *testing.T) *Router {
 	return New(Options{
 		Home:      r.home,
 		Binary:    binary,
-		StateDir:  filepath.Join(r.home, "Library", "Application Support", "Kontext", "managed-observe", "codex-proxy"),
+		StateDir:  stateDir,
 		Socket:    "/tmp/kontext-managed-observe-501/kontext.sock",
 		GOOS:      "darwin",
 		Launchctl: r.launchd.run,
@@ -1229,6 +1235,40 @@ func TestAnAdministratorsRouteKeepsCodexAsItIs(t *testing.T) {
 	*r.admin = adminAnswer{}
 	if status, err := r.Enable(context.Background()); err != nil || !status.Routed || readFile(t, configPath) != routed {
 		t.Fatalf("Enable once no administrator routes Codex = %+v, %v", status, err)
+	}
+}
+
+// A daemon that keeps its state elsewhere, as one restarted on another Kontext
+// profile does, takes the route over on the port and token Codex reads, and
+// reloads the job from its own state once. The job it replaces keeps the line
+// while its lease runs.
+func TestADaemonTakesOverARouteKeptElsewhere(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	writeFile(t, configPath, original, 0o600)
+	profiles := filepath.Join(r.home, "Library", "Application Support", "Kontext", "profiles")
+	local := filepath.Join(profiles, "local", "managed-observe", "codex-proxy")
+	staging := filepath.Join(profiles, "staging", "managed-observe", "codex-proxy")
+	if _, err := r.daemonIn(t, local).Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routed := readFile(t, configPath)
+	token := strings.TrimSpace(readFile(t, TokenPath(local)))
+
+	r.processes.run(os.Getpid(), time.Now())
+	bootstraps := r.launchd.ran("bootstrap")
+	if status, err := r.daemonIn(t, staging).Enable(context.Background()); err != nil || !status.Routed || status.Port != testPort ||
+		readFile(t, configPath) != routed {
+		t.Fatalf("Enable over a route kept elsewhere = %+v, %v; config:\n%s", status, err, readFile(t, configPath))
+	}
+	plist := readFile(t, filepath.Join(r.home, "Library", "LaunchAgents", Label+".plist"))
+	if strings.TrimSpace(readFile(t, TokenPath(staging))) != token || strings.Contains(plist, local) ||
+		!strings.Contains(plist, BinaryPath(staging)) || r.launchd.ran("bootstrap") != bootstraps+1 {
+		t.Fatalf("the job after the takeover (%d bootstraps):\n%s", r.launchd.ran("bootstrap")-bootstraps, plist)
+	}
+	replaced := New(Options{Home: r.home, StateDir: local, GOOS: "darwin", ProcessStarted: r.processes.lookup})
+	if held, err := replaced.Held(context.Background()); err != nil || !held || readFile(t, configPath) != routed {
+		t.Fatalf("the replaced job's Held within its lease = %v, %v", held, err)
 	}
 }
 
