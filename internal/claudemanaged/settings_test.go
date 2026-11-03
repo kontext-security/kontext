@@ -42,7 +42,8 @@ func TestSavedOutputReadRuleNamesTheDaemonsSaveDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.HasSuffix("/"+filepath.ToSlash(saved), "/"+profile.ManagedObserveDir+"/tool-output") {
+		slashed := filepath.ToSlash(saved)
+		if slashed == ".." || strings.HasPrefix(slashed, "../") || !strings.HasSuffix("/"+slashed, "/"+profile.ManagedObserveDir+"/tool-output") {
 			t.Fatalf("outputs for %s are saved in %q, which the rule doesn't name", dbPath, saved)
 		}
 	}
