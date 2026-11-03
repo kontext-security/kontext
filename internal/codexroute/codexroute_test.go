@@ -170,7 +170,10 @@ func (r testRouter) daemonIn(t *testing.T, stateDir string) *Router {
 			}
 			return nil
 		},
-		Reach: func(context.Context, int, string) error {
+		Reach: func(ctx context.Context, _ int, _ string) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if !*r.reaches {
 				return errors.New("unexpected answer 502")
 			}
@@ -1177,6 +1180,66 @@ func TestTheRouteWaitsForTheJobToReachOpenAI(t *testing.T) {
 	*r.reaches = false
 	if status, err := r.Enable(context.Background()); err != nil || !status.Routed {
 		t.Fatalf("Enable while routed = %+v, %v", status, err)
+	}
+}
+
+// A daemon that stops while the job checks that it reaches OpenAI learned
+// nothing about the network, and requests that Codex processes send after the
+// line went say nothing about the next route: neither holds the next daemon
+// off.
+func TestOnlyACompletedReachCheckOrATakenRouteHoldsCodexOff(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	writeFile(t, configPath, original, 0o644)
+	stopping, stop := context.WithCancel(context.Background())
+	stop()
+	if status, err := r.Enable(stopping); !errors.Is(err, context.Canceled) || status.Routed {
+		t.Fatalf("Enable as the daemon stops = %+v, %v", status, err)
+	}
+	if st := r.loadState(); !st.Unreachable.IsZero() {
+		t.Fatalf("a stopping daemon held the next route off: %+v", st)
+	}
+	if status, err := r.daemon(t).Enable(context.Background()); err != nil || !status.Routed {
+		t.Fatalf("Enable by the next daemon = %+v, %v", status, err)
+	}
+
+	if err := r.Disable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if taken, err := r.job(0).Unreachable(context.Background()); err != nil || taken {
+		t.Fatalf("Unreachable without a route = %v, %v", taken, err)
+	}
+	if st := r.loadState(); !st.Unreachable.IsZero() {
+		t.Fatalf("draining requests held the next route off: %+v", st)
+	}
+	if status, err := r.Enable(context.Background()); err != nil || !status.Routed {
+		t.Fatalf("Enable after draining requests failed = %+v, %v", status, err)
+	}
+}
+
+// A proxy that takes longer than five seconds to start, as a fresh copy of
+// the binary on a busy Mac does, keeps its route: the health check waits as
+// long as the hook does.
+func TestASlowStartingProxyKeepsItsRoute(t *testing.T) {
+	token := strings.Repeat("k", 32)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5500 * time.Millisecond)
+		if r.URL.Path == "/"+token+"/kontext-health" {
+			_, _ = io.WriteString(w, "kontext codex proxy\n")
+		}
+	}))
+	defer slow.Close()
+	port, _ := strconv.Atoi(slow.URL[strings.LastIndex(slow.URL, ":")+1:])
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	routed, err := codexmanaged.AddRoute(original, BaseURL(port, token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, configPath, routed, 0o600)
+	hook := New(Options{Home: home, StateDir: filepath.Join(home, "state"), GOOS: "darwin"})
+	if unrouted, err := hook.UnrouteUnanswered(context.Background()); err != nil || unrouted || readFile(t, configPath) != routed {
+		t.Fatalf("UnrouteUnanswered with a slow proxy = %v, %v", unrouted, err)
 	}
 }
 

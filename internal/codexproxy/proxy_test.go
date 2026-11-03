@@ -883,6 +883,56 @@ func TestTheBreakerCountsOnlyRequestsThatNeverConnected(t *testing.T) {
 	}
 }
 
+// A working upstream keeps the route for the logins it serves: requests to
+// the other one that cannot connect take the route away only while no
+// request to the working one connects, and one that connected before their
+// run began says nothing about it.
+func TestABlockedUpstreamLeavesTheRouteToAWorkingOne(t *testing.T) {
+	newBreaker := func() (*breaker, *int) {
+		trips := new(int)
+		return &breaker{next: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Header.Get("Outcome") == "answered" {
+				return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: r}, nil
+			}
+			return nil, errors.New("dial tcp 192.0.2.1:443: connect: connection refused")
+		}), unreachable: func(context.Context) { *trips++ }}, trips
+	}
+	send := func(b *breaker, host, outcome string) {
+		request, _ := http.NewRequest(http.MethodPost, "https://"+host+"/v1/responses", nil)
+		request.Header.Set("Outcome", outcome)
+		if response, err := b.RoundTrip(request); err == nil {
+			response.Body.Close()
+		}
+	}
+
+	// An API key's requests fail while a ChatGPT login's connect.
+	b, trips := newBreaker()
+	send(b, "api.example", "refused")
+	send(b, "chatgpt.example", "answered")
+	for range 4 {
+		send(b, "api.example", "refused")
+	}
+	if *trips != 0 {
+		t.Fatalf("a blocked upstream took the route from a working one (%d trips)", *trips)
+	}
+	// Then the ChatGPT login's fail too, and neither works.
+	for range 3 {
+		send(b, "chatgpt.example", "refused")
+	}
+	if *trips != 1 {
+		t.Fatalf("both upstreams failing: %d trips, want 1", *trips)
+	}
+
+	b, trips = newBreaker()
+	send(b, "chatgpt.example", "answered")
+	for range 3 {
+		send(b, "api.example", "refused")
+	}
+	if *trips != 1 {
+		t.Fatalf("a connection from before the run kept the route: %d trips, want 1", *trips)
+	}
+}
+
 // The daemon's check that the job reaches the upstream sends either upstream
 // a request with no credentials, never counts toward giving the route up,
 // and says nothing of the token.

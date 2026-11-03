@@ -288,6 +288,10 @@ func withCodexRouteCheck(evaluate func(hook.Event) (hook.Result, error), check f
 	}
 }
 
+// codexRouteCheck builds the check every Codex hook path runs as a session
+// starts (see withCodexRouteCheck); tests replace it.
+var codexRouteCheck = unrouteUnansweredCodex
+
 // unrouteUnansweredCodex takes Codex's route away on macOS when nothing
 // answers on its port (see codexroute.Router.UnrouteUnanswered), and says so.
 // A check that fails says nothing.

@@ -46,7 +46,10 @@ import (
 const codexPreferenceDomain = "com.openai.codex"
 
 // cloudConfigCacheVersion is the format of Codex's cloud-managed config cache
-// that AdminRouteBlocker reads; Codex ignores a cache of any other version.
+// that AdminRouteBlocker reads. A Codex ignores a cache in a format other than
+// its own, but one in a format Kontext does not know most likely comes from a
+// newer Codex that reads it, and that Kontext cannot read: it might route
+// Codex, so it counts as unreadable.
 const cloudConfigCacheVersion = 1
 
 // defaultChatGPTBackend is Codex's own chatgpt_base_url.

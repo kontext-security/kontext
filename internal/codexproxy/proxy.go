@@ -79,7 +79,8 @@ type Options struct {
 	// Unreachable is told each time maxUnreachable requests in a row could
 	// not connect to their upstream at all (no address, connection, proxy or
 	// TLS), as on a network that needs a proxy the job was never told about,
-	// so that it takes the route away. The requests that follow still go
+	// so that it takes the route away; not while a request to the other
+	// upstream connected meanwhile. The requests that follow still go
 	// upstream. Nil tells nobody.
 	Unreachable func(context.Context)
 	// Transport reaches the upstream; a clone of http.DefaultTransport when nil.
@@ -281,15 +282,28 @@ func (s *Server) reach(ctx context.Context) error {
 }
 
 // breaker tells unreachable each time maxUnreachable requests in a row did
-// not connect to their upstream. A request that connected, whatever came of
-// it, starts the count again; one that Codex gave up on first counts for
-// nothing.
+// not connect to their upstream, unless a request to the other upstream
+// connected meanwhile: one route serves both kinds of login, and an upstream
+// that works keeps it for the logins it serves. A request that connected,
+// whatever came of it, starts its upstream's count again; one that Codex gave
+// up on first counts for nothing.
 type breaker struct {
 	next        http.RoundTripper
 	unreachable func(context.Context)
 
-	mu       sync.Mutex
-	failures int
+	mu sync.Mutex
+	// ended numbers the requests as they end, and runs keeps each upstream
+	// host's latest run of requests that did not connect.
+	ended uint64
+	runs  map[string]*failedRun
+}
+
+// failedRun is an upstream's requests in a row that did not connect: how
+// many, from which ended request on, and the last of its requests that did
+// connect.
+type failedRun struct {
+	failures         int
+	since, connected uint64
 }
 
 func (b *breaker) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -300,17 +314,42 @@ func (b *breaker) RoundTrip(request *http.Request) (*http.Response, error) {
 		return response, err
 	}
 	b.mu.Lock()
+	b.ended++
+	if b.runs == nil {
+		b.runs = map[string]*failedRun{}
+	}
+	run := b.runs[request.URL.Host]
+	if run == nil {
+		run = &failedRun{}
+		b.runs[request.URL.Host] = run
+	}
 	tripped := false
 	if err == nil || connected.Load() {
-		b.failures = 0
-	} else if b.failures++; b.failures == maxUnreachable {
-		b.failures, tripped = 0, true
+		run.failures, run.connected = 0, b.ended
+	} else {
+		if run.failures == 0 {
+			run.since = b.ended
+		}
+		if run.failures++; run.failures >= maxUnreachable && !b.connectedSince(request.URL.Host, run.since) {
+			run.failures, tripped = 0, true
+		}
 	}
 	b.mu.Unlock()
 	if tripped && b.unreachable != nil {
 		b.unreachable(context.WithoutCancel(request.Context()))
 	}
 	return response, err
+}
+
+// connectedSince reports whether a request to an upstream other than host
+// connected after request n ended. b.mu must be held.
+func (b *breaker) connectedSince(host string, n uint64) bool {
+	for other, run := range b.runs {
+		if other != host && run.connected > n {
+			return true
+		}
+	}
+	return false
 }
 
 // strip removes the token segment; it compares in constant time.

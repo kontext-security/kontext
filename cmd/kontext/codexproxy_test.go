@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -106,6 +108,38 @@ func TestACodexSessionStartChecksTheRoute(t *testing.T) {
 		if result.Notice != "" || checks != 1 || (err != nil) != (event.HookName == hook.HookStop) {
 			t.Fatalf("%s %s = %+v, %v (%d checks)", event.Agent, event.HookName, result, err, checks)
 		}
+	}
+}
+
+// A Codex session start hook run in an explicit mode checks the route as the
+// managed and sidecar paths do, and its answer says what the check found.
+func TestAnExplicitModeCodexSessionStartChecksTheRoute(t *testing.T) {
+	previous := codexRouteCheck
+	t.Cleanup(func() { codexRouteCheck = previous })
+	checks := 0
+	codexRouteCheck = func(diagnostic.Logger) func(context.Context) string {
+		return func(context.Context) string {
+			checks++
+			return codexUnroutedNotice
+		}
+	}
+	for _, mode := range []string{"observe", "enforce", "remote"} {
+		cmd := hookCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(io.Discard)
+		cmd.SetIn(strings.NewReader(`{"session_id":"s1","hook_event_name":"SessionStart","source":"startup","cwd":"/tmp","model":"gpt-6.1-sol","transcript_path":null}`))
+		cmd.SetArgs([]string{"--agent", "codex", "--mode", mode, "--socket", filepath.Join(t.TempDir(), "none.sock"), "session-start"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		var answer map[string]any
+		if err := json.Unmarshal(out.Bytes(), &answer); err != nil || answer["systemMessage"] != codexUnroutedNotice {
+			t.Fatalf("%s: hook answered %s (%v)", mode, out.String(), err)
+		}
+	}
+	if checks != 3 {
+		t.Fatalf("%d route checks for 3 session starts", checks)
 	}
 }
 

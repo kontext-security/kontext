@@ -197,16 +197,21 @@ const maxHealthFailures = 3
 // a moment gets its route back soon after.
 const unreachableWait = 10 * time.Minute
 
-// answerWait is how long UnrouteUnanswered waits for the proxy. A loaded job
-// answers within it, since launchd starts the proxy on demand: in
+// answerWait is how long a health check waits for the proxy, the daemon's and
+// the one Codex's session start hook makes (see UnrouteUnanswered). A loaded
+// job answers within it, since launchd starts the proxy on demand: in
 // milliseconds from a binary that ran before, in seconds the first time a
-// fresh copy runs, which macOS checks first. Only a hung listener costs the
-// hook all of it, once.
+// fresh copy runs, which macOS checks first, and longer on a busy Mac. Only a
+// hung listener costs the hook all of it, once.
 const answerWait = 10 * time.Second
 
 // proxyVariables are the proxy settings the job takes from the daemon's
 // environment: launchd starts it with none of its own, and Go never reads the
-// proxy macOS is set to use.
+// proxy macOS is set to use. A standard install starts the daemon without
+// them too, so they reach the job only when the daemon's own environment has
+// them, as when it runs by hand or an administrator added them to its launch
+// agent. On a network that needs macOS's own proxy settings, the reach check
+// keeps Codex routed directly instead.
 var proxyVariables = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"}
 
 func New(opts Options) *Router {
@@ -364,7 +369,12 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 		// job, the job must reach OpenAI as well, which it cannot on a network
 		// that needs a proxy it does not know.
 		if err := r.opts.Reach(ctx, st.Port, token); err != nil {
-			st.Holder, st.Unreachable = nil, r.opts.Now()
+			st.Holder = nil
+			// A daemon stopping meanwhile learned nothing about the network:
+			// only a check that ran its course holds the next one off.
+			if ctx.Err() == nil {
+				st.Unreachable = r.opts.Now()
+			}
 			_ = r.saveState(st)
 			return Status{}, fmt.Errorf("codex proxy could not reach OpenAI: %w", err)
 		}
@@ -494,8 +504,10 @@ func (r *Router) Held(context.Context) (bool, error) {
 // could not reach OpenAI, as on a network that needs a proxy the job does not
 // know. The daemon's health check reaches only the job, so Enable keeps Codex
 // routed directly for unreachableWait, and routes it again only once the job
-// reaches OpenAI. Like Held, it leaves the route to a daemon changing it as
-// we speak, and reports false then.
+// reaches OpenAI. Requests from Codex processes still draining after the line
+// went hold nothing off: the next route waits for the job's own check. Like
+// Held, it leaves the route to a daemon changing it as we speak. It reports
+// whether it took the line away.
 func (r *Router) Unreachable(context.Context) (bool, error) {
 	if r.opts.GOOS != "darwin" {
 		return false, nil
@@ -507,6 +519,9 @@ func (r *Router) Unreachable(context.Context) (bool, error) {
 		return false, err
 	}
 	defer unlock()
+	if config, err := readConfig(r.configPath()); err != nil || codexmanaged.Route(config.content) == "" {
+		return false, err
+	}
 	st := r.loadState()
 	st.Unreachable = r.opts.Now()
 	if err := r.saveState(st); err != nil {
@@ -994,7 +1009,7 @@ func runLaunchctl(ctx context.Context, args ...string) error {
 }
 
 func health(ctx context.Context, port int, token string) error {
-	return ask(ctx, port, token, codexproxy.HealthRoute, codexproxy.HealthBody, 5*time.Second)
+	return ask(ctx, port, token, codexproxy.HealthRoute, codexproxy.HealthBody, answerWait)
 }
 
 // reach has the proxy try its upstreams in turn, each for up to

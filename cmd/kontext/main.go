@@ -386,7 +386,7 @@ func hookCmd() *cobra.Command {
 				lifecycle.Diagnostic = diagnostic.New(cmd.ErrOrStderr(), diagnostic.EnabledFromEnv())
 				hookcmd.RunWithExpectedEvent(managedHookAgent{Agent: a}, expectedEvent, withCodexRouteCheck(func(e hook.Event) (hook.Result, error) {
 					return lifecycle.Process(context.Background(), e), nil
-				}, unrouteUnansweredCodex(lifecycle.Diagnostic)))
+				}, codexRouteCheck(lifecycle.Diagnostic)))
 				return nil
 			}
 
@@ -401,11 +401,14 @@ func hookCmd() *cobra.Command {
 					adapter = expectedHookAdapter{Adapter: adapter, expected: expectedEvent}
 				}
 				processor := rootHookProcessor{socketPath: resolvedSocketPath, mode: hookMode}
-				return guardhookruntime.Run(context.Background(), adapter, processor, hookMode, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+				checked := withCodexRouteCheck(func(e hook.Event) (hook.Result, error) {
+					return processor.Process(context.Background(), e)
+				}, codexRouteCheck(diagnostic.New(cmd.ErrOrStderr(), diagnostic.EnabledFromEnv())))
+				return guardhookruntime.Run(context.Background(), adapter, hookProcessorFunc(checked), hookMode, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 			}
 			hookcmd.RunWithExpectedEvent(a, expectedEvent, withCodexRouteCheck(func(e hook.Event) (hook.Result, error) {
 				return evaluateHookWithSidecar(resolvedSocketPath, e)
-			}, unrouteUnansweredCodex(diagnostic.New(cmd.ErrOrStderr(), diagnostic.EnabledFromEnv()))))
+			}, codexRouteCheck(diagnostic.New(cmd.ErrOrStderr(), diagnostic.EnabledFromEnv()))))
 			return nil
 		},
 	}
@@ -574,6 +577,13 @@ type rootHookProcessor struct {
 
 func (p rootHookProcessor) Process(_ context.Context, event hook.Event) (hook.Result, error) {
 	return evaluateHookWithSidecarForMode(p.socketPath, event, string(p.mode))
+}
+
+// hookProcessorFunc runs an evaluate function as an explicit mode's processor.
+type hookProcessorFunc func(hook.Event) (hook.Result, error)
+
+func (f hookProcessorFunc) Process(_ context.Context, event hook.Event) (hook.Result, error) {
+	return f(event)
 }
 
 func resolveHookSocketPath(flagValue string) string {
