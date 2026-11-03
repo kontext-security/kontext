@@ -410,3 +410,33 @@ func TestEncodeCodexFailOpenSaysNothing(t *testing.T) {
 		}
 	}
 }
+
+// A notice reaches the person as Codex's systemMessage however the hook was
+// decided, with no daemon to decide it too.
+func TestEncodeCodexNoticeReachesThePerson(t *testing.T) {
+	t.Parallel()
+
+	const notice = "Restart Codex."
+	withNotice := func(result hook.Result) hook.Result {
+		result.Notice = notice
+		return result
+	}
+	for _, check := range []struct {
+		event  string
+		result hook.Result
+		want   string
+	}{
+		{"SessionStart", withNotice(hook.FailOpen("managed policy daemon unavailable")), `{"systemMessage":"Restart Codex."}`},
+		{"SessionStart", withNotice(hook.Result{Decision: hook.DecisionAllow, Reason: "Workspace rules apply."}),
+			`{"systemMessage":"Restart Codex.","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Workspace rules apply."}}`},
+		{"SessionStart", withNotice(hook.Result{Decision: hook.DecisionDeny, Reason: "Session blocked."}),
+			`{"continue":false,"stopReason":"Session blocked.","systemMessage":"Restart Codex."}`},
+		{"Stop", withNotice(hook.Result{Decision: hook.DecisionAllow}), `{"systemMessage":"Restart Codex."}`},
+		{"SessionStart", hook.FailOpen("managed policy daemon unavailable"), `{}`},
+	} {
+		out, err := EncodeCodexResult(check.event, check.result)
+		if err != nil || string(out) != check.want {
+			t.Fatalf("EncodeCodexResult(%s, %+v) = %s, %v, want %s", check.event, check.result, out, err, check.want)
+		}
+	}
+}

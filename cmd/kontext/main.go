@@ -384,9 +384,9 @@ func hookCmd() *cobra.Command {
 			if shouldUseManagedObserve(explicitSocket, explicitMode) {
 				lifecycle := managedobserve.NewLifecycle()
 				lifecycle.Diagnostic = diagnostic.New(cmd.ErrOrStderr(), diagnostic.EnabledFromEnv())
-				hookcmd.RunWithExpectedEvent(managedHookAgent{Agent: a}, expectedEvent, func(e hook.Event) (hook.Result, error) {
+				hookcmd.RunWithExpectedEvent(managedHookAgent{Agent: a}, expectedEvent, withCodexRouteCheck(func(e hook.Event) (hook.Result, error) {
 					return lifecycle.Process(context.Background(), e), nil
-				})
+				}, unrouteUnansweredCodex(lifecycle.Diagnostic)))
 				return nil
 			}
 
@@ -403,9 +403,9 @@ func hookCmd() *cobra.Command {
 				processor := rootHookProcessor{socketPath: resolvedSocketPath, mode: hookMode}
 				return guardhookruntime.Run(context.Background(), adapter, processor, hookMode, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 			}
-			hookcmd.RunWithExpectedEvent(a, expectedEvent, func(e hook.Event) (hook.Result, error) {
+			hookcmd.RunWithExpectedEvent(a, expectedEvent, withCodexRouteCheck(func(e hook.Event) (hook.Result, error) {
 				return evaluateHookWithSidecar(resolvedSocketPath, e)
-			})
+			}, unrouteUnansweredCodex(diagnostic.New(cmd.ErrOrStderr(), diagnostic.EnabledFromEnv()))))
 			return nil
 		},
 	}

@@ -4,12 +4,18 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -101,6 +107,10 @@ type testRouter struct {
 	home    string
 	launchd *fakeLaunchd
 	healthy *bool
+	// reaches says whether the job reaches OpenAI, and env is the daemon's
+	// environment.
+	reaches *bool
+	env     map[string]string
 	codex   *int
 	// binary is where the daemon's kontext binary is, and processes the
 	// processes running, the test's own as the daemon among them.
@@ -115,10 +125,11 @@ const build2 = "kontext build 2\n"
 func newTestRouter(t *testing.T) testRouter {
 	t.Helper()
 	home := t.TempDir()
-	r := testRouter{home: home, launchd: &fakeLaunchd{}, healthy: new(bool), codex: new(int), clock: new(time.Duration),
+	r := testRouter{home: home, launchd: &fakeLaunchd{}, healthy: new(bool), reaches: new(bool), env: map[string]string{},
+		codex: new(int), clock: new(time.Duration),
 		binary:    filepath.Join(home, "opt", "homebrew", "bin", "kontext"),
 		processes: &fakeProcesses{started: map[int]time.Time{os.Getpid(): time.Now().Add(-time.Hour)}}}
-	*r.healthy = true
+	*r.healthy, *r.reaches = true, true
 	writeFile(t, r.binary, build2, 0o755)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"), authFor("plus"), 0o600)
 	r.Router = r.daemon(t)
@@ -146,6 +157,16 @@ func (r testRouter) daemon(t *testing.T) *Router {
 			}
 			return nil
 		},
+		Reach: func(context.Context, int, string) error {
+			if !*r.reaches {
+				return errors.New("unexpected answer 502")
+			}
+			return nil
+		},
+		LookupEnv: func(name string) (string, bool) {
+			value, ok := r.env[name]
+			return value, ok
+		},
 		CodexSince:     func(time.Time) (int, error) { return *r.codex, nil },
 		ProcessStarted: r.processes.lookup,
 		FreePort:       func() (int, error) { return testPort, nil },
@@ -158,6 +179,18 @@ func (r testRouter) daemon(t *testing.T) *Router {
 func (r testRouter) job(later time.Duration) *Router {
 	return New(Options{Home: r.home, StateDir: r.opts.StateDir, GOOS: "darwin", ProcessStarted: r.processes.lookup,
 		Now: func() time.Time { return time.Now().Add(later) }})
+}
+
+// hook is the router Codex's session start hook builds, whose health check
+// gets answer, and asks is told each time it does.
+func (r testRouter) hook(answer error, asks func(ctx context.Context)) *Router {
+	return New(Options{Home: r.home, StateDir: r.opts.StateDir, GOOS: "darwin", ProcessStarted: r.processes.lookup,
+		Health: func(ctx context.Context, _ int, _ string) error {
+			if asks != nil {
+				asks(ctx)
+			}
+			return answer
+		}})
 }
 
 // replace puts content at path as a new file, as an update or a downgrade
@@ -905,5 +938,290 @@ func TestARouteTakenAwayComesBackWithTheDaemon(t *testing.T) {
 	r.processes.run(os.Getpid(), time.Now())
 	if status, err := r.daemon(t).Enable(context.Background()); err != nil || !status.Routed || readFile(t, configPath) != routed {
 		t.Fatalf("Enable = %+v, %v; config:\n%s", status, err, readFile(t, configPath))
+	}
+}
+
+// refused is what the health check finds where nothing listens.
+var refused = &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+
+// Codex's session start hook takes away a route nothing answers on, though
+// the daemon that holds it still runs, and leaves every other route alone.
+func TestASessionStartTakesAwayARouteNothingAnswers(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	writeFile(t, configPath, original, 0o644)
+
+	// Never routed: the hook asks the proxy nothing.
+	asked := 0
+	count := func(context.Context) { asked++ }
+	if unrouted, err := r.hook(refused, count).UnrouteUnanswered(context.Background()); err != nil || unrouted || asked != 0 {
+		t.Fatalf("UnrouteUnanswered without a route = %v, %v (asked %d times)", unrouted, err, asked)
+	}
+
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routed := readFile(t, configPath)
+	// A proxy that answers, or answers wrongly, or hangs up, is the daemon's
+	// to judge.
+	for _, answer := range []error{nil, errors.New("unexpected answer 404"), io.EOF} {
+		if unrouted, err := r.hook(answer, nil).UnrouteUnanswered(context.Background()); err != nil || unrouted || readFile(t, configPath) != routed {
+			t.Fatalf("UnrouteUnanswered with %v = %v, %v", answer, unrouted, err)
+		}
+	}
+	// While a daemon changes the route, the hook leaves it to it.
+	unlock, locked, err := lockFile(r.lockPath(), true)
+	if err != nil || !locked {
+		t.Fatal(err)
+	}
+	if unrouted, err := r.hook(refused, nil).UnrouteUnanswered(context.Background()); err != nil || unrouted || readFile(t, configPath) != routed {
+		t.Fatalf("UnrouteUnanswered during a change = %v, %v", unrouted, err)
+	}
+	unlock()
+
+	var deadline time.Time
+	unrouted, err := r.hook(refused, func(ctx context.Context) { deadline, _ = ctx.Deadline() }).UnrouteUnanswered(context.Background())
+	if err != nil || !unrouted {
+		t.Fatalf("UnrouteUnanswered with nothing listening = %v, %v", unrouted, err)
+	}
+	if deadline.IsZero() || time.Until(deadline) > answerWait {
+		t.Fatalf("the hook waited for the proxy until %v", deadline)
+	}
+	// The line goes as the job takes it away: the config's mode comes back,
+	// and the job stays for the Codex processes that read the line.
+	if info, _ := os.Stat(configPath); readFile(t, configPath) != original || info.Mode().Perm() != 0o644 {
+		t.Fatalf("config after the hook (%v):\n%s", info.Mode().Perm(), readFile(t, configPath))
+	}
+	if st := r.loadState(); st.Holder != nil || st.UnroutedAt.IsZero() || !r.launchd.loaded {
+		t.Fatalf("state after the hook: %+v, job loaded %v", st, r.launchd.loaded)
+	}
+	// It never adds the line back.
+	if unrouted, err := r.hook(nil, nil).UnrouteUnanswered(context.Background()); err != nil || unrouted || readFile(t, configPath) != original {
+		t.Fatalf("UnrouteUnanswered once the line went = %v, %v", unrouted, err)
+	}
+	// Nor does it ever answer for a route off macOS.
+	offMac := New(Options{Home: r.home, StateDir: r.opts.StateDir, GOOS: "linux", Health: func(context.Context, int, string) error { return refused }})
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if unrouted, err := offMac.UnrouteUnanswered(context.Background()); err != nil || unrouted || readFile(t, configPath) != routed {
+		t.Fatalf("UnrouteUnanswered off macOS = %v, %v", unrouted, err)
+	}
+}
+
+// A proxy that does not answer in time counts as none; a daemon that routed
+// Codex elsewhere meanwhile keeps its route.
+func TestASessionStartLeavesANewRouteAlone(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	writeFile(t, configPath, original, 0o600)
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	token := strings.TrimSpace(readFile(t, TokenPath(r.opts.StateDir)))
+	elsewhere, err := codexmanaged.AddRoute(original, BaseURL(testPort+1, token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := r.hook(context.DeadlineExceeded, func(context.Context) { writeFile(t, configPath, elsewhere, 0o600) })
+	if unrouted, err := hook.UnrouteUnanswered(context.Background()); err != nil || unrouted || readFile(t, configPath) != elsewhere {
+		t.Fatalf("UnrouteUnanswered over a new route = %v, %v; config:\n%s", unrouted, err, readFile(t, configPath))
+	}
+	if unrouted, err := r.hook(context.DeadlineExceeded, nil).UnrouteUnanswered(context.Background()); err != nil || !unrouted ||
+		readFile(t, configPath) != original {
+		t.Fatalf("UnrouteUnanswered with no answer in time = %v, %v; config:\n%s", unrouted, err, readFile(t, configPath))
+	}
+}
+
+// Only the health check's refused connection or its timeout count as no
+// answer, as the real check reports them.
+func TestOnlyNoAnswerCountsAsNoAnswer(t *testing.T) {
+	token := strings.Repeat("k", 32)
+	listen := func() (net.Listener, int) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { listener.Close() })
+		return listener, listener.Addr().(*net.TCPAddr).Port
+	}
+	closed, closedPort := listen()
+	closed.Close()
+	// launchd holds a job's port and starts the proxy on demand: until it
+	// does, the connection waits unaccepted.
+	_, waitingPort := listen()
+	hangsUp, hangsUpPort := listen()
+	go func() {
+		for {
+			conn, err := hangsUp.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	answers := func(status int, body string) int {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, body)
+		}))
+		t.Cleanup(server.Close)
+		port, _ := strconv.Atoi(server.URL[strings.LastIndex(server.URL, ":")+1:])
+		return port
+	}
+	for _, check := range []struct {
+		name     string
+		port     int
+		noAnswer bool
+	}{
+		{"nothing listens", closedPort, true},
+		{"nothing accepts", waitingPort, true},
+		{"the proxy", answers(http.StatusOK, "kontext codex proxy\n"), false},
+		{"another server", answers(http.StatusNotFound, "404 page not found\n"), false},
+		{"a hang-up", hangsUpPort, false},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		err := health(ctx, check.port, token)
+		cancel()
+		if noAnswer(err) != check.noAnswer || (err == nil) != (check.name == "the proxy") {
+			t.Errorf("%s: health = %v, no answer %v", check.name, err, noAnswer(err))
+		}
+	}
+}
+
+// The job takes Codex's route away once its requests cannot reach OpenAI,
+// and the daemon, whose health check only reaches the job, routes Codex again
+// only once the job reaches OpenAI, after a while.
+func TestTheRouteWaitsForTheJobToReachOpenAI(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	writeFile(t, configPath, original, 0o644)
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routed := readFile(t, configPath)
+
+	// While a daemon changes the route, the job leaves it to it.
+	unlock, locked, err := lockFile(r.lockPath(), true)
+	if err != nil || !locked {
+		t.Fatal(err)
+	}
+	if taken, err := r.job(0).Unreachable(context.Background()); err != nil || taken || readFile(t, configPath) != routed {
+		t.Fatalf("Unreachable during a change = %v, %v", taken, err)
+	}
+	unlock()
+	if taken, err := r.job(0).Unreachable(context.Background()); err != nil || !taken {
+		t.Fatalf("Unreachable = %v, %v", taken, err)
+	}
+	if info, _ := os.Stat(configPath); readFile(t, configPath) != original || info.Mode().Perm() != 0o644 {
+		t.Fatalf("config once the job could not reach OpenAI (%v):\n%s", info.Mode().Perm(), readFile(t, configPath))
+	}
+	if held, err := r.job(0).Held(context.Background()); err != nil || held {
+		t.Fatalf("Held after Unreachable = %v, %v", held, err)
+	}
+
+	// The daemon's next refreshes leave Codex routed directly, asking the
+	// job nothing, and say why.
+	bootstraps := r.launchd.ran("bootstrap")
+	*r.healthy = false
+	for _, later := range []time.Duration{0, unreachableWait - time.Minute} {
+		*r.clock = later
+		status, err := r.Enable(context.Background())
+		if err != nil || status.Routed || !strings.HasPrefix(status.Skipped, "the Codex proxy could not reach OpenAI") || readFile(t, configPath) != original {
+			t.Fatalf("Enable %v after = %+v, %v", later, status, err)
+		}
+	}
+	if status := r.Status(context.Background()); !strings.HasPrefix(status.Skipped, "the Codex proxy could not reach OpenAI") {
+		t.Fatalf("Status = %+v", status)
+	}
+	if r.launchd.ran("bootstrap") != bootstraps {
+		t.Fatal("Enable reloaded the job while Codex waits")
+	}
+
+	// Then it asks again; the job still cannot reach OpenAI, so Codex waits
+	// on.
+	*r.healthy, *r.reaches, *r.clock = true, false, unreachableWait+time.Minute
+	if status, err := r.Enable(context.Background()); err == nil || status.Routed || readFile(t, configPath) != original {
+		t.Fatalf("Enable while the job cannot reach OpenAI = %+v, %v", status, err)
+	}
+	if status, err := r.Enable(context.Background()); err != nil || !strings.HasPrefix(status.Skipped, "the Codex proxy could not reach OpenAI") {
+		t.Fatalf("Enable right after = %+v, %v", status, err)
+	}
+	*r.reaches, *r.clock = true, 2*unreachableWait+2*time.Minute
+	if status, err := r.Enable(context.Background()); err != nil || !status.Routed || readFile(t, configPath) != routed {
+		t.Fatalf("Enable once the job reaches OpenAI = %+v, %v; config:\n%s", status, err, readFile(t, configPath))
+	}
+	if st := r.loadState(); !st.Unreachable.IsZero() || st.Holder == nil {
+		t.Fatalf("state once routed again: %+v", st)
+	}
+	// A routed job is not asked again: its own requests tell.
+	*r.reaches = false
+	if status, err := r.Enable(context.Background()); err != nil || !status.Routed {
+		t.Fatalf("Enable while routed = %+v, %v", status, err)
+	}
+}
+
+// Codex is routed through a job only once it reaches OpenAI, which it may
+// never do from a network that needs a proxy it does not know; the job stays
+// for whatever still calls it, until the drain.
+func TestEnableRoutesOnlyThroughAJobThatReachesOpenAI(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	writeFile(t, configPath, original, 0o644)
+	*r.reaches = false
+	if status, err := r.Enable(context.Background()); err == nil || status.Routed || readFile(t, configPath) != original {
+		t.Fatalf("Enable = %+v, %v", status, err)
+	}
+	if st := r.loadState(); st.Holder != nil || st.Unreachable.IsZero() || st.Port != testPort || !r.launchd.loaded {
+		t.Fatalf("state: %+v, job loaded %v", st, r.launchd.loaded)
+	}
+	if done, err := r.Drain(context.Background()); err != nil || !done || r.launchd.loaded {
+		t.Fatalf("Drain = %v, %v", done, err)
+	}
+}
+
+// The job reaches OpenAI through the proxy the daemon was told to use, and
+// the plist that names it is the person's alone.
+func TestTheJobGetsTheDaemonsProxySettings(t *testing.T) {
+	r := newTestRouter(t)
+	writeFile(t, filepath.Join(r.home, ".codex", "config.toml"), original, 0o600)
+	plistPath := filepath.Join(r.home, "Library", "LaunchAgents", Label+".plist")
+	// An older build's plist, which anyone may read.
+	writeFile(t, plistPath, "<plist/>\n", 0o644)
+	r.env["HTTPS_PROXY"] = "http://kim:s3cr&t@proxy.example:3128"
+	r.env["no_proxy"] = "localhost,.internal.example"
+	r.env["HTTP_PROXY"] = ""
+	r.env["ALL_PROXY"] = "socks5://proxy.example:1080"
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plist := readFile(t, plistPath)
+	want := "\t<key>EnvironmentVariables</key>\n\t<dict>\n" +
+		"\t\t<key>HTTPS_PROXY</key>\n\t\t<string>http://kim:s3cr&amp;t@proxy.example:3128</string>\n" +
+		"\t\t<key>no_proxy</key>\n\t\t<string>localhost,.internal.example</string>\n\t</dict>\n"
+	if !strings.Contains(plist, want) || strings.Contains(plist, "HTTP_PROXY") || strings.Contains(plist, "ALL_PROXY") {
+		t.Fatalf("plist:\n%s", plist)
+	}
+	if info, err := os.Stat(plistPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("plist mode = %v, %v", info.Mode().Perm(), err)
+	}
+	decoder := xml.NewDecoder(strings.NewReader(plist))
+	for {
+		if _, err := decoder.Token(); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatalf("plist is not XML: %v\n%s", err, plist)
+		}
+	}
+
+	// A daemon started with other settings reloads the job with them, and
+	// one started with none leaves the job none.
+	bootstraps := r.launchd.ran("bootstrap")
+	r.env = map[string]string{}
+	if _, err := r.daemon(t).Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if plist := readFile(t, plistPath); strings.Contains(plist, "EnvironmentVariables") || r.launchd.ran("bootstrap") != bootstraps+1 {
+		t.Fatalf("after a daemon without proxy settings (%d bootstraps):\n%s", r.launchd.ran("bootstrap")-bootstraps, plist)
 	}
 }

@@ -8,9 +8,9 @@ import (
 )
 
 // job is the proxy's launchd job: binary is the job's own copy of kontext,
-// home the home whose Codex route it serves, and upstream and apiUpstream,
-// when set, where it forwards instead of the Codex backend and the OpenAI
-// API.
+// home the home whose Codex route it serves, upstream and apiUpstream, when
+// set, where it forwards instead of the Codex backend and the OpenAI API, and
+// env the proxy settings it reaches them through.
 type job struct {
 	label       string
 	binary      string
@@ -20,6 +20,7 @@ type job struct {
 	socket      string
 	upstream    string
 	apiUpstream string
+	env         [][2]string
 	logPath     string
 }
 
@@ -41,6 +42,14 @@ func renderPlist(j job) string {
 	for _, arg := range args {
 		program.WriteString("\t\t<string>" + xmlEscape(arg) + "</string>\n")
 	}
+	var environment strings.Builder
+	if len(j.env) > 0 {
+		environment.WriteString("\t<key>EnvironmentVariables</key>\n\t<dict>\n")
+		for _, variable := range j.env {
+			environment.WriteString("\t\t<key>" + xmlEscape(variable[0]) + "</key>\n\t\t<string>" + xmlEscape(variable[1]) + "</string>\n")
+		}
+		environment.WriteString("\t</dict>\n")
+	}
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -50,7 +59,7 @@ func renderPlist(j job) string {
 	<key>ProgramArguments</key>
 	<array>
 ` + program.String() + `	</array>
-	<key>Sockets</key>
+` + environment.String() + `	<key>Sockets</key>
 	<dict>
 		<key>Listener</key>
 		<dict>

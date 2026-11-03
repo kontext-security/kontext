@@ -130,7 +130,11 @@ type Result struct {
 	// permission decision for it, so the agent's own permission flow applies
 	// and a broken Kontext neither blocks nor approves the call.
 	FailedOpen bool
-	metadata   any
+	// Notice is a message for the person, which the agent shows them however
+	// the hook was decided, a failed-open one included; "" says nothing. Only
+	// Codex's encoder writes it, as its systemMessage.
+	Notice   string
+	metadata any
 }
 
 // FailOpen is the result for a hook Kontext could not decide.

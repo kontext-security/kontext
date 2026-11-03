@@ -10,9 +10,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -782,5 +784,173 @@ func TestProxySendsEachLoginWhereItBelongs(t *testing.T) {
 	}
 	if logged := logs(); strings.Contains(logged, apiKey) || strings.Contains(logged, accessToken) || !strings.Contains(logged, "replaced=1") {
 		t.Fatalf("logs = %q", logged)
+	}
+}
+
+// refusing is the URL of a port nothing listens on any more.
+func refusing(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewServer(http.NotFoundHandler())
+	server.Close()
+	return server.URL
+}
+
+// A proxy whose requests cannot connect to the upstream, as on a network
+// that needs a proxy the job was never told about, gives the route up at
+// every third request in a row, and still sends each one on.
+func TestProxyGivesTheRouteUpWhenItCannotConnect(t *testing.T) {
+	var mu sync.Mutex
+	trips := 0
+	address := refusing(t)
+	upstream, _ := url.Parse(address + "/backend-api/codex")
+	apiUpstream, _ := url.Parse(address + "/v1")
+	var logged strings.Builder
+	server, err := New(Options{Upstream: upstream, APIUpstream: apiUpstream, Token: testToken,
+		Unreachable: func(context.Context) {
+			mu.Lock()
+			defer mu.Unlock()
+			trips++
+		},
+		Logf: func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			fmt.Fprintf(&logged, format+"\n", args...)
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(server)
+	defer proxy.Close()
+	for i, wantTrips := range []int{0, 0, 1, 1, 1, 2} {
+		response, err := http.Get(proxy.URL + "/" + testToken + "/backend-api/codex/models")
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		mu.Lock()
+		got := trips
+		mu.Unlock()
+		if response.StatusCode != http.StatusBadGateway || got != wantTrips {
+			t.Fatalf("request %d: %d, %d trips, want %d", i+1, response.StatusCode, got, wantTrips)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Count(logged.String(), "upstream error") != 6 || strings.Contains(logged.String(), testToken) {
+		t.Fatalf("logs = %q", logged.String())
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// Only requests that never connected count toward giving the route up: a
+// request that connected, whatever came of it, starts the count again, and
+// one Codex gave up on first neither counts nor starts it again.
+func TestTheBreakerCountsOnlyRequestsThatNeverConnected(t *testing.T) {
+	trips := 0
+	b := &breaker{next: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.Header.Get("Outcome") {
+		case "answered":
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: http.NoBody, Request: r}, nil
+		case "cut":
+			httptrace.ContextClientTrace(r.Context()).GotConn(httptrace.GotConnInfo{})
+			return nil, io.ErrUnexpectedEOF
+		case "given up":
+			return nil, r.Context().Err()
+		default:
+			return nil, errors.New("dial tcp 192.0.2.1:443: connect: connection refused")
+		}
+	}), unreachable: func(context.Context) { trips++ }}
+	given := []string{}
+	for _, outcome := range []string{"refused", "refused", "answered", "refused", "refused", "cut",
+		"refused", "refused", "given up", "refused", "refused", "refused", "refused"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		if outcome == "given up" {
+			cancel()
+		}
+		request, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://chatgpt.example/backend-api/codex/responses", nil)
+		request.Header.Set("Outcome", outcome)
+		if response, err := b.RoundTrip(request); err == nil {
+			response.Body.Close()
+		}
+		cancel()
+		given = append(given, strconv.Itoa(trips))
+	}
+	if got := strings.Join(given, " "); got != "0 0 0 0 0 0 0 0 0 1 1 1 2" {
+		t.Fatalf("trips after each request: %s", got)
+	}
+}
+
+// The daemon's check that the job reaches the upstream sends either upstream
+// a request with no credentials, never counts toward giving the route up,
+// and says nothing of the token.
+func TestProxyReachesItsUpstreamWithoutCredentials(t *testing.T) {
+	trips := 0
+	proxy, up, _ := newProxyWith(t, Options{Unreachable: func(context.Context) { trips++ }})
+	reach := func(proxy *httptest.Server, method, token string) (int, string) {
+		t.Helper()
+		request, _ := http.NewRequest(method, proxy.URL+"/"+token+ReachRoute, nil)
+		request.Header.Set("Authorization", "Bearer sk-not-for-the-upstream")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		body, _ := io.ReadAll(response.Body)
+		return response.StatusCode, string(body)
+	}
+	if status, body := reach(proxy, http.MethodGet, testToken); status != http.StatusOK || body != ReachBody {
+		t.Fatalf("reach = %d %q", status, body)
+	}
+	up.mu.Lock()
+	if len(up.paths) != 1 || up.paths[0] != "/backend-api/codex" || up.headers[0].Get("Authorization") != "" {
+		t.Fatalf("the upstream saw %v with %v", up.paths, up.headers)
+	}
+	up.mu.Unlock()
+	if status, _ := reach(proxy, http.MethodPost, testToken); status != http.StatusMethodNotAllowed {
+		t.Fatalf("POST reach = %d", status)
+	}
+	if status, _ := reach(proxy, http.MethodGet, strings.Repeat("0", len(testToken))); status != http.StatusNotFound {
+		t.Fatalf("reach without the token = %d", status)
+	}
+
+	// The Codex backend refuses, the OpenAI API answers: either will do.
+	recorder := &upstream{}
+	recording := httptest.NewServer(recorder)
+	defer recording.Close()
+	address := refusing(t)
+	for _, upstreams := range []struct {
+		upstream, api string
+		want          int
+	}{
+		{address + "/backend-api/codex", recording.URL + "/v1", http.StatusOK},
+		{address + "/backend-api/codex", address + "/v1", http.StatusBadGateway},
+	} {
+		var logged strings.Builder
+		upstreamURL, _ := url.Parse(upstreams.upstream)
+		apiURL, _ := url.Parse(upstreams.api)
+		server, err := New(Options{Upstream: upstreamURL, APIUpstream: apiURL, Token: testToken,
+			Unreachable: func(context.Context) { trips++ },
+			Logf:        func(format string, args ...any) { fmt.Fprintf(&logged, format+"\n", args...) }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxy := httptest.NewServer(server)
+		for range maxUnreachable {
+			if status, _ := reach(proxy, http.MethodGet, testToken); status != upstreams.want {
+				t.Fatalf("reach through %s and %s = %d, want %d", upstreams.upstream, upstreams.api, status, upstreams.want)
+			}
+		}
+		proxy.Close()
+		if upstreams.want != http.StatusOK && (!strings.Contains(logged.String(), "upstream not reached") || strings.Contains(logged.String(), testToken)) {
+			t.Fatalf("logs = %q", logged.String())
+		}
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if strings.Join(recorder.paths, ",") != "/v1,/v1,/v1" || trips != 0 {
+		t.Fatalf("the OpenAI API saw %v; %d trips", recorder.paths, trips)
 	}
 }

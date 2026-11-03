@@ -21,6 +21,8 @@ import (
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/codexproxy"
 	"github.com/kontext-security/kontext/internal/codexroute"
+	"github.com/kontext-security/kontext/internal/diagnostic"
+	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 	"github.com/kontext-security/kontext/internal/tooloutput"
@@ -79,8 +81,9 @@ func codexProxyCmd() *cobra.Command {
 				decider := codexproxy.SocketDecider{Client: localruntime.NewClient(socketPath)}
 				rewriter = codexproxy.NewRewriter(decider, store, codexproxy.DecideWait)
 			}
+			held, unreachable := jobRoute(home, stateDir, logger)
 			server, err := codexproxy.New(codexproxy.Options{Upstream: upstreamURL, APIUpstream: apiUpstreamURL, Token: token, Rewriter: rewriter,
-				Held: heldRoute(home, stateDir, logger), Logf: logger.Printf})
+				Held: held, Unreachable: unreachable, Logf: logger.Printf})
 			if err != nil {
 				return err
 			}
@@ -106,7 +109,7 @@ func codexProxyCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&stdinSocket, "stdin-socket", false, "serve the listening socket launchd passes on standard input")
 	cmd.Flags().BoolVar(&passThrough, "pass-through", false, "forward every request unchanged, asking the daemon nothing")
-	cmd.Flags().StringVar(&home, "home", "", "home whose Codex route the proxy serves; once no daemon holds the route, the proxy takes the route's line out of ~/.codex/config.toml")
+	cmd.Flags().StringVar(&home, "home", "", "home whose Codex route the proxy serves; once no daemon holds the route, or requests cannot reach the upstream, the proxy takes the route's line out of ~/.codex/config.toml")
 	cmd.Flags().IntVar(&port, "port", 0, "loopback port to serve without launchd (0 picks one)")
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "file holding the proxy's path token")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "the proxy's state directory")
@@ -118,15 +121,32 @@ func codexProxyCmd() *cobra.Command {
 	return cmd
 }
 
-// heldRoute asks, for the job, whether a daemon still holds the Codex route
-// in home, which goes once none does (see codexroute.Router.Held). A proxy
-// run by hand serves no route, and asks nothing.
-func heldRoute(home, stateDir string, logger *log.Logger) func(context.Context) bool {
+// jobRoute asks, for the job, whether a daemon still holds the Codex route
+// in home, which goes once none does (see codexroute.Router.Held), and takes
+// the route away once the job's requests cannot reach the upstream (see
+// codexroute.Router.Unreachable). A proxy run by hand serves no route, and
+// asks nothing.
+func jobRoute(home, stateDir string, logger *log.Logger) (func(context.Context) bool, func(context.Context)) {
 	if home == "" {
-		return nil
+		return nil, nil
 	}
 	router := codexroute.New(codexroute.Options{Home: home, StateDir: stateDir})
-	return reportHeld(router.Held, logger.Printf)
+	return reportHeld(router.Held, logger.Printf), reportUnreachable(router.Unreachable, logger.Printf)
+}
+
+// reportUnreachable takes the route away with unreachable once requests
+// could not reach the upstream, and logs what came of it.
+func reportUnreachable(unreachable func(context.Context) (bool, error), logf func(string, ...any)) func(context.Context) {
+	return func(ctx context.Context) {
+		switch taken, err := unreachable(ctx); {
+		case err != nil:
+			logf("Codex route not taken away, though requests could not reach the upstream: %v", err)
+		case !taken:
+			logf("Codex route left to the daemon changing it, though requests could not reach the upstream")
+		default:
+			logf("Codex route taken away: requests could not reach the upstream; passing requests through")
+		}
+	}
 }
 
 // reportHeld asks held, and logs what it finds the first time, so each proxy
@@ -244,6 +264,51 @@ func pruneDecisions(ctx context.Context, store *codexproxy.Store, logger *log.Lo
 			return
 		case <-tick.C:
 		}
+	}
+}
+
+// codexUnroutedNotice tells the person, as a Codex session starts, that its
+// hook took away a route nothing answered on.
+const codexUnroutedNotice = "Kontext's Codex proxy is not answering, so Kontext took its openai_base_url line out of ~/.codex/config.toml. " +
+	"Restart Codex and the ChatGPT app: sessions opened before now, this one included, still call the proxy and keep reconnecting."
+
+// withCodexRouteCheck checks Codex's route to the Kontext proxy as each Codex
+// session starts, before evaluate answers the hook, and hands the person what
+// the check has to say. Codex runs the hook itself, so the check runs when
+// neither the daemon nor the proxy job does.
+func withCodexRouteCheck(evaluate func(hook.Event) (hook.Result, error), check func(context.Context) string) func(hook.Event) (hook.Result, error) {
+	return func(e hook.Event) (hook.Result, error) {
+		notice := ""
+		if e.Agent == "codex" && e.HookName == hook.HookSessionStart {
+			notice = check(context.Background())
+		}
+		result, err := evaluate(e)
+		result.Notice = notice
+		return result, err
+	}
+}
+
+// unrouteUnansweredCodex takes Codex's route away on macOS when nothing
+// answers on its port (see codexroute.Router.UnrouteUnanswered), and says so.
+// A check that fails says nothing.
+func unrouteUnansweredCodex(diag diagnostic.Logger) func(context.Context) string {
+	return func(ctx context.Context) string {
+		if runtime.GOOS != "darwin" {
+			return ""
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		router := codexroute.New(codexroute.Options{Home: home, StateDir: codexroute.StateDir(managedobserve.DefaultDBPath())})
+		unrouted, err := router.UnrouteUnanswered(ctx)
+		if err != nil {
+			diag.Printf("codex proxy route check: %v\n", err)
+		}
+		if !unrouted {
+			return ""
+		}
+		return codexUnroutedNotice
 	}
 }
 
