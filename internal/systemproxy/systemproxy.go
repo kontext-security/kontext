@@ -1,4 +1,7 @@
-package codexroute
+// Package systemproxy reads the manual proxies macOS is set to use, which Go
+// never reads, from what scutil --proxy prints, so no cgo is needed. It gives
+// them as the proxy variables Go reads, for a process started with those.
+package systemproxy
 
 import (
 	"context"
@@ -10,43 +13,57 @@ import (
 	"time"
 )
 
-// scutilProxies is what scutil --proxy prints: the proxies macOS is set to
-// use, read without cgo.
-func scutilProxies(ctx context.Context) (string, error) {
+// Scutil is what scutil --proxy prints: the proxies macOS is set to use.
+func Scutil(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, "/usr/sbin/scutil", "--proxy").Output()
 	return string(output), err
 }
 
-// systemProxyEnv is the manual proxies in what scutil --proxy printed, as
-// the variables Go reads: HTTPS_PROXY for the secure web proxy and
-// HTTP_PROXY for the web proxy, both of which macOS speaks HTTP to, and
-// NO_PROXY for the hosts and domains it sends around them (see noProxy). A
-// PAC file or proxy auto-discovery cannot be expressed as variables, and
-// the password of a proxy that needs one stays in the keychain: on a
-// network that needs either, the reach check keeps Codex routed directly. It
-// reports false when output is not what scutil --proxy prints.
-func systemProxyEnv(output string) ([][2]string, bool) {
+// Proxies are the manual proxies macOS is set to use, as the values of the
+// variables Go reads: HTTPS_PROXY for the secure web proxy and HTTP_PROXY for
+// the web proxy, both of which macOS speaks HTTP to, and NO_PROXY for the
+// hosts and domains it sends around them (see noProxy). A value is "" when
+// its variable is not set. A PAC file or proxy auto-discovery cannot be
+// expressed as variables, and the password of a proxy that needs one stays in
+// the keychain.
+type Proxies struct {
+	HTTPS, HTTP, NoProxy string
+}
+
+// Parse reads the manual proxies in what scutil --proxy printed. It reports
+// false when output is not what scutil --proxy prints.
+func Parse(output string) (Proxies, bool) {
 	settings, exceptions, ok := parseProxies(output)
 	if !ok {
-		return nil, false
+		return Proxies{}, false
 	}
+	var proxies Proxies
+	if settings["HTTPSEnable"] == "1" {
+		proxies.HTTPS = proxyURL(settings["HTTPSProxy"], settings["HTTPSPort"])
+	}
+	if settings["HTTPEnable"] == "1" {
+		proxies.HTTP = proxyURL(settings["HTTPProxy"], settings["HTTPPort"])
+	}
+	// Without a proxy the exceptions mean nothing, and would only change the
+	// environment Env gives when they change.
+	if proxies.HTTPS != "" || proxies.HTTP != "" {
+		proxies.NoProxy = noProxy(exceptions)
+	}
+	return proxies, true
+}
+
+// Env is p as a process's environment: the variables that are set, in the
+// order HTTPS_PROXY, HTTP_PROXY, NO_PROXY.
+func (p Proxies) Env() [][2]string {
 	var env [][2]string
-	for _, proxy := range [][2]string{{"HTTPS_PROXY", "HTTPS"}, {"HTTP_PROXY", "HTTP"}} {
-		if settings[proxy[1]+"Enable"] != "1" {
-			continue
-		}
-		if address := proxyURL(settings[proxy[1]+"Proxy"], settings[proxy[1]+"Port"]); address != "" {
-			env = append(env, [2]string{proxy[0], address})
+	for _, variable := range [][2]string{{"HTTPS_PROXY", p.HTTPS}, {"HTTP_PROXY", p.HTTP}, {"NO_PROXY", p.NoProxy}} {
+		if variable[1] != "" {
+			env = append(env, variable)
 		}
 	}
-	// Without a proxy the exceptions mean nothing, and would only reload the
-	// job when they change.
-	if hosts := noProxy(exceptions); len(env) > 0 && hosts != "" {
-		env = append(env, [2]string{"NO_PROXY", hosts})
-	}
-	return env, true
+	return env
 }
 
 // parseProxies reads the settings at the top of what scutil --proxy prints,
@@ -122,8 +139,8 @@ func proxyURL(host, port string) string {
 // addresses and CIDR blocks as macOS writes them, except blocks whose address
 // leaves octets out (169.254/16), which get them back. Entries with other
 // wildcards (10.*), or that would not stay one entry, are left out, as are
-// the simple hostnames macOS can exclude on a switch of its own: the job sends
-// their requests through the proxy.
+// the simple hostnames macOS can exclude on a switch of its own: their
+// requests go through the proxy.
 func noProxy(exceptions []string) string {
 	var entries []string
 	for _, exception := range exceptions {

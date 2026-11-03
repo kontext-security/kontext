@@ -44,6 +44,7 @@ import (
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/codexproxy"
+	"github.com/kontext-security/kontext/internal/systemproxy"
 )
 
 // Label is the proxy job's launchd label.
@@ -214,8 +215,8 @@ const answerWait = 10 * time.Second
 // are the daemon's own when its environment has any, as when it runs by hand
 // or an administrator added them to its launch agent. A standard install
 // starts the daemon without them, so the job gets the manual proxies macOS is
-// set to use instead (see systemProxyEnv). On a network that needs a PAC file
-// or proxy auto-discovery, the reach check keeps Codex routed directly.
+// set to use instead (see systemproxy.Parse). On a network that needs a PAC
+// file or proxy auto-discovery, the reach check keeps Codex routed directly.
 var proxyVariables = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"}
 
 func New(opts Options) *Router {
@@ -244,7 +245,7 @@ func New(opts Options) *Router {
 		opts.LookupEnv = os.LookupEnv
 	}
 	if opts.SystemProxies == nil {
-		opts.SystemProxies = scutilProxies
+		opts.SystemProxies = systemproxy.Scutil
 	}
 	if opts.AdminRoute == nil {
 		opts.AdminRoute = codexmanaged.AdminRouteBlocker
@@ -985,8 +986,8 @@ func (r *Router) proxyEnv(ctx context.Context, plist string) [][2]string {
 		return env
 	}
 	if output, err := r.opts.SystemProxies(ctx); err == nil {
-		if env, ok := systemProxyEnv(output); ok {
-			return env
+		if proxies, ok := systemproxy.Parse(output); ok {
+			return proxies.Env()
 		}
 	}
 	return jobEnv(plist)
