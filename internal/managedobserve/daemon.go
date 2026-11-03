@@ -94,17 +94,25 @@ func holdInstanceLock(socketPath string, log diagnostic.Logger) (func(), error) 
 	return release, nil
 }
 
-// socketAnswers reports whether anything accepts a connection on the socket.
-// Any failure to connect reads as no: a crash leaves the file behind with
-// nothing listening, and that must not keep the next daemon out.
+// socketAnswers reports whether something lives on the socket. A connect that
+// is accepted says yes, and so does one that waits or finds the queue full,
+// which is a busy daemon. Other failures read as no: a crash leaves the file
+// behind with nothing listening, and that must not keep the next daemon out.
 func socketAnswers(socketPath string, log diagnostic.Logger) bool {
 	conn, err := net.DialTimeout("unix", socketPath, time.Second)
 	if err != nil {
 		log.Printf("managed-observe socket check: %v\n", err)
-		return false
+		return connectFailureMeansBusy(err)
 	}
 	_ = conn.Close()
 	return true
+}
+
+// connectFailureMeansBusy is true for a full queue as well: Go counts EAGAIN, the
+// answer on Linux, as a timeout.
+func connectFailureMeansBusy(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // takeInstanceLock returns a no-op if the lock can't be taken at all, such as on

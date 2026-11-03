@@ -9,6 +9,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const openNoFollow = windows.O_FILE_FLAG_OPEN_REPARSE_POINT
+
 // lockOffsetHigh puts the locked byte far past the PID: a locked range can't
 // be read, even by the process asking who holds the lock.
 const lockOffsetHigh = 0x7fffffff

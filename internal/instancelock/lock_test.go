@@ -285,6 +285,26 @@ func TestAcquireLeavesWhatALinkPointsAt(t *testing.T) {
 	}
 }
 
+// A link to nothing would otherwise have the open create the file it names.
+func TestAcquireCreatesNothingThroughALink(t *testing.T) {
+	hermetic.Symlinks(t)
+	path := lockPath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "not-there-yet")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if lock, err := Acquire(path, 0); err == nil {
+		lock.Release()
+		t.Error("took a lock through a link")
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the open created the link's target: %v", err)
+	}
+}
+
 func TestPathForSocketIsTheSameThroughALink(t *testing.T) {
 	hermetic.Symlinks(t)
 	hermetic.Home(t)

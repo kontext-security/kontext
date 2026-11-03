@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -230,6 +231,24 @@ func TestRunDaemonWaitsForADaemonThatIsLeaving(t *testing.T) {
 			t.Fatal("the daemon never answered on the socket")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestConnectFailureMeansBusy(t *testing.T) {
+	dial := func(err error) error { return &net.OpError{Op: "dial", Net: "unix", Err: err} }
+	for name, tt := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"queue full": {dial(os.NewSyscallError("connect", syscall.EAGAIN)), true},
+		"timed out":  {dial(os.ErrDeadlineExceeded), true},
+		"refused":    {dial(os.NewSyscallError("connect", syscall.ECONNREFUSED)), false},
+		"no file":    {dial(os.NewSyscallError("connect", syscall.ENOENT)), false},
+		"not a dial": {errors.New("something else"), false},
+	} {
+		if got := connectFailureMeansBusy(tt.err); got != tt.want {
+			t.Errorf("%s: got %t, want %t", name, got, tt.want)
+		}
 	}
 }
 

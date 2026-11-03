@@ -83,13 +83,20 @@ func Acquire(path string, wait time.Duration) (*Lock, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	// Writing the PID through a link would overwrite whatever it points at.
-	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file", path)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	// Writing the PID through a link would overwrite whatever it points at, so
+	// the open doesn't follow one, and the check is on what was opened.
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|openNoFollow, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
 	deadline := time.Now().Add(wait)
 	for {
