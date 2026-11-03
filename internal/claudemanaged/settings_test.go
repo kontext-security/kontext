@@ -3,13 +3,50 @@ package claudemanaged
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
+	"github.com/kontext-security/kontext/internal/hermetic"
+	"github.com/kontext-security/kontext/internal/profile"
+	"github.com/kontext-security/kontext/internal/tooloutput"
 )
+
+// The rule names the directory the daemon saves outputs in as text, and nothing
+// connects the two. Moving profile.Root has to move the rule in the same change,
+// or reading a saved output back starts to ask for permission again.
+func TestSavedOutputReadRuleNamesTheDaemonsSaveDirectory(t *testing.T) {
+	home := t.TempDir()
+	hermetic.SetHome(t, home)
+	t.Setenv(profile.EnvRoot, "")
+
+	root, err := filepath.Rel(home, profile.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("Read(~/%s/**/%s/tool-output/**)", filepath.ToSlash(root), profile.ManagedObserveDir)
+	if SavedOutputReadRule != want {
+		t.Fatalf("SavedOutputReadRule = %q, want %q", SavedOutputReadRule, want)
+	}
+
+	profileDir, err := profile.Dir("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, base := range []string{profile.Root(), profileDir} {
+		dbPath := filepath.Join(base, profile.ManagedObserveDir, profile.ManagedObserveDB)
+		saved, err := filepath.Rel(profile.Root(), tooloutput.DefaultDirForDB(dbPath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasSuffix("/"+filepath.ToSlash(saved), "/"+profile.ManagedObserveDir+"/tool-output") {
+			t.Fatalf("outputs for %s are saved in %q, which the rule doesn't name", dbPath, saved)
+		}
+	}
+}
 
 func TestValidateEquivalentCommandQuoting(t *testing.T) {
 	t.Parallel()
