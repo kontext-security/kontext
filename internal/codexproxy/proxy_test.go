@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -931,6 +932,58 @@ func TestABlockedUpstreamLeavesTheRouteToAWorkingOne(t *testing.T) {
 	if *trips != 1 {
 		t.Fatalf("a connection from before the run kept the route: %d trips, want 1", *trips)
 	}
+}
+
+// A request to the working upstream that connected before the other's
+// requests began to fail keeps the route while it waits for its answer and
+// while the answer streams. Requests that fail once it is over are judged
+// without it.
+func TestAWorkingUpstreamCountsWhileItsRequestIsUnderWay(t *testing.T) {
+	var trips atomic.Int32
+	connected, answer := make(chan struct{}), make(chan struct{})
+	b := &breaker{next: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "chatgpt.example" {
+			return nil, errors.New("dial tcp 192.0.2.1:443: connect: connection refused")
+		}
+		httptrace.ContextClientTrace(r.Context()).GotConn(httptrace.GotConnInfo{})
+		close(connected)
+		<-answer
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("data: {}\n\n")), Request: r}, nil
+	}), unreachable: func(context.Context) { trips.Add(1) }}
+	roundTrip := func(host string) (*http.Response, error) {
+		request, _ := http.NewRequest(http.MethodPost, "https://"+host+"/backend-api/codex/responses", nil)
+		return b.RoundTrip(request)
+	}
+	failThrice := func(when string, want int32) {
+		t.Helper()
+		for range 3 {
+			if _, err := roundTrip("api.example"); err == nil {
+				t.Fatal("a refused request was answered")
+			}
+		}
+		if got := trips.Load(); got != want {
+			t.Fatalf("%s: %d trips, want %d", when, got, want)
+		}
+	}
+
+	responses := make(chan *http.Response, 1)
+	go func() {
+		response, err := roundTrip("chatgpt.example")
+		if err != nil {
+			t.Error(err)
+		}
+		responses <- response
+	}()
+	<-connected
+	failThrice("while the working upstream's answer is awaited", 0)
+	close(answer)
+	response := <-responses
+	failThrice("while its answer streams", 0)
+	if _, err := io.ReadAll(response.Body); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	failThrice("once it is over", 1)
 }
 
 // The daemon's check that the job reaches the upstream sends either upstream
