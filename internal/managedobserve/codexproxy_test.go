@@ -181,6 +181,8 @@ func TestCodexRoutingLogsWhereTheRouteStands(t *testing.T) {
 	router := codexroute.New(codexroute.Options{Home: home, Binary: binary, StateDir: filepath.Join(home, "state"),
 		Socket: filepath.Join(home, "kontext.sock"), GOOS: "darwin", Launchctl: launchctl,
 		Health:     func(context.Context, int, string) error { return nil },
+		Reach:      func(context.Context, int, string) error { return nil },
+		AdminRoute: func(string) (string, error) { return "", nil },
 		CodexSince: func(time.Time) (int, error) { return 0, nil },
 		FreePort:   func() (int, error) { return 49321, nil }})
 

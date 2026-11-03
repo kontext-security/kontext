@@ -92,39 +92,48 @@ func EncodeCodexResult(hookEventName string, result hook.Result) ([]byte, error)
 	if !codexSupportedHook(hookName) {
 		return nil, fmt.Errorf("codex: unsupported hook event %q", hookEventName)
 	}
+	out := codexOutput(hookEventName, result)
+	// Codex shows the person a systemMessage as a warning, whatever else the
+	// hook said.
+	out.SystemMessage = result.Notice
+	return json.Marshal(out)
+}
+
+func codexOutput(hookEventName string, result hook.Result) codexHookOutput {
+	hookName := hook.HookName(hookEventName)
 	// Codex has no way to replace a tool output: a blocked PostToolUse hands
 	// the model the reason in its place, and the person still sees the
 	// output. A compacted output goes there, whatever else the daemon said
 	// about the event, unless it denied it.
 	if text, ok := result.UpdatedToolOutput["content"].(string); ok && text != "" &&
 		hookName == hook.HookPostToolUse && result.Decision != hook.DecisionDeny {
-		return json.Marshal(codexHookOutput{Decision: "block", Reason: text})
+		return codexHookOutput{Decision: "block", Reason: text}
 	}
 	// A fail-open result says nothing, not even its reason as model context.
 	if result.FailedOpen {
-		return json.Marshal(codexHookOutput{})
+		return codexHookOutput{}
 	}
 
 	reason := codexMeaningfulReason(result)
 	if hookName == hook.HookPreToolUse {
-		return encodeCodexPreToolUseResult(hookEventName, result, reason)
+		return codexPreToolUseOutput(hookEventName, result, reason)
 	}
-	return encodeCodexNonPreToolUseResult(hookEventName, result, reason)
+	return codexNonPreToolUseOutput(hookEventName, result, reason)
 }
 
-func encodeCodexPreToolUseResult(hookEventName string, result hook.Result, reason string) ([]byte, error) {
+func codexPreToolUseOutput(hookEventName string, result hook.Result, reason string) codexHookOutput {
 	if result.Decision != hook.DecisionAllow {
-		return json.Marshal(codexHookOutput{
+		return codexHookOutput{
 			HookSpecificOutput: &codexHookSpecificOutput{
 				HookEventName:            hookEventName,
 				PermissionDecision:       string(hook.DecisionDeny),
 				PermissionDecisionReason: result.ClaudeReason(),
 			},
-		})
+		}
 	}
 
 	if result.UpdatedInput == nil && reason == "" {
-		return json.Marshal(codexHookOutput{})
+		return codexHookOutput{}
 	}
 	out := codexHookOutput{
 		HookSpecificOutput: &codexHookSpecificOutput{
@@ -136,40 +145,40 @@ func encodeCodexPreToolUseResult(hookEventName string, result hook.Result, reaso
 	if result.UpdatedInput != nil {
 		out.HookSpecificOutput.PermissionDecision = string(hook.DecisionAllow)
 	}
-	return json.Marshal(out)
+	return out
 }
 
-func encodeCodexNonPreToolUseResult(hookEventName string, result hook.Result, reason string) ([]byte, error) {
+func codexNonPreToolUseOutput(hookEventName string, result hook.Result, reason string) codexHookOutput {
 	if result.Decision == hook.DecisionDeny {
 		switch hook.HookName(hookEventName) {
 		case hook.HookPostToolUse, hook.HookUserPromptSubmit:
-			return json.Marshal(codexHookOutput{
+			return codexHookOutput{
 				Decision: "block",
 				Reason:   result.ClaudeReason(),
-			})
+			}
 		case hook.HookSessionStart:
 			cont := false
-			return json.Marshal(codexHookOutput{
+			return codexHookOutput{
 				Continue:   &cont,
 				StopReason: result.ClaudeReason(),
-			})
+			}
 		case hook.HookStop:
-			return json.Marshal(codexHookOutput{})
+			return codexHookOutput{}
 		}
 	}
 
 	if hook.HookName(hookEventName) == hook.HookStop {
-		return json.Marshal(codexHookOutput{})
+		return codexHookOutput{}
 	}
 	if reason == "" {
-		return json.Marshal(codexHookOutput{})
+		return codexHookOutput{}
 	}
-	return json.Marshal(codexHookOutput{
+	return codexHookOutput{
 		HookSpecificOutput: &codexHookSpecificOutput{
 			HookEventName:     hookEventName,
 			AdditionalContext: reason,
 		},
-	})
+	}
 }
 
 func codexSupportedHook(hookName hook.HookName) bool {

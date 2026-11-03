@@ -63,8 +63,12 @@ func TestRealLaunchdJob(t *testing.T) {
 	var mu sync.Mutex
 	var forwarded []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entry := r.Method + " " + r.URL.Path
+		if r.Header.Get("Authorization") != "" {
+			entry += " (signed)"
+		}
 		mu.Lock()
-		forwarded = append(forwarded, r.Method+" "+r.URL.Path)
+		forwarded = append(forwarded, entry)
 		mu.Unlock()
 		_, _ = io.WriteString(w, "{}")
 	}))
@@ -106,6 +110,18 @@ func TestRealLaunchdJob(t *testing.T) {
 	status, err := router.Enable(ctx)
 	if err != nil || !status.Routed || !status.Loaded {
 		t.Fatalf("Enable = %+v, %v\nproxy log:\n%s", status, err, logOnFailure())
+	}
+	// Before Codex was routed, the job reached the upstream, with no
+	// credentials.
+	mu.Lock()
+	reached := strings.Join(forwarded, ", ")
+	forwarded = nil
+	mu.Unlock()
+	if reached != "HEAD /backend-api/codex" {
+		t.Fatalf("before Codex was routed, the upstream saw %q", reached)
+	}
+	if info, err := os.Stat(router.plistPath()); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("plist mode = %v, %v", info.Mode().Perm(), err)
 	}
 	config, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
 	if !strings.HasPrefix(codexmanaged.Route(string(config)), "http://127.0.0.1:"+strconv.Itoa(status.Port)+"/kx") {
@@ -184,7 +200,7 @@ func TestRealLaunchdJob(t *testing.T) {
 	mu.Lock()
 	seen, forwarded := strings.Join(forwarded, ", "), nil
 	mu.Unlock()
-	if response.StatusCode != http.StatusOK || seen != "GET /v1/models" {
+	if response.StatusCode != http.StatusOK || seen != "GET /v1/models (signed)" {
 		t.Fatalf("an API key's request through the job = %d; upstream saw %q", response.StatusCode, seen)
 	}
 	// Each proxy run says where the route stands at its first request.

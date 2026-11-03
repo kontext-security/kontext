@@ -21,11 +21,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -48,6 +50,15 @@ const (
 	// HealthRoute answers HealthBody straight from the proxy.
 	HealthRoute = "/kontext-health"
 	HealthBody  = "kontext codex proxy\n"
+	// ReachRoute answers ReachBody once a request that carries no
+	// credentials reached either upstream, each tried for up to ReachWait.
+	ReachRoute = "/kontext-reach"
+	ReachBody  = "kontext codex proxy reached its upstream\n"
+	ReachWait  = 5 * time.Second
+
+	// maxUnreachable is how many requests in a row may fail to connect to
+	// their upstream before the proxy gives the route up.
+	maxUnreachable = 3
 )
 
 // Options configure a Server.
@@ -65,6 +76,13 @@ type Options struct {
 	// requests it finds unheld pass through unchanged, asking the daemon
 	// nothing. Nil holds always.
 	Held func(context.Context) bool
+	// Unreachable is told each time maxUnreachable requests in a row could
+	// not connect to their upstream at all (no address, connection, proxy or
+	// TLS), as on a network that needs a proxy the job was never told about,
+	// so that it takes the route away; not while the other upstream worked
+	// meanwhile (see breaker). The requests that follow still go upstream.
+	// Nil tells nobody.
+	Unreachable func(context.Context)
 	// Transport reaches the upstream; a clone of http.DefaultTransport when nil.
 	Transport http.RoundTripper
 	// Logf receives one line per request: never headers, bodies or the token.
@@ -78,6 +96,7 @@ type Server struct {
 	token       []byte
 	rewriter    *Rewriter
 	held        func(context.Context) bool
+	transport   http.RoundTripper
 	proxy       *httputil.ReverseProxy
 	logf        func(format string, args ...any)
 }
@@ -106,7 +125,8 @@ func New(opts Options) (*Server, error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	s := &Server{upstream: upstream, apiUpstream: apiUpstream, token: []byte(opts.Token), rewriter: opts.Rewriter, held: opts.Held, logf: logf}
+	s := &Server{upstream: upstream, apiUpstream: apiUpstream, token: []byte(opts.Token), rewriter: opts.Rewriter, held: opts.Held,
+		transport: transport, logf: logf}
 	s.proxy = &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			// Out.URL is already the upstream URL the request's credentials
@@ -114,7 +134,7 @@ func New(opts Options) (*Server, error) {
 			// should see what Codex sent.
 			r.Out.Host = r.Out.URL.Host
 		},
-		Transport:     transport,
+		Transport:     &breaker{next: transport, unreachable: opts.Unreachable},
 		FlushInterval: -1, // SSE: hand every event to Codex as it arrives
 		// ReverseProxy's own messages go through scrub: URLs carry the token.
 		ErrorLog: log.New(logWriter(func(line string) { logf("%s", scrub(line, opts.Token)) }), "", 0),
@@ -159,6 +179,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, HealthBody)
+		return
+	}
+	if rest == ReachRoute {
+		// The daemon's check, before it routes Codex here, that this job
+		// reaches the upstream: the health check never leaves the Mac.
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if err := s.reach(r.Context()); err != nil {
+			s.logf("upstream not reached: %s", scrub(err.Error(), string(s.token)))
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, ReachBody)
 		return
 	}
 	route := strings.TrimPrefix(rest, codexSuffix)
@@ -216,6 +252,165 @@ func (s *Server) upstreamFor(header http.Header) *url.URL {
 		return s.apiUpstream
 	}
 	return s.upstream
+}
+
+// reach sends each upstream in turn a request that carries no credentials,
+// and reports whether either answered, whatever it said.
+func (s *Server) reach(ctx context.Context) error {
+	var errs []error
+	for _, upstream := range []*url.URL{s.upstream, s.apiUpstream} {
+		err := func() error {
+			ctx, cancel := context.WithTimeout(ctx, ReachWait)
+			defer cancel()
+			request, err := http.NewRequestWithContext(ctx, http.MethodHead, upstream.String(), nil)
+			if err != nil {
+				return err
+			}
+			response, err := s.transport.RoundTrip(request)
+			if err != nil {
+				return err
+			}
+			response.Body.Close()
+			return nil
+		}()
+		if err == nil {
+			return nil
+		}
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// breaker tells unreachable each time maxUnreachable requests in a row did
+// not connect to their upstream, unless the other upstream worked while they
+// failed: a request to it connected or ended, or one is still waiting for its
+// answer or streaming it. One route serves both kinds of login, and an
+// upstream that works keeps it for the logins it serves; the next requests
+// that fail are judged afresh. A request that connected, whatever came of it,
+// starts its upstream's count again; one that Codex gave up on first counts
+// for nothing.
+type breaker struct {
+	next        http.RoundTripper
+	unreachable func(context.Context)
+
+	mu sync.Mutex
+	// events numbers connections and failed requests as they happen, and
+	// upstreams keeps what each upstream host's requests did lately.
+	events    uint64
+	upstreams map[string]*upstreamState
+}
+
+// upstreamState is what an upstream's requests did lately: how many in a row
+// did not connect, from which event on, the latest event that showed it
+// works, and how many of its connected requests are still under way.
+type upstreamState struct {
+	failures         int
+	since, connected uint64
+	open             int
+}
+
+func (b *breaker) RoundTrip(request *http.Request) (*http.Response, error) {
+	host := request.URL.Host
+	var connected atomic.Bool
+	// A connection counts from the moment it is made, not once the answer
+	// comes: Codex may wait seconds for that.
+	trace := &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) {
+		if connected.CompareAndSwap(false, true) {
+			b.opened(host)
+		}
+	}}
+	response, err := b.next.RoundTrip(request.WithContext(httptrace.WithClientTrace(request.Context(), trace)))
+	if err == nil && connected.CompareAndSwap(false, true) {
+		// A transport that doesn't report its connections answered anyway.
+		b.opened(host)
+	}
+	switch {
+	case connected.Load() && err == nil && response.StatusCode != http.StatusSwitchingProtocols:
+		// The request is under way until Codex has had the whole answer.
+		response.Body = &releasing{ReadCloser: response.Body, release: func() { b.closed(host) }}
+	case connected.Load():
+		b.closed(host)
+	case request.Context().Err() != nil:
+		// Codex gave up before a connection, which says nothing about the
+		// upstream.
+	default:
+		if b.failed(host) && b.unreachable != nil {
+			b.unreachable(context.WithoutCancel(request.Context()))
+		}
+	}
+	return response, err
+}
+
+// upstream is host's state. b.mu must be held.
+func (b *breaker) upstream(host string) *upstreamState {
+	if b.upstreams == nil {
+		b.upstreams = map[string]*upstreamState{}
+	}
+	if b.upstreams[host] == nil {
+		b.upstreams[host] = &upstreamState{}
+	}
+	return b.upstreams[host]
+}
+
+// opened notes a connection to host, which starts its count again.
+func (b *breaker) opened(host string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.events++
+	upstream := b.upstream(host)
+	upstream.failures, upstream.connected = 0, b.events
+	upstream.open++
+}
+
+// closed notes that a connected request to host is over, which shows it
+// worked until now.
+func (b *breaker) closed(host string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.events++
+	upstream := b.upstream(host)
+	upstream.connected = b.events
+	upstream.open--
+}
+
+// failed counts a request to host that did not connect, and reports whether
+// the route goes for it.
+func (b *breaker) failed(host string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.events++
+	upstream := b.upstream(host)
+	if upstream.failures == 0 {
+		upstream.since = b.events
+	}
+	if upstream.failures++; upstream.failures < maxUnreachable {
+		return false
+	}
+	upstream.failures = 0
+	return !b.otherWorks(host, upstream.since)
+}
+
+// otherWorks reports whether an upstream other than host worked after event
+// since, or has a connected request under way. b.mu must be held.
+func (b *breaker) otherWorks(host string, since uint64) bool {
+	for other, upstream := range b.upstreams {
+		if other != host && (upstream.open > 0 || upstream.connected > since) {
+			return true
+		}
+	}
+	return false
+}
+
+// releasing calls release once, when its body is closed.
+type releasing struct {
+	io.ReadCloser
+	once    sync.Once
+	release func()
+}
+
+func (r *releasing) Close() error {
+	defer r.once.Do(r.release)
+	return r.ReadCloser.Close()
 }
 
 // strip removes the token segment; it compares in constant time.
