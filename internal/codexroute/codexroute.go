@@ -115,9 +115,11 @@ type Options struct {
 	// Reach checks that the proxy on port reaches OpenAI, which it must
 	// before Codex is routed to it.
 	Reach func(ctx context.Context, port int, token string) error
-	// LookupEnv reads the daemon's environment, whose proxy settings the job
-	// gets (see proxyVariables).
-	LookupEnv func(string) (string, bool)
+	// LookupEnv reads the daemon's environment, and SystemProxies prints the
+	// proxies macOS is set to use, as scutil --proxy does: the job gets the
+	// proxy settings of one of them (see proxyVariables).
+	LookupEnv     func(string) (string, bool)
+	SystemProxies func(ctx context.Context) (string, error)
 	// AdminRoute says which layer of Codex's configuration that an
 	// administrator manages routes Codex, or "" (see
 	// codexmanaged.AdminRouteBlocker), given the Codex home.
@@ -205,13 +207,13 @@ const unreachableWait = 10 * time.Minute
 // hung listener costs the hook all of it, once.
 const answerWait = 10 * time.Second
 
-// proxyVariables are the proxy settings the job takes from the daemon's
-// environment: launchd starts it with none of its own, and Go never reads the
-// proxy macOS is set to use. A standard install starts the daemon without
-// them too, so they reach the job only when the daemon's own environment has
-// them, as when it runs by hand or an administrator added them to its launch
-// agent. On a network that needs macOS's own proxy settings, the reach check
-// keeps Codex routed directly instead.
+// proxyVariables are the proxy settings the job gets: launchd starts it with
+// none of its own, and Go never reads the proxies macOS is set to use. They
+// are the daemon's own when its environment has any, as when it runs by hand
+// or an administrator added them to its launch agent. A standard install
+// starts the daemon without them, so the job gets the manual proxies macOS is
+// set to use instead (see systemProxyEnv). On a network that needs a PAC file
+// or proxy auto-discovery, the reach check keeps Codex routed directly.
 var proxyVariables = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"}
 
 func New(opts Options) *Router {
@@ -238,6 +240,9 @@ func New(opts Options) *Router {
 	}
 	if opts.LookupEnv == nil {
 		opts.LookupEnv = os.LookupEnv
+	}
+	if opts.SystemProxies == nil {
+		opts.SystemProxies = scutilProxies
 	}
 	if opts.AdminRoute == nil {
 		opts.AdminRoute = codexmanaged.AdminRouteBlocker
@@ -925,10 +930,10 @@ func (r *Router) ensureBinary(st *state) error {
 
 // ensureJob writes the job's plist and (re)loads the job when either changed.
 func (r *Router) ensureJob(ctx context.Context, port int) error {
+	current, _ := os.ReadFile(r.plistPath())
 	plist := renderPlist(job{label: r.opts.Label, binary: BinaryPath(r.opts.StateDir), port: port, home: r.opts.Home,
 		stateDir: r.opts.StateDir, socket: r.opts.Socket, upstream: r.opts.Upstream, apiUpstream: r.opts.APIUpstream,
-		env: r.proxyEnv(), logPath: r.logPath()})
-	current, _ := os.ReadFile(r.plistPath())
+		env: r.proxyEnv(ctx, string(current)), logPath: r.logPath()})
 	loaded := r.loaded(ctx)
 	if string(current) == plist && loaded {
 		return nil
@@ -954,16 +959,26 @@ func (r *Router) ensureJob(ctx context.Context, port int) error {
 	return r.opts.Launchctl(ctx, "bootstrap", r.domain(), r.plistPath())
 }
 
-// proxyEnv is the proxy settings in the daemon's environment, in
-// proxyVariables' order, for the job's.
-func (r *Router) proxyEnv() [][2]string {
+// proxyEnv is the proxy settings for the job's environment, in
+// proxyVariables' order: the daemon's, or else macOS's manual proxies. When
+// macOS's cannot be read, the job keeps the settings its plist gives it, since
+// a reload cuts Codex's streams.
+func (r *Router) proxyEnv(ctx context.Context, plist string) [][2]string {
 	var env [][2]string
 	for _, name := range proxyVariables {
 		if value, ok := r.opts.LookupEnv(name); ok && value != "" {
 			env = append(env, [2]string{name, value})
 		}
 	}
-	return env
+	if len(env) > 0 {
+		return env
+	}
+	if output, err := r.opts.SystemProxies(ctx); err == nil {
+		if env, ok := systemProxyEnv(output); ok {
+			return env
+		}
+	}
+	return jobEnv(plist)
 }
 
 func (r *Router) removeJob(ctx context.Context) error {

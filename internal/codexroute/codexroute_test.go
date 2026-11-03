@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,9 +109,11 @@ type testRouter struct {
 	launchd *fakeLaunchd
 	healthy *bool
 	// reaches says whether the job reaches OpenAI, env is the daemon's
-	// environment, and admin what Codex's administrator layers say.
+	// environment, scutil what macOS's proxy settings print as, and admin
+	// what Codex's administrator layers say.
 	reaches *bool
 	env     map[string]string
+	scutil  *scutilAnswer
 	admin   *adminAnswer
 	codex   *int
 	// binary is where the daemon's kontext binary is, and processes the
@@ -127,13 +130,21 @@ type adminAnswer struct {
 	err     error
 }
 
+// scutilAnswer is what scutil --proxy prints, or err, and how many times it
+// was asked.
+type scutilAnswer struct {
+	output string
+	err    error
+	asked  int
+}
+
 const build2 = "kontext build 2\n"
 
 func newTestRouter(t *testing.T) testRouter {
 	t.Helper()
 	home := t.TempDir()
 	r := testRouter{home: home, launchd: &fakeLaunchd{}, healthy: new(bool), reaches: new(bool), env: map[string]string{},
-		admin: &adminAnswer{}, codex: new(int), clock: new(time.Duration),
+		scutil: &scutilAnswer{output: noProxies}, admin: &adminAnswer{}, codex: new(int), clock: new(time.Duration),
 		binary:    filepath.Join(home, "opt", "homebrew", "bin", "kontext"),
 		processes: &fakeProcesses{started: map[int]time.Time{os.Getpid(): time.Now().Add(-time.Hour)}}}
 	*r.healthy, *r.reaches = true, true
@@ -182,6 +193,10 @@ func (r testRouter) daemonIn(t *testing.T, stateDir string) *Router {
 		LookupEnv: func(name string) (string, bool) {
 			value, ok := r.env[name]
 			return value, ok
+		},
+		SystemProxies: func(context.Context) (string, error) {
+			r.scutil.asked++
+			return r.scutil.output, r.scutil.err
 		},
 		AdminRoute: func(codexHome string) (string, error) {
 			if codexHome != filepath.Join(r.home, ".codex") {
@@ -1370,7 +1385,7 @@ func TestTheJobGetsTheDaemonsProxySettings(t *testing.T) {
 	}
 
 	// A daemon started with other settings reloads the job with them, and
-	// one started with none leaves the job none.
+	// one started with none gives it macOS's, none here.
 	bootstraps := r.launchd.ran("bootstrap")
 	r.env = map[string]string{}
 	if _, err := r.daemon(t).Enable(context.Background()); err != nil {
@@ -1378,5 +1393,69 @@ func TestTheJobGetsTheDaemonsProxySettings(t *testing.T) {
 	}
 	if plist := readFile(t, plistPath); strings.Contains(plist, "EnvironmentVariables") || r.launchd.ran("bootstrap") != bootstraps+1 {
 		t.Fatalf("after a daemon without proxy settings (%d bootstraps):\n%s", r.launchd.ran("bootstrap")-bootstraps, plist)
+	}
+}
+
+// The daemon's own proxy settings, in either case, win over macOS's, which
+// nobody asks for then.
+func TestTheDaemonsProxySettingsWinOverMacOSs(t *testing.T) {
+	r := newTestRouter(t)
+	writeFile(t, filepath.Join(r.home, ".codex", "config.toml"), original, 0o600)
+	r.scutil.output = manualProxies
+	r.env["https_proxy"] = "http://daemon-proxy.example:3128"
+	if status, err := r.Enable(context.Background()); err != nil || !status.Routed {
+		t.Fatalf("Enable = %+v, %v", status, err)
+	}
+	plist := readFile(t, filepath.Join(r.home, "Library", "LaunchAgents", Label+".plist"))
+	if env := jobEnv(plist); !slices.Equal(env, [][2]string{{"https_proxy", "http://daemon-proxy.example:3128"}}) || r.scutil.asked != 0 {
+		t.Fatalf("the job's settings %q, macOS's asked for %d times; plist:\n%s", env, r.scutil.asked, plist)
+	}
+}
+
+// On a Mac set to use manual proxies, the job reaches OpenAI through them.
+// Each reload cuts Codex's streams, so the job is reloaded only once they
+// change: not for anything else scutil prints, nor when they cannot be read.
+func TestTheJobGetsMacOSsManualProxies(t *testing.T) {
+	r := newTestRouter(t)
+	writeFile(t, filepath.Join(r.home, ".codex", "config.toml"), original, 0o600)
+	plistPath := filepath.Join(r.home, "Library", "LaunchAgents", Label+".plist")
+	// enable has the daemon route Codex once scutil printed output or failed
+	// with err, and tells what the job got and how many times it reloaded.
+	enable := func(output string, err error) ([][2]string, int) {
+		t.Helper()
+		bootstraps := r.launchd.ran("bootstrap")
+		r.scutil.output, r.scutil.err = output, err
+		if status, err := r.Enable(context.Background()); err != nil || !status.Routed {
+			t.Fatalf("Enable = %+v, %v", status, err)
+		}
+		return jobEnv(readFile(t, plistPath)), r.launchd.ran("bootstrap") - bootstraps
+	}
+	if env, _ := enable(manualProxies, nil); !slices.Equal(env, manualEnv) {
+		t.Fatalf("the job's settings = %q; plist:\n%s", env, readFile(t, plistPath))
+	}
+
+	otherwise := strings.NewReplacer("ExcludeSimpleHostnames : 1", "ExcludeSimpleHostnames : 0",
+		"SOCKSEnable : 0", "SOCKSEnable : 1\n  SOCKSPort : 1080\n  SOCKSProxy : socks.example",
+		"ProxyAutoConfigEnable : 0", "ProxyAutoConfigEnable : 0\n  ProxyAutoConfigURLString : http://wpad.example/proxy.pac",
+		"utun4", "utun5").Replace(manualProxies)
+	for _, answer := range []struct {
+		output string
+		err    error
+	}{{otherwise, nil}, {"", errors.New("exit status 1")}, {"No proxy configuration available\n", nil}} {
+		if env, reloads := enable(answer.output, answer.err); reloads != 0 || !slices.Equal(env, manualEnv) {
+			t.Fatalf("once scutil printed %q, %v: the job's settings = %q, %d reloads", answer.output, answer.err, env, reloads)
+		}
+	}
+
+	// Another proxy reloads the job with it, and a PAC file leaves it none.
+	moved := strings.ReplaceAll(manualProxies, "HTTPSProxy : proxy.example", "HTTPSProxy : proxy.office.example")
+	if env, reloads := enable(moved, nil); reloads != 1 || len(env) != 3 || env[0] != [2]string{"HTTPS_PROXY", "http://proxy.office.example:3128"} {
+		t.Fatalf("on another proxy: the job's settings = %q, %d reloads", env, reloads)
+	}
+	if env, reloads := enable(pacProxies, nil); reloads != 1 || env != nil || strings.Contains(readFile(t, plistPath), "EnvironmentVariables") {
+		t.Fatalf("on a PAC file: the job's settings = %q, %d reloads", env, reloads)
+	}
+	if env, reloads := enable(noProxies, nil); reloads != 0 || env != nil {
+		t.Fatalf("on no proxy: the job's settings = %q, %d reloads", env, reloads)
 	}
 }
