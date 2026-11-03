@@ -24,7 +24,7 @@ permissions:
 jobs:
   validate:
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 200
     outputs:
       validation_tag: ${{ steps.tag.outputs.tag }}
     env:
@@ -56,10 +56,21 @@ jobs:
           echo "GORELEASER_CURRENT_TAG=$tag" >> "$GITHUB_ENV"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      - name: Allow for Apple's initial company notarization queue
+        run: |
+          python3 - <<'PYCONFIG'
+          import os
+          from pathlib import Path
+          source = Path('.goreleaser.staging.yaml').read_text()
+          assert source.count('timeout: 20m') == 1
+          target = Path(os.environ['RUNNER_TEMP']) / 'company-goreleaser.yaml'
+          target.write_text(source.replace('timeout: 20m', 'timeout: 90m'))
+          PYCONFIG
+
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: "~> v2.18"
-          args: release --clean --skip=publish --config .goreleaser.staging.yaml
+          args: release --clean --skip=publish --config ${{ runner.temp }}/company-goreleaser.yaml
 
       - name: Verify both macOS architectures
         shell: bash
@@ -100,4 +111,15 @@ jobs:
             dist/checksums.txt
             evidence/
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Retain interrupted candidate binaries
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: company-signing-interrupted
+          path: |
+            dist/kontext_darwin_*/kontext
+            evidence/
+          if-no-files-found: warn
           retention-days: 14
