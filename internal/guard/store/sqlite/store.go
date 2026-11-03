@@ -26,6 +26,9 @@ type Store struct {
 	db     *sql.DB
 	path   string
 	signer receiptSigner
+	// afterAnnotationPage, when set, runs after each committed rewrite page. Tests
+	// use it to interrupt a pass partway.
+	afterAnnotationPage func()
 
 	// Capture configuration lives on Store so each persisted decision can
 	// snapshot behavior and evidence atomically.
@@ -390,8 +393,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureRiskTypeAnnotations(ctx); err != nil {
 		return err
 	}
-	for _, table := range []string{"step_safety_verdicts", "risk_type_annotations"} {
-		if err := s.normalizeAnnotationCreatedAt(ctx, table); err != nil {
+	for _, table := range annotationTables {
+		if err := s.ensureAnnotationCreatedAtFixedWidth(ctx, table); err != nil {
 			return err
 		}
 	}
@@ -738,7 +741,14 @@ where id = ?
 // ledgerTimestampCursorKeyLayout.
 const annotationCreatedAtUnnormalized = "created_at not glob '????-??-??T??:??:??.?????????Z'"
 
-// normalizeAnnotationCreatedAt keeps a table's annotation created_at in
+// annotationTables hold created_at in ledgerTimestampCursorKeyLayout.
+var annotationTables = []string{"step_safety_verdicts", "risk_type_annotations"}
+
+func annotationUnnormalizedIndex(table string) string {
+	return "idx_" + table + "_created_unnormalized"
+}
+
+// ensureAnnotationCreatedAtFixedWidth keeps new annotation created_at values in
 // ledgerTimestampCursorKeyLayout. The export cursors and the prune mirror
 // compare it as text, and earlier releases wrote RFC3339Nano, which trims
 // trailing zeros: "…:20.5Z" sorts before "…:20Z", so an annotation that became
@@ -747,15 +757,12 @@ const annotationCreatedAtUnnormalized = "created_at not glob '????-??-??T??:??:?
 // left running across an upgrade, a downgrade), and a trimmed stamp sorts
 // after its own fixed-width cursor, so the export would return it on every
 // page. The trigger rewrites such a stamp inside the insert, whichever release
-// makes it, so no reader sees one. The pass below rewrites rows from before
-// the trigger existed; the partial index holds only rows left to rewrite, so
-// the pass is cheap on every open, and "indexed by" keeps the planner off the
-// covering created_at index, which it prefers and which would scan every row.
-func (s *Store) normalizeAnnotationCreatedAt(ctx context.Context, table string) error {
-	index := "idx_" + table + "_created_unnormalized"
+// makes it, so no reader sees one. RewriteAnnotationCreatedAt handles rows from
+// before the trigger existed.
+func (s *Store) ensureAnnotationCreatedAtFixedWidth(ctx context.Context, table string) error {
 	// Go writes a UTC time as RFC3339Nano with at most eight fraction digits
 	// once trailing zeros go; with nine it already is the fixed-width layout.
-	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`
 create index if not exists %[1]s
 on %[2]s(id) where %[3]s;
 
@@ -768,21 +775,47 @@ begin
     || substr(substr(new.created_at, 21, max(length(new.created_at) - 21, 0)) || '000000000', 1, 9) || 'Z'
   where rowid = new.rowid;
 end;
-	`, index, table, annotationCreatedAtUnnormalized)); err != nil {
-		return err
+	`, annotationUnnormalizedIndex(table), table, annotationCreatedAtUnnormalized))
+	return err
+}
+
+// RewriteAnnotationCreatedAt moves annotation rows from before the fixed-width
+// trigger into ledgerTimestampCursorKeyLayout and returns how many it rewrote.
+// Until it has finished, the export and the prune mirror must not read these
+// tables. It takes a while on a large store, so it isn't part of opening one:
+// the daemon runs it on its own store, with the hook socket already serving.
+// Each page commits by itself, so a call that is interrupted loses at most one
+// page, and the next call does only what is left.
+func (s *Store) RewriteAnnotationCreatedAt(ctx context.Context) (int, error) {
+	total := 0
+	for _, table := range annotationTables {
+		rewritten, err := s.rewriteAnnotationCreatedAt(ctx, table)
+		total += rewritten
+		if err != nil {
+			return total, err
+		}
 	}
-	// On macOS and Windows the first open rewrites every row: their clocks
+	return total, nil
+}
+
+// rewriteAnnotationCreatedAt rewrites one table. The partial index holds only
+// rows left to rewrite, so a call with nothing to do is cheap, and "indexed by"
+// keeps the planner off the covering created_at index, which it prefers and
+// which would scan every row.
+func (s *Store) rewriteAnnotationCreatedAt(ctx context.Context, table string) (int, error) {
+	// On macOS and Windows the first pass rewrites every row: their clocks
 	// tick in microseconds and 100ns, so no RFC3339Nano stamp there has nine
 	// digits. Pages bound memory and how long each write holds the lock
 	// against the hook path. Paging by id steps past a value that does not
 	// parse; it stays as it is, and reading the row reports it.
 	page := fmt.Sprintf(`select id, created_at from %s indexed by %s where %s and id > ? order by id limit 500`,
-		table, index, annotationCreatedAtUnnormalized)
+		table, annotationUnnormalizedIndex(table), annotationCreatedAtUnnormalized)
 	update := fmt.Sprintf(`update %s set created_at = ? where id = ?`, table)
+	total := 0
 	for after := ""; ; {
 		rows, err := s.db.QueryContext(ctx, page, after)
 		if err != nil {
-			return err
+			return total, err
 		}
 		scanned := 0
 		var ids, keys []string
@@ -790,7 +823,7 @@ end;
 			var id, createdAt string
 			if err := rows.Scan(&id, &createdAt); err != nil {
 				rows.Close()
-				return err
+				return total, err
 			}
 			scanned++
 			after = id
@@ -799,26 +832,30 @@ end;
 			}
 		}
 		if err := rows.Err(); err != nil {
-			return err
+			return total, err
 		}
 		if scanned == 0 {
-			return nil
+			return total, nil
 		}
 		if len(ids) == 0 {
 			continue
 		}
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
-			return err
+			return total, err
 		}
 		for i := range ids {
 			if _, err := tx.ExecContext(ctx, update, keys[i], ids[i]); err != nil {
 				_ = tx.Rollback()
-				return err
+				return total, err
 			}
 		}
 		if err := tx.Commit(); err != nil {
-			return err
+			return total, err
+		}
+		total += len(ids)
+		if s.afterAnnotationPage != nil {
+			s.afterAnnotationPage()
 		}
 	}
 }

@@ -59,6 +59,10 @@ type DaemonOptions struct {
 	FallbackDeploymentVersion string
 	HomebrewUpdater           func(context.Context, managedconfig.LoadedConfig, diagnostic.Logger) <-chan struct{}
 	BinaryWatchdog            func(context.Context, diagnostic.Logger) <-chan struct{}
+	// annotationRewrite and ledgerPrune replace rewriteAnnotationTimes and
+	// pruneExportedLedger in tests.
+	annotationRewrite func(ctx context.Context, dbPath string) (int, error)
+	ledgerPrune       func(ctx context.Context, opts DaemonOptions, dbPath string) error
 }
 
 var (
@@ -424,16 +428,29 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		authorityHolder.run(policyCtx, inventoryHolder, authorityReady)
 	}()
 	streamCtx, stopStream := context.WithCancel(ctx)
+	// The hook socket is serving by now. On the first start after an upgrade
+	// this pass takes seconds to minutes on a large store, more than a hook
+	// waits for the socket, which is why it isn't part of opening the store.
+	annotationsRewritten := make(chan struct{})
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		if rewriteAnnotationsUntilDone(streamCtx, opts, dbPath, annotationRewriteRetry) {
+			close(annotationsRewritten)
+		}
+	}()
 	streamErr := make(chan error, 1)
 	background.Add(1)
 	go func() {
 		defer background.Done()
-		// Keep the first heartbeat from racing the initial scan. The hook
-		// socket is already serving while discovery runs.
-		select {
-		case <-authorityReady:
-		case <-streamCtx.Done():
-			return
+		// Keep the first heartbeat from racing the initial scan, and the first
+		// export from reading annotations the pass hasn't rewritten yet.
+		for _, ready := range []chan struct{}{authorityReady, annotationsRewritten} {
+			select {
+			case <-ready:
+			case <-streamCtx.Done():
+				return
+			}
 		}
 		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder, authorityHolder)
 	}()
@@ -466,6 +483,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	cleanup := time.NewTicker(cleanupInterval(idleTimeout))
 	defer cleanup.Stop()
+	prune := opts.ledgerPrune
+	if prune == nil {
+		prune = pruneExportedLedger
+	}
 
 	for {
 		select {
@@ -491,11 +512,67 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			if err := cleanupStaleSessions(ctx, dbPath, idleTimeout); err != nil {
 				opts.Diagnostic.Printf("managed observe cleanup: %v\n", err)
 			}
-			if err := pruneExportedLedger(ctx, opts, dbPath); err != nil {
-				opts.Diagnostic.Printf("managed observe ledger prune: %v\n", err)
+			// The prune mirrors the export's reading of annotations, so it waits
+			// for the same pass: a trimmed stamp could read as already uploaded.
+			select {
+			case <-annotationsRewritten:
+				if err := prune(ctx, opts, dbPath); err != nil {
+					opts.Diagnostic.Printf("managed observe ledger prune: %v\n", err)
+				}
+			default:
 			}
 		}
 	}
+}
+
+// annotationRewriteRetry is how long a failed annotation rewrite waits before
+// it tries again.
+const annotationRewriteRetry = 30 * time.Second
+
+// rewriteAnnotationsUntilDone reports whether the rewrite finished; it returns
+// false only when ctx ended first. A failure is retried and not skipped: the
+// export can't read these tables safely before the rewrite has finished, and
+// whatever stops the rewrite, such as a locked or full disk, would stop the
+// export's own open as well.
+func rewriteAnnotationsUntilDone(ctx context.Context, opts DaemonOptions, dbPath string, retry time.Duration) bool {
+	rewrite := opts.annotationRewrite
+	if rewrite == nil {
+		rewrite = rewriteAnnotationTimes
+	}
+	lastErr := ""
+	for {
+		started := time.Now()
+		rewritten, err := rewrite(ctx, dbPath)
+		if rewritten > 0 {
+			logAlways(opts.Diagnostic, "rewrote %d annotation timestamps in %s\n", rewritten, time.Since(started).Round(time.Millisecond))
+		}
+		if err == nil {
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		if msg := err.Error(); msg != lastErr {
+			logAlways(opts.Diagnostic, "annotation timestamp rewrite: %v; export waits and it tries again\n", err)
+			lastErr = msg
+		}
+		select {
+		case <-time.After(retry):
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+// rewriteAnnotationTimes uses a store of its own: the hook path's store has one
+// connection, and pages queued on it would hold up decisions.
+func rewriteAnnotationTimes(ctx context.Context, dbPath string) (int, error) {
+	store, err := sqlite.OpenStore(dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer store.Close()
+	return store.RewriteAnnotationCreatedAt(ctx)
 }
 
 func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.RuntimeConfiguration {
