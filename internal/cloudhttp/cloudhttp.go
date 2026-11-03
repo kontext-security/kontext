@@ -1,5 +1,7 @@
 // Package cloudhttp builds the HTTP clients the CLI uses to reach the Kontext
-// cloud. They share one transport whose HTTP/2 connections are health-checked.
+// cloud. They share one transport whose HTTP/2 connections are health-checked,
+// and which on a Mac goes through the manual proxies set in macOS unless the
+// environment names proxies of its own (see proxyPicker).
 //
 // Without health checks a dead HTTP/2 connection stays in the pool: Go keeps
 // sending new requests on it, and each one only times out, until the reset
@@ -27,10 +29,12 @@ const (
 
 var sharedTransport = NewTransport(PingAfter, PingTimeout)
 
-// NewTransport returns a copy of http.DefaultTransport (proxy settings, dial
-// and TLS timeouts included) with HTTP/2 connection health checks enabled.
+// NewTransport returns a copy of http.DefaultTransport (dial and TLS timeouts
+// included) with HTTP/2 connection health checks enabled, whose requests go
+// through the proxies cloudProxies picks.
 func NewTransport(pingAfter, pingTimeout time.Duration) *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = cloudProxies.proxyFor
 	transport.HTTP2 = &http.HTTP2Config{
 		SendPingTimeout: pingAfter,
 		PingTimeout:     pingTimeout,

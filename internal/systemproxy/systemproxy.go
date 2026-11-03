@@ -1,11 +1,13 @@
 // Package systemproxy reads the manual proxies macOS is set to use, which Go
 // never reads, from what scutil --proxy prints, so no cgo is needed. It gives
-// them as the proxy variables Go reads, for a process started with those.
+// them as the proxy variables Go reads, for a process started with those, and
+// as the proxy those variables would give a URL, for this one.
 package systemproxy
 
 import (
 	"context"
 	"net"
+	"net/netip"
 	"net/url"
 	"os/exec"
 	"strconv"
@@ -171,4 +173,147 @@ func noProxyEntry(exception string) (string, bool) {
 		return "", false
 	}
 	return exception, true
+}
+
+// ProxyFunc gives the proxy a request to a URL goes through, or nil when it
+// goes directly, as http.ProxyFromEnvironment does in a process whose
+// environment is p.Env(): the secure web proxy for https URLs and the web
+// proxy for http ones, except for localhost, loopback addresses and the hosts
+// NoProxy names. Go compares a host name in Unicode by its ASCII form; here
+// names are compared as written.
+func (p Proxies) ProxyFunc() func(*url.URL) *url.URL {
+	https, http := parseProxyURL(p.HTTPS), parseProxyURL(p.HTTP)
+	exceptions := readNoProxy(p.NoProxy)
+	return func(u *url.URL) *url.URL {
+		var proxy *url.URL
+		switch u.Scheme {
+		case "https":
+			proxy = https
+		case "http":
+			proxy = http
+		}
+		if proxy == nil || exceptions.direct(u) {
+			return nil
+		}
+		return proxy
+	}
+}
+
+func parseProxyURL(address string) *url.URL {
+	if address == "" {
+		return nil
+	}
+	proxy, err := url.Parse(address)
+	if err != nil {
+		return nil
+	}
+	return proxy
+}
+
+// exceptions are the entries of a NO_PROXY value, as Go reads them.
+type exceptions struct {
+	all     bool
+	blocks  []*net.IPNet
+	ips     []ipException
+	domains []domainException
+}
+
+// ipException is an IP address, on port unless that is "".
+type ipException struct {
+	ip   net.IP
+	port string
+}
+
+// domainException is the hosts whose names end in suffix, which starts with a
+// dot, and when host is set the one that suffix names without it, on port
+// unless that is "".
+type domainException struct {
+	suffix, port string
+	host         bool
+}
+
+func readNoProxy(value string) exceptions {
+	var e exceptions
+	for _, entry := range strings.Split(value, ",") {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "*" {
+			return exceptions{all: true}
+		}
+		if _, block, err := net.ParseCIDR(entry); err == nil {
+			e.blocks = append(e.blocks, block)
+			continue
+		}
+		host, port, err := net.SplitHostPort(entry)
+		if err != nil {
+			host, port = entry, ""
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			e.ips = append(e.ips, ipException{ip: ip, port: port})
+			continue
+		}
+		if host == "" {
+			continue
+		}
+		// example.com is that host and those under it, .example.com and
+		// *.example.com only those under it.
+		if strings.HasPrefix(host, "*.") {
+			host = host[1:]
+		}
+		exception := domainException{suffix: host, port: port, host: host[0] != '.'}
+		if exception.host {
+			exception.suffix = "." + host
+		}
+		e.domains = append(e.domains, exception)
+	}
+	return e
+}
+
+// defaultPorts are the ports of URLs that name none.
+var defaultPorts = map[string]string{"http": "80", "https": "443"}
+
+// Local reports whether a request to u stays on this machine: its host is
+// localhost or a loopback address, which Go never sends through a proxy.
+func Local(u *url.URL) bool {
+	return u.Hostname() == "localhost" || hostIP(u.Hostname()).IsLoopback()
+}
+
+// hostIP is host's IP address, or nil when it is a name.
+func hostIP(host string) net.IP {
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return nil
+	}
+	return net.IP(address.AsSlice())
+}
+
+// direct reports whether a request to u goes around the proxy.
+func (e exceptions) direct(u *url.URL) bool {
+	if e.all || Local(u) {
+		return true
+	}
+	host, port := u.Hostname(), u.Port()
+	if port == "" {
+		port = defaultPorts[u.Scheme]
+	}
+	if ip := hostIP(host); ip != nil {
+		for _, block := range e.blocks {
+			if block.Contains(ip) {
+				return true
+			}
+		}
+		for _, exception := range e.ips {
+			if exception.ip.Equal(ip) && (exception.port == "" || exception.port == port) {
+				return true
+			}
+		}
+		return false
+	}
+	host = strings.ToLower(host)
+	for _, exception := range e.domains {
+		if (strings.HasSuffix(host, exception.suffix) || exception.host && host == exception.suffix[1:]) &&
+			(exception.port == "" || exception.port == port) {
+			return true
+		}
+	}
+	return false
 }

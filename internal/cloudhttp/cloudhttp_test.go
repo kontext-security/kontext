@@ -176,6 +176,6 @@ func TestNewClientUsesHealthCheckedTransport(t *testing.T) {
 		t.Fatalf("HTTP/2 health checks not configured: %+v", transport.HTTP2)
 	}
 	if transport.Proxy == nil {
-		t.Fatal("proxy settings from the environment were dropped")
+		t.Fatal("the transport picks no proxy for its requests")
 	}
 }
