@@ -198,7 +198,7 @@ const maxHealthFailures = 3
 // not reach OpenAI, before Enable asks it again: a network that needs a proxy
 // the job does not know stays one for a while, and a Mac that was offline for
 // a moment gets its route back soon after. Other proxy settings for the job
-// end the wait (see proxiesChanged).
+// end the wait (see Enable).
 const unreachableWait = 10 * time.Minute
 
 // answerWait is how long a health check waits for the proxy, the daemon's and
@@ -310,6 +310,10 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	// The job's proxy settings, read once: the hold-off and the job go by the
+	// same ones.
+	plist, plistErr := os.ReadFile(r.plistPath())
+	env := r.proxyEnv(ctx, string(plist))
 	// The line Codex reads names the job: keep its port and token, so every
 	// Codex process that read it keeps reaching the proxy.
 	port, routedToken, routed := parseBaseURL(codexmanaged.Route(config.content))
@@ -321,7 +325,10 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 			token = routedToken
 		}
 		st.Port = port
-	} else if skip := r.holdOff(st); skip != "" && !r.proxiesChanged(ctx) {
+	} else if skip := r.holdOff(st); skip != "" && (plistErr != nil || slices.Equal(env, jobEnv(string(plist)))) {
+		// The job found it could not reach OpenAI through the settings its
+		// plist gives it: other ones, as once the Mac joined another network,
+		// end the wait. Once the job is gone, there is nothing to tell.
 		return Status{Skipped: skip}, nil
 	}
 	if st.Port == 0 {
@@ -341,7 +348,7 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 	if err := r.saveState(st); err != nil {
 		return Status{}, err
 	}
-	if err := r.ensureJob(ctx, st.Port); err != nil {
+	if err := r.ensureJob(ctx, st.Port, env); err != nil {
 		if routed {
 			// Codex must never be left calling a port nobody holds.
 			return Status{}, errors.Join(fmt.Errorf("codex proxy job not loaded: %w", err), r.unroute())
@@ -602,15 +609,6 @@ func (r *Router) holdOff(st state) string {
 		return ""
 	}
 	return "the Codex proxy could not reach OpenAI; trying again after " + until.Local().Format("15:04")
-}
-
-// proxiesChanged reports whether the job would get other proxy settings than
-// its plist gives it, as once the Mac joined another network: it found it
-// could not reach OpenAI through those. Once the job is gone, there is nothing
-// to tell.
-func (r *Router) proxiesChanged(ctx context.Context) bool {
-	current, err := os.ReadFile(r.plistPath())
-	return err == nil && !slices.Equal(r.proxyEnv(ctx, string(current)), jobEnv(string(current)))
 }
 
 // holder is this process's hold on the route.
@@ -939,12 +937,13 @@ func (r *Router) ensureBinary(st *state) error {
 	return nil
 }
 
-// ensureJob writes the job's plist and (re)loads the job when either changed.
-func (r *Router) ensureJob(ctx context.Context, port int) error {
-	current, _ := os.ReadFile(r.plistPath())
+// ensureJob writes the job's plist, with env as its proxy settings (see
+// proxyEnv), and (re)loads the job when either changed.
+func (r *Router) ensureJob(ctx context.Context, port int, env [][2]string) error {
 	plist := renderPlist(job{label: r.opts.Label, binary: BinaryPath(r.opts.StateDir), port: port, home: r.opts.Home,
 		stateDir: r.opts.StateDir, socket: r.opts.Socket, upstream: r.opts.Upstream, apiUpstream: r.opts.APIUpstream,
-		env: r.proxyEnv(ctx, string(current)), logPath: r.logPath()})
+		env: env, logPath: r.logPath()})
+	current, _ := os.ReadFile(r.plistPath())
 	loaded := r.loaded(ctx)
 	if string(current) == plist && loaded {
 		return nil
@@ -973,7 +972,8 @@ func (r *Router) ensureJob(ctx context.Context, port int) error {
 // proxyEnv is the proxy settings for the job's environment, in
 // proxyVariables' order: the daemon's, or else macOS's manual proxies. When
 // macOS's cannot be read, the job keeps the settings its plist gives it, since
-// a reload cuts Codex's streams.
+// a reload cuts Codex's streams. An empty variable counts as unset, as it does
+// for Go: what keeps the job direct is NO_PROXY=*.
 func (r *Router) proxyEnv(ctx context.Context, plist string) [][2]string {
 	var env [][2]string
 	for _, name := range proxyVariables {

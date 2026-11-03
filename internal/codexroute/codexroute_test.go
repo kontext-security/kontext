@@ -131,11 +131,12 @@ type adminAnswer struct {
 }
 
 // scutilAnswer is what scutil --proxy prints, or err, and how many times it
-// was asked.
+// was asked; once asked failAfter times, when that is set, it fails.
 type scutilAnswer struct {
-	output string
-	err    error
-	asked  int
+	output    string
+	err       error
+	asked     int
+	failAfter int
 }
 
 const build2 = "kontext build 2\n"
@@ -196,6 +197,9 @@ func (r testRouter) daemonIn(t *testing.T, stateDir string) *Router {
 		},
 		SystemProxies: func(context.Context) (string, error) {
 			r.scutil.asked++
+			if r.scutil.failAfter > 0 && r.scutil.asked > r.scutil.failAfter {
+				return "", errors.New("exit status 1")
+			}
 			return r.scutil.output, r.scutil.err
 		},
 		AdminRoute: func(codexHome string) (string, error) {
@@ -1425,13 +1429,17 @@ func TestOtherProxySettingsEndTheWait(t *testing.T) {
 	r.scutil.err = errors.New("exit status 1")
 	waits("once scutil fails")
 
+	// macOS's proxies end the wait. The daemon reads them once, so the job
+	// gets the ones that ended it, even if scutil fails right after.
 	r.scutil.output, r.scutil.err, *r.reaches = manualProxies, nil, true
+	r.scutil.failAfter = r.scutil.asked + 1
 	if status, err := r.Enable(context.Background()); err != nil || !status.Routed || readFile(t, configPath) != routed {
 		t.Fatalf("Enable through macOS's proxies = %+v, %v", status, err)
 	}
 	if env := jobEnv(readFile(t, plistPath)); !slices.Equal(env, manualEnv) {
 		t.Fatalf("the job's settings = %q", env)
 	}
+	r.scutil.failAfter = 0
 
 	if taken, err := r.job(0).Unreachable(context.Background()); err != nil || !taken {
 		t.Fatalf("Unreachable through macOS's proxies = %v, %v", taken, err)
