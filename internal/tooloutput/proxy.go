@@ -70,17 +70,9 @@ func (c *Compactor) CompactProxied(ctx context.Context, out ProxyOutput) (string
 	defer cancel()
 
 	saved := filepath.Join(c.dir, out.SessionID, name+".txt")
-	body, fits := encode(c.proxyRequest(out, saved))
-	if !fits {
-		return "", false
-	}
-	response, err := c.client.Compact(ctx, body)
-	if err != nil {
-		c.diagnostic.Printf("%v; output left as is\n", err)
-		return "", false
-	}
+	response, text, ok := c.ask(ctx, c.proxyRequest(out, saved))
 	part := output{kind: KindText, text: out.Text}
-	if response.Decision != DecisionReplace || !part.acceptable(*response.Text) {
+	if !ok || !part.acceptable(text) {
 		return "", false
 	}
 	if err := writePrivate(c.dir, saved, []byte(out.Text)); err != nil {
@@ -88,7 +80,6 @@ func (c *Compactor) CompactProxied(ctx context.Context, out ProxyOutput) (string
 		return "", false
 	}
 	c.remember(out.SessionID, record{EventID: response.EventID, ToolUseID: out.CallID, Part: out.Part, Kind: KindText, At: c.now()})
-	text := *response.Text
 	c.mu.Lock()
 	c.session(out.SessionID).decided[name] = &text
 	c.mu.Unlock()
@@ -107,16 +98,18 @@ func (c *Compactor) proxyRequest(out ProxyOutput, saved string) Request {
 	if out.Model != "" {
 		model = &out.Model
 	}
+	context := conversationContext(out.Conversation, out.Whole, goal, out.CallID, out.ToolName, out.ToolInput, withheld)
+	// The script goes as the context carries it, redacted.
 	return Request{
 		Mode:      ModeLive,
 		Agent:     "codex",
 		SessionID: out.SessionID,
 		ToolUseID: out.CallID,
 		ToolName:  out.ToolName,
-		ToolInput: out.ToolInput,
+		ToolInput: context.Current.ToolInput,
 		Model:     model,
 		Output:    Output{Kind: KindText, Text: out.Text, RecoveryPath: saved},
-		Context:   conversationContext(out.Conversation, out.Whole, goal, out.CallID, out.ToolName, out.ToolInput, withheld),
+		Context:   context,
 		Delivery:  DeliveryProxy,
 		Part:      out.Part,
 	}

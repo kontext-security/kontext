@@ -52,17 +52,17 @@ func requestContext(event hook.Event, goal, home string, withheld func(input any
 }
 
 // conversationContext is what the server is told about the call toolUseID of
-// conversation; whole reports that conversation starts where the
-// conversation does.
+// conversation, its secrets redacted; whole reports that conversation starts
+// where the conversation does.
 func conversationContext(conversation modelusage.Conversation, whole bool, goal, toolUseID, toolName string, toolInput any, withheld func(input any) bool) Context {
 	assistantText, before := splitCurrent(conversation.Messages, toolUseID)
 	items, length := history(before, withheld)
 	context := Context{
-		Goal: clip(goal, maxContextText),
+		Goal: clip(redacted(goal), maxContextText),
 		Current: Current{
-			AssistantText: clip(assistantText, maxContextText),
+			AssistantText: clip(redacted(assistantText), maxContextText),
 			ToolName:      toolName,
-			ToolInput:     toolInput,
+			ToolInput:     redactedInput(toolInput),
 		},
 		History: items,
 	}
@@ -209,9 +209,9 @@ func history(messages []modelusage.Message, withheld func(input any) bool) ([]Hi
 	kept := visible[max(len(visible)-historyItems, 0):]
 	items := make([]HistoryItem, 0, len(kept))
 	for _, message := range kept {
-		item := HistoryItem{Role: message.Role, Content: clip(message.Text, maxHistoryText), ToolUseID: message.ToolUseID}
+		item := HistoryItem{Role: message.Role, Content: clip(redacted(message.Text), maxHistoryText), ToolUseID: message.ToolUseID}
 		if call := message.ToolCall; call != nil {
-			input := call.Input
+			input := redactedJSON(call.Input)
 			if len(input) > maxHistoryText {
 				input, _ = json.Marshal(clip(string(input), maxHistoryText))
 			}
@@ -222,7 +222,9 @@ func history(messages []modelusage.Message, withheld func(input any) bool) ([]Hi
 	return items, len(visible)
 }
 
-// clip shortens text over limit bytes to its start and end.
+// clip shortens text over limit bytes to its start and end. What it clips is
+// redacted first: a cut could leave part of a secret the ruleset would no
+// longer recognize.
 func clip(text string, limit int) string {
 	if len(text) <= limit {
 		return text
