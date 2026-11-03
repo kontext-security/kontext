@@ -49,17 +49,17 @@ jobs:
     permissions:
       contents: write
     env:
-      # Choose the secret name first. A missing company secret must not fall
-      # back to Michel's credentials. Leave the selector unset until validated.
+      # Gate each explicit secret reference separately so missing company
+      # credentials cannot fall back to Michel's. Keep the selector unset until validated.
       MACOS_SIGNING_PROFILE: ${{ vars.MACOS_SIGNING_PROFILE }}
       MACOS_EXPECTED_TEAM_ID: ${{ vars.MACOS_COMPANY_TEAM_ID }}
-      MACOS_SIGN_P12: ${{ secrets[vars.MACOS_SIGNING_PROFILE == 'company' && 'MACOS_COMPANY_SIGN_P12' || 'MACOS_SIGN_P12'] }}
-      MACOS_SIGN_PASSWORD: ${{ secrets[vars.MACOS_SIGNING_PROFILE == 'company' && 'MACOS_COMPANY_SIGN_PASSWORD' || 'MACOS_SIGN_PASSWORD'] }}
-      MACOS_NOTARY_ISSUER_ID: ${{ secrets[vars.MACOS_SIGNING_PROFILE == 'company' && 'MACOS_COMPANY_NOTARY_ISSUER_ID' || 'MACOS_NOTARY_ISSUER_ID'] }}
-      MACOS_NOTARY_KEY_ID: ${{ secrets[vars.MACOS_SIGNING_PROFILE == 'company' && 'MACOS_COMPANY_NOTARY_KEY_ID' || 'MACOS_NOTARY_KEY_ID'] }}
-      MACOS_NOTARY_KEY: ${{ secrets[vars.MACOS_SIGNING_PROFILE == 'company' && 'MACOS_COMPANY_NOTARY_KEY' || 'MACOS_NOTARY_KEY'] }}
+      MACOS_SIGN_P12: ${{ (vars.MACOS_SIGNING_PROFILE == 'company' && secrets.MACOS_COMPANY_SIGN_P12) || (vars.MACOS_SIGNING_PROFILE != 'company' && secrets.MACOS_SIGN_P12) || '' }}
+      MACOS_SIGN_PASSWORD: ${{ (vars.MACOS_SIGNING_PROFILE == 'company' && secrets.MACOS_COMPANY_SIGN_PASSWORD) || (vars.MACOS_SIGNING_PROFILE != 'company' && secrets.MACOS_SIGN_PASSWORD) || '' }}
+      MACOS_NOTARY_ISSUER_ID: ${{ (vars.MACOS_SIGNING_PROFILE == 'company' && secrets.MACOS_COMPANY_NOTARY_ISSUER_ID) || (vars.MACOS_SIGNING_PROFILE != 'company' && secrets.MACOS_NOTARY_ISSUER_ID) || '' }}
+      MACOS_NOTARY_KEY_ID: ${{ (vars.MACOS_SIGNING_PROFILE == 'company' && secrets.MACOS_COMPANY_NOTARY_KEY_ID) || (vars.MACOS_SIGNING_PROFILE != 'company' && secrets.MACOS_NOTARY_KEY_ID) || '' }}
+      MACOS_NOTARY_KEY: ${{ (vars.MACOS_SIGNING_PROFILE == 'company' && secrets.MACOS_COMPANY_NOTARY_KEY) || (vars.MACOS_SIGNING_PROFILE != 'company' && secrets.MACOS_NOTARY_KEY) || '' }}
       # The cask needs notarized binaries; see scripts/render-homebrew-cask.sh.
-      PUBLISH_CASK: ${{ secrets[vars.MACOS_SIGNING_PROFILE == 'company' && 'MACOS_COMPANY_SIGN_P12' || 'MACOS_SIGN_P12'] != '' }}
+      PUBLISH_CASK: ${{ (vars.MACOS_SIGNING_PROFILE == 'company' && secrets.MACOS_COMPANY_SIGN_P12 != '') || (vars.MACOS_SIGNING_PROFILE != 'company' && secrets.MACOS_SIGN_P12 != '') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

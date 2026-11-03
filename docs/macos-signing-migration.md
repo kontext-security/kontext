@@ -72,7 +72,7 @@ gh secret set MACOS_COMPANY_NOTARY_KEY_ID --repo kontext-security/kontext
 gh variable set MACOS_COMPANY_TEAM_ID --body "$COMPANY_TEAM_ID" --repo kontext-security/kontext
 ```
 
-Never set the selector before the five secrets and verified Team ID exist. Selecting `company` chooses the company secret names first, so an absent secret cannot fall back to a personal value. An empty selector or `legacy` preserves the current path; other values fail preflight.
+Never set the selector before the five secrets and verified Team ID exist. The workflow names each secret explicitly and gates the company and legacy references separately. An absent company secret cannot fall back to a personal value. An empty selector or `legacy` preserves the current path; other values fail preflight.
 
 ## Validation and rollout order
 
