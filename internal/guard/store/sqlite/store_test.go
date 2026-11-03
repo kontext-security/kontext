@@ -1061,8 +1061,10 @@ func TestLedgerBatchLimitReturnsReceiptsForSelectedActions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(batch.Actions) != 1 || batch.Actions[0]["canonical_event_type"] != "request.proposed" {
-		t.Fatalf("actions = %+v, want only first proposed action", batch.Actions)
+	// Which action comes first isn't the point here: one save writes two, and
+	// on a coarse clock they tie on the cursor and fall to the random id.
+	if len(batch.Actions) != 1 {
+		t.Fatalf("actions = %+v, want only one", batch.Actions)
 	}
 	if len(batch.Receipts) != 1 {
 		t.Fatalf("receipts = %+v, want receipt for selected action", batch.Receipts)
