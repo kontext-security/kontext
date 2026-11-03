@@ -159,12 +159,12 @@ jobs:
       - name: Formula installs from an untrusted tap with no dependencies
         run: |
           set -euo pipefail
+          brew install kontext/trust/kontext 2>&1 | tee "$RUNNER_TEMP/formula.log"
           deps="$(brew deps --formula kontext/trust/kontext)"
           if [[ -n "$deps" ]]; then
             echo "::error::formula pulls dependencies: $deps"
             exit 1
           fi
-          brew install kontext/trust/kontext 2>&1 | tee "$RUNNER_TEMP/formula.log"
           kontext --version | grep -F "$VERSION"
           brew uninstall --formula kontext
 
