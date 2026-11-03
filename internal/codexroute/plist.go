@@ -91,6 +91,30 @@ func renderPlist(j job) string {
 `
 }
 
+// jobEnv is the env renderPlist wrote into plist, or nil.
+func jobEnv(plist string) [][2]string {
+	_, rest, ok := strings.Cut(plist, "\t<key>EnvironmentVariables</key>\n\t<dict>\n")
+	if !ok {
+		return nil
+	}
+	entries, _, ok := strings.Cut(rest, "\t</dict>\n")
+	if !ok {
+		return nil
+	}
+	var dict struct {
+		Keys   []string `xml:"key"`
+		Values []string `xml:"string"`
+	}
+	if xml.Unmarshal([]byte("<dict>"+entries+"</dict>"), &dict) != nil || len(dict.Keys) != len(dict.Values) {
+		return nil
+	}
+	var env [][2]string
+	for i, name := range dict.Keys {
+		env = append(env, [2]string{name, dict.Values[i]})
+	}
+	return env
+}
+
 func xmlEscape(value string) string {
 	var escaped bytes.Buffer
 	_ = xml.EscapeText(&escaped, []byte(value))

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,9 +109,11 @@ type testRouter struct {
 	launchd *fakeLaunchd
 	healthy *bool
 	// reaches says whether the job reaches OpenAI, env is the daemon's
-	// environment, and admin what Codex's administrator layers say.
+	// environment, scutil what macOS's proxy settings print as, and admin
+	// what Codex's administrator layers say.
 	reaches *bool
 	env     map[string]string
+	scutil  *scutilAnswer
 	admin   *adminAnswer
 	codex   *int
 	// binary is where the daemon's kontext binary is, and processes the
@@ -127,13 +130,22 @@ type adminAnswer struct {
 	err     error
 }
 
+// scutilAnswer is what scutil --proxy prints, or err, and how many times it
+// was asked; once asked failAfter times, when that is set, it fails.
+type scutilAnswer struct {
+	output    string
+	err       error
+	asked     int
+	failAfter int
+}
+
 const build2 = "kontext build 2\n"
 
 func newTestRouter(t *testing.T) testRouter {
 	t.Helper()
 	home := t.TempDir()
 	r := testRouter{home: home, launchd: &fakeLaunchd{}, healthy: new(bool), reaches: new(bool), env: map[string]string{},
-		admin: &adminAnswer{}, codex: new(int), clock: new(time.Duration),
+		scutil: &scutilAnswer{output: noProxies}, admin: &adminAnswer{}, codex: new(int), clock: new(time.Duration),
 		binary:    filepath.Join(home, "opt", "homebrew", "bin", "kontext"),
 		processes: &fakeProcesses{started: map[int]time.Time{os.Getpid(): time.Now().Add(-time.Hour)}}}
 	*r.healthy, *r.reaches = true, true
@@ -182,6 +194,13 @@ func (r testRouter) daemonIn(t *testing.T, stateDir string) *Router {
 		LookupEnv: func(name string) (string, bool) {
 			value, ok := r.env[name]
 			return value, ok
+		},
+		SystemProxies: func(context.Context) (string, error) {
+			r.scutil.asked++
+			if r.scutil.failAfter > 0 && r.scutil.asked > r.scutil.failAfter {
+				return "", errors.New("exit status 1")
+			}
+			return r.scutil.output, r.scutil.err
 		},
 		AdminRoute: func(codexHome string) (string, error) {
 			if codexHome != filepath.Join(r.home, ".codex") {
@@ -1370,7 +1389,7 @@ func TestTheJobGetsTheDaemonsProxySettings(t *testing.T) {
 	}
 
 	// A daemon started with other settings reloads the job with them, and
-	// one started with none leaves the job none.
+	// one started with none gives it macOS's, none here.
 	bootstraps := r.launchd.ran("bootstrap")
 	r.env = map[string]string{}
 	if _, err := r.daemon(t).Enable(context.Background()); err != nil {
@@ -1378,5 +1397,121 @@ func TestTheJobGetsTheDaemonsProxySettings(t *testing.T) {
 	}
 	if plist := readFile(t, plistPath); strings.Contains(plist, "EnvironmentVariables") || r.launchd.ran("bootstrap") != bootstraps+1 {
 		t.Fatalf("after a daemon without proxy settings (%d bootstraps):\n%s", r.launchd.ran("bootstrap")-bootstraps, plist)
+	}
+}
+
+// The job found it could not reach OpenAI through the proxy settings it had:
+// once it would get others, as when the Mac joins a network with a proxy, it
+// is asked again at once. The same settings, or none that can be read, keep
+// Codex waiting, and so does a job that is gone.
+func TestOtherProxySettingsEndTheWait(t *testing.T) {
+	r := newTestRouter(t)
+	configPath := filepath.Join(r.home, ".codex", "config.toml")
+	plistPath := filepath.Join(r.home, "Library", "LaunchAgents", Label+".plist")
+	writeFile(t, configPath, original, 0o600)
+	if _, err := r.Enable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routed := readFile(t, configPath)
+	waits := func(when string) {
+		t.Helper()
+		if status, err := r.Enable(context.Background()); err != nil || !strings.HasPrefix(status.Skipped, "the Codex proxy could not reach OpenAI") ||
+			readFile(t, configPath) != original {
+			t.Fatalf("Enable %s = %+v, %v", when, status, err)
+		}
+	}
+	if taken, err := r.job(0).Unreachable(context.Background()); err != nil || !taken {
+		t.Fatalf("Unreachable = %v, %v", taken, err)
+	}
+	// A job asked would not reach OpenAI either.
+	*r.reaches = false
+	waits("with the same settings")
+	r.scutil.err = errors.New("exit status 1")
+	waits("once scutil fails")
+
+	// macOS's proxies end the wait. The daemon reads them once, so the job
+	// gets the ones that ended it, even if scutil fails right after.
+	r.scutil.output, r.scutil.err, *r.reaches = manualProxies, nil, true
+	r.scutil.failAfter = r.scutil.asked + 1
+	if status, err := r.Enable(context.Background()); err != nil || !status.Routed || readFile(t, configPath) != routed {
+		t.Fatalf("Enable through macOS's proxies = %+v, %v", status, err)
+	}
+	if env := jobEnv(readFile(t, plistPath)); !slices.Equal(env, manualEnv) {
+		t.Fatalf("the job's settings = %q", env)
+	}
+	r.scutil.failAfter = 0
+
+	if taken, err := r.job(0).Unreachable(context.Background()); err != nil || !taken {
+		t.Fatalf("Unreachable through macOS's proxies = %v, %v", taken, err)
+	}
+	*r.reaches = false
+	waits("through macOS's proxies still")
+	if drained, err := r.Drain(context.Background()); err != nil || !drained {
+		t.Fatalf("Drain = %v, %v", drained, err)
+	}
+	waits("once the job is gone")
+}
+
+// The daemon's own proxy settings, in either case, win over macOS's, which
+// nobody asks for then.
+func TestTheDaemonsProxySettingsWinOverMacOSs(t *testing.T) {
+	r := newTestRouter(t)
+	writeFile(t, filepath.Join(r.home, ".codex", "config.toml"), original, 0o600)
+	r.scutil.output = manualProxies
+	r.env["https_proxy"] = "http://daemon-proxy.example:3128"
+	if status, err := r.Enable(context.Background()); err != nil || !status.Routed {
+		t.Fatalf("Enable = %+v, %v", status, err)
+	}
+	plist := readFile(t, filepath.Join(r.home, "Library", "LaunchAgents", Label+".plist"))
+	if env := jobEnv(plist); !slices.Equal(env, [][2]string{{"https_proxy", "http://daemon-proxy.example:3128"}}) || r.scutil.asked != 0 {
+		t.Fatalf("the job's settings %q, macOS's asked for %d times; plist:\n%s", env, r.scutil.asked, plist)
+	}
+}
+
+// On a Mac set to use manual proxies, the job reaches OpenAI through them.
+// Each reload cuts Codex's streams, so the job is reloaded only once they
+// change: not for anything else scutil prints, nor when they cannot be read.
+func TestTheJobGetsMacOSsManualProxies(t *testing.T) {
+	r := newTestRouter(t)
+	writeFile(t, filepath.Join(r.home, ".codex", "config.toml"), original, 0o600)
+	plistPath := filepath.Join(r.home, "Library", "LaunchAgents", Label+".plist")
+	// enable has the daemon route Codex once scutil printed output or failed
+	// with err, and tells what the job got and how many times it reloaded.
+	enable := func(output string, err error) ([][2]string, int) {
+		t.Helper()
+		bootstraps := r.launchd.ran("bootstrap")
+		r.scutil.output, r.scutil.err = output, err
+		if status, err := r.Enable(context.Background()); err != nil || !status.Routed {
+			t.Fatalf("Enable = %+v, %v", status, err)
+		}
+		return jobEnv(readFile(t, plistPath)), r.launchd.ran("bootstrap") - bootstraps
+	}
+	if env, _ := enable(manualProxies, nil); !slices.Equal(env, manualEnv) {
+		t.Fatalf("the job's settings = %q; plist:\n%s", env, readFile(t, plistPath))
+	}
+
+	otherwise := strings.NewReplacer("ExcludeSimpleHostnames : 1", "ExcludeSimpleHostnames : 0",
+		"SOCKSEnable : 0", "SOCKSEnable : 1\n  SOCKSPort : 1080\n  SOCKSProxy : socks.example",
+		"ProxyAutoConfigEnable : 0", "ProxyAutoConfigEnable : 0\n  ProxyAutoConfigURLString : http://wpad.example/proxy.pac",
+		"utun4", "utun5").Replace(manualProxies)
+	for _, answer := range []struct {
+		output string
+		err    error
+	}{{otherwise, nil}, {"", errors.New("exit status 1")}, {"No proxy configuration available\n", nil}} {
+		if env, reloads := enable(answer.output, answer.err); reloads != 0 || !slices.Equal(env, manualEnv) {
+			t.Fatalf("once scutil printed %q, %v: the job's settings = %q, %d reloads", answer.output, answer.err, env, reloads)
+		}
+	}
+
+	// Another proxy reloads the job with it, and a PAC file leaves it none.
+	moved := strings.ReplaceAll(manualProxies, "HTTPSProxy : proxy.example", "HTTPSProxy : proxy.office.example")
+	if env, reloads := enable(moved, nil); reloads != 1 || len(env) != 3 || env[0] != [2]string{"HTTPS_PROXY", "http://proxy.office.example:3128"} {
+		t.Fatalf("on another proxy: the job's settings = %q, %d reloads", env, reloads)
+	}
+	if env, reloads := enable(pacProxies, nil); reloads != 1 || env != nil || strings.Contains(readFile(t, plistPath), "EnvironmentVariables") {
+		t.Fatalf("on a PAC file: the job's settings = %q, %d reloads", env, reloads)
+	}
+	if env, reloads := enable(noProxies, nil); reloads != 0 || env != nil {
+		t.Fatalf("on no proxy: the job's settings = %q, %d reloads", env, reloads)
 	}
 }
