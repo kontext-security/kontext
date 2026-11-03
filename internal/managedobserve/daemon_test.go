@@ -365,6 +365,144 @@ func TestDaemonRefreshesStreamInstallToken(t *testing.T) {
 	}
 }
 
+// The annotation rewrite takes longer on a large store than a hook waits for
+// the socket, so hooks are answered while it runs, and nothing is exported
+// or pruned until it has finished.
+func TestDaemonServesHooksWhileAnnotationRewriteRuns(t *testing.T) {
+	disableDeviceKeyResolution(t)
+	batches := make(chan struct{}, 64)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case batches <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	dir := t.TempDir()
+	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext.sock")
+	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)
+	t.Setenv("KONTEXT_INSTALL_TOKEN", "install-token")
+	writeTestInstallation(t, filepath.Join(dir, "installation.json"))
+
+	rewriting := make(chan struct{})
+	release := make(chan struct{})
+	pruned := make(chan struct{}, 64)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- RunDaemon(ctx, DaemonOptions{
+			SocketPath: socketPath,
+			DBPath:     filepath.Join(dir, "guard.db"),
+			// A cleanup tick every 10 ms.
+			IdleTimeout:      20 * time.Millisecond,
+			StreamStatePath:  filepath.Join(dir, "stream-state.json"),
+			StreamInterval:   20 * time.Millisecond,
+			StreamHTTPClient: server.Client(),
+			ledgerPrune: func(context.Context, DaemonOptions, string) error {
+				select {
+				case pruned <- struct{}{}:
+				default:
+				}
+				return nil
+			},
+			HomebrewUpdater: func(context.Context, managedconfig.LoadedConfig, diagnostic.Logger) <-chan struct{} {
+				return nil
+			},
+			annotationRewrite: func(ctx context.Context, _ string) (int, error) {
+				close(rewriting)
+				select {
+				case <-release:
+					return 0, nil
+				case <-ctx.Done():
+					return 0, ctx.Err()
+				}
+			},
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("RunDaemon() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("RunDaemon did not stop")
+		}
+	})
+	waitForSocket(t, socketPath, errCh)
+	select {
+	case <-rewriting:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the rewrite did not start")
+	}
+
+	client := localruntime.NewClient(socketPath)
+	client.Timeout = testRuntimeTimeout
+	if _, err := client.Process(context.Background(), hook.Event{
+		SessionID: "claude-rewrite-session",
+		Agent:     "claude",
+		HookName:  hook.HookPreToolUse,
+		ToolName:  "Read",
+		CWD:       "/tmp/project",
+	}); err != nil {
+		t.Fatalf("Process() during the rewrite: %v", err)
+	}
+	select {
+	case <-batches:
+		t.Fatal("a batch went out before the rewrite finished")
+	case <-pruned:
+		t.Fatal("the ledger was pruned before the rewrite finished")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-batches:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no batch went out after the rewrite finished")
+	}
+	select {
+	case <-pruned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no prune ran after the rewrite finished")
+	}
+}
+
+func TestRewriteAnnotationsUntilDoneRetriesAFailure(t *testing.T) {
+	calls := 0
+	done := rewriteAnnotationsUntilDone(context.Background(), DaemonOptions{
+		annotationRewrite: func(context.Context, string) (int, error) {
+			calls++
+			if calls == 1 {
+				return 0, errors.New("database is locked")
+			}
+			return 0, nil
+		},
+	}, "", time.Millisecond)
+	if !done || calls != 2 {
+		t.Fatalf("done = %v after %d calls; want a second try that finishes", done, calls)
+	}
+}
+
+func TestRewriteAnnotationsUntilDoneStopsWithItsContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	done := rewriteAnnotationsUntilDone(ctx, DaemonOptions{
+		annotationRewrite: func(context.Context, string) (int, error) {
+			calls++
+			cancel()
+			return 0, errors.New("database is locked")
+		},
+	}, "", time.Hour)
+	if done || calls != 1 {
+		t.Fatalf("done = %v after %d calls; want it to stop unfinished", done, calls)
+	}
+}
+
 func TestDaemonWritesAuthErrorAfterConsecutiveStreamAuthFailures(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusConflict} {
 		t.Run(http.StatusText(status), func(t *testing.T) { testDaemonAuthFailure(t, status) })

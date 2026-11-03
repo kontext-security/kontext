@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -1985,7 +1986,7 @@ func TestOpenStoreGatesCursorBackfillOnUserVersion(t *testing.T) {
 // A database from before fixed-width annotation stamps holds RFC3339Nano rows.
 // Opening it rewrites them page by page and leaves a value that does not parse
 // as it is; the export still sends the same instant.
-func TestOpenStoreRewritesLegacyAnnotationCreatedAt(t *testing.T) {
+func TestRewriteAnnotationCreatedAtRewritesLegacyRows(t *testing.T) {
 	ctx := context.Background()
 	path := t.TempDir() + "/guard.db"
 	store, err := OpenStore(path)
@@ -2023,6 +2024,32 @@ values(?, ?, 'session-1', 'h', 'shell', 'v1', 'm1', '{}', ?)`, "rta_"+id, "act_"
 		t.Fatal(err)
 	}
 	defer store.Close()
+
+	// Opening leaves the rows alone: it runs before the daemon's socket is up.
+	for _, table := range tables {
+		stored, err := queryStrings(ctx, store.db, `select created_at from `+table+` where id like '%whole'`)
+		if err != nil || !slices.Equal(stored, []string{"2026-10-31T12:00:20Z"}) {
+			t.Fatalf("%s created_at after open = %v, err %v; want it untouched", table, stored, err)
+		}
+	}
+	// A cancelled pass stops short, and the next one does what is left.
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := store.RewriteAnnotationCreatedAt(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled rewrite err = %v, want context.Canceled", err)
+	}
+	rewritten, err := store.RewriteAnnotationCreatedAt(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every row but the garbage one in each table, whichever rows the earlier
+	// call got to; none of them were in the layout to begin with.
+	if want := 2 * (len(legacy) - 1); rewritten != want {
+		t.Fatalf("rewritten = %d, want %d", rewritten, want)
+	}
+	if again, err := store.RewriteAnnotationCreatedAt(ctx); err != nil || again != 0 {
+		t.Fatalf("second rewrite = %d, err %v; want nothing to do", again, err)
+	}
 
 	want := []string{"2026-10-31T12:00:20.000000000Z", "2026-10-31T12:00:20.500000000Z", "not a time"}
 	for _, table := range tables {
