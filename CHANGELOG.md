@@ -12,6 +12,7 @@
 
 ### Bug Fixes
 
+* **macos:** sign and notarize macOS releases as CoBrowser Technology GmbH (Team `GB932D44Y3`) ([#689](https://github.com/kontext-security/kontext/issues/689)) ([10c76c4](https://github.com/kontext-security/kontext/commit/10c76c43080e3b54277d07544a1b5379badcd58a))
 * **claudemanaged:** take Claude Code's managed paths from the platform layer ([#677](https://github.com/kontext-security/kontext/issues/677)) ([a439b80](https://github.com/kontext-security/kontext/commit/a439b8085decf210c3c81d55596b04a4835d0317))
 * **codexmanaged:** count Codex's system hooks only if a user couldn't have written them ([#685](https://github.com/kontext-security/kontext/issues/685)) ([8cc8afb](https://github.com/kontext-security/kontext/commit/8cc8afb8195f84b1531db6aa1e3406ef20b04cb4))
 * **codexproxy:** fail open when Codex's route can't work, and leave admin routes alone ([#691](https://github.com/kontext-security/kontext/issues/691)) ([e629a1e](https://github.com/kontext-security/kontext/commit/e629a1ec9ad17920b11dacdbc4613c68ede8018b))
@@ -41,9 +42,6 @@
 
 * **ledger:** export pages seek to their cursor instead of walking the index ([#671](https://github.com/kontext-security/kontext/issues/671)) ([43fa4d5](https://github.com/kontext-security/kontext/commit/43fa4d5da76e468acde4fa099267815d4e6a3191))
 
-### macOS signing
-
-* macOS releases are signed and notarized by CoBrowser Technology GmbH (Team `GB932D44Y3`).
 
 ## [1.17.1](https://github.com/kontext-security/kontext/compare/v1.17.0...v1.17.1) (2026-10-29)
 
