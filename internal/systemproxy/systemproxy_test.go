@@ -197,6 +197,16 @@ func TestProxyFunc(t *testing.T) {
 	}
 }
 
+func TestPunycode(t *testing.T) {
+	for label, want := range map[string]string{
+		"büro": "bro-hoa", "bücher": "bcher-kva", "münchen": "mnchen-3ya", "straße": "strae-oqa", "例え": "r8jz45g", "テスト": "zckzah",
+	} {
+		if got, ok := punycode(label); !ok || got != want {
+			t.Errorf("punycode(%q) = %q, %v; want %q", label, got, ok, want)
+		}
+	}
+}
+
 // parityChild is set in the process that TestProxyFuncReadsTheEnvAsGoDoes
 // starts, which prints the proxies http.ProxyFromEnvironment gives
 // parityURLs.
@@ -214,6 +224,11 @@ var parityURLs = []string{
 	"https://[fd00::1]/", "https://[fd00::2]:8443/", "https://[fd00::2]/", "https://[fd00::3]/",
 	"https://mixed.example/", "https://MIXED.EXAMPLE/", "http://other.example:8080/",
 	"https://localhost/", "https://LOCALHOST/", "https://127.0.0.2:8443/", "https://[::1]/", "https://[::ffff:127.0.0.1]/", "https://[::1%25lo0]/",
+	// Names in Unicode, against entries in Unicode and in ASCII.
+	"https://büro.example/", "https://BÜRO.example/", "https://xn--bro-hoa.example/", "https://bu\u0308ro.example/",
+	"https://a.bücher.example/", "https://a.xn--bcher-kva.example/", "https://bücher.example/",
+	"https://例え.テスト/", "https://例え。テスト/", "https://xn--r8jz45g.xn--zckzah/", "https://straße.example/", "https://xn--strae-oqa.example/",
+	"https://full.example/", "https://ｆｕｌｌ.example/", "https://ｌｏｃａｌｈｏｓｔ/", "https://other.テスト/",
 }
 
 // Whatever ProxyFunc gives a URL is what http.ProxyFromEnvironment gives it
@@ -244,7 +259,8 @@ func TestProxyFuncReadsTheEnvAsGoDoes(t *testing.T) {
 	}
 	for _, noProxy := range []string{
 		"*.local,169.254.0.0/16,fe80::/10,*.intranet.example,.corp.example,exact.example,ported.example:8443," +
-			"192.0.2.7,198.51.100.9:8080,113.7,fd00::1,[fd00::2]:8443,[fd00::3], MiXeD.Example ,:8080,,",
+			"192.0.2.7,198.51.100.9:8080,113.7,fd00::1,[fd00::2]:8443,[fd00::3], MiXeD.Example ,:8080,," +
+			"xn--bro-hoa.example,.bücher.example,例え.テスト,straße.example,ＦＵＬＬ.example",
 		"*",
 		"",
 	} {

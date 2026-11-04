@@ -6,6 +6,7 @@ package systemproxy
 
 import (
 	"context"
+	"math"
 	"net"
 	"net/netip"
 	"net/url"
@@ -13,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // Scutil is what scutil --proxy prints: the proxies macOS is set to use.
@@ -179,8 +182,8 @@ func noProxyEntry(exception string) (string, bool) {
 // goes directly, as http.ProxyFromEnvironment does in a process whose
 // environment is p.Env(): the secure web proxy for https URLs and the web
 // proxy for http ones, except for localhost, loopback addresses and the hosts
-// NoProxy names. Go compares a host name in Unicode by its ASCII form; here
-// names are compared as written.
+// NoProxy names. Host names in Unicode are compared by their ASCII form, as
+// Go compares them (see asciiHost).
 func (p Proxies) ProxyFunc() func(*url.URL) *url.URL {
 	https, http := parseProxyURL(p.HTTPS), parseProxyURL(p.HTTP)
 	exceptions := readNoProxy(p.NoProxy)
@@ -263,6 +266,7 @@ func readNoProxy(value string) exceptions {
 		if exception.host {
 			exception.suffix = "." + host
 		}
+		exception.suffix = asciiHost(exception.suffix)
 		e.domains = append(e.domains, exception)
 	}
 	return e
@@ -274,7 +278,8 @@ var defaultPorts = map[string]string{"http": "80", "https": "443"}
 // Local reports whether a request to u stays on this machine: its host is
 // localhost or a loopback address, which Go never sends through a proxy.
 func Local(u *url.URL) bool {
-	return u.Hostname() == "localhost" || hostIP(u.Hostname()).IsLoopback()
+	host := asciiHost(u.Hostname())
+	return host == "localhost" || hostIP(host).IsLoopback()
 }
 
 // hostIP is host's IP address, or nil when it is a name.
@@ -291,7 +296,7 @@ func (e exceptions) direct(u *url.URL) bool {
 	if e.all || Local(u) {
 		return true
 	}
-	host, port := u.Hostname(), u.Port()
+	host, port := asciiHost(u.Hostname()), u.Port()
 	if port == "" {
 		port = defaultPorts[u.Scheme]
 	}
@@ -316,4 +321,127 @@ func (e exceptions) direct(u *url.URL) bool {
 		}
 	}
 	return false
+}
+
+// asciiHost is host as Go compares it with NO_PROXY's entries. Go leaves a
+// name in ASCII as it is, and gives a name in Unicode in its ASCII form, which
+// its IDNA lookup builds by mapping the name (compatibility forms, upper case,
+// other full stops) and spelling each label that is not ASCII in Punycode
+// after "xn--". asciiHost maps names with NFKC and lower case, which matches
+// IDNA's mapping for all but a few characters such as the Turkish İ, and does
+// not refuse the names IDNA's checks would, which Go then compares as written.
+func asciiHost(host string) string {
+	if isASCII(host) {
+		return host
+	}
+	// NFKC maps the fullwidth and halfwidth full stops; IDNA maps the
+	// ideographic one too.
+	host = strings.ReplaceAll(norm.NFC.String(strings.ToLower(norm.NFKC.String(host))), "\u3002", ".")
+	labels := strings.Split(host, ".")
+	for i, label := range labels {
+		if isASCII(label) {
+			continue
+		}
+		encoded, ok := punycode(label)
+		if !ok {
+			return host
+		}
+		labels[i] = "xn--" + encoded
+	}
+	return strings.Join(labels, ".")
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// Punycode's parameters (RFC 3492, section 5).
+const (
+	punycodeBase = 36
+	punycodeTMin = 1
+	punycodeTMax = 26
+	punycodeSkew = 38
+	punycodeDamp = 700
+)
+
+// punycode is label in Punycode, as RFC 3492's section 6.3 encodes it, or
+// false when it is too long to encode.
+func punycode(label string) (string, bool) {
+	runes := []rune(label)
+	var out []byte
+	for _, r := range runes {
+		if r < 0x80 {
+			out = append(out, byte(r))
+		}
+	}
+	basic := len(out)
+	if basic > 0 {
+		out = append(out, '-')
+	}
+	n, delta, bias := rune(0x80), 0, 72
+	for handled := basic; handled < len(runes); {
+		next := rune(math.MaxInt32)
+		for _, r := range runes {
+			if r >= n && r < next {
+				next = r
+			}
+		}
+		if int(next-n) > (math.MaxInt32-delta)/(handled+1) {
+			return "", false
+		}
+		delta += int(next-n) * (handled + 1)
+		n = next
+		for _, r := range runes {
+			if r < n {
+				delta++
+			}
+			if r != n {
+				continue
+			}
+			q := delta
+			for k := punycodeBase; ; k += punycodeBase {
+				t := min(max(k-bias, punycodeTMin), punycodeTMax)
+				if q < t {
+					break
+				}
+				out = append(out, punycodeDigit(t+(q-t)%(punycodeBase-t)))
+				q = (q - t) / (punycodeBase - t)
+			}
+			out = append(out, punycodeDigit(q))
+			bias = punycodeBias(delta, handled+1, handled == basic)
+			delta = 0
+			handled++
+		}
+		delta++
+		n++
+	}
+	return string(out), true
+}
+
+func punycodeDigit(d int) byte {
+	if d < 26 {
+		return byte('a' + d)
+	}
+	return byte('0' + d - 26)
+}
+
+// punycodeBias is RFC 3492's adapt.
+func punycodeBias(delta, points int, first bool) int {
+	if first {
+		delta /= punycodeDamp
+	} else {
+		delta /= 2
+	}
+	delta += delta / points
+	k := 0
+	for delta > (punycodeBase-punycodeTMin)*punycodeTMax/2 {
+		delta /= punycodeBase - punycodeTMin
+		k += punycodeBase
+	}
+	return k + (punycodeBase-punycodeTMin+1)*delta/(delta+punycodeSkew)
 }
