@@ -461,7 +461,9 @@ instead:
   administrator manages (MDM, `/etc/codex`, or workspace-managed). It also
   takes the route away when the proxy cannot reach OpenAI or the proxy stops
   answering. The proxy reaches OpenAI through the Mac's manual proxy settings,
-  or through proxy environment variables when the daemon has them. It doesn't
+  unless the daemon's environment sets any of `HTTPS_PROXY`, `HTTP_PROXY` or
+  `NO_PROXY` (in either case): then it uses exactly those and ignores the Mac's
+  settings. It doesn't
   read proxy auto-config (PAC) files or proxy auto-discovery, so on networks
   that need them the proxy can't reach OpenAI and Codex stays direct, without
   compaction. An administrator
