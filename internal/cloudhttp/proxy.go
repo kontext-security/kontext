@@ -60,10 +60,9 @@ type proxyPicker struct {
 	reading chan struct{}
 	// proxy gives the proxies read last, and is nil until a read succeeds.
 	proxy func(*url.URL) *url.URL
-	// directAt is when requests last started going directly for directFor
-	// instead of through directProxy, the proxy that failed.
-	directAt    time.Time
-	directProxy string
+	// direct is when requests last started skipping each proxy that failed
+	// one, and going directly for directFor.
+	direct map[string]time.Time
 }
 
 // cloudProxies picks the proxies of the shared transport's requests.
@@ -113,24 +112,32 @@ func (p *proxyPicker) proxyFor(req *http.Request) (*url.URL, error) {
 func (p *proxyPicker) goingDirect(proxy *url.URL) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	age := p.now().Round(0).Sub(p.directAt)
-	return age >= 0 && age < directFor && proxy.String() == p.directProxy
+	age := p.now().Round(0).Sub(p.direct[proxy.String()])
+	return age >= 0 && age < directFor
 }
 
 // goDirect has requests skip proxy and go directly for directFor, as one just
 // got through directly after proxy failed it with reason, and logs the
 // switch. Requests that went through the proxy before the switch may fail
-// after it, and switch nothing again.
+// after it, and switch nothing again. Each proxy that failed is skipped for
+// its own directFor, as when macOS's web proxy and secure web proxy differ.
 func (p *proxyPicker) goDirect(proxy *url.URL, reason string) {
 	p.mu.Lock()
 	now := p.now().Round(0)
-	age := now.Sub(p.directAt)
-	switched := age < 0 || age >= directFor || proxy.String() != p.directProxy
-	if switched {
-		p.directAt, p.directProxy = now, proxy.String()
+	for key, at := range p.direct {
+		if age := now.Sub(at); age < 0 || age >= directFor {
+			delete(p.direct, key)
+		}
+	}
+	_, skipped := p.direct[proxy.String()]
+	if !skipped {
+		if p.direct == nil {
+			p.direct = make(map[string]time.Time)
+		}
+		p.direct[proxy.String()] = now
 	}
 	p.mu.Unlock()
-	if switched {
+	if !skipped {
 		p.logf("cloud proxy failed (%s); going direct\n", reason)
 	}
 }

@@ -136,15 +136,19 @@ func (l *logLines) all() []string {
 }
 
 // proxiesAt is what scutil --proxy prints on a Mac set to use the proxy at
-// addr as its web proxy and secure web proxy.
-func proxiesAt(t *testing.T, addr string) string {
+// web as its web proxy, and the one at secure as its secure web proxy.
+func proxiesAt(t *testing.T, web, secure string) string {
 	t.Helper()
-	host, port, err := net.SplitHostPort(addr)
+	webHost, webPort, err := net.SplitHostPort(web)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : " + port + "\n  HTTPProxy : " + host +
-		"\n  HTTPSEnable : 1\n  HTTPSPort : " + port + "\n  HTTPSProxy : " + host + "\n}\n"
+	secureHost, securePort, err := net.SplitHostPort(secure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : " + webPort + "\n  HTTPProxy : " + webHost +
+		"\n  HTTPSEnable : 1\n  HTTPSPort : " + securePort + "\n  HTTPSProxy : " + secureHost + "\n}\n"
 }
 
 // cloudPicker picks the proxies scutil prints for every request to the cloud,
@@ -161,7 +165,7 @@ func cloudPicker(scutil *fakeScutil, clock *time.Time) (*proxyPicker, *logLines)
 // collects what it logs.
 func pickerOf(t *testing.T, addr string, clock *time.Time) (*proxyPicker, *logLines) {
 	t.Helper()
-	return cloudPicker(&fakeScutil{output: proxiesAt(t, addr)}, clock)
+	return cloudPicker(&fakeScutil{output: proxiesAt(t, addr, addr)}, clock)
 }
 
 // proxyFake is a proxy on this machine at addr, which answers each request it
@@ -453,13 +457,13 @@ func TestRequestsGoThroughANewMacOSProxy(t *testing.T) {
 	cloud := newCloudFake(t)
 	broken := newProxyFake(t, askForPassword)
 	working := newProxyFake(t, tunnelTo(cloud.https.Listener.Addr().String()))
-	scutil := &fakeScutil{output: proxiesAt(t, broken.addr)}
+	scutil := &fakeScutil{output: proxiesAt(t, broken.addr, broken.addr)}
 	clock := time.Now()
 	p, logs := cloudPicker(scutil, &clock)
 	client := cloud.client(t, p, time.Minute)
 
 	for _, proxy := range []*proxyFake{broken, working} {
-		scutil.output = proxiesAt(t, proxy.addr)
+		scutil.output = proxiesAt(t, proxy.addr, proxy.addr)
 		clock = clock.Add(systemProxiesAge)
 		if answer, err := post(client, "https://cloud.example.com/v1/ingest", "batch"); err != nil || answer != "200 OK from the cloud" {
 			t.Fatalf("answer %q, %v", answer, err)
@@ -467,6 +471,29 @@ func TestRequestsGoThroughANewMacOSProxy(t *testing.T) {
 	}
 	if asked, direct, lines := working.asked.Load(), cloud.direct.Load(), logs.all(); asked != 1 || direct != 1 || len(lines) != 1 {
 		t.Fatalf("the new proxy was asked %d times, the cloud dialed directly %d times, and %q logged", asked, direct, lines)
+	}
+}
+
+// Requests skip each proxy that failed one: alternating between two that
+// both did, as http and https requests do when macOS's web proxy and secure
+// web proxy differ, asks each of them once.
+func TestRequestsSkipEachProxyThatFailed(t *testing.T) {
+	cloud := newCloudFake(t)
+	web, secure := newProxyFake(t, askForPassword), newProxyFake(t, askForPassword)
+	clock := time.Now()
+	p, logs := cloudPicker(&fakeScutil{output: proxiesAt(t, web.addr, secure.addr)}, &clock)
+	client := cloud.client(t, p, time.Minute)
+
+	for range 2 {
+		if answer, err := get(client, "http://cloud.example.com/v1/ingest"); err != nil || answer != "200 OK from the cloud" {
+			t.Fatalf("answer %q, %v", answer, err)
+		}
+		if answer, err := post(client, "https://cloud.example.com/v1/ingest", "batch"); err != nil || answer != "200 OK from the cloud" {
+			t.Fatalf("answer %q, %v", answer, err)
+		}
+	}
+	if webAsked, secureAsked, lines := web.asked.Load(), secure.asked.Load(), logs.all(); webAsked != 1 || secureAsked != 1 || len(lines) != 2 {
+		t.Fatalf("the web proxy was asked %d times, the secure web proxy %d times, and %q logged", webAsked, secureAsked, lines)
 	}
 }
 

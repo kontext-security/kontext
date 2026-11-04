@@ -294,14 +294,14 @@ func useMacOSProxies(t *testing.T, output string) {
 	getenv, system := cloudProxies.getenv, cloudProxies.system
 	cloudProxies.getenv = func(string) string { return "" }
 	cloudProxies.system = func(context.Context) (string, error) { return output, nil }
-	cloudProxies.readAt, cloudProxies.proxy, cloudProxies.directAt = time.Time{}, nil, time.Time{}
+	cloudProxies.readAt, cloudProxies.proxy, cloudProxies.direct = time.Time{}, nil, nil
 	t.Cleanup(func() {
 		sharedTransport.CloseIdleConnections()
 		settle(cloudProxies)
 		cloudProxies.mu.Lock()
 		defer cloudProxies.mu.Unlock()
 		cloudProxies.getenv, cloudProxies.system = getenv, system
-		cloudProxies.readAt, cloudProxies.proxy, cloudProxies.directAt = time.Time{}, nil, time.Time{}
+		cloudProxies.readAt, cloudProxies.proxy, cloudProxies.direct = time.Time{}, nil, nil
 	})
 }
 
