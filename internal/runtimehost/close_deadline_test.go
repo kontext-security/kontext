@@ -29,6 +29,33 @@ func TestCloseGivesUpOnAStuckStoreClose(t *testing.T) {
 	}
 }
 
+func TestCloseAfterAGiveUpWaitsForTheSameClose(t *testing.T) {
+	release := make(chan struct{})
+	calls := 0
+	failed := errors.New("close failed")
+	host := &Host{closeStore: func() error {
+		calls++
+		<-release
+		return failed
+	}}
+	expired, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := host.Close(expired); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first Close() = %v, want the deadline", err)
+	}
+	if err := host.Close(expired); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("second Close() = %v while the store is still closing, want the deadline", err)
+	}
+
+	close(release)
+	if err := host.Close(context.Background()); !errors.Is(err, failed) {
+		t.Errorf("last Close() = %v, want the close's own result", err)
+	}
+	if calls != 1 {
+		t.Errorf("the store was closed %d times", calls)
+	}
+}
+
 func TestCloseReportsAStoreCloseError(t *testing.T) {
 	failed := errors.New("close failed")
 	host := &Host{closeStore: func() error { return failed }}

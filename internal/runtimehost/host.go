@@ -73,6 +73,7 @@ type Host struct {
 	drainRecords     func(context.Context) error
 	pendingRecords   func() int
 	stopScoring      func()
+	storeClosed      chan error
 }
 
 // PendingRecords counts answered calls and events whose records aren't written
@@ -305,13 +306,18 @@ func (h *Host) Close(ctx context.Context) error {
 		h.sessionCloseOnce = true
 	}
 	if h.closeStore != nil {
-		// This waits for the server's warm-up, which can sit on a stalled file.
+		// This waits for the server's warm-up, which can sit on a stalled file. A
+		// later Close keeps waiting for the same close.
 		closeStore := h.closeStore
 		h.closeStore = nil
 		closed := make(chan error, 1)
+		h.storeClosed = closed
 		go func() { closed <- closeStore() }()
+	}
+	if h.storeClosed != nil {
 		select {
-		case err := <-closed:
+		case err := <-h.storeClosed:
+			h.storeClosed = nil
 			if err != nil {
 				errs = append(errs, err)
 			}
