@@ -1,0 +1,127 @@
+name: Validate company macOS signing
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      MACOS_COMPANY_SIGN_P12:
+        required: true
+      MACOS_COMPANY_SIGN_PASSWORD:
+        required: true
+      MACOS_COMPANY_NOTARY_ISSUER_ID:
+        required: true
+      MACOS_COMPANY_NOTARY_KEY_ID:
+        required: true
+      MACOS_COMPANY_NOTARY_KEY:
+        required: true
+    outputs:
+      validation_tag:
+        value: ${{ jobs.validate.outputs.validation_tag }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: macos-latest
+    timeout-minutes: 200
+    outputs:
+      validation_tag: ${{ steps.tag.outputs.tag }}
+    env:
+      MACOS_SIGNING_PROFILE: company
+      MACOS_EXPECTED_TEAM_ID: ${{ vars.MACOS_COMPANY_TEAM_ID }}
+      MACOS_SIGN_P12: ${{ secrets.MACOS_COMPANY_SIGN_P12 }}
+      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_COMPANY_SIGN_PASSWORD }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_COMPANY_NOTARY_ISSUER_ID }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_COMPANY_NOTARY_KEY_ID }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_COMPANY_NOTARY_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Validate company certificate and credentials
+        run: bash scripts/check-macos-signing.sh
+
+      - name: Create local validation tag
+        id: tag
+        run: |
+          tag="v0.0.0-signing.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          git tag "$tag"
+          echo "GORELEASER_CURRENT_TAG=$tag" >> "$GITHUB_ENV"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Allow for Apple's initial company notarization queue
+        run: |
+          python3 - <<'PYCONFIG'
+          import os
+          from pathlib import Path
+          source = Path('.goreleaser.staging.yaml').read_text()
+          assert source.count('wait: true') == 1
+          target = Path(os.environ['RUNNER_TEMP']) / 'company-goreleaser.yaml'
+          target.write_text(source.replace('wait: true', 'wait: false'))
+          PYCONFIG
+
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: "~> v2.18"
+          args: release --clean --skip=publish --config ${{ runner.temp }}/company-goreleaser.yaml
+
+      - name: Verify both macOS architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/source-sha.txt
+          for arch in arm64 amd64; do
+            archive="dist/kontext_${GORELEASER_CURRENT_TAG#v}_darwin_${arch}.tar.gz"
+            binary_dir="$(mktemp -d)"
+            tar -xzf "$archive" -C "$binary_dir" kontext
+            binary="$binary_dir/kontext"
+            codesign --verify --strict --all-architectures -R="identifier kontext and anchor apple generic and certificate leaf[subject.OU] = \"$MACOS_EXPECTED_TEAM_ID\"" "$binary"
+            codesign -dv --verbose=4 "$binary" 2> "evidence/${arch}-signature.txt"
+            codesign -d -r- "$binary" > "evidence/${arch}-requirement.txt" 2>&1
+            grep -Fx "Authority=Developer ID Application: CoBrowser Technology GmbH ($MACOS_EXPECTED_TEAM_ID)" "evidence/${arch}-signature.txt"
+            grep -Fx "TeamIdentifier=$MACOS_EXPECTED_TEAM_ID" "evidence/${arch}-signature.txt"
+            # GoReleaser submits without waiting; native lookup gates upgrades.
+            accepted=false
+            for _ in $(seq 360); do
+              if codesign -vvvv -R=notarized --check-notarization "$binary" > "evidence/${arch}-notarization.txt" 2>&1; then
+                accepted=true
+                break
+              fi
+              sleep 15
+            done
+            [[ "$accepted" == true ]] || { echo "::error::Apple notarization is not verified for $arch after 90 minutes"; exit 1; }
+            shasum -a 256 "$archive" >> evidence/checksums.txt
+            rm -rf "$binary_dir"
+          done
+
+      - name: Retain validation builds and evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: company-signing-validation
+          path: |
+            dist/*_darwin_*.tar.gz
+            dist/checksums.txt
+            evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Retain interrupted candidate binaries
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: company-signing-interrupted
+          path: |
+            dist/kontext_darwin_*/kontext
+            dist/*_darwin_*.tar.gz
+            dist/checksums.txt
+            evidence/
+          if-no-files-found: warn
+          retention-days: 14
