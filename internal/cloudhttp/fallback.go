@@ -23,8 +23,8 @@ const proxyPatience = 5 * time.Second
 // does not connect it within patience. Once a tunnel through the proxy is up,
 // or the request has gone out to the proxy, it may have reached the server, so
 // it is not sent again: the server never gets it twice. When the request gets
-// through directly, requests go directly for directFor: on a network that lets
-// traffic out directly, a proxy that is down or wants a password would
+// through directly, requests skip that proxy for directFor: on a network that
+// lets traffic out directly, a proxy that is down or wants a password would
 // otherwise make them fail. A proxy the environment names stays strict, as it
 // does in Go.
 type directFallback struct {
@@ -42,8 +42,8 @@ func (f *directFallback) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	first := &attempt{patience: f.patience}
 	resp, err := first.send(f.transport, req)
-	reason, failed := first.failedAtProxy(req, resp, err)
-	if !failed || req.Context().Err() != nil {
+	proxy, reason := first.failedAtProxy(req, resp, err)
+	if proxy == nil || req.Context().Err() != nil {
 		return resp, err
 	}
 	again, ok := resend(req)
@@ -52,7 +52,8 @@ func (f *directFallback) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	retry := &attempt{direct: true}
 	directResp, directErr := retry.send(f.transport, again)
-	if !retry.connected() {
+	connected, fresh := retry.connection()
+	if !connected {
 		// The request cannot get out directly either, so what the proxy
 		// said tells more.
 		return resp, err
@@ -60,7 +61,13 @@ func (f *directFallback) RoundTrip(req *http.Request) (*http.Response, error) {
 	if resp != nil {
 		resp.Body.Close()
 	}
-	f.proxies.goDirect(reason)
+	// The way out directly works when the server answered, or when a new
+	// connection to it just came up: a request that failed on that failed
+	// at the server. One that failed on a connection from before shows
+	// nothing.
+	if directErr == nil || fresh {
+		f.proxies.goDirect(proxy, reason)
+	}
 	return directResp, directErr
 }
 
@@ -100,8 +107,8 @@ type attempt struct {
 	timer  *time.Timer
 	// up is set once the request may reach the server: a tunnel to the
 	// server is up through its proxy, or the transport has a connection to
-	// send it on.
-	up bool
+	// send it on, which is fresh when it was dialed for the request.
+	up, fresh bool
 	// gaveUp is set once the request stops waiting for its proxy.
 	gaveUp bool
 }
@@ -122,7 +129,7 @@ func (a *attempt) send(transport http.RoundTripper, req *http.Request) (*http.Re
 	a.cancel = cancel
 	a.mu.Unlock()
 	ctx = httptrace.WithClientTrace(context.WithValue(ctx, attemptKey{}, a), &httptrace.ClientTrace{
-		GotConn: func(httptrace.GotConnInfo) { a.reach(true) },
+		GotConn: a.gotConn,
 	})
 	resp, err := transport.RoundTrip(req.WithContext(ctx))
 	a.mu.Lock()
@@ -168,46 +175,73 @@ func (a *attempt) giveUp(proxy *url.URL, patience time.Duration) {
 	}
 }
 
-// reach notes that the request may reach the server from now on: the
-// transport has a connection to send it on (conn), or a tunnel through its
-// proxy is up. A tunnel the request stopped waiting for will carry another
-// one.
-func (a *attempt) reach(conn bool) {
+// gotConn notes that the transport has a connection to send the request on,
+// so it may reach the server from now on.
+func (a *attempt) gotConn(info httptrace.GotConnInfo) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if conn || !a.gaveUp {
-		a.up = true
-		if a.timer != nil {
-			a.timer.Stop()
-		}
+	a.reach()
+	a.fresh = a.fresh || !info.Reused
+}
+
+// tunnelUp notes that a tunnel to the server is up through the request's
+// proxy, so it may reach the server from now on, unless it stopped waiting
+// for the proxy: then the tunnel will carry another request.
+func (a *attempt) tunnelUp() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.gaveUp {
+		a.reach()
 	}
 }
 
-// connected reports whether the transport had a connection to send the
-// request on.
-func (a *attempt) connected() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.up
+// reach notes that the request may reach the server. a.mu must be held.
+func (a *attempt) reach() {
+	a.up = true
+	if a.timer != nil {
+		a.timer.Stop()
+	}
 }
 
-// failedAtProxy tells why a proxy macOS is set to use failed the request
-// before it could reach the server, given what the transport answered, if
-// one did. A request through a proxy the environment names, or none, did not.
-func (a *attempt) failedAtProxy(req *http.Request, resp *http.Response, err error) (reason string, failed bool) {
+// connection reports whether the transport had a connection to send the
+// request on, and whether it dialed one for it.
+func (a *attempt) connection() (connected, fresh bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.up, a.fresh
+}
+
+// failedAtProxy is the proxy macOS is set to use that failed the request
+// before it could reach the server, given what the transport answered, and
+// why, or nil when none did. A request through a proxy the environment
+// names, or none, did not fail at one.
+func (a *attempt) failedAtProxy(req *http.Request, resp *http.Response, err error) (*url.URL, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch {
 	case a.proxy == nil:
-		return "", false
 	case err != nil:
-		return err.Error(), !a.up
-	case resp.StatusCode == http.StatusProxyAuthRequired && req.URL.Scheme == "http":
-		// An http request goes to the proxy whole, with no tunnel, and a
-		// proxy that wants a password answers it without passing it on.
-		return resp.Status, true
+		if !a.up {
+			return a.proxy, err.Error()
+		}
+	case resp.StatusCode == http.StatusProxyAuthRequired && req.URL.Scheme == "http" && safeTwice(req.Method):
+		// An http request goes to the proxy whole, with no tunnel. A proxy
+		// that wants a password answers it without passing it on, but the
+		// answer cannot prove that, so only a request the server may get
+		// twice is sent again.
+		return a.proxy, resp.Status
 	}
-	return "", false
+	return nil, ""
+}
+
+// safeTwice reports whether a request with method may reach the server
+// twice, as Go's transport sends one again: it is idempotent.
+func safeTwice(method string) bool {
+	switch method {
+	case "", http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return true
+	}
+	return false
 }
 
 // noteTunnel is the transport's OnProxyConnectResponse: once a proxy answers
@@ -215,7 +249,7 @@ func (a *attempt) failedAtProxy(req *http.Request, resp *http.Response, err erro
 // dials with a context that keeps the request's values.
 func noteTunnel(ctx context.Context, _ *url.URL, _ *http.Request, connectRes *http.Response) error {
 	if a := attemptOf(ctx); a != nil && connectRes.StatusCode == http.StatusOK {
-		a.reach(false)
+		a.tunnelUp()
 	}
 	return nil
 }

@@ -99,18 +99,22 @@ func (c *cloudFake) client(t *testing.T, p *proxyPicker, patience time.Duration)
 
 // post posts body to rawURL with client, and tells the status and body of the
 // answer.
-func post(t *testing.T, client *http.Client, rawURL, body string) (string, error) {
-	t.Helper()
-	resp, err := client.Post(rawURL, "text/plain", strings.NewReader(body))
+func post(client *http.Client, rawURL, body string) (string, error) {
+	return answerOf(client.Post(rawURL, "text/plain", strings.NewReader(body)))
+}
+
+// get gets rawURL with client, and tells the status and body of the answer.
+func get(client *http.Client, rawURL string) (string, error) {
+	return answerOf(client.Get(rawURL))
+}
+
+func answerOf(resp *http.Response, err error) (string, error) {
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 	answer, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resp.Status + " " + string(answer), nil
+	return resp.Status + " " + string(answer), err
 }
 
 // logLines collects what a picker logs.
@@ -131,20 +135,33 @@ func (l *logLines) all() []string {
 	return slices.Clone(l.lines)
 }
 
-// cloudPicker picks the proxy at addr for every request to the cloud, as the
-// web proxy and secure web proxy macOS is set to use, on a clock at *clock,
-// and collects what it logs.
-func cloudPicker(t *testing.T, addr string, clock *time.Time) (*proxyPicker, *logLines) {
+// proxiesAt is what scutil --proxy prints on a Mac set to use the proxy at
+// addr as its web proxy and secure web proxy.
+func proxiesAt(t *testing.T, addr string) string {
 	t.Helper()
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := testPicker(nil, &fakeScutil{output: "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : " + port + "\n  HTTPProxy : " + host +
-		"\n  HTTPSEnable : 1\n  HTTPSPort : " + port + "\n  HTTPSProxy : " + host + "\n}\n"}, clock)
+	return "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : " + port + "\n  HTTPProxy : " + host +
+		"\n  HTTPSEnable : 1\n  HTTPSPort : " + port + "\n  HTTPSProxy : " + host + "\n}\n"
+}
+
+// cloudPicker picks the proxies scutil prints for every request to the cloud,
+// on a clock at *clock, and collects what it logs.
+func cloudPicker(scutil *fakeScutil, clock *time.Time) (*proxyPicker, *logLines) {
+	p := testPicker(nil, scutil, clock)
 	logs := &logLines{}
 	p.logf = logs.logf
 	return p, logs
+}
+
+// pickerOf picks the proxy at addr for every request to the cloud, as the web
+// proxy and secure web proxy macOS is set to use, on a clock at *clock, and
+// collects what it logs.
+func pickerOf(t *testing.T, addr string, clock *time.Time) (*proxyPicker, *logLines) {
+	t.Helper()
+	return cloudPicker(&fakeScutil{output: proxiesAt(t, addr)}, clock)
 }
 
 // proxyFake is a proxy on this machine at addr, which answers each request it
@@ -254,14 +271,39 @@ func readThenClose(_ net.Conn, req *http.Request) {
 	_, _ = io.Copy(io.Discard, req.Body)
 }
 
-// A request goes directly, body and all, when the proxy macOS is set to use
-// is down, and the switch is logged.
+// onceBody is a request body that cannot be read once closed, as one read
+// from a file or a pipe cannot.
+type onceBody struct {
+	io.Reader
+	closed atomic.Bool
+}
+
+func (b *onceBody) Read(p []byte) (int, error) {
+	if b.closed.Load() {
+		return 0, errors.New("read after close")
+	}
+	return b.Reader.Read(p)
+}
+
+func (b *onceBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
+
+// A request goes directly, its body read anew, when the proxy macOS is set to
+// use is down, and the switch is logged.
 func TestDownMacOSProxyGoesDirect(t *testing.T) {
 	cloud := newCloudFake(t)
 	clock := time.Now()
-	p, logs := cloudPicker(t, downProxy(t), &clock)
+	p, logs := pickerOf(t, downProxy(t), &clock)
+	req, err := http.NewRequest(http.MethodPost, "https://cloud.example.com/v1/ingest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Body, req.ContentLength = &onceBody{Reader: strings.NewReader("batch")}, int64(len("batch"))
+	req.GetBody = func() (io.ReadCloser, error) { return &onceBody{Reader: strings.NewReader("batch")}, nil }
 
-	answer, err := post(t, cloud.client(t, p, time.Minute), "https://cloud.example.com/v1/ingest", "batch")
+	answer, err := answerOf(cloud.client(t, p, time.Minute).Do(req))
 	if err != nil || answer != "200 OK from the cloud" {
 		t.Fatalf("answer %q, %v", answer, err)
 	}
@@ -276,29 +318,43 @@ func TestDownMacOSProxyGoesDirect(t *testing.T) {
 
 // A request goes directly when the proxy macOS is set to use wants a
 // password, which it asks for in its answer to CONNECT for an https request,
-// and in its answer to the request itself for an http one.
+// and in its answer to the request itself for an http one. That answer cannot
+// prove the proxy kept an http request from the server, so an http POST gets
+// it back instead.
 func TestMacOSProxyWantingAPasswordGoesDirect(t *testing.T) {
-	for _, test := range []struct{ scheme, reason string }{
-		{"https", "Proxy Authentication Required"},
-		{"http", "407 Proxy Authentication Required"},
+	for _, test := range []struct {
+		name, url, answer string
+		post              bool
+		got, logged       []string
+	}{
+		{"https POST", "https://cloud.example.com/v1/ingest", "200 OK from the cloud", true,
+			[]string{"POST /v1/ingest batch"}, []string{"cloud proxy failed (Proxy Authentication Required); going direct\n"}},
+		{"http GET", "http://cloud.example.com/v1/ingest", "200 OK from the cloud", false,
+			[]string{"GET /v1/ingest "}, []string{"cloud proxy failed (407 Proxy Authentication Required); going direct\n"}},
+		{"http POST", "http://cloud.example.com/v1/ingest", "407 Proxy Authentication Required ", true, nil, nil},
 	} {
-		t.Run(test.scheme, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			cloud := newCloudFake(t)
 			proxy := newProxyFake(t, askForPassword)
 			clock := time.Now()
-			p, logs := cloudPicker(t, proxy.addr, &clock)
+			p, logs := pickerOf(t, proxy.addr, &clock)
+			client := cloud.client(t, p, time.Minute)
 
-			answer, err := post(t, cloud.client(t, p, time.Minute), test.scheme+"://cloud.example.com/v1/ingest", "batch")
-			if err != nil || answer != "200 OK from the cloud" {
+			send := func() (string, error) { return get(client, test.url) }
+			if test.post {
+				send = func() (string, error) { return post(client, test.url, "batch") }
+			}
+			answer, err := send()
+			if err != nil || answer != test.answer {
 				t.Fatalf("answer %q, %v", answer, err)
 			}
-			if asked, direct := proxy.asked.Load(), cloud.direct.Load(); asked != 1 || direct != 1 {
+			if asked, direct := proxy.asked.Load(), cloud.direct.Load(); asked != 1 || int(direct) != len(test.got) {
 				t.Fatalf("the proxy was asked %d times, and the cloud dialed directly %d times", asked, direct)
 			}
-			if got := cloud.gotNow(); !slices.Equal(got, []string{"POST /v1/ingest batch"}) {
+			if got := cloud.gotNow(); !slices.Equal(got, test.got) {
 				t.Fatalf("the cloud got %q", got)
 			}
-			if lines := logs.all(); !slices.Equal(lines, []string{"cloud proxy failed (" + test.reason + "); going direct\n"}) {
+			if lines := logs.all(); !slices.Equal(lines, test.logged) {
 				t.Fatalf("logged %q", lines)
 			}
 		})
@@ -319,11 +375,11 @@ func TestSlowMacOSProxyGoesDirect(t *testing.T) {
 			cloud := newCloudFake(t)
 			proxy := newProxyFake(t, hang)
 			clock := time.Now()
-			p, logs := cloudPicker(t, proxy.addr, &clock)
+			p, logs := pickerOf(t, proxy.addr, &clock)
 			client := cloud.client(t, p, test.patience)
 			client.Timeout = test.timeout
 
-			answer, err := post(t, client, "https://cloud.example.com/v1/ingest", "batch")
+			answer, err := post(client, "https://cloud.example.com/v1/ingest", "batch")
 			if err != nil || answer != "200 OK from the cloud" {
 				t.Fatalf("answer %q, %v", answer, err)
 			}
@@ -341,11 +397,11 @@ func TestWorkingMacOSProxyCarriesRequests(t *testing.T) {
 	cloud := newCloudFake(t)
 	proxy := newProxyFake(t, tunnelTo(cloud.https.Listener.Addr().String()))
 	clock := time.Now()
-	p, logs := cloudPicker(t, proxy.addr, &clock)
+	p, logs := pickerOf(t, proxy.addr, &clock)
 	client := cloud.client(t, p, 200*time.Millisecond)
 
 	for _, path := range []string{"/slow", "/stream", "/v1/ingest"} {
-		answer, err := post(t, client, "https://cloud.example.com"+path, "batch")
+		answer, err := post(client, "https://cloud.example.com"+path, "batch")
 		if err != nil || answer != "200 OK from the cloud" {
 			t.Fatalf("answer %q, %v", answer, err)
 		}
@@ -368,11 +424,11 @@ func TestRequestsGoDirectForAWhile(t *testing.T) {
 	cloud := newCloudFake(t)
 	proxy := newProxyFake(t, askForPassword)
 	clock := time.Now()
-	p, logs := cloudPicker(t, proxy.addr, &clock)
+	p, logs := pickerOf(t, proxy.addr, &clock)
 	client := cloud.client(t, p, time.Minute)
 	send := func(asked int32, logged int) {
 		t.Helper()
-		if answer, err := post(t, client, "https://cloud.example.com/v1/ingest", "batch"); err != nil || answer != "200 OK from the cloud" {
+		if answer, err := post(client, "https://cloud.example.com/v1/ingest", "batch"); err != nil || answer != "200 OK from the cloud" {
 			t.Fatalf("answer %q, %v", answer, err)
 		}
 		if got, lines := proxy.asked.Load(), logs.all(); got != asked || len(lines) != logged {
@@ -382,13 +438,67 @@ func TestRequestsGoDirectForAWhile(t *testing.T) {
 
 	send(1, 1)
 	// A request that went through the proxy before the switch fails after it.
-	p.goDirect("Proxy Authentication Required")
+	p.goDirect(&url.URL{Scheme: "http", Host: proxy.addr}, "Proxy Authentication Required")
 	clock = clock.Add(directFor - time.Second)
 	send(1, 1)
 	clock = clock.Add(time.Second)
 	send(2, 2)
 	clock = clock.Add(-time.Hour)
 	send(3, 3)
+}
+
+// Requests skip only the proxy that failed: once macOS is set to use another,
+// as on another network, they go through that one at once.
+func TestRequestsGoThroughANewMacOSProxy(t *testing.T) {
+	cloud := newCloudFake(t)
+	broken := newProxyFake(t, askForPassword)
+	working := newProxyFake(t, tunnelTo(cloud.https.Listener.Addr().String()))
+	scutil := &fakeScutil{output: proxiesAt(t, broken.addr)}
+	clock := time.Now()
+	p, logs := cloudPicker(scutil, &clock)
+	client := cloud.client(t, p, time.Minute)
+
+	for _, proxy := range []*proxyFake{broken, working} {
+		scutil.output = proxiesAt(t, proxy.addr)
+		clock = clock.Add(systemProxiesAge)
+		if answer, err := post(client, "https://cloud.example.com/v1/ingest", "batch"); err != nil || answer != "200 OK from the cloud" {
+			t.Fatalf("answer %q, %v", answer, err)
+		}
+	}
+	if asked, direct, lines := working.asked.Load(), cloud.direct.Load(), logs.all(); asked != 1 || direct != 1 || len(lines) != 1 {
+		t.Fatalf("the new proxy was asked %d times, the cloud dialed directly %d times, and %q logged", asked, direct, lines)
+	}
+}
+
+// A direct request that fails at the server still shows that the way out
+// directly works when it got a new connection to the server, so requests
+// switch; one that failed on a connection from before shows nothing, so they
+// do not.
+func TestFailedDirectRequestsSwitchOnlyOnANewConnection(t *testing.T) {
+	cloud := newCloudFake(t)
+	proxy := newProxyFake(t, askForPassword)
+	clock := time.Now()
+	p, logs := pickerOf(t, proxy.addr, &clock)
+	client := cloud.client(t, p, time.Minute)
+	send := func(path string, asked int32, logged int) {
+		t.Helper()
+		answer, err := post(client, "https://cloud.example.com"+path, "batch")
+		if (err == nil) != (path != "/drop") {
+			t.Fatalf("answer %q, %v", answer, err)
+		}
+		if got, lines := proxy.asked.Load(), logs.all(); got != asked || len(lines) != logged {
+			t.Fatalf("the proxy was asked %d times, not %d, and %q logged", got, asked, lines)
+		}
+	}
+
+	// The server drops the request on a new direct connection.
+	send("/drop", 1, 1)
+	// Going directly, a request leaves its connection idle.
+	send("/v1/ingest", 1, 1)
+	clock = clock.Add(directFor)
+	// The server drops the request on that connection.
+	send("/drop", 2, 1)
+	send("/v1/ingest", 3, 2)
 }
 
 // A request that may have reached the server is not sent again: not once a
@@ -410,9 +520,9 @@ func TestRequestsPastTheProxyAreNotSentAgain(t *testing.T) {
 			cloud := newCloudFake(t)
 			proxy := newProxyFake(t, test.answer(cloud))
 			clock := time.Now()
-			p, logs := cloudPicker(t, proxy.addr, &clock)
+			p, logs := pickerOf(t, proxy.addr, &clock)
 
-			if answer, err := post(t, cloud.client(t, p, time.Minute), test.url, "batch"); err == nil {
+			if answer, err := post(cloud.client(t, p, time.Minute), test.url, "batch"); err == nil {
 				t.Fatalf("answer %q", answer)
 			}
 			if direct, got, lines := cloud.direct.Load(), cloud.gotNow(), logs.all(); direct != 0 || !slices.Equal(got, test.got) || len(lines) != 0 {
@@ -429,7 +539,7 @@ func TestRequestsThatCannotGoDirect(t *testing.T) {
 	cloud := newCloudFake(t)
 	proxy := newProxyFake(t, askForPassword)
 	clock := time.Now()
-	p, logs := cloudPicker(t, proxy.addr, &clock)
+	p, logs := pickerOf(t, proxy.addr, &clock)
 	client := cloud.client(t, p, time.Minute)
 
 	req, err := http.NewRequest(http.MethodPost, "https://cloud.example.com/v1/ingest", io.MultiReader(strings.NewReader("batch")))
@@ -446,7 +556,7 @@ func TestRequestsThatCannotGoDirect(t *testing.T) {
 
 	cloud.refuse.Store(true)
 	for range 2 {
-		if _, err := post(t, client, "https://cloud.example.com/v1/ingest", "batch"); err == nil || !strings.Contains(err.Error(), "Proxy Authentication Required") {
+		if _, err := post(client, "https://cloud.example.com/v1/ingest", "batch"); err == nil || !strings.Contains(err.Error(), "Proxy Authentication Required") {
 			t.Fatalf("got %v, not what the proxy said", err)
 		}
 	}
@@ -461,7 +571,7 @@ func TestEnvironmentProxiesStayStrict(t *testing.T) {
 	cloud := newCloudFake(t)
 	proxy := newProxyFake(t, askForPassword)
 	clock := time.Now()
-	p, logs := cloudPicker(t, downProxy(t), &clock)
+	p, logs := pickerOf(t, downProxy(t), &clock)
 	p.getenv = func(name string) string {
 		if name == "HTTPS_PROXY" {
 			return "http://" + proxy.addr
@@ -470,7 +580,7 @@ func TestEnvironmentProxiesStayStrict(t *testing.T) {
 	}
 	p.fromEnvironment = func(*http.Request) (*url.URL, error) { return &url.URL{Scheme: "http", Host: proxy.addr}, nil }
 
-	if answer, err := post(t, cloud.client(t, p, time.Minute), "https://cloud.example.com/v1/ingest", "batch"); err == nil {
+	if answer, err := post(cloud.client(t, p, time.Minute), "https://cloud.example.com/v1/ingest", "batch"); err == nil {
 		t.Fatalf("answer %q", answer)
 	}
 	if asked, direct, lines := proxy.asked.Load(), cloud.direct.Load(), logs.all(); asked != 1 || direct != 0 || len(lines) != 0 {

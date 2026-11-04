@@ -27,10 +27,10 @@ const systemProxiesAge = 30 * time.Second
 // it: a request to the cloud may have a budget of less than scutil's timeout.
 const systemProxiesWait = time.Second
 
-// directFor is how long requests to the cloud go directly once one got
-// through directly after a proxy macOS is set to use failed it, before they
-// try the proxy again: a proxy that is down or wants a password would
-// otherwise hold up each of them (see directFallback).
+// directFor is how long requests to the cloud skip a proxy macOS is set to use
+// and go directly once one got through directly after the proxy failed it,
+// before they try the proxy again: a proxy that is down or wants a password
+// would otherwise hold up each of them (see directFallback).
 const directFor = 5 * time.Minute
 
 // proxyPicker picks the proxy of each request to the cloud: the one the
@@ -60,8 +60,10 @@ type proxyPicker struct {
 	reading chan struct{}
 	// proxy gives the proxies read last, and is nil until a read succeeds.
 	proxy func(*url.URL) *url.URL
-	// directAt is when requests last started going directly for directFor.
-	directAt time.Time
+	// directAt is when requests last started going directly for directFor
+	// instead of through directProxy, the proxy that failed.
+	directAt    time.Time
+	directProxy string
 }
 
 // cloudProxies picks the proxies of the shared transport's requests.
@@ -87,40 +89,45 @@ func (p *proxyPicker) proxyFor(req *http.Request) (*url.URL, error) {
 	if p.system == nil || systemproxy.Local(req.URL) {
 		return nil, nil
 	}
-	// Nor does one sent again directly after a proxy of macOS's failed it, or
-	// one made while requests go directly for a while after that.
+	// Nor does one sent again directly after a proxy of macOS's failed it.
 	a := attemptOf(req.Context())
-	if (a != nil && a.direct) || p.goingDirect() {
+	if a != nil && a.direct {
 		return nil, nil
 	}
+	// Requests skip a proxy for a while after it failed one, but macOS's
+	// settings are still read, so that a Mac that moves to a network with
+	// another proxy uses it at once.
 	proxy := p.systemProxy(req.Context())(req.URL)
-	if proxy != nil && a != nil {
+	if proxy == nil || p.goingDirect(proxy) {
+		return nil, nil
+	}
+	if a != nil {
 		a.through(req.Context(), proxy)
 	}
 	return proxy, nil
 }
 
-// goingDirect reports whether requests go directly for now: less than
-// directFor ago by the wall clock, one got through directly after a proxy
-// macOS is set to use failed it.
-func (p *proxyPicker) goingDirect() bool {
+// goingDirect reports whether requests skip proxy and go directly for now:
+// less than directFor ago by the wall clock, one got through directly after
+// proxy failed it.
+func (p *proxyPicker) goingDirect(proxy *url.URL) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	age := p.now().Round(0).Sub(p.directAt)
-	return age >= 0 && age < directFor
+	return age >= 0 && age < directFor && proxy.String() == p.directProxy
 }
 
-// goDirect has requests go directly for directFor, as one just got through
-// directly after a proxy macOS is set to use failed it with reason, and logs
-// the switch. Requests that went through the proxy before the switch may fail
+// goDirect has requests skip proxy and go directly for directFor, as one just
+// got through directly after proxy failed it with reason, and logs the
+// switch. Requests that went through the proxy before the switch may fail
 // after it, and switch nothing again.
-func (p *proxyPicker) goDirect(reason string) {
+func (p *proxyPicker) goDirect(proxy *url.URL, reason string) {
 	p.mu.Lock()
 	now := p.now().Round(0)
 	age := now.Sub(p.directAt)
-	switched := age < 0 || age >= directFor
+	switched := age < 0 || age >= directFor || proxy.String() != p.directProxy
 	if switched {
-		p.directAt = now
+		p.directAt, p.directProxy = now, proxy.String()
 	}
 	p.mu.Unlock()
 	if switched {
