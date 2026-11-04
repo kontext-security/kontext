@@ -133,7 +133,12 @@ type Result struct {
 	// Notice is a message for the person, which the agent shows them however
 	// the hook was decided, a failed-open one included; "" says nothing. Only
 	// Codex's encoder writes it, as its systemMessage.
-	Notice   string
+	Notice string
+	// Stop ends the session at its start, before its first turn, however the
+	// hook was decided, and tells the person why; "" lets it run. Only Codex's
+	// encoder writes it, on a session start, as continue:false with Stop as
+	// its stopReason.
+	Stop     string
 	metadata any
 }
 

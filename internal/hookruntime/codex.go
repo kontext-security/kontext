@@ -94,8 +94,13 @@ func EncodeCodexResult(hookEventName string, result hook.Result) ([]byte, error)
 	}
 	out := codexOutput(hookEventName, result)
 	// Codex shows the person a systemMessage as a warning, whatever else the
-	// hook said.
+	// hook said, and ends a session whose start hook says stop before its
+	// first turn, showing the stopReason.
 	out.SystemMessage = result.Notice
+	if result.Stop != "" && hookName == hook.HookSessionStart {
+		stop := false
+		out.Continue, out.StopReason = &stop, result.Stop
+	}
 	return json.Marshal(out)
 }
 

@@ -440,3 +440,33 @@ func TestEncodeCodexNoticeReachesThePerson(t *testing.T) {
 		}
 	}
 }
+
+// A stop ends a Codex session before its first turn, saying why, however the
+// hook was decided; only a session start can stop.
+func TestEncodeCodexStopEndsTheSession(t *testing.T) {
+	t.Parallel()
+
+	const stop = "Start Codex again."
+	withStop := func(result hook.Result) hook.Result {
+		result.Notice, result.Stop = "The proxy is down.", stop
+		return result
+	}
+	for _, check := range []struct {
+		event  string
+		result hook.Result
+		want   string
+	}{
+		{"SessionStart", withStop(hook.FailOpen("managed policy daemon unavailable")),
+			`{"continue":false,"stopReason":"Start Codex again.","systemMessage":"The proxy is down."}`},
+		{"SessionStart", withStop(hook.Result{Decision: hook.DecisionAllow, Reason: "Workspace rules apply."}),
+			`{"continue":false,"stopReason":"Start Codex again.","systemMessage":"The proxy is down.","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Workspace rules apply."}}`},
+		{"SessionStart", withStop(hook.Result{Decision: hook.DecisionDeny, Reason: "Session blocked."}),
+			`{"continue":false,"stopReason":"Start Codex again.","systemMessage":"The proxy is down."}`},
+		{"UserPromptSubmit", withStop(hook.Result{Decision: hook.DecisionAllow}), `{"systemMessage":"The proxy is down."}`},
+	} {
+		out, err := EncodeCodexResult(check.event, check.result)
+		if err != nil || string(out) != check.want {
+			t.Fatalf("EncodeCodexResult(%s, %+v) = %s, %v, want %s", check.event, check.result, out, err, check.want)
+		}
+	}
+}

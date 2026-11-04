@@ -116,12 +116,12 @@ func TestACodexSessionStartChecksTheRoute(t *testing.T) {
 			return hook.Result{}, errors.New("daemon said nonsense")
 		}
 		return hook.FailOpen("managed policy daemon unavailable"), nil
-	}, func(context.Context) string {
+	}, func(context.Context) bool {
 		checks++
-		return codexUnroutedNotice
+		return true
 	})
 	result, err := evaluate(hook.Event{Agent: "codex", HookName: hook.HookSessionStart})
-	if err != nil || result.Notice != codexUnroutedNotice || !result.FailedOpen || checks != 1 {
+	if err != nil || result.Notice != codexUnroutedNotice || result.Stop != codexUnroutedStop || !result.FailedOpen || checks != 1 {
 		t.Fatalf("a Codex session start = %+v, %v (%d checks)", result, err, checks)
 	}
 	for _, event := range []hook.Event{
@@ -130,9 +130,28 @@ func TestACodexSessionStartChecksTheRoute(t *testing.T) {
 		{Agent: "codex", HookName: hook.HookStop},
 	} {
 		result, err := evaluate(event)
-		if result.Notice != "" || checks != 1 || (err != nil) != (event.HookName == hook.HookStop) {
+		if result.Notice != "" || result.Stop != "" || checks != 1 || (err != nil) != (event.HookName == hook.HookStop) {
 			t.Fatalf("%s %s = %+v, %v (%d checks)", event.Agent, event.HookName, result, err, checks)
 		}
+	}
+}
+
+// A Codex session that read a route nothing answers on stops, saying why,
+// even when Kontext could not evaluate its start: without the stop, it would
+// keep reconnecting to the proxy. A route that answers stops nothing.
+func TestACodexSessionOnADeadRouteStops(t *testing.T) {
+	failing := withCodexRouteCheck(func(hook.Event) (hook.Result, error) {
+		return hook.Result{}, errors.New("daemon said nonsense")
+	}, func(context.Context) bool { return true })
+	result, err := failing(hook.Event{Agent: "codex", HookName: hook.HookSessionStart})
+	if err != nil || result.Stop != codexUnroutedStop || result.Notice != codexUnroutedNotice {
+		t.Fatalf("a failed evaluation of a session start on a dead route = %+v, %v", result, err)
+	}
+	answering := withCodexRouteCheck(func(hook.Event) (hook.Result, error) {
+		return hook.Result{Decision: hook.DecisionAllow}, nil
+	}, func(context.Context) bool { return false })
+	if result, err := answering(hook.Event{Agent: "codex", HookName: hook.HookSessionStart}); err != nil || result.Stop != "" || result.Notice != "" {
+		t.Fatalf("a session start on a live route = %+v, %v", result, err)
 	}
 }
 
@@ -142,10 +161,10 @@ func TestAnExplicitModeCodexSessionStartChecksTheRoute(t *testing.T) {
 	previous := codexRouteCheck
 	t.Cleanup(func() { codexRouteCheck = previous })
 	checks := 0
-	codexRouteCheck = func(diagnostic.Logger) func(context.Context) string {
-		return func(context.Context) string {
+	codexRouteCheck = func(diagnostic.Logger) func(context.Context) bool {
+		return func(context.Context) bool {
 			checks++
-			return codexUnroutedNotice
+			return true
 		}
 	}
 	for _, mode := range []string{"observe", "enforce", "remote"} {
@@ -159,7 +178,8 @@ func TestAnExplicitModeCodexSessionStartChecksTheRoute(t *testing.T) {
 			t.Fatalf("%s: %v", mode, err)
 		}
 		var answer map[string]any
-		if err := json.Unmarshal(out.Bytes(), &answer); err != nil || answer["systemMessage"] != codexUnroutedNotice {
+		if err := json.Unmarshal(out.Bytes(), &answer); err != nil || answer["systemMessage"] != codexUnroutedNotice ||
+			answer["continue"] != false || answer["stopReason"] != codexUnroutedStop {
 			t.Fatalf("%s: hook answered %s (%v)", mode, out.String(), err)
 		}
 	}
@@ -168,8 +188,8 @@ func TestAnExplicitModeCodexSessionStartChecksTheRoute(t *testing.T) {
 	}
 }
 
-// On a Mac, the hook takes away a route to a port nothing listens on, and
-// tells the person to restart Codex; a route that answers stays.
+// On a Mac, the hook takes away a route to a port nothing listens on; a
+// route that answers stays.
 func TestTheSessionStartHookUnroutesARouteNothingAnswers(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("Codex is routed through the proxy on macOS only")
@@ -201,14 +221,67 @@ func TestTheSessionStartHookUnroutesARouteNothingAnswers(t *testing.T) {
 		_, _ = io.WriteString(w, codexproxy.HealthBody)
 	})}
 	go func() { _ = proxy.Serve(listener) }()
-	if notice := check(context.Background()); notice != "" {
-		t.Fatalf("a route the proxy answers on: %q", notice)
+	if check(context.Background()) {
+		t.Fatal("a route the proxy answers on was taken away")
 	}
 	proxy.Close()
-	if notice := check(context.Background()); notice != codexUnroutedNotice {
-		t.Fatalf("a route nothing answers on: %q", notice)
+	if !check(context.Background()) {
+		t.Fatal("a route nothing answers on stayed")
 	}
 	if data, _ := os.ReadFile(configPath); string(data) != original {
 		t.Fatalf("config:\n%s", data)
+	}
+}
+
+// `kontext codex-proxy disable` keeps Codex off the proxy until `kontext
+// codex-proxy enable`, and status and doctor say so, a disabled route
+// counting as healthy.
+func TestCodexProxyDisableStaysUntilEnable(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Codex is routed through the proxy on macOS only")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KONTEXT_MANAGED_OBSERVE_DB", filepath.Join(home, "managed-observe", "guard.db"))
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := codexProxyCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("codex-proxy %s: %v\n%s", strings.Join(args, " "), err, out.String())
+		}
+		return out.String()
+	}
+	doctor := func() string {
+		t.Helper()
+		var out bytes.Buffer
+		if !checkCodexProxy(context.Background(), &out) {
+			t.Fatalf("doctor counts the route as unhealthy:\n%s", out.String())
+		}
+		return out.String()
+	}
+	if out := run("disable"); !strings.Contains(out, "kontext codex-proxy enable") {
+		t.Fatalf("disable said:\n%s", out)
+	}
+	if out := run("status"); !strings.Contains(out, "disabled locally: true\n") || !strings.Contains(out, "kontext codex-proxy enable") {
+		t.Fatalf("status after disable:\n%s", out)
+	}
+	if out := doctor(); !strings.Contains(out, "kontext codex-proxy enable") {
+		t.Fatalf("doctor after disable:\n%s", out)
+	}
+	if out := run("enable"); !strings.Contains(out, "within a minute") {
+		t.Fatalf("enable said:\n%s", out)
+	}
+	if out := run("status"); !strings.Contains(out, "disabled locally: false\n") {
+		t.Fatalf("status after enable:\n%s", out)
+	}
+	if out := doctor(); strings.Contains(out, "disabled") {
+		t.Fatalf("doctor after enable:\n%s", out)
+	}
+	if out := run("enable"); !strings.Contains(out, "not disabled") {
+		t.Fatalf("a second enable said:\n%s", out)
 	}
 }

@@ -469,17 +469,45 @@ func TestCodexRoutingReportsWhereTheRouteStands(t *testing.T) {
 
 	c.switched <- ""
 	reported("routed/null 0,0,0 ")
-	// `kontext codex-proxy disable` takes the line away; the daemon routes
-	// Codex again, and says so after what took it.
+	// `kontext codex-proxy disable` takes the line away and keeps Codex off:
+	// the daemon says so after what took it, until `kontext codex-proxy
+	// enable`, and then routes Codex again.
 	local := codexroute.New(codexroute.Options{Home: home, StateDir: filepath.Join(home, "state"), GOOS: "darwin",
 		DisableReason: codexroute.ReasonDisabledLocally})
 	if err := local.Disable(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	c.switched <- ""
-	reported("routed/null 0,0,0 ; taken_away/disabled_locally 0,0,0 ; routed/null 0,0,0 ")
+	reported("routed/null 0,0,0 ; taken_away/disabled_locally 0,0,0 ; not_routed/disabled_locally 0,0,0 ")
+	if _, err := local.EnableLocally(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	c.switched <- ""
+	reported("routed/null 0,0,0 ; taken_away/disabled_locally 0,0,0 ; not_routed/disabled_locally 0,0,0 ; routed/null 0,0,0 ")
 	c.switched <- codexroute.ReasonCodexProxyOff
-	reported("routed/null 0,0,0 ; taken_away/disabled_locally 0,0,0 ; routed/null 0,0,0 ; not_routed/codex_proxy_off 0,0,0 ")
+	reported("routed/null 0,0,0 ; taken_away/disabled_locally 0,0,0 ; not_routed/disabled_locally 0,0,0 ; routed/null 0,0,0 ; " +
+		"not_routed/codex_proxy_off 0,0,0 ")
+}
+
+// While the person keeps Codex off, that is the reason the daemon reports,
+// whatever the switches say.
+func TestCodexRoutingReportsTheirDisableWhateverTheSwitches(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("the router locks the route and copies the binary on macOS and Linux only")
+	}
+	router, home := testRouter(t)
+	c := &codexRouting{router: router, diagnostic: diagnostic.New(io.Discard, false), switched: make(chan string, 1)}
+	local := codexroute.New(codexroute.Options{Home: home, StateDir: filepath.Join(home, "state"), GOOS: "darwin",
+		DisableReason: codexroute.ReasonDisabledLocally})
+	if err := local.Disable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, off := range []string{"", codexroute.ReasonCodexProxyOff, codexroute.ReasonCompactionOff, ""} {
+		if result, state := c.apply(context.Background(), off); state != (routeState{codexNotRouted, codexroute.ReasonDisabledLocally}) ||
+			!strings.Contains(result, "disabled") {
+			t.Errorf("apply(%q) = %q, %+v", off, result, state)
+		}
+	}
 }
 
 // A failed Enable or Disable that leaves Kontext's line in config.toml leaves

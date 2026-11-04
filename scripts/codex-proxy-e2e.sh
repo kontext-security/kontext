@@ -1,8 +1,10 @@
 #!/bin/sh
 # Runs the Codex proxy end to end: a real Codex binary sends its turns through
-# the proxy to a mock backend, and a fake daemon decides the printed parts.
-# Nothing needs credentials, nothing calls a model, and a Seatbelt profile
-# refuses every connection off the machine. macOS only.
+# the proxy to a mock backend, and a fake daemon decides the printed parts;
+# and a real Codex routed to a port nothing answers on stops at its session
+# start hook instead of reconnecting for good. Nothing needs credentials,
+# nothing calls a model, and a Seatbelt profile refuses every connection off
+# the machine. macOS only.
 #
 # Usage: scripts/codex-proxy-e2e.sh /path/to/codex [--launchd]
 #
@@ -19,10 +21,11 @@
 set -eu
 codex=${1:?usage: scripts/codex-proxy-e2e.sh /path/to/codex [--launchd]}
 cd "$(dirname "$0")/.."
+binary=$(mktemp -d)/kontext
+go build -o "$binary" ./cmd/kontext
 KONTEXT_CODEX_E2E_BIN=$codex go test -count=1 -run TestCodexEndToEnd -v ./internal/codexproxy/
+KONTEXT_CODEX_E2E_BIN=$codex KONTEXT_HOOK_E2E_BIN=$binary go test -count=1 -run TestCodexOnADeadRouteStopsAtItsStart -v ./cmd/kontext/
 if [ "${2:-}" = "--launchd" ]; then
-	binary=$(mktemp -d)/kontext
-	go build -o "$binary" ./cmd/kontext
 	KONTEXT_LAUNCHD_E2E_BIN=$binary go test -count=1 -run TestRealLaunchdJob -v ./internal/codexroute/
 	KONTEXT_CODEX_E2E_BIN=$codex KONTEXT_LAUNCHD_E2E_BIN=$binary go test -count=1 -run TestCodexAfterDowngrade -v ./internal/codexproxy/
 fi

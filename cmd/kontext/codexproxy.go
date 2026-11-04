@@ -72,7 +72,12 @@ func codexProxyCmd() *cobra.Command {
 				return err
 			}
 			defer store.Close()
-			logger := log.New(cmd.ErrOrStderr(), "codex-proxy ", log.LstdFlags)
+			logOutput := cmd.ErrOrStderr()
+			if stdinSocket {
+				// The job's log, which launchd never trims.
+				logOutput = codexroute.JobLog(home, logOutput)
+			}
+			logger := log.New(logOutput, "codex-proxy ", log.LstdFlags)
 			if socketPath == "" {
 				socketPath = managedobserve.DefaultSocketPath()
 			}
@@ -117,7 +122,7 @@ func codexProxyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&upstream, "upstream", codexproxy.DefaultUpstream, "Codex backend base URL, for requests a ChatGPT login signs")
 	cmd.Flags().StringVar(&apiUpstream, "api-upstream", codexproxy.DefaultAPIUpstream, "OpenAI API base URL, for requests an API key signs")
 	cmd.Flags().DurationVar(&idleExit, "idle-exit", codexroute.IdleExit, "exit after this long without a connection (0 never)")
-	cmd.AddCommand(codexProxyStatusCmd(), codexProxyDisableCmd())
+	cmd.AddCommand(codexProxyStatusCmd(), codexProxyDisableCmd(), codexProxyEnableCmd())
 	return cmd
 }
 
@@ -194,7 +199,8 @@ func reportHeld(ask func(context.Context) (bool, error), logf func(string, ...an
 }
 
 // codexRouter is the router of the person's own commands: a line they take
-// away reaches the daemon's next report as disabled here.
+// away reaches the daemon's next report as disabled here, and Codex stays
+// off the proxy until they enable it again.
 func codexRouter() (*codexroute.Router, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -215,8 +221,8 @@ func codexProxyStatusCmd() *cobra.Command {
 				return err
 			}
 			status := router.Status(cmd.Context())
-			fmt.Fprintf(cmd.OutOrStdout(), "routed: %v\nanswering: %v\nheld by a daemon: %v\njob loaded: %v\nport: %d\n",
-				status.Routed, status.Answering, status.Held, status.Loaded, status.Port)
+			fmt.Fprintf(cmd.OutOrStdout(), "routed: %v\nanswering: %v\nheld by a daemon: %v\njob loaded: %v\nport: %d\ndisabled locally: %v\n",
+				status.Routed, status.Answering, status.Held, status.Loaded, status.Port, status.DisabledLocally)
 			if status.Skipped != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "not routed because: %s\n", status.Skipped)
 			}
@@ -233,21 +239,22 @@ func codexProxyDisableCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "disable",
 		Short: "Stop routing Codex through the Codex proxy",
-		Long: "Removes the openai_base_url line Kontext wrote to ~/.codex/config.toml. The proxy job stays, passing requests " +
-			"through, until no Codex process that started while Codex was routed is left; --now unloads it anyway. A daemon " +
-			"whose switch is on routes Codex again.",
+		Long: "Removes the openai_base_url line Kontext wrote to ~/.codex/config.toml, and keeps Codex off the proxy, whatever " +
+			"the endpoint's switches say, until `kontext codex-proxy enable`. The proxy job stays, passing requests through, " +
+			"until no Codex process that started while Codex was routed is left; --now unloads it anyway.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			router, err := codexRouter()
 			if err != nil {
 				return err
 			}
+			const stays = "Codex stays off the proxy until kontext codex-proxy enable."
 			if now {
 				left, err := router.Remove(cmd.Context(), 0)
 				if err != nil {
 					return err
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "Codex is no longer routed through the proxy, and the proxy is unloaded.")
+				fmt.Fprintln(cmd.OutOrStdout(), "Codex is no longer routed through the proxy, and the proxy is unloaded. "+stays)
 				if left > 0 {
 					fmt.Fprintf(cmd.OutOrStdout(), "Restart Codex: %d Codex process(es) still had the proxy's address.\n", left)
 				}
@@ -261,15 +268,42 @@ func codexProxyDisableCmd() *cobra.Command {
 				return err
 			}
 			if drained {
-				fmt.Fprintln(cmd.OutOrStdout(), "Codex is no longer routed through the proxy, and the proxy is unloaded.")
+				fmt.Fprintln(cmd.OutOrStdout(), "Codex is no longer routed through the proxy, and the proxy is unloaded. "+stays)
 			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "Codex is no longer routed through the proxy. Quit Codex and the ChatGPT app, then run this again to unload it.")
+				fmt.Fprintln(cmd.OutOrStdout(), "Codex is no longer routed through the proxy. "+stays+
+					" Quit Codex and the ChatGPT app, then run this again to unload the proxy.")
 			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&now, "now", false, "unload the proxy even while Codex processes may still call it")
 	return cmd
+}
+
+func codexProxyEnableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "enable",
+		Short: "Route Codex through the Codex proxy again after disable",
+		Long: "Undoes `kontext codex-proxy disable`: the daemon routes Codex through the proxy again at its next configuration " +
+			"refresh, within a minute, while the endpoint's switches are on.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			router, err := codexRouter()
+			if err != nil {
+				return err
+			}
+			enabled, err := router.EnableLocally(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if !enabled {
+				fmt.Fprintln(cmd.OutOrStdout(), "Codex was not disabled with kontext codex-proxy disable: the daemon routes it through the proxy while the endpoint's switches are on.")
+				return nil
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "The daemon routes Codex through the proxy again within a minute, while the endpoint's switches are on.")
+			return nil
+		},
+	}
 }
 
 // pruneDecisions drops decisions as old as the saved outputs they point to,
@@ -290,22 +324,32 @@ func pruneDecisions(ctx context.Context, store *codexproxy.Store, logger *log.Lo
 }
 
 // codexUnroutedNotice tells the person, as a Codex session starts, that its
-// hook took away a route nothing answered on.
-const codexUnroutedNotice = "Kontext's Codex proxy is not answering, so Kontext took its openai_base_url line out of ~/.codex/config.toml. " +
-	"Restart Codex and the ChatGPT app: sessions opened before now, this one included, still call the proxy and keep reconnecting."
+// hook took away a route nothing answered on, and codexUnroutedStop why the
+// session stops: it read the line before it went.
+const (
+	codexUnroutedNotice = "Kontext's Codex proxy is not answering, so Kontext took its openai_base_url line out of ~/.codex/config.toml."
+	codexUnroutedStop   = "Start Codex again: this session read the line before it went, and would keep reconnecting to the proxy. " +
+		"Restart the ChatGPT app too: sessions it opened before now still call the proxy."
+)
 
 // withCodexRouteCheck checks Codex's route to the Kontext proxy as each Codex
-// session starts, before evaluate answers the hook, and hands the person what
-// the check has to say. Codex runs the hook itself, so the check runs when
-// neither the daemon nor the proxy job does.
-func withCodexRouteCheck(evaluate func(hook.Event) (hook.Result, error), check func(context.Context) string) func(hook.Event) (hook.Result, error) {
+// session starts, before evaluate answers the hook. Codex runs the hook
+// itself, so the check runs when neither the daemon nor the proxy job does.
+// Once it took away a route nothing answered on, the session stops, saying
+// why, whatever the evaluation did: it read the line, and would otherwise
+// keep reconnecting to the proxy for good.
+func withCodexRouteCheck(evaluate func(hook.Event) (hook.Result, error), check func(context.Context) bool) func(hook.Event) (hook.Result, error) {
 	return func(e hook.Event) (hook.Result, error) {
-		notice := ""
-		if e.Agent == "codex" && e.HookName == hook.HookSessionStart {
-			notice = check(context.Background())
-		}
+		unrouted := e.Agent == "codex" && e.HookName == hook.HookSessionStart && check(context.Background())
 		result, err := evaluate(e)
-		result.Notice = notice
+		if unrouted {
+			if err != nil {
+				// A failed evaluation answers nothing, which would let the
+				// session run.
+				result, err = hook.FailOpen(err.Error()), nil
+			}
+			result.Notice, result.Stop = codexUnroutedNotice, codexUnroutedStop
+		}
 		return result, err
 	}
 }
@@ -315,26 +359,23 @@ func withCodexRouteCheck(evaluate func(hook.Event) (hook.Result, error), check f
 var codexRouteCheck = unrouteUnansweredCodex
 
 // unrouteUnansweredCodex takes Codex's route away on macOS when nothing
-// answers on its port (see codexroute.Router.UnrouteUnanswered), and says so.
-// A check that fails says nothing.
-func unrouteUnansweredCodex(diag diagnostic.Logger) func(context.Context) string {
-	return func(ctx context.Context) string {
+// answers on its port (see codexroute.Router.UnrouteUnanswered), and reports
+// whether it did. A check that fails takes nothing away.
+func unrouteUnansweredCodex(diag diagnostic.Logger) func(context.Context) bool {
+	return func(ctx context.Context) bool {
 		if runtime.GOOS != "darwin" {
-			return ""
+			return false
 		}
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return ""
+			return false
 		}
 		router := codexroute.New(codexroute.Options{Home: home, StateDir: codexroute.StateDir(managedobserve.DefaultDBPath())})
 		unrouted, err := router.UnrouteUnanswered(ctx)
 		if err != nil {
 			diag.Printf("codex proxy route check: %v\n", err)
 		}
-		if !unrouted {
-			return ""
-		}
-		return codexUnroutedNotice
+		return unrouted
 	}
 }
 
@@ -356,10 +397,15 @@ func checkCodexProxy(ctx context.Context, out io.Writer) bool {
 	case status.Routed:
 		fmt.Fprintf(out, "  WARNING: ~/.codex/config.toml routes Codex through the Kontext proxy, which does not answer, so Codex requests wait forever; start the Kontext daemon, or delete the line marked %q\n", codexmanaged.RouteMarker)
 		return false
-	case status.Loaded && status.Draining > 0:
-		fmt.Fprintf(out, "  codex proxy: not routed; kept for %d Codex process(es) started while it was\n", status.Draining)
-	case status.Loaded:
-		fmt.Fprintln(out, "  codex proxy: not routed")
+	case status.Loaded || status.DisabledLocally:
+		line := "  codex proxy: not routed"
+		if status.DisabledLocally {
+			line += ": " + status.Skipped
+		}
+		if status.Draining > 0 {
+			line += fmt.Sprintf("; kept for %d Codex process(es) started while it was", status.Draining)
+		}
+		fmt.Fprintln(out, line)
 	}
 	return true
 }

@@ -20,8 +20,9 @@ import (
 // codexRouting follows the endpoint's switches with the Codex route, away
 // from the refresher: while a confirmed configuration has both tool output
 // compaction and the Codex proxy on, Codex's model traffic goes through the
-// proxy; once one has either off, the route goes, and the proxy job after it,
-// once Codex has drained. An unconfirmed configuration changes nothing, so an
+// proxy, unless the person disabled it with `kontext codex-proxy disable`;
+// once one has either off, the route goes, and the proxy job after it, once
+// Codex has drained. An unconfirmed configuration changes nothing, so an
 // unreachable API never churns the person's Codex config. Where the route
 // stands goes to the Kontext API (see codexReports).
 type codexRouting struct {
@@ -157,6 +158,12 @@ func (c *codexRouting) apply(ctx context.Context, off string) (string, routeStat
 			}
 		} else {
 			result = "not routed: switch off (" + off + ")"
+		}
+		// The person keeps Codex off whatever the switches say, which tells
+		// more than they do.
+		if _, disabled := c.router.DisabledLocally(); disabled {
+			state.reason = codexroute.ReasonDisabledLocally
+			result += "; disabled here with kontext codex-proxy disable"
 		}
 	}
 	if drained, err := c.router.Drain(ctx); err != nil {
