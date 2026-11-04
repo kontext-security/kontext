@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -63,8 +64,16 @@ func TestTheJobsLogStartsAgainPastItsLimit(t *testing.T) {
 	if got := readFile(t, path); got != logLine("e") {
 		t.Fatalf("log after starting again twice:\n%s", got)
 	}
-	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 2 {
-		t.Fatalf("logs kept: %v, %v", entries, err)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if strings.Join(names, " ") != "codex-proxy.log codex-proxy.log.1 codex-proxy.log.lock" {
+		t.Fatalf("files beside the log: %v", names)
 	}
 	// A line longer than the limit goes whole into a log of its own.
 	long := strings.Repeat("f", 150) + "\n"
@@ -124,5 +133,45 @@ func TestARunFollowsTheLogAnotherStartedAgain(t *testing.T) {
 	mustWrite(t, second, "f\n")
 	if readFile(t, path) != "e\nf\n" {
 		t.Fatalf("log after it was deleted:\n%s", readFile(t, path))
+	}
+}
+
+// Runs that find the same full log at once, as two may that overlap across a
+// reload, start it again once between them: the log they filled stays whole
+// beside the new one, and neither waits on the other to write.
+func TestRunsStartingTheLogAgainAtOnceKeepTheFullOne(t *testing.T) {
+	full := logLine("a") + logLine("a")
+	for round := range 300 {
+		path := filepath.Join(t.TempDir(), "codex-proxy.log")
+		writeFile(t, path, full, 0o644)
+		var files []*os.File
+		var logs []io.Writer
+		for range 2 {
+			file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files = append(files, file)
+			logs = append(logs, jobLogFor(path, 100, io.Discard, file, file))
+		}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i, log := range logs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, _ = io.WriteString(log, logLine(string(rune('b'+i))))
+			}()
+		}
+		close(start)
+		wg.Wait()
+		kept, current := readFile(t, path+".1"), readFile(t, path)
+		for _, file := range files {
+			file.Close()
+		}
+		if !strings.HasPrefix(kept, full) {
+			t.Fatalf("round %d: the full log was lost; kept:\n%s---\nlog:\n%s", round, kept, current)
+		}
 	}
 }

@@ -53,7 +53,8 @@ func isFileAt(file *os.File, path string) bool {
 // jobLog is the log that files, standard error first, write to. Before a
 // write would take it past limit, it moves to path + ".1", in place of the
 // last one, and the files point at a new one at path: whatever else writes to
-// them, as a crash's trace, goes there too.
+// them, as a crash's trace, goes there too. Runs of the job that overlap
+// share a lock to do so (see makeRoom).
 type jobLog struct {
 	mu    sync.Mutex
 	path  string
@@ -81,27 +82,45 @@ func (l *jobLog) Write(p []byte) (int, error) {
 // makeRoom readies the log for n more bytes: it follows the log at path once
 // another run of the job started it again, or it was deleted, and starts it
 // again itself when n more bytes would take a log with anything in it past
-// the limit.
+// the limit. Runs of the job overlap across a reload, and two may find the
+// same full log at once: they decide and change under a lock they share,
+// each looking again under it, so the log starts again once between them and
+// the full one stays. A run that finds the lock taken writes where it is and
+// tries again with its next line: a log never waits on another process.
 func (l *jobLog) makeRoom(n int64) error {
-	info, err := l.files[0].Stat()
-	if err != nil {
+	if room, err := l.room(n); err != nil || room {
 		return err
 	}
-	if at, err := os.Stat(l.path); err != nil || !os.SameFile(info, at) {
+	unlock, locked, err := lockFile(l.path+".lock", false)
+	if err != nil || !locked {
+		return err
+	}
+	defer unlock()
+	if !isFileAt(l.files[0], l.path) {
 		if err := l.point(); err != nil {
 			return err
 		}
-		if info, err = l.files[0].Stat(); err != nil {
-			return err
-		}
 	}
-	if info.Size() == 0 || info.Size()+n <= l.limit {
-		return nil
+	if room, err := l.room(n); err != nil || room {
+		return err
 	}
 	if err := os.Rename(l.path, l.path+".1"); err != nil {
 		return err
 	}
 	return l.point()
+}
+
+// room reports whether the files write to the log at path, and n more bytes
+// keep it within the limit or it holds nothing yet: a longer line goes whole
+// into a log of its own.
+func (l *jobLog) room(n int64) (bool, error) {
+	info, err := l.files[0].Stat()
+	if err != nil {
+		return false, err
+	}
+	at, err := os.Stat(l.path)
+	current := err == nil && os.SameFile(info, at)
+	return current && (info.Size() == 0 || info.Size()+n <= l.limit), nil
 }
 
 // point points the files at the log at path, made when there is none.
