@@ -21,6 +21,11 @@ var proxyVariables = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_
 // scutil.
 const systemProxiesAge = 30 * time.Second
 
+// systemProxiesWait is the longest a request waits for a read of macOS's
+// proxies that is under way, as when scutil hangs, before it goes on without
+// it: a request to the cloud may have a budget of less than scutil's timeout.
+const systemProxiesWait = time.Second
+
 // proxyPicker picks the proxy of each request to the cloud: the one the
 // environment names when it sets any proxy variable, read as
 // http.ProxyFromEnvironment reads it, and otherwise the manual proxies macOS
@@ -37,17 +42,22 @@ type proxyPicker struct {
 	// proxy for go directly.
 	system func(context.Context) (string, error)
 	now    func() time.Time
+	// wait is how long a request waits for a read under way: systemProxiesWait.
+	wait time.Duration
 
 	mu     sync.Mutex
 	readAt time.Time
-	proxy  func(*url.URL) *url.URL
+	// reading is closed when the read under way ends, and nil while none is.
+	reading chan struct{}
+	// proxy gives the proxies read last, and is nil until a read succeeds.
+	proxy func(*url.URL) *url.URL
 }
 
 // cloudProxies picks the proxies of the shared transport's requests.
 var cloudProxies = newProxyPicker()
 
 func newProxyPicker() *proxyPicker {
-	p := &proxyPicker{getenv: os.Getenv, fromEnvironment: http.ProxyFromEnvironment, now: time.Now}
+	p := &proxyPicker{getenv: os.Getenv, fromEnvironment: http.ProxyFromEnvironment, now: time.Now, wait: systemProxiesWait}
 	if runtime.GOOS == "darwin" {
 		p.system = systemproxy.Scutil
 	}
@@ -66,32 +76,59 @@ func (p *proxyPicker) proxyFor(req *http.Request) (*url.URL, error) {
 	if p.system == nil || systemproxy.Local(req.URL) {
 		return nil, nil
 	}
-	return p.systemProxy()(req.URL), nil
+	return p.systemProxy(req.Context())(req.URL), nil
 }
 
-// systemProxy gives the proxy macOS's manual proxies send a URL through. It
-// reads them again once they are systemProxiesAge old by the wall clock: Go's
-// monotonic clock may stop while a Mac sleeps, and a Mac that wakes up has
-// often moved to another network. When they cannot be read, requests go on
-// through the ones read before, or directly when none were.
-func (p *proxyPicker) systemProxy() func(*url.URL) *url.URL {
+// systemProxy gives the proxy macOS's manual proxies send a URL through. Once
+// they are systemProxiesAge old by the wall clock, the next request starts
+// reading them again: Go's monotonic clock may stop while a Mac sleeps, and a
+// Mac that wakes up has often moved to another network. A request waits for a
+// read under way for no longer than p.wait, or than ctx allows, and then goes
+// on through the proxies read before, or directly when none were, as it does
+// when a read fails.
+func (p *proxyPicker) systemProxy(ctx context.Context) func(*url.URL) *url.URL {
+	p.mu.Lock()
+	now := p.now().Round(0)
+	if age := now.Sub(p.readAt); p.reading == nil && (age < 0 || age >= systemProxiesAge) {
+		p.readAt, p.reading = now, make(chan struct{})
+		go p.read(p.system, p.reading)
+	}
+	reading := p.reading
+	p.mu.Unlock()
+	if reading != nil {
+		timer := time.NewTimer(p.wait)
+		select {
+		case <-reading:
+		case <-timer.C:
+		case <-ctx.Done():
+		}
+		timer.Stop()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	now := p.now().Round(0)
-	if age := now.Sub(p.readAt); age < 0 || age >= systemProxiesAge {
-		p.readAt = now
-		// Not the request's context: a request given up on would leave the
-		// ones after it on the proxies read before until the next read.
-		if output, err := p.system(context.Background()); err == nil {
-			if read, ok := systemproxy.Parse(output); ok {
-				p.proxy = read.ProxyFunc()
-			}
-		}
-	}
 	if p.proxy == nil {
 		return direct
 	}
 	return p.proxy
+}
+
+// read reads macOS's proxies with system, and closes done once it is over. It
+// does not take a request's context: a request given up on would leave the ones
+// after it on the proxies read before until the next read.
+func (p *proxyPicker) read(system func(context.Context) (string, error), done chan struct{}) {
+	var proxy func(*url.URL) *url.URL
+	if output, err := system(context.Background()); err == nil {
+		if read, ok := systemproxy.Parse(output); ok {
+			proxy = read.ProxyFunc()
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if proxy != nil {
+		p.proxy = proxy
+	}
+	p.reading = nil
+	close(done)
 }
 
 func direct(*url.URL) *url.URL { return nil }

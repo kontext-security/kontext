@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -53,15 +54,20 @@ const (
 `
 )
 
-// fakeScutil prints output, or fails with err, and counts its runs.
+// fakeScutil prints output, or fails with err, and counts its runs. While
+// block is set, a run waits for it to close first.
 type fakeScutil struct {
 	output string
 	err    error
-	runs   int
+	block  chan struct{}
+	runs   atomic.Int32
 }
 
 func (s *fakeScutil) run(context.Context) (string, error) {
-	s.runs++
+	s.runs.Add(1)
+	if s.block != nil {
+		<-s.block
+	}
 	return s.output, s.err
 }
 
@@ -69,13 +75,25 @@ func (s *fakeScutil) run(context.Context) (string, error) {
 var fromEnvironment = &url.URL{Scheme: "http", Host: "environment.example:3128"}
 
 // testPicker picks proxies from env and the proxies scutil prints, on a clock
-// at *clock.
+// at *clock. Its requests wait for any read under way, which a fake finishes
+// at once unless it blocks.
 func testPicker(env map[string]string, scutil *fakeScutil, clock *time.Time) *proxyPicker {
 	return &proxyPicker{
 		getenv:          func(name string) string { return env[name] },
 		fromEnvironment: func(*http.Request) (*url.URL, error) { return fromEnvironment, nil },
 		system:          scutil.run,
 		now:             func() time.Time { return *clock },
+		wait:            time.Minute,
+	}
+}
+
+// settle waits for the read p has under way, if any.
+func settle(p *proxyPicker) {
+	p.mu.Lock()
+	reading := p.reading
+	p.mu.Unlock()
+	if reading != nil {
+		<-reading
 	}
 }
 
@@ -83,7 +101,13 @@ func testPicker(env map[string]string, scutil *fakeScutil, clock *time.Time) *pr
 // directly.
 func proxyOf(t *testing.T, p *proxyPicker, rawURL string) string {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	return proxyWithin(t, context.Background(), p, rawURL)
+}
+
+// proxyWithin is the proxy p picks for a request to rawURL made with ctx.
+func proxyWithin(t *testing.T, ctx context.Context, p *proxyPicker, rawURL string) string {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +135,8 @@ func TestPickerUsesMacOSManualProxies(t *testing.T) {
 			t.Errorf("%s goes through %q, want %q", rawURL, got, want)
 		}
 	}
-	if scutil.runs != 1 {
-		t.Fatalf("scutil ran %d times for requests at the same moment", scutil.runs)
+	if scutil.runs.Load() != 1 {
+		t.Fatalf("scutil ran %d times for requests at the same moment", scutil.runs.Load())
 	}
 }
 
@@ -127,8 +151,8 @@ func TestLocalRequestsDoNotReadMacOSProxies(t *testing.T) {
 			t.Errorf("%s goes through %q", rawURL, got)
 		}
 	}
-	if scutil.runs != 0 {
-		t.Fatalf("scutil ran %d times", scutil.runs)
+	if scutil.runs.Load() != 0 {
+		t.Fatalf("scutil ran %d times", scutil.runs.Load())
 	}
 }
 
@@ -148,8 +172,8 @@ func TestEnvironmentProxiesWin(t *testing.T) {
 		clock := time.Now()
 		scutil := &fakeScutil{output: manualProxies}
 		p := testPicker(map[string]string{name: "http://environment.example:3128"}, scutil, &clock)
-		if got := proxyOf(t, p, "https://api.kontext.example/"); got != fromEnvironment.String() || scutil.runs != 0 {
-			t.Errorf("with %s set, requests go through %q after %d scutil runs", name, got, scutil.runs)
+		if got := proxyOf(t, p, "https://api.kontext.example/"); got != fromEnvironment.String() || scutil.runs.Load() != 0 {
+			t.Errorf("with %s set, requests go through %q after %d scutil runs", name, got, scutil.runs.Load())
 		}
 	}
 	clock := time.Now()
@@ -167,18 +191,18 @@ func TestPickerReadsMacOSProxiesAgainAsTheyAge(t *testing.T) {
 	// The Mac joins a network that needs a proxy.
 	scutil.output = manualProxies
 	clock = clock.Add(systemProxiesAge - time.Second)
-	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "" || scutil.runs != 1 {
-		t.Fatalf("before they age, requests go through %q after %d scutil runs", got, scutil.runs)
+	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "" || scutil.runs.Load() != 1 {
+		t.Fatalf("before they age, requests go through %q after %d scutil runs", got, scutil.runs.Load())
 	}
 	clock = clock.Add(time.Second)
-	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "http://proxy.example:3128" || scutil.runs != 2 {
-		t.Fatalf("once they aged, requests go through %q after %d scutil runs", got, scutil.runs)
+	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "http://proxy.example:3128" || scutil.runs.Load() != 2 {
+		t.Fatalf("once they aged, requests go through %q after %d scutil runs", got, scutil.runs.Load())
 	}
 	// A clock set back reads them again too.
 	scutil.output = noProxies
 	clock = clock.Add(-time.Second)
-	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "" || scutil.runs != 3 {
-		t.Fatalf("after the clock went back, requests go through %q after %d scutil runs", got, scutil.runs)
+	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "" || scutil.runs.Load() != 3 {
+		t.Fatalf("after the clock went back, requests go through %q after %d scutil runs", got, scutil.runs.Load())
 	}
 }
 
@@ -196,15 +220,53 @@ func TestPickerKeepsTheProxiesItCouldRead(t *testing.T) {
 	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "http://proxy.example:3128" {
 		t.Fatalf("requests go through %q", got)
 	}
-	for _, answer := range []fakeScutil{{err: context.DeadlineExceeded}, {output: "No proxy configuration available\n"}} {
+	for _, answer := range []struct {
+		output string
+		err    error
+	}{{err: context.DeadlineExceeded}, {output: "No proxy configuration available\n"}} {
 		scutil.output, scutil.err = answer.output, answer.err
 		clock = clock.Add(systemProxiesAge)
 		if got := proxyOf(t, p, "https://api.kontext.example/"); got != "http://proxy.example:3128" {
 			t.Errorf("after scutil printed %q (%v), requests go through %q", answer.output, answer.err, got)
 		}
 	}
-	if scutil.runs != 4 {
-		t.Fatalf("scutil ran %d times, want 4", scutil.runs)
+	if scutil.runs.Load() != 4 {
+		t.Fatalf("scutil ran %d times, want 4", scutil.runs.Load())
+	}
+}
+
+// A read that hangs holds a request up no longer than the request's deadline
+// or the picker's wait, starts no second read, and leaves requests on the
+// proxies read before.
+func TestHangingReadsHoldRequestsUpBriefly(t *testing.T) {
+	clock := time.Now()
+	scutil := &fakeScutil{output: manualProxies, block: make(chan struct{})}
+	p := testPicker(nil, scutil, &clock)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if got := proxyWithin(t, ctx, p, "https://api.kontext.example/"); got != "" {
+		t.Fatalf("before any proxies were read, a request went through %q", got)
+	}
+	p.wait = 20 * time.Millisecond
+	clock = clock.Add(systemProxiesAge)
+	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "" || scutil.runs.Load() != 1 {
+		t.Fatalf("while the first read hangs, a request goes through %q after %d scutil runs", got, scutil.runs.Load())
+	}
+	close(scutil.block)
+	settle(p)
+	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "http://proxy.example:3128" || scutil.runs.Load() != 2 {
+		t.Fatalf("once the read ended, requests go through %q after %d scutil runs", got, scutil.runs.Load())
+	}
+	release := make(chan struct{})
+	scutil.output, scutil.block = noProxies, release
+	clock = clock.Add(systemProxiesAge)
+	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "http://proxy.example:3128" {
+		t.Fatalf("while a read hangs, requests go through %q", got)
+	}
+	close(release)
+	settle(p)
+	if got := proxyOf(t, p, "https://api.kontext.example/"); got != "" || scutil.runs.Load() != 3 {
+		t.Fatalf("after the hanging read, requests go through %q after %d scutil runs", got, scutil.runs.Load())
 	}
 }
 
@@ -225,6 +287,7 @@ func TestPickerReadsMacOSProxiesOnlyOnAMac(t *testing.T) {
 // for the rest of the test.
 func useMacOSProxies(t *testing.T, output string) {
 	t.Helper()
+	settle(cloudProxies)
 	cloudProxies.mu.Lock()
 	defer cloudProxies.mu.Unlock()
 	getenv, system := cloudProxies.getenv, cloudProxies.system
@@ -233,6 +296,7 @@ func useMacOSProxies(t *testing.T, output string) {
 	cloudProxies.readAt, cloudProxies.proxy = time.Time{}, nil
 	t.Cleanup(func() {
 		sharedTransport.CloseIdleConnections()
+		settle(cloudProxies)
 		cloudProxies.mu.Lock()
 		defer cloudProxies.mu.Unlock()
 		cloudProxies.getenv, cloudProxies.system = getenv, system
