@@ -6,11 +6,36 @@ local annotation scores AWS CLI operations extracted from the full raw shell
 input. Its `combined_verdict` is the hypothetical OR of the old verdict and the
 operation verdict, not an average of incomparable margins. `shadow: true` is
 mandatory in this version. Unsupported or malformed input is an abstention.
+A resource-limited or failed scan keeps a positive already found, but emits no
+score or negative verdict for an incomplete negative scan.
 
 Initial scope: statically identifiable AWS CLI calls for the eight services in
 the frozen training schemas (plus s3api), command substitutions, invoked shell
 functions and literal shell wrappers. Python, HTTP, dynamic command construction
 and arbitrary program semantics remain outside this implementation.
+
+Shell exits propagate through taken blocks and functions; function returns and
+child-shell exits stay local to their scopes. Fresh literal `bash/sh/dash -c`
+shells do not inherit unexported parent functions. Static case patterns respect
+matching and fallthrough; unknown branches represent possible execution. Global
+AWS flags produce the same features regardless of their valid placement.
+Budgets cover cumulative parsed bytes, traversed nodes, pattern bytes, scope
+copies and extracted calls, including repeated function invocations.
+
+The exporter verifies every consumed frozen input before importing research
+modules or writing artifacts. Reproduce its integrity checks with the research
+Python environment and the same two source-directory arguments as the exporter:
+
+```sh
+python scripts/check-aws-operation-export.py \
+  --experiment-dir /path/to/known-operation-patch-2026-11-02 \
+  --schema-dir /path/to/cloud-training-evaluation-2026-11-02 \
+  --receipt /tmp/aws-export-checks.json
+```
+
+The receipt records rejection of changed weights, extractor code, syntax
+schemas and authored fixtures. The private replay output must be a new file;
+existing files, symlinks and hardlinks are refused without truncation.
 
 ## Failure modes to verify before implementation
 

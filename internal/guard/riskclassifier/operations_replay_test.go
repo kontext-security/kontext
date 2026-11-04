@@ -34,7 +34,7 @@ func TestAWSOperationLocalCorpusReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	out, err := os.OpenFile(output, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	out, err := os.OpenFile(output, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}

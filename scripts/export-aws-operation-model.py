@@ -21,23 +21,39 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def verify_frozen_inputs(patch, schema):
+    expected = json.loads(Path(__file__).with_name('aws-operation-frozen-inputs.json').read_text())
+    schemas = {p.name for p in (schema / 'source-schemas').glob('*.json')}
+    pinned = {Path(p).name for p in expected['schema'] if p.startswith('source-schemas/')}
+    if schemas != pinned:
+        raise ValueError('frozen schema set mismatch')
+    for key, root in (('experiment', patch), ('schema', schema)):
+        for name, sha in expected[key].items():
+            source = root / name
+            if not source.is_file() or digest(source) != sha:
+                raise ValueError('frozen input hash mismatch: ' + key + '/' + name)
+    return expected
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment-dir", required=True, type=Path)
     parser.add_argument("--schema-dir", required=True, type=Path)
+    parser.add_argument("--verify-only", action="store_true", help="verify every frozen input before imports; write nothing")
     args = parser.parse_args()
     patch, schema = args.experiment_dir.resolve(), args.schema_dir.resolve()
+    expected = verify_frozen_inputs(patch, schema)
+    if args.verify_only:
+        print(json.dumps({'verified_inputs': sum(map(len, expected.values())), 'written_files': 0}))
+        return
     sys.path[:0] = [str(patch), str(schema)]
     from operation_features import event_features, extract
     from semantic_features import SCHEMAS, kebab, parameters
 
-    expected = {
-        "command": "11f8272c21262056d0e01f61ad32b3f352735c45cb3bc2e4e332a3b1ba101403",
-        "session": "07e5349299ed76348cc4c61d6728852fcafe1e399cdfeabf120222bb5af29447",
-    }
     heads = {}
     sources = {}
-    for unit, sha in expected.items():
+    for unit in ('command', 'session'):
+        sha = expected['experiment']['models/' + unit + '.joblib']
         source = patch / "models" / (unit + ".joblib")
         if digest(source) != sha:
             raise ValueError("frozen model hash mismatch: " + unit)

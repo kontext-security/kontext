@@ -2,8 +2,11 @@ package riskclassifier
 
 import (
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 
+	"mvdan.cc/sh/v3/pattern"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -26,7 +29,19 @@ type operationWalk struct {
 	functions        map[string]*syntax.Stmt
 	visiting         map[string]bool
 	steps, recursion int
+	parsedBytes      int
+	functionDepth    int
+	stop             string
 	status           string
+}
+
+func (w *operationWalk) spend(n int) bool {
+	w.steps += n
+	if w.steps > operationMaxNodes || w.status == "limit_exceeded" {
+		w.status = "limit_exceeded"
+		return false
+	}
+	return true
 }
 
 func extractAWSOperations(command string, types awsArgumentTypes) ([]awsOperation, string) {
@@ -44,15 +59,16 @@ func extractAWSOperations(command string, types awsArgumentTypes) ([]awsOperatio
 	return w.ops, "evaluated"
 }
 
-func (w *operationWalk) parse(command string) {
-	if w.recursion >= operationMaxRecursion {
+func (w *operationWalk) parse(command string) int {
+	w.parsedBytes += len(command)
+	if w.recursion >= operationMaxRecursion || w.parsedBytes > operationMaxBytes {
 		w.status = "limit_exceeded"
-		return
+		return -1
 	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 	if err != nil {
 		w.status = "parse_error"
-		return
+		return -1
 	}
 	depth := 0
 	syntax.Walk(file, func(node syntax.Node) bool {
@@ -61,8 +77,7 @@ func (w *operationWalk) parse(command string) {
 			return true
 		}
 		depth++
-		w.steps++
-		if depth > operationMaxDepth || w.steps > operationMaxNodes {
+		if depth > operationMaxDepth || !w.spend(1) {
 			w.status = "limit_exceeded"
 			depth--
 			return false
@@ -70,11 +85,12 @@ func (w *operationWalk) parse(command string) {
 		return true
 	})
 	if w.status == "limit_exceeded" {
-		return
+		return -1
 	}
 	w.recursion++
-	w.list(file.Stmts)
+	result := w.list(file.Stmts)
 	w.recursion--
+	return result
 }
 
 // list follows known constant guards, but never runs a shell. Unknown branches
@@ -82,16 +98,10 @@ func (w *operationWalk) parse(command string) {
 func (w *operationWalk) list(stmts []*syntax.Stmt) int {
 	result := -1
 	for _, stmt := range stmts {
-		if w.status == "limit_exceeded" {
+		if w.status == "limit_exceeded" || w.stop != "" {
 			break
 		}
 		result = w.stmt(stmt)
-		if call, ok := stmt.Cmd.(*syntax.CallExpr); ok && !stmt.Negated && !stmt.Background && len(call.Args) > 0 {
-			name, _ := operationLiteral(call.Args[0])
-			if name == "exit" || name == "return" {
-				break
-			}
-		}
 	}
 	return result
 }
@@ -100,8 +110,12 @@ func (w *operationWalk) stmt(stmt *syntax.Stmt) int {
 	if stmt == nil {
 		return -1
 	}
-	w.steps++
-	if w.steps > operationMaxNodes || w.recursion >= operationMaxRecursion || len(w.ops) >= operationMaxCalls {
+	if stmt.Background {
+		copy := *stmt
+		copy.Background = false
+		return w.child(false, func() int { return w.stmt(&copy) })
+	}
+	if !w.spend(1) || w.recursion >= operationMaxRecursion || len(w.ops) >= operationMaxCalls {
 		w.status = "limit_exceeded"
 		return -1
 	}
@@ -134,18 +148,25 @@ func (w *operationWalk) stmt(stmt *syntax.Stmt) int {
 	case *syntax.Block:
 		result = w.list(c.Stmts)
 	case *syntax.Subshell:
-		// Definitions in a subshell must not leak into the enclosing shell.
-		functions := w.functions
-		w.functions = cloneOperationFunctions(functions)
-		result = w.list(c.Stmts)
-		w.functions = functions
+		result = w.child(false, func() int { return w.list(c.Stmts) })
 	case *syntax.BinaryCmd:
+		if c.Op != syntax.AndStmt && c.Op != syntax.OrStmt {
+			w.child(false, func() int { return w.stmt(c.X) })
+			result = w.child(false, func() int { return w.stmt(c.Y) })
+			break
+		}
 		left := w.stmt(c.X)
+		if w.stop != "" {
+			result = left
+			break
+		}
 		if c.Op == syntax.AndStmt && left == 1 || c.Op == syntax.OrStmt && left == 0 {
 			result = left
 		} else {
 			result = w.stmt(c.Y)
 			if left < 0 && (c.Op == syntax.AndStmt || c.Op == syntax.OrStmt) {
+				// The right side may be skipped, so it cannot definitely stop us.
+				w.stop = ""
 				result = -1
 			}
 		}
@@ -153,10 +174,14 @@ func (w *operationWalk) stmt(stmt *syntax.Stmt) int {
 		result = w.ifClause(c)
 	case *syntax.WhileClause:
 		cond := w.list(c.Cond)
-		if !(cond == 1 && !c.Until || cond == 0 && c.Until) {
+		if w.stop == "" && !(cond == 1 && !c.Until || cond == 0 && c.Until) {
 			w.list(c.Do)
+			if cond < 0 {
+				w.stop = ""
+			}
 		}
 	case *syntax.ForClause:
+		definite := false
 		if loop, ok := c.Loop.(*syntax.WordIter); ok {
 			for _, item := range loop.Items {
 				w.word(item)
@@ -164,18 +189,20 @@ func (w *operationWalk) stmt(stmt *syntax.Stmt) int {
 			if loop.InPos.IsValid() && len(loop.Items) == 0 {
 				break
 			}
+			for _, item := range loop.Items {
+				if _, ok := operationLiteral(item); ok {
+					definite = true
+				}
+			}
 		} else {
 			w.expansions(c.Loop)
 		}
 		w.list(c.Do)
-	case *syntax.CaseClause:
-		w.word(c.Word)
-		for _, item := range c.Items {
-			for _, pattern := range item.Patterns {
-				w.word(pattern)
-			}
-			w.list(item.Stmts)
+		if !definite {
+			w.stop = ""
 		}
+	case *syntax.CaseClause:
+		result = w.caseClause(c)
 	case *syntax.DeclClause:
 		for _, a := range c.Args {
 			w.word(a.Value)
@@ -200,14 +227,19 @@ func (w *operationWalk) ifClause(c *syntax.IfClause) int {
 		return w.list(c.Then)
 	}
 	condition := w.list(c.Cond)
+	if w.stop != "" {
+		return condition
+	}
 	if condition == 0 {
 		return w.list(c.Then)
 	}
 	if condition < 0 {
 		w.list(c.Then)
+		w.stop = ""
 		if c.Else != nil {
 			w.ifClause(c.Else)
 		}
+		w.stop = ""
 		return -1
 	}
 	if c.Else != nil {
@@ -216,12 +248,95 @@ func (w *operationWalk) ifClause(c *syntax.IfClause) int {
 	return -1
 }
 
-func cloneOperationFunctions(src map[string]*syntax.Stmt) map[string]*syntax.Stmt {
-	dst := make(map[string]*syntax.Stmt, len(src))
-	for k, v := range src {
-		dst[k] = v
+// A fresh shell does not inherit unexported functions. Subshells do, but
+// neither their definitions nor their control flow may change the parent.
+func (w *operationWalk) child(fresh bool, run func() int) int {
+	functions, visiting, stop, depth := w.functions, w.visiting, w.stop, w.functionDepth
+	if !fresh && !w.spend(len(functions)+1) {
+		return -1
 	}
-	return dst
+	w.functions = map[string]*syntax.Stmt{}
+	if !fresh {
+		for k, v := range functions {
+			w.functions[k] = v
+		}
+	}
+	w.visiting, w.stop = map[string]bool{}, ""
+	if fresh {
+		w.functionDepth = 0
+	}
+	result := run()
+	w.functions, w.visiting, w.stop, w.functionDepth = functions, visiting, stop, depth
+	return result
+}
+
+func (w *operationWalk) caseClause(c *syntax.CaseClause) int {
+	w.word(c.Word)
+	value, known := operationLiteral(c.Word)
+	fallthroughArm, uncertain := false, !known
+	result := 0
+	for _, item := range c.Items {
+		match, maybe := fallthroughArm, false
+		for _, word := range item.Patterns {
+			if match {
+				break
+			}
+			w.word(word)
+			if !w.spend(int(word.End().Offset()-word.Pos().Offset()) + 1) {
+				return -1
+			}
+			// Unquoted literal parts retain glob syntax; quoted parts are escaped.
+			var glob strings.Builder
+			static := true
+			for _, part := range word.Parts {
+				if lit, ok := part.(*syntax.Lit); ok {
+					glob.WriteString(lit.Value)
+				} else {
+					v, ok := operationLiteral(&syntax.Word{Parts: []syntax.WordPart{part}})
+					if !ok {
+						static = false
+						break
+					}
+					glob.WriteString(pattern.QuoteMeta(v, 0))
+				}
+			}
+			if !known || !static {
+				maybe = true
+				continue
+			}
+			re, err := pattern.Regexp(glob.String(), pattern.EntireString)
+			if err != nil {
+				maybe = true
+				continue
+			}
+			rx, err := regexp.Compile(re)
+			if err != nil {
+				maybe = true
+				continue
+			}
+			match = rx.MatchString(value)
+		}
+		if !match && !maybe {
+			continue
+		}
+		result = w.list(item.Stmts)
+		if uncertain || !match {
+			w.stop = ""
+		} else if w.stop != "" {
+			return result
+		}
+		if match && !uncertain && item.Op == syntax.Break {
+			return result
+		}
+		if !match {
+			uncertain = true
+		}
+		fallthroughArm = item.Op == syntax.Fallthrough && match
+	}
+	if uncertain {
+		return -1
+	}
+	return result
 }
 
 func (w *operationWalk) word(word *syntax.Word) {
@@ -246,18 +361,15 @@ func (w *operationWalk) expansions(node syntax.Node) {
 		}
 	}
 	syntax.Walk(node, func(n syntax.Node) bool {
+		if n != nil && !w.spend(1) {
+			return false
+		}
 		switch n := n.(type) {
 		case *syntax.CmdSubst:
-			functions := w.functions
-			w.functions = cloneOperationFunctions(functions)
-			w.list(n.Stmts)
-			w.functions = functions
+			w.child(false, func() int { return w.list(n.Stmts) })
 			return false
 		case *syntax.ProcSubst:
-			functions := w.functions
-			w.functions = cloneOperationFunctions(functions)
-			w.list(n.Stmts)
-			w.functions = functions
+			w.child(false, func() int { return w.list(n.Stmts) })
 			return false
 		}
 		return w.status != "limit_exceeded"
@@ -277,10 +389,13 @@ func (w *operationWalk) call(c *syntax.CallExpr) int {
 		argv[i] = value
 	}
 	// Wrappers describe invocation syntax; none assigns a risk label.
+	inParent := true
+	allowFunctions := true
 	for len(argv) > 0 {
 		name := path.Base(argv[0])
 		switch name {
 		case "env":
+			inParent = false
 			argv = argv[1:]
 			for len(argv) > 0 {
 				a := argv[0]
@@ -301,12 +416,47 @@ func (w *operationWalk) call(c *syntax.CallExpr) int {
 				}
 				break
 			}
-		case "command", "exec", "nohup":
+		case "exec":
+			argv = argv[1:]
+			for len(argv) > 0 && strings.HasPrefix(argv[0], "-") {
+				flag := argv[0]
+				argv = argv[1:]
+				if flag == "--" {
+					break
+				}
+				if flag == "-" {
+					return -1
+				}
+				for i := 1; i < len(flag); i++ {
+					switch flag[i] {
+					case 'c', 'l':
+					case 'a':
+						if i+1 < len(flag) {
+							i = len(flag)
+						} else if len(argv) > 0 {
+							argv = argv[1:]
+						} else {
+							return -1
+						}
+					default:
+						return -1
+					}
+				}
+			}
+			if inParent && len(argv) > 0 && argv[0] != "" && argv[0] != "\x00" {
+				w.stop = "exit"
+			}
+		case "command", "nohup":
+			allowFunctions = false
+			if name == "nohup" {
+				inParent = false
+			}
 			argv = argv[1:]
 			for len(argv) > 0 && (argv[0] == "--" || argv[0] == "-p") {
 				argv = argv[1:]
 			}
 		case "sudo":
+			inParent = false
 			argv = argv[1:]
 			for len(argv) > 0 && strings.HasPrefix(argv[0], "-") {
 				flag := argv[0]
@@ -322,15 +472,20 @@ func (w *operationWalk) call(c *syntax.CallExpr) int {
 				}
 			}
 		default:
-			if fn := w.functions[argv[0]]; fn != nil {
+			if fn := w.functions[argv[0]]; fn != nil && inParent && allowFunctions && w.stop == "" {
 				if w.visiting[argv[0]] {
 					w.status = "limit_exceeded"
 					return -1
 				}
 				w.visiting[argv[0]] = true
-				w.stmt(fn)
+				w.functionDepth++
+				result := w.stmt(fn)
+				w.functionDepth--
+				if w.stop == "return" {
+					w.stop = ""
+				}
 				delete(w.visiting, argv[0])
-				return -1
+				return result
 			}
 			if name == "bash" || name == "sh" || name == "dash" {
 				for i := 1; i < len(argv); i++ {
@@ -343,8 +498,7 @@ func (w *operationWalk) call(c *syntax.CallExpr) int {
 						continue
 					}
 					if !strings.HasPrefix(flag, "--") && strings.Contains(flag, "c") && i+1 < len(argv) && argv[i+1] != "\x00" {
-						w.parse(argv[i+1])
-						break
+						return w.child(true, func() int { return w.parse(argv[i+1]) })
 					}
 				}
 				return -1
@@ -352,6 +506,18 @@ func (w *operationWalk) call(c *syntax.CallExpr) int {
 			if name == "aws" {
 				if op, ok := parseAWSOperation(argv, w.types); ok {
 					w.ops = append(w.ops, op)
+				}
+				return -1
+			}
+			if inParent && (name == "exit" || name == "return" && w.functionDepth > 0) {
+				w.stop = name
+				if len(argv) == 2 {
+					if n, err := strconv.Atoi(argv[1]); err == nil {
+						if n == 0 {
+							return 0
+						}
+						return 1
+					}
 				}
 				return -1
 			}
@@ -379,13 +545,18 @@ func parseAWSOperation(argv []string, types awsArgumentTypes) (awsOperation, boo
 		arg := argv[i]
 		flag, _, eq := strings.Cut(arg, "=")
 		if operationGlobalValues[flag] {
+			op.flags = append(op.flags, flag)
 			i++
 			if !eq {
+				if i >= len(argv) || strings.HasPrefix(argv[i], "--") {
+					return op, false
+				}
 				i++
 			}
 			continue
 		}
 		if operationGlobalBools[flag] {
+			op.flags = append(op.flags, flag)
 			i++
 			continue
 		}
@@ -416,18 +587,27 @@ func parseAWSOperation(argv []string, types awsArgumentTypes) (awsOperation, boo
 		op.flags = append(op.flags, flag)
 		kind := params[flag]
 		if kind == "" && strings.HasPrefix(flag, "--no-") {
-			kind = params["--"+flag[5:]]
+			if params["--"+flag[5:]] == "boolean" {
+				kind = "boolean"
+			}
 		}
 		if operationGlobalBools[flag] {
 			kind = "boolean"
+		}
+		if operationGlobalValues[flag] {
+			kind = "string"
+		}
+		if kind == "" {
+			return op, false
 		}
 		i++
 		if eq || kind == "boolean" {
 			continue
 		}
-		if i < len(argv) {
-			i++
+		if i >= len(argv) || strings.HasPrefix(argv[i], "--") {
+			return op, false
 		}
+		i++
 		if kind == "list" {
 			for i < len(argv) && !strings.HasPrefix(argv[i], "--") && argv[i] != "help" {
 				i++

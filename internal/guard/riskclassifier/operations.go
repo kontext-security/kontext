@@ -140,8 +140,14 @@ func (m *OperationModel) Classify(command string) OperationVerdict {
 		}
 		score = math.Max(score, margin)
 	}
+	result := verdictForScore(score, h.Threshold)
+	// A partial positive is useful evidence. A partial negative is not a
+	// completed assessment and must not masquerade as a clean result.
+	if status != "evaluated" && result != VerdictRisky {
+		return verdict
+	}
 	verdict.Score = &score
-	verdict.Verdict = verdictForScore(score, h.Threshold)
+	verdict.Verdict = result
 	return verdict
 }
 

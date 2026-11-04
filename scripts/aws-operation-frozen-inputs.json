@@ -1,0 +1,21 @@
+{
+  "experiment": {
+    "authored-data.json": "644373aed86b022a526638d1a122cf1c045b6f16d92cdc7de925a4a4b81a47be",
+    "models/command.joblib": "11f8272c21262056d0e01f61ad32b3f352735c45cb3bc2e4e332a3b1ba101403",
+    "models/command.json.gz": "9f9214404b346c1df2827e91fa2c5dbb873d69933a60e762f733c33d4bcdbe7f",
+    "models/session.joblib": "07e5349299ed76348cc4c61d6728852fcafe1e399cdfeabf120222bb5af29447",
+    "models/session.json.gz": "18849825c66ae1195c135f97addea9257aab96e27030c75eeb22c4ede86efa07",
+    "operation_features.py": "db796db9679d7b78ca5b24083d5a7ad63b4349d26bee3b62556f6d5487e9d544"
+  },
+  "schema": {
+    "semantic_features.py": "d79c1dbea7e8fab12e3acf3ee9f7b1ee428200d07d8df8f057b70e097aa61582",
+    "source-schemas/cloudtrail.json": "d1ecedc239cffe1220d9e22878b9ea5bd19cbd83b463126cd16a6547cd056475",
+    "source-schemas/ec2.json": "6f02f8af7732f2e6169552117fe844df7f1a88a4336de87f83ecce73c5aeba00",
+    "source-schemas/iam.json": "15c70eaeb15bda321fbf0e9a0db35036d67c6ccd34d38acbcad3a086b89251c5",
+    "source-schemas/kms.json": "a565bf9811ffd4b5b67fbb3464090bc131f71766e0b291eb6922983a2180f1d8",
+    "source-schemas/s3.json": "84c3a4e6ac1c80ed49cb1ddf1f548ea7f51d8a41acbfa0f198b9ba0028d784e8",
+    "source-schemas/secretsmanager.json": "d568532fb0db48e0ce9c3c30b6f48aae734e1657105043990ef699ec48656671",
+    "source-schemas/ssm.json": "8fa748c9acab59f074615605d65fd058b4ad4733ee8c924bc8ff1117467c7ee0",
+    "source-schemas/sts.json": "d97a08aa49223dee070009624c1d70f5b6af6ccc43220cc30ff566d5f02f3c0b"
+  }
+}
