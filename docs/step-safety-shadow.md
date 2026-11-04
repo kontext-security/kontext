@@ -51,7 +51,8 @@ Oversized actions are skipped in full.
 The 128-token action allowance includes the tool name, JSON structure, and
 `[TOOL_NAME]` / `[ARGUMENTS]` labels. Missing requests or schemas remain absent;
 Kontext does not infer them from transcripts or assistant reasoning. Missing
-requests cause supported operations to abstain. Rare Unicode
+requests are recorded with `user_request_present=false` and do not by themselves
+prevent assessment. Rare Unicode
 combining sequences that Go NFC would modify differently from Hugging Face are
 skipped as `unsupported_text`.
 

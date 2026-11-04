@@ -31,9 +31,8 @@ func TestScopedPythonNativeParity(t *testing.T) {
 		Probability          float64
 		Unsafe               bool
 		Error                string
-		RequestIntent        *float64 `json:"request_intent_probability"`
-		UncroppedTokenCounts [4]int   `json:"uncropped_token_counts"`
-		HistoryOmitted       *bool    `json:"history_omitted"`
+		UncroppedTokenCounts [4]int `json:"uncropped_token_counts"`
+		HistoryOmitted       *bool  `json:"history_omitted"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -51,24 +50,9 @@ func TestScopedPythonNativeParity(t *testing.T) {
 	for _, r := range rows {
 		t.Run(r.Name, func(t *testing.T) {
 			before, _ := json.Marshal(r.Input)
-			if r.RequestIntent != nil {
-				if math.Abs(requestIntentProbability(r.Input.UserRequest)-*r.RequestIntent) > 1e-9 {
-					t.Fatal("request intent score differs")
-				}
-			}
 			packed, e := packScopedInput(context.Background(), b.tokenizer, r.Input)
 			if r.Error != "" {
-				// These frozen V3 fixtures were rejected by the removed gates.
-				// Their complete inputs must now reach the contextual encoder.
-				switch r.Error {
-				case ErrorUnsupportedEffect, ErrorCompoundRequest, ErrorMissingRequest, ErrorRequestNotInformational:
-					if e != nil || len(packed.IDs) == 0 {
-						t.Fatalf("removed gate still rejects input: %v", e)
-					}
-				default:
-					t.Fatalf("unhandled fixture error %q", r.Error)
-				}
-				return
+				t.Fatalf("ungated reference fixture unexpectedly contains error %q", r.Error)
 			}
 			if e != nil {
 				t.Fatal(e)
@@ -116,8 +100,7 @@ func TestScopedPythonNativeParity(t *testing.T) {
 		})
 	}
 	if path == "testdata/scoped_golden.json" {
-		// A long fixture rejected by the eligibility gate does not exercise
-		// packing. Keep admitted reference cases for each cropping branch.
+		// Keep full reference coverage for every context-cropping branch.
 		for _, i := range []int{0, 1, 3} {
 			if !cropCoverage[i] {
 				t.Errorf("no eligible reference case exercises cropping for field %d", i)

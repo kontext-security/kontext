@@ -21,7 +21,10 @@
     "total": 415,
     "assessed": 415,
     "skipped": 0,
-    "alerts": 1
+    "alerts": 1,
+    "source_pool_total": 610,
+    "excluded_before_replay": 195,
+    "exclusion_reason": "original context could not be reliably reconstructed"
   },
   "private_original_flagged_no_risk": {
     "saved": 539,

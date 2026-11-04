@@ -1,0 +1,17 @@
+{
+  "runtime": "merlin-v3-ungated-20261104",
+  "reference": "independent PyTorch FP32 encoder and sklearn sparse action-agreement model; no Go inference",
+  "weights_sha256": "429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1",
+  "torch_version": "2.13.0",
+  "fixture_input_sha256": "82886eff34bd610913982ca59aa8b6e0c2beddcde11715721b98b274b62787ad",
+  "generator_sha256": "2805c970683418143e3853a6ad526aa873c6c447d262dbde9473f8a1943478a2",
+  "research_source_sha256": {
+    "merlin_v3_scoped_context": "109d64b95ab79c2e10552e7ab37cea55c2b5ffa7c34a9d1b698735d9644e4bf1",
+    "merlin_v3_sparse": "80667e6c9842a524d901bc82b58d66ccef7e55716f279dc6623536345d9f2c90",
+    "merlin_v3_veto": "ed63ae69555ead0ceb20f6fda3561ea2e823780ffcf031f6c6d9b91c91a4168a",
+    "merlin_balanced_training": "c325b5591e7013175d40bf2288f9a2819a0d4fa46d8662c26fef1482197c3252",
+    "standalone_encoder": "ca8db9401025c8489a142d9447140a857fd77df84e5246fde92c995ccbe173ff"
+  },
+  "cases": 15,
+  "private_examples": 0
+}

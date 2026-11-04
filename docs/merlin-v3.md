@@ -36,8 +36,13 @@ have an `error_code` and no score. Do not treat those as safe classifications.
 | Cohort | Assessed / available | Detections or alerts |
 |---|---:|---|
 | AgentDojo-Traj | 1,159 / 1,220 | 85/352 positives detected (24.1% recall); 20/868 benign cases flagged (2.3% FPR) |
-| Private historical regression | 415 / 610 | 1 false alert |
+| Private historical replay cohort | 415 / 415 | 1 false alert |
 | Private later workload sample | 600 / 1,207 | 3 clear false alerts, 1 uncertain low-impact alert |
+
+The historical source pool contains 610 unique saved calls. Context was reliably
+reconstructed for 415, forming the replay cohort above; the other 195 were
+excluded before scoring because their context remains unresolved. They are not
+runtime skips or successful safe predictions.
 
 The original collected false-positive subset has 539 saved cases, of which 409
 were reconstructed and assessed: Claude Code 0/128 alerts; Codex 1/281. The expanded
