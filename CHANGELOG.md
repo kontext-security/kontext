@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.18.0](https://github.com/kontext-security/kontext/compare/v1.17.1...v1.18.0) (2026-11-04)
+
+
+### Features
+
+* **codexproxy:** a per-endpoint switch for Codex on Mac, and route reports ([#692](https://github.com/kontext-security/kontext/issues/692)) ([b9ced9c](https://github.com/kontext-security/kontext/commit/b9ced9cae362418b1d78b055d96de66b51441157))
+* **codexproxy:** compact Codex code mode results through a local proxy ([#681](https://github.com/kontext-security/kontext/issues/681)) ([9758f15](https://github.com/kontext-security/kontext/commit/9758f1548a94535590e996efd4676694f7e2da7b))
+* **managedobserve:** add tool output compaction ([#665](https://github.com/kontext-security/kontext/issues/665)) ([8085484](https://github.com/kontext-security/kontext/commit/8085484925c5f9d148787e7965278c9769267885))
+
+
+### Bug Fixes
+
+* **claudemanaged:** take Claude Code's managed paths from the platform layer ([#677](https://github.com/kontext-security/kontext/issues/677)) ([a439b80](https://github.com/kontext-security/kontext/commit/a439b8085decf210c3c81d55596b04a4835d0317))
+* **cloudhttp:** reach the cloud through the manual proxies set in macOS ([#694](https://github.com/kontext-security/kontext/issues/694)) ([1a700d0](https://github.com/kontext-security/kontext/commit/1a700d0da065ef694e8f77458b6c5f0b058121d9))
+* **codexmanaged:** count Codex's system hooks only if a user couldn't have written them ([#685](https://github.com/kontext-security/kontext/issues/685)) ([8cc8afb](https://github.com/kontext-security/kontext/commit/8cc8afb8195f84b1531db6aa1e3406ef20b04cb4))
+* **codexproxy:** fail open when Codex's route can't work, and leave admin routes alone ([#691](https://github.com/kontext-security/kontext/issues/691)) ([e629a1e](https://github.com/kontext-security/kontext/commit/e629a1ec9ad17920b11dacdbc4613c68ede8018b))
+* **codexproxy:** make disable stick, cap the job's log, and stop a session on a dead route ([#705](https://github.com/kontext-security/kontext/issues/705)) ([7555bb5](https://github.com/kontext-security/kontext/commit/7555bb58ee307c6cceb06505614760bf33bb630a))
+* **codexroute:** give the Codex proxy job the manual proxies set in macOS ([#693](https://github.com/kontext-security/kontext/issues/693)) ([effd197](https://github.com/kontext-security/kontext/commit/effd197dd1702ee0ca43862aefe83724b4c091eb))
+* **guard:** stop the MCP config warm-up when the server closes ([#664](https://github.com/kontext-security/kontext/issues/664)) ([f6d6656](https://github.com/kontext-security/kontext/commit/f6d66561d3484ac641dab8023f12766b562207c4))
+* **hookinstall:** take Codex's system folder from the platform layer ([#684](https://github.com/kontext-security/kontext/issues/684)) ([7847936](https://github.com/kontext-security/kontext/commit/7847936fdbdf99f97a31333353aedbe6fe297c3e))
+* **hooks:** stop Codex running Kontext hooks twice when machine-wide hooks exist ([#672](https://github.com/kontext-security/kontext/issues/672)) ([58c64d0](https://github.com/kontext-security/kontext/commit/58c64d0640199f6c01a7a6de08dd1719d76aa3b0))
+* **ledger:** order annotation export cursors by time, not RFC3339Nano text ([#670](https://github.com/kontext-security/kontext/issues/670)) ([ed79c67](https://github.com/kontext-security/kontext/commit/ed79c67fc193a66a85f755c3988c02606daed7ac))
+* **ledger:** stop dropping annotations whose action was not exported yet ([#679](https://github.com/kontext-security/kontext/issues/679)) ([3a474f3](https://github.com/kontext-security/kontext/commit/3a474f36c621a156b0a0de49904a17c7b454375b))
+* **managedconfig:** ignore a system file that can't be an administrator's ([#688](https://github.com/kontext-security/kontext/issues/688)) ([7b0d4b7](https://github.com/kontext-security/kontext/commit/7b0d4b73aa6babf0c0b2fbe9906cad566a5aadac))
+* **managedconfig:** refuse a system config on Windows that a user could have written ([#680](https://github.com/kontext-security/kontext/issues/680)) ([538a059](https://github.com/kontext-security/kontext/commit/538a059c40dee75812ea3cba14904588cbed64d0))
+* **managedobserve:** allow one daemon per socket, on every OS ([#696](https://github.com/kontext-security/kontext/issues/696)) ([f4043de](https://github.com/kontext-security/kontext/commit/f4043def1fe3709e6e61f6135e53a93e5bcadb4d))
+* **managedobserve:** retry a dropped RPC that macOS reports as ENOTCONN ([#675](https://github.com/kontext-security/kontext/issues/675)) ([ab346d8](https://github.com/kontext-security/kontext/commit/ab346d86b4090b5ea83417a396d80a51c1b15f89))
+* **managedobserve:** retry a dropped RPC that Windows reports with a Winsock errno ([#676](https://github.com/kontext-security/kontext/issues/676)) ([f0b0e32](https://github.com/kontext-security/kontext/commit/f0b0e3289b54291d979ccf7f19b70d5ee4fd6f00))
+* **managedobserve:** retry a dropped RPC whose dial finds the socket file gone ([#678](https://github.com/kontext-security/kontext/issues/678)) ([379fdbe](https://github.com/kontext-security/kontext/commit/379fdbe72041082192a5f69aca9d3be18dfe23ca))
+* **managedobserve:** rewrite annotation timestamps after the hook socket is up ([#697](https://github.com/kontext-security/kontext/issues/697)) ([17741bd](https://github.com/kontext-security/kontext/commit/17741bdbb1e22fc1f317c798365263ffe70cc79c))
+* **managedobserve:** write queued records on a stop, within a deadline ([#702](https://github.com/kontext-security/kontext/issues/702)) ([5aa3131](https://github.com/kontext-security/kontext/commit/5aa313197c20b89557056021df27dd1464feef38))
+* **mcpconfig:** read Claude Code's managed MCP file where each OS keeps it ([#683](https://github.com/kontext-security/kontext/issues/683)) ([58ecd77](https://github.com/kontext-security/kontext/commit/58ecd777bafc6aa6d1732c65ef532e8160641a1f))
+* **platform:** name Kontext's directories per OS, keep the socket per user ([#673](https://github.com/kontext-security/kontext/issues/673)) ([6a0c2ef](https://github.com/kontext-security/kontext/commit/6a0c2ef86d0653477a0e0bd1b2e67187393817b4))
+* **shell:** keep the provider host of a URL with a computed part ([#666](https://github.com/kontext-security/kontext/issues/666)) ([f9a5c80](https://github.com/kontext-security/kontext/commit/f9a5c808f3fd3dd43b0c587282e6c04d12f99ad8))
+* **sqlite:** open the store read-only from any path, on Windows too ([#690](https://github.com/kontext-security/kontext/issues/690)) ([9fb6e41](https://github.com/kontext-security/kontext/commit/9fb6e4169bbd9d07f10ec1b53986d033ca2afca1))
+* **sqlite:** order sessions by created_at time, not its text ([#669](https://github.com/kontext-security/kontext/issues/669)) ([086c9e9](https://github.com/kontext-security/kontext/commit/086c9e91606a2f5846ef5b421e44e198782e6459))
+* **tooloutput:** keep secrets out of compaction requests (ENG-907) ([#695](https://github.com/kontext-security/kontext/issues/695)) ([239c3b9](https://github.com/kontext-security/kontext/commit/239c3b94c817e14343807cab4fcc330f0f823b44))
+* **tooloutput:** prune saved outputs by session and cap their total size ([#682](https://github.com/kontext-security/kontext/issues/682)) ([741b384](https://github.com/kontext-security/kontext/commit/741b384da8525e23d69036735e98127629f5ecec))
+
+
+### Performance Improvements
+
+* **ledger:** export pages seek to their cursor instead of walking the index ([#671](https://github.com/kontext-security/kontext/issues/671)) ([43fa4d5](https://github.com/kontext-security/kontext/commit/43fa4d5da76e468acde4fa099267815d4e6a3191))
+
 ## [1.17.1](https://github.com/kontext-security/kontext/compare/v1.17.0...v1.17.1) (2026-10-29)
 
 
