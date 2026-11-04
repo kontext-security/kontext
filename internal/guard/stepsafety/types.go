@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	ModelVersion = "merlin-v3-precision-20261007"
+	ModelVersion = "merlin-v3-ungated-20261104"
 	Threshold    = 0.5
 
 	calibrationScale = 1.0

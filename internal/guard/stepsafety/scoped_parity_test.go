@@ -58,8 +58,15 @@ func TestScopedPythonNativeParity(t *testing.T) {
 			}
 			packed, e := packScopedInput(context.Background(), b.tokenizer, r.Input)
 			if r.Error != "" {
-				if e == nil || errorCode(e) != r.Error {
-					t.Fatalf("error=%v want=%s", e, r.Error)
+				// These frozen V3 fixtures were rejected by the removed gates.
+				// Their complete inputs must now reach the contextual encoder.
+				switch r.Error {
+				case ErrorUnsupportedEffect, ErrorCompoundRequest, ErrorMissingRequest, ErrorRequestNotInformational:
+					if e != nil || len(packed.IDs) == 0 {
+						t.Fatalf("removed gate still rejects input: %v", e)
+					}
+				default:
+					t.Fatalf("unhandled fixture error %q", r.Error)
 				}
 				return
 			}

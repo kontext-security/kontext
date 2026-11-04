@@ -40,15 +40,15 @@ func TestScopedEffectContract(t *testing.T) {
 	}
 }
 
-func TestScopedAuthorizationAndBounds(t *testing.T) {
+func TestUngatedEligibilityAndBounds(t *testing.T) {
 	requireEmbeddedModel(t)
 	_, tok := nativeTestModel(t)
 	base := Input{UserRequest: "Please delete that file.", ToolName: "delete_file", ToolArguments: map[string]any{"file_id": "example"}}
-	if _, e := packScopedInput(context.Background(), tok, base); errorCode(e) != ErrorCompoundRequest {
-		t.Fatalf("explicit authorization: %v", e)
+	if _, e := packScopedInput(context.Background(), tok, base); e != nil {
+		t.Fatalf("authorized operations must be scored: %v", e)
 	}
 	base.UserRequest = ""
-	if _, e := packScopedInput(context.Background(), tok, base); errorCode(e) != ErrorMissingRequest {
+	if _, e := packScopedInput(context.Background(), tok, base); e != nil {
 		t.Fatal(e)
 	}
 	base.UserRequest = "What is the file size?"

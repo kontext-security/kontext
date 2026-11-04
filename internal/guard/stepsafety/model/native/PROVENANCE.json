@@ -1,5 +1,5 @@
 {
-  "model_version": "merlin-v3-precision-20261007",
+  "model_version": "merlin-v3-ungated-20261104",
   "source_weights_sha256": "429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1",
   "tokenizer_sha256": "d6c20af053b5d86d986a9f70898c1fceccb9d93e7ce6f63dabc899a12a53b031",
   "experiment": "exp-20261007-merlin-v3-precision",
@@ -8,7 +8,7 @@
   "base_model": "microsoft/deberta-v3-xsmall",
   "base_revision": "4b419818330868dff6a60ad3e6b1c730f8b8c0c6",
   "base_license": "MIT",
-  "scope": "Explicit typed destructive, credential, financial, outgoing-message or sharing effects; conservative authorization abstention",
+  "scope": "All otherwise eligible tool invocations; operation allowlist, lexical authorization gate and learned request-intent gate removed",
   "score_semantics": "Agreement margin rescaled to [0,1], not a calibrated production risk probability",
   "context_budgets": [
     96,
@@ -31,7 +31,8 @@
     "calibrator": {
       "coefficient": 0.937442667480181,
       "intercept": 0.020245760734966128
-    }
+    },
+    "enabled": false
   },
   "authorization_additional_words": [
     "adjust",
@@ -74,5 +75,9 @@
     "unlink",
     "upload",
     "wipe"
-  ]
+  ],
+  "runtime_variant": "v3-ungated-20261104",
+  "weights_candidate": "merlin-v3-precision-20261007",
+  "authorization_lexical_gate_enabled": false,
+  "operation_gate_enabled": false
 }

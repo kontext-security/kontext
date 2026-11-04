@@ -1,5 +1,5 @@
 {
-  "candidate": "merlin-v3-precision-20261007",
+  "candidate": "merlin-v3-ungated-20261104",
   "weights_sha256": "429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1",
   "threshold": 0.5,
   "calibrator": {
@@ -136,5 +136,12 @@
     }
   },
   "default_enabled": true,
-  "score_semantics": "Threshold-relative agreement score; not a calibrated risk probability"
+  "score_semantics": "Threshold-relative agreement score; not a calibrated risk probability",
+  "weights_candidate": "merlin-v3-precision-20261007",
+  "runtime_gates": {
+    "operation": false,
+    "lexical_request": false,
+    "learned_request_intent": false,
+    "action_agreement": true
+  }
 }
