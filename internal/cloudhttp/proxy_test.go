@@ -84,6 +84,7 @@ func testPicker(env map[string]string, scutil *fakeScutil, clock *time.Time) *pr
 		system:          scutil.run,
 		now:             func() time.Time { return *clock },
 		wait:            time.Minute,
+		logf:            func(string, ...any) {},
 	}
 }
 
@@ -293,15 +294,33 @@ func useMacOSProxies(t *testing.T, output string) {
 	getenv, system := cloudProxies.getenv, cloudProxies.system
 	cloudProxies.getenv = func(string) string { return "" }
 	cloudProxies.system = func(context.Context) (string, error) { return output, nil }
-	cloudProxies.readAt, cloudProxies.proxy = time.Time{}, nil
+	cloudProxies.readAt, cloudProxies.proxy, cloudProxies.directAt = time.Time{}, nil, time.Time{}
 	t.Cleanup(func() {
 		sharedTransport.CloseIdleConnections()
 		settle(cloudProxies)
 		cloudProxies.mu.Lock()
 		defer cloudProxies.mu.Unlock()
 		cloudProxies.getenv, cloudProxies.system = getenv, system
-		cloudProxies.readAt, cloudProxies.proxy = time.Time{}, nil
+		cloudProxies.readAt, cloudProxies.proxy, cloudProxies.directAt = time.Time{}, nil, time.Time{}
 	})
+}
+
+// refuseDirect has the shared transport dial nothing off this machine for the
+// rest of the test, telling dialed about the first address it refuses.
+func refuseDirect(t *testing.T, dialed chan<- string) {
+	t.Helper()
+	dial := sharedTransport.DialContext
+	sharedTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if host, _, err := net.SplitHostPort(addr); err == nil && net.ParseIP(host).IsLoopback() {
+			return dial(ctx, network, addr)
+		}
+		select {
+		case dialed <- addr:
+		default:
+		}
+		return nil, errors.New("tests dial nothing off this machine")
+	}
+	t.Cleanup(func() { sharedTransport.DialContext = dial })
 }
 
 // fakeProxy is a proxy that answers plain HTTP requests itself and refuses to
@@ -335,22 +354,27 @@ func askedOf(asked <-chan string) string {
 	}
 }
 
-// The clients' requests go through macOS's secure web proxy and web proxy.
-// Both fakes answer themselves, so nothing leaves this machine.
+// The clients' requests go through macOS's secure web proxy and web proxy,
+// and directly when one fails them. Both fakes answer themselves, and the
+// transport refuses to dial the cloud, so nothing leaves this machine.
 func TestCloudClientsGoThroughMacOSProxies(t *testing.T) {
-	secureAsked, webAsked := make(chan string, 1), make(chan string, 1)
+	secureAsked, webAsked, dialed := make(chan string, 1), make(chan string, 1), make(chan string, 1)
 	secureHost, securePort := fakeProxy(t, secureAsked)
 	webHost, webPort := fakeProxy(t, webAsked)
 	useMacOSProxies(t, "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : "+webPort+"\n  HTTPProxy : "+webHost+
 		"\n  HTTPSEnable : 1\n  HTTPSPort : "+securePort+"\n  HTTPSProxy : "+secureHost+"\n}\n")
+	refuseDirect(t, dialed)
 	client := NewClient(5 * time.Second)
 
 	if resp, err := client.Get("https://api.kontext.example/v1/endpoint-config"); err == nil {
 		resp.Body.Close()
-		t.Fatal("the request went through although the secure web proxy refused to tunnel it")
+		t.Fatal("the request went through although the secure web proxy refused to tunnel it, and it could not go directly")
 	}
 	if asked := askedOf(secureAsked); asked != "CONNECT api.kontext.example:443" {
 		t.Fatalf("the secure web proxy was asked %q", asked)
+	}
+	if addr := askedOf(dialed); addr != "api.kontext.example:443" {
+		t.Fatalf("the request was sent again directly to %q", addr)
 	}
 
 	resp, err := client.Get("http://api.kontext.example/v1/endpoint-config")

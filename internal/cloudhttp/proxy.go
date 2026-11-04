@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/systemproxy"
 )
 
@@ -25,6 +26,12 @@ const systemProxiesAge = 30 * time.Second
 // proxies that is under way, as when scutil hangs, before it goes on without
 // it: a request to the cloud may have a budget of less than scutil's timeout.
 const systemProxiesWait = time.Second
+
+// directFor is how long requests to the cloud go directly once one got
+// through directly after a proxy macOS is set to use failed it, before they
+// try the proxy again: a proxy that is down or wants a password would
+// otherwise hold up each of them (see directFallback).
+const directFor = 5 * time.Minute
 
 // proxyPicker picks the proxy of each request to the cloud: the one the
 // environment names when it sets any proxy variable, read as
@@ -44,6 +51,8 @@ type proxyPicker struct {
 	now    func() time.Time
 	// wait is how long a request waits for a read under way: systemProxiesWait.
 	wait time.Duration
+	// logf writes to the process log.
+	logf func(format string, args ...any)
 
 	mu     sync.Mutex
 	readAt time.Time
@@ -51,13 +60,15 @@ type proxyPicker struct {
 	reading chan struct{}
 	// proxy gives the proxies read last, and is nil until a read succeeds.
 	proxy func(*url.URL) *url.URL
+	// directAt is when requests last started going directly for directFor.
+	directAt time.Time
 }
 
 // cloudProxies picks the proxies of the shared transport's requests.
 var cloudProxies = newProxyPicker()
 
 func newProxyPicker() *proxyPicker {
-	p := &proxyPicker{getenv: os.Getenv, fromEnvironment: http.ProxyFromEnvironment, now: time.Now, wait: systemProxiesWait}
+	p := &proxyPicker{getenv: os.Getenv, fromEnvironment: http.ProxyFromEnvironment, now: time.Now, wait: systemProxiesWait, logf: logAlways}
 	if runtime.GOOS == "darwin" {
 		p.system = systemproxy.Scutil
 	}
@@ -76,7 +87,45 @@ func (p *proxyPicker) proxyFor(req *http.Request) (*url.URL, error) {
 	if p.system == nil || systemproxy.Local(req.URL) {
 		return nil, nil
 	}
-	return p.systemProxy(req.Context())(req.URL), nil
+	// Nor does one sent again directly after a proxy of macOS's failed it, or
+	// one made while requests go directly for a while after that.
+	a := attemptOf(req.Context())
+	if (a != nil && a.direct) || p.goingDirect() {
+		return nil, nil
+	}
+	proxy := p.systemProxy(req.Context())(req.URL)
+	if proxy != nil && a != nil {
+		a.through(req.Context(), proxy)
+	}
+	return proxy, nil
+}
+
+// goingDirect reports whether requests go directly for now: less than
+// directFor ago by the wall clock, one got through directly after a proxy
+// macOS is set to use failed it.
+func (p *proxyPicker) goingDirect() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	age := p.now().Round(0).Sub(p.directAt)
+	return age >= 0 && age < directFor
+}
+
+// goDirect has requests go directly for directFor, as one just got through
+// directly after a proxy macOS is set to use failed it with reason, and logs
+// the switch. Requests that went through the proxy before the switch may fail
+// after it, and switch nothing again.
+func (p *proxyPicker) goDirect(reason string) {
+	p.mu.Lock()
+	now := p.now().Round(0)
+	age := now.Sub(p.directAt)
+	switched := age < 0 || age >= directFor
+	if switched {
+		p.directAt = now
+	}
+	p.mu.Unlock()
+	if switched {
+		p.logf("cloud proxy failed (%s); going direct\n", reason)
+	}
 }
 
 // systemProxy gives the proxy macOS's manual proxies send a URL through. Once
@@ -132,3 +181,8 @@ func (p *proxyPicker) read(system func(context.Context) (string, error), done ch
 }
 
 func direct(*url.URL) *url.URL { return nil }
+
+// logAlways writes to the process log, whether or not diagnostics are on.
+func logAlways(format string, args ...any) {
+	diagnostic.LogAlways(diagnostic.Logger{}, format, args...)
+}

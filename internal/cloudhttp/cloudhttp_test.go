@@ -168,14 +168,15 @@ func TestNewClientUsesHealthCheckedTransport(t *testing.T) {
 	if client.Timeout != 7*time.Second {
 		t.Fatalf("timeout = %v", client.Timeout)
 	}
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok || transport != sharedTransport {
-		t.Fatal("client does not use the shared transport")
+	fallback, ok := client.Transport.(*directFallback)
+	if !ok || fallback.transport != sharedTransport || fallback.proxies != cloudProxies || fallback.patience != proxyPatience {
+		t.Fatal("client does not use the shared transport, going directly when a proxy of macOS's fails")
 	}
+	transport := fallback.transport
 	if transport.HTTP2 == nil || transport.HTTP2.SendPingTimeout != PingAfter || transport.HTTP2.PingTimeout != PingTimeout {
 		t.Fatalf("HTTP/2 health checks not configured: %+v", transport.HTTP2)
 	}
-	if transport.Proxy == nil {
-		t.Fatal("the transport picks no proxy for its requests")
+	if transport.Proxy == nil || transport.OnProxyConnectResponse == nil {
+		t.Fatal("the transport picks no proxy for its requests, or does not note their tunnels")
 	}
 }
