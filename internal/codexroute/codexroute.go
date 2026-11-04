@@ -54,6 +54,10 @@ const Label = "security.kontext.codex-proxy"
 // launchd starts it again for the next one.
 const IdleExit = 10 * time.Minute
 
+// LogLimit is how large the proxy job's log grows before the job starts it
+// again, keeping the last one beside it (see JobLog): launchd never trims it.
+const LogLimit = 4 << 20
+
 // unloadWait is how long the router waits for launchd to let the job go
 // after bootout.
 const unloadWait = 5 * time.Second
@@ -77,6 +81,12 @@ func StateDir(dbPath string) string {
 func TokenPath(stateDir string) string    { return filepath.Join(stateDir, "token") }
 func DecisionsDir(stateDir string) string { return filepath.Join(stateDir, "decisions") }
 func BinaryPath(stateDir string) string   { return filepath.Join(stateDir, "bin", "kontext") }
+
+// LogPath is the proxy job's log in home, which its plist names for its
+// standard output and error.
+func LogPath(home string) string {
+	return filepath.Join(home, "Library", "Logs", "Kontext", "codex-proxy.log")
+}
 
 // BaseURL is the openai_base_url that reaches the proxy.
 func BaseURL(port int, token string) string {
@@ -110,9 +120,11 @@ type Options struct {
 	LeaseGrace time.Duration
 	// DisableReason is what Disable and Remove record as having taken the
 	// line away, for the daemon's next report (see TakeAway): `kontext
-	// codex-proxy disable` sets ReasonDisabledLocally, and Remove then keeps
-	// what the daemon has yet to report. A daemon reports what it changes
-	// itself, and uninstall leaves nothing, so neither sets one.
+	// codex-proxy disable` sets ReasonDisabledLocally. Both then also keep
+	// Codex off the proxy until EnableLocally, whatever the endpoint's
+	// switches say, and Remove keeps what the daemon has yet to report. A
+	// daemon reports what it changes itself, and uninstall leaves nothing, so
+	// neither sets one.
 	DisableReason string
 
 	GOOS string
@@ -167,6 +179,11 @@ type Status struct {
 	// Draining counts the Codex processes from before the line went that may
 	// still call the job, which therefore stays.
 	Draining int
+	// DisabledLocally reports that the person keeps Codex off the proxy with
+	// `kontext codex-proxy disable`, since DisabledAt when the marker says
+	// (see Options.DisableReason).
+	DisabledLocally bool
+	DisabledAt      time.Time
 }
 
 // state is what the router keeps in route.json.
@@ -293,11 +310,10 @@ func (r *Router) configPath() string { return filepath.Join(r.opts.Home, ".codex
 func (r *Router) plistPath() string {
 	return filepath.Join(r.opts.Home, "Library", "LaunchAgents", r.opts.Label+".plist")
 }
-func (r *Router) logPath() string {
-	return filepath.Join(r.opts.Home, "Library", "Logs", "Kontext", "codex-proxy.log")
-}
-func (r *Router) statePath() string { return filepath.Join(r.opts.StateDir, "route.json") }
-func (r *Router) lockPath() string  { return filepath.Join(r.opts.StateDir, "route.lock") }
+func (r *Router) logPath() string      { return LogPath(r.opts.Home) }
+func (r *Router) statePath() string    { return filepath.Join(r.opts.StateDir, "route.json") }
+func (r *Router) lockPath() string     { return filepath.Join(r.opts.StateDir, "route.lock") }
+func (r *Router) disabledPath() string { return filepath.Join(r.opts.StateDir, "disabled.json") }
 
 // lock takes the lock the router shares with the proxy job, which takes the
 // line away itself once no daemon holds it (see Held). r.mu must be held,
@@ -310,13 +326,18 @@ func (r *Router) lock() (func(), error) {
 // Enable routes Codex through the proxy: it starts the job and, once the
 // proxy answers on its port, writes the config line. It leaves Codex alone,
 // and takes its own line away, when the person routes Codex's model traffic
-// themselves, or an administrator does in a layer of Codex's configuration.
+// themselves, or an administrator does in a layer of Codex's configuration,
+// and while the person keeps Codex off the proxy, which then is the reason
+// whatever else holds (see Options.DisableReason).
 func (r *Router) Enable(ctx context.Context) (Status, error) {
 	if r.opts.GOOS != "darwin" {
 		return Status{Skipped: "the Codex proxy runs on macOS only", Reason: ReasonMacOSOnly}, nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if at, disabled := r.DisabledLocally(); disabled {
+		return disabledStatus(at), r.unrouteLocked("")
+	}
 	config, err := readConfig(r.configPath())
 	if err != nil {
 		return Status{Reason: configReason(err)}, err
@@ -329,7 +350,11 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 		return Status{Reason: ReasonRouteError}, err
 	}
 	defer unlock()
-	// The proxy job may have taken the line away meanwhile.
+	// The person may have disabled the route meanwhile, and the proxy job
+	// may have taken the line away.
+	if at, disabled := r.DisabledLocally(); disabled {
+		return disabledStatus(at), r.unroute("")
+	}
 	if config, err = readConfig(r.configPath()); err != nil {
 		return Status{Reason: configReason(err)}, err
 	}
@@ -470,14 +495,105 @@ func (r *Router) Enable(ctx context.Context) (Status, error) {
 // Disable takes the config line away, so new Codex threads call OpenAI
 // directly. The job stays, passing requests through, for the threads that
 // already read the line, until Drain finds them gone. Without the line,
-// nothing in ~/.codex changes.
+// nothing in ~/.codex changes. With a DisableReason, Codex stays off the
+// proxy until EnableLocally.
 func (r *Router) Disable(context.Context) error {
 	if r.opts.GOOS != "darwin" {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.unrouteLocked(r.opts.DisableReason)
+	if r.opts.DisableReason == "" {
+		return r.unrouteLocked("")
+	}
+	unlock, err := r.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := r.keepOff(); err != nil {
+		return err
+	}
+	return r.unroute(r.opts.DisableReason)
+}
+
+// disabledMarker is the marker that keeps Codex off the proxy, left by the
+// person's Disable or Remove (see Options.DisableReason), and since when.
+type disabledMarker struct {
+	At time.Time `json:"at"`
+}
+
+// keepOff leaves the marker that keeps Codex off the proxy, for the person's
+// Disable or Remove; one already there stays as it is. Under the lock, it
+// lands before or after a daemon's Enable, never in the middle of one, and
+// before the line goes. The lock must be held.
+func (r *Router) keepOff() error {
+	if r.opts.DisableReason == "" {
+		return nil
+	}
+	if _, already := r.DisabledLocally(); already {
+		return nil
+	}
+	data, err := json.Marshal(disabledMarker{At: r.opts.Now().UTC()})
+	if err != nil {
+		return err
+	}
+	return writePrivate(r.opts.StateDir, r.disabledPath(), data)
+}
+
+// DisabledLocally reports whether the person keeps Codex off the proxy with
+// `kontext codex-proxy disable`, and since when, as the marker says. A marker
+// that cannot be read keeps Codex off all the same.
+func (r *Router) DisabledLocally() (time.Time, bool) {
+	if r.opts.GOOS != "darwin" {
+		return time.Time{}, false
+	}
+	data, err := os.ReadFile(r.disabledPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return time.Time{}, false
+	}
+	var marker disabledMarker
+	_ = json.Unmarshal(data, &marker)
+	return marker.At, true
+}
+
+// EnableLocally takes away the marker the person's Disable or Remove left:
+// the daemon's next Enable routes Codex again, while the endpoint's switches
+// are on. It reports whether Codex was kept off.
+func (r *Router) EnableLocally(context.Context) (bool, error) {
+	if r.opts.GOOS != "darwin" {
+		return false, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, disabled := r.DisabledLocally(); !disabled {
+		return false, nil
+	}
+	unlock, err := r.lock()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	if err := os.Remove(r.disabledPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	return true, nil
+}
+
+// disabledStatus is where Enable leaves Codex while the person keeps it off
+// the proxy, since at.
+func disabledStatus(at time.Time) Status {
+	return Status{Skipped: disabledText(at), Reason: ReasonDisabledLocally, DisabledLocally: true, DisabledAt: at}
+}
+
+// disabledText says why Codex is not routed while the person keeps it off
+// the proxy, since at.
+func disabledText(at time.Time) string {
+	text := "disabled here with kontext codex-proxy disable"
+	if !at.IsZero() {
+		text += " on " + at.Local().Format("2006-01-02 15:04")
+	}
+	return text + "; kontext codex-proxy enable turns it back on"
 }
 
 // unrouteLocked is unroute under the lock, which it takes only when there is
@@ -733,8 +849,8 @@ func (r *Router) Drain(ctx context.Context) (bool, error) {
 // Remove takes everything away for uninstall, in order: the config line;
 // then, once the Codex processes that may have read it are gone or wait runs
 // out, the job and the proxy's state. It returns how many of them were left.
-// With a DisableReason, what the daemon has yet to report stays (see
-// removeState).
+// With a DisableReason, Codex stays off the proxy, as with Disable, and what
+// the daemon has yet to report stays (see removeState).
 func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 	if r.opts.GOOS != "darwin" {
 		return 0, nil
@@ -753,6 +869,9 @@ func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 			return 0, err
 		}
 		defer unlock()
+		if err := r.keepOff(); err != nil {
+			return 0, err
+		}
 		return 0, r.removeState()
 	}
 	unlock, err := r.lock()
@@ -760,6 +879,9 @@ func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 		return 0, err
 	}
 	defer unlock()
+	if err := r.keepOff(); err != nil {
+		return 0, err
+	}
 	if err := r.unroute(r.opts.DisableReason); err != nil {
 		return 0, err
 	}
@@ -784,9 +906,10 @@ func (r *Router) Remove(ctx context.Context, wait time.Duration) (int, error) {
 
 // removeState removes the proxy's state. The lock must be held; the job is
 // gone. With a DisableReason, the folder and its locks stay, since a daemon
-// may be waiting on the route's to route Codex again, and so does what that
-// daemon has yet to report: the last take-away, in route.json, and the job's
-// counters. The rest goes: the token, the job's binary and the decisions.
+// may be waiting on the route's, and so do the marker that keeps Codex off
+// the proxy and what that daemon has yet to report: the last take-away, in
+// route.json, and the job's counters. The rest goes: the token, the job's
+// binary and the decisions.
 func (r *Router) removeState() error {
 	if r.opts.DisableReason == "" {
 		return os.RemoveAll(r.opts.StateDir)
@@ -799,7 +922,7 @@ func (r *Router) removeState() error {
 		return err
 	}
 	kept := map[string]bool{}
-	for _, path := range []string{r.lockPath(), r.statePath(), r.countersPath(), r.countersLockPath()} {
+	for _, path := range []string{r.lockPath(), r.statePath(), r.disabledPath(), r.countersPath(), r.countersLockPath()} {
 		kept[filepath.Base(path)] = true
 	}
 	for _, entry := range entries {
@@ -871,6 +994,7 @@ func (r *Router) Status(ctx context.Context) Status {
 	defer r.mu.Unlock()
 	st := r.loadState()
 	status := Status{Port: st.Port, Loaded: r.loaded(ctx)}
+	status.DisabledAt, status.DisabledLocally = r.DisabledLocally()
 	config, err := readConfig(r.configPath())
 	if err != nil {
 		status.Skipped = err.Error()
@@ -884,8 +1008,9 @@ func (r *Router) Status(ctx context.Context) Status {
 		status.Answering = st.Port != 0 && route == BaseURL(st.Port, token) && r.opts.Health(ctx, st.Port, token) == nil
 		status.Held = r.held(st.Holder)
 	} else {
-		status.Skipped = r.skip(config.content).text
-		if status.Skipped == "" {
+		if status.DisabledLocally {
+			status.Skipped = disabledText(status.DisabledAt)
+		} else if status.Skipped = r.skip(config.content).text; status.Skipped == "" {
 			status.Skipped = r.holdOff(st)
 		}
 		if status.Loaded {

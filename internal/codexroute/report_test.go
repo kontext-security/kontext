@@ -104,9 +104,10 @@ func TestEnableKeepsReportingARouteThatMissesAHealthCheck(t *testing.T) {
 // daemon's report of it, whatever the daemon's own checks find meanwhile:
 // the proxy job, once no daemon holds the route or its requests cannot reach
 // OpenAI; Codex's session start hook, once nothing answers on its port; and
-// `kontext codex-proxy disable`, with --now as well. Clearing a record leaves
-// a later one. What a daemon takes away itself it reports itself, and
-// uninstall leaves nothing behind.
+// `kontext codex-proxy disable`, with --now as well, which also keeps Codex
+// off the proxy. Clearing a record leaves a later one. What a daemon takes
+// away itself it reports itself, keeping nothing off, and uninstall leaves
+// nothing behind.
 func TestEachTakeAwayWaitsForTheDaemonsReport(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -136,12 +137,12 @@ func TestEachTakeAwayWaitsForTheDaemonsReport(t *testing.T) {
 			if err := r.local().Disable(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-		}, ReasonDisabledLocally, true},
+		}, ReasonDisabledLocally, false},
 		{"the person disables it now", func(t *testing.T, r testRouter) {
 			if _, err := r.local().Remove(context.Background(), 0); err != nil {
 				t.Fatal(err)
 			}
-		}, ReasonDisabledLocally, true},
+		}, ReasonDisabledLocally, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			r := newTestRouter(t)
@@ -179,6 +180,9 @@ func TestEachTakeAwayWaitsForTheDaemonsReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := *r.TakeAway()
+	if _, err := r.local().EnableLocally(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := r.Enable(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +205,9 @@ func TestEachTakeAwayWaitsForTheDaemonsReport(t *testing.T) {
 	if err := r.Disable(context.Background()); err != nil || r.TakeAway() != nil {
 		t.Fatalf("the daemon's Disable = %v; take-away %+v", err, r.TakeAway())
 	}
+	if _, disabled := r.DisabledLocally(); disabled {
+		t.Fatal("the daemon's Disable kept Codex off")
+	}
 	if _, err := r.Remove(context.Background(), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +218,8 @@ func TestEachTakeAwayWaitsForTheDaemonsReport(t *testing.T) {
 
 // `kontext codex-proxy disable --now` removes the proxy's state but keeps
 // what the daemon has yet to report: the last take-away and the job's
-// counts, also when the route and the job were gone already.
+// counts, also when the route and the job were gone already. Codex stays off
+// the proxy until `kontext codex-proxy enable`.
 func TestDisablingNowKeepsWhatTheDaemonHasYetToReport(t *testing.T) {
 	r := newTestRouter(t)
 	if _, err := r.Enable(context.Background()); err != nil {
@@ -250,9 +258,15 @@ func TestDisablingNowKeepsWhatTheDaemonHasYetToReport(t *testing.T) {
 	if again := r.TakeAway(); again == nil || !again.Same(*taken) || r.Counters().PassThroughs != 2 {
 		t.Fatalf("after a second disable --now: take-away %+v, counters %+v", again, r.Counters())
 	}
-	// The daemon routes Codex again from what is left.
+	if status, err := r.Enable(context.Background()); err != nil || status.Routed || status.Reason != ReasonDisabledLocally {
+		t.Fatalf("Enable after disable --now = %+v, %v", status, err)
+	}
+	// Once enabled, the daemon routes Codex again from what is left.
+	if _, err := r.local().EnableLocally(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if status, err := r.Enable(context.Background()); err != nil || !status.Routed || r.TakeAway() == nil {
-		t.Fatalf("Enable after disable --now = %+v, %v; take-away %+v", status, err, r.TakeAway())
+		t.Fatalf("Enable after disable --now and enable = %+v, %v; take-away %+v", status, err, r.TakeAway())
 	}
 }
 
