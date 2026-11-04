@@ -419,7 +419,8 @@ See the [Guard documentation](docs/guard.md) for the runtime and data boundary.
 
 Tool output compaction is off unless an administrator turns it on for an
 endpoint in the dashboard. When it is on, the managed daemon sends each Claude
-Code Bash or Read output, and each Codex tool output, over 2 KB to the Kontext
+Code Bash or Read output and each direct Codex shell output over 2 KB, and on
+macOS each printed part of a Codex code mode result over 2 KB, to the Kontext
 API, with the latest prompt, the assistant's text for that call and up to six
 recent transcript items. Secrets in what it sends are replaced with
 placeholders on the device first and put back in the reply before the agent
@@ -446,10 +447,12 @@ instead:
   macOS, while the switch is on, the daemon routes Codex's model requests
   through a local proxy: it adds an `openai_base_url` line marked
   `# kontext-codex-proxy` to `~/.codex/config.toml` and serves the proxy from
-  a launchd job on a loopback port. The proxy shortens large code mode results
-  in each request and repeats earlier decisions byte for byte, so the model's
-  prompt cache keeps working. It changes nothing else, and any failure sends
-  the request on unchanged. Codex sessions already running keep their route
+  a launchd job on a loopback port. The proxy shortens large printed parts of
+  code mode results in each request and repeats earlier decisions byte for
+  byte, so the model's prompt cache keeps working. It also declines Codex's
+  WebSocket connection, so Codex sends its requests over HTTP instead. If
+  shortening fails, the request goes on unchanged. Codex sessions already
+  running keep their route
   until Codex restarts. `kontext codex-proxy status` shows the route.
 - The daemon leaves Codex alone when something else already routes it: a base
   URL, model provider or ChatGPT URL in the user's Codex config or in one an
