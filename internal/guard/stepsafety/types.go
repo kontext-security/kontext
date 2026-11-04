@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -140,6 +141,7 @@ type Evaluator struct {
 	slots        chan struct{}
 	modelVersion string
 	unavailable  string
+	stopped      atomic.Bool
 }
 
 func ConfigFromEnv(_ string) (Config, error) {
@@ -258,7 +260,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, input Input) Evaluation {
 		result.LatencyMS = elapsedMilliseconds(started)
 		return result
 	}
-	if e.unavailable != "" || e.backend == nil {
+	if e.unavailable != "" || e.backend == nil || e.stopped.Load() {
 		result.ErrorCode = firstNonEmpty(e.unavailable, ErrorUnavailable)
 		result.LatencyMS = elapsedMilliseconds(started)
 		return result
@@ -388,6 +390,14 @@ func (e *Evaluator) Health(ctx context.Context) Health {
 		health.ModelVersion = e.modelVersion
 	}
 	return health
+}
+
+// StopScoring makes every later Evaluate answer unavailable without running the
+// model, for a daemon that is stopping and has records left to write.
+func (e *Evaluator) StopScoring() {
+	if e != nil {
+		e.stopped.Store(true)
+	}
 }
 
 func (e *Evaluator) Close() error {

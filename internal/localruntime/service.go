@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
@@ -32,6 +33,7 @@ type Service struct {
 	observe       func(context.Context, hook.Event)
 	diagnostic    diagnostic.Logger
 	duplicates    *duplicateHooks
+	pendingEvents atomic.Int64
 	cancel        context.CancelFunc
 	serveDone     chan struct{}
 	wg            sync.WaitGroup
@@ -89,6 +91,9 @@ func NewService(opts Options) (*Service, error) {
 }
 
 func (s *Service) SocketPath() string { return s.socketPath }
+
+// PendingEvents counts answered events that are still being written.
+func (s *Service) PendingEvents() int { return int(s.pendingEvents.Load()) }
 
 func (s *Service) Start(ctx context.Context) error {
 	if err := os.Remove(s.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -240,7 +245,9 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 		ingestCtx := context.WithoutCancel(ctx)
 		// The response is already sent. Keep this work in the bounded request
 		// handler instead of spawning another unbounded ingestion goroutine.
+		s.pendingEvents.Add(1)
 		s.ingestEvent(ingestCtx, &req)
+		s.pendingEvents.Add(-1)
 	}
 	if s.observe != nil {
 		if event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, &req); err == nil {

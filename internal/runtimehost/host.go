@@ -37,6 +37,8 @@ type Options struct {
 	Diagnostic         diagnostic.Logger
 	SkipInitialSession bool
 	DisableAsyncIngest bool
+	// StepSafety replaces the embedded model when set, for tests.
+	StepSafety *stepsafety.Evaluator
 	// AsyncDecisionRecording answers decision-gating hooks (PreToolUse) as
 	// soon as the policy verdict is settled and runs every store write —
 	// session upsert, annotation, decision row — in the background,
@@ -69,6 +71,32 @@ type Host struct {
 	sessionOpened    bool
 	sessionCloseOnce bool
 	drainRecords     func(context.Context) error
+	pendingRecords   func() int
+	stopScoring      func()
+}
+
+// PendingRecords counts answered calls and events whose records aren't written
+// yet.
+func (h *Host) PendingRecords() int {
+	if h == nil {
+		return 0
+	}
+	pending := 0
+	if h.pendingRecords != nil {
+		pending = h.pendingRecords()
+	}
+	if h.runtimeService != nil {
+		pending += h.runtimeService.PendingEvents()
+	}
+	return pending
+}
+
+// StopScoring makes the model answer unavailable from now on, so records still
+// queued for it get written without waiting for inference.
+func (h *Host) StopScoring() {
+	if h != nil && h.stopScoring != nil {
+		h.stopScoring()
+	}
 }
 
 func Start(ctx context.Context, opts Options) (*Host, error) {
@@ -104,7 +132,10 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	stepSafety := stepsafety.New(ctx, stepSafetyConfig)
+	stepSafety := opts.StepSafety
+	if stepSafety == nil {
+		stepSafety = stepsafety.New(ctx, stepSafetyConfig)
+	}
 	closeStepSafety := func() error { return stepSafety.Close() }
 	if stepSafety != nil {
 		healthCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
@@ -168,7 +199,9 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	}
 	if recorder != nil {
 		host.drainRecords = recorder.Drain
+		host.pendingRecords = recorder.Pending
 	}
+	host.stopScoring = stepSafety.StopScoring
 
 	serviceSessionID := sessionID
 	if opts.SkipInitialSession {

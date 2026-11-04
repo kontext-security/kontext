@@ -18,6 +18,7 @@ import (
 	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"github.com/kontext-security/kontext/internal/guard/app/server"
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
+	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/instancelock"
@@ -63,6 +64,8 @@ type DaemonOptions struct {
 	// pruneExportedLedger in tests.
 	annotationRewrite func(ctx context.Context, dbPath string) (int, error)
 	ledgerPrune       func(ctx context.Context, opts DaemonOptions, dbPath string) error
+	// stepSafety replaces the embedded model.
+	stepSafety *stepsafety.Evaluator
 }
 
 var (
@@ -301,6 +304,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Mode:               mode,
 		Diagnostic:         opts.Diagnostic,
 		SkipInitialSession: true,
+		StepSafety:         opts.stepSafety,
 		// Async ingest: non-blocking hooks (PostToolUse, session lifecycle)
 		// are acked immediately and written in the background. Synchronous
 		// writes queue on the store's single SQLite connection, and under a
@@ -325,7 +329,17 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err != nil {
 		return err
 	}
-	defer host.Close(context.Background())
+	stopDeadline := &stopClock{}
+	defer func() {
+		closeCtx, cancel := stopDeadline.context()
+		defer cancel()
+		err := host.Close(closeCtx)
+		if left := host.PendingRecords(); left > 0 {
+			logAlways(opts.Diagnostic, "managed-observe daemon stopping with %d records not written: %v\n", left, err)
+		} else if err != nil {
+			logAlways(opts.Diagnostic, "managed-observe daemon stop: %v\n", err)
+		}
+	}()
 	if err := WriteDaemonStatus(dbPath, binaryVersion); err != nil {
 		opts.Diagnostic.Printf("write daemon-status breadcrumb: %v\n", err)
 	}
@@ -457,7 +471,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	defer func() {
 		stopPolicyRefresh()
 		stopStream()
-		background.Wait()
+		stopDeadline.start()
+		// Past this point the queued records need the time more than a shadow
+		// score does.
+		time.AfterFunc(daemonStopBudget/2, host.StopScoring)
+		waitForBackgroundWork(&background, opts.Diagnostic)
 	}()
 	background.Add(1)
 	go func() {
@@ -481,12 +499,15 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if idleTimeout == 0 {
 		idleTimeout = DefaultIdleTimeout()
 	}
-	cleanup := time.NewTicker(cleanupInterval(idleTimeout))
-	defer cleanup.Stop()
 	prune := opts.ledgerPrune
 	if prune == nil {
 		prune = pruneExportedLedger
 	}
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		runCleanup(streamCtx, opts, dbPath, idleTimeout, prune, annotationsRewritten)
+	}()
 
 	for {
 		select {
@@ -508,6 +529,20 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 				return fmt.Errorf("managed stream failed: %w", err)
 			}
 			return nil
+		}
+	}
+}
+
+// runCleanup closes idle sessions and prunes the ledger on a timer. It runs beside
+// the daemon's main loop: on a busy store a tick can outlast the whole stop budget,
+// and a stop has to start without waiting for it.
+func runCleanup(ctx context.Context, opts DaemonOptions, dbPath string, idleTimeout time.Duration, prune func(context.Context, DaemonOptions, string) error, annotationsRewritten <-chan struct{}) {
+	cleanup := time.NewTicker(cleanupInterval(idleTimeout))
+	defer cleanup.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
 		case <-cleanup.C:
 			if err := cleanupStaleSessions(ctx, dbPath, idleTimeout); err != nil {
 				opts.Diagnostic.Printf("managed observe cleanup: %v\n", err)
