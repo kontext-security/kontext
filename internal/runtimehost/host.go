@@ -305,10 +305,19 @@ func (h *Host) Close(ctx context.Context) error {
 		h.sessionCloseOnce = true
 	}
 	if h.closeStore != nil {
-		if err := h.closeStore(); err != nil {
-			errs = append(errs, err)
-		}
+		// This waits for the server's warm-up, which can sit on a stalled file.
+		closeStore := h.closeStore
 		h.closeStore = nil
+		closed := make(chan error, 1)
+		go func() { closed <- closeStore() }()
+		select {
+		case err := <-closed:
+			if err != nil {
+				errs = append(errs, err)
+			}
+		case <-ctx.Done():
+			errs = append(errs, fmt.Errorf("close store: %w", ctx.Err()))
+		}
 	}
 	if h.closeStepSafety != nil {
 		if err := h.closeStepSafety(); err != nil {

@@ -16,14 +16,26 @@ import (
 // replacement waits that long for this daemon to leave.
 var daemonStopBudget = 3 * time.Second
 
-// secondStopSignalExit is the exit code when an operator stops a daemon that is
-// already stopping.
-const secondStopSignalExit = 130
+// stopGrace is how far past the budget a signalled daemon can run before it exits
+// anyway, whatever it is stuck on, startup included. The stop's own deadline ends
+// a normal stop first. The two together stay below instanceLockWait too.
+var stopGrace = time.Second
+
+// exitLogWait is how long an exit waits for its last log line.
+const exitLogWait = 200 * time.Millisecond
+
+const (
+	// secondStopSignalExit is the exit code when an operator stops a daemon that
+	// is already stopping.
+	secondStopSignalExit = 130
+	// overdueStopExit is the exit code when a stop outlasts budget and grace.
+	overdueStopExit = 1
+)
 
 // StopOnSignal returns a context cancelled by the first stop signal, which lets
 // the daemon write what it has answered. A second signal exits at once. On
 // Windows, Go delivers console events as these signals; a process killed with
-// TerminateProcess sees nothing.
+// TerminateProcess sees nothing. A stop that outlasts budget and grace exits too.
 func StopOnSignal(parent context.Context, log diagnostic.Logger) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	signals := make(chan os.Signal, 2)
@@ -36,10 +48,13 @@ func StopOnSignal(parent context.Context, log diagnostic.Logger) (context.Contex
 		case <-done:
 			return
 		}
+		overdue := time.NewTimer(daemonStopBudget + stopGrace)
+		defer overdue.Stop()
 		select {
 		case <-signals:
-			logAlways(log, "managed-observe daemon: second stop signal, exiting without finishing\n")
-			os.Exit(secondStopSignalExit)
+			logAndExit(log, secondStopSignalExit, "managed-observe daemon: second stop signal, exiting without finishing\n")
+		case <-overdue.C:
+			logAndExit(log, overdueStopExit, "managed-observe daemon: still stopping after %v, exiting without finishing\n", daemonStopBudget+stopGrace)
 		case <-done:
 		}
 	}()
@@ -51,6 +66,20 @@ func StopOnSignal(parent context.Context, log diagnostic.Logger) (context.Contex
 			cancel()
 		})
 	}
+}
+
+// logAndExit doesn't let the log hold up the exit: its volume can stall too.
+func logAndExit(log diagnostic.Logger, code int, format string, args ...any) {
+	written := make(chan struct{})
+	go func() {
+		logAlways(log, format, args...)
+		close(written)
+	}()
+	select {
+	case <-written:
+	case <-time.After(exitLogWait):
+	}
+	os.Exit(code)
 }
 
 // stopClock holds one deadline for all the steps of a stop, from the first of

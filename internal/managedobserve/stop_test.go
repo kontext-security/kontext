@@ -25,8 +25,8 @@ import (
 // A replacement waits instanceLockWait for the old daemon to leave. A stop that
 // takes longer gets the replacement refused.
 func TestDaemonStopBudgetIsBelowTheInstanceLockWait(t *testing.T) {
-	if daemonStopBudget >= instanceLockWait {
-		t.Errorf("stop budget %v, instance lock wait %v", daemonStopBudget, instanceLockWait)
+	if daemonStopBudget+stopGrace >= instanceLockWait {
+		t.Errorf("stop budget %v and grace %v, instance lock wait %v", daemonStopBudget, stopGrace, instanceLockWait)
 	}
 }
 
@@ -305,11 +305,11 @@ func TestRunDaemonStopsScoringToWriteABacklog(t *testing.T) {
 	}
 	defer db.Close()
 	var unscored int
-	if err := db.QueryRow(`select count(*) from step_safety_verdicts where error_code = 'unavailable'`).Scan(&unscored); err != nil {
+	if err := db.QueryRow(`select count(*) from step_safety_verdicts where error_code = 'daemon_stopping'`).Scan(&unscored); err != nil {
 		t.Fatal(err)
 	}
 	if int64(unscored) != answered-model.calls.Load() {
-		t.Errorf("%d verdicts say unavailable, want one for each of the %d calls the model didn't see", unscored, answered-model.calls.Load())
+		t.Errorf("%d verdicts say the daemon was stopping, want one for each of the %d calls the model didn't see", unscored, answered-model.calls.Load())
 	}
 }
 
@@ -366,12 +366,20 @@ func TestStopSignalHelper(t *testing.T) {
 	if mode == "" {
 		t.Skip("runs only as a helper process")
 	}
-	ctx, release := StopOnSignal(context.Background(), diagnostic.New(os.Stderr, false))
+	log := diagnostic.New(os.Stderr, false)
+	if mode == "overdue" || mode == "overdue-stuck-log" {
+		daemonStopBudget = 100 * time.Millisecond
+		stopGrace = 100 * time.Millisecond
+	}
+	if mode == "overdue-stuck-log" {
+		log = diagnostic.New(stuckWriter{}, true)
+	}
+	ctx, release := StopOnSignal(context.Background(), log)
 	defer release()
 	fmt.Println("ready")
 	<-ctx.Done()
 	fmt.Println("stopping")
-	if mode == "stuck" {
+	if mode != "stop" {
 		time.Sleep(time.Minute)
 	}
 	fmt.Println("stopped")
@@ -427,6 +435,48 @@ func TestStopSignalLetsTheDaemonFinish(t *testing.T) {
 	sendStopSignal(t, cmd)
 	waitForLine(t, lines, "stopping")
 	waitForLine(t, lines, "stopped")
+}
+
+// A daemon stuck anywhere, such as on the store during startup, still leaves in
+// time for its replacement.
+func TestStuckStopExitsPastTheBudget(t *testing.T) {
+	cmd, _, stderr := startStopHelper(t, "overdue")
+	sendStopSignal(t, cmd)
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case err := <-exited:
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != overdueStopExit {
+			t.Errorf("exit = %v, want code %d", err, overdueStopExit)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a stuck stop never ended")
+	}
+	if !strings.Contains(stderr.String(), "still stopping") {
+		t.Errorf("stderr doesn't say why: %q", stderr.String())
+	}
+}
+
+type stuckWriter struct{}
+
+func (stuckWriter) Write([]byte) (int, error) { select {} }
+
+// A log on a stalled volume mustn't keep the daemon from leaving.
+func TestStuckStopExitsEvenIfItsLogIsStuck(t *testing.T) {
+	cmd, _, _ := startStopHelper(t, "overdue-stuck-log")
+	sendStopSignal(t, cmd)
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case err := <-exited:
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != overdueStopExit {
+			t.Errorf("exit = %v, want code %d", err, overdueStopExit)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a stuck log kept the daemon from exiting")
+	}
 }
 
 func TestSecondStopSignalExitsAtOnce(t *testing.T) {

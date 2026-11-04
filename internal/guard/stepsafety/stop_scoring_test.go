@@ -20,13 +20,13 @@ func (b *countingBackend) Health(context.Context) (Health, error) {
 
 func (b *countingBackend) Close() error { return nil }
 
-func TestStopScoringAnswersUnavailableWithoutTheModel(t *testing.T) {
+func TestStopScoringAnswersWithoutTheModel(t *testing.T) {
 	backend := &countingBackend{}
 	evaluator := NewWithBackend(backend, 0, 1, "test")
 	evaluator.StopScoring()
 	got := evaluator.Evaluate(context.Background(), Input{ToolName: "mcp__files__delete_file", UserRequest: "clean up"})
-	if got.ErrorCode != ErrorUnavailable {
-		t.Errorf("error code = %q, want %q", got.ErrorCode, ErrorUnavailable)
+	if got.ErrorCode != ErrorDaemonStopping {
+		t.Errorf("error code = %q, want %q", got.ErrorCode, ErrorDaemonStopping)
 	}
 	if backend.calls != 0 {
 		t.Errorf("the model ran %d times", backend.calls)
