@@ -520,7 +520,9 @@ func managedObserveDaemonCmd() *cobra.Command {
 				}
 				timeout = parsed
 			}
-			return managedobserve.RunDaemon(context.Background(), managedobserve.DaemonOptions{
+			ctx, releaseSignals := managedobserve.StopOnSignal(context.Background(), diagnostic.New(cmd.ErrOrStderr(), diagnostic.EnabledFromEnv()))
+			defer releaseSignals()
+			return managedobserve.RunDaemon(ctx, managedobserve.DaemonOptions{
 				SocketPath:    socketPath,
 				DBPath:        dbPath,
 				NoCodexRoute:  noCodexRoute,

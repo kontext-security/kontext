@@ -30,8 +30,14 @@ type DeferredRecorder struct {
 	submitters sync.WaitGroup
 	workers    sync.WaitGroup
 	failures   atomic.Int64
+	pending    atomic.Int64
 	logMu      sync.Mutex
 	diag       diagnostic.Logger
+}
+
+// Pending counts submitted jobs that haven't finished.
+func (r *DeferredRecorder) Pending() int {
+	return int(r.pending.Load())
 }
 
 func NewDeferredRecorder(diag diagnostic.Logger) *DeferredRecorder {
@@ -59,6 +65,7 @@ func (r *DeferredRecorder) Submit(job func(context.Context) error) error {
 	// Admission and closing are serialized. Drain waits for every admitted
 	// submitter before closing jobs, including senders waiting for queue space.
 	r.submitters.Add(1)
+	r.pending.Add(1)
 	r.mu.Unlock()
 	defer r.submitters.Done()
 	r.jobs <- job
@@ -73,6 +80,7 @@ func (r *DeferredRecorder) run() {
 			diagnostic.LogAlways(r.diag, "deferred decision record: %v (%d failed since start)\n", err, r.failures.Add(1))
 			r.logMu.Unlock()
 		}
+		r.pending.Add(-1)
 	}
 }
 

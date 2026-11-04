@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -55,6 +56,7 @@ const (
 	ErrorConcurrency     = "concurrency_timeout"
 	ErrorInvalidOutput   = "invalid_output"
 	ErrorInputTooLarge   = "input_too_large"
+	ErrorDaemonStopping  = "daemon_stopping"
 )
 
 // Input is the complete production-available no-Thought representation. The
@@ -140,6 +142,7 @@ type Evaluator struct {
 	slots        chan struct{}
 	modelVersion string
 	unavailable  string
+	stopped      atomic.Bool
 }
 
 func ConfigFromEnv(_ string) (Config, error) {
@@ -260,6 +263,11 @@ func (e *Evaluator) Evaluate(ctx context.Context, input Input) Evaluation {
 	}
 	if e.unavailable != "" || e.backend == nil {
 		result.ErrorCode = firstNonEmpty(e.unavailable, ErrorUnavailable)
+		result.LatencyMS = elapsedMilliseconds(started)
+		return result
+	}
+	if e.stopped.Load() {
+		result.ErrorCode = ErrorDaemonStopping
 		result.LatencyMS = elapsedMilliseconds(started)
 		return result
 	}
@@ -388,6 +396,14 @@ func (e *Evaluator) Health(ctx context.Context) Health {
 		health.ModelVersion = e.modelVersion
 	}
 	return health
+}
+
+// StopScoring makes every later Evaluate answer ErrorDaemonStopping without running
+// the model, for a daemon that is stopping and has records left to write.
+func (e *Evaluator) StopScoring() {
+	if e != nil {
+		e.stopped.Store(true)
+	}
 }
 
 func (e *Evaluator) Close() error {
