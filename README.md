@@ -409,7 +409,9 @@ kontext setup --uninstall
 - Managed deployments can export redacted records to the organization
   dashboard.
 - Tool output compaction, when an administrator turns it on, sends large tool
-  outputs and recent conversation context to the Kontext API (below).
+  outputs and recent conversation context to the Kontext API, with secrets
+  replaced on the device first, and on macOS routes Codex's model requests
+  through a local proxy (below).
 
 See the [Guard documentation](docs/guard.md) for the runtime and data boundary.
 
@@ -417,16 +419,20 @@ See the [Guard documentation](docs/guard.md) for the runtime and data boundary.
 
 Tool output compaction is off unless an administrator turns it on for an
 endpoint in the dashboard. When it is on, the managed daemon sends each Claude
-Code Bash or Read output, and each Codex shell output, over 2 KB to the Kontext
+Code Bash or Read output, and each Codex tool output, over 2 KB to the Kontext
 API, with the latest prompt, the assistant's text for that call and up to six
-recent transcript items. If the API returns a shorter version, the agent gets
-that version instead:
+recent transcript items. Secrets in what it sends are replaced with
+placeholders on the device first and put back in the reply before the agent
+sees it. If the API returns a shorter version, the agent gets that version
+instead:
 
-- The full shell output is saved first, readable by the user only, under
-  `managed-observe/tool-output/` in the daemon's data directory, and deleted
-  after seven days. Kontext's machine-wide Claude Code settings let the agent
-  read that folder without a prompt. With the hooks in the user's own
-  settings, the Read tool asks once; reading it from the shell does not.
+- The full output is saved first, readable by the user only, under
+  `managed-observe/tool-output/` in the daemon's data directory. A session's
+  saved outputs are deleted together seven days after its newest one, and when
+  all of them pass 512 MB, the longest-idle sessions go first. On
+  macOS, Kontext's machine-wide Claude Code settings let the agent read that
+  folder without a prompt. With the hooks in the user's own settings, the Read
+  tool asks once; reading it from the shell does not.
 - A shortened Read result keeps its line numbers; the agent reads the file
   itself for any lines it needs.
 - When a later call reads a saved output or a left-out part of a file back, the
@@ -436,19 +442,36 @@ that version instead:
   Downloads, iCloud Drive, cloud storage, external volumes): the output
   arrives with the hook, and a transcript kept in one is not read for
   context.
-- Codex has no way for a hook to replace a tool output, so the hook blocks the
-  finished call with the shorter version as the reason: the model gets
-  `Process exited with code N` and the shorter output in place of the result,
-  while the person still sees the full output. Codex logs each such call as a
-  tool error. Shorter versions over about 9.5 KB, which Codex would cut, are
-  left as they are.
-- Other Codex shell calls are sent for measurement only and never changed:
-  calls whose command was still running when the call returned, calls whose
-  session log can't be read, and calls that Codex makes from code mode, where
-  a blocked call fails the whole script.
-- The round trip gets at most three seconds. Any timeout, error or unexpected
-  reply leaves the output unchanged. Turning the switch off stops the daemon's
-  compaction and read-back requests from its next configuration refresh,
+- Codex runs most tools from code mode, where no hook can change a result. On
+  macOS, while the switch is on, the daemon routes Codex's model requests
+  through a local proxy: it adds an `openai_base_url` line marked
+  `# kontext-codex-proxy` to `~/.codex/config.toml` and serves the proxy from
+  a launchd job on a loopback port. The proxy shortens large code mode results
+  in each request and repeats earlier decisions byte for byte, so the model's
+  prompt cache keeps working. It changes nothing else, and any failure sends
+  the request on unchanged. Codex sessions already running keep their route
+  until Codex restarts. `kontext codex-proxy status` shows the route.
+- The daemon leaves Codex alone when something else already routes it: a base
+  URL, model provider or ChatGPT URL in the user's Codex config or in one an
+  administrator manages (MDM, `/etc/codex`, or workspace-managed). It also
+  takes the route away when the proxy cannot reach OpenAI or the proxy stops
+  answering. The proxy uses the Mac's manual proxy settings. An administrator
+  can turn Codex routing off for an endpoint ("Codex on Mac") and keep
+  compaction for the other agents.
+- When Codex calls the shell directly rather than from code mode, the hook
+  blocks the finished call with the shorter version as the reason: the model
+  gets `Process exited with code N` and the shorter output in place of the
+  result, while the person still sees the full output. Codex logs each such
+  call as a tool error. Shorter versions over about 9.5 KB, which Codex would
+  cut, are left as they are.
+- Codex outputs that cannot be shortened are not sent: shell calls whose
+  command was still running when the call returned or whose session log
+  can't be read, and code mode results that don't pass through the proxy
+  (Windows, Linux, or a Mac where Codex isn't routed).
+- A hook's round trip gets at most three seconds, and a Codex request waits
+  under two seconds at the proxy. Any timeout, error or unexpected reply
+  leaves the output unchanged. Turning the switch off stops compaction and
+  takes the Codex route away from the daemon's next configuration refresh,
   normally within a minute.
 
 ---
