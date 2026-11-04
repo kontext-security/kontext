@@ -113,7 +113,9 @@ func (w *operationWalk) stmt(stmt *syntax.Stmt) int {
 	if stmt.Background {
 		copy := *stmt
 		copy.Background = false
-		return w.child(false, func() int { return w.stmt(&copy) })
+		w.child(false, func() int { return w.stmt(&copy) })
+		// An asynchronous list reports successful launch, not the job's result.
+		return 0
 	}
 	if !w.spend(1) || w.recursion >= operationMaxRecursion || len(w.ops) >= operationMaxCalls {
 		w.status = "limit_exceeded"
@@ -212,7 +214,8 @@ func (w *operationWalk) stmt(stmt *syntax.Stmt) int {
 	case *syntax.TimeClause:
 		result = w.stmt(c.Stmt)
 	case *syntax.CoprocClause:
-		result = w.stmt(c.Stmt)
+		w.child(false, func() int { return w.stmt(c.Stmt) })
+		result = 0
 	default:
 		w.expansions(c)
 	}
