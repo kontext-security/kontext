@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/cedareval"
+	"github.com/kontext-security/kontext/internal/cloudhttp"
 )
 
 const testInstallationID = "ins_0123456789abcdefghijklmnopqrstuv"
@@ -214,8 +215,9 @@ func TestNewClientDefaultsToHealthCheckedTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transport, ok := client.http.Transport.(*http.Transport)
-	if !ok || transport.HTTP2 == nil || transport.HTTP2.SendPingTimeout <= 0 || transport.HTTP2.PingTimeout <= 0 {
-		t.Fatal("default policy client must health-check its HTTP/2 connections; a dead connection otherwise stalls every refresh")
+	// cloudhttp's own tests check that its shared transport health-checks
+	// its HTTP/2 connections.
+	if client.http.Transport != cloudhttp.NewClient(0).Transport {
+		t.Fatal("default policy client must use cloudhttp's shared transport, which health-checks its HTTP/2 connections; a dead connection otherwise stalls every refresh")
 	}
 }
