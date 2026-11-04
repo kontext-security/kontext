@@ -40,6 +40,8 @@ type fakeAPI struct {
 	requests  []Request
 	readBacks []ReadBack
 	paths     []string
+	// bodies are the request bodies as sent, read-backs' included.
+	bodies []string
 }
 
 func newFakeAPI(t *testing.T, reply func(Request) (int, any)) *fakeAPI {
@@ -52,6 +54,7 @@ func newFakeAPI(t *testing.T, reply func(Request) (int, any)) *fakeAPI {
 		body, _ := io.ReadAll(r.Body)
 		api.mu.Lock()
 		api.paths = append(api.paths, r.URL.Path)
+		api.bodies = append(api.bodies, string(body))
 		api.mu.Unlock()
 		switch r.URL.Path {
 		case "/api/v1/installations/ins_test/tool-output-compaction":

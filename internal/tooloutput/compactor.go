@@ -1,11 +1,13 @@
 // Package tooloutput implements tool output compaction. The daemon sends a
 // large tool output to the Kontext API and applies what comes back: Claude
 // Code and Codex outputs are shortened live, with the full output saved where
-// the agent can read it back. An output no hook can change, such as that of a
-// shell call a code mode script makes, is never sent; the Codex proxy
-// shortens code mode results in the model's requests instead (see
-// ProxyOutput). The endpoint configuration's switch turns it on, and every
-// failure leaves the output as it was.
+// the agent can read it back. No secret leaves the device with an output or
+// its context, and the agent sees the lines it is shown as they were (see
+// hideSecrets). An output no hook can change, such as that of a shell call a
+// code mode script makes, is never sent; the Codex proxy shortens code mode
+// results in the model's requests instead (see ProxyOutput). The endpoint
+// configuration's switch turns it on, and every failure leaves the output as
+// it was.
 package tooloutput
 
 import (
@@ -198,19 +200,11 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 	if out.kind == KindText {
 		request.Output.RecoveryPath = saved
 	}
-	body, fits := encode(request)
-	if !fits {
+	response, replacement, ok := c.ask(ctx, request)
+	if !ok || !out.acceptable(replacement) {
 		return nil
 	}
-	response, err := c.client.Compact(ctx, body)
-	if err != nil {
-		c.diagnostic.Printf("%v; output left as is\n", err)
-		return nil
-	}
-	if response.Decision != DecisionReplace || !out.acceptable(*response.Text) {
-		return nil
-	}
-	text := head + *response.Text
+	text := head + replacement
 	if out.limit > 0 && len(text) > out.limit {
 		c.diagnostic.Printf("tool output compaction: shortened output too long for the agent; output left as is\n")
 		return nil
@@ -224,7 +218,7 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 		}
 	} else {
 		compaction.FilePath = filepath.Clean(out.filePath)
-		compaction.Omitted = omittedLines(out.text, *response.Text, out.startLine)
+		compaction.Omitted = omittedLines(out.text, replacement, out.startLine)
 	}
 	c.remember(event.SessionID, compaction)
 	return out.rebuild(text)
@@ -292,17 +286,57 @@ func (c *Compactor) request(event hook.Event, out output, goal string) Request {
 	if agent == "claude" {
 		agent = "claude-code"
 	}
+	// The tool input goes as the context carries it, redacted.
 	return Request{
 		Mode:      ModeLive,
 		Agent:     agent,
 		SessionID: event.SessionID,
 		ToolUseID: event.ToolUseID,
 		ToolName:  event.ToolName,
-		ToolInput: event.ToolInput,
+		ToolInput: context.Current.ToolInput,
 		Model:     model,
 		Output:    Output{Kind: out.kind, Text: out.text, FilePath: out.filePath, StartLine: out.startLine},
 		Context:   context,
 	}
+}
+
+// ask sends a request, with its output's secrets hidden, and returns the
+// server's answer and its shorter text with the secrets back in place. It
+// returns false when the output stays as it is: it is too large for a
+// request, hiding its secrets or the call fails, the server keeps it, or
+// the text that comes back cannot stand in for it.
+func (c *Compactor) ask(ctx context.Context, request Request) (Response, string, bool) {
+	// An output no request can carry is not worth redacting, and a text
+	// stands in for an output only if it is shorter.
+	size := len(request.Output.Text)
+	if size > MaxRequestBytes {
+		c.diagnostic.Printf("tool output compaction: output too large for a request; output left as is\n")
+		return Response{}, "", false
+	}
+	found, err := hideOutput(&request.Output)
+	if err != nil {
+		c.diagnostic.Printf("tool output compaction: %v; output left as is\n", err)
+		return Response{}, "", false
+	}
+	body, fits := encode(request)
+	if !fits {
+		c.diagnostic.Printf("tool output compaction: output too large for a request; output left as is\n")
+		return Response{}, "", false
+	}
+	response, err := c.client.Compact(ctx, body)
+	if err != nil {
+		c.diagnostic.Printf("%v; output left as is\n", err)
+		return Response{}, "", false
+	}
+	if response.Decision != DecisionReplace {
+		return Response{}, "", false
+	}
+	text, err := found.reveal(*response.Text, size)
+	if err != nil {
+		c.diagnostic.Printf("tool output compaction: %v; output left as is\n", err)
+		return Response{}, "", false
+	}
+	return response, text, true
 }
 
 // encode returns the request's body within MaxRequestBytes, dropping the
