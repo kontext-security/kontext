@@ -451,14 +451,20 @@ instead:
   code mode results in each request and repeats earlier decisions byte for
   byte, so the model's prompt cache keeps working. It also declines Codex's
   WebSocket connection, so Codex sends its requests over HTTP instead. If
-  shortening fails, the request goes on unchanged. Codex sessions already
-  running keep their route
-  until Codex restarts. `kontext codex-proxy status` shows the route.
+  shortening fails, the request goes on unchanged. Routing changes reach new
+  Codex sessions only: a session already running when routing starts stays
+  direct until Codex restarts, and one still using the proxy after routing
+  stops gets its requests passed through unchanged. `kontext codex-proxy
+  status` shows the route.
 - The daemon leaves Codex alone when something else already routes it: a base
   URL, model provider or ChatGPT URL in the user's Codex config or in one an
   administrator manages (MDM, `/etc/codex`, or workspace-managed). It also
   takes the route away when the proxy cannot reach OpenAI or the proxy stops
-  answering. The proxy uses the Mac's manual proxy settings. An administrator
+  answering. The proxy reaches OpenAI through the Mac's manual proxy settings,
+  or through proxy environment variables when the daemon has them. It doesn't
+  read proxy auto-config (PAC) files or proxy auto-discovery, so on networks
+  that need them the proxy can't reach OpenAI and Codex stays direct, without
+  compaction. An administrator
   can turn Codex routing off for an endpoint ("Codex on Mac") and keep
   compaction for the other agents.
 - When Codex calls the shell directly rather than from code mode, the hook
