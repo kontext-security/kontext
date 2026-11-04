@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -39,6 +40,7 @@ create table if not exists risk_classifier_verdicts (
   svm_score real,
   svm_threshold real,
   svm_model_version text,
+  operations_json text,
   llm_verdict text,
   llm_raw text,
   llm_model text,
@@ -84,6 +86,7 @@ var classifierVerdictColumns = []struct {
 	{name: "svm_score", def: "real"},
 	{name: "svm_threshold", def: "real"},
 	{name: "svm_model_version", def: "text"},
+	{name: "operations_json", def: "text"},
 	{name: "llm_verdict", def: "text"},
 	{name: "llm_raw", def: "text"},
 	{name: "llm_model", def: "text"},
@@ -126,18 +129,28 @@ func (s *Store) SaveClassifierVerdict(ctx context.Context, record riskclassifier
 		svmThreshold = record.SVM.Threshold
 		svmModelVersion = record.SVM.ModelVersion
 	}
+	var operationsJSON any
+	if record.Operations != nil {
+		body, err := json.Marshal(record.Operations)
+		if err != nil {
+			return ClassifierVerdictRecord{}, fmt.Errorf("encode operation annotation: %w", err)
+		}
+		operationsJSON = string(body)
+	}
 	_, err := s.db.ExecContext(ctx, `
 insert into risk_classifier_verdicts(
   id, action_id, session_id, tool_use_id, agent,
   command_redacted, command_hash, command_truncated, agent_task,
   svm_verdict, svm_score, svm_threshold, svm_model_version,
+  operations_json,
   risk_type_error,
   enforced, user_feedback, created_at
-) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		stored.ID, record.ActionID, record.SessionID, nullIfEmpty(record.ToolUseID), nullIfEmpty(record.Agent),
 		record.Command, record.CommandHash, record.CommandTruncated, nullIfEmpty(record.AgentTask),
 		svmVerdict, svmScore, svmThreshold, svmModelVersion,
+		operationsJSON,
 		nullIfEmpty(record.RiskTypeError),
 		record.Enforced, nullIfEmpty(record.UserFeedback), record.CreatedAt.Format(time.RFC3339Nano),
 	)
@@ -215,6 +228,7 @@ const classifierVerdictSelect = `
 select id, action_id, session_id, coalesce(tool_use_id, ''), coalesce(agent, ''),
   command_redacted, command_hash, command_truncated, coalesce(agent_task, ''),
   svm_verdict, svm_score, svm_threshold, svm_model_version,
+  operations_json,
   coalesce(risk_type_error, ''),
   enforced, coalesce(user_feedback, ''), feedback_at, created_at
 from risk_classifier_verdicts
@@ -226,10 +240,12 @@ func scanClassifierVerdict(scanner interface{ Scan(...any) error }) (ClassifierV
 	var svmScore, svmThreshold sql.NullFloat64
 	var feedbackAt sql.NullString
 	var created string
+	var operationsJSON sql.NullString
 	if err := scanner.Scan(
 		&record.ID, &record.ActionID, &record.SessionID, &record.ToolUseID, &record.Agent,
 		&record.Command, &record.CommandHash, &record.CommandTruncated, &record.AgentTask,
 		&svmVerdict, &svmScore, &svmThreshold, &svmModelVersion,
+		&operationsJSON,
 		&record.RiskTypeError,
 		&record.Enforced, &record.UserFeedback, &feedbackAt, &created,
 	); err != nil {
@@ -242,6 +258,13 @@ func scanClassifierVerdict(scanner interface{ Scan(...any) error }) (ClassifierV
 			Threshold:    svmThreshold.Float64,
 			ModelVersion: svmModelVersion.String,
 		}
+	}
+	if operationsJSON.Valid {
+		var annotation riskclassifier.OperationVerdict
+		if err := json.Unmarshal([]byte(operationsJSON.String), &annotation); err != nil {
+			return ClassifierVerdictRecord{}, fmt.Errorf("decode operation annotation: %w", err)
+		}
+		record.Operations = &annotation
 	}
 	if feedbackAt.Valid && feedbackAt.String != "" {
 		parsed, err := parseStoredTime("classifier feedback_at", feedbackAt.String)

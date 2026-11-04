@@ -183,13 +183,14 @@ type CedarEvidence struct {
 // ClassifierAnnotation is one action's risk annotation. AgentTask and the
 // command fields stay local; only the verdict block is uploaded.
 type ClassifierAnnotation struct {
-	SVM              *ClassifierSVM       `json:"svm,omitempty"`
-	RiskTypes        *ClassifierRiskTypes `json:"-"`
-	RiskTypeError    string               `json:"-"`
-	Command          string               `json:"-"`
-	CommandHash      string               `json:"-"`
-	CommandTruncated bool                 `json:"-"`
-	AgentTask        string               `json:"-"`
+	SVM              *ClassifierSVM        `json:"svm,omitempty"`
+	Operations       *ClassifierOperations `json:"-"`
+	RiskTypes        *ClassifierRiskTypes  `json:"-"`
+	RiskTypeError    string                `json:"-"`
+	Command          string                `json:"-"`
+	CommandHash      string                `json:"-"`
+	CommandTruncated bool                  `json:"-"`
+	AgentTask        string                `json:"-"`
 }
 
 // ClassifierSVM uses the field names the hosted ingest
@@ -199,6 +200,21 @@ type ClassifierSVM struct {
 	Score        float64 `json:"score"`
 	Threshold    float64 `json:"threshold"`
 	ModelVersion string  `json:"model_version"`
+}
+
+// ClassifierOperations is local shadow data, excluded from signed facts and
+// uploads until the operation model has been evaluated on fresh traffic.
+type ClassifierOperations struct {
+	ModelVersion     string   `json:"model_version"`
+	ExtractorVersion string   `json:"extractor_version"`
+	Head             string   `json:"head"`
+	Status           string   `json:"status"`
+	Score            *float64 `json:"score,omitempty"`
+	Threshold        float64  `json:"threshold"`
+	Verdict          string   `json:"verdict,omitempty"`
+	OperationCount   int      `json:"operation_count"`
+	Shadow           bool     `json:"shadow"`
+	CombinedVerdict  string   `json:"combined_verdict,omitempty"`
 }
 
 // ClassifierRiskTypes is local derived data, deliberately excluded from the

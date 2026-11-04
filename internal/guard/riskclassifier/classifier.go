@@ -30,6 +30,7 @@ type Redactor func(string) string
 // first and only then attaches this.
 type Verdicts struct {
 	SVM           *SVMVerdict
+	Operations    *OperationVerdict
 	RiskTypes     *RiskTypeVerdict
 	RiskTypeError string
 
@@ -46,18 +47,22 @@ type Verdicts struct {
 
 // ClassifierOptions configure the in-path classifier.
 type ClassifierOptions struct {
-	SVM           *SVM         // required
-	RiskTypes     *RiskTypeSVM // optional; nil leaves the second stage absent
-	RiskTypeError string       // optional load failure retained for eligible rows
-	Redact        Redactor     // required
+	SVM            *SVM            // required
+	Operations     *OperationModel // optional, local shadow only
+	OperationError bool            // optional load failure; never disables the old SVM
+	RiskTypes      *RiskTypeSVM    // optional; nil leaves the second stage absent
+	RiskTypeError  string          // optional load failure retained for eligible rows
+	Redact         Redactor        // required
 }
 
-// Classifier scores commands with the embedded binary SVM and risk-type SVM.
+// Classifier runs the binary SVM, local AWS shadow model and risk-type SVM.
 type Classifier struct {
-	svm           *SVM
-	riskTypes     *RiskTypeSVM
-	riskTypeError string
-	redact        Redactor
+	svm            *SVM
+	operations     *OperationModel
+	operationError bool
+	riskTypes      *RiskTypeSVM
+	riskTypeError  string
+	redact         Redactor
 
 	prompts *lruCache[string]
 }
@@ -67,11 +72,13 @@ func NewClassifier(opts ClassifierOptions) *Classifier {
 		return nil
 	}
 	return &Classifier{
-		svm:           opts.SVM,
-		riskTypes:     opts.RiskTypes,
-		riskTypeError: opts.RiskTypeError,
-		redact:        opts.Redact,
-		prompts:       newLRUCache[string](promptCacheSize),
+		svm:            opts.SVM,
+		operations:     opts.Operations,
+		operationError: opts.OperationError,
+		riskTypes:      opts.RiskTypes,
+		riskTypeError:  opts.RiskTypeError,
+		redact:         opts.Redact,
+		prompts:        newLRUCache[string](promptCacheSize),
 	}
 }
 
@@ -118,8 +125,33 @@ func (c *Classifier) Classify(_ context.Context, sessionID, toolName, command st
 		CommandTruncated: truncated,
 		AgentTask:        c.agentTask(sessionID),
 	}
+	c.attachOperations(toolName, command, &verdicts)
 	c.attachRiskTypes(toolName, command, svmVerdict, &verdicts)
 	return verdicts
+}
+
+func (c *Classifier) attachOperations(toolName, command string, verdicts *Verdicts) {
+	if !IsShellCommandTool(toolName) {
+		return
+	}
+	if c.operations == nil {
+		if c.operationError {
+			verdicts.Operations = &OperationVerdict{Status: "model_unavailable", Shadow: true, CombinedVerdict: verdicts.SVM.Verdict}
+		}
+		return
+	}
+	// Advisory enrichment must never crash a settled authorization decision.
+	defer func() {
+		if recover() != nil {
+			verdicts.Operations = &OperationVerdict{Status: "inference_error", Shadow: true, CombinedVerdict: verdicts.SVM.Verdict}
+		}
+	}()
+	annotation := c.operations.Classify(command)
+	annotation.CombinedVerdict = verdicts.SVM.Verdict
+	if annotation.Verdict == VerdictRisky {
+		annotation.CombinedVerdict = VerdictRisky
+	}
+	verdicts.Operations = &annotation
 }
 
 func (c *Classifier) attachRiskTypes(toolName, command string, svmVerdict SVMVerdict, verdicts *Verdicts) {

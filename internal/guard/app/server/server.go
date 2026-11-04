@@ -165,6 +165,7 @@ func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 		return nil
 	}
 	riskTypes, riskTypeErr := riskclassifier.LoadRiskTypeSVM()
+	operations, operationErr := riskclassifier.LoadOperationModel()
 	riskTypeError := ""
 	if riskTypeErr != nil {
 		// The binary SVM remains useful and continues running. Retain the error
@@ -172,9 +173,11 @@ func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 		riskTypeError = riskTypeErr.Error()
 	}
 	return riskclassifier.NewClassifier(riskclassifier.ClassifierOptions{
-		SVM:           svm,
-		RiskTypes:     riskTypes,
-		RiskTypeError: riskTypeError,
+		SVM:            svm,
+		Operations:     operations,
+		OperationError: operationErr != nil,
+		RiskTypes:      riskTypes,
+		RiskTypeError:  riskTypeError,
 		// The shared ruleset directly, not risk.RedactCredentials. That wrapper
 		// adds a size guard which replaces its whole input with a placeholder —
 		// correct for the 240-byte display summary it was written for, ruinous
