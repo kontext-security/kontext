@@ -338,3 +338,108 @@ func TestRefresherRunStopsOnCancellation(t *testing.T) {
 		t.Fatal("Run() did not stop after cancellation")
 	}
 }
+
+// An early refresh is extra: if it fails during an outage it must not push the
+// timer's next attempt further away.
+func TestRefreshNowFailuresDoNotGrowTheBackoff(t *testing.T) {
+	fetches := make(chan time.Time, 64)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fetches <- time.Now()
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const interval = 200 * time.Millisecond
+	now := make(chan struct{}, 1)
+	refresher := Refresher{
+		Client:         client,
+		Cache:          NewCache("", time.Hour),
+		InstallationID: testInstallationID,
+		Interval:       interval,
+		RefreshNow:     now,
+		TokenSource:    func(context.Context) (string, error) { return "token", nil },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		refresher.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	<-fetches // the initial refresh
+	for range 6 {
+		now <- struct{}{}
+		select {
+		case <-fetches:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no fetch after a RefreshNow signal")
+		}
+	}
+	// One failure on the timer means twice the interval. Six more doublings
+	// would reach MaxBackoff's default of ten intervals.
+	start := time.Now()
+	select {
+	case <-fetches:
+		if gap := time.Since(start); gap > 7*interval {
+			t.Fatalf("next timer attempt after %v, want the backoff of one failure", gap)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no fetch from the timer")
+	}
+}
+
+// A failed early refresh just before the timer fires must leave that retry where it was.
+func TestRefreshNowFailureKeepsTheScheduledRetry(t *testing.T) {
+	fetches := make(chan time.Time, 64)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fetches <- time.Now()
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const interval = 500 * time.Millisecond
+	now := make(chan struct{}, 1)
+	refresher := Refresher{
+		Client:         client,
+		Cache:          NewCache("", time.Hour),
+		InstallationID: testInstallationID,
+		Interval:       interval,
+		RefreshNow:     now,
+		TokenSource:    func(context.Context) (string, error) { return "token", nil },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		refresher.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	initial := <-fetches
+	// The initial failure schedules the retry two intervals out.
+	time.Sleep(time.Until(initial.Add(2*interval - 150*time.Millisecond)))
+	now <- struct{}{}
+	<-fetches // the early refresh
+	select {
+	case <-fetches:
+		// A restarted timer would land a whole backoff after the signal.
+		if gap := time.Since(initial); gap > 3*interval {
+			t.Fatalf("retry %v after the initial fetch, want it where it was scheduled", gap)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no retry from the timer")
+	}
+}

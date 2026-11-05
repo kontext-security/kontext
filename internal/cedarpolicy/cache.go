@@ -450,8 +450,12 @@ type Refresher struct {
 	TokenSource              TokenSource
 	InstallationID           string
 	Interval                 time.Duration
-	MaxBackoff               time.Duration
-	Now                      func() time.Time
+	// RefreshNow, when signalled, runs the next refresh without waiting for
+	// Interval. A nil channel never fires. A failed early refresh leaves the
+	// timer and the backoff as they were.
+	RefreshNow <-chan struct{}
+	MaxBackoff time.Duration
+	Now        func() time.Time
 	// Diagnostic surfaces refresh state transitions in the daemon log. A
 	// refresh loop that fails silently leaves enforcement running on a stale
 	// policy with no operator-visible signal, so failures must not be
@@ -556,13 +560,23 @@ func (r *Refresher) Run(ctx context.Context) {
 			first = false
 		}
 		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-r.RefreshNow:
+				// A failed early refresh keeps the timer as it was, so it can't
+				// delay the retry already scheduled or grow the backoff.
+				if err := r.Refresh(ctx); err == nil {
+					timer.Stop()
+					delay = interval
+					timer = time.NewTimer(delay)
+				}
+			case <-timer.C:
+				break wait
 			}
-			return
-		case <-timer.C:
 		}
 	}
 }
