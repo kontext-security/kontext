@@ -452,7 +452,7 @@ type Refresher struct {
 	Interval                 time.Duration
 	// RefreshNow, when signalled, runs the next refresh without waiting for
 	// Interval. A nil channel never fires. A failed early refresh leaves the
-	// backoff as it was, so it can't delay recovery.
+	// timer and the backoff as they were.
 	RefreshNow <-chan struct{}
 	MaxBackoff time.Duration
 	Now        func() time.Time
@@ -541,14 +541,13 @@ func (r *Refresher) Run(ctx context.Context) {
 	}
 	delay := interval
 	first := true
-	early := false
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		if err := r.Refresh(ctx); err == nil {
 			delay = interval
-		} else if !early && delay < maxBackoff {
+		} else if delay < maxBackoff {
 			delay *= 2
 			if delay > maxBackoff {
 				delay = maxBackoff
@@ -561,17 +560,23 @@ func (r *Refresher) Run(ctx context.Context) {
 			first = false
 		}
 		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-r.RefreshNow:
+				// A failed early refresh keeps the timer as it was, so it can't
+				// delay the retry already scheduled or grow the backoff.
+				if err := r.Refresh(ctx); err == nil {
+					timer.Stop()
+					delay = interval
+					timer = time.NewTimer(delay)
+				}
+			case <-timer.C:
+				break wait
 			}
-			return
-		case <-r.RefreshNow:
-			timer.Stop()
-			early = true
-		case <-timer.C:
-			early = false
 		}
 	}
 }

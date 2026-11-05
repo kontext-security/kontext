@@ -133,8 +133,8 @@ func TestEnrolmentRefreshesAreBounded(t *testing.T) {
 	enrolment := &enrolmentRefresh{cache: cache, now: now, left: maxEnrolmentRefreshes}
 
 	// A refresh still pending isn't a second one, so it doesn't use up the bound.
-	enrolment.afterAcceptedFlush()
-	enrolment.afterAcceptedFlush()
+	enrolment.afterAcceptedPost()
+	enrolment.afterAcceptedPost()
 	if enrolment.left != maxEnrolmentRefreshes-1 {
 		t.Fatalf("left = %d after a pending refresh, want %d", enrolment.left, maxEnrolmentRefreshes-1)
 	}
@@ -146,7 +146,7 @@ func TestEnrolmentRefreshesAreBounded(t *testing.T) {
 			refreshes++
 		default:
 		}
-		enrolment.afterAcceptedFlush()
+		enrolment.afterAcceptedPost()
 	}
 	select {
 	case <-now:
@@ -162,7 +162,7 @@ func TestAcceptedPostRefreshesWhenNoFetchHasWorkedYet(t *testing.T) {
 	now := make(chan struct{}, 1)
 	enrolment := &enrolmentRefresh{cache: cedarpolicy.NewCache("", time.Hour), now: now, left: maxEnrolmentRefreshes}
 
-	enrolment.afterAcceptedFlush()
+	enrolment.afterAcceptedPost()
 	select {
 	case <-now:
 	default:

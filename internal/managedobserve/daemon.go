@@ -469,7 +469,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 				return
 			}
 		}
-		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder, authorityHolder, enrolment.afterAcceptedFlush)
+		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder, authorityHolder, enrolment.afterAcceptedPost)
 	}()
 	defer func() {
 		stopPolicyRefresh()
@@ -868,7 +868,7 @@ func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token, installa
 	return s.key
 }
 
-func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, afterAcceptedFlush func()) error {
+func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, afterAcceptedPost func()) error {
 	interval := opts.StreamInterval
 	if interval == 0 {
 		interval = managedstream.DefaultIntervalFromEnv()
@@ -876,7 +876,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	deviceKeys := &deviceKeySource{}
 	var consecutiveAuthFailures, consecutiveFlushFailures int
 	flush := func() {
-		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder, authorityHolder, afterAcceptedFlush)
+		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder, authorityHolder, afterAcceptedPost)
 		if err == nil {
 			consecutiveAuthFailures = 0
 			consecutiveFlushFailures = 0
@@ -911,7 +911,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	}
 }
 
-func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, afterAcceptedFlush func()) error {
+func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, afterAcceptedPost func()) error {
 	loadedConfig, installToken, err := loadManagedConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("managed stream config reload: %w", err)
@@ -940,17 +940,17 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		HTTPClient:         opts.StreamHTTPClient,
 		Diagnostic:         opts.Diagnostic,
 		OnFlushSuccess: func() {
-			accepted = true
+			// Once per flush, on the first accepted post: a flush can make several,
+			// and draining a backlog shouldn't hold the policy back.
+			if !accepted {
+				accepted = true
+				afterAcceptedPost()
+			}
 			if err := ClearAuthError(dbPath); err != nil {
 				opts.Diagnostic.Printf("clear auth-error breadcrumb: %v\n", err)
 			}
 		},
 	})
-	// After the whole flush, not per post: one flush can make several accepted
-	// posts, and a later one failing doesn't undo the enrolment.
-	if accepted {
-		afterAcceptedFlush()
-	}
 	return err
 }
 
@@ -1105,7 +1105,7 @@ type enrolmentRefresh struct {
 	left  int
 }
 
-func (e *enrolmentRefresh) afterAcceptedFlush() {
+func (e *enrolmentRefresh) afterAcceptedPost() {
 	if e.left == 0 {
 		return
 	}
