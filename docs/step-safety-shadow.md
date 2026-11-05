@@ -1,24 +1,19 @@
 # Local step-safety assessment: Merlin advisory beta
 
-The default-on Merlin V3 model supplies a narrow advisory signal alongside
-Kestrel, which retains its existing Bash/shell classifier. Merlin looks for
-potentially consequential operations during informational tasks. Neither model
-replaces deterministic/Cedar authorization. `enforced` is always `false`.
+The default-on Merlin V3 ungated runtime supplies an advisory contextual signal
+alongside Kestrel. Neither model replaces deterministic/Cedar authorization.
+Inference remains asynchronous and `enforced` is always `false`.
 
 ## Coverage
 
-The [V3 precision candidate](merlin-v3.md) requires an explicit structured
-operation: deletion, credential change, money transfer, outgoing message or
-access sharing, with populated effect arguments. A learned informational-intent
-filter, conservative authorization checks, a contextual DeBERTa model and a
-learned action filter must agree before it flags a call.
-
-Ordinary lookups, Bash, browser/code wrappers and unknown effects abstain. Known
-file-content tools such as Read, Write, Edit and apply_patch remain excluded.
-Missing request context, explicit/ambiguous mutation requests and unsupported
-inputs also abstain. An unavailable result means **not assessed**, not safe.
-This deliberate coverage reduction prioritizes precision over recall. The score
-is threshold-relative agreement, not a calibrated probability of actual risk.
+[V3 ungated](merlin-v3.md) uses the same contextual DeBERTa weights and learned
+action-agreement filter as V3, with the operation allowlist, lexical request gate
+and learned informational-intent gate removed. Bash, browser wrappers, lookups
+and unknown tool names can now be assessed if they fit the existing input limits.
+Known file-content tools such as Read, Write, Edit and apply_patch remain excluded.
+The threshold remains 0.5. Scores express threshold-relative agreement, not a
+calibrated probability of actual risk. Missing request context no longer causes
+an eligibility rejection; context-presence flags remain available for review.
 
 ## Embedded runtime
 
@@ -42,22 +37,22 @@ built with the model.
 ## Input limits
 
 The four training fields, markers, separators, and 512-token padding stay the
-same. The complete request passes the intent/authorization gates before the
-contextual model receives its bounded view. Actions are never truncated:
+same. Request intent and operation names no longer determine eligibility.
+The contextual model receives the same bounded view. Actions are never truncated:
 
 | Field | Content budget | When it does not fit |
 | --- | ---: | --- |
-| User request | 96 tokens | Retain the first 96 after checking the complete request |
+| User request | 96 tokens | Retain the first 96 tokens |
 | Recent interaction history | 144 tokens | Retain the first 72 and last 72 tokens after excluding file tools |
 | Current tool name + complete arguments | 128 tokens | Skip: `action_too_large` |
 | Available tool schemas, when supplied | 128 tokens | Retain the first 64 and last 64 |
 
-Bash is outside V3 scope. An eligible typed operation is never scored from only
-its beginning and end.
+Oversized actions are skipped in full.
 The 128-token action allowance includes the tool name, JSON structure, and
 `[TOOL_NAME]` / `[ARGUMENTS]` labels. Missing requests or schemas remain absent;
 Kontext does not infer them from transcripts or assistant reasoning. Missing
-requests cause supported operations to abstain. Rare Unicode
+requests are recorded with `user_request_present=false` and do not by themselves
+prevent assessment. Rare Unicode
 combining sequences that Go NFC would modify differently from Hugging Face are
 skipped as `unsupported_text`.
 
@@ -138,9 +133,9 @@ correlation IDs, capped/redacted tool name, agreement score in the legacy
 `unsafe_probability` field when present, model
 version, latency, error category, context-presence flags, `history_omitted`, and
 `enforced=false`. Exclusions and failures have `shadow_decision=unavailable` and
-no score. They must not be counted as safe predictions. V3 additionally reports
-`unsupported_effect`, `missing_request`, `compound_or_mutation_request` and
-`request_not_informational` as explicit abstention reasons.
+no score. They must not be counted as safe predictions. Historical gated V3 rows may contain `unsupported_effect`, `missing_request`,
+`compound_or_mutation_request` or `request_not_informational`. The ungated runtime
+no longer produces those gate-rejection codes.
 
 Unsafe predictions also retain a separately bounded, redacted review context:
 up to 2,000 bytes of the user request and 6,000 bytes of supported tool history.

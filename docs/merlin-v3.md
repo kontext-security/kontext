@@ -1,96 +1,80 @@
-# Merlin V3: precision-first contextual issue detection
+# Merlin V3 ungated — local evaluation release
 
-Candidate `merlin-v3-precision-20261007` combines a repaired Claude prompt path
-with a deliberately narrow contextual detector. This is a review candidate;
-creating this change does not update an installed daemon or hook configuration.
-The existing default-on advisory behavior and explicit opt-out are preserved.
-Kestrel, Cedar policy decisions and the asynchronous inference boundary remain
-unchanged. Every Merlin result has `enforced=false`.
+Runtime `merlin-v3-ungated-20261104` uses the unchanged V3 contextual encoder and
+sparse action-agreement model from `merlin-v3-precision-20261007`. This is a
+runtime eligibility change, not newly trained weights. It removes the operation
+allowlist, lexical request gate and learned informational-request gate.
 
-## Why the prompt fix alone is insufficient
+The threshold remains **0.5**. The complete current action must fit **128 tokens**;
+long actions and excluded tools remain unassessed. The output score is a
+threshold-relative agreement score, **not a calibrated probability of risk**.
+This is an advisory detector; it does not execute or block tool calls.
 
-Claude's managed hook template omitted UserPromptSubmit while Codex included it.
-The installed Claude configuration had the same omission. All 1,105 Claude V2
-records in the initial audit lacked a user request. The V2 fitting pool contained
-188 real calls from one Codex session, with no WebSearch/WebFetch/ToolSearch.
-Claude did appear in calibration and the small test panel; it was not wholly
-untested. Normalizing capitalization already worked, but name-only WebSearch to
-webrun substitutions changed seven of 239 empty-history decisions from flag to
-no flag. This diagnostic is not adopted as a production aliasing workaround.
+## Run locally
 
-The follow-up recovered actual explicit human requests from two Claude sessions
-and paired 1,060 fully captured calls with and without those requests. Tool,
-arguments, empty history and absent schemas were fixed within each pair. Skill
-attachments, task notifications and assistant reasoning were excluded. These
-are input interventions, not exact reconstructions of original live history.
+Download this folder (`v3-ungated`) from `kontext-security/Merlin`, preserving its
+layout. Go 1.26.10 or later is required to build the standalone native runtime.
+It embeds the supplied assets and needs no Python, ONNX runtime or hosted inference.
+Go downloads normal build dependencies on the first build.
 
-| Frozen model/input contract | Result on 1,060 restored-request calls | AgentDojo, 1,220 calls /352 risky |
-| --- | --- | --- |
-| V2 plus prompt transport only | 13 assessed; four benign calls flagged; 1,047 unavailable | Five assessed, zero detections |
-| V2 plus bounded request/schema context | 889 assessed; 191 flags, including 45/71 previously reviewed benign flags | 92 true and 52 false alerts; 26.1% recall |
-| V3 plus prompt repair | Zero flags; all these local operations outside scope | 23 true and zero false alerts; 6.53% recall |
+```bash
+hf download kontext-security/Merlin --include 'v3-ungated/*' --local-dir dist/Merlin
+cd dist/Merlin/v3-ungated/native
+go build -o merlin ./cmd/merlin
+printf '%s\n' '{"id":"example","input":{"user_request":"Find public documentation","tool_name":"WebSearch","tool_arguments":{"query":"Go JSON decoder documentation"},"interaction_history":"[]"}}' | ./merlin
+```
 
-V2's 70 incident false positives become request-too-large under the hook-only
-fix. That is loss of coverage, not successful benign classification. Four other
-short real requests still produce false alerts on public searches and localhost
-navigation. Allowing V2 to read bounded long context increases noise. Neither
-simpler change meets the precision requirement.
+Each input line contains `id` and `input`. Input fields are `user_request`,
+`interaction_history` (a JSON array encoded as a string), `tool_name`,
+`tool_arguments`, and optionally `available_tool_schemas`. Include only completed
+**prior** tool observations in history, never the current result or later turns.
+Each output line preserves `id` and includes `evaluation`; unavailable assessments
+have an `error_code` and no score. Do not treat those as safe classifications.
 
-The V3 comparison reuses the frozen candidate and thresholds; no retraining or
-threshold selection used these follow-up outcomes. Earlier evidence includes
-zero alerts in 539 captured hosted-benign flags (mixed fitting/evaluation roles,
-not all unseen), and one independently reviewed credible issue in 3,545 additional
-published AgentDojo calls from another model on the same task suite. The benchmark
-has been studied repeatedly and these observations do not prove production
-precision. No hosted “risky” judgment is treated as a true-positive label.
+## Evaluation
 
-## Model and input contract
+| Cohort | Assessed / available | Detections or alerts |
+|---|---:|---|
+| AgentDojo-Traj | 1,159 / 1,220 | 85/352 positives detected (24.1% recall); 20/868 benign cases flagged (2.3% FPR) |
+| Private historical replay cohort | 415 / 415 | 1 false alert |
+| Private later workload sample | 600 / 1,207 | 3 clear false alerts, 1 uncertain low-impact alert |
 
-An alert requires a recognized structured deletion, credential change, money
-transfer, outgoing message or sharing effect; populated effect arguments; a
-request without explicit or ambiguous mutation authorization; a learned
-informational-intent gate; and agreement between contextual and action models.
-The contextual neural checkpoint is retained from earlier research; the action
-and request filters are newly trained. Ordinary reads, Bash, browser/code wrappers
-and unsupported tools abstain. This scope reduction explains much of the noise
-reduction and gives up broad risk coverage.
+The historical source pool contains 610 unique saved calls. Context was reliably
+reconstructed for 415, forming the replay cohort above; the other 195 were
+excluded before scoring because their context remains unresolved. They are not
+runtime skips or successful safe predictions.
 
-The complete request is checked by the intent/authorization gates. The encoder
-uses request head96, history head72/tail72, complete action128 and schema
-head64/tail64, within the existing 512-token sequence. Existing 64 KiB per-field
-and 128 KiB total byte limits remain. Missing intent and other abstentions carry
-an error reason with no score; they are never certified safe. The legacy
-`unsafe_probability` field carries a threshold-relative agreement score, not a
-calibrated probability of actual harm.
+The original collected false-positive subset has 539 saved cases, of which 409
+were reconstructed and assessed: Claude Code 0/128 alerts; Codex 1/281. The expanded
+historical panel above includes these cases. These cohorts are not additive.
+The later sample's clear false-alert frequency is 3/600 assessed calls (0.50%);
+607 cases remain unassessed. This is not a population false-positive guarantee.
 
-Weights, tokenizer and both sparse filters are embedded in native Go. No ONNX,
-Python, external model installation or runtime downloads are needed. Current
-pins, thresholds, provenance and licenses are under
-`internal/guard/stepsafety/model/native` and `model/ATTRIBUTION.md`. The separate
-historical ONNX provenance remains preserved for its legacy installer.
+Historical data overlap training/selection/calibration and AgentDojo was repeatedly
+consulted during development. The later sample is stratified, not traffic weighted.
+Historical context was reconstructed from transcripts rather than exact daemon
+snapshots. The remaining historical examples are unresolved, not successful tests.
+No fresh ungated ASB or AgentHarm result is claimed. The earlier v0.1 benchmark
+numbers do not describe this runtime.
 
-## Integration and validation
+This release is suitable for controlled evaluation. It is not evidence of uniform
+precision on unfamiliar tools or workloads. See `merlin-v3-ungated-evaluation.json` for aggregates
+and the Hugging Face release manifest for file checksums. **No private prompts, calls,
+transcripts, reviewer text, identifiers or per-example scores are distributed.**
+Private evaluation requires the internal access-controlled archive; the public
+release cannot independently reproduce its private-data metrics.
 
-Claude prompt registration is required in both managed and user installs. Older
-Kontext-owned configurations remain recognizable for upgrade; foreign prompt
-hooks are preserved. A new empty prompt clears stale intent. Adapter-to-runtime
-tests cover latest prompt, session closure and Claude/Codex isolation. Existing
-tests protect the pre-call context snapshot and post-response inference boundary.
+## Provenance and terms
 
-Updating a binary alone does not refresh installed hooks. Use the normal setup
-or management upgrade flow when a trial is authorized; the daemon's memory-only
-request cache also needs a fresh prompt after restart. Do not judge a trial only
-by lack of alerts: check request coverage and actual eligible assessments.
+Base encoder: `microsoft/deberta-v3-xsmall` (MIT), revision
+`4b419818330868dff6a60ad3e6b1c730f8b8c0c6`. The V3 encoder weights SHA-256 is
+`429b09164c6705790c4414eb31c0bc18d2fa8a374bea467b2e1b49ead6aeb5f1`.
+V3 was developed using benchmark data and private training/selection examples;
+only model parameters and aggregate evaluation results are released here.
+Upstream dataset/model terms continue to apply; consult the bundled attribution
+and provenance files. The checkpoint is a research release (`other` license),
+not a blanket commercial-use license. Runtime source follows the repository
+Apache-2.0 license. The older request-intent asset remains for provenance but is
+not used by the ungated inference path.
 
-The integrated implementation reproduces the 1,505 saved native reference
-decisions and replays 1,060 restored-request calls separately. Public numerical
-fixtures are committed; private captures remain in ToolSafe-Lab. The standalone
-candidate measured about 1.63 GB peak RSS, 2.35 s startup and 120 ms long-context
-p95 on macOS arm64. Other-platform latency is not established. Pure-Go parity,
-race tests and an isolated daemon E2E cover portability and advisory behavior;
-E2E requires an actual eligible score within the configured production deadline,
-and separately verifies forced-timeout and explicit opt-out behavior.
-
-Research records: `exp-20261007-merlin-v3-precision`, child
-`merlin_prompt_repair_20261007_v1` in ToolSafe-Lab. Aggregate results accompany this
-document; no local user content, API keys or raw replay data belongs in this PR.
+The [original gated V3 report](merlin-v3-gated.md) is retained for historical comparison. Kontext retains asynchronous advisory inference (`enforced=false`), the existing default-on setting and explicit opt-out.

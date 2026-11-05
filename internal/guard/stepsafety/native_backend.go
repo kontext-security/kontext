@@ -36,13 +36,7 @@ func newNativeBackend(ctx context.Context, cfg Config) (*nativeBackend, error) {
 	nativeOnce.Do(func() {
 		go func() {
 			defer close(nativeReady)
-			nativeShared.model, nativeShared.tokenizer, nativeShared.err = loadNativeAssets(context.Background())
-			if nativeShared.err == nil {
-				nativeShared.err = loadAgreementAssets()
-				if nativeShared.err == nil {
-					nativeShared.err = loadRequestGateAssets()
-				}
-			}
+			nativeShared.model, nativeShared.tokenizer, nativeShared.err = loadNativeRuntime(context.Background(), nativeAssets)
 		}()
 	})
 	select {
@@ -56,14 +50,27 @@ func newNativeBackend(ctx context.Context, cfg Config) (*nativeBackend, error) {
 	}
 }
 
-func loadNativeAssets(ctx context.Context) (*nativeModel, *tokenizer, error) {
-	names, err := fs.Glob(nativeAssets, "model/native/weights.*.gz")
+// loadNativeRuntime loads only assets used by ungated inference. The retired
+// request-intent asset is retained for historical provenance, never startup.
+func loadNativeRuntime(ctx context.Context, assets fs.FS) (*nativeModel, *tokenizer, error) {
+	model, tok, err := loadNativeAssets(ctx, assets)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := loadAgreementAssets(assets); err != nil {
+		return nil, nil, err
+	}
+	return model, tok, nil
+}
+
+func loadNativeAssets(ctx context.Context, assets fs.FS) (*nativeModel, *tokenizer, error) {
+	names, err := fs.Glob(assets, "model/native/weights.*.gz")
 	if err != nil || len(names) != 5 {
 		return nil, nil, errors.New("missing embedded native weights")
 	}
 	readers := make([]io.Reader, 0, len(names))
 	for _, name := range names {
-		f, err := nativeAssets.Open(name)
+		f, err := assets.Open(name)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -83,7 +90,7 @@ func loadNativeAssets(ctx context.Context) (*nativeModel, *tokenizer, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	f, err := nativeAssets.Open("model/native/tokenizer.json.gz")
+	f, err := assets.Open("model/native/tokenizer.json.gz")
 	if err != nil {
 		return nil, nil, err
 	}

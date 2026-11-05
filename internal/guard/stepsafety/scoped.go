@@ -124,16 +124,11 @@ func scopedEligibility(input Input) error {
 
 // packScopedInput preserves the frozen bounded contextual representation.
 // The current action is complete. Request uses its head, history and schema
-// use head/tail. Unsupported effects abstain before model inference.
+// use head/tail. Eligibility is independent of tool effect and request intent.
+// V3 ungated retains the full-action limit and action-agreement scoring.
 func packScopedInput(ctx context.Context, tok tokenEncoder, input Input) (packedInput, error) {
 	var out packedInput
 	if err := validateInputBounds(input); err != nil {
-		return out, err
-	}
-	if err := scopedEligibility(input); err != nil {
-		return out, err
-	}
-	if err := requestIntentGate(ctx, input.UserRequest); err != nil {
 		return out, err
 	}
 	fields, err := candidateFields(input)

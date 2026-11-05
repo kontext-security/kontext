@@ -10,6 +10,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"io"
+	"io/fs"
 	"math"
 	"strings"
 	"unicode"
@@ -29,8 +30,8 @@ var agreementModel struct {
 	SparseThreshold    float64          `json:"sparse_threshold"`
 }
 
-func loadAgreementAssets() error {
-	f, err := nativeAssets.Open("model/native/agreement.json.gz")
+func loadAgreementAssets(assets fs.FS) error {
+	f, err := assets.Open("model/native/agreement.json.gz")
 	if err != nil {
 		return err
 	}
