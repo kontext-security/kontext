@@ -14,7 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -142,8 +142,19 @@ type Evaluator struct {
 	slots        chan struct{}
 	modelVersion string
 	unavailable  string
-	stopped      atomic.Bool
+	// loaded closes once backend and unavailable are final. Read neither before it.
+	loaded     <-chan struct{}
+	cancelLoad context.CancelFunc
+	stopping   chan struct{}
+	stopOnce   sync.Once
 }
+
+// alreadyLoaded is for evaluators that have nothing left to load.
+var alreadyLoaded = func() <-chan struct{} {
+	loaded := make(chan struct{})
+	close(loaded)
+	return loaded
+}()
 
 func ConfigFromEnv(_ string) (Config, error) {
 	// Advisory assessment is enabled unless the daemon explicitly opts out.
@@ -182,8 +193,9 @@ func ConfigFromEnv(_ string) (Config, error) {
 	}, nil
 }
 
-// New loads the embedded native Go checkpoint when enabled. Initialization
-// failures produce an unavailable evaluator rather than failing daemon startup.
+// New loads the embedded native Go checkpoint when enabled and returns once it's
+// loaded. Initialization failures produce an unavailable evaluator rather than
+// failing startup. A daemon uses NewBackground, so hooks don't wait for this.
 func New(ctx context.Context, cfg Config) *Evaluator {
 	if !cfg.Enabled {
 		return nil
@@ -196,9 +208,59 @@ func New(ctx context.Context, cfg Config) *Evaluator {
 			slots:        make(chan struct{}, cfg.MaxConcurrency),
 			modelVersion: cfg.ModelVersion,
 			unavailable:  errorCode(err),
+			loaded:       alreadyLoaded,
+			stopping:     make(chan struct{}),
 		}
 	}
 	return NewWithBackend(backend, cfg.Timeout, cfg.MaxConcurrency, cfg.ModelVersion)
+}
+
+// NewBackground returns at once and loads the embedded checkpoint behind it. Calls
+// made meanwhile wait for the model, and Health says "loading".
+func NewBackground(ctx context.Context, cfg Config) *Evaluator {
+	if !cfg.Enabled {
+		return nil
+	}
+	cfg = normalizeConfig(cfg)
+	return NewWithLoader(ctx, cfg, func(loadCtx context.Context) (Backend, error) {
+		backend, err := newNativeBackend(loadCtx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return backend, nil
+	})
+}
+
+// NewWithLoader is NewBackground with its own load, for tests. The load has to
+// return when its context ends: that's the startup timeout, or ctx ending, or Close.
+func NewWithLoader(ctx context.Context, cfg Config, load func(context.Context) (Backend, error)) *Evaluator {
+	cfg = normalizeConfig(cfg)
+	loaded := make(chan struct{})
+	ctx, cancel := context.WithCancel(ctx)
+	e := &Evaluator{
+		timeout:      cfg.Timeout,
+		slots:        make(chan struct{}, cfg.MaxConcurrency),
+		modelVersion: cfg.ModelVersion,
+		loaded:       loaded,
+		cancelLoad:   cancel,
+		stopping:     make(chan struct{}),
+	}
+	go func() {
+		defer close(loaded)
+		loadCtx, cancelTimeout := context.WithTimeout(ctx, cfg.StartupTimeout)
+		defer cancelTimeout()
+		backend, err := load(loadCtx)
+		switch {
+		case err == nil:
+			e.backend = backend
+		case ctx.Err() != nil:
+			// Called off, not broken: only a stop or Close ends ctx.
+			e.unavailable = ErrorDaemonStopping
+		default:
+			e.unavailable = errorCode(err)
+		}
+	}()
+	return e
 }
 
 func NewWithBackend(backend Backend, timeout time.Duration, maxConcurrency int, modelVersion string) *Evaluator {
@@ -216,6 +278,8 @@ func NewWithBackend(backend Backend, timeout time.Duration, maxConcurrency int, 
 		timeout:      timeout,
 		slots:        make(chan struct{}, maxConcurrency),
 		modelVersion: modelVersion,
+		loaded:       alreadyLoaded,
+		stopping:     make(chan struct{}),
 	}
 }
 
@@ -261,12 +325,21 @@ func (e *Evaluator) Evaluate(ctx context.Context, input Input) Evaluation {
 		result.LatencyMS = elapsedMilliseconds(started)
 		return result
 	}
+	// The wait isn't the model's latency, and the per-call deadline starts after it.
+	waitStarted := time.Now()
+	waitCode := e.waitForLoad(ctx)
+	started = started.Add(time.Since(waitStarted))
+	if waitCode != "" {
+		result.ErrorCode = waitCode
+		result.LatencyMS = elapsedMilliseconds(started)
+		return result
+	}
 	if e.unavailable != "" || e.backend == nil {
 		result.ErrorCode = firstNonEmpty(e.unavailable, ErrorUnavailable)
 		result.LatencyMS = elapsedMilliseconds(started)
 		return result
 	}
-	if e.stopped.Load() {
+	if e.scoringStopped() {
 		result.ErrorCode = ErrorDaemonStopping
 		result.LatencyMS = elapsedMilliseconds(started)
 		return result
@@ -380,9 +453,58 @@ func CalibratedProbability(margin float64) float64 {
 	return exp / (1 + exp)
 }
 
+// waitForLoad returns once the model is there, or an error code if the call
+// shouldn't wait any longer. The load itself ends by the startup timeout at latest.
+func (e *Evaluator) waitForLoad(ctx context.Context) string {
+	select {
+	case <-e.loaded:
+		return ""
+	default:
+	}
+	select {
+	case <-e.loaded:
+		return ""
+	case <-e.stopping:
+		return ErrorDaemonStopping
+	case <-ctx.Done():
+		return errorCode(ctx.Err())
+	}
+}
+
+func (e *Evaluator) scoringStopped() bool {
+	select {
+	case <-e.stopping:
+		return true
+	default:
+		return false
+	}
+}
+
+// Loaded closes when the load has ended, however it ended. LoadError says how.
+func (e *Evaluator) Loaded() <-chan struct{} {
+	if e == nil {
+		return alreadyLoaded
+	}
+	return e.loaded
+}
+
+// LoadError is the code the load ended with, empty if the model loaded. Unlike
+// Health, it doesn't change when the evaluator closes. Call it after Loaded.
+func (e *Evaluator) LoadError() string {
+	if e == nil {
+		return ""
+	}
+	return e.unavailable
+}
+
 func (e *Evaluator) Health(ctx context.Context) Health {
 	if e == nil {
 		return Health{Enabled: false, Status: "disabled"}
+	}
+	select {
+	case <-e.loaded:
+	default:
+		return Health{Enabled: true, Status: "loading", ModelVersion: e.modelVersion}
 	}
 	if e.unavailable != "" || e.backend == nil {
 		return Health{Enabled: true, Status: "unavailable", ModelVersion: e.modelVersion, ErrorCode: firstNonEmpty(e.unavailable, ErrorUnavailable)}
@@ -402,12 +524,19 @@ func (e *Evaluator) Health(ctx context.Context) Health {
 // the model, for a daemon that is stopping and has records left to write.
 func (e *Evaluator) StopScoring() {
 	if e != nil {
-		e.stopped.Store(true)
+		e.stopOnce.Do(func() { close(e.stopping) })
 	}
 }
 
 func (e *Evaluator) Close() error {
-	if e == nil || e.backend == nil {
+	if e == nil {
+		return nil
+	}
+	if e.cancelLoad != nil {
+		e.cancelLoad()
+	}
+	<-e.loaded
+	if e.backend == nil {
 		return nil
 	}
 	return e.backend.Close()

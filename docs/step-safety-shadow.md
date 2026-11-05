@@ -106,9 +106,10 @@ KONTEXT_STEP_SAFETY_SHADOW=0 kontext guard start
 Managed deployments set the variables in their daemon configuration and restart;
 an export in an unrelated terminal does not change an already-running service.
 Existing explicit opt-outs remain disabled after upgrading. To re-enable, remove
-the opt-out or set it to `1` and restart. Initialization loads the embedded model
-once per process, using additional memory and up to the startup timeout; failure
-leaves assessment unavailable and does not fail daemon startup.
+the opt-out or set it to `1` and restart. The embedded model loads once per process,
+using additional memory and up to the startup timeout; failure leaves assessment
+unavailable and does not fail startup. The managed daemon loads it in the background
+and serves hooks meanwhile, while the local guard server loads it before serving.
 Optional controls are `KONTEXT_STEP_SAFETY_TIMEOUT` (default 250 ms, maximum 500 ms),
 `KONTEXT_STEP_SAFETY_STARTUP_TIMEOUT` (default 30 seconds), and
 `KONTEXT_STEP_SAFETY_MAX_CONCURRENCY` (fixed at 1).
@@ -117,6 +118,11 @@ Merlin admission and inference run in deferred recording after policy settles.
 The hook response does not wait for model inference. Request/history are captured
 at the call, and results cannot revise authorization. A per-evaluation deadline
 bounds model-slot admission and work; Go checks cancellation between layers.
+Records of calls made during a background load wait for the model instead of going
+unscored. That deadline and the reported latency start once it has loaded. They are
+then released together and share the one model slot, so with a large backlog or slow
+inference some record `timeout` or `concurrency_timeout`. A stop releases them with
+`daemon_stopping`. A crash during the load loses them.
 The recorder has four workers and 256 waiting slots. Submission happens after
 the transport sends the settled response. A full queue retains the submitting
 handler until space is available, preserving its audit record. Each transport

@@ -66,6 +66,7 @@ type Host struct {
 
 	server           *server.Server
 	closeStore       func() error
+	stepSafety       *stepsafety.Evaluator
 	closeStepSafety  func() error
 	runtimeService   *localruntime.Service
 	sessionOpened    bool
@@ -135,17 +136,13 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	}
 	stepSafety := opts.StepSafety
 	if stepSafety == nil {
-		stepSafety = stepsafety.New(ctx, stepSafetyConfig)
+		// Nothing on the hook's response path needs the model, so the socket below
+		// doesn't wait for it. Records wait instead, in deferred recording.
+		stepSafety = stepsafety.NewBackground(ctx, stepSafetyConfig)
 	}
+	// Nothing waits for this, so a log that blocks can't hold up a stop.
+	go reportModelLoad(stepSafety, opts.Diagnostic)
 	closeStepSafety := func() error { return stepSafety.Close() }
-	if stepSafety != nil {
-		healthCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		health := stepSafety.Health(healthCtx)
-		cancel()
-		if health.Status != "ready" {
-			diagnostic.LogAlways(opts.Diagnostic, "step-safety shadow unavailable (%s); calls will fail open\n", health.ErrorCode)
-		}
-	}
 	serverSessionID := sessionID
 	if opts.SkipInitialSession {
 		serverSessionID = ""
@@ -196,6 +193,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		Mode:            mode,
 		server:          localServer,
 		closeStore:      closeStore,
+		stepSafety:      stepSafety,
 		closeStepSafety: closeStepSafety,
 	}
 	if recorder != nil {
@@ -250,6 +248,18 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	}
 
 	return host, nil
+}
+
+// reportModelLoad logs a model that didn't load, once that's known. A load called
+// off by a stop isn't one.
+func reportModelLoad(stepSafety *stepsafety.Evaluator, diag diagnostic.Logger) {
+	if stepSafety == nil {
+		return
+	}
+	<-stepSafety.Loaded()
+	if code := stepSafety.LoadError(); code != "" && code != stepsafety.ErrorDaemonStopping {
+		diagnostic.LogAlways(diag, "step-safety shadow unavailable (%s); calls will fail open\n", code)
+	}
 }
 
 func clientResultTransform(mode guardhookruntime.Mode) func(hook.Event, hook.Result) hook.Result {

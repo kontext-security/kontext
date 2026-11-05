@@ -20,6 +20,14 @@ var nativeShared struct {
 	err       error
 }
 
+var nativeLoadHold <-chan struct{}
+
+// HoldNativeLoad keeps the embedded model from loading until release closes, so a
+// test can check what doesn't wait for it. Call it before anything starts the load.
+func HoldNativeLoad(release <-chan struct{}) {
+	nativeLoadHold = release
+}
+
 type nativeBackend struct {
 	model        *nativeModel
 	tokenizer    *tokenizer
@@ -36,6 +44,9 @@ func newNativeBackend(ctx context.Context, cfg Config) (*nativeBackend, error) {
 	nativeOnce.Do(func() {
 		go func() {
 			defer close(nativeReady)
+			if nativeLoadHold != nil {
+				<-nativeLoadHold
+			}
 			nativeShared.model, nativeShared.tokenizer, nativeShared.err = loadNativeRuntime(context.Background(), nativeAssets)
 		}()
 	})
