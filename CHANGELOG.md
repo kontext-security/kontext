@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.19.0](https://github.com/kontext-security/kontext/compare/v1.18.0...v1.19.0) (2026-11-05)
+
+
+### Features
+
+* **kestrel:** shadow-score parsed AWS operations ([#703](https://github.com/kontext-security/kontext/issues/703)) ([300641f](https://github.com/kontext-security/kontext/commit/300641f1af079eb2fd648635a795ba36066addde))
+* **merlin:** remove restrictive V3 eligibility gates ([#701](https://github.com/kontext-security/kontext/issues/701)) ([348e334](https://github.com/kontext-security/kontext/commit/348e33441f49f4eed1458564759b84de3bd6f27f))
+
+
+### Bug Fixes
+
+* **cloudhttp:** reach the cloud through the manual proxies set in macOS ([#694](https://github.com/kontext-security/kontext/issues/694)) ([1a700d0](https://github.com/kontext-security/kontext/commit/1a700d0da065ef694e8f77458b6c5f0b058121d9))
+* **codexproxy:** make disable stick, cap the job's log, and stop a session on a dead route ([#705](https://github.com/kontext-security/kontext/issues/705)) ([7555bb5](https://github.com/kontext-security/kontext/commit/7555bb58ee307c6cceb06505614760bf33bb630a))
+* **managedobserve:** write queued records on a stop, within a deadline ([#702](https://github.com/kontext-security/kontext/issues/702)) ([5aa3131](https://github.com/kontext-security/kontext/commit/5aa313197c20b89557056021df27dd1464feef38))
+
 ## [1.18.0](https://github.com/kontext-security/kontext/compare/v1.17.1...v1.18.0) (2026-11-04)
 
 
