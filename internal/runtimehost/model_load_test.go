@@ -18,13 +18,15 @@ import (
 const startStatusPrefix = "model status at start: "
 
 // Runs in a process of its own, because the model loads once per process and
-// another test may already have loaded it.
+// another test may already have loaded it. The load never finishes here, so the
+// answer doesn't depend on which of it and Start is quicker.
 func TestStartStatusHelper(t *testing.T) {
 	dir := os.Getenv("KONTEXT_TEST_START_STATUS_DIR")
 	if dir == "" {
 		t.Skip("helper for TestStartDoesNotWaitForTheRealModel")
 	}
 	t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "")
+	stepsafety.HoldNativeLoad(make(chan struct{}))
 	ctx := context.Background()
 	host, err := Start(ctx, Options{AgentName: "claude", CWD: dir, DBPath: filepath.Join(dir, "guard.db")})
 	if err != nil {
@@ -48,11 +50,7 @@ func TestStartDoesNotWaitForTheRealModel(t *testing.T) {
 		t.Fatalf("helper said nothing about the model:\n%s", output)
 	}
 	status, _, _ := strings.Cut(rest, "\n")
-	switch strings.TrimSpace(status) {
-	case "loading":
-	case "unavailable":
-		t.Skip("this build has no model") // The nostepsafetymodel tag.
-	default:
+	if strings.TrimSpace(status) != "loading" {
 		t.Errorf("the model was %q when Start returned, so Start waited for it", status)
 	}
 }
@@ -70,9 +68,10 @@ func (l *heldLog) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// The log may be gone once Close has returned.
-func TestCloseWaitsForTheReportOfTheLoad(t *testing.T) {
+// A log that blocks can't hold up a stop or the cleanup after a failed start.
+func TestStuckLogDoesNotHoldUpClose(t *testing.T) {
 	log := &heldLog{reached: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(log.release) })
 	ctx := context.Background()
 	evaluator := stepsafety.NewWithLoader(ctx, stepsafety.Config{Enabled: true}, func(context.Context) (stepsafety.Backend, error) {
 		return nil, errors.New("no weights")
@@ -99,13 +98,7 @@ func TestCloseWaitsForTheReportOfTheLoad(t *testing.T) {
 	}()
 	select {
 	case <-closed:
-		t.Error("Close returned with the report still running")
-	case <-time.After(200 * time.Millisecond):
-	}
-	close(log.release)
-	select {
-	case <-closed:
 	case <-time.After(10 * time.Second):
-		t.Fatal("Close didn't return")
+		t.Fatal("Close is waiting for the log")
 	}
 }

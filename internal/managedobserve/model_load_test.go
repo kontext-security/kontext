@@ -180,9 +180,14 @@ func TestRunDaemonSaysSoWhenTheModelFailsToLoad(t *testing.T) {
 		t.Fatalf("hook after a failed load: %v", err)
 	}
 	waitForRows(t, fixture.dbPath, `select count(*) from step_safety_verdicts where tool_use_id = ? and shadow_decision = 'unavailable'`, 1, "load-failed")
+	// The report runs on its own, so a stuck log can't hold anything up.
+	deadline := time.Now().Add(20 * time.Second)
+	for !strings.Contains(log.String(), "step-safety shadow unavailable") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the log doesn't say the model is unavailable: %q", log.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	cancel()
 	awaitDaemonExit(t, errCh, daemonStopBudget+10*time.Second)
-	if !strings.Contains(log.String(), "step-safety shadow unavailable") {
-		t.Errorf("the log doesn't say the model is unavailable: %q", log.String())
-	}
 }

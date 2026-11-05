@@ -140,16 +140,9 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		// doesn't wait for it. Records wait instead, in deferred recording.
 		stepSafety = stepsafety.NewBackground(ctx, stepSafetyConfig)
 	}
-	modelLoadReported := make(chan struct{})
-	go func() {
-		defer close(modelLoadReported)
-		reportModelLoad(stepSafety, opts.Diagnostic)
-	}()
-	closeStepSafety := func() error {
-		err := stepSafety.Close()
-		<-modelLoadReported
-		return err
-	}
+	// Nothing waits for this, so a log that blocks can't hold up a stop.
+	go reportModelLoad(stepSafety, opts.Diagnostic)
+	closeStepSafety := func() error { return stepSafety.Close() }
 	serverSessionID := sessionID
 	if opts.SkipInitialSession {
 		serverSessionID = ""
