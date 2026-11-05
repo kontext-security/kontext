@@ -354,8 +354,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	policyReady := make(chan struct{})
 	authorityAvailable := make(chan struct{}, 1)
 	authorityResend := make(chan struct{}, 1)
+	policyRefreshNow := make(chan struct{}, 1)
+	enrolment := &enrolmentRefresh{cache: cedarCache, now: policyRefreshNow, left: maxEnrolmentRefreshes}
 	cedarRefresher := cedarpolicy.Refresher{
 		InitialRefreshDone: policyReady,
+		RefreshNow:         policyRefreshNow,
 		OnAuthorityScanAvailable: func() {
 			select {
 			case authorityResend <- struct{}{}:
@@ -466,7 +469,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 				return
 			}
 		}
-		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder, authorityHolder)
+		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder, authorityHolder, enrolment.afterAcceptedFlush)
 	}()
 	defer func() {
 		stopPolicyRefresh()
@@ -865,7 +868,7 @@ func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token, installa
 	return s.key
 }
 
-func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder) error {
+func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, afterAcceptedFlush func()) error {
 	interval := opts.StreamInterval
 	if interval == 0 {
 		interval = managedstream.DefaultIntervalFromEnv()
@@ -873,7 +876,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	deviceKeys := &deviceKeySource{}
 	var consecutiveAuthFailures, consecutiveFlushFailures int
 	flush := func() {
-		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder, authorityHolder)
+		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder, authorityHolder, afterAcceptedFlush)
 		if err == nil {
 			consecutiveAuthFailures = 0
 			consecutiveFlushFailures = 0
@@ -908,7 +911,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	}
 }
 
-func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder) error {
+func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, afterAcceptedFlush func()) error {
 	loadedConfig, installToken, err := loadManagedConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("managed stream config reload: %w", err)
@@ -917,7 +920,8 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 	// pages and builds a payload for each, and a hung ping retried per page
 	// would stack its timeout onto every page of the drain.
 	deviceKey := deviceKeys.resolve(ctx, loadedConfig.Config.CloudURL, installToken, installationID, opts.StreamHTTPClient, opts.Diagnostic)
-	if err := managedstream.Flush(ctx, managedstream.Options{
+	accepted := false
+	err = managedstream.Flush(ctx, managedstream.Options{
 		DBPath:             dbPath,
 		StatePath:          opts.StreamStatePath,
 		CloudURL:           loadedConfig.Config.CloudURL,
@@ -936,14 +940,18 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		HTTPClient:         opts.StreamHTTPClient,
 		Diagnostic:         opts.Diagnostic,
 		OnFlushSuccess: func() {
+			accepted = true
 			if err := ClearAuthError(dbPath); err != nil {
 				opts.Diagnostic.Printf("clear auth-error breadcrumb: %v\n", err)
 			}
 		},
-	}); err != nil {
-		return err
+	})
+	// After the whole flush, not per post: one flush can make several accepted
+	// posts, and a later one failing doesn't undo the enrolment.
+	if accepted {
+		afterAcceptedFlush()
 	}
-	return nil
+	return err
 }
 
 func writeStreamAuthFailure(opts DaemonOptions, dbPath string, status int) {
@@ -1078,4 +1086,37 @@ func migrateSelfServeModeToRemote(loaded managedconfig.LoadedConfig, log diagnos
 	}
 	reloaded.Scope = loaded.Scope
 	return reloaded
+}
+
+// maxEnrolmentRefreshes bounds the early policy refreshes per daemon start. At
+// the default flush interval it covers the minute the refresh timer would have
+// taken, so an installation that never gets a principal goes back to the timer
+// and adds at most this many requests per start.
+const maxEnrolmentRefreshes = 6
+
+// enrolmentRefresh refreshes the policy right after an accepted post while the
+// cloud can't yet name this installation's principal. The hosted API only knows
+// an installation once a post is accepted, and until the policy says otherwise
+// enforcement allows every call, so waiting for the timer leaves a fresh endpoint
+// ungoverned for up to a minute. Called from the flush goroutine only.
+type enrolmentRefresh struct {
+	cache *cedarpolicy.Cache
+	now   chan<- struct{}
+	left  int
+}
+
+func (e *enrolmentRefresh) afterAcceptedFlush() {
+	if e.left == 0 {
+		return
+	}
+	// An empty state means no fetch has worked yet. An accepted post shows the
+	// cloud is reachable, so try ahead of the refresher's backoff.
+	if state := e.cache.Current().State; state != cedarpolicy.StatePrincipalUnavailable && state != "" {
+		return
+	}
+	select {
+	case e.now <- struct{}{}:
+		e.left--
+	default:
+	}
 }
