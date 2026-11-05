@@ -1,0 +1,270 @@
+{"command": "load_value() {\n aws ssm get-parameter --name /app/password --with-decryption --profile workload\n}\nload_value", "count": 2, "score": 0.34452298079394894, "verdict": "risky"}
+{"command": "aws secretsmanager get-resource-policy --secret-id credential_5 --profile admin", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager get-resource-policy --secret-id credential_4 --profile billing\n}\nload_value", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameter --name /app/config --profile admin\n}\nload_value", "count": 2, "score": -0.6017189902849052, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameters --names /app/config --profile admin", "count": 1, "score": -0.36167729792642567, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager batch-get-secret-value --secret-id-list credential_5 --profile admin", "count": 1, "score": 0.19158101582148768, "verdict": "risky"}
+{"command": "aws sts get-caller-identity --query Account --profile workload", "count": 1, "score": -0.8389236839191541, "verdict": "not_risky"}
+{"command": "aws ssm describe-parameters --max-results 5 --profile workload", "count": 1, "score": -0.9047594345023859, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager describe-secret --secret-id credential_1 --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-resource-policy --secret-id credential_0 --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager describe-secret --secret-id credential_1 --profile billing'", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameters --names /app/config --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.6736685791009598, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager list-secrets --max-results 5 --profile billing'", "count": 1, "score": -0.9007336590426712, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-resource-policy --secret-id credential_2 --profile admin", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameter --name /app/password --with-decryption --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.34452298079394894, "verdict": "risky"}
+{"command": "aws ssm get-parameters --names /app/config --no-with-decryption --profile billing", "count": 1, "score": -0.5982234501528283, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm get-parameter-history --name /app/password --with-decryption --profile admin\n}\nf\nunset VALUE", "count": 2, "score": 0.18890001356132413, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-secret-value --secret-id credential_0 --query SecretString --profile workload", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-resource-policy --secret-id credential_0 --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameters --names /app/config --no-with-decryption --profile admin\n}\nload_value", "count": 2, "score": -0.8489339083376702, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm describe-parameters --max-results 5 --profile billing", "count": 1, "score": -0.9047594345023859, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-resource-policy --secret-id credential_0 --profile workload'", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm get-parameter --name /app/password --with-decryption --profile billing'", "count": 1, "score": 0.6577048559760705, "verdict": "risky"}
+{"command": "load_value() {\n aws secretsmanager get-resource-policy --secret-id credential_5 --profile admin\n}\nload_value", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameters --names /app/config --no-with-decryption --profile admin", "count": 1, "score": -0.5982234501528283, "verdict": "not_risky"}
+{"command": "aws ssm get-parameters --names /app/config --no-with-decryption --profile workload", "count": 1, "score": -0.5982234501528283, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm get-parameters --names /app/config --no-with-decryption --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.8489339083376702, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-secret-value --secret-id credential_3 --query SecretString --profile workload\n}\nf\nunset VALUE", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager describe-secret --secret-id credential_3 --profile workload", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameters --names /app/password --with-decryption --profile workload\n}\nload_value", "count": 2, "score": 0.29844542245908445, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager describe-secret --secret-id credential_2 --profile admin", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager list-secrets --max-results 5 --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.981211004413921, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm get-parameters --names /app/config --no-with-decryption --profile workload'", "count": 1, "score": -0.5982234501528283, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-resource-policy --secret-id credential_2 --profile admin'", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-secret-value --secret-id credential_2 --query SecretString --profile admin'", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "load_value() {\n aws secretsmanager get-secret-value --secret-id credential_3 --query SecretString --profile workload\n}\nload_value", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "f() {\n aws secretsmanager get-secret-value --secret-id credential_5 --query SecretString --profile admin\n}\nf\nunset VALUE", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "bash -c 'aws ssm get-parameters --names /app/config --profile admin'", "count": 1, "score": -0.36167729792642567, "verdict": "not_risky"}
+{"command": "aws secretsmanager list-secrets --max-results 5 --profile workload", "count": 1, "score": -0.9007336590426712, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager batch-get-secret-value --secret-id-list credential_3 --profile workload", "count": 1, "score": 0.19158101582148768, "verdict": "risky"}
+{"command": "aws secretsmanager describe-secret --secret-id credential_0 --profile workload", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-resource-policy --secret-id credential_5 --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameters --names /app/config --no-with-decryption --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.8489339083376702, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager batch-get-secret-value --secret-id-list credential_0 --profile workload", "count": 1, "score": 0.19158101582148768, "verdict": "risky"}
+{"command": "f() {\n aws sts get-caller-identity --query Account --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.9520338325702498, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-secret-value --secret-id credential_0 --query SecretString --profile workload", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "bash -c 'aws ssm get-parameters --names /app/password --with-decryption --profile admin'", "count": 1, "score": 0.5825427927035379, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameters --names /app/config --profile billing", "count": 1, "score": -0.36167729792642567, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-secret-value --secret-id credential_2 --query SecretString --profile admin\n}\nf\nunset VALUE", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "aws ssm get-parameters --names /app/config --profile workload", "count": 1, "score": -0.36167729792642567, "verdict": "not_risky"}
+{"command": "aws ssm get-parameters --names /app/password --with-decryption --profile billing", "count": 1, "score": 0.5825427927035379, "verdict": "risky"}
+{"command": "load_value() {\n aws secretsmanager get-resource-policy --secret-id credential_3 --profile workload\n}\nload_value", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameters --names /app/config --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.6736685791009598, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager describe-secret --secret-id credential_5 --profile admin\n}\nload_value", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-secret-value --secret-id credential_5 --query SecretString --profile admin", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager describe-secret --secret-id credential_2 --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameter --name /app/config --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.6017189902849052, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager describe-secret --secret-id credential_5 --profile admin'", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-resource-policy --secret-id credential_1 --profile billing", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameters --names /app/password --with-decryption --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.29844542245908445, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager describe-secret --secret-id credential_1 --profile billing", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager describe-secret --secret-id credential_0 --profile workload\n}\nload_value", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameter --name /app/config --profile billing", "count": 1, "score": -0.21524946609083956, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager describe-secret --secret-id credential_4 --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-resource-policy --secret-id credential_4 --profile billing", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-resource-policy --secret-id credential_3 --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-resource-policy --secret-id credential_5 --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "f() {\n aws sts get-caller-identity --query Account --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.9520338325702498, "verdict": "not_risky"}
+{"command": "bash -c 'aws sts get-caller-identity --query Account --profile billing'", "count": 1, "score": -0.8389236839191541, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameters --names /app/config --no-with-decryption --profile billing\n}\nload_value", "count": 2, "score": -0.8489339083376702, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-secret-value --secret-id credential_1 --query SecretString --profile billing'", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "f() {\n aws secretsmanager batch-get-secret-value --secret-id-list credential_0 --profile workload\n}\nf\nunset VALUE", "count": 2, "score": 0.3146913875741306, "verdict": "risky"}
+{"command": "aws secretsmanager get-resource-policy --secret-id credential_0 --profile workload", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "aws ssm get-parameter --name /app/config --profile billing", "count": 1, "score": -0.21524946609083956, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-secret-value --secret-id credential_0 --query SecretString --profile workload'", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-resource-policy --secret-id credential_0 --profile workload", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "bash -c 'aws sts get-caller-identity --query Account --profile admin'", "count": 1, "score": -0.8389236839191541, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm get-parameters --names /app/config --no-with-decryption --profile admin'", "count": 1, "score": -0.5982234501528283, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameter --name /app/password --with-decryption --profile workload", "count": 1, "score": 0.6577048559760705, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameters --names /app/config --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.6736685791009598, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameter --name /app/password --with-decryption --profile billing", "count": 1, "score": 0.6577048559760705, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameters --names /app/config --no-with-decryption --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.8489339083376702, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-resource-policy --secret-id credential_3 --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager list-secrets --max-results 5 --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.981211004413921, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager describe-secret --secret-id credential_0 --profile workload", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-resource-policy --secret-id credential_1 --profile billing'", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-secret-value --secret-id credential_3 --query SecretString --profile workload", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "load_value() {\n aws secretsmanager get-secret-value --secret-id credential_1 --query SecretString --profile billing\n}\nload_value", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "f() {\n aws secretsmanager batch-get-secret-value --secret-id-list credential_3 --profile workload\n}\nf\nunset VALUE", "count": 2, "score": 0.3146913875741306, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameter --name /app/config --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.6017189902849052, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm get-parameters --names /app/config --no-with-decryption --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.8489339083376702, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm get-parameter-history --name /app/password --with-decryption --profile workload\n}\nf\nunset VALUE", "count": 2, "score": 0.18890001356132413, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager describe-secret --secret-id credential_3 --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameter --name /app/password --with-decryption --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.34452298079394894, "verdict": "risky"}
+{"command": "aws secretsmanager list-secrets --max-results 5 --profile admin", "count": 1, "score": -0.9007336590426712, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm describe-parameters --max-results 5 --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.9937392390657586, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-secret-value --secret-id credential_1 --query SecretString --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameters --names /app/password --with-decryption --profile billing\n}\nf\nunset VALUE", "count": 2, "score": 0.29844542245908445, "verdict": "risky"}
+{"command": "aws ssm get-parameter --name /app/password --with-decryption --profile billing", "count": 1, "score": 0.6577048559760705, "verdict": "risky"}
+{"command": "load_value() {\n aws secretsmanager describe-secret --secret-id credential_4 --profile billing\n}\nload_value", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager batch-get-secret-value --secret-id-list credential_2 --profile admin\n}\nf\nunset VALUE", "count": 2, "score": 0.3146913875741306, "verdict": "risky"}
+{"command": "load_value() {\n aws ssm describe-parameters --max-results 5 --profile billing\n}\nload_value", "count": 2, "score": -0.9937392390657586, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-secret-value --secret-id credential_3 --query SecretString --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws sts get-caller-identity --query Account --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9520338325702498, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameters --names /app/password --with-decryption --profile admin", "count": 1, "score": 0.5825427927035379, "verdict": "risky"}
+{"command": "aws secretsmanager describe-secret --secret-id credential_1 --profile billing", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-secret-value --secret-id credential_4 --query SecretString --profile billing", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-secret-value --secret-id credential_2 --query SecretString --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "f() {\n aws secretsmanager describe-secret --secret-id credential_1 --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameters --names /app/config --profile workload\n}\nload_value", "count": 2, "score": -0.6736685791009598, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-resource-policy --secret-id credential_1 --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager list-secrets --max-results 5 --profile workload", "count": 1, "score": -0.9007336590426712, "verdict": "not_risky"}
+{"command": "aws secretsmanager describe-secret --secret-id credential_3 --profile workload", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager get-secret-value --secret-id credential_5 --query SecretString --profile admin\n}\nload_value", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "load_value() {\n aws ssm get-parameters --names /app/password --with-decryption --profile admin\n}\nload_value", "count": 2, "score": 0.29844542245908445, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameters --names /app/config --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.6736685791009598, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager describe-secret --secret-id credential_4 --profile billing'", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm describe-parameters --max-results 5 --profile admin'", "count": 1, "score": -0.9047594345023859, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameters --names /app/password --with-decryption --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.29844542245908445, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws sts get-caller-identity --query Account --profile billing", "count": 1, "score": -0.8389236839191541, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm get-parameter --name /app/config --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.6017189902849052, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameter --name /app/config --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.6017189902849052, "verdict": "not_risky"}
+{"command": "load_value() {\n aws sts get-caller-identity --query Account --profile admin\n}\nload_value", "count": 2, "score": -0.9520338325702498, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-secret-value --secret-id credential_3 --query SecretString --profile workload'", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "aws ssm get-parameters --names /app/config --profile billing", "count": 1, "score": -0.36167729792642567, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws sts get-caller-identity --query Account --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9520338325702498, "verdict": "not_risky"}
+{"command": "aws ssm get-parameters --names /app/password --with-decryption --profile admin", "count": 1, "score": 0.5825427927035379, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameters --names /app/config --no-with-decryption --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.8489339083376702, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager get-resource-policy --secret-id credential_2 --profile admin\n}\nload_value", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm get-parameter --name /app/password --with-decryption --profile workload'", "count": 1, "score": 0.6577048559760705, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameters --names /app/config --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.6736685791009598, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-resource-policy --secret-id credential_3 --profile workload'", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager get-resource-policy --secret-id credential_0 --profile workload\n}\nload_value", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-secret-value --secret-id credential_4 --query SecretString --profile billing\n}\nf\nunset VALUE", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "load_value() {\n aws secretsmanager get-secret-value --secret-id credential_0 --query SecretString --profile workload\n}\nload_value", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager describe-secret --secret-id credential_5 --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameters --names /app/password --with-decryption --profile workload", "count": 1, "score": 0.5825427927035379, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager list-secrets --max-results 5 --profile admin", "count": 1, "score": -0.9007336590426712, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm get-parameter --name /app/password --with-decryption --profile admin'", "count": 1, "score": 0.6577048559760705, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameters --names /app/config --no-with-decryption --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.8489339083376702, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm describe-parameters --max-results 5 --profile admin\n}\nload_value", "count": 2, "score": -0.9937392390657586, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-resource-policy --secret-id credential_4 --profile billing'", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "aws secretsmanager describe-secret --secret-id credential_5 --profile admin", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-secret-value --secret-id credential_0 --query SecretString --profile workload\n}\nf\nunset VALUE", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "bash -c 'aws ssm describe-parameters --max-results 5 --profile workload'", "count": 1, "score": -0.9047594345023859, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager describe-secret --secret-id credential_2 --profile admin\n}\nload_value", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager get-resource-policy --secret-id credential_1 --profile billing\n}\nload_value", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager describe-secret --secret-id credential_3 --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameter --name /app/config --profile workload", "count": 1, "score": -0.21524946609083956, "verdict": "not_risky"}
+{"command": "aws ssm get-parameters --names /app/password --with-decryption --profile workload", "count": 1, "score": 0.5825427927035379, "verdict": "risky"}
+{"command": "aws ssm get-parameter --name /app/password --with-decryption --profile admin", "count": 1, "score": 0.6577048559760705, "verdict": "risky"}
+{"command": "f() {\n aws secretsmanager batch-get-secret-value --secret-id-list credential_4 --profile billing\n}\nf\nunset VALUE", "count": 2, "score": 0.3146913875741306, "verdict": "risky"}
+{"command": "load_value() {\n aws ssm get-parameter --name /app/config --profile billing\n}\nload_value", "count": 2, "score": -0.6017189902849052, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-resource-policy --secret-id credential_2 --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-resource-policy --secret-id credential_2 --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager describe-secret --secret-id credential_4 --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "aws sts get-caller-identity --query Account --profile admin", "count": 1, "score": -0.8389236839191541, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-secret-value --secret-id credential_4 --query SecretString --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "load_value() {\n aws secretsmanager get-secret-value --secret-id credential_4 --query SecretString --profile billing\n}\nload_value", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "f() {\n aws secretsmanager list-secrets --max-results 5 --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.981211004413921, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-resource-policy --secret-id credential_2 --profile admin", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager batch-get-secret-value --secret-id-list credential_1 --profile billing\n}\nf\nunset VALUE", "count": 2, "score": 0.3146913875741306, "verdict": "risky"}
+{"command": "bash -c 'aws ssm get-parameters --names /app/config --no-with-decryption --profile billing'", "count": 1, "score": -0.5982234501528283, "verdict": "not_risky"}
+{"command": "aws sts get-caller-identity --query Account --profile billing", "count": 1, "score": -0.8389236839191541, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-resource-policy --secret-id credential_1 --profile billing", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-secret-value --secret-id credential_5 --query SecretString --profile admin", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameter --name /app/password --with-decryption --profile workload\n}\nf\nunset VALUE", "count": 2, "score": 0.34452298079394894, "verdict": "risky"}
+{"command": "bash -c 'aws ssm get-parameters --names /app/password --with-decryption --profile billing'", "count": 1, "score": 0.5825427927035379, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameter --name /app/config --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.6017189902849052, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm describe-parameters --max-results 5 --profile admin", "count": 1, "score": -0.9047594345023859, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-resource-policy --secret-id credential_3 --profile workload", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-secret-value --secret-id credential_4 --query SecretString --profile billing", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager describe-secret --secret-id credential_0 --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager batch-get-secret-value --secret-id-list credential_2 --profile admin", "count": 1, "score": 0.19158101582148768, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameter-history --name /app/password --with-decryption --profile admin", "count": 1, "score": 0.43595330781492125, "verdict": "risky"}
+{"command": "aws ssm get-parameters --names /app/config --profile admin", "count": 1, "score": -0.36167729792642567, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager describe-secret --secret-id credential_2 --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm get-parameter --name /app/config --profile billing'", "count": 1, "score": -0.21524946609083956, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-secret-value --secret-id credential_1 --query SecretString --profile billing\n}\nf\nunset VALUE", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-resource-policy --secret-id credential_4 --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "load_value() {\n aws sts get-caller-identity --query Account --profile workload\n}\nload_value", "count": 2, "score": -0.9520338325702498, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager get-secret-value --secret-id credential_2 --query SecretString --profile admin\n}\nload_value", "count": 2, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "aws ssm describe-parameters --max-results 5 --profile admin", "count": 1, "score": -0.9047594345023859, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm get-parameter-history --name /app/password --with-decryption --profile billing\n}\nf\nunset VALUE", "count": 2, "score": 0.18890001356132413, "verdict": "risky"}
+{"command": "load_value() {\n aws ssm get-parameter --name /app/config --profile workload\n}\nload_value", "count": 2, "score": -0.6017189902849052, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager list-secrets --max-results 5 --profile billing", "count": 1, "score": -0.9007336590426712, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm describe-parameters --max-results 5 --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9937392390657586, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager describe-secret --secret-id credential_2 --profile admin'", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "aws secretsmanager describe-secret --secret-id credential_4 --profile billing", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-resource-policy --secret-id credential_5 --profile admin'", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "load_value() {\n aws sts get-caller-identity --query Account --profile billing\n}\nload_value", "count": 2, "score": -0.9520338325702498, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager describe-secret --secret-id credential_0 --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "aws secretsmanager describe-secret --secret-id credential_2 --profile admin", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm describe-parameters --max-results 5 --profile workload", "count": 1, "score": -0.9047594345023859, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm get-parameters --names /app/config --profile workload'", "count": 1, "score": -0.36167729792642567, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm get-parameter --name /app/config --profile admin'", "count": 1, "score": -0.21524946609083956, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-secret-value --secret-id credential_5 --query SecretString --profile admin'", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameter --name /app/config --profile admin", "count": 1, "score": -0.21524946609083956, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameter --name /app/password --with-decryption --profile admin\n}\nload_value", "count": 2, "score": 0.34452298079394894, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameter --name /app/password --with-decryption --profile admin\n}\nf\nunset VALUE", "count": 2, "score": 0.34452298079394894, "verdict": "risky"}
+{"command": "bash -c 'aws ssm describe-parameters --max-results 5 --profile billing'", "count": 1, "score": -0.9047594345023859, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-resource-policy --secret-id credential_1 --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameter --name /app/config --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.6017189902849052, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager describe-secret --secret-id credential_3 --profile workload\n}\nload_value", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager describe-secret --secret-id credential_1 --profile billing\n}\nload_value", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "bash -c 'aws sts get-caller-identity --query Account --profile workload'", "count": 1, "score": -0.8389236839191541, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameters --names /app/config --profile billing\n}\nload_value", "count": 2, "score": -0.6736685791009598, "verdict": "not_risky"}
+{"command": "bash -c 'aws ssm get-parameters --names /app/config --profile billing'", "count": 1, "score": -0.36167729792642567, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameter-history --name /app/password --with-decryption --profile billing", "count": 1, "score": 0.43595330781492125, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameters --names /app/config --no-with-decryption --profile billing", "count": 1, "score": -0.5982234501528283, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager describe-secret --secret-id credential_5 --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.9757937276509326, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager list-secrets --max-results 5 --profile admin\n}\nload_value", "count": 2, "score": -0.981211004413921, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-resource-policy --secret-id credential_5 --profile admin", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameter-history --name /app/password --with-decryption --profile workload", "count": 1, "score": 0.43595330781492125, "verdict": "risky"}
+{"command": "bash -c 'aws secretsmanager list-secrets --max-results 5 --profile admin'", "count": 1, "score": -0.9007336590426712, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameter --name /app/password --with-decryption --profile billing\n}\nload_value", "count": 2, "score": 0.34452298079394894, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-secret-value --secret-id credential_1 --query SecretString --profile billing", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager batch-get-secret-value --secret-id-list credential_4 --profile billing", "count": 1, "score": 0.19158101582148768, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager batch-get-secret-value --secret-id-list credential_1 --profile billing", "count": 1, "score": 0.19158101582148768, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameters --names /app/password --with-decryption --profile workload\n}\nf\nunset VALUE", "count": 2, "score": 0.29844542245908445, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager list-secrets --max-results 5 --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.981211004413921, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager describe-secret --secret-id credential_5 --profile admin", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "load_value() {\n aws secretsmanager list-secrets --max-results 5 --profile workload\n}\nload_value", "count": 2, "score": -0.981211004413921, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm get-parameter --name /app/password --with-decryption --profile billing\n}\nf\nunset VALUE", "count": 2, "score": 0.34452298079394894, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-secret-value --secret-id credential_0 --query SecretString --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "load_value() {\n aws secretsmanager list-secrets --max-results 5 --profile billing\n}\nload_value", "count": 2, "score": -0.981211004413921, "verdict": "not_risky"}
+{"command": "aws secretsmanager list-secrets --max-results 5 --profile billing", "count": 1, "score": -0.9007336590426712, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-resource-policy --secret-id credential_4 --profile billing", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm describe-parameters --max-results 5 --profile workload\n}\nload_value", "count": 2, "score": -0.9937392390657586, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager get-resource-policy --secret-id credential_4 --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.9779003311711333, "verdict": "not_risky"}
+{"command": "f() {\n aws sts get-caller-identity --query Account --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.9520338325702498, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameters --names /app/config --no-with-decryption --profile workload\n}\nload_value", "count": 2, "score": -0.8489339083376702, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameters --names /app/config --profile admin\n}\nload_value", "count": 2, "score": -0.6736685791009598, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameters --names /app/config --no-with-decryption --profile workload", "count": 1, "score": -0.5982234501528283, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager describe-secret --secret-id credential_4 --profile billing", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "aws ssm get-parameter --name /app/password --with-decryption --profile workload", "count": 1, "score": 0.6577048559760705, "verdict": "risky"}
+{"command": "bash -c 'aws ssm get-parameter --name /app/config --profile workload'", "count": 1, "score": -0.21524946609083956, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager describe-secret --secret-id credential_0 --profile workload'", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws sts get-caller-identity --query Account --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9520338325702498, "verdict": "not_risky"}
+{"command": "aws ssm get-parameter --name /app/config --profile workload", "count": 1, "score": -0.21524946609083956, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager batch-get-secret-value --secret-id-list credential_5 --profile admin\n}\nf\nunset VALUE", "count": 2, "score": 0.3146913875741306, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-resource-policy --secret-id credential_3 --profile workload", "count": 1, "score": -0.890837388090526, "verdict": "not_risky"}
+{"command": "bash -c 'aws secretsmanager get-secret-value --secret-id credential_4 --query SecretString --profile billing'", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameter --name /app/password --with-decryption --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.34452298079394894, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws sts get-caller-identity --query Account --profile workload", "count": 1, "score": -0.8389236839191541, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm describe-parameters --max-results 5 --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9937392390657586, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-secret-value --secret-id credential_2 --query SecretString --profile admin", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "aws ssm get-parameters --names /app/config --no-with-decryption --profile admin", "count": 1, "score": -0.5982234501528283, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm get-parameters --names /app/password --with-decryption --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.29844542245908445, "verdict": "risky"}
+{"command": "bash -c 'aws secretsmanager describe-secret --secret-id credential_3 --profile workload'", "count": 1, "score": -0.8821929493971095, "verdict": "not_risky"}
+{"command": "f() {\n aws secretsmanager list-secrets --max-results 5 --profile billing\n}\nf\nunset VALUE", "count": 2, "score": -0.981211004413921, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameters --names /app/password --with-decryption --profile billing", "count": 1, "score": 0.5825427927035379, "verdict": "risky"}
+{"command": "bash -c 'aws secretsmanager list-secrets --max-results 5 --profile workload'", "count": 1, "score": -0.9007336590426712, "verdict": "not_risky"}
+{"command": "aws ssm describe-parameters --max-results 5 --profile billing", "count": 1, "score": -0.9047594345023859, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm describe-parameters --max-results 5 --profile workload\n}\nf\nunset VALUE", "count": 2, "score": -0.9937392390657586, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-secret-value --secret-id credential_1 --query SecretString --profile billing", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "bash -c 'aws ssm get-parameters --names /app/password --with-decryption --profile workload'", "count": 1, "score": 0.5825427927035379, "verdict": "risky"}
+{"command": "aws ssm get-parameter --name /app/config --profile admin", "count": 1, "score": -0.21524946609083956, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameter --name /app/password --with-decryption --profile admin", "count": 1, "score": 0.6577048559760705, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameters --names /app/password --with-decryption --profile admin\n}\nf\nunset VALUE", "count": 2, "score": 0.29844542245908445, "verdict": "risky"}
+{"command": "f() {\n aws ssm get-parameters --names /app/config --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.6736685791009598, "verdict": "not_risky"}
+{"command": "f() {\n aws ssm describe-parameters --max-results 5 --profile admin\n}\nf\nunset VALUE", "count": 2, "score": -0.9937392390657586, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager get-secret-value --secret-id credential_5 --query SecretString --profile admin)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": 0.8648534590651642, "verdict": "risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws secretsmanager list-secrets --max-results 5 --profile billing)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.981211004413921, "verdict": "not_risky"}
+{"command": "export AWS_REGION=eu-west-1\nVALUE=$(aws ssm describe-parameters --max-results 5 --profile workload)\nprintf \"%s\\n\" \"$VALUE\"", "count": 1, "score": -0.9937392390657586, "verdict": "not_risky"}
+{"command": "env AWS_REGION=us-west-2 aws secretsmanager get-secret-value --secret-id credential_2 --query SecretString --profile admin", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws sts get-caller-identity --query Account --profile admin", "count": 1, "score": -0.8389236839191541, "verdict": "not_risky"}
+{"command": "aws secretsmanager get-secret-value --secret-id credential_3 --query SecretString --profile workload", "count": 1, "score": 0.8961763239900522, "verdict": "risky"}
+{"command": "env AWS_REGION=us-west-2 aws ssm get-parameters --names /app/config --profile workload", "count": 1, "score": -0.36167729792642567, "verdict": "not_risky"}
+{"command": "load_value() {\n aws ssm get-parameters --names /app/password --with-decryption --profile billing\n}\nload_value", "count": 2, "score": 0.29844542245908445, "verdict": "risky"}

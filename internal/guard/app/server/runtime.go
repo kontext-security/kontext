@@ -365,6 +365,10 @@ func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, de
 	if verdicts.RiskTypes != nil {
 		annotation.RiskTypes = classifierRiskTypes(verdicts.RiskTypes)
 	}
+	if verdicts.Operations != nil {
+		operation := risk.ClassifierOperations(*verdicts.Operations)
+		annotation.Operations = &operation
+	}
 	decision.Classifier = annotation
 }
 
@@ -393,6 +397,10 @@ func (r guardHookRuntime) recordAnnotation(ctx context.Context, actionID string,
 			Threshold:    annotation.SVM.Threshold,
 			ModelVersion: annotation.SVM.ModelVersion,
 		},
+	}
+	if annotation.Operations != nil {
+		operation := riskclassifier.OperationVerdict(*annotation.Operations)
+		record.Operations = &operation
 	}
 	// Advisory data: a failed write must not fail the tool call.
 	_, _ = r.store.SaveClassifierVerdict(ctx, record)

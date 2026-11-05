@@ -41,6 +41,8 @@ type Record struct {
 	AgentTask string `json:"agent_task,omitempty"`
 
 	SVM *SVMVerdict `json:"svm,omitempty"`
+	// Operations is local shadow data, separate from the legacy binary score.
+	Operations *OperationVerdict `json:"operations,omitempty"`
 	// RiskTypeError records advisory model load/inference degradation for an
 	// eligible binary-risky shell call. A successful derived annotation lives
 	// in the separate append-only risk_type_annotations table.
