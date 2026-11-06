@@ -227,14 +227,15 @@ func PrintHookStatus(out io.Writer) HookStatus {
 		} else {
 			hosted, guard := false, false
 			for _, raw := range hooks {
-				visitHookCommands(raw, func(command string) {
+				visitHookCommands(raw, func(command string, args []string) {
+					line := strings.Join(append([]string{command}, args...), " ")
 					switch {
-					case isGuardHookCommand(command):
+					case claudemanaged.IsGuardHookHandler(command, args):
 						guard = true
-						fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
-					case claudemanaged.IsManagedHookCommand(command):
+						fmt.Fprintf(out, "Claude Code Guard hook: %s\n", line)
+					case claudemanaged.IsManagedHookHandler(command, args):
 						hosted = true
-						fmt.Fprintf(out, "Claude Code hosted hook: %s\n", command)
+						fmt.Fprintf(out, "Claude Code hosted hook: %s\n", line)
 					}
 				})
 			}
@@ -276,7 +277,7 @@ func printInstalledHookStatus(out io.Writer, scope hookinstall.Scope) HookStatus
 	return HookStatus{Healthy: hookinstall.Diagnose(out, scope, home)}
 }
 
-func visitHookCommands(raw any, visit func(string)) {
+func visitHookCommands(raw any, visit func(command string, args []string)) {
 	groups, ok := raw.([]any)
 	if !ok {
 		return
@@ -295,9 +296,20 @@ func visitHookCommands(raw any, visit func(string)) {
 			if !ok {
 				continue
 			}
-			if command, ok := hookMap["command"].(string); ok {
-				visit(command)
+			command, ok := hookMap["command"].(string)
+			if !ok {
+				continue
 			}
+			// The exec form keeps the executable in command and the rest in args.
+			var args []string
+			if list, ok := hookMap["args"].([]any); ok {
+				for _, arg := range list {
+					if text, ok := arg.(string); ok {
+						args = append(args, text)
+					}
+				}
+			}
+			visit(command, args)
 		}
 	}
 }

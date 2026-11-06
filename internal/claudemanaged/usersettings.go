@@ -129,8 +129,12 @@ func kontextHook(group MatcherGroup, handler Handler, event Event) (string, bool
 	if len(handler.Args) > 0 {
 		// Exec form: command is the executable's path, not a shell line.
 		fields, ok = commandHandlerFields(agenthooks.CommandHandler{Command: handler.Command, Args: handler.Args})
+	} else if ExecForm {
+		// A shell line doesn't run where hooks need the exec form, so it can't
+		// stand for Kontext's hook there, and must not be copied.
+		return "", false
 	}
-	if !ok || len(fields) != 3 || filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != event.Alias {
+	if !ok || !isHookCall(fields, event.Alias) {
 		return "", false
 	}
 	return fields[0], true
@@ -224,8 +228,7 @@ func runnable(path string) bool {
 	if privacyfolder.Guarded("", path) {
 		return false
 	}
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0
+	return agenthooks.IsExecutable(path)
 }
 
 // ReadUserSettings parses the settings file into a generic map so unknown
@@ -282,6 +285,17 @@ func isGuardHookHandler(handler agenthooks.CommandHandler) bool {
 	return isGuardHookFields(fields)
 }
 
+// IsManagedHookHandler reports whether a hook handler runs Kontext's managed hook,
+// in either form: one command line, or an executable with args.
+func IsManagedHookHandler(command string, args []string) bool {
+	return isManagedHookHandler(agenthooks.CommandHandler{Command: command, Args: args})
+}
+
+// IsGuardHookHandler is IsManagedHookHandler for the local Guard's hook.
+func IsGuardHookHandler(command string, args []string) bool {
+	return isGuardHookHandler(agenthooks.CommandHandler{Command: command, Args: args})
+}
+
 func isManagedHookHandler(handler agenthooks.CommandHandler) bool {
 	if len(handler.Args) == 0 {
 		return IsManagedHookCommand(handler.Command)
@@ -298,7 +312,9 @@ func commandHandlerFields(handler agenthooks.CommandHandler) ([]string, bool) {
 	if command == "" {
 		return nil, false
 	}
-	if fields, ok := agenthooks.SplitCommand(command); ok && len(fields) == 1 {
+	// Unquote a quoted path. An unquoted one is taken as written: SplitCommand
+	// would read the backslashes of a Windows path as escapes.
+	if fields, ok := agenthooks.SplitCommand(command); ok && len(fields) == 1 && strings.ContainsAny(command[:1], `'"`) {
 		command = fields[0]
 	}
 	fields := make([]string, 0, 1+len(handler.Args))
@@ -308,7 +324,7 @@ func commandHandlerFields(handler agenthooks.CommandHandler) ([]string, bool) {
 }
 
 func isGuardHookFields(fields []string) bool {
-	if len(fields) < 4 || filepath.Base(fields[0]) != "kontext" {
+	if len(fields) < 4 || !agenthooks.IsKontextBinary(fields[0]) {
 		return false
 	}
 	if fields[1] == "guard" && fields[2] == "hook" && fields[3] == "claude-code" {
@@ -334,7 +350,7 @@ func isManagedHookFields(fields []string) bool {
 			return false
 		}
 	}
-	if filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" {
+	if !agenthooks.IsKontextBinary(fields[0]) || fields[1] != "hook" {
 		return false
 	}
 	for _, event := range SupportedEvents {
