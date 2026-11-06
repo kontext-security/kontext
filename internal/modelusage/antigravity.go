@@ -70,8 +70,11 @@ func (s *antigravityState) parseLine(text []byte) error {
 	}
 	switch row.Type {
 	case "USER_INPUT":
-		// A system message (a resumed run, a sub-agent's instructions) is no
-		// person's prompt.
+		// Only a person's own input starts a turn. A resumed run or a sub-agent's
+		// instructions arrive as system messages or from other sources.
+		if row.Source != "USER_EXPLICIT" {
+			return nil
+		}
 		if at, err := time.Parse(time.RFC3339Nano, row.CreatedAt); err == nil {
 			s.prompts = append(s.prompts, Prompt{SessionID: s.session, Timestamp: at})
 		}

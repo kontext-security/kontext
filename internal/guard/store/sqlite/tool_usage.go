@@ -72,10 +72,17 @@ func (s *Store) TrackToolTranscript(ctx context.Context, event hook.Event) error
 		}
 		// Only an Antigravity transcript needs the model from its hooks: its rows
 		// do not name one. An event without a model leaves the last one standing.
+		// The first model named clears the fingerprint: responses read before it
+		// were withheld, and no change to the file would bring them back.
+		model := ""
+		if event.Agent == "antigravity" {
+			model = event.Model
+		}
 		_, err := s.db.ExecContext(ctx, `insert into tool_usage_sources(session_id, transcript_path, agent, last_seen, model)
  values(?,?,?,?,?) on conflict(session_id, transcript_path) do update set last_seen=excluded.last_seen, agent=excluded.agent,
+ fingerprint=case when tool_usage_sources.model = '' and excluded.model <> '' then '' else tool_usage_sources.fingerprint end,
  model=case when excluded.model = '' then tool_usage_sources.model else excluded.model end`,
-			event.SessionID, path, event.Agent, time.Now().UTC().Format(time.RFC3339Nano), event.Model)
+			event.SessionID, path, event.Agent, time.Now().UTC().Format(time.RFC3339Nano), model)
 		if err != nil {
 			return err
 		}

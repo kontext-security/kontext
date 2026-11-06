@@ -96,7 +96,10 @@ func DecodeAntigravityEvent(input []byte, agentName string, hookName hook.HookNa
 		if h.StepIdx != nil {
 			event.ToolUseID = AntigravityToolUseID(strings.TrimPrefix(h.ConversationID, antigravitySessionPrefix), *h.StepIdx)
 		}
-		if cwd, _ := toolInput["cwd"].(string); cwd != "" {
+		// Only a shell call runs where its arguments say. Any other tool's arguments
+		// are its own data, and the MCP config lookup reads this directory, so a
+		// call must not be able to pick the workspace whose config identifies it.
+		if cwd, _ := toolInput["cwd"].(string); cwd != "" && name == "Bash" {
 			event.CWD = cwd
 		}
 		// A command that exits non-zero still reports no error: the app calls

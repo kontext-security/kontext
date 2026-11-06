@@ -1196,3 +1196,70 @@ func TestToolUsageRereadsSourcesReadByThePreviousAdapter(t *testing.T) {
 		t.Fatalf("records = %+v, error = %v", rows, err)
 	}
 }
+
+// Ways this can fail: a transcript read before any hook named a model never
+// imports, because a later hook changes no file for reconciliation to notice;
+// every hook forces a reread; another agent's transcript is reread for a model it
+// names itself.
+func TestAntigravityUsageImportsOnceAHookNamesTheModel(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	path, err := filepath.Abs("../../../modelusage/testdata/antigravity-tool-turn.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const session = "antigravity-2163ba71-0862-48c7-87c8-197903c4cacb"
+	event := hook.Event{SessionID: session, Agent: "antigravity", HookName: hook.HookStop, TranscriptPath: path}
+	track := func(model string) {
+		t.Helper()
+		event.Model = model
+		if err := store.TrackToolTranscript(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ReconcileToolUsage(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	track("")
+	if rows, err := store.PendingToolUsage(ctx, 50); err != nil || len(rows) != 0 {
+		t.Fatalf("records with no model: %+v %v", rows, err)
+	}
+	track("gemini-3.8-flash-tiered")
+	rows, err := store.PendingToolUsage(ctx, 50)
+	if err != nil || len(rows) != 7 {
+		t.Fatalf("records: %d %v", len(rows), err)
+	}
+	if rows[0].Model != "gemini-3.8-flash" || rows[0].Agent != "antigravity" || rows[0].SessionID != session {
+		t.Fatalf("identity: %+v", rows[0])
+	}
+
+	var fingerprint, again string
+	read := func(dst *string) {
+		t.Helper()
+		if err := store.db.QueryRowContext(ctx, "select fingerprint from tool_usage_sources where session_id = ?", session).Scan(dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read(&fingerprint)
+	track("gemini-3.8-flash-tiered")
+	read(&again)
+	if fingerprint == "" || again != fingerprint {
+		t.Fatalf("a repeated model forced a reread: %q then %q", fingerprint, again)
+	}
+
+	codex := hook.Event{SessionID: "codex-x", Agent: "codex", HookName: hook.HookStop, TranscriptPath: path, Model: "gpt-6-sol"}
+	if err := store.TrackToolTranscript(ctx, codex); err != nil {
+		t.Fatal(err)
+	}
+	var model string
+	if err := store.db.QueryRowContext(ctx, "select model from tool_usage_sources where session_id = 'codex-x'").Scan(&model); err != nil {
+		t.Fatal(err)
+	}
+	if model != "" {
+		t.Fatalf("codex names its model in its transcript; stored %q", model)
+	}
+}

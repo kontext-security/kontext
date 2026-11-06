@@ -213,3 +213,20 @@ func readAntigravityTranscript(t *testing.T) []byte {
 	}
 	return raw
 }
+
+// A row the app starts for itself must not split the person's turn in two.
+func TestAntigravityTranscriptCountsOnlyAPersonsInputAsAPrompt(t *testing.T) {
+	t.Parallel()
+	rows := `{"type":"USER_INPUT","source":"USER_EXPLICIT","step_index":0,"created_at":"2026-11-06T15:36:04Z"}
+{"type":"USER_INPUT","source":"USER_IMPLICIT","step_index":1,"created_at":"2026-11-06T15:36:05Z"}
+{"type":"USER_INPUT","source":"SYSTEM","step_index":2,"created_at":"2026-11-06T15:36:06Z"}
+{"type":"USER_INPUT","step_index":3,"created_at":"2026-11-06T15:36:07Z"}
+`
+	transcript := NewAntigravityTranscript(antigravityTestSession)
+	if _, err := transcript.Read(strings.NewReader(rows)); err != nil {
+		t.Fatal(err)
+	}
+	if prompts := transcript.Prompts(); len(prompts) != 1 || prompts[0].Timestamp.Second() != 4 {
+		t.Fatalf("prompts = %+v", prompts)
+	}
+}

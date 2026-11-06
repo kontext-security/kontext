@@ -254,3 +254,27 @@ func readAntigravityFixture(t *testing.T, name string) []byte {
 	}
 	return raw
 }
+
+// Only a shell call runs where its arguments say. An MCP tool's arguments are its
+// own data, and the MCP config lookup reads event.CWD: a call must not be able to
+// pick the workspace whose config identifies it for policy.
+func TestDecodeAntigravityEventTakesADirectoryOnlyFromAShellCall(t *testing.T) {
+	t.Parallel()
+	for _, call := range []string{
+		`{"name":"call_mcp_tool","args":{"ServerName":"github","ToolName":"list","Arguments":{"cwd":"/other/project"}}}`,
+		`{"name":"read_file","args":{"Path":"/w/a","cwd":"/other/project"}}`,
+		`{"name":"some_new_tool","args":{"cwd":"/other/project"}}`,
+	} {
+		input := []byte(`{"conversationId":"c1","workspacePaths":["/w"],"toolCall":` + call + `}`)
+		event, err := DecodeAntigravityEvent(input, "antigravity", hook.HookPreToolUse)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.CWD != "/w" {
+			t.Errorf("%s moved the call to %q", call, event.CWD)
+		}
+		if event.ToolInput["cwd"] != "/other/project" {
+			t.Errorf("%s lost its own argument: %#v", call, event.ToolInput)
+		}
+	}
+}
