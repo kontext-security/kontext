@@ -46,9 +46,12 @@ func enrolmentHold(started time.Time, wait time.Duration, enforcement server.Ced
 		if wait <= 0 || enforcement == server.CedarEnforcementOff || policies == nil || event.HookName != hook.HookPreToolUse {
 			return 0
 		}
-		if !cedarpolicy.AwaitingEnrolment(policies.Current().State) {
+		// The clock first: past the wait, which is every call after the first
+		// seconds, this costs no cache read.
+		remaining := time.Until(started.Add(wait))
+		if remaining <= 0 || !cedarpolicy.AwaitingEnrolment(policies.Current().State) {
 			return 0
 		}
-		return max(time.Until(started.Add(wait)), 0)
+		return remaining
 	}
 }
