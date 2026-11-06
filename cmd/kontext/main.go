@@ -92,7 +92,7 @@ func whoamiCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			token, err := loaded.InstallToken(cmd.Context())
+			token, err := managedconfig.ResolveInstallToken(cmd.Context(), loaded.Config.Credentials.InstallTokenRef)
 			ref := loaded.Config.Credentials.InstallTokenRef
 			if err != nil && loaded.Scope == managedconfig.ScopeSystem && ref.Source == "env" && ref.Name == "KONTEXT_INSTALL_TOKEN" {
 				// The MDM launcher exports this only to the daemon, not the user's shell.

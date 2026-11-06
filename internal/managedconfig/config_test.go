@@ -262,7 +262,7 @@ func TestParseTokenRefRejectsInvalidRefs(t *testing.T) {
 	tests := []string{
 		"raw-token-value",
 		"keychain:",
-		"vault:token",
+		"file:token",
 		"env:KONTEXT INSTALL TOKEN",
 		"env:KONTEXT:INSTALL:TOKEN",
 		"env:KONTEXT-INSTALL-TOKEN",

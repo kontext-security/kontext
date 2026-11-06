@@ -196,7 +196,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		dbPath = DefaultDBPath()
 	}
 
-	_, err = loadedConfig.InstallToken(ctx)
+	_, err = managedconfig.ResolveInstallToken(ctx, loadedConfig.Config.Credentials.InstallTokenRef)
 	if err != nil {
 		// Leave a breadcrumb: under launchd this exit is otherwise invisible
 		// (doctor would only see "daemon: not running" with no cause). A
@@ -278,7 +278,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		if err != nil {
 			return "", err
 		}
-		return loaded.InstallToken(refreshCtx)
+		return managedconfig.ResolveInstallToken(refreshCtx, loaded.Config.Credentials.InstallTokenRef)
 	}
 	// Tool output compaction stays off until a confirmed configuration turns
 	// it on: an unreachable, invalid or older configuration reads as off.
@@ -808,7 +808,7 @@ func loadManagedConfig(ctx context.Context) (managedconfig.LoadedConfig, string,
 		}
 		return managedconfig.LoadedConfig{}, "", fmt.Errorf("load managed config: %w", err)
 	}
-	installToken, err := loadedConfig.InstallToken(ctx)
+	installToken, err := managedconfig.ResolveInstallToken(ctx, loadedConfig.Config.Credentials.InstallTokenRef)
 	if err != nil {
 		return managedconfig.LoadedConfig{}, "", fmt.Errorf("resolve install token: %w", err)
 	}
