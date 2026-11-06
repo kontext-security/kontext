@@ -336,9 +336,47 @@ func ResolveInstallToken(ctx context.Context, ref TokenRef) (string, error) {
 		return token, nil
 	case "keychain":
 		return resolveKeychainInstallToken(ctx, ref.Name)
+	case "file":
+		return "", errors.New("a file install token ref resolves beside its config; use LoadedConfig.InstallToken")
 	default:
-		return "", errors.New("install token ref source must be keychain or env")
+		return "", errors.New("install token ref source must be keychain, env or file")
 	}
+}
+
+// maxInstallTokenFileBytes bounds the read: a token is short, and the file
+// sits where an installer, not this process, decides what goes.
+const maxInstallTokenFileBytes = 4096
+
+// InstallToken resolves the config's install token. A file ref names a file in
+// the config's own folder, so an installer can write both, and it is read under
+// the config's own rule: on Windows a system config's token must be a file only
+// an administrator could have written. Every user may read it, because each
+// user's daemon has to.
+func (l LoadedConfig) InstallToken(ctx context.Context) (string, error) {
+	ref := l.Config.Credentials.InstallTokenRef
+	if ref.Source != "file" {
+		return ResolveInstallToken(ctx, ref)
+	}
+	if err := validateTokenRef(ref); err != nil {
+		return "", err
+	}
+	read := os.ReadFile
+	if l.Scope == ScopeSystem {
+		read = readSystemFile
+	}
+	path := filepath.Join(filepath.Dir(l.Path), ref.Name)
+	data, err := read(path)
+	if err != nil {
+		return "", fmt.Errorf("read install token file: %w", err)
+	}
+	if len(data) > maxInstallTokenFileBytes {
+		return "", fmt.Errorf("install token file %s is larger than %d bytes", path, maxInstallTokenFileBytes)
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" {
+		return "", fmt.Errorf("install token file %s is empty", path)
+	}
+	return token, nil
 }
 
 func normalizeAndValidate(cfg Config) (Config, error) {
@@ -488,15 +526,18 @@ func isLoopbackHost(host string) bool {
 
 func validateTokenRef(ref TokenRef) error {
 	switch ref.Source {
-	case "keychain", "env":
+	case "keychain", "env", "file":
 	default:
-		return errors.New("install token ref source must be keychain or env")
+		return errors.New("install token ref source must be keychain, env or file")
 	}
 	if ref.Name == "" {
 		return errors.New("install token ref name is required")
 	}
 	if strings.ContainsAny(ref.Name, " \t\r\n:") {
 		return errors.New("install token ref name must not contain whitespace or colon")
+	}
+	if ref.Source == "file" && (strings.ContainsAny(ref.Name, `/\`) || ref.Name == "." || ref.Name == "..") {
+		return errors.New("file install token ref name must be a file name beside the config, not a path")
 	}
 	if ref.Source == "env" && !envNamePattern.MatchString(ref.Name) {
 		return errors.New("env install token ref name must be a valid environment variable name")
