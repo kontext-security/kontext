@@ -310,8 +310,7 @@ func checkFeature(installed, user string) error {
 }
 
 func executable(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0
+	return agenthooks.IsExecutable(path)
 }
 
 // layerBinaries lists the binaries a Codex layer's Kontext hooks run, in event

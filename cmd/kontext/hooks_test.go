@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -51,6 +52,31 @@ func TestDoctorIgnoresLocalHooksWhenClaudeAbsent(t *testing.T) {
 		_, healthy := checkHooks(io.Discard, managedobserve.DoctorStatus{})
 		if healthy == present {
 			t.Fatalf("present=%v healthy=%v", present, healthy)
+		}
+	}
+}
+
+// System scope refuses before touching any file when the process lacks the
+// privilege its OS asks for: root on macOS, an elevated token on Windows.
+func TestHooksSystemScopeNeedsPrivilege(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("kontext hooks runs on macOS and Windows")
+	}
+	old := hooksPrivileged
+	hooksPrivileged = func() bool { return false }
+	t.Cleanup(func() { hooksPrivileged = old })
+	hermetic.SetHome(t, t.TempDir())
+	binary := filepath.Join(t.TempDir(), "kontext")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	for _, args := range [][]string{{"install", "--scope", "system", "--binary", binary}, {"remove", "--scope", "system"}} {
+		cmd := hooksCmd()
+		cmd.SetArgs(args)
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		if err := cmd.Execute(); err == nil || err.Error() != hooksPrivilegeHint {
+			t.Errorf("%v: err = %v, want %q", args, err, hooksPrivilegeHint)
 		}
 	}
 }
