@@ -338,10 +338,28 @@ func ResolveInstallToken(ctx context.Context, ref TokenRef) (string, error) {
 		return resolveKeychainInstallToken(ctx, ref.Name)
 	case "file":
 		return "", errors.New("a file install token ref resolves beside its config; use LoadedConfig.InstallToken")
+	case "registry":
+		value, err := readRegistryString(InstallTokenRegistryKey, ref.Name)
+		if err != nil {
+			return "", fmt.Errorf("read install token from HKLM\\%s\\%s: %w", InstallTokenRegistryKey, ref.Name, err)
+		}
+		token := strings.TrimSpace(value)
+		if token == "" {
+			return "", fmt.Errorf("install token registry value HKLM\\%s\\%s is empty", InstallTokenRegistryKey, ref.Name)
+		}
+		return token, nil
 	default:
-		return "", errors.New("install token ref source must be keychain, env or file")
+		return "", errors.New("install token ref source must be keychain, env, file or registry")
 	}
 }
+
+// InstallTokenRegistryKey is where a registry ref's value lives on Windows, under
+// HKLM in the 64-bit view. It's a policy key: an installer or an MDM writes it,
+// and only administrators can, while every user's daemon can read it.
+const InstallTokenRegistryKey = `SOFTWARE\Policies\Kontext`
+
+// Test seam: reads a string value only an administrator could have written.
+var readRegistryString = readAdminOnlyRegistry
 
 // maxInstallTokenFileBytes bounds the read: a token is short, and the file
 // sits where an installer, not this process, decides what goes.
@@ -526,9 +544,9 @@ func isLoopbackHost(host string) bool {
 
 func validateTokenRef(ref TokenRef) error {
 	switch ref.Source {
-	case "keychain", "env", "file":
+	case "keychain", "env", "file", "registry":
 	default:
-		return errors.New("install token ref source must be keychain, env or file")
+		return errors.New("install token ref source must be keychain, env, file or registry")
 	}
 	if ref.Name == "" {
 		return errors.New("install token ref name is required")
@@ -538,6 +556,9 @@ func validateTokenRef(ref TokenRef) error {
 	}
 	if ref.Source == "file" && (strings.ContainsAny(ref.Name, `/\`) || ref.Name == "." || ref.Name == "..") {
 		return errors.New("file install token ref name must be a file name beside the config, not a path")
+	}
+	if ref.Source == "registry" && strings.ContainsAny(ref.Name, `/\`) {
+		return errors.New("registry install token ref name must be a value name under " + InstallTokenRegistryKey + ", not a key path")
 	}
 	if ref.Source == "env" && !envNamePattern.MatchString(ref.Name) {
 		return errors.New("env install token ref name must be a valid environment variable name")
