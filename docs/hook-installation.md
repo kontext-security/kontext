@@ -75,8 +75,19 @@ the table shows their defaults. Existing `kontext setup` Codex paths remain at
 `~/.codex`. `--binary` defaults to this executable's stable Homebrew path for
 user scope and `/usr/local/bin/kontext` for system scope.
 
-These commands are macOS-only. System mutations require root. Dry-run requires
-no elevation and creates no files, directories, or backups. A real install
+These commands run on macOS and Windows. System mutations require root on macOS
+and an elevated process ("Run as administrator") on Windows. Dry-run requires
+no elevation and creates no files, directories, or backups.
+
+On Windows, Claude Code hooks are written in exec form: `command` is the
+absolute path of `kontext.exe` and `args` carries the rest, because Claude Code
+runs a one-line hook command through PowerShell there. Codex and Cursor files
+are skipped and reported as `unsupported-on-windows`. System scope writes Claude
+Code's managed drop-in under Program Files and needs `--binary`:
+
+```powershell
+kontext.exe hooks install --scope system --binary "C:\Program Files\Kontext\kontext.exe"
+``` A real install
 requires the target binary to be an executable file; dry-run can plan before
 the binary exists. User scope runs as the target user without elevation:
 
