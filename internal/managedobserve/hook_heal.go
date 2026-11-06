@@ -94,7 +94,7 @@ func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logge
 		var errs []error
 		// One pass per agent: a broken file of one agent must not stop the
 		// repair of another.
-		for _, kinds := range [][]string{{"claude-user"}, {"codex", "feature"}, {"cursor"}} {
+		for _, kinds := range [][]string{{"claude-user"}, {"codex", "feature"}, {"cursor"}, {"antigravity"}} {
 			err := hookinstall.Install(hookinstall.Options{
 				Scope: hookinstall.User, Home: home, Binary: binary, NoBackup: true, SetupPaths: true,
 				Skip: func(file hookinstall.File) bool {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
+	"github.com/kontext-security/kontext/internal/antigravitymanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
@@ -61,8 +62,45 @@ func agentWiring(paths codexmanaged.InstallationPaths, pathsErr error, scope man
 				return agentinventory.WiredError
 			}
 		},
-		"cursor": func() agentinventory.Wired { return cursorWired(scope) },
+		"cursor":      func() agentinventory.Wired { return cursorWired(scope) },
+		"antigravity": antigravityWired,
 	}
+}
+
+// antigravityWired reports whether the user's hooks file carries the complete
+// Kontext hook set, at any scope: Antigravity documents no machine-wide file.
+func antigravityWired() agentinventory.Wired {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return agentinventory.WiredError
+	}
+	path := antigravitymanaged.UserHooksPath(home)
+	// Reading through a link into a privacy-guarded folder would prompt.
+	if privacyfolder.Guarded(home, path) {
+		return agentinventory.WiredError
+	}
+	raw, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return agentinventory.WiredNo
+	case err != nil || !json.Valid(raw):
+		return agentinventory.WiredError
+	}
+	binary, err := antigravitymanaged.ValidateInstalled(raw)
+	switch {
+	case errors.Is(err, antigravitymanaged.ErrMalformed):
+		return agentinventory.WiredError
+	case err != nil:
+		return agentinventory.WiredNo
+	}
+	// A hook naming a missing binary passes every call without recording it.
+	if privacyfolder.Guarded(home, binary) {
+		return agentinventory.WiredError
+	}
+	if info, err := os.Stat(binary); err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return agentinventory.WiredError
+	}
+	return agentinventory.WiredYes
 }
 
 // cursorWired reports whether Cursor's machine-wide hooks.json, or for a

@@ -9,6 +9,7 @@ agent's hooks, even when that agent is absent.
 | user | Claude Code | `~/.claude/settings.json` (or `CLAUDE_CONFIG_DIR/settings.json`) |
 | user | Codex | `~/.codex/hooks.json`, `~/.codex/config.toml` |
 | user | Cursor | `~/.cursor/hooks.json` |
+| user | Antigravity | `~/.gemini/config/hooks.json` |
 | system | Claude Code | `/Library/Application Support/ClaudeCode/managed-settings.d/20-kontext.json` |
 | system | Codex | `/etc/codex/hooks.json`, `/etc/codex/config.toml` |
 | system | Cursor | `/Library/Application Support/Cursor/hooks.json` |

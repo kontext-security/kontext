@@ -14,6 +14,12 @@ type Aliaser interface {
 	Aliases() []string
 }
 
+// CommandEventAgent is an agent whose hook payloads do not name their event, so
+// it takes the event from the hook command.
+type CommandEventAgent interface {
+	ForEvent(event hook.HookName) Agent
+}
+
 var registry = map[string]Agent{}
 var aliases = map[string]Agent{}
 

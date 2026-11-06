@@ -24,7 +24,7 @@ create table if not exists tool_usage_sources (
  session_id text not null, transcript_path text not null, agent text not null,
  last_seen text not null, checked_at text not null default '',
  fingerprint text not null default '', error text not null default '',
- error_fingerprint text not null default '',
+ error_fingerprint text not null default '', model text not null default '',
  primary key(session_id, transcript_path)
 );
 create table if not exists tool_usage_records (
@@ -46,7 +46,9 @@ type ToolUsageRecord struct {
 // TrackToolTranscript only registers local metadata. Transcript I/O is done by
 // the stream worker, outside the policy decision/acknowledgement path.
 func (s *Store) TrackToolTranscript(ctx context.Context, event hook.Event) error {
-	if event.Agent != "claude" && event.Agent != "cowork" && event.Agent != "codex" {
+	switch event.Agent {
+	case "claude", "cowork", "codex", "antigravity":
+	default:
 		return nil
 	}
 	if event.SessionID == "" {
@@ -68,9 +70,12 @@ func (s *Store) TrackToolTranscript(ctx context.Context, event hook.Event) error
 		if !filepath.IsAbs(path) {
 			return fmt.Errorf("usage transcript path must be absolute")
 		}
-		_, err := s.db.ExecContext(ctx, `insert into tool_usage_sources(session_id, transcript_path, agent, last_seen)
- values(?,?,?,?) on conflict(session_id, transcript_path) do update set last_seen=excluded.last_seen, agent=excluded.agent`,
-			event.SessionID, path, event.Agent, time.Now().UTC().Format(time.RFC3339Nano))
+		// Only an Antigravity transcript needs the model from its hooks: its rows
+		// do not name one. An event without a model leaves the last one standing.
+		_, err := s.db.ExecContext(ctx, `insert into tool_usage_sources(session_id, transcript_path, agent, last_seen, model)
+ values(?,?,?,?,?) on conflict(session_id, transcript_path) do update set last_seen=excluded.last_seen, agent=excluded.agent,
+ model=case when excluded.model = '' then tool_usage_sources.model else excluded.model end`,
+			event.SessionID, path, event.Agent, time.Now().UTC().Format(time.RFC3339Nano), event.Model)
 		if err != nil {
 			return err
 		}
@@ -97,7 +102,7 @@ const (
 )
 
 type toolUsageSource struct {
-	session, path, agent, lastSeen, checkedAt, fingerprint, message string
+	session, path, agent, lastSeen, checkedAt, fingerprint, message, model string
 	// errorFingerprint is the file state whose read last failed.
 	errorFingerprint string
 }
@@ -180,7 +185,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 }
 
 func (s *Store) toolUsageSources(ctx context.Context, now time.Time) ([]toolUsageSource, error) {
-	rows, err := s.db.QueryContext(ctx, `select session_id, transcript_path, agent, last_seen, checked_at, fingerprint, error, error_fingerprint from tool_usage_sources
+	rows, err := s.db.QueryContext(ctx, `select session_id, transcript_path, agent, last_seen, checked_at, fingerprint, error, error_fingerprint, model from tool_usage_sources
  where last_seen >= ? or fingerprint = ''`, now.Add(-7*24*time.Hour).Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
@@ -189,7 +194,7 @@ func (s *Store) toolUsageSources(ctx context.Context, now time.Time) ([]toolUsag
 	var sources []toolUsageSource
 	for rows.Next() {
 		var src toolUsageSource
-		if err := rows.Scan(&src.session, &src.path, &src.agent, &src.lastSeen, &src.checkedAt, &src.fingerprint, &src.message, &src.errorFingerprint); err != nil {
+		if err := rows.Scan(&src.session, &src.path, &src.agent, &src.lastSeen, &src.checkedAt, &src.fingerprint, &src.message, &src.errorFingerprint, &src.model); err != nil {
 			return nil, err
 		}
 		sources = append(sources, src)
@@ -252,14 +257,12 @@ func readToolTranscript(src toolUsageSource, now time.Time) (string, []modelusag
 	if err != nil {
 		return "", nil, nil, err
 	}
-	key := transcriptKey{codex: src.agent == "codex", path: src.path}
+	key := transcriptKey{format: transcriptFormat(src.agent), path: src.path}
 	cursor := transcriptCursors.take(key)
 	if !cursor.resumes(f, stat) {
-		cursor = &transcriptCursor{transcript: modelusage.NewClaudeTranscript()}
-		if key.codex {
-			cursor.transcript = modelusage.NewCodexTranscript()
-		}
+		cursor = &transcriptCursor{transcript: newToolTranscript(key.format, src.session)}
 	}
+	cursor.transcript.SetModel(src.model)
 	records, err := cursor.read(f, stat, now)
 	transcriptCursors.put(key, cursor)
 	if err != nil {
@@ -297,8 +300,30 @@ func readToolTranscript(src toolUsageSource, now time.Time) (string, []modelusag
 var transcriptCursors = transcriptCursorCache{cursors: map[transcriptKey]*transcriptCursor{}}
 
 type transcriptKey struct {
-	codex bool
-	path  string
+	format string
+	path   string
+}
+
+// transcriptFormat names the parser an agent's transcript needs. Cowork embeds
+// Claude Code and writes its format.
+func transcriptFormat(agent string) string {
+	switch agent {
+	case "codex", "antigravity":
+		return agent
+	default:
+		return "claude"
+	}
+}
+
+func newToolTranscript(format, session string) *modelusage.Transcript {
+	switch format {
+	case "codex":
+		return modelusage.NewCodexTranscript()
+	case "antigravity":
+		return modelusage.NewAntigravityTranscript(session)
+	default:
+		return modelusage.NewClaudeTranscript()
+	}
 }
 
 // transcriptCursor is a transcript's parser state after its last complete

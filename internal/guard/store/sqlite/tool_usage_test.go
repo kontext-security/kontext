@@ -740,7 +740,7 @@ func TestToolUsageCursorMatchesFullReads(t *testing.T) {
 				}
 				t.Cleanup(func() { store.Close() })
 				path := filepath.Join(dir, "session.jsonl")
-				copies[i] = transcriptCopy{store: store, path: path, key: transcriptKey{codex: scenario.agent == "codex", path: path}}
+				copies[i] = transcriptCopy{store: store, path: path, key: transcriptKey{format: transcriptFormat(scenario.agent), path: path}}
 				t.Cleanup(func() { transcriptCursors.take(copies[i].key) })
 			}
 			incremental, full := copies[0], copies[1]

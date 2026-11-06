@@ -434,7 +434,7 @@ func TestRefreshStaleHooksAndRemoveDryRun(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The user's Claude settings file stays; only its hooks go.
-			if want := map[Scope]int{User: 3, System: 4}[scope]; strings.Count(out.String(), "would-remove\t") != want {
+			if want := map[Scope]int{User: 4, System: 4}[scope]; strings.Count(out.String(), "would-remove\t") != want {
 				t.Fatal(&out)
 			}
 			for _, d := range defs {

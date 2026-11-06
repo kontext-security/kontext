@@ -25,7 +25,7 @@ var versionSources = map[string][]string{
 	"windsurf":      {"Windsurf.app"},
 	"copilot_cli":   {"copilot"},
 	"opencode":      {"opencode", "OpenCode.app"},
-	"antigravity":   {"Antigravity.app"},
+	"antigravity":   {"Antigravity.app", "agy"},
 	"kiro":          {"Kiro.app"},
 	"goose":         {"Goose.app"},
 }

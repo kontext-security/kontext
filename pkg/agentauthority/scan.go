@@ -121,7 +121,7 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 		case "gemini_cli":
 			g.permissionConfig(a, filepath.Join(base, "settings.json"), readers.Gemini)
 		case "antigravity":
-			g.generic(a, filepath.Join(home, ".gemini/antigravity/mcp_config.json"), "mcpServers")
+			g.generic(a, filepath.Join(home, ".gemini/config/mcp_config.json"), "mcpServers")
 		case "kiro":
 			g.generic(a, filepath.Join(base, "settings/mcp.json"), "mcpServers")
 		case "amp":

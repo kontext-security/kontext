@@ -16,6 +16,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/kontext-security/kontext/internal/agenthooks"
+	"github.com/kontext-security/kontext/internal/antigravitymanaged"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
@@ -85,11 +86,17 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 		claude = File{"claude-user", path, User}
 		cursor = File{"cursor", filepath.Join(home, ".cursor", "hooks.json"), User}
 	}
-	return []Definition{
+	defs := []Definition{
 		{Agent: "claude_code", Name: "Claude Code", Files: []File{claude}, Validate: validateClaude},
 		{Agent: "codex", Name: "Codex", Files: []File{{"codex", filepath.Join(codexDir, "hooks.json"), scope}, {"feature", filepath.Join(codexDir, "config.toml"), scope}}, Validate: codexmanaged.ValidateInstalled},
 		{Agent: "cursor", Name: "Cursor", Files: []File{cursor}, Validate: cursormanaged.ValidateInstalled},
-	}, nil
+	}
+	// Antigravity documents no machine-wide hooks location, so it has no system
+	// file for an organization package to own.
+	if scope == User {
+		defs = append(defs, Definition{Agent: "antigravity", Name: "Antigravity", Files: []File{{"antigravity", antigravitymanaged.UserHooksPath(home), User}}, Validate: antigravitymanaged.ValidateInstalled})
+	}
+	return defs, nil
 }
 
 // Machine-wide files a user-scope install reads but never writes (test seams).
@@ -294,7 +301,7 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 // setupTolerates lists the files setup reports instead of failing on: the
 // optional Codex feature flag, and any file an uninstall cannot clean.
 func setupTolerates(opts Options, kind string, remove bool) bool {
-	return opts.Setup && (kind == "feature" || remove && (kind == "codex" || kind == "cursor" || kind == "claude-user"))
+	return opts.Setup && (kind == "feature" || remove && (kind == "codex" || kind == "cursor" || kind == "claude-user" || kind == "antigravity"))
 }
 
 func plan(file File, opts Options, remove bool) (change, error) {
@@ -342,7 +349,7 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		if !remove {
 			c.after, err = claudemanaged.TemplateJSON(opts.Binary)
 		}
-	case "codex", "claude-user", "cursor":
+	case "codex", "claude-user", "cursor", "antigravity":
 		binary := opts.Binary
 		var machine [][]byte
 		if file.Kind == "claude-user" && !remove {
@@ -384,6 +391,10 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			err = claudemanaged.RemoveManagedHooks(settings)
 		} else if file.Kind == "claude-user" {
 			_, err = claudemanaged.MergeManagedHooksMirroring(settings, binary, machine...)
+		} else if file.Kind == "antigravity" && removeHere {
+			antigravitymanaged.RemoveManagedHooks(settings)
+		} else if file.Kind == "antigravity" {
+			err = antigravitymanaged.MergeManagedHooks(settings, binary)
 		} else if file.Kind == "cursor" && removeHere {
 			err = cursormanaged.RemoveManagedHooks(settings)
 		} else if file.Kind == "cursor" {
@@ -399,14 +410,14 @@ func plan(file File, opts Options, remove bool) (change, error) {
 		after, _ := json.Marshal(settings)
 		// Setup rewrites Codex's file as is; a machine-wide file is only
 		// rewritten when Kontext's entries change, so a rerun asks for no password.
-		if bytes.Equal(before, after) && (!opts.Setup || file.Kind == "claude-user" || file.Kind == "cursor" || coveredAll) {
+		if bytes.Equal(before, after) && (!opts.Setup || file.Kind == "claude-user" || file.Kind == "cursor" || file.Kind == "antigravity" || coveredAll) {
 			return c, nil
 		}
 		c.after, err = json.MarshalIndent(settings, "", "  ")
 		c.after = append(c.after, '\n')
 		// Only delete an empty file when all of its content was our hooks. A
 		// dotfiles symlink stays; its target gets the emptied settings.
-		if removeHere && (!opts.Setup || file.Kind == "cursor" || coveredAll) && len(settings) == 0 && file.Kind != "claude-user" && info.Mode()&os.ModeSymlink == 0 {
+		if removeHere && (!opts.Setup || file.Kind == "cursor" || file.Kind == "antigravity" || coveredAll) && len(settings) == 0 && file.Kind != "claude-user" && info.Mode()&os.ModeSymlink == 0 {
 			c.after = nil
 		}
 	case "feature":

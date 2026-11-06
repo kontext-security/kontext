@@ -230,6 +230,20 @@ func (r *Resolver) configURL(home, agent, cwd, server string) string {
 		}
 		url, _ := find(r.servers(global), server)
 		return url
+	case "antigravity":
+		// As for Cursor: the workspace's file wins over the global one, and a
+		// workspace in a guarded folder cannot be read.
+		if cwd != "" {
+			project := filepath.Join(cwd, ".agents", "mcp_config.json")
+			if privacyfolder.Guarded(home, project) {
+				return ""
+			}
+			if url, found := find(r.servers(project), server); found {
+				return url
+			}
+		}
+		url, _ := find(r.servers(filepath.Join(home, ".gemini", "config", "mcp_config.json")), server)
+		return url
 	}
 	return ""
 }
