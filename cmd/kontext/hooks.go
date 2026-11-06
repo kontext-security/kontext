@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -17,15 +18,15 @@ func hooksCmd() *cobra.Command {
 		var scope, binary string
 		var dryRun bool
 		sub := &cobra.Command{Use: action, Short: action + " Kontext hooks", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-			if runtime.GOOS != "darwin" {
-				return fmt.Errorf("kontext hooks is currently macOS-only")
+			if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+				return fmt.Errorf("kontext hooks is currently macOS and Windows only")
 			}
 			if scope != "user" && scope != "system" {
 				return fmt.Errorf("invalid scope %q: want user or system", scope)
 			}
 			// Dry-run needs no privileges and must not create directories or backups.
-			if scope == "system" && !dryRun && os.Geteuid() != 0 {
-				return fmt.Errorf("system hook installation and removal require root; use sudo with --scope system")
+			if scope == "system" && !dryRun && !hooksPrivileged() {
+				return errors.New(hooksPrivilegeHint)
 			}
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -35,6 +36,10 @@ func hooksCmd() *cobra.Command {
 			// install the machine-wide set with --scope system.
 			if binary == "" && scope == "user" {
 				binary, _ = setup.StableBinaryPath()
+			} else if binary == "" && action == "install" && runtime.GOOS == "windows" {
+				// No Windows install folder is fixed yet, so a machine-wide
+				// hook names its binary explicitly.
+				return errors.New("--scope system on Windows needs --binary, the absolute path of kontext.exe")
 			} else if binary == "" {
 				binary = claudemanaged.DefaultKontextBinary
 			}

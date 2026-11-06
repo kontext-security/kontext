@@ -1393,6 +1393,15 @@ func TestStableBinaryPathPrefersBrewSymlink(t *testing.T) {
 	}
 }
 
+// `kontext hooks install` on Windows names the running kontext.exe as is.
+func TestStableBinaryPathKeepsAWindowsPath(t *testing.T) {
+	exe := `C:\Users\t\AppData\Local\Programs\Kontext\kontext.exe`
+	overrideVar(t, &executablePath, func() (string, error) { return exe, nil })
+	if got, note := StableBinaryPath(); got != exe || note != "" {
+		t.Fatalf("StableBinaryPath() = %q, %q", got, note)
+	}
+}
+
 func TestSetupBindsTheSelectedIdentityBeforeSavingCredentials(t *testing.T) {
 	for _, email := range []string{"person@example.com", ""} {
 		t.Run("person="+email, func(t *testing.T) {

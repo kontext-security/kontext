@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -91,6 +92,15 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 		{Agent: "cursor", Name: "Cursor", Files: []File{cursor}, Validate: cursormanaged.ValidateInstalled},
 	}, nil
 }
+
+// runtimeGOOS is the OS the hooks are installed for (a test seam).
+var runtimeGOOS = runtime.GOOS
+
+// windowsUnsupported is the reason Codex's and Cursor's files are left alone
+// on Windows. Claude Code runs a hook without a shell (its exec form); Codex
+// runs every hook command through PowerShell, which can't parse the POSIX
+// quoting Kontext writes, and Cursor's Windows behaviour is unverified.
+const windowsUnsupported = "unsupported-on-windows"
 
 // Machine-wide files a user-scope install reads but never writes (test seams).
 var (
@@ -234,7 +244,10 @@ func run(opts Options, remove bool) error {
 }
 
 func runDefinitions(opts Options, defs []Definition, remove bool) error {
-	if !remove && (!filepath.IsAbs(opts.Binary) || filepath.Base(opts.Binary) != "kontext" || strings.ContainsAny(opts.Binary, "\n\r\x00")) {
+	if !remove && (!filepath.IsAbs(opts.Binary) || !installableName(opts.Binary) || strings.ContainsAny(opts.Binary, "\n\r\x00")) {
+		if runtimeGOOS == "windows" {
+			return errors.New("binary must be an absolute path to kontext.exe")
+		}
 		return errors.New("binary must be an absolute path to a kontext executable")
 	}
 	if !remove && !opts.DryRun && !opts.Setup && !executable(opts.Binary) {
@@ -291,6 +304,16 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 	return nil
 }
 
+// installableName reports whether binary's file name is one Kontext writes
+// into a hook: kontext, or on Windows kontext.exe, since Claude Code's exec
+// form starts only a real .exe there.
+func installableName(binary string) bool {
+	if runtimeGOOS == "windows" {
+		return strings.EqualFold(filepath.Base(binary), "kontext.exe")
+	}
+	return filepath.Base(binary) == "kontext"
+}
+
 // setupTolerates lists the files setup reports instead of failing on: the
 // optional Codex feature flag, and any file an uninstall cannot clean.
 func setupTolerates(opts Options, kind string, remove bool) bool {
@@ -299,6 +322,12 @@ func setupTolerates(opts Options, kind string, remove bool) bool {
 
 func plan(file File, opts Options, remove bool) (change, error) {
 	c := change{result: Result{File: file, Action: "skip", Reason: "unchanged"}}
+	// Neither read nor written, so nothing creates Codex's system folder,
+	// which its installer has to own.
+	if runtimeGOOS == "windows" && file.Kind != "claude" && file.Kind != "claude-user" {
+		c.result.Reason = windowsUnsupported
+		return c, nil
+	}
 	// A user file whose every event a machine-wide Kontext hook already runs
 	// keeps none of Kontext's entries.
 	var coveredAll bool
