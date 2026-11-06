@@ -55,6 +55,9 @@ type Options struct {
 	// CodexProxy answers the Codex proxy's questions (see localruntime).
 	CodexProxy   func(context.Context, json.RawMessage) json.RawMessage
 	ObserveEvent func(context.Context, hook.Event)
+	// HoldFor says how long a PreToolUse call may be held until the policy
+	// arrives (see localruntime.Options).
+	HoldFor func(hook.Event) time.Duration
 }
 
 type Host struct {
@@ -217,6 +220,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		OffersCompaction:  opts.OffersCompaction,
 		CodexProxy:        opts.CodexProxy,
 		Observe:           opts.ObserveEvent,
+		HoldFor:           opts.HoldFor,
 		Diagnostic:        opts.Diagnostic,
 	})
 	if err != nil {

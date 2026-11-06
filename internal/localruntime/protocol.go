@@ -31,6 +31,30 @@ type EvaluateRequest struct {
 	// CodexProxy is a CodexProxyRequestType request's question, as the Codex
 	// proxy encodes it.
 	CodexProxy json.RawMessage `json:"codex_proxy,omitempty"`
+	// Capabilities names what the hook understands beyond one request and
+	// one answer, such as HoldCapability. A daemon uses a capability only
+	// when the request names it, so a hook that predates one is never sent
+	// a frame it cannot read; a daemon that predates one ignores the field.
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// HoldCapability says the hook reads a HoldResultType frame before the
+// answer and keeps waiting for the time the frame names.
+const HoldCapability = "hold"
+
+// HoldResultType marks a frame the daemon sends before the answer when it
+// holds a PreToolUse call until its policy arrives. HoldMs says how long at
+// most; the answer follows on the same connection.
+const HoldResultType = "hold"
+
+// Accepts reports whether the request names the capability.
+func (r *EvaluateRequest) Accepts(capability string) bool {
+	for _, have := range r.Capabilities {
+		if have == capability {
+			return true
+		}
+	}
+	return false
 }
 
 type EvaluateResult struct {
@@ -51,6 +75,9 @@ type EvaluateResult struct {
 	// the hook may then send a CompactRequestType request. A daemon that
 	// predates the request never offers it.
 	CompactToolOutput bool `json:"compact_tool_output,omitempty"`
+	// HoldMs, on a HoldResultType frame, is the longest the daemon will hold
+	// the call before it answers.
+	HoldMs int64 `json:"hold_ms,omitempty"`
 }
 
 // CompactRequestType marks a request for tool output compaction instead of
