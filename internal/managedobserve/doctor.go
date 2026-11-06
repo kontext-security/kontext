@@ -278,7 +278,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	tokenRef := loaded.Config.Credentials.InstallTokenRef
-	if _, err := managedconfig.ResolveInstallToken(ctx, tokenRef); err == nil {
+	if _, err := loaded.InstallToken(ctx); err == nil {
 		report.InstallTokenReadable = true
 		fmt.Fprintf(out, "  install token: readable (%s)\n", tokenRef)
 	} else if tokenRef.Source == "env" && loaded.Scope == managedconfig.ScopeSystem {
