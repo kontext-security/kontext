@@ -43,6 +43,13 @@ const (
 // through unchecked.
 var daemonRestartWait = 3 * time.Second
 
+// maxPolicyHold caps how long a hook keeps waiting when a fresh daemon holds
+// a PreToolUse call until its policy arrives (ENG-939). The daemon holds for
+// at most its own enrolment wait; this cap keeps a daemon that asks for more
+// from stalling the agent. A daemon that never sends a hold costs the
+// decision budget alone, as before.
+var maxPolicyHold = 3 * time.Second
+
 var launchdMu sync.Mutex
 
 type Lifecycle struct {
@@ -154,7 +161,7 @@ func (l Lifecycle) processWithKickstart(ctx context.Context, event hook.Event, b
 			return daemonUnavailable()
 		}
 		callCtx, cancelCall := context.WithTimeout(ctx, budget)
-		result, err := l.call(callCtx, event)
+		result, held, err := l.callGating(callCtx, event)
 		cancelCall()
 		if err == nil {
 			return l.finalize(event, result)
@@ -162,8 +169,8 @@ func (l Lifecycle) processWithKickstart(ctx context.Context, event hook.Event, b
 		// The daemon went away between the probe and its reply, which is what
 		// a restart looks like from here. One more round through reach waits
 		// for the successor. A slow reply is not retried; that would double
-		// the decision budget.
-		if attempt == 0 && connectionLost(err) {
+		// the decision budget. Nor is a held call: it already spent its hold.
+		if attempt == 0 && !held && connectionLost(err) {
 			continue
 		}
 		return daemonUnavailable()
@@ -276,6 +283,28 @@ func (l Lifecycle) waitForProbe(ctx context.Context) bool {
 		case <-timer.C:
 		}
 	}
+}
+
+// callGating is call for a hook that gates something. A PreToolUse call can
+// be held by a fresh daemon until its policy arrives: the hook then waits up
+// to maxPolicyHold more, plus the decision budget again. held reports that
+// it was.
+func (l Lifecycle) callGating(ctx context.Context, event hook.Event) (result hook.Result, held bool, err error) {
+	if event.HookName != hook.HookPreToolUse {
+		result, err = l.call(ctx, event)
+		return result, false, err
+	}
+	client := localruntime.NewClient(l.SocketPath)
+	client.Timeout = time.Until(deadlineOr(ctx, time.Now().Add(asyncHookWait)))
+	if client.Timeout <= 0 {
+		client.Timeout = asyncHookWait
+	}
+	result, held, err = client.ProcessHoldable(ctx, event, maxPolicyHold)
+	if err != nil {
+		l.Diagnostic.Printf("managed observe call (held %v): %v\n", held, err)
+		return hook.Result{}, held, err
+	}
+	return result, held, nil
 }
 
 func (l Lifecycle) call(ctx context.Context, event hook.Event) (hook.Result, error) {
