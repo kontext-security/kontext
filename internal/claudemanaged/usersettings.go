@@ -129,6 +129,10 @@ func kontextHook(group MatcherGroup, handler Handler, event Event) (string, bool
 	if len(handler.Args) > 0 {
 		// Exec form: command is the executable's path, not a shell line.
 		fields, ok = commandHandlerFields(agenthooks.CommandHandler{Command: handler.Command, Args: handler.Args})
+	} else if ExecForm {
+		// A shell line doesn't run where hooks need the exec form, so it can't
+		// stand for Kontext's hook there, and must not be copied.
+		return "", false
 	}
 	if !ok || !isHookCall(fields, event.Alias) {
 		return "", false
@@ -287,6 +291,17 @@ func isGuardHookHandler(handler agenthooks.CommandHandler) bool {
 		return false
 	}
 	return isGuardHookFields(fields)
+}
+
+// IsManagedHookHandler reports whether a hook handler runs Kontext's managed hook,
+// in either form: one command line, or an executable with args.
+func IsManagedHookHandler(command string, args []string) bool {
+	return isManagedHookHandler(agenthooks.CommandHandler{Command: command, Args: args})
+}
+
+// IsGuardHookHandler is IsManagedHookHandler for the local Guard's hook.
+func IsGuardHookHandler(command string, args []string) bool {
+	return isGuardHookHandler(agenthooks.CommandHandler{Command: command, Args: args})
 }
 
 func isManagedHookHandler(handler agenthooks.CommandHandler) bool {

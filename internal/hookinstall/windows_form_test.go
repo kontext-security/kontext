@@ -99,6 +99,31 @@ func TestWindowsUserInstallWritesClaudeExecFormOnly(t *testing.T) {
 	}
 }
 
+// A machine drop-in an older version wrote in the shell form doesn't run under
+// PowerShell, so a user install must write its own exec form, not copy it.
+func TestWindowsUserInstallDoesNotCopyAShellFormMachineHook(t *testing.T) {
+	home, binary := asWindows(t)
+	claudemanaged.ExecForm = false
+	shell, err := json.Marshal(claudemanaged.Template(binary))
+	claudemanaged.ExecForm = true
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, machineClaudeDropIn, string(shell), 0644)
+
+	var out bytes.Buffer
+	if err := Install(Options{Scope: User, Home: home, Binary: binary, Out: &out}); err != nil {
+		t.Fatal(err)
+	}
+	data := read(t, filepath.Join(home, ".claude", "settings.json"))
+	if !claudemanaged.UserHooksMatch([]byte(data), binary) {
+		t.Fatalf("settings.json is not the exec-form hook set:\n%s", data)
+	}
+	if strings.Contains(data, " hook ") {
+		t.Fatalf("a shell-form hook was copied:\n%s", data)
+	}
+}
+
 func TestWindowsSystemInstallWritesTheManagedDropIn(t *testing.T) {
 	_, binary := asWindows(t)
 	dropIn := filepath.Join(t.TempDir(), "ClaudeCode", "managed-settings.d", "20-kontext.json")
