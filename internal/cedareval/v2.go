@@ -16,6 +16,7 @@ const (
 	AgentClaudeCodeV2        = "anthropic-claude-code"
 	AgentCodexV2             = "openai-codex"
 	AgentCursorV2            = "anysphere-cursor"
+	AgentAntigravityV2       = "google-antigravity"
 	ToolShellV2              = "shell"
 	ToolUnknownV2            = "unknown"
 )
@@ -151,7 +152,7 @@ func validateInputV2(input ToolUseInputV2) error {
 	if !validText(input.EndpointID, 1024) {
 		return fmt.Errorf("cedareval: endpoint id must contain 1 to 1024 characters")
 	}
-	if input.AgentID != AgentClaudeCodeV2 && input.AgentID != AgentCodexV2 && input.AgentID != AgentCursorV2 {
+	if input.AgentID != AgentClaudeCodeV2 && input.AgentID != AgentCodexV2 && input.AgentID != AgentCursorV2 && input.AgentID != AgentAntigravityV2 {
 		return fmt.Errorf("cedareval: unsupported agent %q", input.AgentID)
 	}
 	if !validText(input.SessionID, 1024) {

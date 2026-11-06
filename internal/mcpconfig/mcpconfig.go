@@ -198,7 +198,45 @@ func (r *Resolver) lookup(agent, sessionID, cwd, toolName string) (url, name str
 		}
 		return url, "", false
 	}
+	if agent == "antigravity" {
+		return r.antigravityURL(home, cwd, rest), "", false
+	}
 	return r.configURL(home, agent, cwd, server), "", false
+}
+
+// antigravityURL finds the server a tool name was built from. The adapter spells
+// the server's configured name into it as is, so a name can contain "__" and the
+// tool name cannot be split at its first separator. As for Cursor, the workspace's
+// file wins over the global one, and a workspace in a guarded folder cannot be read.
+func (r *Resolver) antigravityURL(home, cwd, toolName string) string {
+	if cwd != "" {
+		project := filepath.Join(cwd, ".agents", "mcp_config.json")
+		if privacyfolder.Guarded(home, project) {
+			return ""
+		}
+		if url, found := findByToolName(r.servers(project), toolName); found {
+			return url
+		}
+	}
+	url, _ := findByToolName(r.servers(filepath.Join(home, ".gemini", "config", "mcp_config.json")), toolName)
+	return url
+}
+
+// findByToolName returns the URL of the configured server whose name begins
+// toolName. Two names that both fit leave the URL unknown, as two that normalize
+// alike do: judging a call by the wrong server is worse than not knowing it.
+func findByToolName(servers map[string]readers.MCP, toolName string) (string, bool) {
+	url, found := "", false
+	for name, config := range servers {
+		if !strings.HasPrefix(toolName, normalize(name)+"__") {
+			continue
+		}
+		if found && strings.TrimSpace(config.URL) != url {
+			return "", true
+		}
+		url, found = strings.TrimSpace(config.URL), true
+	}
+	return url, found
 }
 
 func (r *Resolver) configURL(home, agent, cwd, server string) string {

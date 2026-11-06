@@ -460,6 +460,8 @@ func cedarInputsV2(principal cedareval.EvaluationPrincipal, event risk.HookEvent
 		agentID = cedareval.AgentCodexV2
 	case "cursor", cedareval.AgentCursorV2:
 		agentID = cedareval.AgentCursorV2
+	case "antigravity", cedareval.AgentAntigravityV2:
+		agentID = cedareval.AgentAntigravityV2
 	}
 	base := cedareval.ToolUseInputV2{
 		Version:    cedareval.RequestContractVersionV2,

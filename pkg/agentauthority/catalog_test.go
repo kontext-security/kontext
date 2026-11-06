@@ -188,3 +188,40 @@ func TestKimiHomeOverrides(t *testing.T) {
 		}
 	}
 }
+
+// The app keeps its MCP config in ~/.gemini/config, not under the folder that
+// marks it installed, and still accepts the legacy serverUrl key for a remote
+// server. Missing either would leave its servers out of the authority report.
+func TestAntigravityMCPServersFromTheConfigFolder(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, home, ".gemini/antigravity/installation_id", "x")
+	writeFixture(t, home, ".gemini/config/mcp_config.json", `{"mcpServers":{
+		"stdio":{"command":"node"},
+		"remote":{"url":"https://remote.example/mcp"},
+		"legacy":{"serverUrl":"https://legacy.example/mcp"}
+	}}`)
+	r := scanFixture(home, []AgentLocation{{"antigravity", "~/.gemini/antigravity"}})
+	if len(r.Agents) != 1 {
+		t.Fatalf("agents = %+v", r.Agents)
+	}
+	hosts := map[string]string{}
+	for _, server := range r.Agents[0].MCPServers {
+		host := ""
+		if server.URLHost != nil {
+			host = *server.URLHost
+		}
+		hosts[server.Name] = host
+	}
+	want := map[string]string{"stdio": "", "remote": "remote.example", "legacy": "legacy.example"}
+	if len(hosts) != len(want) {
+		t.Fatalf("servers = %v, want %v", hosts, want)
+	}
+	for name, host := range want {
+		if got, ok := hosts[name]; !ok || got != host {
+			t.Errorf("%s host = %q (found %v), want %q", name, got, ok, host)
+		}
+	}
+}

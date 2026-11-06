@@ -29,6 +29,7 @@ import (
 	"github.com/kontext-security/kontext/internal/setup"
 	"github.com/spf13/cobra"
 
+	_ "github.com/kontext-security/kontext/internal/agent/antigravity"
 	_ "github.com/kontext-security/kontext/internal/agent/claude"
 	_ "github.com/kontext-security/kontext/internal/agent/codex"
 	_ "github.com/kontext-security/kontext/internal/agent/cowork"
@@ -377,6 +378,11 @@ func hookCmd() *cobra.Command {
 				// must not, so report it and exit with no decision.
 				fmt.Fprintf(os.Stderr, "unknown agent: %s\n", agentName)
 				os.Exit(0)
+			}
+			// An adapter that takes its event from this command decodes that event
+			// itself, and may report it under a more specific name (a failed call).
+			if named, ok := a.(agent.CommandEventAgent); ok {
+				a, expectedEvent = named.ForEvent(expectedEvent), ""
 			}
 
 			explicitSocket := cmd.Flags().Changed("socket")

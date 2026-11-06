@@ -173,6 +173,8 @@ func turnAgent(agent string) string {
 		return "cowork"
 	case "codex":
 		return "codex"
+	case "antigravity":
+		return "antigravity"
 	default:
 		return ""
 	}

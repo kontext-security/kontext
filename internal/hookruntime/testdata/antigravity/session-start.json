@@ -1,0 +1,10 @@
+{
+  "artifactDirectoryPath": "/Users/dev/.gemini/antigravity/brain/113d28c3-9ac2-4d13-9708-1a9c0bc268ce",
+  "conversationId": "113d28c3-9ac2-4d13-9708-1a9c0bc268ce",
+  "lastUserInput": "Fix the failing test in the probe project",
+  "modelName": "gemini-3.5-flash-lite",
+  "transcriptPath": "/Users/dev/.gemini/antigravity/brain/113d28c3-9ac2-4d13-9708-1a9c0bc268ce/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/Users/dev/agy-probe"
+  ]
+}

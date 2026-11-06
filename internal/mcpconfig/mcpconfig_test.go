@@ -261,3 +261,53 @@ func TestWarmStopsOnceItsContextIsDone(t *testing.T) {
 		t.Fatalf("Warm() cached %d files, want 4", n)
 	}
 }
+
+// Ways an Antigravity lookup can misidentify a server, each pinned below:
+//   - a remote server configured with the legacy serverUrl key has no URL
+//   - a name containing "__" is cut at its first separator and takes the URL of
+//     a different server, so policy judges the wrong one
+//   - two configured names that both fit a tool name pick a winner by accident
+//   - the global file beats the workspace's
+func TestServerForAntigravity(t *testing.T) {
+	home := t.TempDir()
+	write := func(path, data string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	project := filepath.Join(home, "app")
+	write(filepath.Join(home, ".gemini", "config", "mcp_config.json"), `{"mcpServers":{
+		"plain":{"url":"https://plain.example/mcp"},
+		"legacy":{"serverUrl":"https://legacy.example/mcp"},
+		"both":{"url":"https://url-wins.example/mcp","serverUrl":"https://ignored.example/mcp"},
+		"local":{"command":"node"},
+		"team__prod":{"url":"https://prod.example/mcp"},
+		"clash":{"url":"https://clash.example/mcp"},
+		"clash__prod":{"url":"https://clash-prod.example/mcp"},
+		"shadowed":{"url":"https://global.example/mcp"}
+	}}`)
+	write(filepath.Join(project, ".agents", "mcp_config.json"), `{"mcpServers":{"shadowed":{"url":"https://workspace.example/mcp"}}}`)
+	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json")}
+	for _, tc := range []struct{ name, tool, want string }{
+		{"url", "mcp__plain__search", "https://plain.example/mcp"},
+		{"legacy serverUrl", "mcp__legacy__search", "https://legacy.example/mcp"},
+		{"url beats serverUrl", "mcp__both__search", "https://url-wins.example/mcp"},
+		{"stdio", "mcp__local__search", ""},
+		{"not configured", "mcp__absent__search", ""},
+		{"name containing a separator", "mcp__team__prod__search", "https://prod.example/mcp"},
+		{"a tool under the shorter name", "mcp__clash__search", "https://clash.example/mcp"},
+		{"two names fit", "mcp__clash__prod__search", ""},
+		{"workspace beats global", "mcp__shadowed__search", "https://workspace.example/mcp"},
+	} {
+		if got, _, _ := r.Server("antigravity", "s", project, tc.tool); got != tc.want {
+			t.Errorf("%s: %s = %q, want %q", tc.name, tc.tool, got, tc.want)
+		}
+	}
+	if got, _, _ := r.Server("antigravity", "s", "", "mcp__shadowed__search"); got != "https://global.example/mcp" {
+		t.Errorf("no workspace = %q", got)
+	}
+}

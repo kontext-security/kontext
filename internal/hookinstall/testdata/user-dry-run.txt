@@ -2,3 +2,4 @@ would-write	user	<root>/Users/test/.claude/settings.json	missing
 would-write	user	<root>/Users/test/.codex/hooks.json	missing
 would-write	user	<root>/Users/test/.codex/config.toml	missing
 would-write	user	<root>/Users/test/.cursor/hooks.json	missing
+would-write	user	<root>/Users/test/.gemini/config/hooks.json	missing

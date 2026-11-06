@@ -100,6 +100,8 @@ func withSessionAgents(turns []sqlite.TurnRecord, sessions []sqlite.LedgerRecord
 			agents[id] = "cowork"
 		case "codex":
 			agents[id] = "codex"
+		case "antigravity":
+			agents[id] = "antigravity"
 		}
 	}
 	var orphans []string

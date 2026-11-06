@@ -335,6 +335,8 @@ func AgentPresent(agent, home string) bool {
 		command, app = "codex", "Codex.app"
 	case "cursor":
 		command, app = "cursor-agent", "Cursor.app"
+	case "antigravity":
+		command, app = "agy", "Antigravity.app"
 	}
 	if _, err := exec.LookPath(command); err == nil {
 		return true

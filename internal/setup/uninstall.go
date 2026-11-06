@@ -114,6 +114,15 @@ func Uninstall(ctx context.Context, opts Options) error {
 				default:
 					fmt.Fprintf(opts.Stdout, "  • No Cursor hooks to remove (%s)\n", r.File.Path)
 				}
+			case "antigravity":
+				switch {
+				case r.Err != nil:
+					fmt.Fprintf(opts.Stderr, "warning: Antigravity hooks could not be removed from %s (%v)\n", r.File.Path, r.Err)
+				case r.Action == "remove" || r.Action == "write":
+					fmt.Fprintf(opts.Stdout, "  ✓ Antigravity hooks removed (%s)\n", r.File.Path)
+				default:
+					fmt.Fprintf(opts.Stdout, "  • No Antigravity hooks to remove (%s)\n", r.File.Path)
+				}
 			case "claude-user":
 				if r.Err != nil {
 					fmt.Fprintf(opts.Stderr, "warning: Claude Code hooks could not be removed from %s (%v)\n", r.File.Path, r.Err)

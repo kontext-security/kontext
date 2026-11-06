@@ -36,7 +36,27 @@ func GenericMCP(data []byte, key string) (map[string]MCP, error) {
 		}
 		return result, nil
 	}
-	var result map[string]MCP
-	err := json.Unmarshal(raw, &result)
-	return result, err
+	var entries map[string]struct {
+		MCP
+		// The legacy key Antigravity still accepts for a remote server. Agents that
+		// never read it may carry any value there, which must not fail their file.
+		ServerURL json.RawMessage `json:"serverUrl"`
+	}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, err
+	}
+	if entries == nil {
+		return nil, nil
+	}
+	result := make(map[string]MCP, len(entries))
+	for name, entry := range entries {
+		if entry.URL == "" {
+			var legacy string
+			if json.Unmarshal(entry.ServerURL, &legacy) == nil {
+				entry.URL = legacy
+			}
+		}
+		result[name] = entry.MCP
+	}
+	return result, nil
 }

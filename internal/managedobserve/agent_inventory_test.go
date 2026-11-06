@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
+	"github.com/kontext-security/kontext/internal/antigravitymanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/cursormanaged"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
@@ -373,4 +374,63 @@ func swapCursorSystemHooks(t *testing.T, path string) {
 	previous := cursorSystemHooksPath
 	cursorSystemHooksPath = path
 	t.Cleanup(func() { cursorSystemHooksPath = previous })
+}
+
+// Antigravity's hooks live only in the user's home, at every scope. Ways this can
+// misreport, each pinned below: a hook switched off in the app's settings counts
+// as wired; a hook naming a deleted binary counts as wired, though it now passes
+// every call unrecorded; an unreadable file counts as simply absent.
+func TestAntigravityWired(t *testing.T) {
+	home := hermetic.Home(t)
+	path := antigravitymanaged.UserHooksPath(home)
+	if got := antigravityWired(); got != agentinventory.WiredNo {
+		t.Fatalf("no file = %s", got)
+	}
+	binary := filepath.Join(home, "bin", "kontext")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(settings map[string]any) {
+		t.Helper()
+		raw, err := json.Marshal(settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings := map[string]any{}
+	if err := antigravitymanaged.MergeManagedHooks(settings, binary); err != nil {
+		t.Fatal(err)
+	}
+	write(settings)
+	if got := antigravityWired(); got != agentinventory.WiredYes {
+		t.Fatalf("installed = %s", got)
+	}
+	settings[antigravitymanaged.HookName].(map[string]any)["enabled"] = false
+	write(settings)
+	if got := antigravityWired(); got != agentinventory.WiredNo {
+		t.Fatalf("switched off = %s", got)
+	}
+	delete(settings[antigravitymanaged.HookName].(map[string]any), "enabled")
+	write(settings)
+	if err := os.Remove(binary); err != nil {
+		t.Fatal(err)
+	}
+	if got := antigravityWired(); got != agentinventory.WiredError {
+		t.Fatalf("deleted binary = %s", got)
+	}
+	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := antigravityWired(); got != agentinventory.WiredError {
+		t.Fatalf("malformed = %s", got)
+	}
 }

@@ -25,6 +25,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
+	"github.com/kontext-security/kontext/internal/antigravitymanaged"
 	"github.com/kontext-security/kontext/internal/buildinfo"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/codexmanaged"
@@ -169,6 +170,9 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		return err
 	}
 	if err := preflightCursorHooks(binary, cursorUserHooksPath()); err != nil {
+		return err
+	}
+	if err := preflightAntigravityHooks(binary, antigravityHooksPath()); err != nil {
 		return err
 	}
 
@@ -494,6 +498,8 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", installed)
 			case "cursor":
 				fmt.Fprintf(opts.Stdout, "  ✓ Cursor hooks installed (%s)\n", installed)
+			case "antigravity":
+				fmt.Fprintf(opts.Stdout, "  ✓ Antigravity hooks installed (%s)\n", installed)
 			case "feature":
 				if r.Err != nil {
 					fmt.Fprintf(opts.Stderr, "note: could not enable the Codex hooks feature automatically (%v); set `[features].hooks = true` in ~/.codex/config.toml or the hooks will not run.\n", r.Err)
@@ -969,6 +975,24 @@ func cursorUserHooksPath() string {
 // preflightCursorHooks stops setup before anything is written when Cursor's
 // hooks file cannot take Kontext's entries.
 func preflightCursorHooks(binary, path string) error {
+	return preflightHooksFile("Cursor", binary, path, cursormanaged.MergeManagedHooks)
+}
+
+// antigravityHooksPath is the hooks file every Antigravity surface reads.
+func antigravityHooksPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return antigravitymanaged.UserHooksPath(home)
+}
+
+// preflightAntigravityHooks does the same for Antigravity's hooks file.
+func preflightAntigravityHooks(binary, path string) error {
+	return preflightHooksFile("Antigravity", binary, path, antigravitymanaged.MergeManagedHooks)
+}
+
+func preflightHooksFile(agent, binary, path string, merge func(map[string]any, string) error) error {
 	// Follows a dotfiles symlink; the writer preserves it. A dangling link
 	// would fail only after credentials and other hooks are written.
 	info, err := os.Stat(path)
@@ -976,7 +1000,7 @@ func preflightCursorHooks(binary, path string) error {
 		if _, lerr := os.Lstat(path); lerr != nil {
 			// Absent: the folder must still take the new file.
 			if err := writableDir(path); err != nil {
-				return fmt.Errorf("check Cursor hooks: %w\n\nFix the folder, then rerun setup.\nNothing changed.", err)
+				return fmt.Errorf("check %s hooks: %w\n\nFix the folder, then rerun setup.\nNothing changed.", agent, err)
 			}
 			return nil
 		}
@@ -993,13 +1017,13 @@ func preflightCursorHooks(binary, path string) error {
 		}
 	}
 	if err == nil {
-		err = cursormanaged.MergeManagedHooks(settings, binary)
+		err = merge(settings, binary)
 	}
 	if err == nil {
 		err = writableDir(path)
 	}
 	if err != nil {
-		return fmt.Errorf("check Cursor hooks: %w\n\nFix or move %s, then rerun setup.\nNothing changed.", err, path)
+		return fmt.Errorf("check %s hooks: %w\n\nFix or move %s, then rerun setup.\nNothing changed.", agent, err, path)
 	}
 	return nil
 }

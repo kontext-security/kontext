@@ -407,6 +407,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "tool_usage_sources", "error_fingerprint", "text not null default ''"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "tool_usage_sources", "model", "text not null default ''"); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, ledgerExportSkipsDDL); err != nil {
 		return err
 	}
@@ -2069,6 +2072,8 @@ func hostedAgentIdentity(agent string) (string, string) {
 		return "anthropic", "claude_code"
 	case "cowork", "claude-cowork", "claude_cowork":
 		return "anthropic", "claude_cowork"
+	case "antigravity":
+		return "google", "antigravity"
 	default:
 		return "", strings.TrimSpace(agent)
 	}
