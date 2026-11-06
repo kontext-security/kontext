@@ -1,0 +1,50 @@
+# Windows executables for the MSI in packaging/windows, built by
+# .github/workflows/windows-package.yml. Kept apart from .goreleaser.yaml so a
+# release does not publish Windows assets until that is decided. The ldflags
+# follow .goreleaser.yaml; keep them in sync.
+#
+#   goreleaser build --snapshot --clean --config .goreleaser.windows.yaml
+#
+# writes dist/windows_<arch>/kontext.exe and dist/windows_<arch>/kontextw.exe.
+version: 2
+
+project_name: kontext
+
+builds:
+  # The CLI and the hook command: a console program.
+  - id: kontext
+    main: ./cmd/kontext
+    binary: "windows_{{ .Arch }}/kontext"
+    no_unique_dist_dir: true
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # The same program linked for the GUI subsystem, so the logon task that
+  # starts the daemon opens no console window.
+  - id: kontextw
+    main: ./cmd/kontext
+    binary: "windows_{{ .Arch }}/kontextw"
+    no_unique_dist_dir: true
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -H windowsgui
+
+# Builds only: this file must never publish a release.
+release:
+  disable: true
+
+changelog:
+  disable: true
