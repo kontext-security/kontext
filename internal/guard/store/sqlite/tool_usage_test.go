@@ -1208,10 +1208,7 @@ func TestAntigravityUsageImportsOnceAHookNamesTheModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	path, err := filepath.Abs("../../../modelusage/testdata/antigravity-tool-turn.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
+	path := antigravityTranscriptCopy(t)
 	const session = "antigravity-2163ba71-0862-48c7-87c8-197903c4cacb"
 	event := hook.Event{SessionID: session, Agent: "antigravity", HookName: hook.HookStop, TranscriptPath: path}
 	track := func(model string) {
@@ -1262,4 +1259,72 @@ func TestAntigravityUsageImportsOnceAHookNamesTheModel(t *testing.T) {
 	if model != "" {
 		t.Fatalf("codex names its model in its transcript; stored %q", model)
 	}
+}
+
+// A reconcile pass reads outside its write transaction. A hook naming the first
+// model during that read clears the fingerprint, and the pass's own write must not
+// put it back: the file will not change again, so the withheld records would stay
+// lost.
+func TestAntigravityModelNamedDuringAReadStillImports(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	path := antigravityTranscriptCopy(t)
+	const session = "antigravity-2163ba71-0862-48c7-87c8-197903c4cacb"
+	event := hook.Event{SessionID: session, Agent: "antigravity", HookName: hook.HookStop, TranscriptPath: path}
+	if err := store.TrackToolTranscript(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	sources, err := store.toolUsageSources(ctx, now)
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("sources: %+v %v", sources, err)
+	}
+	fingerprint, records, prompts, err := readToolTranscript(sources[0], now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("records with no model: %+v", records)
+	}
+
+	event.Model = "gemini-3.8-flash-tiered"
+	if err := store.TrackToolTranscript(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.applyToolUsageUpdates(ctx, []toolUsageUpdate{{
+		source: sources[0], read: true, fingerprint: fingerprint, records: records, prompts: prompts,
+	}}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ReconcileToolUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.PendingToolUsage(ctx, 50)
+	if err != nil || len(rows) != 7 {
+		t.Fatalf("records after the next pass: %d %v", len(rows), err)
+	}
+	if rows[0].Model != "gemini-3.8-flash" {
+		t.Fatalf("model = %q", rows[0].Model)
+	}
+}
+
+// antigravityTranscriptCopy gives a test its own path: parser state is kept per
+// process by path, and these tests depend on what the parser has not yet seen.
+func antigravityTranscriptCopy(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("../../../modelusage/testdata/antigravity-tool-turn.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "transcript_full.jsonl")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { transcriptCursors.take(transcriptKey{format: "antigravity", path: path}) })
+	return path
 }

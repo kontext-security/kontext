@@ -429,8 +429,10 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 		// which SQLite refuses with SQLITE_BUSY at once instead of waiting
 		// out busy_timeout.
 		if update.read {
-			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=?, error=?, error_fingerprint=? where session_id=? and transcript_path=?`,
-				checkedAt, update.fingerprint, update.message, update.errorFingerprint, src.session, src.path)
+			// A hook naming a model during the read cleared the fingerprint so the records
+			// this read withheld get another; writing it back would lose them.
+			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=case when model=? then ? else fingerprint end, error=?, error_fingerprint=? where session_id=? and transcript_path=?`,
+				checkedAt, src.model, update.fingerprint, update.message, update.errorFingerprint, src.session, src.path)
 		} else {
 			_, err = tx.ExecContext(ctx, `update tool_usage_sources set error=?, error_fingerprint='' where session_id=? and transcript_path=?`,
 				update.message, src.session, src.path)
