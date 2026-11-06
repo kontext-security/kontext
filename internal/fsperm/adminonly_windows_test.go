@@ -39,7 +39,7 @@ func TestAdminOnlyDescriptors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			reason, err := notAdminOnly(sd)
+			reason, err := notAdminOnly(sd, writeAccess)
 			if err != nil {
 				t.Fatal(err)
 			}

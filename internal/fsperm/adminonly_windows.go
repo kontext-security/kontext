@@ -162,7 +162,7 @@ func checkAdminOnly(handle windows.Handle, path string) error {
 	if err != nil {
 		return &os.PathError{Op: "read security of", Path: path, Err: err}
 	}
-	reason, err := notAdminOnly(sd)
+	reason, err := notAdminOnly(sd, writeAccess)
 	if err != nil {
 		return &os.PathError{Op: "read security of", Path: path, Err: err}
 	}
@@ -173,8 +173,9 @@ func checkAdminOnly(handle windows.Handle, path string) error {
 }
 
 // notAdminOnly returns why sd lets someone other than an administrator change
-// the object, or "" if it doesn't. An entry it can't read counts against it.
-func notAdminOnly(sd *windows.SECURITY_DESCRIPTOR) (string, error) {
+// the object, or "" if it doesn't. write is the object type's write rights. An
+// entry it can't read counts against it.
+func notAdminOnly(sd *windows.SECURITY_DESCRIPTOR, write uint32) (string, error) {
 	owner, _, err := sd.Owner()
 	if err != nil {
 		return "", err
@@ -201,7 +202,7 @@ func notAdminOnly(sd *windows.SECURITY_DESCRIPTOR) (string, error) {
 		case windows.ACCESS_DENIED_ACE_TYPE:
 		case windows.ACCESS_ALLOWED_ACE_TYPE:
 			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-			if uint32(ace.Mask)&writeAccess != 0 && !isAdmin(sid) {
+			if uint32(ace.Mask)&write != 0 && !isAdmin(sid) {
 				return "can be written by " + accountName(sid), nil
 			}
 		default:
