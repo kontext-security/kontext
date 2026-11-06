@@ -1,0 +1,111 @@
+name: Windows Package
+
+# Builds kontext.exe and kontextw.exe with .goreleaser.windows.yaml and the
+# MSIs in packaging/windows with WiX v7, and uploads them as an artifact.
+# Nothing is published. Not a required check.
+
+on:
+  pull_request:
+    paths:
+      - "packaging/windows/**"
+      - ".goreleaser.yaml"
+      - ".goreleaser.windows.yaml"
+      - ".github/workflows/windows-package.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "packaging/windows/**"
+      - ".goreleaser.yaml"
+      - ".goreleaser.windows.yaml"
+      - ".github/workflows/windows-package.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # WiX v7 as a .NET tool: windows-latest ships only WiX 3.
+  WIX_VERSION: "7.0.1"
+  # "true" or "false"; the secret itself is passed only to the signing step.
+  SIGNING_CONFIGURED: ${{ secrets.WINDOWS_SIGNING_ACCOUNT != '' }}
+
+jobs:
+  msi:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser derives the snapshot version from the tags.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check the GoReleaser config
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: "~> v2.18"
+          args: check --config .goreleaser.windows.yaml
+
+      - name: Build the executables
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: "~> v2.18"
+          args: build --snapshot --clean --config .goreleaser.windows.yaml
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP 'wix'
+          dotnet tool install wix --version $env:WIX_VERSION --tool-path $tools
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content -Path $env:GITHUB_PATH -Value $tools
+          & (Join-Path $tools 'wix.exe') --version
+
+      - name: Build the MSIs
+        shell: pwsh
+        run: |
+          # The MSI version is the last release's; Windows Installer reads only
+          # the first three fields.
+          $version = (Get-Content .release-please-manifest.json -Raw | ConvertFrom-Json).'.'
+          New-Item -ItemType Directory -Force out | Out-Null
+          foreach ($arch in @(@{ wix = 'x64'; go = 'amd64' }, @{ wix = 'arm64'; go = 'arm64' })) {
+            $bin = Join-Path $PWD "dist\windows_$($arch.go)"
+            $msi = Join-Path $PWD "out\kontext_$($version)_windows_$($arch.go).msi"
+            # -acceptEula wix7 accepts the WiX v7 OSMF EULA for this build.
+            wix build packaging/windows/Package.wxs -arch $arch.wix `
+              -d "ProductVersion=$version" -d "BinDir=$bin" `
+              -acceptEula wix7 -o $msi
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            wix msi validate -acceptEula wix7 $msi
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Get-ChildItem out\*.msi | Format-Table Name, Length
+
+      # OPTIONAL SIGNING, not implemented yet. Runs only when the signing secret
+      # exists; without it, it is skipped and the MSIs stay unsigned. Once
+      # signing lands: sign kontext.exe and kontextw.exe before "Build the
+      # MSIs" and the MSIs after it. Until then it fails, so a run with the
+      # secret set is never mistaken for a signed build.
+      - name: Sign (optional)
+        if: ${{ env.SIGNING_CONFIGURED == 'true' }}
+        env:
+          WINDOWS_SIGNING_ACCOUNT: ${{ secrets.WINDOWS_SIGNING_ACCOUNT }}
+        shell: pwsh
+        run: |
+          Write-Output "::error::WINDOWS_SIGNING_ACCOUNT is set, but signing is not implemented in this workflow yet."
+          exit 1
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kontext-windows-msi
+          path: out/*.msi
+          if-no-files-found: error
