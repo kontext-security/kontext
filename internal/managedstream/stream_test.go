@@ -1690,7 +1690,7 @@ func TestPayloadDiscoveryAtomicPair(t *testing.T) {
 				inv.Agents = nil
 			}
 			if name == "agents" {
-				inv.Agents = []agentinventory.Agent{{ID: "cursor", ConfigPath: "~/.cursor", Wired: agentinventory.WiredUnsupported}}
+				inv.Agents = []agentinventory.Agent{{ID: "cursor", ConfigPath: "~/.cursor", Wired: agentinventory.WiredUnsupported, Installed: agentinventory.InstalledNo, Configured: true}}
 			}
 			if name == "missing timestamp" {
 				inv.ReportedAt = ""
@@ -1723,7 +1723,7 @@ func TestPayloadDiscoveryAtomicPair(t *testing.T) {
 			if name != "agents" && string(device["agents"]) != "[]" {
 				t.Fatalf("empty scan: %s", body)
 			}
-			if name == "agents" && string(device["agents"]) != `[{"id":"cursor","config_path":"~/.cursor","wired":"unsupported","last_activity_at":null}]` {
+			if name == "agents" && string(device["agents"]) != `[{"id":"cursor","config_path":"~/.cursor","wired":"unsupported","last_activity_at":null,"installed":"no","configured":true}]` {
 				t.Fatalf("wire contract: %s", body)
 			}
 		})

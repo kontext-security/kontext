@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
 type ScanOptions struct {
@@ -19,66 +21,98 @@ type ScanOptions struct {
 // hook and session facts, keeping discovery independent of its store.
 func Scan(ctx context.Context, home string, env func(string) string, now time.Time, opts ScanOptions) Inventory {
 	inv := Inventory{Agents: []Agent{}, ReportedAt: now.UTC().Format(time.RFC3339)}
+	cleanParents := map[string]bool{}
 	for _, descriptor := range Catalog {
+		started := time.Now()
+		health := agentauthority.NewSourceHealth(descriptor.ID+"/presence", started)
 		if ctx.Err() != nil {
 			inv.Incomplete = true
-			break
-		}
-		var config string
-		for _, candidate := range configDirs(descriptor, home, env) {
-			info, err := os.Stat(candidate)
-			if err != nil {
-				continue
-			}
-			if info.IsDir() {
-				config = candidate
-				break
-			}
-		}
-		if config == "" {
+			health.Fail(agentauthority.ReasonDeadline)
+			inv.Sources = append(inv.Sources, health.Result(time.Now()))
 			continue
 		}
-		path := config
-		if rel, err := filepath.Rel(home, config); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			path = "~/"
-			if rel != "." {
-				path += filepath.ToSlash(rel)
-			}
+		installed, lookupErr := agentInstalled(home, descriptor.ID)
+		if lookupErr != nil {
+			health.Fail(agentauthority.ReasonFor(lookupErr))
+		} else {
+			health.Read()
 		}
-		// Do not truncate a path into a different location or reject the whole
-		// heartbeat at the API's 1024-character boundary.
-		if len(path) > 1024 {
-			continue
-		}
-		agent := Agent{ID: descriptor.ID, ConfigPath: path, Wired: WiredUnsupported}
-		if descriptor.ID == "claude_cowork" {
-			agent.Sandboxed = coworkSandbox(ctx, home, now, opts.HasCoworkSession)
-		}
-		if descriptor.ID == "claude_code" || descriptor.ID == "claude_cowork" || descriptor.ID == "codex" || descriptor.ID == "cursor" || descriptor.ID == "antigravity" {
-			agent.Wired = WiredError
-			if evaluate := opts.Wired[descriptor.ID]; evaluate != nil {
-				agent.Wired = evaluate()
-			}
-		}
-		if descriptor.ActivityRoot != "" && (descriptor.ID != "claude_cowork" || config == filepath.Join(home, coworkHostSessions)) {
-			root := descriptor.ActivityRoot
-			if strings.HasPrefix(root, "<config>") {
-				root = filepath.Join(config, strings.TrimPrefix(strings.TrimPrefix(root, "<config>"), "/"))
-			} else if descriptor.ID == "opencode" && envValue(env, "XDG_DATA_HOME") != "" {
-				root = filepath.Join(expand(home, envValue(env, "XDG_DATA_HOME")), "opencode/storage")
+		config, configured := inspectConfig(ctx, descriptor, home, env, cleanParents, health)
+		// Cowork ships inside Claude.app, so the app alone says nothing about it.
+		if configured || installed == InstalledYes && descriptor.ID != "claude_cowork" {
+			if agent, ok := scanAgent(ctx, descriptor, home, env, config, installed, configured, now, opts, &inv); ok {
+				inv.Agents = append(inv.Agents, agent)
 			} else {
-				root = filepath.Join(home, root)
+				health.Fail(agentauthority.ReasonSizeLimit)
 			}
-			var incomplete bool
-			agent.LastActivityAt, incomplete = lastActivity(ctx, root)
-			inv.Incomplete = inv.Incomplete || incomplete
 		}
-		inv.Agents = append(inv.Agents, agent)
+		inv.Sources = append(inv.Sources, health.Result(time.Now()))
 	}
 	if ctx.Err() != nil {
 		inv.Incomplete = true
 	}
 	return inv
+}
+
+func scanAgent(ctx context.Context, descriptor Descriptor, home string, env func(string) string, config string, installed Installed, configured bool, now time.Time, opts ScanOptions, inv *Inventory) (Agent, bool) {
+	path := displayPath(home, config)
+	// Do not truncate a path into a different location or reject the whole
+	// heartbeat at the API's 1024-character boundary.
+	if len(path) > 1024 {
+		return Agent{}, false
+	}
+	agent := Agent{ID: descriptor.ID, ConfigPath: path, Wired: WiredUnsupported, Installed: installed, Configured: configured}
+	if descriptor.ID == "claude_cowork" {
+		agent.Sandboxed = coworkSandbox(ctx, home, now, opts.HasCoworkSession)
+	}
+	if descriptor.ID == "claude_code" || descriptor.ID == "claude_cowork" || descriptor.ID == "codex" || descriptor.ID == "cursor" || descriptor.ID == "antigravity" {
+		agent.Wired = WiredError
+		if evaluate := opts.Wired[descriptor.ID]; evaluate != nil {
+			agent.Wired = evaluate()
+		}
+	}
+	if descriptor.ActivityRoot != "" && (descriptor.ID != "claude_cowork" || config == filepath.Join(home, coworkHostSessions)) {
+		root := descriptor.ActivityRoot
+		if strings.HasPrefix(root, "<config>") {
+			root = filepath.Join(config, strings.TrimPrefix(strings.TrimPrefix(root, "<config>"), "/"))
+		} else if descriptor.ID == "opencode" && envValue(env, "XDG_DATA_HOME") != "" {
+			root = filepath.Join(expand(home, envValue(env, "XDG_DATA_HOME")), "opencode/storage")
+		} else {
+			root = filepath.Join(home, root)
+		}
+		var incomplete bool
+		agent.LastActivityAt, incomplete = lastActivity(ctx, root)
+		inv.Incomplete = inv.Incomplete || incomplete
+	}
+	return agent, true
+}
+
+func displayPath(home, path string) string {
+	if rel, err := filepath.Rel(home, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if rel == "." {
+			return "~/"
+		}
+		return "~/" + filepath.ToSlash(rel)
+	}
+	return path
+}
+
+// AuthorityLocations names every catalog agent's configuration, listed or not,
+// so that the authority scan states each source explicitly.
+func AuthorityLocations(home string, env func(string) string, inv Inventory) []agentauthority.AgentLocation {
+	listed := make(map[string]string, len(inv.Agents))
+	for _, agent := range inv.Agents {
+		listed[agent.ID] = agent.ConfigPath
+	}
+	locations := make([]agentauthority.AgentLocation, 0, len(Catalog))
+	for _, descriptor := range Catalog {
+		if path, ok := listed[descriptor.ID]; ok {
+			locations = append(locations, agentauthority.AgentLocation{ID: descriptor.ID, ConfigPath: path})
+			continue
+		}
+		locations = append(locations, agentauthority.AgentLocation{ID: descriptor.ID, ConfigPath: displayPath(home, configDirs(descriptor, home, env)[0]), Absent: true})
+	}
+	return locations
 }
 
 func envValue(env func(string) string, key string) string {

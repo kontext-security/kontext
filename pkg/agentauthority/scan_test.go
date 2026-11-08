@@ -74,57 +74,57 @@ func TestGoldenHomes(t *testing.T) {
 	for _, name := range []string{"home_openclaw", "home_qwen_code", "home_goose", "home_factory_droid", "home_devin_cli", "home_pi", "home_kimi_code", "home_auggie", "home_kilo", "home_crush", "home_junie", "home_grok_build", "home_hermes", "home_cursor", "home_windsurf", "home_gemini", "home_cline", "home_opencode", "home_no_prompt_off", "home_claude_full", "home_codex", "home_desktop", "home_generic", "home_empty", "home_planted_token", "home_symlink_to_root", "home_huge_settings", "home_many_files", "home_malformed_json", "home_malformed_toml"} {
 		t.Run(name, func(t *testing.T) {
 			home := fixtureHome(t, name)
-			agents := []AgentLocation{{"claude_code", "~/.claude"}}
+			agents := []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}}
 			switch name {
 			case "home_openclaw":
-				agents = []AgentLocation{{"openclaw", "~/.openclaw"}}
+				agents = []AgentLocation{{ID: "openclaw", ConfigPath: "~/.openclaw"}}
 			case "home_qwen_code":
-				agents = []AgentLocation{{"qwen_code", "~/.qwen"}}
+				agents = []AgentLocation{{ID: "qwen_code", ConfigPath: "~/.qwen"}}
 			case "home_goose":
-				agents = []AgentLocation{{"goose", "~/.config/goose"}}
+				agents = []AgentLocation{{ID: "goose", ConfigPath: "~/.config/goose"}}
 			case "home_factory_droid":
-				agents = []AgentLocation{{"factory_droid", "~/.factory"}}
+				agents = []AgentLocation{{ID: "factory_droid", ConfigPath: "~/.factory"}}
 			case "home_devin_cli":
-				agents = []AgentLocation{{"devin_cli", "~/.config/devin"}}
+				agents = []AgentLocation{{ID: "devin_cli", ConfigPath: "~/.config/devin"}}
 			case "home_pi":
-				agents = []AgentLocation{{"pi", "~/.pi/agent"}}
+				agents = []AgentLocation{{ID: "pi", ConfigPath: "~/.pi/agent"}}
 			case "home_kimi_code":
-				agents = []AgentLocation{{"kimi_code", "~/.kimi-code"}}
+				agents = []AgentLocation{{ID: "kimi_code", ConfigPath: "~/.kimi-code"}}
 			case "home_auggie":
-				agents = []AgentLocation{{"auggie", "~/.augment"}}
+				agents = []AgentLocation{{ID: "auggie", ConfigPath: "~/.augment"}}
 			case "home_kilo":
-				agents = []AgentLocation{{"kilo", "~/.config/kilo"}}
+				agents = []AgentLocation{{ID: "kilo", ConfigPath: "~/.config/kilo"}}
 			case "home_crush":
-				agents = []AgentLocation{{"crush", "~/.config/crush"}}
+				agents = []AgentLocation{{ID: "crush", ConfigPath: "~/.config/crush"}}
 			case "home_junie":
-				agents = []AgentLocation{{"junie", "~/.junie"}}
+				agents = []AgentLocation{{ID: "junie", ConfigPath: "~/.junie"}}
 			case "home_grok_build":
-				agents = []AgentLocation{{"grok_build", "~/.grok"}}
+				agents = []AgentLocation{{ID: "grok_build", ConfigPath: "~/.grok"}}
 			case "home_hermes":
-				agents = []AgentLocation{{"hermes", "~/.hermes"}}
+				agents = []AgentLocation{{ID: "hermes", ConfigPath: "~/.hermes"}}
 			case "home_cursor":
 				createCursorFixture(t, home)
-				agents = []AgentLocation{{"cursor", "~/.cursor"}}
+				agents = []AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor"}}
 			case "home_windsurf":
-				agents = []AgentLocation{{"windsurf", "~/.windsurf"}}
+				agents = []AgentLocation{{ID: "windsurf", ConfigPath: "~/.windsurf"}}
 			case "home_gemini":
-				agents = []AgentLocation{{"gemini_cli", "~/.gemini"}}
+				agents = []AgentLocation{{ID: "gemini_cli", ConfigPath: "~/.gemini"}}
 			case "home_cline":
-				agents = []AgentLocation{{"cline", "~/.cline"}}
+				agents = []AgentLocation{{ID: "cline", ConfigPath: "~/.cline"}}
 			case "home_opencode":
-				agents = []AgentLocation{{"opencode", "~/.config/opencode"}}
+				agents = []AgentLocation{{ID: "opencode", ConfigPath: "~/.config/opencode"}}
 			case "home_no_prompt_off":
 				path := createCursorFixture(t, home)
 				if output, err := exec.Command("/usr/bin/sqlite3", path, `UPDATE ItemTable SET value='{"composerState":{"useYoloMode":false}}';`).CombinedOutput(); err != nil {
 					t.Fatalf("Cursor off fixture: %s %v", output, err)
 				}
-				agents = []AgentLocation{{"cursor", "~/.cursor"}, {"windsurf", "~/.windsurf"}, {"gemini_cli", "~/.gemini"}, {"cline", "~/.cline"}, {"opencode", "~/.config/opencode"}}
+				agents = []AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor"}, {ID: "windsurf", ConfigPath: "~/.windsurf"}, {ID: "gemini_cli", ConfigPath: "~/.gemini"}, {ID: "cline", ConfigPath: "~/.cline"}, {ID: "opencode", ConfigPath: "~/.config/opencode"}}
 			case "home_codex", "home_malformed_toml":
-				agents = []AgentLocation{{"codex", "~/.codex"}}
+				agents = []AgentLocation{{ID: "codex", ConfigPath: "~/.codex"}}
 			case "home_desktop":
-				agents = []AgentLocation{{"claude_cowork", "~/Library/Application Support/Claude/local-agent-mode-sessions"}}
+				agents = []AgentLocation{{ID: "claude_cowork", ConfigPath: "~/Library/Application Support/Claude/local-agent-mode-sessions"}}
 			case "home_generic":
-				agents = append([]AgentLocation{{"cursor", "~/.cursor"}, {"amp", "~/.config/amp"}, {"opencode", "~/.config/opencode"}}, []AgentLocation{{"openclaw", "~/.openclaw"}, {"qwen_code", "~/.qwen"}, {"goose", "~/.config/goose"}, {"factory_droid", "~/.factory"}, {"devin_cli", "~/.config/devin"}, {"pi", "~/.pi/agent"}, {"kimi_code", "~/.kimi"}, {"auggie", "~/.augment"}, {"kilo", "~/.config/kilo"}, {"crush", "~/.config/crush"}, {"junie", "~/.junie"}, {"grok_build", "~/.grok"}, {"hermes", "~/.hermes"}}...)
+				agents = append([]AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor"}, {ID: "amp", ConfigPath: "~/.config/amp"}, {ID: "opencode", ConfigPath: "~/.config/opencode"}}, []AgentLocation{{ID: "openclaw", ConfigPath: "~/.openclaw"}, {ID: "qwen_code", ConfigPath: "~/.qwen"}, {ID: "goose", ConfigPath: "~/.config/goose"}, {ID: "factory_droid", ConfigPath: "~/.factory"}, {ID: "devin_cli", ConfigPath: "~/.config/devin"}, {ID: "pi", ConfigPath: "~/.pi/agent"}, {ID: "kimi_code", ConfigPath: "~/.kimi"}, {ID: "auggie", ConfigPath: "~/.augment"}, {ID: "kilo", ConfigPath: "~/.config/kilo"}, {ID: "crush", ConfigPath: "~/.config/crush"}, {ID: "junie", ConfigPath: "~/.junie"}, {ID: "grok_build", ConfigPath: "~/.grok"}, {ID: "hermes", ConfigPath: "~/.hermes"}}...)
 			case "home_empty":
 				agents = nil
 			case "home_planted_token":
@@ -215,7 +215,7 @@ func TestParentSymlinkAndOutsideRoot(t *testing.T) {
 	if err = os.Symlink(filepath.Join(other, "secret"), filepath.Join(home, ".claude")); err != nil {
 		t.Fatal(err)
 	}
-	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}, {"codex", other}})
+	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}, {ID: "codex", ConfigPath: other}})
 	if r.Agents[0].Permissions.DefaultMode != nil || r.Coverage.SkippedFiles == 0 {
 		t.Fatal("symlink or outside root was accepted")
 	}
@@ -224,7 +224,7 @@ func TestCancelledScan(t *testing.T) {
 	home := fixtureHome(t, "home_claude_full")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	r := scan(ctx, home, Environment{}, []AgentLocation{{"claude_code", "~/.claude"}}, fixtureTime, filepath.Join(home, "managed"))
+	r := scan(ctx, home, Environment{}, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}}, fixtureTime, filepath.Join(home, "managed"))
 	if !r.Truncated {
 		t.Fatal("cancelled scan is not truncated")
 	}
@@ -286,7 +286,7 @@ func TestRedactionBoundariesAndPaths(t *testing.T) {
 			t.Errorf("kept token %q", value)
 		}
 	}
-	r := scanFixture(fixtureHome(t, "home_claude_full"), []AgentLocation{{"claude_code", "~/.claude"}})
+	r := scanFixture(fixtureHome(t, "home_claude_full"), []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}})
 	r.Agents[0].MCPServers[0].Source = "/Users/michelosswald/.claude/settings.json"
 	r.Agents[0].Plugins[0].Name = strings.Repeat("a1", 16)
 	r.Credentials[0].Path = "/Users/" + strings.Repeat("a1", 16) + "/.aws/credentials"
@@ -379,7 +379,7 @@ func TestProjectsAndPluginCountsPreserveCredentials(t *testing.T) {
 		writeFixture(t, home, fmt.Sprintf(".claude/plugins/cache/team/design/v1/skills/skill-%03d/SKILL.md", i), "skill")
 		writeFixture(t, home, fmt.Sprintf(".claude/plugins/cache/team/design/v1/agents/agent-%03d.md", i), "agent")
 	}
-	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}})
+	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}})
 	if r.Truncated || r.Coverage.SkippedFiles != 0 || !slices.Equal(r.Coverage.Limits, []string{"claude_code: projects limited to 32"}) || len(r.Coverage.Errors) != 0 || len(r.Credentials) != 2 || len(r.Agents[0].Plugins) != 1 {
 		t.Fatalf("budget lost facts: %+v", r)
 	}
@@ -399,7 +399,7 @@ func TestURLArgumentsKeepOnlyOrigin(t *testing.T) {
 func TestPermissionPatternsRedactPaths(t *testing.T) {
 	home := fixtureHome(t, "home_empty")
 	writeFixture(t, home, ".claude/settings.json", `{"permissions":{"allow":["Bash(python3 /Users/michel/scripts/x.py:*)", "Bash(/usr/bin/python3:*)"]}}`)
-	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}})
+	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}})
 	grants := r.Agents[0].Permissions.Allow
 	if len(grants) != 2 || grants[0].Pattern != "Bash(python3 <redacted>)" || grants[1].Pattern != "Bash(<redacted>)" || grants[0].Risk != "any_shell" {
 		t.Fatalf("unsafe grants: %+v", grants)
@@ -418,7 +418,7 @@ func TestSecretFlagsRemovedFromEveryCommandSource(t *testing.T) {
 	home := fixtureHome(t, "home_empty")
 	writeFixture(t, home, ".claude.json", `{"mcpServers":{"test":{"command":"node","args":["--password","P@ssw0rd123","--AuthToken=secret","--verbose"]}}}`)
 	writeFixture(t, home, ".claude/settings.json", `{"permissions":{"allow":["Bash(python --password P@ssw0rd123 --AuthToken=secret:*)"]},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"node --password P@ssw0rd123 --AuthToken=secret --verbose"}]}]}}`)
-	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}})
+	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}})
 	data, _ := json.Marshal(r)
 	for _, value := range []string{"P@ssw0rd123", "AuthToken", "--password"} {
 		if strings.Contains(string(data), value) {
@@ -446,7 +446,7 @@ func realDeveloperHome(t *testing.T) string {
 
 func TestRealDeveloperHome(t *testing.T) {
 	home := realDeveloperHome(t)
-	agents := []AgentLocation{{"claude_code", "~/.claude"}}
+	agents := []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}}
 	scanFixture(home, agents) // Warm filesystem caches before measuring the scan.
 	start := time.Now()
 	r := scanFixture(home, agents)
@@ -470,7 +470,7 @@ func TestSkillsCannotStarveAgentConfigs(t *testing.T) {
 	writeFixture(t, home, ".claude/agents/reviewer.md", "---\ntools: Read\n---\n")
 	writeFixture(t, home, ".claude/plugins/cache/local/plugin-7/v1/.mcp.json", `{"mcpServers":{"plugin-server":{"command":"node"}}}`)
 	writeFixture(t, home, ".claude/plugins/cache/local/plugin-7/v1/hooks/hooks.json", `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"echo test"}]}]}}`)
-	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}, {"codex", "~/.codex"}})
+	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}, {ID: "codex", ConfigPath: "~/.codex"}})
 	if r.Truncated || len(r.Agents[0].Plugins) != 8 || len(r.Agents[0].MCPServers) != 2 || r.Agents[1].Permissions.Codex == nil || *r.Agents[1].Permissions.Codex.SandboxMode != "danger-full-access" {
 		t.Fatalf("skills starved higher priority facts: %+v", r)
 	}
@@ -536,7 +536,7 @@ func TestReadRuleRejectsOutsideRootsAndUserContent(t *testing.T) {
 	writeFixture(t, home, ".claude.json", string(data))
 	writeFixture(t, home, "Documents/repo/.mcp.json", `{"mcpServers":{"unread":{"command":"node"}}}`)
 	writeFixture(t, home, "Documents/repo/.env", "PRIVATE_TOKEN=ignored")
-	r := scanFixture(home, []AgentLocation{{"claude_code", "~/.claude"}, {"cursor", "~/outside"}})
+	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}, {ID: "cursor", ConfigPath: "~/outside"}})
 	if len(r.Agents[0].MCPServers) != 2 || len(r.Credentials) != 0 || r.Truncated {
 		t.Fatalf("project facts: %+v", r)
 	}
@@ -551,7 +551,7 @@ func TestScanReusesUnchangedParseResults(t *testing.T) {
 	home := fixtureHome(t, "home_claude_full")
 	cache := map[string]fileResult{}
 	run := func() (Report, int) {
-		r := scanCached(context.Background(), home, Environment{UID: 501}, []AgentLocation{{"claude_code", "~/.claude"}}, fixtureTime, filepath.Join(home, "managed"), cache, nil)
+		r := scanCached(context.Background(), home, Environment{UID: 501}, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}}, fixtureTime, filepath.Join(home, "managed"), cache, nil)
 		opened := 0
 		for _, result := range cache {
 			if result.opened {
@@ -586,7 +586,7 @@ func TestCustomConfigDirectoryDoesNotExpandReadAllowlist(t *testing.T) {
 	// intentionally does not add that path to its fixed configuration roots.
 	writeFixture(t, home, "custom-claude/settings.json", `{"permissions":{"defaultMode":"auto"}}`)
 	writeFixture(t, home, "custom-claude/plugins/installed_plugins.json", `{"plugins":{}}`)
-	r := scanFixture(home, []AgentLocation{{"claude_code", filepath.Join(home, "custom-claude")}})
+	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: filepath.Join(home, "custom-claude")}})
 	if r.Agents[0].Permissions.DefaultMode != nil || len(r.Agents[0].Plugins) != 0 || r.Coverage.SkippedFiles == 0 || r.Truncated {
 		t.Fatalf("custom discovery location expanded the read rule: %+v", r)
 	}

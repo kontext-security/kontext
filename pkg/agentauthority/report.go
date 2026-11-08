@@ -8,7 +8,13 @@ import (
 	"github.com/gowebpki/jcs"
 )
 
-type AgentLocation struct{ ID, ConfigPath string }
+// AgentLocation is where one agent's configuration lives. An Absent agent is
+// read so that an empty source is stated explicitly, and gets a report row
+// only when something was found.
+type AgentLocation struct {
+	ID, ConfigPath string
+	Absent         bool
+}
 type Report struct {
 	SchemaVersion string       `json:"schema_version"`
 	ScannedAt     string       `json:"scanned_at"`
@@ -18,6 +24,8 @@ type Report struct {
 	Credentials   []Credential `json:"credentials"`
 	Coverage      Coverage     `json:"coverage"`
 	Truncated     bool         `json:"truncated"`
+	// Sources travels in device.inventory, never inside the authority report.
+	Sources []SourceResult `json:"-"`
 }
 type Agent struct {
 	ID          string      `json:"id"`

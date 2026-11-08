@@ -47,8 +47,10 @@ func readCursor(ctx context.Context, file *os.File) (*bool, error) {
 	case "0\n":
 		value := false
 		return &value, nil
+	case "":
+		return nil, nil // Cursor never stored the setting.
 	default:
-		return nil, errors.New("unknown Cursor auto-run setting")
+		return nil, errUnsupportedFormat
 	}
 }
 

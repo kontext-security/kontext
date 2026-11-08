@@ -195,6 +195,12 @@ func allowLoopback(t *testing.T) {
 func TestRunFullFlow(t *testing.T) {
 	h := newHarness(t)
 	allowLoopback(t)
+	// Discovery needs the agent itself; hook files alone are not evidence.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
 	server := pingServer(t, "tok-123")
 
 	if err := Run(context.Background(), h.options("tok-123", server)); err != nil {

@@ -122,6 +122,9 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(home, ".cursor"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(home, ".cursor", "mcp.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	type ledgerBatchRequest struct {
 		OrganizationID string `json:"organization_id"`
 		InstallationID string `json:"installation_id"`

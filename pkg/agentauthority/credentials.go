@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,6 +27,9 @@ func (g *guard) credentials() {
 	for _, entry := range g.entries(ssh) {
 		if strings.HasPrefix(entry.Name(), "id_") && !strings.HasSuffix(entry.Name(), ".pub") {
 			result := g.access(filepath.Join(ssh, entry.Name()), "stat")
+			if errors.Is(result.err, os.ErrNotExist) {
+				g.fail(ReasonChangedDuringRead)
+			}
 			if result.err == nil {
 				keys++
 				if result.info.ModTime().After(newest) {

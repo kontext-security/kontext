@@ -34,9 +34,9 @@ func readGuarded(ctx context.Context, path, mode string) (result fileResult) {
 			result.err = statErr
 			return
 		}
-		if info.Mode()&os.ModeSymlink != 0 || isDataless(info) || (!info.IsDir() && !info.Mode().IsRegular()) || mode != "tail" && mode != "cursor" && !info.IsDir() && info.Size() > maxFileBytes {
+		if err := refusal(info, mode == "tail" || mode == "cursor"); err != nil {
 			unix.Close(fd)
-			result.err = os.ErrPermission
+			result.err = err
 			return
 		}
 		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
@@ -75,20 +75,27 @@ func readGuarded(ctx context.Context, path, mode string) (result fileResult) {
 		result.parsed = value
 		if err != nil {
 			result.parseErr = errParse
+			if errors.Is(err, errUnsupportedFormat) {
+				result.parseErr = errors.Join(errParse, errUnsupportedFormat)
+			}
 		}
 	case "stat":
 		if !actual.Mode().IsRegular() {
 			result.err = os.ErrPermission
 		}
 	case "read":
-		if !actual.Mode().IsRegular() || actual.Size() > maxFileBytes {
+		if !actual.Mode().IsRegular() {
 			result.err = os.ErrPermission
+			return
+		}
+		if actual.Size() > maxFileBytes {
+			result.err = errTooLarge
 			return
 		}
 		result.data, result.err = io.ReadAll(io.LimitReader(file, maxFileBytes+1))
 		if len(result.data) > maxFileBytes {
 			result.data = nil
-			result.err = os.ErrPermission
+			result.err = errTooLarge
 		}
 	case "tail":
 		if !actual.Mode().IsRegular() {

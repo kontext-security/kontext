@@ -668,6 +668,9 @@ func TestLifecycleRemoteNormalizesEnforceStampOnNonBlockingHook(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	// Keep the machine's own apps and CLIs out of every fixture's inventory.
+	agentinventory.SystemAppDirs, agentinventory.SystemCLIDirs = nil, nil
+	_ = os.Setenv("PATH", "/usr/bin:/bin")
 	// Keep the unavailable-daemon tests fast; the restart wait is exercised
 	// by TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget.
 	daemonRestartWait = 500 * time.Millisecond

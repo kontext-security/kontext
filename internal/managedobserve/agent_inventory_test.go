@@ -33,6 +33,9 @@ func TestAgentInventoryRefresh(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(home, ".cursor"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(home, ".cursor", "mcp.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	holder := &agentInventoryHolder{}
 	if _, ok := holder.Fact(); ok {
@@ -51,7 +54,7 @@ func TestAgentInventoryRefresh(t *testing.T) {
 	if !ok || len(inv.Agents) != 1 || inv.Agents[0].ID != "cursor" {
 		t.Fatalf("initial fact=%+v, %t", inv, ok)
 	}
-	if err := os.Remove(filepath.Join(home, ".cursor")); err != nil {
+	if err := os.RemoveAll(filepath.Join(home, ".cursor")); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)

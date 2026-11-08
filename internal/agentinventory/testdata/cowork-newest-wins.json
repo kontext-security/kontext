@@ -5,6 +5,8 @@
       "config_path": "~/Library/Application Support/Claude/local-agent-mode-sessions",
       "wired": "yes",
       "last_activity_at": "2026-09-18T14:00:00Z",
+      "installed": "unknown",
+      "configured": true,
       "sandboxed": false
     }
   ],
