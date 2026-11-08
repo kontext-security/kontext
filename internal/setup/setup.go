@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +57,13 @@ var errPersonalKeyBoundElsewhere = errors.New("this setup command was already us
 // process and terminal interactions go through these so tests never touch
 // launchctl/security/scutil or a real TTY.
 var (
+	// Only a daemon that repairs hooks can add them later, so every other
+	// install keeps writing them all.
+	hookAgentAbsent = func(home, agent string) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return managedobserve.HookRepairAvailable() && agentinventory.Absent(ctx, home, os.Getenv, agent)
+	}
 	agentWiring = func() map[string]func() agentinventory.Wired {
 		return managedobserve.AgentWiring(managedconfig.ScopeUser)
 	}
@@ -478,8 +486,16 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 	}
 	// Every hook file is in the user's home, so setup never asks for a password.
 	codexHooks := ""
+	var notFound []string
 	if err := hookinstall.Install(hookinstall.Options{
 		Scope: hookinstall.User, Home: home, Binary: binary, Setup: true, ClaudePath: managedSettingsPath, CursorPath: cursorHooksPath, CodexPath: codexSystemHooks,
+		SkipAgent: func(agent string) bool {
+			if !hookAgentAbsent(home, agent) {
+				return false
+			}
+			notFound = append(notFound, agentinventory.DisplayName(agent))
+			return true
+		},
 		Report: func(r hookinstall.Result) {
 			// A machine-wide file from an earlier setup or an organization
 			// covers every event; the user file stays free of Kontext's hooks.
@@ -510,6 +526,13 @@ func Run(ctx context.Context, opts Options) (retErr error) {
 		},
 	}); err != nil {
 		return err
+	}
+	if len(notFound) > 0 {
+		fmt.Fprintf(opts.Stdout, "  • Not found: %s. Kontext adds their hooks when they appear\n", strings.Join(notFound, ", "))
+		if slices.Contains(notFound, agentinventory.DisplayName("codex")) {
+			// Repair adds the hooks later, but only the user can trust them.
+			fmt.Fprintln(opts.Stdout, "  • Codex: once Kontext adds its hooks, run `codex`, open /hooks and trust each Kontext hook")
+		}
 	}
 	if codexHooks != "" {
 		// Codex runs a user hook only once it is trusted in the Codex CLI's /hooks.

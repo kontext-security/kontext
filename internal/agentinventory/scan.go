@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -95,6 +97,29 @@ func displayPath(home, path string) string {
 		return "~/" + filepath.ToSlash(rel)
 	}
 	return path
+}
+
+// Absent reports whether a scan is sure the agent is not on this machine: no app
+// or binary, no config of its own, and every check answered. An unclear result
+// is not absence, so it can never cost an agent its hooks.
+func Absent(ctx context.Context, home string, env func(string) string, id string) bool {
+	index := slices.IndexFunc(Catalog, func(d Descriptor) bool { return d.ID == id })
+	if index < 0 || ctx.Err() != nil {
+		return false
+	}
+	if installed, err := agentInstalled(home, id); err != nil || installed != InstalledNo {
+		return false
+	}
+	// Claude.app runs Claude Code too, with no claude command on the PATH.
+	if id == "claude_code" && runtime.GOOS == "darwin" {
+		if installed, err := agentInstalled(home, "claude_cowork"); err != nil || installed != InstalledNo {
+			return false
+		}
+	}
+	health := agentauthority.NewSourceHealth(id+"/presence", time.Now())
+	health.Read()
+	_, configured := inspectConfig(ctx, Catalog[index], home, env, map[string]bool{}, health)
+	return !configured && ctx.Err() == nil && health.Result(time.Now()).Status == agentauthority.StatusComplete
 }
 
 // AuthorityLocations names every catalog agent's configuration, listed or not,
