@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/managedconfig"
@@ -227,5 +229,29 @@ func TestDiagnoseReportRecordsDaemonAndExportState(t *testing.T) {
 		t.Error("HeartbeatAgeSeconds is nil despite a recorded heartbeat")
 	} else if *report.HeartbeatAgeSeconds != 20 {
 		t.Errorf("HeartbeatAgeSeconds = %v, want 20", *report.HeartbeatAgeSeconds)
+	}
+}
+
+func TestInventoryHealthPrintsEachFactSeparately(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "inventory-state.json")
+	var out bytes.Buffer
+	if got := printInventoryHealth(&out, path, time.Now()); got != nil || !strings.Contains(out.String(), "no scan recorded yet") {
+		t.Fatalf("report = %+v, out = %q", got, out.String())
+	}
+	now := time.Date(2026, 11, 8, 13, 0, 0, 0, time.UTC)
+	state := `{"revision":9,"health":{"last_attempt_at":"2026-11-08T12:58:00Z","last_upload_at":"2026-11-08T12:59:00Z","applied_revisions":{"partial":7,"complete":9}}}`
+	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	got := printInventoryHealth(&out, path, now)
+	for _, want := range []string{"last attempt: 2m0s ago", "last complete scan: never", "last upload: 1m0s ago", "applied revision: complete 9, partial 7"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q in:\n%s", want, out.String())
+		}
+	}
+	if got == nil || got.AppliedRevisions["complete"] != 9 {
+		t.Fatalf("report = %+v", got)
 	}
 }

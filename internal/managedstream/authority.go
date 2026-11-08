@@ -31,7 +31,8 @@ func addAuthority(payload *Payload, opts Options, state State, now time.Time) {
 		return
 	}
 	previous := state.LastReport.Authority
-	if previous != nil && previous.Hash == report.Hash && !heartbeatDue(state.LastAuthorityAt, time.Hour, now) {
+	// A pending result needs its claims beside it, even when they are unchanged.
+	if previous != nil && previous.Hash == report.Hash && !heartbeatDue(state.LastAuthorityAt, time.Hour, now) && !opts.Inventory.hasPendingAuthority() {
 		return
 	}
 	if payload.Device == nil {
