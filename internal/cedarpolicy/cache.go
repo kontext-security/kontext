@@ -598,6 +598,10 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 		r.Cache.clearUnauthorized()
 	}
 	if err := r.Cache.Apply(result, r.now()); err != nil {
+		if result.State == StateUnauthorized && holdsPolicy {
+			// The drop didn't land, so this 401 kept the policy after all.
+			err = fmt.Errorf("%w: could not save the drop: %w", errUnauthorizedHeld, err)
+		}
 		r.recordFailure(err)
 		return err
 	}

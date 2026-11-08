@@ -185,8 +185,9 @@ func TestUnauthorizedDropIsRetriedAfterAFailedWrite(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(path, "occupied"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := refresher.Refresh(context.Background()); err == nil || errors.Is(err, errUnauthorizedHeld) {
-		t.Fatalf("Refresh() error = %v, want the write failure", err)
+	err := refresher.Refresh(context.Background())
+	if !errors.Is(err, errUnauthorizedHeld) || !strings.Contains(err.Error(), "replace") {
+		t.Fatalf("Refresh() error = %v, want a hold that names the write failure", err)
 	}
 	if cache.Current().Deployment == nil {
 		t.Fatal("a failed write dropped the policy")
@@ -327,6 +328,51 @@ func TestRefreshNowHoldUsesTheShortRetry(t *testing.T) {
 	for cache.Current().Deployment != nil {
 		if time.Now().After(deadline) {
 			t.Fatalf("policy still active after %d reads", fetches.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// The third 401 can't save its drop, so the policy is still active. The next
+// try must come after the short retry, not the failure backoff.
+func TestRunRetriesAFailedDropWithTheShortRetry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cedar-policy.json")
+	cache := enforcingCache(t, path, time.Now().UTC())
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, "occupied"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var fetches atomic.Int64
+	refresher := unauthorizedRefresher(t, cache, &fetches)
+	refresher.Interval = time.Hour
+	refresher.unauthorizedRetry = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		refresher.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for fetches.Load() <= unauthorizedThreshold {
+		if time.Now().After(deadline) {
+			t.Fatalf("reads = %d, want a retry after the failed drop", fetches.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	for cache.Current().Deployment != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the drop never landed after writes recovered")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
