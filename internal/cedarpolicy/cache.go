@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +23,19 @@ const (
 	// expire by age; they stay active until a valid replacement is installed.
 	DefaultMaxAge    = 15 * time.Minute
 	cacheFileVersion = 2
+
+	// unauthorizedThreshold is how many 401s in a row, with no successful read
+	// between them, end enforcement. Below it a 401 is treated as a server-side
+	// blip: failing open on a blip is worse than enforcing a little longer
+	// after a real revocation.
+	unauthorizedThreshold = 3
+	// unauthorizedRetryDelay paces the reads inside a streak, so the first 401
+	// to the drop takes about a minute instead of following the failure backoff.
+	unauthorizedRetryDelay = 30 * time.Second
 )
+
+// errUnauthorizedHeld marks a 401 that kept the cached policy.
+var errUnauthorizedHeld = errors.New("cedar policy read was rejected as unauthorized")
 
 type CacheStatus struct {
 	State         State
@@ -87,6 +100,9 @@ type Cache struct {
 	legacyLastGood     *LegacyDeployment
 	persistedEnforce   bool
 	status             CacheStatus
+	unauthorizedCount  int
+	// unauthorizedFetched is the cached read the count belongs to.
+	unauthorizedFetched time.Time
 }
 
 func NewCache(path string, _ time.Duration) *Cache {
@@ -101,6 +117,7 @@ func (c *Cache) Load() error {
 	if c.path == "" {
 		return nil
 	}
+	c.loadUnauthorizedCount()
 	data, err := os.ReadFile(c.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -378,19 +395,78 @@ func cloneLegacyDeployment(deployment *LegacyDeployment) *LegacyDeployment {
 	return &copy
 }
 
+// The 401 count lives beside the cache, not in it, so a held 401 can't touch the
+// policy on disk and an older binary's strict decoder never sees a new field.
+// Keeping it across restarts means a daemon that keeps restarting can't hold
+// off a real revocation. It is tied to the cached read's time, which only a
+// valid read changes, so a count an older binary or a crash left behind is ignored.
+func (c *Cache) unauthorizedCountPath() string {
+	return c.path + ".unauthorized"
+}
+
+func (c *Cache) loadUnauthorizedCount() {
+	data, err := os.ReadFile(c.unauthorizedCountPath())
+	if err != nil {
+		return
+	}
+	// An unreadable count starts a new streak, which only costs one more window.
+	countText, fetchedText, _ := strings.Cut(strings.TrimSpace(string(data)), " ")
+	count, countErr := strconv.Atoi(countText)
+	fetched, fetchedErr := time.Parse(time.RFC3339Nano, fetchedText)
+	if countErr != nil || fetchedErr != nil || count <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.unauthorizedCount = count
+	c.unauthorizedFetched = fetched
+	c.mu.Unlock()
+}
+
+func (c *Cache) addUnauthorized() (int, error) {
+	c.mu.Lock()
+	if !c.unauthorizedFetched.Equal(c.fetched) {
+		c.unauthorizedCount = 0
+		c.unauthorizedFetched = c.fetched
+	}
+	c.unauthorizedCount++
+	count := c.unauthorizedCount
+	fetched := c.unauthorizedFetched
+	c.mu.Unlock()
+	if c.path == "" {
+		return count, nil
+	}
+	data := strconv.Itoa(count) + " " + fetched.UTC().Format(time.RFC3339Nano) + "\n"
+	return count, writeCacheFile(c.unauthorizedCountPath(), []byte(data))
+}
+
+// clearUnauthorized is best effort: a file it can't remove is ignored later,
+// because the next valid read changes the time the count is tied to.
+func (c *Cache) clearUnauthorized() {
+	c.mu.Lock()
+	counted := c.unauthorizedCount > 0
+	c.unauthorizedCount = 0
+	c.mu.Unlock()
+	if counted && c.path != "" {
+		_ = os.Remove(c.unauthorizedCountPath())
+	}
+}
+
 func (c *Cache) persist(file cacheFile) error {
 	if c.path == "" {
 		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(c.path), 0o700); err != nil {
-		return fmt.Errorf("cedar policy cache: create directory: %w", err)
 	}
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return fmt.Errorf("cedar policy cache: encode: %w", err)
 	}
-	data = append(data, '\n')
-	temp, err := os.CreateTemp(filepath.Dir(c.path), ".cedar-policy-*.tmp")
+	return writeCacheFile(c.path, append(data, '\n'))
+}
+
+func writeCacheFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("cedar policy cache: create directory: %w", err)
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".cedar-policy-*.tmp")
 	if err != nil {
 		return fmt.Errorf("cedar policy cache: create temporary file: %w", err)
 	}
@@ -416,11 +492,11 @@ func (c *Cache) persist(file cacheFile) error {
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("cedar policy cache: close: %w", err)
 	}
-	if err := os.Rename(tempPath, c.path); err != nil {
+	if err := os.Rename(tempPath, path); err != nil {
 		return fmt.Errorf("cedar policy cache: replace: %w", err)
 	}
 	cleanup = false
-	if err := fsperm.SyncDir(filepath.Dir(c.path)); err != nil {
+	if err := fsperm.SyncDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("cedar policy cache: sync directory: %w", err)
 	}
 	return nil
@@ -456,6 +532,8 @@ type Refresher struct {
 	RefreshNow <-chan struct{}
 	MaxBackoff time.Duration
 	Now        func() time.Time
+	// unauthorizedRetry overrides unauthorizedRetryDelay in tests.
+	unauthorizedRetry time.Duration
 	// Diagnostic surfaces refresh state transitions in the daemon log. A
 	// refresh loop that fails silently leaves enforcement running on a stale
 	// policy with no operator-visible signal, so failures must not be
@@ -507,16 +585,52 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 		return err
 	}
 	previous := r.Cache.Current()
+	holdsPolicy := previous.Deployment != nil || previous.LegacyDeployment != nil
+	if result.State == StateUnauthorized && holdsPolicy {
+		if err := r.holdUnauthorized(); err != nil {
+			r.recordFailure(err)
+			return err
+		}
+	}
+	// The client has validated this read, so it ends a streak even if applying
+	// it fails. A drop clears the count only once written, so it is tried again.
+	if result.State != StateUnauthorized {
+		r.Cache.clearUnauthorized()
+	}
 	if err := r.Cache.Apply(result, r.now()); err != nil {
+		if result.State == StateUnauthorized && holdsPolicy {
+			// The drop didn't land, so this 401 kept the policy after all.
+			err = fmt.Errorf("%w: could not save the drop: %w", errUnauthorizedHeld, err)
+		}
 		r.recordFailure(err)
 		return err
 	}
+	r.Cache.clearUnauthorized()
 	if (!previous.AuthorityScanKnown || !previous.AuthorityScan) && r.Cache.Current().AuthorityScan && r.OnAuthorityScanAvailable != nil {
 		r.OnAuthorityScanAvailable()
 	}
-	r.recovered()
+	if result.State != StateUnauthorized {
+		r.recovered()
+	} else if holdsPolicy {
+		diagnostic.LogAlways(r.Diagnostic, "cedar policy read was rejected as unauthorized %d times in a row; dropped the cached policy, enforcement is off until a read succeeds\n", unauthorizedThreshold)
+	}
 	r.warnCatalogMismatch()
 	return nil
+}
+
+// holdUnauthorized counts a 401 against the cached policy. It returns an error
+// wrapping errUnauthorizedHeld while the policy must stay, and nil once the
+// streak has reached the threshold. The check is >= so a drop whose Apply failed
+// is tried again on the next 401.
+func (r *Refresher) holdUnauthorized() error {
+	count, err := r.Cache.addUnauthorized()
+	if err != nil {
+		diagnostic.LogAlways(r.Diagnostic, "%v\n", err)
+	}
+	if count >= unauthorizedThreshold {
+		return nil
+	}
+	return fmt.Errorf("%w: %d of %d in a row before enforcement stops", errUnauthorizedHeld, count, unauthorizedThreshold)
 }
 
 // warnCatalogMismatch logs once per skew episode that the fetched policy was
@@ -539,15 +653,21 @@ func (r *Refresher) Run(ctx context.Context) {
 	if maxBackoff < interval {
 		maxBackoff = 10 * interval
 	}
+	unauthorizedRetry := r.unauthorizedRetry
+	if unauthorizedRetry <= 0 {
+		unauthorizedRetry = unauthorizedRetryDelay
+	}
 	delay := interval
 	first := true
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := r.Refresh(ctx); err == nil {
+		err := r.Refresh(ctx)
+		held := errors.Is(err, errUnauthorizedHeld)
+		if err == nil {
 			delay = interval
-		} else if delay < maxBackoff {
+		} else if !held && delay < maxBackoff {
 			delay *= 2
 			if delay > maxBackoff {
 				delay = maxBackoff
@@ -559,7 +679,12 @@ func (r *Refresher) Run(ctx context.Context) {
 			}
 			first = false
 		}
-		timer := time.NewTimer(delay)
+		next := delay
+		if held {
+			next = min(delay, unauthorizedRetry)
+		}
+		timer := time.NewTimer(next)
+		deadline := time.Now().Add(next)
 	wait:
 		for {
 			select {
@@ -569,10 +694,18 @@ func (r *Refresher) Run(ctx context.Context) {
 			case <-r.RefreshNow:
 				// A failed early refresh keeps the timer as it was, so it can't
 				// delay the retry already scheduled or grow the backoff.
-				if err := r.Refresh(ctx); err == nil {
+				err := r.Refresh(ctx)
+				if err == nil {
 					timer.Stop()
 					delay = interval
 					timer = time.NewTimer(delay)
+					deadline = time.Now().Add(delay)
+				} else if retry := min(delay, unauthorizedRetry); errors.Is(err, errUnauthorizedHeld) && time.Until(deadline) > retry {
+					// A streak started by an early refresh gets the short retry
+					// too. This only ever brings the next read forward.
+					timer.Stop()
+					timer = time.NewTimer(retry)
+					deadline = time.Now().Add(retry)
 				}
 			case <-timer.C:
 				break wait
