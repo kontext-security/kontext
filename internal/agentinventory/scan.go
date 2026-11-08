@@ -33,7 +33,7 @@ func Scan(ctx context.Context, home string, env func(string) string, now time.Ti
 			inv.Sources = append(inv.Sources, health.Result(time.Now()))
 			continue
 		}
-		installed, lookupErr := agentInstalled(home, descriptor.ID)
+		installed, lookupErr := agentInstalled(home, descriptor.ID, cleanParents)
 		if lookupErr != nil {
 			health.Fail(agentauthority.ReasonFor(lookupErr))
 		} else {
@@ -107,12 +107,12 @@ func Absent(ctx context.Context, home string, env func(string) string, id string
 	if index < 0 || ctx.Err() != nil {
 		return false
 	}
-	if installed, err := agentInstalled(home, id); err != nil || installed != InstalledNo {
+	if installed, err := agentInstalled(home, id, map[string]bool{}); err != nil || installed != InstalledNo {
 		return false
 	}
 	// Claude.app runs Claude Code too, with no claude command on the PATH.
 	if id == "claude_code" && runtime.GOOS == "darwin" {
-		if installed, err := agentInstalled(home, "claude_cowork"); err != nil || installed != InstalledNo {
+		if installed, err := agentInstalled(home, "claude_cowork", map[string]bool{}); err != nil || installed != InstalledNo {
 			return false
 		}
 	}

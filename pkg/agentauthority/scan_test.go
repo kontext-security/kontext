@@ -287,7 +287,7 @@ func TestRedactionBoundariesAndPaths(t *testing.T) {
 		}
 	}
 	r := scanFixture(fixtureHome(t, "home_claude_full"), []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}})
-	r.Agents[0].MCPServers[0].Source = "/Users/michelosswald/.claude/settings.json"
+	r.Agents[0].MCPServers[0].Source = "/Users/example/.claude/settings.json"
 	r.Agents[0].Plugins[0].Name = strings.Repeat("a1", 16)
 	r.Credentials[0].Path = "/Users/" + strings.Repeat("a1", 16) + "/.aws/credentials"
 	before, _ := r.ContentHash()
@@ -398,7 +398,7 @@ func TestURLArgumentsKeepOnlyOrigin(t *testing.T) {
 
 func TestPermissionPatternsRedactPaths(t *testing.T) {
 	home := fixtureHome(t, "home_empty")
-	writeFixture(t, home, ".claude/settings.json", `{"permissions":{"allow":["Bash(python3 /Users/michel/scripts/x.py:*)", "Bash(/usr/bin/python3:*)"]}}`)
+	writeFixture(t, home, ".claude/settings.json", `{"permissions":{"allow":["Bash(python3 /Users/example/scripts/x.py:*)", "Bash(/usr/bin/python3:*)"]}}`)
 	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}})
 	grants := r.Agents[0].Permissions.Allow
 	if len(grants) != 2 || grants[0].Pattern != "Bash(python3 <redacted>)" || grants[1].Pattern != "Bash(<redacted>)" || grants[0].Risk != "any_shell" {

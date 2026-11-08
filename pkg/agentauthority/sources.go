@@ -143,6 +143,8 @@ func (g *guard) readOK() {
 // noteAccess counts a finished access. Parsed reads count once parsing succeeds.
 func (g *guard) noteAccess(err error, mode string) {
 	switch {
+	case errors.Is(err, os.ErrNotExist) && g.listed:
+		g.fail(ReasonChangedDuringRead)
 	case errors.Is(err, os.ErrNotExist):
 		g.readOK()
 	case err != nil:
@@ -150,6 +152,15 @@ func (g *guard) noteAccess(err error, mode string) {
 	case mode != "read" && mode != "cursor":
 		g.readOK()
 	}
+}
+
+// failListed is for metadata of an entry a listing just returned.
+func (g *guard) failListed(err error) {
+	if errors.Is(err, os.ErrNotExist) {
+		g.fail(ReasonChangedDuringRead)
+		return
+	}
+	g.fail(ReasonFor(err))
 }
 
 func (g *guard) noteParse(err error) {

@@ -12,7 +12,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 // versionSources lists where each agent's version is read, in order: an app
@@ -38,6 +41,8 @@ var (
 	SystemAppDirs = []string{"/Applications"}
 	SystemCLIDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
 )
+
+var errPrivacyGuarded = fmt.Errorf("%w: privacy-guarded folder", os.ErrPermission)
 
 var versionPattern = regexp.MustCompile(`\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.]+)?`)
 
@@ -77,6 +82,9 @@ func appVersion(ctx context.Context, home, app string) string {
 	}
 	for _, dir := range appDirs(home) {
 		plist := filepath.Join(dir, app, "Contents", "Info.plist")
+		if privacyfolder.Guarded(home, plist) {
+			continue
+		}
 		if _, err := os.Stat(plist); err != nil {
 			continue
 		}
@@ -93,7 +101,7 @@ func cliVersion(_ context.Context, home, name string) string {
 	if os.Geteuid() == 0 {
 		return ""
 	}
-	path, _ := findCLI(home, name)
+	path, _ := findCLI(home, name, map[string]bool{})
 	if path == "" {
 		return ""
 	}
@@ -165,15 +173,22 @@ type pending struct{}
 
 // findCLI also returns a lookup failure other than absence, so a caller can
 // tell "not installed" from "could not check".
-func findCLI(home, name string) (string, error) {
-	if path, err := exec.LookPath(name); err == nil {
-		return path, nil
+func findCLI(home, name string, clean map[string]bool) (string, error) {
+	// Only Windows needs LookPath, for its executable extensions. On unix it
+	// reports an unreadable PATH folder as not found.
+	if runtime.GOOS == "windows" {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, nil
+		}
 	}
-	// The daemon runs under launchd with a minimal PATH.
 	var failure error
-	for _, dir := range cliDirs(home) {
+	// The daemon runs under launchd with a minimal PATH, hence the fixed folders.
+	for _, dir := range append(filepath.SplitList(os.Getenv("PATH")), cliDirs(home)...) {
+		if !filepath.IsAbs(dir) {
+			continue
+		}
 		path := filepath.Join(dir, name)
-		info, err := os.Stat(path)
+		info, err := statCandidate(home, path, clean)
 		if err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
 			return path, nil
 		}
@@ -184,13 +199,26 @@ func findCLI(home, name string) (string, error) {
 	return "", failure
 }
 
+// statCandidate never follows an install candidate into a privacy-guarded
+// folder: the daemon would prompt in the background.
+func statCandidate(home, path string, clean map[string]bool) (os.FileInfo, error) {
+	if linkGuarded(home, path, clean) {
+		return nil, errPrivacyGuarded
+	}
+	info, err := os.Stat(path)
+	if errors.Is(err, syscall.ENOTDIR) {
+		return nil, os.ErrNotExist
+	}
+	return info, err
+}
+
 func appDirs(home string) []string {
 	return append(slices.Clone(SystemAppDirs), filepath.Join(home, "Applications"))
 }
 
 // agentInstalled locates an app bundle or CLI binary. An agent with no known
 // location, or one Kontext could not check, is unknown rather than absent.
-func agentInstalled(home, id string) (Installed, error) {
+func agentInstalled(home, id string, clean map[string]bool) (Installed, error) {
 	sources := versionSources[id]
 	if len(sources) == 0 {
 		return InstalledUnknown, nil
@@ -200,7 +228,7 @@ func agentInstalled(home, id string) (Installed, error) {
 	for _, source := range sources {
 		if !strings.HasSuffix(source, ".app") {
 			checkable = true
-			path, err := findCLI(home, source)
+			path, err := findCLI(home, source, clean)
 			if path != "" {
 				return InstalledYes, nil
 			}
@@ -214,7 +242,7 @@ func agentInstalled(home, id string) (Installed, error) {
 		}
 		checkable = true
 		for _, dir := range appDirs(home) {
-			info, err := os.Stat(filepath.Join(dir, source))
+			info, err := statCandidate(home, filepath.Join(dir, source), clean)
 			if err == nil && info.IsDir() {
 				return InstalledYes, nil
 			}

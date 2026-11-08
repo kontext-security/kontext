@@ -31,17 +31,31 @@ type authorityHolder struct {
 	available <-chan struct{}
 	resend    <-chan struct{}
 	// record takes each finished scan for upload; nil in tests.
-	record func(agentauthority.Report)
+	record  func(agentauthority.Report)
+	discard func()
+}
+
+func (h *authorityHolder) scanEnabled() bool {
+	return managedstream.AuthorityScanLocallyEnabled() && h.enabled != nil && h.enabled()
+}
+
+// clear forgets the report and, once an opt-out is certain, the results waiting
+// for upload. Before the server has answered, disabled only means no policy yet.
+func (h *authorityHolder) clear() {
+	h.mu.Lock()
+	h.report, h.present = agentauthority.Report{}, false
+	h.mu.Unlock()
+	if h.discard != nil && (!managedstream.AuthorityScanLocallyEnabled() || h.known == nil || h.known()) {
+		h.discard()
+	}
 }
 
 func (h *authorityHolder) Fact() (agentauthority.Report, bool) {
 	if h == nil {
 		return agentauthority.Report{}, false
 	}
-	if !managedstream.AuthorityScanLocallyEnabled() || h.enabled == nil || !h.enabled() {
-		h.mu.Lock()
-		h.report, h.present = agentauthority.Report{}, false
-		h.mu.Unlock()
+	if !h.scanEnabled() {
+		h.clear()
 		return agentauthority.Report{}, false
 	}
 	h.mu.RLock()
@@ -50,10 +64,8 @@ func (h *authorityHolder) Fact() (agentauthority.Report, bool) {
 }
 
 func (h *authorityHolder) refresh(ctx context.Context, inv agentinventory.Inventory) {
-	if !managedstream.AuthorityScanLocallyEnabled() || !h.enabled() {
-		h.mu.Lock()
-		h.report, h.present = agentauthority.Report{}, false
-		h.mu.Unlock()
+	if !h.scanEnabled() {
+		h.clear()
 		return
 	}
 	home, err := os.UserHomeDir()
@@ -65,6 +77,10 @@ func (h *authorityHolder) refresh(ctx context.Context, inv agentinventory.Invent
 	}
 	report := scanAuthority(ctx, &h.scanner, home, inv)
 	if ctx.Err() != nil {
+		return
+	}
+	if !h.scanEnabled() {
+		h.clear()
 		return
 	}
 	h.mu.Lock()

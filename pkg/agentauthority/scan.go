@@ -363,7 +363,9 @@ func (g *guard) claude(a *Agent, base string, root readers.ClaudeRoot, projects 
 	}
 	for _, entry := range g.entries(filepath.Join(g.managed, "managed-settings.d")) {
 		if strings.HasSuffix(entry.Name(), ".json") {
+			g.listed = true
 			g.settings(a, filepath.Join(g.managed, "managed-settings.d", entry.Name()), enabled)
+			g.listed = false
 		}
 	}
 	g.use(a.ID, "plugins", "mcp")
@@ -505,8 +507,15 @@ func (g *guard) connectors(a *Agent, root string) {
 			orgDir := filepath.Join(root, account.Name(), org.Name())
 			for _, dir := range []string{orgDir, filepath.Join(orgDir, "agent")} {
 				for _, entry := range g.sessionEntries(dir) {
+					if !strings.HasPrefix(entry.Name(), "local_") || filepath.Ext(entry.Name()) != ".json" {
+						continue
+					}
 					info, err := entry.Info()
-					if err == nil && info.Mode().IsRegular() && strings.HasPrefix(entry.Name(), "local_") && filepath.Ext(entry.Name()) == ".json" {
+					if err != nil {
+						g.failListed(err)
+						continue
+					}
+					if info.Mode().IsRegular() {
 						sessions = append(sessions, session{filepath.Join(dir, entry.Name()), info.ModTime()})
 					}
 				}
@@ -549,6 +558,7 @@ func (g *guard) plugins(a *Agent, base string, enabled map[string]bool) {
 		for _, entry := range index.Plugins[key] {
 			if !within(filepath.Join(base, "plugins/cache"), entry.InstallPath) {
 				g.skip()
+				g.fail(ReasonPermissionDenied)
 				continue
 			}
 			type pluginMeta struct {

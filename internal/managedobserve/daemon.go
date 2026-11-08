@@ -436,6 +436,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 
 	authorityHolder := &authorityHolder{available: authorityAvailable, resend: authorityResend, enabled: func() bool { return cedarCache.Current().AuthorityScan }, known: func() bool { return cedarCache.Current().AuthorityScanKnown }}
 	authorityHolder.scanner.BeginRead = authorityIOPolicy(opts.Diagnostic)
+	authorityHolder.discard = func() {
+		if err := inventoryStore.DiscardAuthority(); err != nil {
+			opts.Diagnostic.Printf("authority scan: discard pending results: %v\n", err)
+		}
+	}
 	authorityHolder.record = func(report agentauthority.Report) {
 		if err := inventoryStore.RecordAuthority(report); err != nil {
 			opts.Diagnostic.Printf("authority scan: record scan: %v\n", err)
