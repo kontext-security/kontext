@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.22.0](https://github.com/kontext-security/kontext/compare/v1.21.1...v1.22.0) (2026-11-09)
+
+
+### Features
+
+* **managedconfig:** read the install token from HKLM on Windows ([#712](https://github.com/kontext-security/kontext/issues/712)) ([9feb443](https://github.com/kontext-security/kontext/commit/9feb44329684bcb6a0a372c3c2de310100d331ba))
+
+
+### Bug Fixes
+
+* **hooks:** install the agent hooks on Windows ([#711](https://github.com/kontext-security/kontext/issues/711)) ([9bc78dc](https://github.com/kontext-security/kontext/commit/9bc78dc4a0819bdaf2593704dcab31b5c2de0fd9))
+* **installation:** keep an organization-managed identity per user on Windows ([#728](https://github.com/kontext-security/kontext/issues/728)) ([dac2f48](https://github.com/kontext-security/kontext/commit/dac2f48aba4015a3dba8ef38e343f9eeb54738e3))
+* **inventory:** stop two false health results ([#732](https://github.com/kontext-security/kontext/issues/732)) ([65019a2](https://github.com/kontext-security/kontext/commit/65019a21d69c153360ddf77f7fc6ae1aabf0ee54))
+* **managedobserve:** hold a fresh endpoint's first tool calls until its policy arrives ([#715](https://github.com/kontext-security/kontext/issues/715)) ([15eaab4](https://github.com/kontext-security/kontext/commit/15eaab416434148eb10b0e706a6f03e91c732235))
+
 ## [1.21.1](https://github.com/kontext-security/kontext/compare/v1.21.0...v1.21.1) (2026-11-09)
 
 
