@@ -46,6 +46,9 @@ type InventoryHealth struct {
 	LastCompleteAt   string           `json:"last_complete_at,omitempty"`
 	LastUploadAt     string           `json:"last_upload_at,omitempty"`
 	AppliedRevisions map[string]int64 `json:"applied_revisions,omitempty"`
+	// Presence and authority scans record separately and at different rates, so
+	// a complete scan needs every source's latest result to be complete.
+	IncompleteSources map[string]bool `json:"incomplete_sources,omitempty"`
 }
 
 // sourceClaims holds what one source reported, so that it can be merged with a
@@ -172,7 +175,9 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.file.Revision++
-	complete := true
+	if s.file.Health.IncompleteSources == nil {
+		s.file.Health.IncompleteSources = map[string]bool{}
+	}
 	for _, result := range results {
 		result.Revision = s.file.Revision
 		agent, family, _ := strings.Cut(result.ID, "/")
@@ -181,11 +186,15 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 			entry = mergePending(prior, entry)
 		}
 		s.file.Pending[result.ID] = entry
-		complete = complete && result.Status == agentauthority.StatusComplete
+		if result.Status == agentauthority.StatusComplete {
+			delete(s.file.Health.IncompleteSources, result.ID)
+		} else {
+			s.file.Health.IncompleteSources[result.ID] = true
+		}
 	}
 	finished := results[len(results)-1].FinishedAt
 	s.file.Health.LastAttemptAt = finished
-	if complete {
+	if len(s.file.Health.IncompleteSources) == 0 {
 		s.file.Health.LastCompleteAt = finished
 	}
 	return s.save()

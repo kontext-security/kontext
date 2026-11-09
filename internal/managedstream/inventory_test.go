@@ -69,6 +69,32 @@ func mcpNames(claims sourceClaims) []string {
 	return names
 }
 
+// Presence scans run more often than authority scans, so one that is complete
+// must not cover a partial authority source, even across a restart.
+func TestLastCompleteNeedsEverySourceComplete(t *testing.T) {
+	store, path := openTestStore(t)
+	lastComplete := func() string {
+		health, _ := LoadInventoryHealth(path)
+		return health.LastCompleteAt
+	}
+	if err := store.RecordAuthority(mcpScan(agentauthority.StatusPartial, "a")); err != nil {
+		t.Fatal(err)
+	}
+	reopened := OpenInventoryStore(path, testInstallation)
+	if err := reopened.RecordAgents(presenceScan(agentauthority.StatusComplete)); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastComplete(); got != "" {
+		t.Fatalf("last complete = %q while cursor/mcp is partial", got)
+	}
+	if err := reopened.RecordAuthority(mcpScan(agentauthority.StatusComplete, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if lastComplete() == "" {
+		t.Fatal("last complete not set after every source completed")
+	}
+}
+
 func TestEachScanTakesANewPersistedRevision(t *testing.T) {
 	store, path := openTestStore(t)
 	for want := int64(1); want <= 2; want++ {
