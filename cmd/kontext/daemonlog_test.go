@@ -47,3 +47,28 @@ func TestOpenDaemonLogRotatesPastItsCap(t *testing.T) {
 		t.Fatalf("previous log: %v, %v", info, err)
 	}
 }
+
+// A rotation that fails leaves the log in use and says so in it.
+func TestOpenDaemonLogNotesAFailedRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.log")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxDaemonLogBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty folder where the previous log goes makes the rename fail.
+	if err := os.MkdirAll(filepath.Join(path+".1", "busy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := openDaemonLog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(data), "\n") || !strings.Contains(string(data), "couldn't be rotated") {
+		t.Fatalf("log doesn't note the failed rotation; tail %q", data[len(data)-80:])
+	}
+}

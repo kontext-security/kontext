@@ -41,12 +41,21 @@ var version = "dev"
 var userHomeDir = os.UserHomeDir
 
 func main() {
+	// Before cobra parses anything, so a flag error lands in the log too. The
+	// log stays open until the process exits, for main's final error line.
+	if len(os.Args) > 1 && os.Args[1] == daemonCommand {
+		_ = redirectDaemonLog()
+	}
 	root := newRootCmd()
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
+
+// daemonCommand runs the managed-observe daemon; the launch agents and the
+// Windows logon task start it by this name.
+const daemonCommand = "managed-observe-daemon"
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
@@ -509,7 +518,7 @@ func managedObserveDaemonCmd() *cobra.Command {
 	var socketPath, dbPath, idleTimeout string
 	var noCodexRoute bool
 	cmd := &cobra.Command{
-		Use:    "managed-observe-daemon",
+		Use:    daemonCommand,
 		Short:  "Run the managed observe socket daemon",
 		Hidden: true,
 		Args:   cobra.NoArgs,
@@ -518,9 +527,6 @@ func managedObserveDaemonCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Before anything can fail. The log stays open until the process
-			// exits, so main's final error line lands in it too.
-			_ = redirectDaemonLog()
 			timeout := managedobserve.DefaultIdleTimeout()
 			if idleTimeout != "" {
 				parsed, err := time.ParseDuration(idleTimeout)

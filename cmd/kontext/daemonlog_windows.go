@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"runtime/debug"
 
 	"golang.org/x/sys/windows"
 
@@ -18,7 +19,9 @@ var stderrMissing = func() bool {
 
 // redirectDaemonLog sends the daemon's error output to daemon.log in the user's
 // local app data when there is nowhere else for it to go, so a daemon that stops
-// at logon says why. It returns a func that closes the log.
+// at logon says why. A crash goes there too: the runtime writes it to the
+// process's own error handle, not to os.Stderr. It returns a func that closes
+// the log.
 func redirectDaemonLog() func() {
 	if !stderrMissing() {
 		return func() {}
@@ -33,5 +36,9 @@ func redirectDaemonLog() func() {
 	}
 	os.Stderr = f
 	log.SetOutput(f)
-	return func() { _ = f.Close() }
+	_ = debug.SetCrashOutput(f, debug.CrashOptions{})
+	return func() {
+		_ = debug.SetCrashOutput(nil, debug.CrashOptions{})
+		_ = f.Close()
+	}
 }
