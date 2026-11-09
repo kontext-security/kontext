@@ -150,8 +150,9 @@
     <!-- An upgrade stops the running daemons before it replaces kontextw.exe,
          and RegisterTask starts them again. Stopping is immediate: nothing may
          write to the script between InstallInitialize and RemoveExistingProducts
-         (error 2613). A failed upgrade restores the old version first, then
-         starts its daemons. -->
+         (error 2613). In a failed upgrade, the rollback's start comes before the
+         old version is back and fails; the task's restart on failure then starts
+         the daemons on the old version a minute later (measured on Windows 11). -->
     <CustomAction Id="KontextStopDaemons" BinaryRef="KontextInstallScript" JScriptCall="StopDaemons"
                   Execute="immediate" Return="ignore" />
     <CustomAction Id="KontextStopDaemonsRollback" BinaryRef="KontextInstallScript" JScriptCall="StartDaemons"

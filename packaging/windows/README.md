@@ -32,7 +32,7 @@ On install, upgrade and repair the installer also runs, as LocalSystem:
 
 A full uninstall stops the daemons the task started, deletes the task, runs `kontext.exe hooks remove --scope system`, deletes `managed.json`, and the `InstallToken` value if the installer wrote it, then the policy key and `%ProgramData%\Kontext` if nothing else is left in them. It keeps what it removes until it commits, so a cancelled or failed uninstall puts everything back.
 
-An upgrade keeps the configuration, the token, the hooks and the task. It stops the running daemons, removes the old version and installs the new one in one transaction, and starts the daemons again; a failed upgrade restores the old version. A failed first install rolls everything back.
+An upgrade keeps the configuration, the token, the hooks and the task. It stops the running daemons, removes the old version and installs the new one in one transaction, and starts the daemons again. A failed upgrade restores the old version, and the logon task's restart on failure starts the daemons on it within about a minute. A failed first install rolls everything back.
 
 `managed.json`, the token value and the task are written by `kontext-install.js`, a JScript custom action inside the MSI, so the token passes through no command line and no installer log.
 
