@@ -87,7 +87,9 @@ Code's managed drop-in under Program Files and needs `--binary`:
 
 ```powershell
 kontext.exe hooks install --scope system --binary "C:\Program Files\Kontext\kontext.exe"
-``` A real install
+```
+
+A real install
 requires the target binary to be an executable file; dry-run can plan before
 the binary exists. User scope runs as the target user without elevation:
 
