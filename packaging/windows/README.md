@@ -22,6 +22,7 @@ An upgrade or repair without `CLOUD_URL` or `INSTALL_TOKEN` keeps what was writt
 | `%ProgramData%\Kontext\` | system configuration folder | owner Administrators; SYSTEM and Administrators full control; Users read and list; nothing inherited from ProgramData |
 | `%ProgramData%\Kontext\managed.json` | `cloud_url`, `mode`, `"install_token_ref": "registry:InstallToken"` | inherited: SYSTEM and Administrators full control, Users read |
 | `HKLM\SOFTWARE\Policies\Kontext`, value `InstallToken` (REG_SZ, 64-bit view) | the install token | the key's default: administrators and SYSTEM write, Users read |
+| `%LOCALAPPDATA%\Kontext\daemon.log`, per user | what the daemon started by the task would print; rotated to `daemon.log.1` past 10 MB | the user's own folder; not installed, written by the daemon |
 | `%ProgramData%\OpenAI\Codex\` | Codex's system folder, created only if missing and left in place on uninstall | owner Administrators; SYSTEM and Administrators full control; Users read and execute |
 
 On install, upgrade and repair the installer also runs, as LocalSystem:

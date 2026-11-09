@@ -518,6 +518,9 @@ func managedObserveDaemonCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Before anything can fail. The log stays open until the process
+			// exits, so main's final error line lands in it too.
+			_ = redirectDaemonLog()
 			timeout := managedobserve.DefaultIdleTimeout()
 			if idleTimeout != "" {
 				parsed, err := time.ParseDuration(idleTimeout)
