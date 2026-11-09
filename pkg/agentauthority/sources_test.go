@@ -113,6 +113,36 @@ func TestUnreadableInputIsNeverComplete(t *testing.T) {
 	}
 }
 
+// A file kubectl reads must not report as malformed, and a file nothing can
+// parse must not report as complete.
+func TestKubeconfigValidity(t *testing.T) {
+	const contexts = "contexts:\n- context: {}\n  name: a\n"
+	for _, tt := range []struct {
+		name, content, status string
+		reasons               []string
+		credentials           int
+	}{
+		{"repeated key", "current-context: a\ncurrent-context: b\n" + contexts, StatusComplete, nil, 1},
+		{"broken syntax", "current-context: [\n" + contexts, StatusPartial, []string{ReasonMalformed}, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := tempHome(t)
+			writeFixture(t, home, ".kube/config", tt.content)
+			r := scanFixture(home, nil)
+			assertSource(t, r, "host/credentials", tt.status, tt.reasons...)
+			got := 0
+			for _, c := range r.Credentials {
+				if c.Kind == "kubeconfig" && c.Detail == 1 {
+					got++
+				}
+			}
+			if got != tt.credentials {
+				t.Fatalf("kubeconfig facts = %d, want %d: %+v", got, tt.credentials, r.Credentials)
+			}
+		})
+	}
+}
+
 func TestSymlinkedConfigIsDeniedNotAbsent(t *testing.T) {
 	home := tempHome(t)
 	writeFixture(t, home, "elsewhere.json", `{"mcpServers":{}}`)

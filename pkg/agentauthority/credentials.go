@@ -70,8 +70,10 @@ func (g *guard) credentials() {
 // Carries no parser text: the error is cached and these files hold secrets.
 var errMalformedCredentials = errors.New("malformed credential file")
 
+// validYAML checks syntax only. Decoding into a Node keeps repeated keys, which
+// kubectl accepts and a map decode rejects.
 func validYAML(data []byte) bool {
-	var value any
+	var value yaml.Node
 	return yaml.Unmarshal(data, &value) == nil
 }
 
