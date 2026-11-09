@@ -470,7 +470,8 @@ func validateEvent(groups []MatcherGroup, event Event, kontextBinary string) err
 		for _, handler := range group.Hooks {
 			fields, ok := agenthooks.SplitLiteralCommand(handler.Command)
 			shell := ok && len(fields) == 3 && fields[0] == kontextBinary && fields[1] == "hook" && fields[2] == event.Alias
-			exec := ExecForm && handler.Command == kontextBinary && slices.Equal(handler.Args, []string{"hook", event.Alias})
+			// Claude Code runs the exec form on every OS; only Windows requires it.
+			exec := handler.Command == kontextBinary && slices.Equal(handler.Args, []string{"hook", event.Alias})
 			if !shell && !exec {
 				continue
 			}
@@ -480,7 +481,7 @@ func validateEvent(groups []MatcherGroup, event Event, kontextBinary string) err
 			if ExecForm && !exec {
 				return fmt.Errorf("%s Kontext handler must name the binary in command and %q in args", event.Name, "hook "+event.Alias)
 			}
-			if !ExecForm && len(handler.Args) > 0 {
+			if !exec && len(handler.Args) > 0 {
 				return fmt.Errorf("%s Kontext handler args must be omitted", event.Name)
 			}
 			if err := validateAsync(event, handler.Async); err != nil {

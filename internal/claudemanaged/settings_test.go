@@ -333,6 +333,20 @@ func TestValidateRejectsInvalidManagedSettings(t *testing.T) {
 			},
 		},
 		{
+			name: "exec form outside Windows",
+			mutate: func(settings Settings) Settings {
+				for _, event := range SupportedEvents {
+					for i := range settings.Hooks[event.Name.String()] {
+						for j := range settings.Hooks[event.Name.String()][i].Hooks {
+							handler := &settings.Hooks[event.Name.String()][i].Hooks[j]
+							handler.Command, handler.Args = DefaultKontextBinary, []string{"hook", event.Alias}
+						}
+					}
+				}
+				return settings
+			},
+		},
+		{
 			name: "legacy exec args",
 			mutate: func(settings Settings) Settings {
 				settings.Hooks["PreToolUse"][0].Hooks[0].Args = []string{"hook", "pre-tool-use"}
