@@ -14,6 +14,12 @@ var CONFIG_FILE = "managed.json";
 // replaced, or an empty marker saying there was none.
 var BACKUP = ".msi-backup";
 var CREATED = ".msi-created";
+// Beside the token value while it is the installer's: uninstall removes only a
+// token the installer wrote, never one an MDM or an administrator set. UNSET
+// says, while the install can still roll back, that the token it replaced
+// wasn't the installer's.
+var SET = ".msi-set";
+var UNSET = ".msi-unset";
 
 // The install token: a REG_SZ under the machine policy key, in the 64-bit view.
 // Only administrators and SYSTEM can write there and users can read; the
@@ -27,6 +33,7 @@ var TASK_NAME = "Kontext Daemon";
 var TASK_PLACEHOLDER = "@KONTEXTW_EXE@";
 var TASK_CREATE_OR_UPDATE = 6;
 var TASK_LOGON_GROUP = 4;
+var TASK_RUN_USE_SESSION_ID = 4;
 
 // WriteConfig writes managed.json when CLOUD_URL is set, as a new file that
 // inherits the folder's access list, and the token value when INSTALL_TOKEN is
@@ -35,8 +42,8 @@ function WriteConfig() {
     return run("write the configuration", function () {
         var f = fields(4), dir = folder(f[0]), url = f[1], mode = f[2], token = f[3];
         if (url !== "") {
-            if (!/^https:\/\/[\x21-\x7e]+$/.test(url) || /["\\|]/.test(url)) {
-                throw new Error("CLOUD_URL must be an https URL of printable ASCII characters");
+            if (!validCloudURL(url)) {
+                throw new Error("CLOUD_URL must be https://<host>, with a port at most, and nothing after it");
             }
             if (mode !== "observe" && mode !== "enforce") {
                 throw new Error("MODE must be observe or enforce");
@@ -73,8 +80,12 @@ function RollbackConfig() {
         var old = reg.get(TOKEN_KEY, TOKEN_VALUE + BACKUP);
         if (old !== null) {
             reg.set(TOKEN_KEY, TOKEN_VALUE, old);
+            if (reg.get(TOKEN_KEY, TOKEN_VALUE + UNSET) !== null) {
+                reg.remove(TOKEN_KEY, TOKEN_VALUE + SET);
+            }
             log("restored the install token");
         } else if (reg.get(TOKEN_KEY, TOKEN_VALUE + CREATED) !== null) {
+            reg.remove(TOKEN_KEY, TOKEN_VALUE + SET);
             reg.remove(TOKEN_KEY, TOKEN_VALUE);
             log("removed the install token");
         }
@@ -94,20 +105,59 @@ function CommitConfig() {
     });
 }
 
-// RemoveConfig deletes managed.json and the token value on uninstall, and the
-// token key if nothing else is left in it. CustomActionData: folder.
+// RemoveConfig takes managed.json and the installer's token value away on a
+// full uninstall, keeping both for RollbackConfig until CommitRemoveConfig. A
+// token an MDM or an administrator set stays. CustomActionData: folder.
 function RemoveConfig() {
     return run("remove the configuration", function () {
         var fso = new ActiveXObject("Scripting.FileSystemObject");
         var path = folder(fields(1)[0]) + CONFIG_FILE;
-        removeFile(fso, path);
         removeFile(fso, path + BACKUP);
         removeFile(fso, path + CREATED);
+        if (fso.FileExists(path)) {
+            fso.MoveFile(path, path + BACKUP);
+            log("removed " + path);
+        }
         var reg = new Registry();
-        reg.remove(TOKEN_KEY, TOKEN_VALUE);
         dropTokenCopies(reg);
+        var token = reg.get(TOKEN_KEY, TOKEN_VALUE);
+        if (token === null) {
+            return;
+        }
+        if (reg.get(TOKEN_KEY, TOKEN_VALUE + SET) === null) {
+            log("kept the install token: the installer didn't set it");
+            return;
+        }
+        reg.set(TOKEN_KEY, TOKEN_VALUE + BACKUP, token);
+        reg.remove(TOKEN_KEY, TOKEN_VALUE);
+        log("removed the install token");
+    });
+}
+
+// CommitRemoveConfig drops what RemoveConfig kept, then the token key and the
+// configuration folder if nothing else is left in them. CustomActionData: folder.
+function CommitRemoveConfig() {
+    return run("finish removing the configuration", function () {
+        var fso = new ActiveXObject("Scripting.FileSystemObject");
+        var dir = folder(fields(1)[0]);
+        removeFile(fso, dir + CONFIG_FILE + BACKUP);
+        removeFile(fso, dir + CONFIG_FILE + CREATED);
+        var reg = new Registry();
+        dropTokenCopies(reg);
+        if (reg.get(TOKEN_KEY, TOKEN_VALUE) === null) {
+            reg.remove(TOKEN_KEY, TOKEN_VALUE + SET);
+        }
         if (reg.removeKeyIfEmpty(TOKEN_KEY)) {
             log("removed HKLM\\" + TOKEN_KEY);
+        }
+        // Windows Installer skipped the folder while the copy was in it.
+        var path = dir.substring(0, dir.length - 1);
+        if (fso.FolderExists(path)) {
+            var f = fso.GetFolder(path);
+            if (f.Files.Count === 0 && f.SubFolders.Count === 0) {
+                fso.DeleteFolder(path, true);
+                log("removed " + path);
+            }
         }
     });
 }
@@ -119,16 +169,21 @@ function replaceToken(reg, token) {
     var old = reg.get(TOKEN_KEY, TOKEN_VALUE);
     if (old !== null) {
         reg.set(TOKEN_KEY, TOKEN_VALUE + BACKUP, old);
+        if (reg.get(TOKEN_KEY, TOKEN_VALUE + SET) === null) {
+            reg.set(TOKEN_KEY, TOKEN_VALUE + UNSET, "");
+        }
     } else {
         reg.set(TOKEN_KEY, TOKEN_VALUE + CREATED, "");
     }
     reg.set(TOKEN_KEY, TOKEN_VALUE, token);
+    reg.set(TOKEN_KEY, TOKEN_VALUE + SET, "");
     log("wrote HKLM\\" + TOKEN_KEY + "\\" + TOKEN_VALUE);
 }
 
 function dropTokenCopies(reg) {
     reg.remove(TOKEN_KEY, TOKEN_VALUE + BACKUP);
     reg.remove(TOKEN_KEY, TOKEN_VALUE + CREATED);
+    reg.remove(TOKEN_KEY, TOKEN_VALUE + UNSET);
 }
 
 // Registry reads and writes string values with WScript.Shell and lists a key
@@ -186,10 +241,12 @@ function present(name) {
 }
 
 // RegisterTask registers the logon task from the shipped task XML, with the
-// installed kontextw.exe filled in. CustomActionData: task XML|kontextw.exe.
+// installed kontextw.exe filled in. With start set, it also starts the daemon
+// for everyone already signed in, who would otherwise wait for their next
+// logon. CustomActionData: task XML|kontextw.exe|start (1 or empty).
 function RegisterTask() {
     return run("register the logon task", function () {
-        var f = fields(2);
+        var f = fields(3);
         var service = taskService();
         var definition = service.NewTask(0);
         definition.XmlText = taskXML(f[0], f[1]);
@@ -197,9 +254,69 @@ function RegisterTask() {
         // system's name for it, which is what registration takes.
         var group = definition.Principal.GroupId;
         var none; // VT_EMPTY: a group needs no password.
-        taskFolder(service, true).RegisterTaskDefinition(TASK_NAME, definition, TASK_CREATE_OR_UPDATE, group, none, TASK_LOGON_GROUP);
+        var task = taskFolder(service, true).RegisterTaskDefinition(TASK_NAME, definition, TASK_CREATE_OR_UPDATE, group, none, TASK_LOGON_GROUP);
         log("registered \\" + TASK_FOLDER + "\\" + TASK_NAME);
+        if (f[2] === "1") {
+            startInSignedInSessions(task);
+        }
     });
+}
+
+// StopDaemons stops the daemons the task started, before an upgrade replaces
+// kontextw.exe. A missing task is not an error.
+function StopDaemons() {
+    return run("stop the daemons", function () {
+        var task = daemonTask();
+        if (task !== null) {
+            task.Stop(0);
+            log("stopped the daemons");
+        }
+    });
+}
+
+// StartDaemons starts the daemon for everyone signed in, when a failed upgrade
+// rolls back after StopDaemons.
+function StartDaemons() {
+    return run("start the daemons", function () {
+        var task = daemonTask();
+        if (task !== null) {
+            startInSignedInSessions(task);
+        }
+    });
+}
+
+function daemonTask() {
+    var tasks = taskFolder(taskService(), false);
+    if (tasks === null) {
+        return null;
+    }
+    try {
+        return tasks.GetTask(TASK_NAME);
+    } catch (e) {
+        return null;
+    }
+}
+
+// startInSignedInSessions runs the task in each session with a desktop, as that
+// session's user. A session it can't start in is logged, not an error: the
+// daemon starts there at the next logon.
+function startInSignedInSessions(task) {
+    var seen = {};
+    var processes = GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2")
+        .ExecQuery("SELECT SessionId FROM Win32_Process WHERE Name = 'explorer.exe'");
+    for (var e = new Enumerator(processes); !e.atEnd(); e.moveNext()) {
+        var id = e.item().SessionId;
+        if (seen[id]) {
+            continue;
+        }
+        seen[id] = true;
+        try {
+            task.RunEx(null, TASK_RUN_USE_SESSION_ID, id, "");
+            log("started the daemon in session " + id);
+        } catch (err) {
+            log("could not start the daemon in session " + id + ": " + describe(err));
+        }
+    }
 }
 
 // UnregisterTask stops the daemons the task started and deletes the task, and
@@ -286,6 +403,18 @@ function removeFile(fso, path) {
 
 // configJSON is the format internal/managedconfig reads. The token is the
 // InstallToken value under the policy key.
+// validCloudURL applies the daemon's rule (internal/managedconfig,
+// validateCloudURL): https, a host, at most a port from 1 to 65535, and nothing
+// after them but one slash.
+function validCloudURL(url) {
+    var m = /^https:\/\/([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(:([0-9]{1,5}))?\/?$/.exec(url);
+    if (m === null) {
+        return false;
+    }
+    var port = m[4];
+    return !port || (Number(port) >= 1 && Number(port) <= 65535);
+}
+
 function configJSON(url, mode) {
     return "{\n" +
         "  \"version\": \"managed-install-v1\",\n" +
