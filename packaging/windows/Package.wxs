@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Kontext MSI, per machine. Build with WiX v7 (see README.md):
+
+    wix build Package.wxs -arch x64 -d ProductVersion=1.2.3 -d BinDir=<folder with kontext.exe and kontextw.exe> -acceptEula wix7 -o kontext-x64.msi
+
+  Install and repair run, in this order after InstallFiles: WriteConfig
+  (managed.json when CLOUD_URL is given, the InstallToken value under
+  HKLM\SOFTWARE\Policies\Kontext when INSTALL_TOKEN is), `kontext.exe hooks
+  install`, and RegisterTask. A full uninstall undoes them before RemoveFiles. The uninstall
+  half of a major upgrade skips them, so the configuration, hooks and task carry
+  over to the new version.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Kontext"
+           Manufacturer="Kontext"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="4AB6EFDD-C0EA-4800-A61C-259B8BDF059D"
+           Scope="perMachine"
+           Compressed="yes">
+    <SummaryInformation Description="Kontext CLI, agent hooks and per-user daemon" />
+
+    <!-- Same-version upgrades too: CI builds of one release share a version.
+         The old version is removed inside the upgrade's transaction, so a
+         failed upgrade restores it. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of Kontext is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Public properties, set on the msiexec command line. -->
+    <Property Id="CLOUD_URL" Secure="yes" />
+    <Property Id="MODE" Value="observe" Secure="yes" />
+    <Property Id="INSTALL_TOKEN" Secure="yes" Hidden="yes" />
+
+    <!-- The immediate actions below put INSTALL_TOKEN into this property, the
+         input of the deferred WriteConfig; it stays out of the log too. -->
+    <Property Id="KontextWriteConfig" Hidden="yes" />
+
+    <!-- INSTALL_TOKEN is optional: an MDM can set the InstallToken policy value. -->
+    <Launch Condition="Installed OR WIX_UPGRADE_DETECTED OR CLOUD_URL"
+            Message="A first installation needs CLOUD_URL." />
+    <Launch Condition="Installed OR MODE=&quot;observe&quot; OR MODE=&quot;enforce&quot;"
+            Message="MODE must be observe or enforce." />
+
+    <!-- Set when %ProgramData%\OpenAI\Codex exists before the install. -->
+    <Property Id="CODEX_SYSTEM_FOLDER_FOUND">
+      <DirectorySearch Id="CodexSystemFolderSearch" Path="[CommonAppDataFolder]OpenAI\Codex" Depth="0" />
+    </Property>
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Kontext" />
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="KONTEXTCONFIGFOLDER" Name="Kontext" />
+      <Directory Id="OPENAIFOLDER" Name="OpenAI">
+        <Directory Id="CODEXSYSTEMFOLDER" Name="Codex" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Kontext">
+      <Component Directory="INSTALLFOLDER">
+        <File Id="kontext.exe" Source="$(var.BinDir)\kontext.exe" KeyPath="yes" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
+        <File Id="kontextw.exe" Source="$(var.BinDir)\kontextw.exe" KeyPath="yes" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
+        <File Id="KontextDaemonTaskXml" Source="$(sys.SOURCEFILEDIR)kontext-daemon-task.xml" KeyPath="yes" />
+      </Component>
+
+      <!-- %ProgramData%\Kontext, where internal/platform looks for the system
+           configuration: owned by Administrators; SYSTEM and Administrators
+           full control; Users read on the folder (list and traverse) and read
+           on its files. Protected, so nothing is inherited from ProgramData. -->
+      <Component Id="KontextConfigFolder" Directory="KONTEXTCONFIGFOLDER" Guid="309C0D89-FAA0-4DE5-BA8F-1F24007B13C5">
+        <CreateFolder>
+          <PermissionEx Sddl="O:BAG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;CI;0x1200a9;;;BU)(A;OIIO;FR;;;BU)" />
+        </CreateFolder>
+      </Component>
+
+      <!-- %ProgramData%\OpenAI\Codex, Codex's system folder: created only when
+           it does not exist, admin-owned, Users read and execute. Permanent, so
+           an uninstall leaves it in place. -->
+      <Component Id="CodexSystemFolder" Directory="CODEXSYSTEMFOLDER" Guid="5E28B26E-9CF0-476C-A45C-61A79A237E08"
+                 Permanent="yes" Condition="NOT CODEX_SYSTEM_FOLDER_FOUND">
+        <CreateFolder>
+          <PermissionEx Sddl="O:BAG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)" />
+        </CreateFolder>
+      </Component>
+    </Feature>
+
+    <Binary Id="KontextInstallScript" SourceFile="$(sys.SOURCEFILEDIR)kontext-install.js" />
+
+    <!-- Inputs of the deferred actions. HideTarget keeps the values out of the log. -->
+    <CustomAction Id="KontextWriteConfigData" Property="KontextWriteConfig" HideTarget="yes"
+                  Value="[KONTEXTCONFIGFOLDER]|[CLOUD_URL]|[MODE]|[INSTALL_TOKEN]" />
+    <CustomAction Id="KontextRollbackConfigData" Property="KontextRollbackConfig" Value="[KONTEXTCONFIGFOLDER]" />
+    <CustomAction Id="KontextCommitConfigData" Property="KontextCommitConfig" Value="[KONTEXTCONFIGFOLDER]" />
+    <CustomAction Id="KontextRemoveConfigData" Property="KontextRemoveConfig" Value="[KONTEXTCONFIGFOLDER]" />
+    <CustomAction Id="KontextRemoveConfigRollbackData" Property="KontextRemoveConfigRollback" Value="[KONTEXTCONFIGFOLDER]" />
+    <CustomAction Id="KontextCommitRemoveConfigData" Property="KontextCommitRemoveConfig" Value="[KONTEXTCONFIGFOLDER]" />
+    <CustomAction Id="KontextRegisterTaskData" Property="KontextRegisterTask"
+                  Value="[#KontextDaemonTaskXml]|[#kontextw.exe]|[KONTEXTSTARTDAEMONS]" />
+    <!-- Uninstall's file keys resolve empty, so these name the folder. -->
+    <CustomAction Id="KontextUnregisterTaskRollbackData" Property="KontextUnregisterTaskRollback"
+                  Value="[INSTALLFOLDER]kontext-daemon-task.xml|[INSTALLFOLDER]kontextw.exe|1" />
+
+    <!-- An install or upgrade starts the daemon for everyone signed in; a repair
+         leaves running daemons alone. -->
+    <SetProperty Id="KONTEXTSTARTDAEMONS" Value="1" Before="KontextRegisterTaskData" Sequence="execute"
+                 Condition="NOT Installed AND NOT REMOVE~=&quot;ALL&quot;" />
+
+    <!-- managed.json and the token value: written as LocalSystem, rolled back on failure. -->
+    <CustomAction Id="KontextRollbackConfig" BinaryRef="KontextInstallScript" JScriptCall="RollbackConfig"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="KontextWriteConfig" BinaryRef="KontextInstallScript" JScriptCall="WriteConfig"
+                  Execute="deferred" Impersonate="no" HideTarget="yes" Return="check" />
+    <CustomAction Id="KontextCommitConfig" BinaryRef="KontextInstallScript" JScriptCall="CommitConfig"
+                  Execute="commit" Impersonate="no" Return="ignore" />
+    <!-- A full uninstall keeps managed.json and the token until it commits.
+         If removing them fails, the uninstall fails and rolls back rather than
+         leave the token behind. The task and hooks steps don't stop an
+         uninstall: what they leave behind names a program that is gone. -->
+    <CustomAction Id="KontextRemoveConfigRollback" BinaryRef="KontextInstallScript" JScriptCall="RollbackConfig"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="KontextRemoveConfig" BinaryRef="KontextInstallScript" JScriptCall="RemoveConfig"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="KontextCommitRemoveConfig" BinaryRef="KontextInstallScript" JScriptCall="CommitRemoveConfig"
+                  Execute="commit" Impersonate="no" Return="ignore" />
+
+    <!-- Agent hooks, machine-wide. -->
+    <CustomAction Id="KontextHooksInstallRollback" FileRef="kontext.exe" ExeCommand="hooks remove --scope system"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="KontextHooksInstall" FileRef="kontext.exe"
+                  ExeCommand="hooks install --scope system --binary &quot;[INSTALLFOLDER]kontext.exe&quot;"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="KontextHooksRemoveRollback" FileRef="kontext.exe"
+                  ExeCommand="hooks install --scope system --binary &quot;[INSTALLFOLDER]kontext.exe&quot;"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="KontextHooksRemove" FileRef="kontext.exe" ExeCommand="hooks remove --scope system"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- Logon task \Kontext\Kontext Daemon. -->
+    <CustomAction Id="KontextRegisterTaskRollback" BinaryRef="KontextInstallScript" JScriptCall="UnregisterTask"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="KontextRegisterTask" BinaryRef="KontextInstallScript" JScriptCall="RegisterTask"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="KontextUnregisterTaskRollback" BinaryRef="KontextInstallScript" JScriptCall="RegisterTask"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="KontextUnregisterTask" BinaryRef="KontextInstallScript" JScriptCall="UnregisterTask"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- An upgrade stops the running daemons before it replaces kontextw.exe,
+         and RegisterTask starts them again. Stopping is immediate: nothing may
+         write to the script between InstallInitialize and RemoveExistingProducts
+         (error 2613). In a failed upgrade, the rollback's start comes before the
+         old version is back and fails; the task's restart on failure then starts
+         the daemons on the old version a minute later (measured on Windows 11). -->
+    <CustomAction Id="KontextStopDaemons" BinaryRef="KontextInstallScript" JScriptCall="StopDaemons"
+                  Execute="immediate" Return="ignore" />
+    <CustomAction Id="KontextStopDaemonsRollback" BinaryRef="KontextInstallScript" JScriptCall="StartDaemons"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="KontextStopDaemons" Before="InstallInitialize"
+              Condition="WIX_UPGRADE_DETECTED AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="KontextStopDaemonsRollback" After="RemoveExistingProducts"
+              Condition="WIX_UPGRADE_DETECTED AND NOT REMOVE~=&quot;ALL&quot;" />
+
+      <!-- Install, repair and the install half of an upgrade. -->
+      <Custom Action="KontextRollbackConfigData" After="InstallFiles"
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND (CLOUD_URL OR INSTALL_TOKEN)" />
+      <Custom Action="KontextRollbackConfig" After="KontextRollbackConfigData"
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND (CLOUD_URL OR INSTALL_TOKEN)" />
+      <Custom Action="KontextWriteConfigData" After="KontextRollbackConfig"
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND (CLOUD_URL OR INSTALL_TOKEN)" />
+      <Custom Action="KontextWriteConfig" After="KontextWriteConfigData"
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND (CLOUD_URL OR INSTALL_TOKEN)" />
+      <Custom Action="KontextCommitConfigData" After="KontextWriteConfig"
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND (CLOUD_URL OR INSTALL_TOKEN)" />
+      <Custom Action="KontextCommitConfig" After="KontextCommitConfigData"
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND (CLOUD_URL OR INSTALL_TOKEN)" />
+
+      <!-- The rollback halves only on a first install: an upgrade keeps what the
+           previous version set up. -->
+      <Custom Action="KontextHooksInstallRollback" After="KontextCommitConfig"
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND NOT Installed AND NOT WIX_UPGRADE_DETECTED" />
+      <Custom Action="KontextHooksInstall" After="KontextHooksInstallRollback"
+              Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="KontextRegisterTaskData" After="KontextHooksInstall"
+              Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="KontextRegisterTaskRollback" After="KontextRegisterTaskData"
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND NOT Installed AND NOT WIX_UPGRADE_DETECTED" />
+      <Custom Action="KontextRegisterTask" After="KontextRegisterTaskRollback"
+              Condition="NOT REMOVE~=&quot;ALL&quot;" />
+
+      <!-- Full uninstall only, not the uninstall half of an upgrade. Each step
+           has a rollback half that puts back what it removed. -->
+      <Custom Action="KontextUnregisterTaskRollbackData" Before="KontextUnregisterTaskRollback"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextUnregisterTaskRollback" Before="KontextUnregisterTask"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextUnregisterTask" Before="KontextHooksRemoveRollback"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextHooksRemoveRollback" Before="KontextHooksRemove"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextHooksRemove" Before="KontextRemoveConfigData"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextRemoveConfigData" Before="KontextRemoveConfigRollbackData"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextRemoveConfigRollbackData" Before="KontextRemoveConfigRollback"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextRemoveConfigRollback" Before="KontextRemoveConfig"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextRemoveConfig" Before="KontextCommitRemoveConfigData"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextCommitRemoveConfigData" Before="KontextCommitRemoveConfig"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="KontextCommitRemoveConfig" Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>
