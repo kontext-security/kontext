@@ -55,11 +55,30 @@ jobs:
           version: "~> v2.18"
           args: check --config .goreleaser.windows.yaml
 
+      # The MSI's version is the last release's, and the executables report
+      # the same one; Windows Installer reads only the first three fields.
+      - name: Read the version
+        shell: pwsh
+        run: |
+          $version = (Get-Content .release-please-manifest.json -Raw | ConvertFrom-Json).'.'
+          Add-Content -Path $env:GITHUB_ENV -Value "KONTEXT_VERSION=$version"
+
       - name: Build the executables
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: "~> v2.18"
           args: build --snapshot --clean --config .goreleaser.windows.yaml
+
+      - name: Check the executables' version
+        shell: pwsh
+        run: |
+          $reported = & dist\windows_amd64\kontext.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($reported -notmatch [regex]::Escape(" $env:KONTEXT_VERSION")) {
+            Write-Error "kontext.exe reports '$reported', the MSI is $env:KONTEXT_VERSION"
+            exit 1
+          }
+          "kontext.exe: $reported"
 
       - name: Install WiX
         shell: pwsh
@@ -73,9 +92,7 @@ jobs:
       - name: Build the MSIs
         shell: pwsh
         run: |
-          # The MSI version is the last release's; Windows Installer reads only
-          # the first three fields.
-          $version = (Get-Content .release-please-manifest.json -Raw | ConvertFrom-Json).'.'
+          $version = $env:KONTEXT_VERSION
           New-Item -ItemType Directory -Force out | Out-Null
           foreach ($arch in @(@{ wix = 'x64'; go = 'amd64' }, @{ wix = 'arm64'; go = 'arm64' })) {
             $bin = Join-Path $PWD "dist\windows_$($arch.go)"

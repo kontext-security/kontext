@@ -10,6 +10,12 @@ version: 2
 
 project_name: kontext
 
+# A snapshot reports the version the workflow gives the MSI, so the package and
+# its executables agree; without KONTEXT_VERSION, GoReleaser's usual snapshot
+# version.
+snapshot:
+  version_template: '{{ if index .Env "KONTEXT_VERSION" }}{{ .Env.KONTEXT_VERSION }}{{ else }}{{ incpatch .Version }}-SNAPSHOT-{{ .ShortCommit }}{{ end }}'
+
 builds:
   # The CLI and the hook command: a console program. It leaves out the
   # step-safety model, which only the daemon (kontextw.exe) loads, so the
