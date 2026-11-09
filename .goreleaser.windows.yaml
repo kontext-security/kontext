@@ -11,7 +11,9 @@ version: 2
 project_name: kontext
 
 builds:
-  # The CLI and the hook command: a console program.
+  # The CLI and the hook command: a console program. It leaves out the
+  # step-safety model, which only the daemon (kontextw.exe) loads, so the
+  # installer carries the model once.
   - id: kontext
     main: ./cmd/kontext
     binary: "windows_{{ .Arch }}/kontext"
@@ -23,6 +25,8 @@ builds:
     goarch:
       - amd64
       - arm64
+    tags:
+      - nostepsafetymodel
     ldflags:
       - -s -w -X main.version={{.Version}}
 

@@ -16,8 +16,8 @@ An upgrade or repair without `CLOUD_URL` or `INSTALL_TOKEN` keeps what was writt
 
 | Path | What | Access |
 |---|---|---|
-| `%ProgramFiles%\Kontext\kontext.exe` | CLI and hook command | inherited from Program Files |
-| `%ProgramFiles%\Kontext\kontextw.exe` | the same program without a console window, for the logon task | inherited |
+| `%ProgramFiles%\Kontext\kontext.exe` | CLI and hook command, built without the step-safety model | inherited from Program Files |
+| `%ProgramFiles%\Kontext\kontextw.exe` | the same program with the model and without a console window, for the logon task that runs the daemon | inherited |
 | `%ProgramFiles%\Kontext\kontext-daemon-task.xml` | task definition the installer registers | inherited |
 | `%ProgramData%\Kontext\` | system configuration folder | owner Administrators; SYSTEM and Administrators full control; Users read and list; nothing inherited from ProgramData |
 | `%ProgramData%\Kontext\managed.json` | `cloud_url`, `mode`, `"install_token_ref": "registry:InstallToken"` | inherited: SYSTEM and Administrators full control, Users read |
