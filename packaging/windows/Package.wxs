@@ -147,17 +147,20 @@
     <CustomAction Id="KontextUnregisterTask" BinaryRef="KontextInstallScript" JScriptCall="UnregisterTask"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
-    <!-- An upgrade stops the running daemons before it replaces kontextw.exe;
-         RegisterTask starts them again, and a failed upgrade too. -->
+    <!-- An upgrade stops the running daemons before it replaces kontextw.exe,
+         and RegisterTask starts them again. Stopping is immediate: nothing may
+         write to the script between InstallInitialize and RemoveExistingProducts
+         (error 2613). A failed upgrade restores the old version first, then
+         starts its daemons. -->
+    <CustomAction Id="KontextStopDaemons" BinaryRef="KontextInstallScript" JScriptCall="StopDaemons"
+                  Execute="immediate" Return="ignore" />
     <CustomAction Id="KontextStopDaemonsRollback" BinaryRef="KontextInstallScript" JScriptCall="StartDaemons"
                   Execute="rollback" Impersonate="no" Return="ignore" />
-    <CustomAction Id="KontextStopDaemons" BinaryRef="KontextInstallScript" JScriptCall="StopDaemons"
-                  Execute="deferred" Impersonate="no" Return="ignore" />
 
     <InstallExecuteSequence>
-      <Custom Action="KontextStopDaemonsRollback" Before="KontextStopDaemons"
+      <Custom Action="KontextStopDaemons" Before="InstallInitialize"
               Condition="WIX_UPGRADE_DETECTED AND NOT REMOVE~=&quot;ALL&quot;" />
-      <Custom Action="KontextStopDaemons" Before="RemoveExistingProducts"
+      <Custom Action="KontextStopDaemonsRollback" After="RemoveExistingProducts"
               Condition="WIX_UPGRADE_DETECTED AND NOT REMOVE~=&quot;ALL&quot;" />
 
       <!-- Install, repair and the install half of an upgrade. -->
