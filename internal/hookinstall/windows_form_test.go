@@ -78,7 +78,7 @@ func TestWindowsUserInstallWritesClaudeExecFormOnly(t *testing.T) {
 	skipped := 0
 	for _, row := range lines(out.String()) {
 		if len(row) != 4 {
-			continue
+			t.Fatalf("output row %q has %d fields, want 4", strings.Join(row, "\t"), len(row))
 		}
 		claude := strings.HasPrefix(row[2], filepath.Join(home, ".claude"))
 		unsupported := row[0] == "skip" && row[3] == windowsUnsupported
@@ -186,5 +186,26 @@ func TestWindowsInstallWantsKontextExe(t *testing.T) {
 	upper := filepath.Join(filepath.Dir(binary), "KONTEXT.EXE")
 	if err := Install(Options{Scope: User, Home: home, Binary: upper, DryRun: true}); err != nil {
 		t.Fatalf("Install(KONTEXT.EXE) = %v", err)
+	}
+}
+
+func TestWindowsDoctorDoesNotExpectSkippedAgents(t *testing.T) {
+	home, binary := asWindows(t)
+	if err := Install(Options{Scope: User, Home: home, Binary: binary, Out: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
+	}
+	defs, err := Definitions(User, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	everyAgent := func(string) bool { return true }
+	if !diagnose(&out, User, defs, everyAgent, filepath.Join(home, ".codex", "config.toml"), machineCodexHooks) {
+		t.Fatalf("doctor reports a Windows install as unhealthy:\n%s", out.String())
+	}
+	for _, name := range []string{"Codex", "Cursor"} {
+		if want := name + " hooks: not installed (" + windowsUnsupported + ")"; strings.Count(out.String(), want) != 1 {
+			t.Errorf("want %q once, got:\n%s", want, out.String())
+		}
 	}
 }

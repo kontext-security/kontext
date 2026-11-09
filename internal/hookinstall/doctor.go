@@ -133,7 +133,15 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 			fmt.Fprintf(out, "%s hooks: not installed (agent not present)\n", def.Name)
 			continue
 		}
+		reported := false
 		for _, file := range def.Files {
+			if skippedOnWindows(file.Kind) {
+				if !reported {
+					fmt.Fprintf(out, "%s hooks: not installed (%s)\n", def.Name, windowsUnsupported)
+					reported = true
+				}
+				continue
+			}
 			if file.Kind == "feature" {
 				if err := checkFeature(file.Path, userConfig); err != nil {
 					fmt.Fprintf(out, "%s hooks feature: %v\n", def.Name, err)

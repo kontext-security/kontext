@@ -110,6 +110,12 @@ var runtimeGOOS = runtime.GOOS
 // quoting Kontext writes, and Cursor's Windows behaviour is unverified.
 const windowsUnsupported = "unsupported-on-windows"
 
+// skippedOnWindows reports a file kind that install leaves alone on Windows,
+// and that doctor therefore doesn't expect there.
+func skippedOnWindows(kind string) bool {
+	return runtimeGOOS == "windows" && kind != "claude" && kind != "claude-user"
+}
+
 // Machine-wide files a user-scope install reads but never writes (test seams).
 var (
 	machineClaudeDropIn = claudemanaged.DefaultManagedSettingsDropInPath()
@@ -341,7 +347,7 @@ func plan(file File, opts Options, remove bool) (change, error) {
 	c := change{result: Result{File: file, Action: "skip", Reason: "unchanged"}}
 	// Neither read nor written, so nothing creates Codex's system folder,
 	// which its installer has to own.
-	if runtimeGOOS == "windows" && file.Kind != "claude" && file.Kind != "claude-user" {
+	if skippedOnWindows(file.Kind) {
 		c.result.Reason = windowsUnsupported
 		return c, nil
 	}
