@@ -29,6 +29,7 @@ import (
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/internal/runtimehost"
 	"github.com/kontext-security/kontext/internal/tooloutput"
+	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
 type DaemonOptions struct {
@@ -415,7 +416,12 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 
 	// A rescan after hook changes refreshes the authority report too, so a
 	// newly hooked agent does not wait for the hourly authority scan.
-	inventoryHolder := &agentInventoryHolder{scope: loadedConfig.Scope, rescan: make(chan struct{}, 1), afterRescan: func() {
+	streamStatePath := opts.StreamStatePath
+	if streamStatePath == "" {
+		streamStatePath = managedstream.DefaultStatePathForDB(dbPath)
+	}
+	inventoryStore := managedstream.OpenInventoryStore(managedstream.InventoryStatePath(streamStatePath), installationState.InstallationID)
+	inventoryHolder := &agentInventoryHolder{scope: loadedConfig.Scope, store: inventoryStore, rescan: make(chan struct{}, 1), afterRescan: func() {
 		select {
 		case authorityAvailable <- struct{}{}:
 		default:
@@ -430,6 +436,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 
 	authorityHolder := &authorityHolder{available: authorityAvailable, resend: authorityResend, enabled: func() bool { return cedarCache.Current().AuthorityScan }, known: func() bool { return cedarCache.Current().AuthorityScanKnown }}
 	authorityHolder.scanner.BeginRead = authorityIOPolicy(opts.Diagnostic)
+	authorityHolder.record = func(report agentauthority.Report) {
+		if err := inventoryStore.RecordAuthority(report); err != nil {
+			opts.Diagnostic.Printf("authority scan: record scan: %v\n", err)
+		}
+	}
 	server.SetConnectorScan(authorityHolder.Fact)
 	authorityReady := make(chan struct{})
 	background.Add(1)
@@ -933,6 +944,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		CLIVersion:         opts.BinaryVersion,
 		HooksFact:          func() (managedstream.HooksFact, bool) { return managedObserveHooksFact(loadedConfig.Scope) },
 		AgentsFact:         inventoryHolder.Fact,
+		Inventory:          inventoryHolder.store,
 		AuthorityFact:      authorityHolder.Fact,
 		AuthorityAvailable: authorityHolder.resend,
 		AuthorityScanKnown: authorityHolder.known,

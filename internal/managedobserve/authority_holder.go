@@ -30,6 +30,8 @@ type authorityHolder struct {
 	known     func() bool
 	available <-chan struct{}
 	resend    <-chan struct{}
+	// record takes each finished scan for upload; nil in tests.
+	record func(agentauthority.Report)
 }
 
 func (h *authorityHolder) Fact() (agentauthority.Report, bool) {
@@ -68,6 +70,9 @@ func (h *authorityHolder) refresh(ctx context.Context, inv agentinventory.Invent
 	h.mu.Lock()
 	h.report, h.present = report, true
 	h.mu.Unlock()
+	if h.record != nil {
+		h.record(report)
+	}
 }
 
 func (h *authorityHolder) run(ctx context.Context, inv *agentInventoryHolder, ready chan<- struct{}) {

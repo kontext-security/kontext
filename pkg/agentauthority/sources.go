@@ -206,7 +206,8 @@ func (r *Report) Seal() []string {
 	return trimmed
 }
 
-func (p Permissions) observed() bool {
+// Observed reports whether any permission was actually read.
+func (p Permissions) Observed() bool {
 	return p.DefaultMode != nil || len(p.Allow) > 0 || p.DenyCount > 0 || p.Sandbox != (Sandbox{}) || p.Codex != nil
 }
 
@@ -221,5 +222,5 @@ func (p Permissions) claims() int {
 }
 
 func (a Agent) hasClaims() bool {
-	return len(a.MCPServers) > 0 || len(a.Plugins) > 0 || len(a.Connectors) > 0 || a.Permissions.observed()
+	return len(a.MCPServers) > 0 || len(a.Plugins) > 0 || len(a.Connectors) > 0 || a.Permissions.Observed()
 }

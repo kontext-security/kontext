@@ -105,6 +105,8 @@ type Options struct {
 	// never contacted the server — an idle machine with a revoked token must
 	// keep its breadcrumb.
 	OnFlushSuccess func()
+	// Inventory holds per-source results until the cloud acknowledges them.
+	Inventory *InventoryStore
 }
 
 const (
@@ -156,6 +158,7 @@ type Device struct {
 	DeviceKey        string                  `json:"device_key,omitempty"`
 	Agents           *[]agentinventory.Agent `json:"agents,omitempty"`
 	AgentsReportedAt string                  `json:"agents_reported_at,omitempty"`
+	Inventory        *Inventory              `json:"inventory,omitempty"`
 }
 
 // HooksFact is the per-flush answer to "are the Claude Code managed hooks for
@@ -363,6 +366,7 @@ func flushLedger(ctx context.Context, opts Options) error {
 		payload := newPayload(opts, batch.Sessions, batch.Actions, batch.Receipts, riskTypeAnnotations, batch.ReceiptChainAnchor, now)
 		payload.MerlinAnnotations = merlinAnnotations
 		addAuthority(&payload, opts, state, now)
+		addInventory(&payload, opts)
 
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -371,7 +375,7 @@ func flushLedger(ctx context.Context, opts Options) error {
 		// Authority is independently retryable. Do not skip an otherwise valid
 		// minimum ledger batch just because the optional report filled it up.
 		if limit == 1 && len(body) > MaxPayloadBytes && payload.Device != nil && payload.Device.Authority != nil {
-			payload.Device.Authority = nil
+			dropAuthority(&payload)
 			body, err = json.Marshal(payload)
 			if err != nil {
 				return err
@@ -411,6 +415,7 @@ func flushLedger(ctx context.Context, opts Options) error {
 			}
 			return err
 		}
+		ackInventory(opts, payload, result, now)
 		// Before the cursor moves past this batch, so a crash re-sends it.
 		if err := recordStoredAsSent(ctx, store, &state, batch, result, pageUpdatedAfter, pageActionID); err != nil {
 			return err
@@ -488,13 +493,16 @@ func postHeartbeatIfDue(ctx context.Context, opts Options, statePath string, sta
 
 	payload := newPayload(opts, nil, nil, nil, nil, nil, now)
 	addAuthority(&payload, opts, state, now)
+	addInventory(&payload, opts)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	if _, err := post(ctx, opts, body); err != nil {
+	result, err := post(ctx, opts, body)
+	if err != nil {
 		return err
 	}
+	ackInventory(opts, payload, result, now)
 
 	if opts.OnFlushSuccess != nil {
 		opts.OnFlushSuccess()
@@ -588,6 +596,9 @@ func nonNilRecords(records []sqlite.LedgerRecord) []sqlite.LedgerRecord {
 type ingestResult struct {
 	Quarantined []ingestRow  `json:"quarantined"`
 	Altered     *[]ingestRow `json:"altered"`
+	// InventorySources is apart from the row verdicts above; absent means no
+	// source was acknowledged.
+	InventorySources []InventoryAck `json:"inventory_sources"`
 }
 
 type ingestRow struct {
@@ -973,9 +984,6 @@ func LoadState(path string) (State, error) {
 }
 
 func SaveState(path string, state State) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	persisted := persistedState{
 		LastReport: state.LastReport, LastAuthorityAt: state.LastAuthorityAt,
 		MerlinAnnotationID:     strings.TrimSpace(state.MerlinAnnotationID),
@@ -1002,33 +1010,7 @@ func SaveState(path string, state State) error {
 		return err
 	}
 	data = append(data, '\n')
-	temp, err := os.CreateTemp(filepath.Dir(path), ".stream-state-*.tmp")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err := temp.Chmod(0o600); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if _, err := temp.Write(data); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
+	return writeFileAtomic(path, data, ".stream-state-*.tmp")
 }
 
 func validateOptions(opts Options) error {

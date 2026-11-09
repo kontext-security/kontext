@@ -110,7 +110,11 @@ func TestDaemonSessionEndClosesHookSessionID(t *testing.T) {
 }
 
 func TestDaemonStreamsLedgerBatches(t *testing.T) {
-	home := t.TempDir()
+	// The authority guard refuses symlinked ancestors; macOS's temp dir has one.
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	hermetic.SetHome(t, home)
 	t.Setenv("KONTEXT_AUTHORITY_SCAN", "")
 	for _, d := range agentinventory.Catalog {
@@ -129,12 +133,13 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 		OrganizationID string `json:"organization_id"`
 		InstallationID string `json:"installation_id"`
 		Device         *struct {
-			Authority         *agentauthority.Report `json:"authority"`
-			Label             string                 `json:"label"`
-			CLIVersion        string                 `json:"cli_version"`
-			DeploymentVersion string                 `json:"deployment_version"`
-			Agents            []agentinventory.Agent `json:"agents"`
-			AgentsReportedAt  string                 `json:"agents_reported_at"`
+			Authority         *agentauthority.Report   `json:"authority"`
+			Label             string                   `json:"label"`
+			CLIVersion        string                   `json:"cli_version"`
+			DeploymentVersion string                   `json:"deployment_version"`
+			Agents            []agentinventory.Agent   `json:"agents"`
+			AgentsReportedAt  string                   `json:"agents_reported_at"`
+			Inventory         *managedstream.Inventory `json:"inventory"`
 		} `json:"device,omitempty"`
 		Actions []struct {
 			SessionID string `json:"session_id"`
@@ -167,7 +172,14 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 			t.Fatalf("Decode() error = %v", err)
 		}
 		requests <- body
+		acks := []managedstream.InventoryAck{}
+		if body.Device != nil && body.Device.Inventory != nil {
+			for _, source := range body.Device.Inventory.Sources {
+				acks = append(acks, managedstream.InventoryAck{ID: source.ID, Revision: source.Revision, Outcome: "applied", AppliedRevision: source.Revision})
+			}
+		}
 		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{"inventory_sources": acks})
 	}))
 	t.Cleanup(server.Close)
 
@@ -234,6 +246,13 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 			if first {
 				if body.Device == nil || body.Device.Authority == nil || len(body.Device.Authority.Agents) != 1 || body.Device.Authority.Agents[0].ID != "cursor" {
 					t.Fatalf("first heartbeat authority missing: %+v", body.Device)
+				}
+				sent := map[string]string{}
+				for _, source := range body.Device.Inventory.Sources {
+					sent[source.ID] = source.Status
+				}
+				if sent["cursor/presence"] != "complete" || sent["cursor/mcp"] != "complete" || sent["codex/presence"] != "complete" || sent["host/credentials"] != "complete" {
+					t.Fatalf("first upload sources = %v", sent)
 				}
 				first = false
 			} else if body.Device != nil && body.Device.Authority != nil {

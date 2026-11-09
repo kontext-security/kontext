@@ -183,6 +183,8 @@ type agentInventoryHolder struct {
 	mu          sync.RWMutex
 	inventory   agentinventory.Inventory
 	present     bool
+	// store records each scan for upload; nil in tests that only read facts.
+	store *managedstream.InventoryStore
 }
 
 func (h *agentInventoryHolder) requestRescan() {
@@ -235,6 +237,13 @@ func (h *agentInventoryHolder) run(ctx context.Context, opts DaemonOptions, dbPa
 			h.mu.Lock()
 			h.inventory, h.present = inv, true
 			h.mu.Unlock()
+			// After the fact is published: an upload must never carry a result
+			// whose claims are older than the result.
+			if h.store != nil {
+				if err := h.store.RecordAgents(inv); err != nil {
+					opts.Diagnostic.Printf("agent inventory: record scan: %v\n", err)
+				}
+			}
 		}
 		if first {
 			close(ready)

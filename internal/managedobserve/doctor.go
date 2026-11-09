@@ -21,6 +21,7 @@ import (
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedstream"
 	"github.com/kontext-security/kontext/internal/profile"
+	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
 // PrintStatus reports the managed-observe state for `kontext doctor`:
@@ -72,9 +73,10 @@ type Report struct {
 	DaemonPID        int    `json:"daemon_pid,omitempty"`
 	InstalledVersion string `json:"installed_version,omitempty"`
 
-	Agents              *agentinventory.Inventory `json:"agents,omitempty"`
-	HeartbeatAgeSeconds *float64                  `json:"heartbeat_age_seconds,omitempty"`
-	ExportPending       *int                      `json:"export_pending,omitempty"`
+	Agents              *agentinventory.Inventory      `json:"agents,omitempty"`
+	HeartbeatAgeSeconds *float64                       `json:"heartbeat_age_seconds,omitempty"`
+	ExportPending       *int                           `json:"export_pending,omitempty"`
+	Inventory           *managedstream.InventoryHealth `json:"inventory,omitempty"`
 
 	// Warnings mirrors every WARNING line in the text output, so a GUI can show
 	// the same findings without parsing prose.
@@ -372,6 +374,8 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 			status.Healthy = false
 		}
 	}
+
+	report.Inventory = printInventoryHealth(out, managedstream.InventoryStatePath(managedstream.DefaultStatePathForDB(opts.DBPath)), opts.Now())
 
 	// Self-serve installs have a user LaunchAgent; MDM installs manage theirs
 	// under /Library. Having BOTH scopes on one Mac deserves a callout — the
@@ -703,6 +707,37 @@ func printAgentInventory(out io.Writer, inv *agentinventory.Inventory, now time.
 		incomplete = " (incomplete)"
 	}
 	fmt.Fprintf(out, "  agents: %s — scanned %s ago%s\n", summary, doctorDuration(age), incomplete)
+}
+
+// printInventoryHealth only reports; it warns about nothing and never touches
+// status, because a backend outage does not make the endpoint unhealthy.
+func printInventoryHealth(out io.Writer, path string, now time.Time) *managedstream.InventoryHealth {
+	health, ok := managedstream.LoadInventoryHealth(path)
+	if !ok {
+		fmt.Fprintln(out, "  inventory: no scan recorded yet")
+		return nil
+	}
+	ago := func(stamp string) string {
+		at, err := time.Parse(time.RFC3339Nano, stamp)
+		if err != nil {
+			return "never"
+		}
+		return doctorDuration(max(now.Sub(at), 0)) + " ago"
+	}
+	fmt.Fprintf(out, "  inventory last attempt: %s\n", ago(health.LastAttemptAt))
+	fmt.Fprintf(out, "  inventory last complete scan: %s\n", ago(health.LastCompleteAt))
+	fmt.Fprintf(out, "  inventory last upload: %s\n", ago(health.LastUploadAt))
+	applied := make([]string, 0, 3)
+	for _, status := range []string{agentauthority.StatusComplete, agentauthority.StatusPartial, agentauthority.StatusFailed} {
+		if revision, ok := health.AppliedRevisions[status]; ok {
+			applied = append(applied, fmt.Sprintf("%s %d", status, revision))
+		}
+	}
+	if len(applied) == 0 {
+		applied = []string{"none"}
+	}
+	fmt.Fprintf(out, "  inventory applied revision: %s\n", strings.Join(applied, ", "))
+	return &health
 }
 
 // printAutoUpdate states where updates come from. Only the cask and the tap
