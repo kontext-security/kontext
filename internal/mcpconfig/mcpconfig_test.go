@@ -107,11 +107,20 @@ func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
 	if got, _, _ := r.Server("claude", "s", filepath.Join(home, "elsewhere"), "mcp__other__search"); got != "" {
 		t.Fatalf("Server() for a server only ~/.claude.json could define = %q, want the name fallback", got)
 	}
+	// Only the test home's own ~/Documents counts: a temp dir whose path
+	// happens to contain "Documents" is not a guarded folder.
+	guardedRoots := []string{filepath.Join(home, "Documents")}
+	if real, err := filepath.EvalSymlinks(home); err == nil {
+		guardedRoots = append(guardedRoots, filepath.Join(real, "Documents"))
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for key := range r.cache {
-		if strings.Contains(key, "Documents") {
-			t.Errorf("lookup read %s", strings.SplitN(key, "\x00", 2)[0])
+		path := strings.SplitN(key, "\x00", 2)[0]
+		for _, root := range guardedRoots {
+			if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+				t.Errorf("lookup read %s", path)
+			}
 		}
 	}
 }
