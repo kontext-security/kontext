@@ -24,10 +24,11 @@ func TestInstallationPathForScope(t *testing.T) {
 		want  string
 	}{
 		// System and env-resolved configs keep the enterprise default so MDM
-		// daemons behave byte-identically to before self-serve existed.
-		{"system scope", managedconfig.ScopeSystem, installation.DefaultPath},
-		{"env scope", managedconfig.ScopeEnv, installation.DefaultPath},
-		{"empty scope (LoadFile callers)", managedconfig.Scope(""), installation.DefaultPath},
+		// daemons behave byte-identically to before self-serve existed. On
+		// Windows that default is per user.
+		{"system scope", managedconfig.ScopeSystem, installation.SystemPath()},
+		{"env scope", managedconfig.ScopeEnv, installation.SystemPath()},
+		{"empty scope (LoadFile callers)", managedconfig.Scope(""), installation.SystemPath()},
 		{"user scope", managedconfig.ScopeUser, userPath},
 	}
 	for _, tc := range cases {
@@ -45,7 +46,7 @@ func TestInstallationPathForScopeUserWithoutHomeFallsBack(t *testing.T) {
 	hermetic.SetHome(t, "")
 	t.Setenv(installation.EnvPath, "")
 
-	if got := installationPathForScope(managedconfig.ScopeUser); got != installation.DefaultPath {
+	if got := installationPathForScope(managedconfig.ScopeUser); got != installation.SystemPath() {
 		t.Fatalf("installationPathForScope(user, no home) = %q, want system default", got)
 	}
 }
