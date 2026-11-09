@@ -124,6 +124,11 @@ func TestKubeconfigValidity(t *testing.T) {
 	}{
 		{"repeated key", "current-context: a\ncurrent-context: b\n" + contexts, StatusComplete, nil, 1},
 		{"broken syntax", "current-context: [\n" + contexts, StatusPartial, []string{ReasonMalformed}, 0},
+		{"not a mapping", "plain text\n", StatusPartial, []string{ReasonMalformed}, 0},
+		{"last contexts section is an alias", "contexts: &c\n- context: {}\n  name: a\ncontexts: *c\n", StatusComplete, nil, 1},
+		{"last contexts section wins", contexts + contexts, StatusComplete, nil, 1},
+		{"empty last contexts section", contexts + "contexts: []\n", StatusComplete, nil, 0},
+		{"quoted last contexts section", contexts + "\"contexts\": []\n", StatusComplete, nil, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := tempHome(t)

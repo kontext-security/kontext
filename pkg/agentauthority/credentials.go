@@ -70,11 +70,34 @@ func (g *guard) credentials() {
 // Carries no parser text: the error is cached and these files hold secrets.
 var errMalformedCredentials = errors.New("malformed credential file")
 
-// validYAML checks syntax only. Decoding into a Node keeps repeated keys, which
-// kubectl accepts and a map decode rejects.
-func validYAML(data []byte) bool {
-	var value yaml.Node
-	return yaml.Unmarshal(data, &value) == nil
+// kubeContexts walks the parsed tree because kubectl accepts repeated keys and
+// keeps the last value, while a map decode rejects them.
+func kubeContexts(data []byte) (int, bool) {
+	var doc yaml.Node
+	if yaml.Unmarshal(data, &doc) != nil {
+		return 0, false
+	}
+	if len(doc.Content) == 0 {
+		return 0, true
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return 0, false
+	}
+	count := 0
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "contexts" {
+			count = 0
+			value := root.Content[i+1]
+			if value.Kind == yaml.AliasNode {
+				value = value.Alias
+			}
+			if value.Kind == yaml.SequenceNode {
+				count = len(value.Content)
+			}
+		}
+	}
+	return count, true
 }
 
 // validINI accepts what the AWS tools read: sections, comments, assignments
@@ -140,23 +163,11 @@ func credentialFacts(kind string, data []byte) ([]Credential, error) {
 			}
 		}
 	case "kubeconfig":
-		if !validYAML(data) {
+		contexts, ok := kubeContexts(data)
+		if !ok {
 			return nil, errMalformedCredentials
 		}
-		inContexts := false
-		for _, line := range strings.Split(string(data), "\n") {
-			if line == "contexts:" {
-				inContexts = true
-				continue
-			}
-			if inContexts && strings.HasPrefix(line, "- context:") {
-				count++
-			} else if line != "" && line[0] != ' ' && line[0] != '-' {
-				inContexts = false
-			}
-		}
-		facts = append(facts, Credential{Detail: count})
-		count = 0
+		facts = append(facts, Credential{Detail: contexts})
 	case "npm_token":
 		for _, line := range bytes.Split(data, []byte("\n")) {
 			key, _, ok := bytes.Cut(bytes.TrimSpace(line), []byte("="))
