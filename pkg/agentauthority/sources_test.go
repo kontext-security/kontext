@@ -113,6 +113,16 @@ func TestUnreadableInputIsNeverComplete(t *testing.T) {
 	}
 }
 
+// An empty MCP config lists no servers: editors create the file before it has content.
+func TestEmptyMCPConfigIsComplete(t *testing.T) {
+	for _, content := range []string{"", " \n"} {
+		home := tempHome(t)
+		writeFixture(t, home, ".cursor/mcp.json", content)
+		r := scanFixture(home, []AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor"}})
+		assertSource(t, r, "cursor/mcp", StatusComplete)
+	}
+}
+
 // A file kubectl reads must not report as malformed, and a file nothing can
 // parse must not report as complete.
 func TestKubeconfigValidity(t *testing.T) {

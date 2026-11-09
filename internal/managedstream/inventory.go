@@ -3,6 +3,7 @@ package managedstream
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -46,6 +47,9 @@ type InventoryHealth struct {
 	LastCompleteAt   string           `json:"last_complete_at,omitempty"`
 	LastUploadAt     string           `json:"last_upload_at,omitempty"`
 	AppliedRevisions map[string]int64 `json:"applied_revisions,omitempty"`
+	// Presence and authority scans record separately and at different rates, so
+	// a complete scan needs every source's latest result to be complete.
+	IncompleteSources map[string]bool `json:"incomplete_sources,omitempty"`
 }
 
 // sourceClaims holds what one source reported, so that it can be merged with a
@@ -172,7 +176,12 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.file.Revision++
-	complete := true
+	if s.file.Health.IncompleteSources == nil {
+		s.file.Health.IncompleteSources = map[string]bool{}
+	}
+	// Each batch restates its kind, so a source it no longer reports stops counting.
+	presence := isPresence(results[0].ID)
+	maps.DeleteFunc(s.file.Health.IncompleteSources, func(id string, _ bool) bool { return isPresence(id) == presence })
 	for _, result := range results {
 		result.Revision = s.file.Revision
 		agent, family, _ := strings.Cut(result.ID, "/")
@@ -181,11 +190,13 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 			entry = mergePending(prior, entry)
 		}
 		s.file.Pending[result.ID] = entry
-		complete = complete && result.Status == agentauthority.StatusComplete
+		if result.Status != agentauthority.StatusComplete {
+			s.file.Health.IncompleteSources[result.ID] = true
+		}
 	}
 	finished := results[len(results)-1].FinishedAt
 	s.file.Health.LastAttemptAt = finished
-	if complete {
+	if len(s.file.Health.IncompleteSources) == 0 {
 		s.file.Health.LastCompleteAt = finished
 	}
 	return s.save()
@@ -386,14 +397,11 @@ func (s *InventoryStore) acknowledge(acks []InventoryAck, sent []agentauthority.
 func (s *InventoryStore) DiscardAuthority() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	discarded := false
-	for id := range s.file.Pending {
-		if !isPresence(id) {
-			delete(s.file.Pending, id)
-			discarded = true
-		}
-	}
-	if !discarded {
+	authority := func(id string) bool { return !isPresence(id) }
+	before := len(s.file.Pending) + len(s.file.Health.IncompleteSources)
+	maps.DeleteFunc(s.file.Pending, func(id string, _ pendingSource) bool { return authority(id) })
+	maps.DeleteFunc(s.file.Health.IncompleteSources, func(id string, _ bool) bool { return authority(id) })
+	if len(s.file.Pending)+len(s.file.Health.IncompleteSources) == before {
 		return nil
 	}
 	return s.save()

@@ -69,6 +69,60 @@ func mcpNames(claims sourceClaims) []string {
 	return names
 }
 
+// Presence scans run more often than authority scans, so one that is complete
+// must not cover a partial authority source, even across a restart.
+func TestLastCompleteNeedsEverySourceComplete(t *testing.T) {
+	store, path := openTestStore(t)
+	lastComplete := func() string {
+		health, _ := LoadInventoryHealth(path)
+		return health.LastCompleteAt
+	}
+	if err := store.RecordAuthority(mcpScan(agentauthority.StatusPartial, "a")); err != nil {
+		t.Fatal(err)
+	}
+	reopened := OpenInventoryStore(path, testInstallation)
+	if err := reopened.RecordAgents(presenceScan(agentauthority.StatusComplete)); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastComplete(); got != "" {
+		t.Fatalf("last complete = %q while cursor/mcp is partial", got)
+	}
+	if err := reopened.RecordAuthority(mcpScan(agentauthority.StatusComplete, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if lastComplete() == "" {
+		t.Fatal("last complete not set after every source completed")
+	}
+}
+
+// A source nothing reports any more must not hold the time back forever.
+func TestLastCompleteIgnoresSourcesNoLongerReported(t *testing.T) {
+	for name, forget := range map[string]func(*InventoryStore) error{
+		"agent left the report": func(store *InventoryStore) error {
+			report := mcpScan(agentauthority.StatusComplete)
+			report.Sources = []agentauthority.SourceResult{result("codex/mcp", agentauthority.StatusComplete)}
+			return store.RecordAuthority(report)
+		},
+		"authority scanning disabled": (*InventoryStore).DiscardAuthority,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, path := openTestStore(t)
+			if err := store.RecordAuthority(mcpScan(agentauthority.StatusPartial, "a")); err != nil {
+				t.Fatal(err)
+			}
+			if err := forget(store); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.RecordAgents(presenceScan(agentauthority.StatusComplete)); err != nil {
+				t.Fatal(err)
+			}
+			if health, _ := LoadInventoryHealth(path); health.LastCompleteAt == "" {
+				t.Fatalf("last complete not set: %+v", health.IncompleteSources)
+			}
+		})
+	}
+}
+
 func TestEachScanTakesANewPersistedRevision(t *testing.T) {
 	store, path := openTestStore(t)
 	for want := int64(1); want <= 2; want++ {

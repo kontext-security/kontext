@@ -1,6 +1,9 @@
 package readers
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 type MCP struct {
 	Command string   `json:"command" toml:"command" yaml:"command"`
@@ -9,6 +12,9 @@ type MCP struct {
 }
 
 func GenericMCP(data []byte, key string) (map[string]MCP, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil
+	}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, err
