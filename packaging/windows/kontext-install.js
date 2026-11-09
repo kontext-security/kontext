@@ -14,10 +14,10 @@ var CONFIG_FILE = "managed.json";
 // replaced, or an empty marker saying there was none.
 var BACKUP = ".msi-backup";
 var CREATED = ".msi-created";
-// Beside the token value while it is the installer's: uninstall removes only a
-// token the installer wrote, never one an MDM or an administrator set. UNSET
-// says, while the install can still roll back, that the token it replaced
-// wasn't the installer's.
+// Beside the token value: the token the installer wrote. Uninstall removes the
+// token only while it still equals that, never one an MDM or an administrator
+// set, also not one set over the installer's. UNSET says, while the install can
+// still roll back, that the installer had written no token before.
 var SET = ".msi-set";
 var UNSET = ".msi-unset";
 
@@ -80,12 +80,20 @@ function RollbackConfig() {
         var old = reg.get(TOKEN_KEY, TOKEN_VALUE + BACKUP);
         if (old !== null) {
             reg.set(TOKEN_KEY, TOKEN_VALUE, old);
+            var oldSet = reg.get(TOKEN_KEY, TOKEN_VALUE + SET + BACKUP);
             if (reg.get(TOKEN_KEY, TOKEN_VALUE + UNSET) !== null) {
                 reg.remove(TOKEN_KEY, TOKEN_VALUE + SET);
+            } else if (oldSet !== null) {
+                reg.set(TOKEN_KEY, TOKEN_VALUE + SET, oldSet);
             }
             log("restored the install token");
         } else if (reg.get(TOKEN_KEY, TOKEN_VALUE + CREATED) !== null) {
-            reg.remove(TOKEN_KEY, TOKEN_VALUE + SET);
+            var createdSet = reg.get(TOKEN_KEY, TOKEN_VALUE + SET + BACKUP);
+            if (createdSet !== null) {
+                reg.set(TOKEN_KEY, TOKEN_VALUE + SET, createdSet);
+            } else {
+                reg.remove(TOKEN_KEY, TOKEN_VALUE + SET);
+            }
             reg.remove(TOKEN_KEY, TOKEN_VALUE);
             log("removed the install token");
         }
@@ -124,7 +132,7 @@ function RemoveConfig() {
         if (token === null) {
             return;
         }
-        if (reg.get(TOKEN_KEY, TOKEN_VALUE + SET) === null) {
+        if (reg.get(TOKEN_KEY, TOKEN_VALUE + SET) !== token) {
             log("kept the install token: the installer didn't set it");
             return;
         }
@@ -144,9 +152,7 @@ function CommitRemoveConfig() {
         removeFile(fso, dir + CONFIG_FILE + CREATED);
         var reg = new Registry();
         dropTokenCopies(reg);
-        if (reg.get(TOKEN_KEY, TOKEN_VALUE) === null) {
-            reg.remove(TOKEN_KEY, TOKEN_VALUE + SET);
-        }
+        reg.remove(TOKEN_KEY, TOKEN_VALUE + SET);
         if (reg.removeKeyIfEmpty(TOKEN_KEY)) {
             log("removed HKLM\\" + TOKEN_KEY);
         }
@@ -167,16 +173,19 @@ function CommitRemoveConfig() {
 function replaceToken(reg, token) {
     dropTokenCopies(reg);
     var old = reg.get(TOKEN_KEY, TOKEN_VALUE);
+    var set = reg.get(TOKEN_KEY, TOKEN_VALUE + SET);
     if (old !== null) {
         reg.set(TOKEN_KEY, TOKEN_VALUE + BACKUP, old);
-        if (reg.get(TOKEN_KEY, TOKEN_VALUE + SET) === null) {
-            reg.set(TOKEN_KEY, TOKEN_VALUE + UNSET, "");
-        }
     } else {
         reg.set(TOKEN_KEY, TOKEN_VALUE + CREATED, "");
     }
+    if (set !== null) {
+        reg.set(TOKEN_KEY, TOKEN_VALUE + SET + BACKUP, set);
+    } else {
+        reg.set(TOKEN_KEY, TOKEN_VALUE + UNSET, "");
+    }
     reg.set(TOKEN_KEY, TOKEN_VALUE, token);
-    reg.set(TOKEN_KEY, TOKEN_VALUE + SET, "");
+    reg.set(TOKEN_KEY, TOKEN_VALUE + SET, token);
     log("wrote HKLM\\" + TOKEN_KEY + "\\" + TOKEN_VALUE);
 }
 
@@ -184,6 +193,7 @@ function dropTokenCopies(reg) {
     reg.remove(TOKEN_KEY, TOKEN_VALUE + BACKUP);
     reg.remove(TOKEN_KEY, TOKEN_VALUE + CREATED);
     reg.remove(TOKEN_KEY, TOKEN_VALUE + UNSET);
+    reg.remove(TOKEN_KEY, TOKEN_VALUE + SET + BACKUP);
 }
 
 // Registry reads and writes string values with WScript.Shell and lists a key
@@ -301,9 +311,14 @@ function daemonTask() {
 // session's user. A session it can't start in is logged, not an error: the
 // daemon starts there at the next logon.
 function startInSignedInSessions(task) {
-    var seen = {};
-    var processes = GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2")
-        .ExecQuery("SELECT SessionId FROM Win32_Process WHERE Name = 'explorer.exe'");
+    var seen = {}, processes;
+    try {
+        processes = GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2")
+            .ExecQuery("SELECT SessionId FROM Win32_Process WHERE Name = 'explorer.exe'");
+    } catch (err) {
+        log("could not list the signed-in sessions: " + describe(err));
+        return;
+    }
     for (var e = new Enumerator(processes); !e.atEnd(); e.moveNext()) {
         var id = e.item().SessionId;
         if (seen[id]) {
