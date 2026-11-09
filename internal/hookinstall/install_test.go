@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1285,5 +1286,40 @@ func TestMachineCodexCoverageCountsAnyRunnableHook(t *testing.T) {
 	write(t, machineCodexHooks, string(raw), 0644)
 	if got := machineCodexCoverage(opts); len(got) != len(codexmanaged.SupportedEvents) {
 		t.Fatalf("covered %v, want every event", got)
+	}
+}
+
+// The daemon repairs one agent per pass with a Skip filter, so asking about
+// every agent on every pass would scan each one four times a minute.
+func TestSkipAgentAsksOnlyAboutAgentsThePassReaches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	binary := filepath.Join(t.TempDir(), "kontext")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skipCalls := map[string]int{}
+	var asked []string
+	err := Install(Options{
+		Scope: User, Home: home, Binary: binary, NoBackup: true,
+		Skip: func(file File) bool {
+			skipCalls[file.Path]++
+			return file.Kind != "codex" && file.Kind != "feature"
+		},
+		SkipAgent: func(agent string) bool { asked = append(asked, agent); return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(asked, []string{"codex"}) {
+		t.Fatalf("asked about %v", asked)
+	}
+	for path, calls := range skipCalls {
+		if calls != 1 {
+			t.Fatalf("Skip called %d times for %s", calls, path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("absent agent got a folder: %v", err)
 	}
 }

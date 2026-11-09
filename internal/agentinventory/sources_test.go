@@ -365,3 +365,168 @@ func TestReasonsNeverCarryPaths(t *testing.T) {
 		t.Fatalf("path leaked: %s", data)
 	}
 }
+
+func executableFixture(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertUnknownInstall(t *testing.T, home, id string) {
+	t.Helper()
+	inv := scanHome(t, home)
+	got := sourceOf(t, inv, id+"/presence")
+	if got.Status == agentauthority.StatusComplete || !slices.Contains(got.Reasons, agentauthority.ReasonPermissionDenied) {
+		t.Fatalf("presence = %+v", got)
+	}
+	if Absent(context.Background(), home, noEnv, id) {
+		t.Fatal("a check that could not answer counted as absence")
+	}
+}
+
+func TestUntraversablePathDirectoryIsNotAbsence(t *testing.T) {
+	skipIfRoot(t)
+	home, locked := t.TempDir(), t.TempDir()
+	executableFixture(t, filepath.Join(locked, "bin", "codex"))
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	t.Setenv("PATH", filepath.Join(locked, "bin"))
+	assertUnknownInstall(t, home, "codex")
+}
+
+func TestGuardedInstallCandidatesAreNotTouched(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("privacy folders are macOS-only")
+	}
+	t.Run("PATH entry", func(t *testing.T) {
+		home := t.TempDir()
+		executableFixture(t, filepath.Join(home, "Documents", "bin", "codex"))
+		t.Setenv("PATH", filepath.Join(home, "Documents", "bin"))
+		assertUnknownInstall(t, home, "codex")
+	})
+	t.Run("app linked into a guarded folder", func(t *testing.T) {
+		home := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(home, "Documents", "Cursor.app"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(home, "Applications"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(home, "Documents", "Cursor.app"), filepath.Join(home, "Applications", "Cursor.app")); err != nil {
+			t.Fatal(err)
+		}
+		assertUnknownInstall(t, home, "cursor")
+	})
+}
+
+func TestPathExecutableStillCounts(t *testing.T) {
+	home, bin := t.TempDir(), t.TempDir()
+	executableFixture(t, filepath.Join(bin, "codex"))
+	t.Setenv("PATH", "relative/bin:"+filepath.Join(bin, "missing")+":"+bin)
+	if got, err := agentInstalled(home, "codex", map[string]bool{}); got != InstalledYes || err != nil {
+		t.Fatalf("installed = %s, %v", got, err)
+	}
+}
+
+func TestDisappearingConfigIsChangedDuringRead(t *testing.T) {
+	home := t.TempDir()
+	health := agentauthority.NewSourceHealth("cursor/presence", time.Now())
+	walk := configWalk{ctx: context.Background(), health: health}
+	walk.agentFiles(filepath.Join(home, "gone"), "", 0)
+	walk.notKontextFile(filepath.Join(home, "gone.json"), func([]byte) bool { return true })
+	got := health.Result(time.Now())
+	if got.Status != agentauthority.StatusPartial || !slices.Equal(got.Reasons, []string{agentauthority.ReasonChangedDuringRead}) {
+		t.Fatalf("result = %+v", got)
+	}
+}
+
+func TestCodexFeatureFlagOwnership(t *testing.T) {
+	for _, tt := range []struct {
+		name, config string
+		configured   bool
+	}{
+		{"kontext enabled the flag", "[features]\nhooks = true\n", false},
+		{"user disabled hooks", "[features]\nhooks = false\n", true},
+		{"user alias is not ours", "[features]\ncodex_hooks = true\n", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeHomeFile(t, home, ".codex/config.toml", tt.config)
+			row := rowOf(scanHome(t, home), "codex")
+			if (row != nil && row.Configured) != tt.configured {
+				t.Fatalf("row = %+v", row)
+			}
+		})
+	}
+}
+
+func TestGuardHooksAreNotAgentEvidence(t *testing.T) {
+	const guardHook = `{"matcher":"*","hooks":[{"type":"command","command":"'/opt/homebrew/bin/kontext' guard hook claude-code --socket '/tmp/kontext.sock'"}]}`
+	home := t.TempDir()
+	writeHomeFile(t, home, ".claude/settings.json", `{"hooks":{"PreToolUse":[`+guardHook+`],"PostToolUse":[`+guardHook+`]}}`)
+	writeHomeFile(t, home, ".claude/settings.json.kontext-guard-backup-20261108T120000Z", "{}")
+	if row := rowOf(scanHome(t, home), "claude_code"); row != nil {
+		t.Fatalf("Guard's own hooks listed the agent: %+v", row)
+	}
+	writeHomeFile(t, home, ".claude/settings.json", `{"model":"opus","hooks":{"PreToolUse":[`+guardHook+`]}}`)
+	if row := rowOf(scanHome(t, home), "claude_code"); row == nil || !row.Configured {
+		t.Fatalf("user settings beside Guard hooks: %+v", row)
+	}
+}
+
+func TestClaudeRootConfigIsPresenceEvidence(t *testing.T) {
+	for _, tt := range []struct {
+		name, content string
+		configured    bool
+	}{
+		{"user mcp servers", `{"mcpServers":{"one":{"command":"npx"}}}`, true},
+		{"claude's own state", `{"numStartups":3}`, true},
+		{"malformed is not ours", `{`, true},
+		{"empty object", `{}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", "")
+			installAllHooks(t, home)
+			writeHomeFile(t, home, ".claude.json", tt.content)
+			row := rowOf(scanHome(t, home), "claude_code")
+			if (row != nil && row.Configured) != tt.configured {
+				t.Fatalf("row = %+v", row)
+			}
+			if tt.configured && row.ConfigPath != "~/.claude" {
+				t.Fatalf("config path = %s", row.ConfigPath)
+			}
+			if got := Absent(context.Background(), home, noEnv, "claude_code"); got == tt.configured {
+				t.Fatalf("Absent = %t", got)
+			}
+		})
+	}
+}
+
+func TestUnreadableClaudeRootConfigIsNotAbsence(t *testing.T) {
+	skipIfRoot(t)
+	home := t.TempDir()
+	writeHomeFile(t, home, ".claude.json", `{"mcpServers":{}}`)
+	if err := os.Chmod(filepath.Join(home, ".claude.json"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	assertUnknownInstall(t, home, "claude_code")
+}
+
+func TestGuardedClaudeRootConfigIsNotTouched(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("privacy folders are macOS-only")
+	}
+	home := t.TempDir()
+	writeHomeFile(t, home, "Documents/claude.json", `{"mcpServers":{}}`)
+	if err := os.Symlink(filepath.Join(home, "Documents/claude.json"), filepath.Join(home, ".claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	assertUnknownInstall(t, home, "claude_code")
+}

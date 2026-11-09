@@ -48,6 +48,8 @@ type guard struct {
 	finished      map[string]time.Time
 	order         []string
 	active        []*SourceHealth
+	// listed marks a read of a path a listing just returned.
+	listed bool
 }
 
 func (g *guard) skip() { g.report.Coverage.SkippedFiles++ }
@@ -152,6 +154,11 @@ func (g *guard) access(path, mode string) fileResult {
 			return
 		}
 		if hasCache && sameFileVersion(cached.info, info) && sameFileVersion(cached.walInfo, walInfo) {
+			// A chmod or ACL change leaves the version alone.
+			if err := readable(path); err != nil {
+				done <- fileResult{err: err}
+				return
+			}
 			cached.opened = false
 			done <- cached
 			return
@@ -331,14 +338,9 @@ func readConfig[T any](g *guard, id, path string, parse func([]byte) (T, error),
 
 // readListed reads a file just enumerated, so its absence means it vanished.
 func readListed[T any](g *guard, id, path string, parse func([]byte) (T, error)) (T, bool) {
-	value, err := readParsed(g, path, parse)
-	if errors.Is(err, errParse) {
-		g.parseError(id, filepath.Base(path))
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		g.fail(ReasonChangedDuringRead)
-	}
-	return value, err == nil
+	g.listed = true
+	defer func() { g.listed = false }()
+	return readConfig(g, id, path, parse)
 }
 func parseJSON[T any](data []byte) (T, error) {
 	var value T

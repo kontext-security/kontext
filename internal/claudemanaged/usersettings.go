@@ -257,6 +257,14 @@ func IsGuardHookCommand(command string) bool {
 		(strings.Contains(normalized, "kontext hook --agent claude") && strings.Contains(normalized, "--mode"))
 }
 
+// RemoveGuardHooks strips Kontext Guard's handlers. Only callers asking whether
+// a settings file holds anything but Kontext's use it; the installers keep to
+// their own entries.
+func RemoveGuardHooks(settings map[string]any) error {
+	config := agenthooks.Config{Settings: settings, HooksDescription: "settings.json hooks"}
+	return config.Remove(managedHookPlan(DefaultKontextBinary), isGuardHookHandler)
+}
+
 // IsManagedHookCommand reports whether a hook command is one of OURS: the
 // flagless managed-observe form `'<binary>' hook '<alias>'`. Guard hooks
 // (`kontext guard hook claude-code`, `kontext hook --agent claude … --mode …`)

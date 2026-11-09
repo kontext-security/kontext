@@ -30,7 +30,9 @@ const (
 // entries is in the file.
 var kontextHookFiles = map[string]map[string]func([]byte) bool{
 	"claude_code": {"settings.json": func(raw []byte) bool {
-		return onlyHooks(raw, claudemanaged.RemoveManagedHooks)
+		return onlyHooks(raw, func(settings map[string]any) error {
+			return errors.Join(claudemanaged.RemoveManagedHooks(settings), claudemanaged.RemoveGuardHooks(settings))
+		})
 	}},
 	"codex": {
 		"hooks.json":  func(raw []byte) bool { return onlyHooks(raw, codexmanaged.RemoveManagedHooks) },
@@ -81,8 +83,10 @@ func onlyCodexFeature(raw []byte) bool {
 		return false
 	}
 	if features, ok := config["features"].(map[string]any); ok {
-		delete(features, "hooks")
-		delete(features, "codex_hooks")
+		// Kontext only ever writes hooks = true.
+		if features["hooks"] == true {
+			delete(features, "hooks")
+		}
 		if len(features) == 0 {
 			delete(config, "features")
 		}
@@ -132,7 +136,37 @@ func inspectConfig(ctx context.Context, descriptor Descriptor, home string, env 
 			return candidate, true
 		}
 	}
+	if descriptor.ID == "claude_code" && claudeRootConfigured(ctx, home, clean, health) {
+		return config, true
+	}
 	return config, false
+}
+
+// claudeRootConfigured counts ~/.claude.json, where Claude Code keeps its user
+// MCP servers and state. Kontext never writes this file.
+func claudeRootConfigured(ctx context.Context, home string, clean map[string]bool, health *agentauthority.SourceHealth) bool {
+	path := filepath.Join(home, ".claude.json")
+	if linkGuarded(home, path, clean) {
+		health.Fail(agentauthority.ReasonPermissionDenied)
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			health.Read()
+		} else {
+			health.Fail(agentauthority.ReasonFor(err))
+		}
+		return false
+	}
+	health.Read()
+	if !info.Mode().IsRegular() {
+		return true
+	}
+	walk := configWalk{ctx: ctx, health: health}
+	return walk.notKontextFile(path, func(raw []byte) bool {
+		return onlyHooks(raw, func(map[string]any) error { return nil })
+	})
 }
 
 // privacyGuarded walks each parent once per scan: most candidates share one.
@@ -142,15 +176,21 @@ func privacyGuarded(descriptor Descriptor, home, candidate string, clean map[str
 	if !slices.ContainsFunc(descriptor.ConfigDirs, func(rel string) bool { return filepath.Join(home, rel) == candidate }) {
 		return privacyfolder.Guarded(home, candidate)
 	}
-	parent := filepath.Dir(candidate)
+	return linkGuarded(home, candidate, clean)
+}
+
+// linkGuarded checks a path whose own name cannot be guarded: a clean parent
+// leaves only the question of whether the path is a link.
+func linkGuarded(home, path string, clean map[string]bool) bool {
+	parent := filepath.Dir(path)
 	if !clean[parent] {
 		if privacyfolder.Guarded(home, parent) {
 			return true
 		}
 		clean[parent] = true
 	}
-	info, err := os.Lstat(candidate)
-	return err == nil && info.Mode()&os.ModeSymlink != 0 && privacyfolder.Guarded(home, candidate)
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&os.ModeSymlink != 0 && privacyfolder.Guarded(home, path)
 }
 
 type configWalk struct {
@@ -174,9 +214,7 @@ func (w *configWalk) agentFiles(dir, rel string, depth int) (found bool) {
 	}
 	file, err := os.Open(dir)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			w.health.Fail(agentauthority.ReasonFor(err))
-		}
+		w.failListed(err)
 		return false
 	}
 	defer file.Close()
@@ -225,14 +263,21 @@ func (w *configWalk) agentFiles(dir, rel string, depth int) (found bool) {
 	}
 }
 
+// failListed is for a path a stat or listing just found, so absence is a change.
+func (w *configWalk) failListed(err error) {
+	if errors.Is(err, os.ErrNotExist) {
+		w.health.Fail(agentauthority.ReasonChangedDuringRead)
+		return
+	}
+	w.health.Fail(agentauthority.ReasonFor(err))
+}
+
 // notKontextFile leaves an unreadable file undecided: the failure is latched
 // and the file counts as neither ours nor the agent's.
 func (w *configWalk) notKontextFile(path string, check func([]byte) bool) bool {
 	file, err := os.Open(path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			w.health.Fail(agentauthority.ReasonFor(err))
-		}
+		w.failListed(err)
 		return false
 	}
 	defer file.Close()

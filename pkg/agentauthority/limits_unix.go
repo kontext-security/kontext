@@ -18,6 +18,8 @@ import (
 // downloading the file.
 func isEvictedErr(err error) bool { return errors.Is(err, unix.EDEADLK) }
 
+func readable(path string) error { return unix.Access(path, unix.R_OK) }
+
 func readGuarded(ctx context.Context, path, mode string) (result fileResult) {
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {

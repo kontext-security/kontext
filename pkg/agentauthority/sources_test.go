@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
 func tempHome(t *testing.T) string {
@@ -331,4 +333,136 @@ func TestSourcesStayOutOfTheAuthorityWire(t *testing.T) {
 	if strings.Contains(string(data), "sources") {
 		t.Fatalf("wire = %s", data)
 	}
+}
+
+func TestMalformedCredentialFilesAreNeverComplete(t *testing.T) {
+	for _, tt := range []struct{ name, path, content string }{
+		{"gh", ".config/gh/hosts.yml", "["},
+		{"aws section", ".aws/credentials", "[default"},
+		{"aws line", ".aws/config", "[default]\nnot an assignment\n"},
+		{"aws indented section", ".aws/credentials", " [default"},
+		{"aws indented text first", ".aws/credentials", "  stray words\n"},
+		{"aws indented section under a header", ".aws/credentials", "[default]\n [other\n"},
+		{"aws assignment before any section", ".aws/credentials", "region = eu\n"},
+		{"kube", ".kube/config", "contexts: ["},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := tempHome(t)
+			writeFixture(t, home, tt.path, tt.content)
+			r := scanFixture(home, nil)
+			got := sourceResult(t, r, HostCredentials)
+			if got.Status == StatusComplete || !slices.Contains(got.Reasons, ReasonMalformed) {
+				t.Fatalf("credentials = %+v", got)
+			}
+		})
+	}
+}
+
+func TestValidCredentialFilesStayComplete(t *testing.T) {
+	home := tempHome(t)
+	writeFixture(t, home, ".config/gh/hosts.yml", "github.com:\n  user: octocat\n")
+	writeFixture(t, home, ".aws/credentials", "# comment\n[default]\naws_access_key_id = x\ns3 =\n  max_concurrent_requests = 1\n; other\n\n[other] \nregion: eu\n")
+	writeFixture(t, home, ".kube/config", "contexts:\n- context: {}\n")
+	r := scanFixture(home, nil)
+	assertSource(t, r, HostCredentials, StatusComplete)
+	if len(r.Credentials) != 3 {
+		t.Fatalf("credentials = %+v", r.Credentials)
+	}
+}
+
+func TestAWSMultilineValueIsNotASection(t *testing.T) {
+	home := tempHome(t)
+	writeFixture(t, home, ".aws/config", "[default]\ncredential_process = sh -c '\n    [ -n \"$AWS_PROFILE\" ] &&\n    exec /usr/local/bin/credentials-helper\n    '\n")
+	assertSource(t, scanFixture(home, nil), HostCredentials, StatusComplete)
+}
+
+func TestEnumeratedManagedSettingVanishing(t *testing.T) {
+	home := tempHome(t)
+	managed := filepath.Join(home, "managed")
+	writeFixture(t, home, "managed/managed-settings.d/a.json", `{}`)
+	var r Report
+	r.Coverage.Errors = []string{}
+	g := guard{ctx: context.Background(), home: home, managed: managed, roots: []string{home}, report: &r}
+	g.readFile = func(path, mode string) fileResult {
+		if mode == "read" {
+			return fileResult{err: os.ErrNotExist}
+		}
+		return readGuarded(context.Background(), path, mode)
+	}
+	g.use("claude_code", "mcp")
+	g.claude(&Agent{ID: "claude_code", Permissions: Permissions{Allow: []Grant{}}}, filepath.Join(home, ".claude"), readers.ClaudeRoot{}, nil)
+	got := g.sources["claude_code/permissions"].Result(time.Now())
+	if got.Status != StatusPartial || !slices.Equal(got.Reasons, []string{ReasonChangedDuringRead}) {
+		t.Fatalf("result = %+v", got)
+	}
+}
+
+type vanishingEntry struct {
+	name string
+	err  error
+}
+
+func (e vanishingEntry) Name() string               { return e.name }
+func (e vanishingEntry) IsDir() bool                { return false }
+func (e vanishingEntry) Type() os.FileMode          { return 0 }
+func (e vanishingEntry) Info() (os.FileInfo, error) { return nil, e.err }
+
+func TestListedSessionMetadataFailure(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"vanished", os.ErrNotExist, ReasonChangedDuringRead},
+		{"denied", os.ErrPermission, ReasonPermissionDenied},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := tempHome(t)
+			if err := os.MkdirAll(filepath.Join(home, "sessions/acct/org"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			var r Report
+			r.Coverage.Errors = []string{}
+			g := guard{ctx: context.Background(), home: home, roots: []string{home}, report: &r}
+			g.readFile = func(path, mode string) fileResult {
+				if mode == "sessions" {
+					return fileResult{entries: []os.DirEntry{vanishingEntry{"local_1.json", tt.err}, vanishingEntry{"unrelated.txt", tt.err}}}
+				}
+				return readGuarded(context.Background(), path, mode)
+			}
+			g.use("claude_code", "connectors")
+			g.connectors(&Agent{ID: "claude_code"}, filepath.Join(home, "sessions"))
+			got := g.sources["claude_code/connectors"].Result(time.Now())
+			if got.Status != StatusPartial || !slices.Equal(got.Reasons, []string{tt.reason}) {
+				t.Fatalf("result = %+v", got)
+			}
+		})
+	}
+}
+
+func TestRefusedPluginPathLowersBothSources(t *testing.T) {
+	home := tempHome(t)
+	writeFixture(t, home, ".claude/plugins/installed_plugins.json", `{"plugins":{"p@m":[{"installPath":"/elsewhere/p"}]}}`)
+	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}})
+	assertSource(t, r, "claude_code/plugins", StatusPartial, ReasonPermissionDenied)
+	assertSource(t, r, "claude_code/mcp", StatusPartial, ReasonPermissionDenied)
+}
+
+func TestCachedResultRechecksReadAccess(t *testing.T) {
+	skipIfRoot(t)
+	home := tempHome(t)
+	writeFixture(t, home, ".cursor/mcp.json", `{"mcpServers":{"one":{"command":"npx"}}}`)
+	scanner := new(Scanner)
+	locations := []AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor"}}
+	scanner.Scan(context.Background(), home, Environment{}, locations, fixtureTime)
+	path := filepath.Join(home, ".cursor/mcp.json")
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	r := scanner.Scan(context.Background(), home, Environment{}, locations, fixtureTime)
+	assertSource(t, r, "cursor/mcp", StatusFailed, ReasonPermissionDenied)
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertSource(t, scanner.Scan(context.Background(), home, Environment{}, locations, fixtureTime), "cursor/mcp", StatusComplete)
 }

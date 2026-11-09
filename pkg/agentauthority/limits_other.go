@@ -18,5 +18,8 @@ func readGuarded(context.Context, string, string) fileResult {
 	return fileResult{err: os.ErrPermission}
 }
 
+// readable never runs here: with no content reads, nothing is cached.
+func readable(string) error { return nil }
+
 // isEvictedErr has no equivalent here yet: on Windows placeholders are refused before any read.
 func isEvictedErr(error) bool { return false }

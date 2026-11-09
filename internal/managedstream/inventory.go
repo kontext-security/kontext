@@ -192,11 +192,13 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 }
 
 // mergePending keeps what an unacknowledged result saw when a newer scan could
-// not establish the whole source. What it saw was never uploaded, so without
-// this a run of failed scans would lose it.
+// not establish the whole source: it may never have reached the server. The
+// server dates claims by finished_at, so inherited claims keep the older time
+// and their freshness is understated, never overstated.
 func mergePending(older, newer pendingSource) pendingSource {
 	if older.Claims.positive() {
 		newer.Result.Status = agentauthority.StatusPartial
+		newer.Result.StartedAt, newer.Result.FinishedAt = older.Result.StartedAt, older.Result.FinishedAt
 	}
 	newer.Claims = mergeClaims(older.Claims, newer.Claims)
 	return newer
@@ -353,6 +355,14 @@ func (s *InventoryStore) acknowledge(acks []InventoryAck, sent []agentauthority.
 				delete(s.file.Pending, ack.ID)
 			}
 		case "stale", "conflict":
+			// Above the applied revision is no ordering problem: the result
+			// predates an opt-out this endpoint never saw, so a retry cannot pass.
+			if ack.Outcome == "stale" && ack.Revision > ack.AppliedRevision {
+				if current {
+					delete(s.file.Pending, ack.ID)
+				}
+				continue
+			}
 			s.file.Revision = max(s.file.Revision, ack.AppliedRevision)
 			if current {
 				resend = append(resend, ack.ID)
@@ -366,6 +376,25 @@ func (s *InventoryStore) acknowledge(acks []InventoryAck, sent []agentauthority.
 			entry.Result.Revision = s.file.Revision
 			s.file.Pending[id] = entry
 		}
+	}
+	return s.save()
+}
+
+// DiscardAuthority forgets pending authority results after an opt-out. The
+// server has cleared those claims and rejects anything dated before that, so a
+// resumed scan must not inherit them. The counter stays: revisions never repeat.
+func (s *InventoryStore) DiscardAuthority() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	discarded := false
+	for id := range s.file.Pending {
+		if !isPresence(id) {
+			delete(s.file.Pending, id)
+			discarded = true
+		}
+	}
+	if !discarded {
+		return nil
 	}
 	return s.save()
 }
@@ -409,63 +438,79 @@ func addInventory(payload *Payload, opts Options) {
 	device.Inventory = &Inventory{Schema: InventorySchema, Sources: sources}
 }
 
-// overlayAgents re-adds rows a newer incomplete scan could not see. The cached
-// scan is shared, so it is copied rather than appended to.
+// overlayAgents makes each pending source's row the one in its result, so a
+// result never travels with another scan's claims. The cached scan is shared,
+// so it is copied rather than changed.
 func overlayAgents(device *Device, pending map[string]pendingSource, ids []string) {
 	list := slices.Clone(*device.Agents)
 	for _, id := range ids {
-		entry := pending[id]
-		if !isPresence(id) || entry.Result.Status == agentauthority.StatusComplete || entry.Claims.Agent == nil {
+		if !isPresence(id) {
 			continue
 		}
-		if !slices.ContainsFunc(list, func(a agentinventory.Agent) bool { return a.ID == entry.Claims.Agent.ID }) {
-			list = append(list, *entry.Claims.Agent)
+		agent, _, _ := strings.Cut(id, "/")
+		index := slices.IndexFunc(list, func(a agentinventory.Agent) bool { return a.ID == agent })
+		claimed := pending[id].Claims.Agent
+		switch {
+		case claimed != nil && index >= 0:
+			list[index] = *claimed
+		case claimed != nil:
+			list = append(list, *claimed)
+		case index >= 0:
+			list = slices.Delete(list, index, index+1)
 		}
 	}
 	device.Agents = &list
 }
 
-// overlayAuthority re-adds claims a newer incomplete scan could not see and
-// returns the sources that lost claims to the report's bounds.
+func replaceClaims[T any](field *[]T, claims []T, changed *bool) {
+	if len(*field) == 0 && len(claims) == 0 || reflect.DeepEqual(*field, claims) {
+		return
+	}
+	*field, *changed = claims, true
+	if claims == nil {
+		*field = []T{}
+	}
+}
+
+// overlayAuthority does the same for the report, and returns the sources that
+// lost claims to the report's bounds.
 func overlayAuthority(device *Device, pending map[string]pendingSource, ids []string) []string {
 	report := *device.Authority
 	report.Agents = slices.Clone(report.Agents)
 	changed := false
 	for _, id := range ids {
 		entry := pending[id]
-		if isPresence(id) || entry.Result.Status == agentauthority.StatusComplete || !entry.Claims.positive() {
+		if isPresence(id) {
 			continue
 		}
 		if id == agentauthority.HostCredentials {
-			merged := mergeByKey(entry.Claims.Credentials, report.Credentials, credentialKey)
-			changed = changed || len(merged) != len(report.Credentials)
-			report.Credentials = merged
+			replaceClaims(&report.Credentials, entry.Claims.Credentials, &changed)
 			continue
 		}
 		agent, family, _ := strings.Cut(id, "/")
 		index := slices.IndexFunc(report.Agents, func(a agentauthority.Agent) bool { return a.ID == agent })
 		if index < 0 {
+			if !entry.Claims.positive() {
+				continue
+			}
 			report.Agents = append(report.Agents, agentauthority.Agent{ID: agent, MCPServers: []agentauthority.MCPServer{}, Plugins: []agentauthority.Plugin{}, Permissions: agentauthority.Permissions{Allow: []agentauthority.Grant{}}})
 			index = len(report.Agents) - 1
 		}
 		row := &report.Agents[index]
 		switch family {
 		case "mcp":
-			merged := mergeByKey(entry.Claims.MCPServers, row.MCPServers, mcpKey)
-			changed = changed || len(merged) != len(row.MCPServers)
-			row.MCPServers = merged
+			replaceClaims(&row.MCPServers, entry.Claims.MCPServers, &changed)
 		case "plugins":
-			merged := mergeByKey(entry.Claims.Plugins, row.Plugins, pluginKey)
-			changed = changed || len(merged) != len(row.Plugins)
-			row.Plugins = merged
+			replaceClaims(&row.Plugins, entry.Claims.Plugins, &changed)
 		case "connectors":
-			merged := mergeByKey(entry.Claims.Connectors, row.Connectors, func(c agentauthority.Connector) string { return c.UUID })
-			changed = changed || len(merged) != len(row.Connectors)
-			row.Connectors = merged
+			replaceClaims(&row.Connectors, entry.Claims.Connectors, &changed)
 		case "permissions":
-			current := row.Permissions
-			if merged := mergePermissions(entry.Claims.Permissions, &current); !reflect.DeepEqual(*merged, current) {
-				row.Permissions, changed = *merged, true
+			claimed := agentauthority.Permissions{Allow: []agentauthority.Grant{}}
+			if entry.Claims.Permissions != nil {
+				claimed = *entry.Claims.Permissions
+			}
+			if !reflect.DeepEqual(claimed, row.Permissions) {
+				row.Permissions, changed = claimed, true
 			}
 		}
 	}

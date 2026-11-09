@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func (g *guard) credential(kind, path string, detail int, host, login string) {
@@ -65,12 +67,47 @@ func (g *guard) credentials() {
 	g.credential("gcloud_adc", filepath.Join(g.home, ".config/gcloud/application_default_credentials.json"), 1, "", "")
 }
 
+// Carries no parser text: the error is cached and these files hold secrets.
+var errMalformedCredentials = errors.New("malformed credential file")
+
+func validYAML(data []byte) bool {
+	var value any
+	return yaml.Unmarshal(data, &value) == nil
+}
+
+// validINI accepts what the AWS tools read: sections, comments, assignments
+// inside a section, and indented lines continuing an assignment.
+func validINI(data []byte) bool {
+	section, assigned := false, false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		switch {
+		case line == "" || line[0] == '#' || line[0] == ';':
+		case assigned && (raw[0] == ' ' || raw[0] == '\t'):
+		case line[0] == '[':
+			if !strings.HasSuffix(line, "]") {
+				return false
+			}
+			section, assigned = true, false
+		case section && strings.ContainsAny(line, "=:"):
+			assigned = true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Only presence metadata is retained in the scanner cache.
 func credentialFacts(kind string, data []byte) ([]Credential, error) {
 	facts := []Credential{}
 	count := 0
 	switch kind {
 	case "gh_token":
+		var hosts map[string]map[string]any
+		if yaml.Unmarshal(data, &hosts) != nil {
+			return nil, errMalformedCredentials
+		}
 		host, login := "", ""
 		flush := func() {
 			if host != "" {
@@ -91,6 +128,9 @@ func credentialFacts(kind string, data []byte) ([]Credential, error) {
 		}
 		flush()
 	case "aws_credentials", "aws_config_profiles":
+		if !validINI(data) {
+			return nil, errMalformedCredentials
+		}
 		for _, line := range bytes.Split(data, []byte("\n")) {
 			line = bytes.TrimSpace(line)
 			if bytes.HasPrefix(line, []byte("[")) && bytes.HasSuffix(line, []byte("]")) {
@@ -98,6 +138,9 @@ func credentialFacts(kind string, data []byte) ([]Credential, error) {
 			}
 		}
 	case "kubeconfig":
+		if !validYAML(data) {
+			return nil, errMalformedCredentials
+		}
 		inContexts := false
 		for _, line := range strings.Split(string(data), "\n") {
 			if line == "contexts:" {

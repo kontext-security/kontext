@@ -56,8 +56,8 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 		CloudURL:       server.URL,
 		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
 		InstallToken:   "test-install-token",
-		DeviceLabel:    "michel-macbook",
-		UserEmail:      " anna@example.com ",
+		DeviceLabel:    "test-mac",
+		UserEmail:      " user@example.com ",
 		HTTPClient:     server.Client(),
 	}); err != nil {
 		t.Fatalf("Flush() error = %v", err)
@@ -69,11 +69,11 @@ func TestFlushPostsLedgerBatchWithInstallationIdentity(t *testing.T) {
 	if got.InstallationID != "ins_0123456789abcdefghijklmnopqrstuv" {
 		t.Fatalf("installation_id = %q", got.InstallationID)
 	}
-	if got.Device == nil || got.Device.Label != "michel-macbook" {
+	if got.Device == nil || got.Device.Label != "test-mac" {
 		t.Fatalf("device = %+v", got.Device)
 	}
-	if got.Device.UserEmail != "anna@example.com" {
-		t.Fatalf("device user_email = %q, want trimmed anna@example.com", got.Device.UserEmail)
+	if got.Device.UserEmail != "user@example.com" {
+		t.Fatalf("device user_email = %q, want trimmed user@example.com", got.Device.UserEmail)
 	}
 	if len(got.Sessions) != 1 || len(got.Actions) != 2 || len(got.Receipts) != 2 {
 		t.Fatalf("batch counts = sessions %d actions %d receipts %d", len(got.Sessions), len(got.Actions), len(got.Receipts))
@@ -423,13 +423,13 @@ func TestFlushEmitsDeviceForUserEmailAlone(t *testing.T) {
 		CloudURL:       server.URL,
 		InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
 		InstallToken:   "test-install-token",
-		UserEmail:      "anna@example.com",
+		UserEmail:      "user@example.com",
 		HTTPClient:     server.Client(),
 	}); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
 
-	if got.Device == nil || got.Device.UserEmail != "anna@example.com" || got.Device.Label != "" {
+	if got.Device == nil || got.Device.UserEmail != "user@example.com" || got.Device.Label != "" {
 		t.Fatalf("device = %+v, want user_email only", got.Device)
 	}
 }
@@ -1392,7 +1392,7 @@ func TestFlushPostsHeartbeatWhenNoActionsArePending(t *testing.T) {
 		CloudURL:          server.URL,
 		InstallationID:    "ins_0123456789abcdefghijklmnopqrstuv",
 		InstallToken:      "test-install-token",
-		DeviceLabel:       "michel-macbook",
+		DeviceLabel:       "test-mac",
 		HeartbeatInterval: time.Minute,
 		HTTPClient:        server.Client(),
 		OnFlushSuccess:    func() { onFlushSuccessCalled = true },
@@ -1406,7 +1406,7 @@ func TestFlushPostsHeartbeatWhenNoActionsArePending(t *testing.T) {
 	if got.InstallationID != "ins_0123456789abcdefghijklmnopqrstuv" {
 		t.Fatalf("installation_id = %q", got.InstallationID)
 	}
-	if got.Device == nil || got.Device.Label != "michel-macbook" {
+	if got.Device == nil || got.Device.Label != "test-mac" {
 		t.Fatalf("device = %+v", got.Device)
 	}
 	if len(got.Sessions) != 0 || len(got.Actions) != 0 || len(got.Receipts) != 0 {

@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 	"github.com/kontext-security/kontext/internal/agenthooks"
@@ -252,12 +253,15 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 	}
 	var changes []change
 	for _, def := range defs {
-		if !remove && opts.SkipAgent != nil && opts.SkipAgent(def.Agent) {
-			continue
-		}
+		// Asked at most once, and only for an agent this pass reaches: the daemon
+		// runs one pass per agent, each filtering out the other agents' files.
+		absent := sync.OnceValue(func() bool { return !remove && opts.SkipAgent != nil && opts.SkipAgent(def.Agent) })
 		for _, file := range def.Files {
 			if opts.Skip != nil && opts.Skip(file) {
 				continue
+			}
+			if absent() {
+				break
 			}
 			if file.Kind == "claude" && opts.ClaudePath != "" {
 				file.Path = opts.ClaudePath

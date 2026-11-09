@@ -704,3 +704,168 @@ func TestFlushRecoversFromALostCounter(t *testing.T) {
 		t.Fatal("recovery did not finish")
 	}
 }
+
+// The fact is read before the pending snapshot, so a scan finishing between the
+// two must not pair a complete result with the older scan's claims.
+func TestCompleteResultTravelsWithItsOwnClaims(t *testing.T) {
+	store, _ := openTestStore(t)
+	older := mcpScan(agentauthority.StatusComplete, "a")
+	newer := mcpScan(agentauthority.StatusComplete, "a", "b")
+	if err := store.RecordAuthority(newer); err != nil {
+		t.Fatal(err)
+	}
+	olderAgents := presenceScan(agentauthority.StatusComplete, "codex")
+	newerAgents := presenceScan(agentauthority.StatusComplete, "cursor")
+	if err := store.RecordAgents(newerAgents); err != nil {
+		t.Fatal(err)
+	}
+	payload := payloadWith(store, &olderAgents, &older)
+	if got := payload.Device.Authority.Agents[0].MCPServers; len(got) != 2 {
+		t.Fatalf("servers = %+v", got)
+	}
+	want, err := payload.Device.Authority.ContentHash()
+	if err != nil || payload.Device.Authority.Hash != want {
+		t.Fatalf("hash = %s, want %s (%v)", payload.Device.Authority.Hash, want, err)
+	}
+	agents := *payload.Device.Agents
+	if len(agents) != 1 || agents[0].ID != "cursor" {
+		t.Fatalf("agents = %+v", agents)
+	}
+	if len(older.Agents[0].MCPServers) != 1 || olderAgents.Agents[0].ID != "codex" {
+		t.Fatal("overlay changed the cached scans")
+	}
+}
+
+func TestSnapshotEmptiesAClaimTheFactStillHas(t *testing.T) {
+	store, _ := openTestStore(t)
+	older := mcpScan(agentauthority.StatusComplete, "a")
+	if err := store.RecordAuthority(mcpScan(agentauthority.StatusComplete)); err != nil {
+		t.Fatal(err)
+	}
+	got := payloadWith(store, nil, &older).Device.Authority.Agents[0].MCPServers
+	if got == nil || len(got) != 0 {
+		t.Fatalf("servers = %#v", got)
+	}
+}
+
+// Failure case 1: an inherited claim must not look freshly observed.
+func TestMergeKeepsTheOlderFinishedAt(t *testing.T) {
+	store, _ := openTestStore(t)
+	first := mcpScan(agentauthority.StatusComplete, "a", "b")
+	first.Sources[0].FinishedAt = "2026-11-08T11:00:00Z"
+	if err := store.RecordAuthority(first); err != nil {
+		t.Fatal(err)
+	}
+	second := mcpScan(agentauthority.StatusPartial, "a")
+	second.Sources[0].Reasons = []string{agentauthority.ReasonWalkLimit}
+	second.Sources[0].FinishedAt = "2026-11-08T12:00:00Z"
+	if err := store.RecordAuthority(second); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingOf(t, store, "cursor/mcp").Result.FinishedAt; got != "2026-11-08T11:00:00Z" {
+		t.Fatalf("finished_at = %s", got)
+	}
+	third := mcpScan(agentauthority.StatusComplete, "a")
+	third.Sources[0].FinishedAt = "2026-11-08T13:00:00Z"
+	if err := store.RecordAuthority(third); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingOf(t, store, "cursor/mcp").Result.FinishedAt; got != "2026-11-08T13:00:00Z" {
+		t.Fatalf("a complete result is fresh: %s", got)
+	}
+}
+
+func TestMergeWithNothingInheritedKeepsItsOwnFinishedAt(t *testing.T) {
+	store, _ := openTestStore(t)
+	empty := mcpScan(agentauthority.StatusFailed)
+	empty.Sources[0].FinishedAt = "2026-11-08T11:00:00Z"
+	if err := store.RecordAuthority(empty); err != nil {
+		t.Fatal(err)
+	}
+	next := mcpScan(agentauthority.StatusPartial, "a")
+	next.Sources[0].FinishedAt = "2026-11-08T12:00:00Z"
+	if err := store.RecordAuthority(next); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingOf(t, store, "cursor/mcp").Result.FinishedAt; got != "2026-11-08T12:00:00Z" {
+		t.Fatalf("finished_at = %s", got)
+	}
+}
+
+// After an opt-out the server has cleared these claims, and it rejects anything
+// dated before that as stale, so a resumed scan must not inherit them.
+func TestDiscardAuthorityKeepsCounterAndPresence(t *testing.T) {
+	store, path := openTestStore(t)
+	first := mcpScan(agentauthority.StatusComplete, "a", "b")
+	first.Sources[0].FinishedAt = "2026-11-08T11:00:00Z"
+	if err := store.RecordAuthority(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordAgents(presenceScan(agentauthority.StatusComplete, "cursor")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DiscardAuthority(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.pendingFor("cursor/mcp"); ok {
+		t.Fatal("authority result survived the opt-out")
+	}
+	if _, ok := store.pendingFor("cursor/presence"); !ok {
+		t.Fatal("presence belongs to no opt-out")
+	}
+	reopened := OpenInventoryStore(path, testInstallation)
+	if _, ok := reopened.pendingFor("cursor/mcp"); ok {
+		t.Fatal("discard was not persisted")
+	}
+	resumed := mcpScan(agentauthority.StatusPartial, "a")
+	resumed.Sources[0].Reasons = []string{agentauthority.ReasonWalkLimit}
+	resumed.Sources[0].FinishedAt = "2026-11-08T13:00:00Z"
+	if err := reopened.RecordAuthority(resumed); err != nil {
+		t.Fatal(err)
+	}
+	got := pendingOf(t, reopened, "cursor/mcp")
+	if got.Result.Revision != 3 || got.Result.FinishedAt != "2026-11-08T13:00:00Z" || !slices.Equal(mcpNames(got.Claims), []string{"a"}) {
+		t.Fatalf("resumed = %+v names %v", got.Result, mcpNames(got.Claims))
+	}
+}
+
+// A revision above the applied one cannot be an ordering problem: the server
+// refused the result for predating an opt-out this endpoint never saw.
+func TestStaleAboveAppliedRevisionDropsTheResult(t *testing.T) {
+	store, _ := openTestStore(t)
+	scan := presenceScan(agentauthority.StatusPartial, "cursor")
+	if err := store.RecordAgents(scan); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.acknowledge(ackBody(InventoryAck{ID: "cursor/presence", Revision: 1, Outcome: "stale", AppliedRevision: 0}), nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.pendingFor("cursor/presence"); ok {
+		t.Fatal("a result older than the clear point would retry forever")
+	}
+	if _, ok := store.pendingFor("codex/presence"); !ok {
+		t.Fatal("a verdict on one source touched another")
+	}
+	if err := store.RecordAgents(presenceScan(agentauthority.StatusPartial)); err != nil {
+		t.Fatal(err)
+	}
+	got := pendingOf(t, store, "cursor/presence")
+	if got.Result.Revision != 2 || got.Claims.Agent != nil {
+		t.Fatalf("next scan inherited the dropped result: %+v", got)
+	}
+}
+
+func TestStaleAboveAppliedKeepsANewerResult(t *testing.T) {
+	store, _ := openTestStore(t)
+	for range 2 {
+		if err := store.RecordAgents(presenceScan(agentauthority.StatusComplete)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.acknowledge(ackBody(InventoryAck{ID: "cursor/presence", Revision: 1, Outcome: "stale", AppliedRevision: 0}), nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingOf(t, store, "cursor/presence").Result.Revision; got != 2 {
+		t.Fatalf("revision = %d", got)
+	}
+}
