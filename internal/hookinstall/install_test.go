@@ -89,6 +89,34 @@ func read(t *testing.T, path string) string {
 	return string(b)
 }
 
+func TestSkipAgentWritesNothingForThatAgentAndNeverBlocksRemoval(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	binary := filepath.Join(t.TempDir(), "kontext")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skip := func(agent string) bool { return agent == "cursor" }
+	if err := Install(Options{Scope: User, Home: home, Binary: binary, NoBackup: true, SkipAgent: skip}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".cursor")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("skipped agent got a folder: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); err != nil {
+		t.Fatalf("other agents must install: %v", err)
+	}
+	if err := Install(Options{Scope: User, Home: home, Binary: binary, NoBackup: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(Options{Scope: User, Home: home, Binary: binary, NoBackup: true, SkipAgent: skip}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".cursor", "hooks.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removal must ignore SkipAgent: %v", err)
+	}
+}
+
 func TestDefinitionsInstallRemove(t *testing.T) {
 	for _, scope := range []Scope{User, System} {
 		t.Run(string(scope), func(t *testing.T) {

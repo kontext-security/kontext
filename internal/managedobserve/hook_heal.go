@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
@@ -51,6 +52,37 @@ func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log di
 // selfServeHookHealer gates on the config source, not on file paths, and on a
 // Homebrew binary, the stable path every hook names. It returns nil when the
 // daemon must leave hook files alone; the healer reports whether it changed one.
+// HookRepairAvailable reports whether this install's daemon adds hooks later,
+// which is what lets setup leave out an agent that is not on the machine yet.
+func HookRepairAvailable() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	brew, _, ok := currentExecutableBrewPath()
+	return ok && runningStableBinary(filepath.Join(filepath.Dir(brew), "kontext"))
+}
+
+// runningStableBinary reports whether this process is the executable every hook
+// names. The healer refuses to write hooks for any other.
+func runningStableBinary(binary string) bool {
+	exe, err := executablePath()
+	if err != nil {
+		return false
+	}
+	running, err := os.Stat(exe)
+	if err != nil {
+		return false
+	}
+	installed, err := os.Stat(binary)
+	return err == nil && os.SameFile(running, installed)
+}
+
+func agentAbsent(home, agent string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return agentinventory.Absent(ctx, home, os.Getenv, agent)
+}
+
 func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func() bool {
 	if runtime.GOOS != "darwin" || loaded.Scope != managedconfig.ScopeUser {
 		return nil
@@ -79,15 +111,7 @@ func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logge
 		}
 		// After Homebrew retargets the symlink this process is the old version;
 		// the binary watchdog restarts it, and the new one installs its hooks.
-		exe, err := executablePath()
-		if err != nil {
-			return false
-		}
-		running, err := os.Stat(exe)
-		if err != nil {
-			return false
-		}
-		if installed, err := os.Stat(binary); err != nil || !os.SameFile(running, installed) {
+		if !runningStableBinary(binary) {
 			return false
 		}
 		var guarded, changed []string
@@ -97,6 +121,7 @@ func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logge
 		for _, kinds := range [][]string{{"claude-user"}, {"codex", "feature"}, {"cursor"}, {"antigravity"}} {
 			err := hookinstall.Install(hookinstall.Options{
 				Scope: hookinstall.User, Home: home, Binary: binary, NoBackup: true, SetupPaths: true,
+				SkipAgent: func(agent string) bool { return agentAbsent(home, agent) },
 				Skip: func(file hookinstall.File) bool {
 					if !slices.Contains(kinds, file.Kind) {
 						return true

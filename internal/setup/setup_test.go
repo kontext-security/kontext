@@ -192,6 +192,26 @@ func allowLoopback(t *testing.T) {
 	t.Setenv(managedconfig.EnvAllowHTTP, "1")
 }
 
+func TestRunSkipsHooksForAbsentAgents(t *testing.T) {
+	h := newHarness(t)
+	allowLoopback(t)
+	server := pingServer(t, "tok-123")
+	overrideVar(t, &hookAgentAbsent, func(_, agent string) bool { return agent == "cursor" })
+
+	if err := Run(context.Background(), h.options("tok-123", server)); err != nil {
+		t.Fatalf("Run() error = %v\nstdout:\n%s\nstderr:\n%s", err, h.out.String(), h.errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(h.home, ".cursor")); !os.IsNotExist(err) {
+		t.Fatalf("absent agent got a folder: %v", err)
+	}
+	if strings.Contains(h.out.String(), "Cursor hooks installed") || !strings.Contains(h.out.String(), "Not found: Cursor") {
+		t.Fatalf("setup output:\n%s", h.out.String())
+	}
+	if _, err := os.Stat(filepath.Join(h.home, ".codex", "hooks.json")); err != nil {
+		t.Fatalf("present agents must install: %v", err)
+	}
+}
+
 func TestRunFullFlow(t *testing.T) {
 	h := newHarness(t)
 	allowLoopback(t)

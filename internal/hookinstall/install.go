@@ -208,6 +208,9 @@ type Options struct {
 	Report       func(Result)
 	// Skip leaves a file out entirely, e.g. one the caller must not read.
 	Skip func(File) bool
+	// SkipAgent leaves out an agent that is not on this machine. Only installs
+	// consult it: removal must reach whatever an earlier install wrote.
+	SkipAgent func(agent string) bool
 	// NoBackup skips the timestamped backup before a change. The daemon's
 	// repairs only re-add Kontext's own entries; a backup per repair would
 	// pile up while something keeps removing them.
@@ -249,6 +252,9 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 	}
 	var changes []change
 	for _, def := range defs {
+		if !remove && opts.SkipAgent != nil && opts.SkipAgent(def.Agent) {
+			continue
+		}
 		for _, file := range def.Files {
 			if opts.Skip != nil && opts.Skip(file) {
 				continue
