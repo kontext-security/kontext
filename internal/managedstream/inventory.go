@@ -3,6 +3,7 @@ package managedstream
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -178,6 +179,9 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 	if s.file.Health.IncompleteSources == nil {
 		s.file.Health.IncompleteSources = map[string]bool{}
 	}
+	// Each batch restates its kind, so a source it no longer reports stops counting.
+	presence := isPresence(results[0].ID)
+	maps.DeleteFunc(s.file.Health.IncompleteSources, func(id string, _ bool) bool { return isPresence(id) == presence })
 	for _, result := range results {
 		result.Revision = s.file.Revision
 		agent, family, _ := strings.Cut(result.ID, "/")
@@ -186,9 +190,7 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 			entry = mergePending(prior, entry)
 		}
 		s.file.Pending[result.ID] = entry
-		if result.Status == agentauthority.StatusComplete {
-			delete(s.file.Health.IncompleteSources, result.ID)
-		} else {
+		if result.Status != agentauthority.StatusComplete {
 			s.file.Health.IncompleteSources[result.ID] = true
 		}
 	}
@@ -395,14 +397,11 @@ func (s *InventoryStore) acknowledge(acks []InventoryAck, sent []agentauthority.
 func (s *InventoryStore) DiscardAuthority() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	discarded := false
-	for id := range s.file.Pending {
-		if !isPresence(id) {
-			delete(s.file.Pending, id)
-			discarded = true
-		}
-	}
-	if !discarded {
+	authority := func(id string) bool { return !isPresence(id) }
+	before := len(s.file.Pending) + len(s.file.Health.IncompleteSources)
+	maps.DeleteFunc(s.file.Pending, func(id string, _ pendingSource) bool { return authority(id) })
+	maps.DeleteFunc(s.file.Health.IncompleteSources, func(id string, _ bool) bool { return authority(id) })
+	if len(s.file.Pending)+len(s.file.Health.IncompleteSources) == before {
 		return nil
 	}
 	return s.save()
