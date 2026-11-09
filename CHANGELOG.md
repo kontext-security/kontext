@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.1](https://github.com/kontext-security/kontext/compare/v1.21.0...v1.21.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **inventory:** accept kubeconfigs with repeated keys ([#726](https://github.com/kontext-security/kontext/issues/726)) ([434237b](https://github.com/kontext-security/kontext/commit/434237b1283d37d6e06ccab0b7f9daf873369653))
+
 ## [1.21.0](https://github.com/kontext-security/kontext/compare/v1.20.0...v1.21.0) (2026-11-09)
 
 
