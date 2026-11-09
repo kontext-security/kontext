@@ -234,9 +234,7 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	if !s.grantHold(&ctx, conn, &req) {
-		return
-	}
+	ctx = s.grantHold(ctx, conn, &req)
 
 	ctx, finish := runtimecore.WithResponseWork(ctx)
 	// A failed response write still owes the settled decision its audit record.
@@ -270,27 +268,27 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 // grantHold tells a hook that can wait (HoldCapability) that its PreToolUse
 // call is held until the policy arrives, when HoldFor says so, and carries
 // the hold's end in ctx for the decision. A request without the capability
-// is never held and never sees the frame. It reports false only when the
-// hook is gone before the hold frame could be written.
-func (s *Service) grantHold(ctx *context.Context, conn net.Conn, req *EvaluateRequest) bool {
+// is never held and never sees the frame. When the hook is gone before the
+// frame could be written, the call is not held but still decided and
+// recorded, as a failed answer write is.
+func (s *Service) grantHold(ctx context.Context, conn net.Conn, req *EvaluateRequest) context.Context {
 	if s.holdFor == nil || !req.Accepts(HoldCapability) {
-		return true
+		return ctx
 	}
 	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
 	if err != nil || event.HookName != hook.HookPreToolUse {
-		return true
+		return ctx
 	}
 	hold := s.holdFor(event)
 	if hold <= 0 {
-		return true
+		return ctx
 	}
 	holdMs := (hold + time.Millisecond - 1) / time.Millisecond
 	if err := WriteMessage(conn, EvaluateResult{Type: HoldResultType, HoldMs: int64(holdMs)}); err != nil {
 		s.diagnostic.Printf("local runtime write hold: %v\n", err)
-		return false
+		return ctx
 	}
-	*ctx = policyhold.WithDeadline(*ctx, time.Now().Add(hold))
-	return true
+	return policyhold.WithDeadline(ctx, time.Now().Add(hold))
 }
 
 // handleCompact answers a tool output compaction request. It records nothing:

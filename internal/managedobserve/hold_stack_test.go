@@ -81,6 +81,13 @@ func (s *arrivingPolicy) Current() cedarpolicy.Snapshot {
 // was up.
 func startHoldingHost(t *testing.T, mode guardhookruntime.Mode, arriveAfter, wait time.Duration) (string, time.Time) {
 	t.Helper()
+	return startHoldingHostIn(t, context.Background(), mode, arriveAfter, wait)
+}
+
+// startHoldingHostIn is startHoldingHost serving in ctx, as RunDaemon serves
+// in its signal-cancelled context.
+func startHoldingHostIn(t *testing.T, ctx context.Context, mode guardhookruntime.Mode, arriveAfter, wait time.Duration) (string, time.Time) {
+	t.Helper()
 	t.Setenv("KONTEXT_STEP_SAFETY_SHADOW", "0")
 	enforcement := server.CedarEnforcementStatic
 	if mode == guardhookruntime.ModeRemote {
@@ -89,7 +96,7 @@ func startHoldingHost(t *testing.T, mode guardhookruntime.Mode, arriveAfter, wai
 	started := time.Now()
 	policies := &arrivingPolicy{deployment: writeBlockDeployment(t)}
 	policies.arrive.Store(started.Add(time.Hour).UnixNano())
-	host, err := runtimehost.Start(context.Background(), runtimehost.Options{
+	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          "claude",
 		CWD:                t.TempDir(),
 		DBPath:             filepath.Join(t.TempDir(), "guard.db"),
@@ -158,6 +165,26 @@ func TestHookLetThroughWhenTheHoldEnds(t *testing.T) {
 			}
 			if took < time.Second || took > 2500*time.Millisecond {
 				t.Fatalf("took %v (host up %v before the call), want about the rest of the 2 s hold", took, start.Sub(up))
+			}
+		})
+	}
+}
+
+// A daemon stopping during a hold (SIGTERM, a kickstart replacing the
+// binary) lets the held call through as at the hold's end, in both postures
+// that can block, instead of denying it as an evaluation failure.
+func TestHookHeldWhileTheDaemonStopsIsLetThrough(t *testing.T) {
+	for _, mode := range []guardhookruntime.Mode{guardhookruntime.ModeEnforce, guardhookruntime.ModeRemote} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			socket, _ := startHoldingHostIn(t, ctx, mode, time.Hour, 3*time.Second)
+			lifecycle := Lifecycle{SocketPath: socket, Label: DefaultLaunchdLabel, Mode: string(mode), Kickstart: func(context.Context, string) error { return nil }}
+
+			time.AfterFunc(200*time.Millisecond, cancel)
+			result := lifecycle.Process(context.Background(), stackWriteCall("toolu_stopping"))
+			if result.Decision == hook.DecisionDeny {
+				t.Fatalf("result = %+v, want the call let through when the daemon stops during the hold", result)
 			}
 		})
 	}

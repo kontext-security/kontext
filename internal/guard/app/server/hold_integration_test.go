@@ -32,6 +32,13 @@ func (s arrivingDeployment) Current() cedarpolicy.Snapshot {
 // calls while enrolment is awaited, until hold after start.
 func holdingDaemon(t *testing.T, arriveAfter, hold time.Duration) string {
 	t.Helper()
+	return holdingDaemonIn(t, context.Background(), arriveAfter, hold)
+}
+
+// holdingDaemonIn is holdingDaemon serving in ctx, as the daemon serves in
+// its signal-cancelled context.
+func holdingDaemonIn(t *testing.T, ctx context.Context, arriveAfter, hold time.Duration) string {
+	t.Helper()
 	store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +68,7 @@ func holdingDaemon(t *testing.T, arriveAfter, hold time.Duration) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Start(context.Background()); err != nil {
+	if err := service.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(service.Stop)
@@ -138,5 +145,29 @@ func TestOldHookIsNotHeld(t *testing.T) {
 	}
 	if result.Decision == hook.DecisionDeny {
 		t.Fatalf("Decision = deny before the policy arrived; want today's answer without a policy")
+	}
+}
+
+// A daemon stopping during a hold (SIGTERM, a kickstart replacing the
+// binary) ends the hold early: the call is decided as when the hold runs
+// out, not denied because the evaluation was cancelled.
+func TestHeldCallIsDecidedWhenTheDaemonStops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	socket := holdingDaemonIn(t, ctx, time.Hour, 3*time.Second)
+	client := localruntime.NewClient(socket)
+	client.Timeout = time.Second
+
+	time.AfterFunc(200*time.Millisecond, cancel)
+	start := time.Now()
+	result, held, err := client.ProcessHoldable(context.Background(), writeCall("toolu_stopping"), 3*time.Second)
+	if err != nil || !held {
+		t.Fatalf("held = %v, err = %v; want a held call that is answered", held, err)
+	}
+	if result.Decision == hook.DecisionDeny {
+		t.Fatalf("Decision = deny (%s), want the call let through as at the hold's end", result.Reason)
+	}
+	if took := time.Since(start); took > 1500*time.Millisecond {
+		t.Fatalf("took %v, want soon after the daemon stopped at 200 ms", took)
 	}
 }

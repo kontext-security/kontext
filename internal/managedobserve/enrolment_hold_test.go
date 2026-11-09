@@ -1,7 +1,9 @@
 package managedobserve
 
 import (
+	"bytes"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,5 +69,17 @@ func TestEnrolmentWaitOverride(t *testing.T) {
 		if got := enrolmentWait(quiet); got != tc.want {
 			t.Fatalf("%s=%q: wait = %v, want %v", enrolmentWaitEnv, tc.value, got, tc.want)
 		}
+	}
+}
+
+// A wait longer than the hook will hold is cut to the hook's cap, and says so.
+func TestEnrolmentWaitOverrideAboveTheCapIsReported(t *testing.T) {
+	var out bytes.Buffer
+	t.Setenv(enrolmentWaitEnv, "10s")
+	if got := enrolmentWait(diagnostic.New(&out, true)); got != maxPolicyHold {
+		t.Fatalf("wait = %v, want the %v cap", got, maxPolicyHold)
+	}
+	if !strings.Contains(out.String(), enrolmentWaitEnv) {
+		t.Fatalf("diagnostic = %q, want a line naming %s", out.String(), enrolmentWaitEnv)
 	}
 }

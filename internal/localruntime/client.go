@@ -36,7 +36,9 @@ func (c Client) Process(ctx context.Context, event hook.Event) (hook.Result, err
 // the daemon answers with a hold frame first, the deadline moves to the end
 // of the hold, at most maxHold away, plus the client's Timeout again for
 // the decision itself. held reports whether a hold frame arrived, so the
-// caller does not retry a call that already spent its hold.
+// caller does not retry a call that already spent its hold. Cancelling ctx
+// ends the call at once, so ctx must not carry the decision budget: that is
+// Timeout, which a hold is meant to outlast.
 func (c Client) ProcessHoldable(ctx context.Context, event hook.Event, maxHold time.Duration) (result hook.Result, held bool, err error) {
 	req, err := EvaluateRequestFromEvent(event)
 	if err != nil {
@@ -53,26 +55,40 @@ func (c Client) ProcessHoldable(ctx context.Context, event hook.Event, maxHold t
 		return hook.Result{}, false, err
 	}
 	defer conn.Close()
+	// A cancelled caller cuts the connection's deadline to now, which ends
+	// any read, including one waiting through a hold.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
+	failed := func(err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
-		return hook.Result{}, false, err
+		return hook.Result{}, false, failed(err)
 	}
 	if err := WriteMessage(conn, req); err != nil {
-		return hook.Result{}, false, err
+		return hook.Result{}, false, failed(err)
 	}
 	var answer EvaluateResult
 	if err := ReadMessage(conn, &answer); err != nil {
-		return hook.Result{}, false, err
+		return hook.Result{}, false, failed(err)
 	}
 	if answer.Type == HoldResultType {
 		held = true
 		hold := min(time.Duration(answer.HoldMs)*time.Millisecond, maxHold)
 		hold = max(hold, 0)
 		if err := conn.SetDeadline(time.Now().Add(hold + timeout)); err != nil {
+			return hook.Result{}, held, failed(err)
+		}
+		// A cancel that landed before the new deadline was set would be lost.
+		if err := ctx.Err(); err != nil {
 			return hook.Result{}, held, err
 		}
 		answer = EvaluateResult{}
 		if err := ReadMessage(conn, &answer); err != nil {
-			return hook.Result{}, held, err
+			return hook.Result{}, held, failed(err)
 		}
 		if answer.Type == HoldResultType {
 			return hook.Result{}, held, errors.New("local runtime: a second hold frame")

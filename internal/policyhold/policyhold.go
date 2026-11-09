@@ -15,15 +15,28 @@ import (
 
 type contextKey struct{}
 
+type hold struct {
+	deadline time.Time
+	stop     <-chan struct{}
+}
+
 // WithDeadline returns a context in which the policy decision may wait for
-// the policy until deadline.
+// the policy until deadline. The returned context is not cancelled with
+// ctx: a held call is decided and recorded to the end even when the daemon
+// stops during the hold, as it would be once the hold ran out. ctx's
+// cancellation instead ends the wait early (see Deadline).
 func WithDeadline(ctx context.Context, deadline time.Time) context.Context {
-	return context.WithValue(ctx, contextKey{}, deadline)
+	return context.WithValue(context.WithoutCancel(ctx), contextKey{}, hold{deadline: deadline, stop: ctx.Done()})
 }
 
 // Deadline reports until when the policy decision may wait for the policy,
-// and false when the request was granted no hold.
-func Deadline(ctx context.Context) (time.Time, bool) {
-	deadline, ok := ctx.Value(contextKey{}).(time.Time)
-	return deadline, ok && !deadline.IsZero()
+// a channel that closes when the wait should end early because the daemon
+// is stopping (nil when it never will), and false when the request was
+// granted no hold.
+func Deadline(ctx context.Context) (deadline time.Time, stop <-chan struct{}, ok bool) {
+	h, ok := ctx.Value(contextKey{}).(hold)
+	if !ok || h.deadline.IsZero() {
+		return time.Time{}, nil, false
+	}
+	return h.deadline, h.stop, true
 }

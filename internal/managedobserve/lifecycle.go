@@ -160,9 +160,7 @@ func (l Lifecycle) processWithKickstart(ctx context.Context, event hook.Event, b
 		if !l.reach(restartCtx) {
 			return daemonUnavailable()
 		}
-		callCtx, cancelCall := context.WithTimeout(ctx, budget)
-		result, held, err := l.callGating(callCtx, event)
-		cancelCall()
+		result, held, err := l.callGating(ctx, event, budget)
 		if err == nil {
 			return l.finalize(event, result)
 		}
@@ -288,14 +286,20 @@ func (l Lifecycle) waitForProbe(ctx context.Context) bool {
 // callGating is call for a hook that gates something. A PreToolUse call can
 // be held by a fresh daemon until its policy arrives: the hook then waits up
 // to maxPolicyHold more, plus the decision budget again. held reports that
-// it was.
-func (l Lifecycle) callGating(ctx context.Context, event hook.Event) (result hook.Result, held bool, err error) {
+// it was. The budget goes to the client as its timeout, not into ctx: a
+// held call has to outlast it, while ctx still cancels the call.
+func (l Lifecycle) callGating(ctx context.Context, event hook.Event, budget time.Duration) (result hook.Result, held bool, err error) {
 	if event.HookName != hook.HookPreToolUse {
-		result, err = l.call(ctx, event)
+		callCtx, cancel := context.WithTimeout(ctx, budget)
+		defer cancel()
+		result, err = l.call(callCtx, event)
 		return result, false, err
 	}
 	client := localruntime.NewClient(l.SocketPath)
-	client.Timeout = time.Until(deadlineOr(ctx, time.Now().Add(asyncHookWait)))
+	client.Timeout = budget
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < budget {
+		client.Timeout = time.Until(deadline)
+	}
 	if client.Timeout <= 0 {
 		client.Timeout = asyncHookWait
 	}

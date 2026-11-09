@@ -17,11 +17,12 @@ import (
 const defaultEnrolmentWait = 3 * time.Second
 
 // enrolmentWaitEnv overrides defaultEnrolmentWait with a Go duration such as
-// "1500ms"; "0" holds nothing.
+// "1500ms", at most maxPolicyHold, which is as long as a hook will wait;
+// "0" holds nothing.
 const enrolmentWaitEnv = "KONTEXT_ENROLMENT_WAIT"
 
 // enrolmentWait reads the override, keeping the default for an unset or
-// unreadable value and saying so for the latter.
+// unreadable value and the cap for a longer one, and saying so for both.
 func enrolmentWait(diag diagnostic.Logger) time.Duration {
 	raw := strings.TrimSpace(os.Getenv(enrolmentWaitEnv))
 	if raw == "" {
@@ -35,7 +36,11 @@ func enrolmentWait(diag diagnostic.Logger) time.Duration {
 		diag.Printf("%s=%q is not a duration of zero or more; holding up to %s\n", enrolmentWaitEnv, raw, defaultEnrolmentWait)
 		return defaultEnrolmentWait
 	}
-	return min(wait, maxPolicyHold)
+	if wait > maxPolicyHold {
+		diag.Printf("%s=%q is longer than a hook waits; holding up to %s\n", enrolmentWaitEnv, raw, maxPolicyHold)
+		return maxPolicyHold
+	}
+	return wait
 }
 
 // enrolmentHold says how long a PreToolUse call may be held: only where a

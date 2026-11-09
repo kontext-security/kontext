@@ -65,10 +65,7 @@ func (p *cedarPolicyProvider) DecideHook(ctx context.Context, event risk.HookEve
 		return p.current.DecideHook(ctx, event)
 	}
 
-	snapshot, err := p.awaitPolicy(ctx)
-	if err != nil {
-		return risk.RiskDecision{}, err
-	}
+	snapshot, _ := p.awaitPolicy(ctx)
 	claimsAuthority := p.claimsAuthority(snapshot)
 	decision := risk.RiskDecision{}
 	currentAction := cedareval.EffectiveExecutionActionAllow
@@ -100,12 +97,13 @@ const policyPoll = 20 * time.Millisecond
 // for the policy until the hold ends, so a fresh daemon's first calls are
 // decided by the policy rather than let through before it arrives
 // (ENG-939). When the hold ends first, the call is decided with what is
-// there. A request without a hold never waits.
-func (p *cedarPolicyProvider) awaitPolicy(ctx context.Context) (cedarpolicy.Snapshot, error) {
-	snapshot := p.snapshots.Current()
-	deadline, held := policyhold.Deadline(ctx)
+// there, and the same when the daemon stops during the hold or the call is
+// cancelled, which stopped reports. A request without a hold never waits.
+func (p *cedarPolicyProvider) awaitPolicy(ctx context.Context) (snapshot cedarpolicy.Snapshot, stopped bool) {
+	snapshot = p.snapshots.Current()
+	deadline, stop, held := policyhold.Deadline(ctx)
 	if !held {
-		return snapshot, nil
+		return snapshot, false
 	}
 	for cedarpolicy.AwaitingEnrolment(snapshot.State) {
 		remaining := time.Until(deadline)
@@ -114,14 +112,17 @@ func (p *cedarPolicyProvider) awaitPolicy(ctx context.Context) (cedarpolicy.Snap
 		}
 		wait := time.NewTimer(min(remaining, policyPoll))
 		select {
+		case <-stop:
+			wait.Stop()
+			return p.snapshots.Current(), true
 		case <-ctx.Done():
 			wait.Stop()
-			return cedarpolicy.Snapshot{}, ctx.Err()
+			return p.snapshots.Current(), true
 		case <-wait.C:
 		}
 		snapshot = p.snapshots.Current()
 	}
-	return snapshot, nil
+	return snapshot, false
 }
 
 func (p *cedarPolicyProvider) claimsAuthority(snapshot cedarpolicy.Snapshot) bool {

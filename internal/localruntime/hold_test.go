@@ -2,6 +2,7 @@ package localruntime
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -36,7 +37,7 @@ func TestHoldableClientWaitsThroughAHold(t *testing.T) {
 	var sawDeadline bool
 	runtime := &stubRuntime{}
 	runtime.evaluateCtx = func(ctx context.Context) (hook.Result, error) {
-		_, sawDeadline = policyhold.Deadline(ctx)
+		_, _, sawDeadline = policyhold.Deadline(ctx)
 		time.Sleep(250 * time.Millisecond)
 		return hook.Result{Decision: hook.DecisionDeny, Reason: "policy"}, nil
 	}
@@ -64,7 +65,7 @@ func TestServiceHoldsNothingWithoutTheCapability(t *testing.T) {
 	var sawDeadline bool
 	runtime := &stubRuntime{}
 	runtime.evaluateCtx = func(ctx context.Context) (hook.Result, error) {
-		_, sawDeadline = policyhold.Deadline(ctx)
+		_, _, sawDeadline = policyhold.Deadline(ctx)
 		return hook.Result{Decision: hook.DecisionDeny, Reason: "policy"}, nil
 	}
 	service := newHoldService(t, runtime, func(hook.Event) time.Duration { return time.Second })
@@ -213,5 +214,55 @@ func TestHoldableClientRefusesASecondHold(t *testing.T) {
 	client.Timeout = time.Second
 	if _, held, err := client.ProcessHoldable(context.Background(), preToolUse("toolu_twice"), time.Second); err == nil || !held {
 		t.Fatalf("held = %v, err = %v; want an error after a second hold frame", held, err)
+	}
+}
+
+// A hook that goes away before the hold frame can be written still gets its
+// call decided and recorded, as a failed answer write always did.
+func TestServiceDecidesACallWhoseHookLeftBeforeTheHold(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow}}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatalf("runtimecore.New() error = %v", err)
+	}
+	service, err := NewService(Options{SocketPath: "unused", Core: core, AgentName: "claude", HoldFor: func(hook.Event) time.Duration { return time.Second }})
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	daemonSide, hookSide := net.Pipe()
+	req, err := EvaluateRequestFromEvent(preToolUse("toolu_gone"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Capabilities = []string{HoldCapability}
+	go func() {
+		_ = WriteMessage(hookSide, req)
+		_ = hookSide.Close()
+	}()
+	service.handleConn(context.Background(), daemonSide)
+	if calls := runtime.evaluateCalls.Load(); calls != 1 {
+		t.Fatalf("evaluations = %d, want the call decided once", calls)
+	}
+}
+
+// A hook whose caller cancels during a hold returns at once, not at the end
+// of the extended deadline.
+func TestHoldableClientStopsWaitingWhenCancelled(t *testing.T) {
+	t.Parallel()
+
+	path := fakeDaemon(t, EvaluateResult{Type: HoldResultType, HoldMs: 10_000})
+	client := NewClient(path)
+	client.Timeout = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	_, held, err := client.ProcessHoldable(ctx, preToolUse("toolu_cancelled"), 3*time.Second)
+	if !held || !errors.Is(err, context.Canceled) {
+		t.Fatalf("held = %v, err = %v; want a held call ended by context.Canceled", held, err)
+	}
+	if took := time.Since(start); took > 800*time.Millisecond {
+		t.Fatalf("took %v, want soon after the 100 ms cancel", took)
 	}
 }
