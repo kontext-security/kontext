@@ -117,11 +117,14 @@
                   Execute="deferred" Impersonate="no" HideTarget="yes" Return="check" />
     <CustomAction Id="KontextCommitConfig" BinaryRef="KontextInstallScript" JScriptCall="CommitConfig"
                   Execute="commit" Impersonate="no" Return="ignore" />
-    <!-- A full uninstall keeps managed.json and the token until it commits. -->
+    <!-- A full uninstall keeps managed.json and the token until it commits.
+         If removing them fails, the uninstall fails and rolls back rather than
+         leave the token behind. The task and hooks steps don't stop an
+         uninstall: what they leave behind names a program that is gone. -->
     <CustomAction Id="KontextRemoveConfigRollback" BinaryRef="KontextInstallScript" JScriptCall="RollbackConfig"
                   Execute="rollback" Impersonate="no" Return="ignore" />
     <CustomAction Id="KontextRemoveConfig" BinaryRef="KontextInstallScript" JScriptCall="RemoveConfig"
-                  Execute="deferred" Impersonate="no" Return="ignore" />
+                  Execute="deferred" Impersonate="no" Return="check" />
     <CustomAction Id="KontextCommitRemoveConfig" BinaryRef="KontextInstallScript" JScriptCall="CommitRemoveConfig"
                   Execute="commit" Impersonate="no" Return="ignore" />
 

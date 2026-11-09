@@ -211,12 +211,17 @@ Registry.prototype.path = function (key, name) {
     return REG_ROOT + "\\" + key + "\\" + name;
 };
 
-// get returns the value, or null if the key or value is missing.
+// get returns the value, or null if the key or value is missing. Any other
+// error, such as access denied, is thrown: a value that can't be read is not
+// a value that isn't there.
 Registry.prototype.get = function (key, name) {
     try {
         return String(this.shell.RegRead(this.path(key, name)));
     } catch (e) {
-        return null;
+        if (missing(e)) {
+            return null;
+        }
+        throw e;
     }
 };
 
@@ -245,6 +250,13 @@ Registry.prototype.removeKeyIfEmpty = function (key) {
     this.shell.RegDelete(REG_ROOT + "\\" + key + "\\");
     return true;
 };
+
+// missing reports RegRead's error for a key or value that doesn't exist:
+// ERROR_FILE_NOT_FOUND or ERROR_PATH_NOT_FOUND as an HRESULT.
+function missing(e) {
+    var code = e.number >>> 0;
+    return code === 0x80070002 || code === 0x80070003;
+}
 
 function present(name) {
     return typeof name !== "undefined" && name !== null && String(name) !== "";
