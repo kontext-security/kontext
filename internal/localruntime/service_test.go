@@ -403,6 +403,7 @@ func newTestServiceWithOptions(t *testing.T, opts Options) *Service {
 		OffersCompaction:  opts.OffersCompaction,
 		CodexProxy:        opts.CodexProxy,
 		Observe:           opts.Observe,
+		HoldFor:           opts.HoldFor,
 		Diagnostic:        opts.Diagnostic,
 	})
 	if err != nil {
@@ -430,6 +431,9 @@ type stubRuntime struct {
 	// evaluate, when set, answers EvaluateHook instead of evaluateResult and
 	// evaluateErr; call counts from 1.
 	evaluate func(call int32, event hook.Event) (hook.Result, error)
+	// evaluateCtx, when set, answers EvaluateHook first and sees the
+	// request's context.
+	evaluateCtx func(ctx context.Context) (hook.Result, error)
 }
 
 func (s *stubRuntime) ObserveAsyncEvent(event hook.Event) {
@@ -443,6 +447,9 @@ func (s *stubRuntime) EvaluateHook(ctx context.Context, event hook.Event) (hook.
 	call := s.evaluateCalls.Add(1)
 	if s.afterResponse != nil {
 		runtimecore.AfterResponse(ctx, s.afterResponse)
+	}
+	if s.evaluateCtx != nil {
+		return s.evaluateCtx(ctx)
 	}
 	if s.evaluate != nil {
 		return s.evaluate(call, event)

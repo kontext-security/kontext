@@ -172,6 +172,13 @@ const (
 	StateUnavailable          State = "unavailable"
 )
 
+// AwaitingEnrolment reports whether the state means the endpoint has no
+// policy yet because it is not enrolled: the cloud does not know its
+// principal yet, or no fetch has answered at all.
+func AwaitingEnrolment(state State) bool {
+	return state == StatePrincipalUnavailable || state == ""
+}
+
 type StateResponse struct {
 	ResponseVersion                  int    `json:"responseVersion"`
 	RequestContractVersion           int    `json:"requestContractVersion"`

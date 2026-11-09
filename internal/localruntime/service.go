@@ -13,6 +13,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/policyhold"
 	"github.com/kontext-security/kontext/internal/runtimecore"
 )
 
@@ -31,6 +32,7 @@ type Service struct {
 	offers        func(hook.Event) bool
 	codexProxy    func(context.Context, json.RawMessage) json.RawMessage
 	observe       func(context.Context, hook.Event)
+	holdFor       func(hook.Event) time.Duration
 	diagnostic    diagnostic.Logger
 	duplicates    *duplicateHooks
 	pendingEvents atomic.Int64
@@ -62,7 +64,11 @@ type Options struct {
 	CodexProxy func(context.Context, json.RawMessage) json.RawMessage
 	// Observe sees every evaluated event once its response is written and
 	// its ingest is done, so it never delays a hook.
-	Observe    func(context.Context, hook.Event)
+	Observe func(context.Context, hook.Event)
+	// HoldFor says how long a PreToolUse call from a hook that can wait may
+	// be held until the policy arrives; zero holds nothing. Without it no
+	// call is held.
+	HoldFor    func(hook.Event) time.Duration
 	Diagnostic diagnostic.Logger
 }
 
@@ -85,6 +91,7 @@ func NewService(opts Options) (*Service, error) {
 		offers:      opts.OffersCompaction,
 		codexProxy:  opts.CodexProxy,
 		observe:     opts.Observe,
+		holdFor:     opts.HoldFor,
 		diagnostic:  opts.Diagnostic,
 		duplicates:  newDuplicateHooks(),
 	}, nil
@@ -227,6 +234,8 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
+	ctx = s.grantHold(ctx, conn, &req)
+
 	ctx, finish := runtimecore.WithResponseWork(ctx)
 	// A failed response write still owes the settled decision its audit record.
 	defer finish()
@@ -254,6 +263,32 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 			s.observe(context.WithoutCancel(ctx), event)
 		}
 	}
+}
+
+// grantHold tells a hook that can wait (HoldCapability) that its PreToolUse
+// call is held until the policy arrives, when HoldFor says so, and carries
+// the hold's end in ctx for the decision. A request without the capability
+// is never held and never sees the frame. When the hook is gone before the
+// frame could be written, the call is not held but still decided and
+// recorded, as a failed answer write is.
+func (s *Service) grantHold(ctx context.Context, conn net.Conn, req *EvaluateRequest) context.Context {
+	if s.holdFor == nil || !req.Accepts(HoldCapability) {
+		return ctx
+	}
+	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
+	if err != nil || event.HookName != hook.HookPreToolUse {
+		return ctx
+	}
+	hold := s.holdFor(event)
+	if hold <= 0 {
+		return ctx
+	}
+	holdMs := (hold + time.Millisecond - 1) / time.Millisecond
+	if err := WriteMessage(conn, EvaluateResult{Type: HoldResultType, HoldMs: int64(holdMs)}); err != nil {
+		s.diagnostic.Printf("local runtime write hold: %v\n", err)
+		return ctx
+	}
+	return policyhold.WithDeadline(ctx, time.Now().Add(hold))
 }
 
 // handleCompact answers a tool output compaction request. It records nothing:

@@ -139,6 +139,7 @@ func takeInstanceLock(socketPath string, log diagnostic.Logger) (func(), error) 
 }
 
 func RunDaemon(ctx context.Context, opts DaemonOptions) error {
+	started := time.Now()
 	binaryVersion := opts.BinaryVersion
 	if binaryVersion == "" {
 		binaryVersion = "dev"
@@ -326,6 +327,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		OffersCompaction:       compactor.Offers,
 		CodexProxy:             codexProxyAnswer(compactor),
 		ObserveEvent:           compactor.Observe,
+		HoldFor:                enrolmentHold(started, enrolmentWait(opts.Diagnostic), cedarEnforcement, cedarCache),
 	})
 	if err != nil {
 		return err
@@ -1128,7 +1130,7 @@ func (e *enrolmentRefresh) afterAcceptedPost() {
 	}
 	// An empty state means no fetch has worked yet. An accepted post shows the
 	// cloud is reachable, so try ahead of the refresher's backoff.
-	if state := e.cache.Current().State; state != cedarpolicy.StatePrincipalUnavailable && state != "" {
+	if !cedarpolicy.AwaitingEnrolment(e.cache.Current().State) {
 		return
 	}
 	select {
