@@ -294,7 +294,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 			status.Healthy = false
 		}
 	} else {
-		warn("install token is not readable (%v) — the agent cannot stream; re-run `kontext setup` or unlock your login keychain", err)
+		warn("install token is not readable (%v) — the agent cannot stream; %s", err, installTokenFixHint(tokenRef))
 		status.Healthy = false
 	}
 
@@ -793,4 +793,13 @@ func selfExecutablePath() string {
 		return resolved
 	}
 	return exe
+}
+
+// installTokenFixHint says how to fix a token doctor can't read, by where it
+// comes from: a registry value is set by an administrator or an MDM.
+func installTokenFixHint(ref managedconfig.TokenRef) string {
+	if ref.Source == "registry" {
+		return `an administrator has to set HKLM\` + managedconfig.InstallTokenRegistryKey + `\` + ref.Name + `, through the installer's INSTALL_TOKEN or an MDM policy`
+	}
+	return "re-run `kontext setup` or unlock your login keychain"
 }
