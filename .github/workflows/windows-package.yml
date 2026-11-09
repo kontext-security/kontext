@@ -74,7 +74,7 @@ jobs:
         run: |
           $reported = & dist\windows_amd64\kontext.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($reported -notmatch [regex]::Escape(" $env:KONTEXT_VERSION")) {
+          if ($reported -notmatch (" " + [regex]::Escape($env:KONTEXT_VERSION) + "( |$)")) {
             Write-Error "kontext.exe reports '$reported', the MSI is $env:KONTEXT_VERSION"
             exit 1
           }
