@@ -14,10 +14,7 @@ import (
 // Discovery owns locations;
 // the public authority package knows nothing about internal discovery types.
 func scanAuthority(ctx context.Context, scanner *agentauthority.Scanner, home string, inv agentinventory.Inventory) agentauthority.Report {
-	locations := make([]agentauthority.AgentLocation, 0, len(inv.Agents))
-	for _, agent := range inv.Agents {
-		locations = append(locations, agentauthority.AgentLocation{ID: agent.ID, ConfigPath: agent.ConfigPath})
-	}
+	locations := agentinventory.AuthorityLocations(home, os.Getenv, inv)
 	scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	return scanner.Scan(scanCtx, home, agentauthority.ProbeEnvironment(), locations, time.Now())

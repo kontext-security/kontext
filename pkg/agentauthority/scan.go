@@ -61,17 +61,13 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 			g.roots = append(g.roots, filepath.Join(opencodeDir, "opencode.json"), filepath.Join(opencodeDir, "opencode.jsonc"))
 		}
 	}
+	g.use("host", "credentials")
 	g.credentials()
-	root, _ := readConfig(&g, "claude_code", filepath.Join(home, ".claude.json"), readers.Claude)
-	projects := keys(root.Projects)
-	if len(projects) > 32 {
-		r.Coverage.Limits = append(r.Coverage.Limits, "claude_code: projects limited to 32")
-		projects = projects[:32]
-	}
 	for _, location := range agents {
+		// Past the deadline every read below fails at once, so the sources not
+		// reached still state the deadline instead of going unreported.
 		if ctx.Err() != nil {
 			r.Truncated = true
-			break
 		}
 		id := safe(location.ID, 128)
 		if id == "" {
@@ -85,9 +81,19 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 		}
 		switch id {
 		case "claude_code":
+			g.use(id, "mcp")
+			root, _ := readConfig(&g, id, filepath.Join(home, ".claude.json"), readers.Claude)
+			projects := keys(root.Projects)
+			if len(projects) > 32 {
+				r.Coverage.Limits = append(r.Coverage.Limits, "claude_code: projects limited to 32")
+				g.fail(ReasonWalkLimit)
+				projects = projects[:32]
+			}
 			g.claude(a, base, root, projects)
+			g.use(id, "connectors")
 			g.connectors(a, filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions"))
 		case "codex":
+			g.use(id, "mcp", "permissions")
 			if c, ok := readConfig(&g, id, filepath.Join(base, "config.toml"), readers.Codex); ok {
 				g.servers(a, c.MCPServers, filepath.Join(base, "config.toml"), "user", nil)
 				mode := c.SandboxMode
@@ -98,9 +104,12 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 			}
 		case "claude_cowork":
 			g.desktop(a)
+			g.use(id, "connectors")
 			g.connectors(a, filepath.Join(home, "Library/Application Support/Claude/local-agent-mode-sessions"))
 		case "cursor":
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(base, "mcp.json"), "mcpServers")
+			g.use(id, "permissions")
 			path := filepath.Join(home, "Library/Application Support/Cursor/User/globalStorage/state.vscdb")
 			if enabled, ok := readConfig(&g, id, path, parseJSON[*bool], "cursor"); ok && enabled != nil {
 				mode := "default"
@@ -110,51 +119,69 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 				a.Permissions.DefaultMode = pointer(safe(mode, 128))
 			}
 		case "windsurf":
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(home, ".codeium/windsurf/mcp_config.json"), "mcpServers")
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(home, "Library/Application Support/Windsurf/User/settings.json"), readers.Windsurf)
 		case "cline":
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(clineData, "settings/cline_mcp_settings.json"), "mcpServers")
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(clineData, "globalState.json"), readers.Cline)
 		case "copilot_cli":
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(base, "mcp-config.json"), "mcpServers")
 			g.generic(a, filepath.Join(home, "Library/Application Support/Code/User/mcp.json"), "servers")
 		case "gemini_cli":
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(base, "settings.json"), readers.Gemini)
 		case "antigravity":
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(home, ".gemini/config/mcp_config.json"), "mcpServers")
 		case "kiro":
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(base, "settings/mcp.json"), "mcpServers")
 		case "amp":
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(base, "settings.json"), "amp.mcpServers")
 		case "opencode":
+			g.use(id, "mcp", "permissions")
 			if opencodeDir != "" {
 				base = opencodeDir
 			}
 			g.layeredPermissions(a, base, []string{"opencode.json", "opencode.jsonc"}, readers.OpenCode)
 		case "openclaw":
 			// The canonical filename wins over the legacy Clawdbot filename.
+			g.use(id, "mcp", "plugins", "permissions")
 			for _, name := range []string{"openclaw.json", "clawdbot.json"} {
 				path := filepath.Join(base, name)
 				if c, ok := readConfig(&g, id, path, readers.OpenClaw); ok {
 					g.servers(a, c.MCPServers, path, "user", nil)
+					g.use(id, "plugins")
 					g.catalogPlugins(a, filepath.Join(base, "extensions"), "openclaw.plugin.json", readers.OpenClawManifest, c.PluginStates, c.PluginsDefault)
 					a.Permissions.DefaultMode = pointer(safe(c.DefaultMode, 128))
 					break
 				}
 			}
 		case "qwen_code":
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(base, "settings.json"), readers.Qwen)
+			g.use(id, "plugins")
 			states, _ := readConfig(&g, id, filepath.Join(base, "extensions/extension-enablement.json"), readers.QwenLegacyPluginStates)
 			if current, ok := readConfig(&g, id, filepath.Join(base, "extension-store/state.json"), readers.QwenPluginStates); ok {
 				states = current
 			}
 			g.catalogPlugins(a, filepath.Join(base, "extensions"), "qwen-extension.json", readers.ManifestJSON, states, true)
 		case "goose":
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(base, "config.yaml"), readers.Goose)
 		case "factory_droid":
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(base, "settings.json"), readers.Factory)
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(base, "mcp.json"), "mcpServers")
 		case "devin_cli":
+			g.use(id, "mcp", "permissions")
 			g.layeredPermissions(a, base, []string{"config.json", "mcp_config.json"}, readers.Devin)
 		case "kimi_code":
 			for _, key := range []string{"KIMI_CODE_HOME", "KIMI_SHARE_DIR"} {
@@ -166,13 +193,18 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 					break
 				}
 			}
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(base, "config.toml"), readers.Kimi)
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(base, "mcp.json"), "mcpServers")
 		case "auggie":
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(base, "settings.json"), readers.Auggie)
 		case "kilo":
+			g.use(id, "mcp", "permissions")
 			g.layeredPermissions(a, base, []string{"config.json", "kilo.json", "kilo.jsonc", "opencode.json", "opencode.jsonc"}, readers.OpenCode)
 		case "crush":
+			g.use(id, "mcp", "permissions")
 			path := filepath.Join(base, "crush.json")
 			if override := strings.TrimSpace(os.Getenv("CRUSH_GLOBAL_CONFIG")); override != "" {
 				path = configPath(home, override)
@@ -185,15 +217,21 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 			}
 			g.permissionConfig(a, path, readers.Crush)
 		case "junie":
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(base, "config.json"), readers.Junie)
+			g.use(id, "mcp")
 			g.generic(a, filepath.Join(base, "mcp/mcp.json"), "mcpServers")
 		case "grok_build":
+			g.use(id, "mcp", "permissions")
 			g.permissionConfig(a, filepath.Join(base, "config.toml"), readers.Grok)
 		case "hermes":
+			g.use(id, "mcp", "permissions", "plugins")
 			c := g.permissionConfig(a, filepath.Join(base, "config.yaml"), readers.Hermes)
+			g.use(id, "plugins")
 			g.catalogPlugins(a, filepath.Join(base, "plugins"), "plugin.yaml", readers.ManifestYAML, c.PluginStates, false)
 		case "pi":
 			// Pi has no native MCP configuration or persisted approval toggle.
+			g.use(id, "plugins")
 			states, _ := readConfig(&g, id, filepath.Join(base, "settings.json"), readers.PiPluginStates)
 			root := filepath.Join(base, "npm/node_modules")
 			g.catalogPlugins(a, root, "package.json", readers.PiManifest, states, false)
@@ -205,6 +243,14 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 		default:
 			r.Coverage.UnknownFormat = append(r.Coverage.UnknownFormat, id)
 		}
+		g.use("")
+		// Kontext's own config.toml sets neither field, and reading it is not a claim.
+		if c := a.Permissions.Codex; location.Absent && c != nil && c.SandboxMode == nil && c.ApprovalPolicy == nil {
+			a.Permissions.Codex = nil
+		}
+		if location.Absent && !a.hasClaims() {
+			r.Agents = r.Agents[:len(r.Agents)-1]
+		}
 	}
 	if ctx.Err() != nil {
 		r.Truncated = true
@@ -214,7 +260,17 @@ func scanCached(ctx context.Context, home string, env Environment, agents []Agen
 			delete(cache, path)
 		}
 	}
-	r.finish()
+	trimmed := r.Seal()
+	for _, id := range trimmed {
+		if h := g.sources[id]; h != nil {
+			h.Fail(ReasonSizeLimit)
+		}
+	}
+	r.Sources = g.results()
+	// The secret filter dropped the whole report, so no claim survived.
+	if r.SchemaVersion == "" {
+		r.failSources(ReasonReadError)
+	}
 	return r
 }
 func configPath(home, path string) string {
@@ -264,10 +320,12 @@ func (g *guard) servers(a *Agent, entries map[string]readers.MCP, source, scope 
 	for _, key := range keys(entries) {
 		if len(a.MCPServers) >= 64 {
 			g.skip()
+			g.fail(ReasonWalkLimit)
 			return
 		}
 		if g.ctx.Err() != nil {
 			g.report.Truncated = true
+			g.fail(ReasonDeadline)
 			return
 		}
 		entry := entries[key]
@@ -298,6 +356,7 @@ func (g *guard) servers(a *Agent, entries map[string]readers.MCP, source, scope 
 }
 func (g *guard) claude(a *Agent, base string, root readers.ClaudeRoot, projects []string) {
 	g.servers(a, root.MCPServers, filepath.Join(g.home, ".claude.json"), "user", nil)
+	g.use(a.ID, "permissions", "plugins")
 	enabled := map[string]bool{}
 	for _, path := range []string{filepath.Join(base, "settings.json"), filepath.Join(base, "settings.local.json"), filepath.Join(g.managed, "managed-settings.json")} {
 		g.settings(a, path, enabled)
@@ -307,7 +366,9 @@ func (g *guard) claude(a *Agent, base string, root readers.ClaudeRoot, projects 
 			g.settings(a, filepath.Join(g.managed, "managed-settings.d", entry.Name()), enabled)
 		}
 	}
+	g.use(a.ID, "plugins", "mcp")
 	g.plugins(a, base, enabled)
+	g.use(a.ID, "mcp")
 	for _, project := range projects {
 		config := root.Projects[project]
 		names := append(keys(config.MCPServers), config.EnabledMcpjsonServers...)
@@ -413,7 +474,9 @@ func grantRisk(pattern string) string {
 }
 func (g *guard) desktop(a *Agent) {
 	base := filepath.Join(g.home, "Library/Application Support/Claude")
+	g.use(a.ID, "mcp")
 	g.generic(a, filepath.Join(base, "claude_desktop_config.json"), "mcpServers")
+	g.use(a.ID, "plugins")
 	for _, entry := range g.entries(filepath.Join(base, "Claude Extensions")) {
 		e, ok := readConfig(g, a.ID, filepath.Join(base, "Claude Extensions", entry.Name(), "manifest.json"), readers.DesktopExtension)
 		if !ok {
@@ -453,7 +516,7 @@ func (g *guard) connectors(a *Agent, root string) {
 	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].modified.After(sessions[j].modified) })
 	seen := map[string]bool{}
 	for _, s := range sessions[:min(8, len(sessions))] {
-		list, ok := readConfig(g, a.ID, s.path, readers.ClaudeSession)
+		list, ok := readListed(g, a.ID, s.path, readers.ClaudeSession)
 		if !ok {
 			continue
 		}

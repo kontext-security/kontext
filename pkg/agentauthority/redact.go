@@ -154,7 +154,11 @@ func (r *Report) finish() {
 		return
 	}
 	data, _ = json.Marshal(cleaned)
-	_ = json.Unmarshal(data, r)
+	// A fresh value: decoding into r would write through slices the cached scan
+	// and pending results still read.
+	fresh := Report{Sources: r.Sources}
+	_ = json.Unmarshal(data, &fresh)
+	*r = fresh
 	for i := range r.Agents {
 		a := &r.Agents[i]
 		trimSlice(&a.MCPServers, 64, &r.Coverage.SkippedFiles)

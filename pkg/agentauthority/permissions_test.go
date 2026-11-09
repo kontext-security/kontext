@@ -42,7 +42,7 @@ func TestCursorCacheAndUnknown(t *testing.T) {
 	path := createCursorFixture(t, home)
 	scanner := new(Scanner)
 	run := func() Report {
-		return scanner.Scan(context.Background(), home, Environment{}, []AgentLocation{{"cursor", "~/.cursor"}}, fixtureTime)
+		return scanner.Scan(context.Background(), home, Environment{}, []AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor"}}, fixtureTime)
 	}
 	first := run()
 	if mode := first.Agents[0].Permissions.DefaultMode; mode == nil || *mode != "auto" {
@@ -98,7 +98,7 @@ func TestPermissionConfigCacheAndOverrides(t *testing.T) {
 	writeFixture(t, home, "cline-data/globalState.json", `{"autoApprovalSettings":{"actions":{"executeAllCommands":true}}}`)
 	writeFixture(t, home, "opencode-config/opencode.json", `{"permission":{"bash":"allow"},"mcp":{"example":{"command":["node"]}}}`)
 	writeFixture(t, home, ".gemini/settings.json", `{"general":{"defaultApprovalMode":"auto_edit"},"mcpServers":{"example":{"command":"node"}}}`)
-	agents := []AgentLocation{{"cline", "~/.cline"}, {"opencode", "~/.config/opencode"}, {"gemini_cli", "~/.gemini"}}
+	agents := []AgentLocation{{ID: "cline", ConfigPath: "~/.cline"}, {ID: "opencode", ConfigPath: "~/.config/opencode"}, {ID: "gemini_cli", ConfigPath: "~/.gemini"}}
 	scanner := new(Scanner)
 	run := func() Report { return scanner.Scan(context.Background(), home, Environment{}, agents, fixtureTime) }
 	for i := 0; i < 2; i++ {
@@ -163,7 +163,7 @@ func TestNoPromptAbsentAndCursorReadGuard(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	home := fixtureHome(t, "home_empty")
-	agents := []AgentLocation{{"cursor", "~/.cursor"}, {"windsurf", "~/.windsurf"}, {"gemini_cli", "~/.gemini"}, {"cline", "~/.cline"}, {"opencode", "~/.config/opencode"}}
+	agents := []AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor"}, {ID: "windsurf", ConfigPath: "~/.windsurf"}, {ID: "gemini_cli", ConfigPath: "~/.gemini"}, {ID: "cline", ConfigPath: "~/.cline"}, {ID: "opencode", ConfigPath: "~/.config/opencode"}}
 	r := scanFixture(home, agents)
 	for _, a := range r.Agents {
 		if a.Permissions.DefaultMode != nil {
@@ -222,7 +222,7 @@ func TestCursorWALInvalidatesCachedMode(t *testing.T) {
 	execute("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
 	scanner := new(Scanner)
 	run := func() Report {
-		return scanner.Scan(ctx, home, Environment{}, []AgentLocation{{"cursor", "~/.cursor"}}, fixtureTime)
+		return scanner.Scan(ctx, home, Environment{}, []AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor"}}, fixtureTime)
 	}
 	if mode := run().Agents[0].Permissions.DefaultMode; mode == nil || *mode != "auto" {
 		t.Fatal("initial mode missing")

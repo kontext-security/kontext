@@ -25,7 +25,7 @@ func TestCatalogConfigGuards(t *testing.T) {
 			t.Setenv("KIMI_CODE_HOME", "")
 			t.Setenv("KIMI_SHARE_DIR", "")
 			home := fixtureHome(t, "home_"+tc.id)
-			agents := []AgentLocation{{tc.id, filepath.Join(home, tc.base)}}
+			agents := []AgentLocation{{ID: tc.id, ConfigPath: filepath.Join(home, tc.base)}}
 			scanner := new(Scanner)
 			first := scanner.Scan(context.Background(), home, Environment{}, agents, fixtureTime)
 			if len(first.Agents[0].MCPServers) != 1 {
@@ -65,7 +65,7 @@ func TestCatalogOverridesAndLayers(t *testing.T) {
 	home := fixtureHome(t, "home_empty")
 	writeFixture(t, home, "custom/cline/settings/cline_mcp_settings.json", `{"mcpServers":{"sample":{"command":"npx"}}}`)
 	writeFixture(t, home, "custom/crush.json", `{"mcp":{"sample":{"command":"npx"}}}`)
-	r := scanFixture(home, []AgentLocation{{"cline", "~/.cline"}, {"crush", "~/.config/crush"}})
+	r := scanFixture(home, []AgentLocation{{ID: "cline", ConfigPath: "~/.cline"}, {ID: "crush", ConfigPath: "~/.config/crush"}})
 	for _, a := range r.Agents {
 		if len(a.MCPServers) != 1 {
 			t.Fatalf("override missing: %+v", a)
@@ -73,12 +73,12 @@ func TestCatalogOverridesAndLayers(t *testing.T) {
 	}
 	t.Setenv("CRUSH_GLOBAL_CONFIG", "~/custom/crush-dir")
 	writeFixture(t, home, "custom/crush-dir/crush.json", `{"mcp":{"sample":{"command":"node"}}}`)
-	r = scanFixture(home, []AgentLocation{{"crush", "~/.config/crush"}})
+	r = scanFixture(home, []AgentLocation{{ID: "crush", ConfigPath: "~/.config/crush"}})
 	if len(r.Agents[0].MCPServers) != 1 || *r.Agents[0].MCPServers[0].Command != "node" {
 		t.Fatal("directory override missing")
 	}
 	t.Setenv("CRUSH_GLOBAL_CONFIG", filepath.Join(t.TempDir(), "crush.json"))
-	r = scanFixture(home, []AgentLocation{{"crush", "~/.config/crush"}})
+	r = scanFixture(home, []AgentLocation{{ID: "crush", ConfigPath: "~/.config/crush"}})
 	if r.Coverage.SkippedFiles == 0 {
 		t.Fatal("outside-home override allowed")
 	}
@@ -105,7 +105,7 @@ func TestCatalogOverridesAndLayers(t *testing.T) {
 		}
 		scanner := new(Scanner)
 		for range 2 {
-			report := scanner.Scan(context.Background(), home, Environment{}, []AgentLocation{{tc.id, filepath.Join(home, tc.base)}}, fixtureTime)
+			report := scanner.Scan(context.Background(), home, Environment{}, []AgentLocation{{ID: tc.id, ConfigPath: filepath.Join(home, tc.base)}}, fixtureTime)
 			servers := report.Agents[0].MCPServers
 			if len(servers) != 1 || *servers[0].Command != "new" || !strings.HasSuffix(servers[0].Source, tc.last) {
 				t.Fatalf("layer merge: %+v", servers)
@@ -121,7 +121,7 @@ func TestCatalogPluginGuardAndRedaction(t *testing.T) {
 	if err := os.Symlink(filepath.Join(home, ".hermes/plugins/sample"), filepath.Join(home, ".hermes/plugins/link")); err != nil {
 		t.Fatal(err)
 	}
-	r := scanFixture(home, []AgentLocation{{"hermes", "~/.hermes"}})
+	r := scanFixture(home, []AgentLocation{{ID: "hermes", ConfigPath: "~/.hermes"}})
 	data, err := r.CanonicalJSON()
 	if err != nil || strings.Contains(string(data), "ghp_") || len(r.Agents[0].Plugins) != 1 || r.Coverage.SkippedFiles == 0 {
 		t.Fatalf("plugin guards: %+v %v", r, err)
@@ -153,7 +153,7 @@ func TestEnvironmentOverridesCannotAuthorizeOutsideHome(t *testing.T) {
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			t.Setenv(tc.key, outside)
-			r := scanFixture(home, []AgentLocation{{tc.id, tc.base}})
+			r := scanFixture(home, []AgentLocation{{ID: tc.id, ConfigPath: tc.base}})
 			a := r.Agents[0]
 			if r.Coverage.SkippedFiles == 0 || len(a.MCPServers) != 0 || a.Permissions.DefaultMode != nil {
 				t.Fatalf("outside-home authority read: %+v", r)
@@ -170,7 +170,7 @@ func TestKimiHomeOverrides(t *testing.T) {
 	t.Setenv("KIMI_SHARE_DIR", "~/legacy")
 	for _, current := range []string{"~/current", ""} {
 		t.Setenv("KIMI_CODE_HOME", current)
-		r := scanFixture(home, []AgentLocation{{"kimi_code", "~/.kimi-code"}})
+		r := scanFixture(home, []AgentLocation{{ID: "kimi_code", ConfigPath: "~/.kimi-code"}})
 		a := r.Agents[0]
 		want := "default"
 		if current != "" {
@@ -203,7 +203,7 @@ func TestAntigravityMCPServersFromTheConfigFolder(t *testing.T) {
 		"remote":{"url":"https://remote.example/mcp"},
 		"legacy":{"serverUrl":"https://legacy.example/mcp"}
 	}}`)
-	r := scanFixture(home, []AgentLocation{{"antigravity", "~/.gemini/antigravity"}})
+	r := scanFixture(home, []AgentLocation{{ID: "antigravity", ConfigPath: "~/.gemini/antigravity"}})
 	if len(r.Agents) != 1 {
 		t.Fatalf("agents = %+v", r.Agents)
 	}

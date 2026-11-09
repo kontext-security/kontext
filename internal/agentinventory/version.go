@@ -2,12 +2,14 @@ package agentinventory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,13 @@ var versionSources = map[string][]string{
 	"kiro":          {"Kiro.app"},
 	"goose":         {"Goose.app"},
 }
+
+// The machine-wide places apps and CLIs install to. Exported so a test in
+// another package can keep the machine's own installs out of its fixture.
+var (
+	SystemAppDirs = []string{"/Applications"}
+	SystemCLIDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
+)
 
 var versionPattern = regexp.MustCompile(`\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.]+)?`)
 
@@ -66,7 +75,7 @@ func appVersion(ctx context.Context, home, app string) string {
 	if runtime.GOOS != "darwin" {
 		return ""
 	}
-	for _, dir := range []string{"/Applications", filepath.Join(home, "Applications")} {
+	for _, dir := range appDirs(home) {
 		plist := filepath.Join(dir, app, "Contents", "Info.plist")
 		if _, err := os.Stat(plist); err != nil {
 			continue
@@ -84,7 +93,7 @@ func cliVersion(_ context.Context, home, name string) string {
 	if os.Geteuid() == 0 {
 		return ""
 	}
-	path := findCLI(home, name)
+	path, _ := findCLI(home, name)
 	if path == "" {
 		return ""
 	}
@@ -154,22 +163,74 @@ func (b *cappedBuffer) String() string { return string(b.buf) }
 // pending marks a CLI whose --version is still running.
 type pending struct{}
 
-func findCLI(home, name string) string {
+// findCLI also returns a lookup failure other than absence, so a caller can
+// tell "not installed" from "could not check".
+func findCLI(home, name string) (string, error) {
 	if path, err := exec.LookPath(name); err == nil {
-		return path
+		return path, nil
 	}
 	// The daemon runs under launchd with a minimal PATH.
+	var failure error
 	for _, dir := range cliDirs(home) {
 		path := filepath.Join(dir, name)
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
-			return path
+		info, err := os.Stat(path)
+		if err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return path, nil
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			failure = err
 		}
 	}
-	return ""
+	return "", failure
+}
+
+func appDirs(home string) []string {
+	return append(slices.Clone(SystemAppDirs), filepath.Join(home, "Applications"))
+}
+
+// agentInstalled locates an app bundle or CLI binary. An agent with no known
+// location, or one Kontext could not check, is unknown rather than absent.
+func agentInstalled(home, id string) (Installed, error) {
+	sources := versionSources[id]
+	if len(sources) == 0 {
+		return InstalledUnknown, nil
+	}
+	var failure error
+	checkable := false
+	for _, source := range sources {
+		if !strings.HasSuffix(source, ".app") {
+			checkable = true
+			path, err := findCLI(home, source)
+			if path != "" {
+				return InstalledYes, nil
+			}
+			if err != nil {
+				failure = err
+			}
+			continue
+		}
+		if runtime.GOOS != "darwin" {
+			continue
+		}
+		checkable = true
+		for _, dir := range appDirs(home) {
+			info, err := os.Stat(filepath.Join(dir, source))
+			if err == nil && info.IsDir() {
+				return InstalledYes, nil
+			}
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				failure = err
+			}
+		}
+	}
+	if failure != nil || !checkable {
+		return InstalledUnknown, failure
+	}
+	return InstalledNo, nil
 }
 
 func cliDirs(home string) []string {
-	return []string{"/opt/homebrew/bin", "/usr/local/bin", filepath.Join(home, ".local", "bin"), filepath.Join(home, ".bun", "bin"), filepath.Join(home, ".npm-global", "bin")}
+	return append(slices.Clone(SystemCLIDirs), filepath.Join(home, ".local", "bin"), filepath.Join(home, ".bun", "bin"), filepath.Join(home, ".npm-global", "bin"))
 }
 
 // parseVersion takes the first version-like token, at most 64 characters:

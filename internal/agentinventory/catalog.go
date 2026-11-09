@@ -1,7 +1,11 @@
 // Package agentinventory discovers known agents from local metadata.
 package agentinventory
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/kontext-security/kontext/pkg/agentauthority"
+)
 
 type Wired string
 
@@ -12,13 +16,25 @@ const (
 	WiredUnsupported Wired = "unsupported"
 )
 
+// Installed reports whether an app bundle or CLI binary was located. Wired
+// never counts as evidence: Kontext installs hooks for agents not yet here.
+type Installed string
+
+const (
+	InstalledYes     Installed = "yes"
+	InstalledNo      Installed = "no"
+	InstalledUnknown Installed = "unknown"
+)
+
 type Agent struct {
-	ID             string  `json:"id"`
-	ConfigPath     string  `json:"config_path"`
-	Wired          Wired   `json:"wired"`
-	LastActivityAt *string `json:"last_activity_at"`
-	Sandboxed      *bool   `json:"sandboxed,omitempty"`
-	Version        *string `json:"version,omitempty"`
+	ID             string    `json:"id"`
+	ConfigPath     string    `json:"config_path"`
+	Wired          Wired     `json:"wired"`
+	LastActivityAt *string   `json:"last_activity_at"`
+	Sandboxed      *bool     `json:"sandboxed,omitempty"`
+	Version        *string   `json:"version,omitempty"`
+	Installed      Installed `json:"installed"`
+	Configured     bool      `json:"configured"`
 }
 
 // MarshalJSON keeps the optional sandbox fact exclusive to Cowork, including an
@@ -39,6 +55,8 @@ type Inventory struct {
 	Agents     []Agent `json:"agents"`
 	ReportedAt string  `json:"agents_reported_at"`
 	Incomplete bool    `json:"incomplete,omitempty"`
+	// Sources has a result for every catalog agent, absent ones included.
+	Sources []agentauthority.SourceResult `json:"-"`
 }
 
 type Descriptor struct {
@@ -71,7 +89,7 @@ var Catalog = []Descriptor{
 	{"kilo", "Kilo Code", []string{".config/kilo"}, "XDG_CONFIG_HOME", ""},
 	{"crush", "Crush", []string{".config/crush"}, "CRUSH_GLOBAL_CONFIG", ""},
 	{"junie", "Junie", []string{".junie"}, "", ""},
-	{"antigravity", "Antigravity", []string{".gemini/antigravity-cli", ".gemini/antigravity"}, "", ""},
+	{"antigravity", "Antigravity", []string{".gemini/antigravity-cli", ".gemini/antigravity", ".gemini/config"}, "", ""},
 	{"factory_droid", "Factory Droid", []string{".factory"}, "", ""},
 	{"grok_build", "Grok Build", []string{".grok"}, "GROK_HOME", ""},
 	{"devin_cli", "Devin CLI", []string{".config/devin"}, "XDG_CONFIG_HOME", ""},

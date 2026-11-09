@@ -27,8 +27,8 @@ func TestReportJSONFixtureProfile(t *testing.T) {
 	// The latest Cowork session ran on the host.
 	sandboxed := false
 	agents := []agentinventory.Agent{
-		{ID: "claude_code", ConfigPath: "~/.claude", Wired: agentinventory.WiredYes},
-		{ID: "claude_cowork", ConfigPath: "~/Library/Application Support/Claude/local-agent-mode-sessions", Wired: agentinventory.WiredYes, Sandboxed: &sandboxed},
+		{ID: "claude_code", ConfigPath: "~/.claude", Wired: agentinventory.WiredYes, Installed: agentinventory.InstalledYes, Configured: true},
+		{ID: "claude_cowork", ConfigPath: "~/Library/Application Support/Claude/local-agent-mode-sessions", Wired: agentinventory.WiredYes, Sandboxed: &sandboxed, Installed: agentinventory.InstalledYes, Configured: true},
 	}
 	report := managedstream.Report{Agents: &agents, AgentsReportedAt: "2026-09-16T12:00:00Z", Authority: &authority}
 	if err := managedstream.SaveState(statePath, managedstream.State{LastReport: report}); err != nil {

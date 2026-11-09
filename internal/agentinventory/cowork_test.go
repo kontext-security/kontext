@@ -82,6 +82,10 @@ func TestCoworkDiscovery(t *testing.T) {
 					return tt.sessions[id], nil
 				},
 			})
+			// Whether an app bundle can be checked at all depends on the OS.
+			for i := range inv.Agents {
+				inv.Agents[i].Installed = InstalledUnknown
+			}
 			data, err := json.MarshalIndent(inv, "", "  ")
 			if err != nil {
 				t.Fatal(err)

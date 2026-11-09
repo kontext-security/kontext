@@ -46,17 +46,20 @@ func TestScan(t *testing.T) {
 			}
 			if name != "empty" && name != "outside home" && name != "home override" && name != "cancelled" && name != "path cap" {
 				mkdir(".gemini")
-				want = []Agent{{ID: "gemini_cli", ConfigPath: "~/.gemini", Wired: WiredUnsupported}}
+				writeHomeFile(t, home, ".gemini/settings.json", "{}")
+				want = []Agent{{ID: "gemini_cli", ConfigPath: "~/.gemini", Wired: WiredUnsupported, Installed: InstalledNo, Configured: true}}
 			}
 			switch name {
 			case "home override":
 				env["CODEX_HOME"] = home
+				writeHomeFile(t, home, "auth.json", "{}")
 				wired["codex"] = func() Wired { return WiredNo }
-				want = []Agent{{ID: "codex", ConfigPath: "~/", Wired: WiredNo}}
+				want = []Agent{{ID: "codex", ConfigPath: "~/", Wired: WiredNo, Installed: InstalledNo, Configured: true}}
 			case "outside home":
 				env["CODEX_HOME"] = t.TempDir()
+				writeHomeFile(t, env["CODEX_HOME"], "auth.json", "{}")
 				wired["codex"] = func() Wired { return WiredNo }
-				want = []Agent{{ID: "codex", ConfigPath: env["CODEX_HOME"], Wired: WiredNo}}
+				want = []Agent{{ID: "codex", ConfigPath: env["CODEX_HOME"], Wired: WiredNo, Installed: InstalledNo, Configured: true}}
 			case "activity":
 				file(".gemini/tmp/old", now.Add(-time.Hour))
 				file(".gemini/tmp/a/b/new", now.Add(-8*time.Minute))
@@ -92,9 +95,9 @@ func TestScan(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "wired error":
-				mkdir(".claude")
+				writeHomeFile(t, home, ".claude/CLAUDE.md", "notes")
 				wired["claude_code"] = func() Wired { return WiredError }
-				want = append([]Agent{{ID: "claude_code", ConfigPath: "~/.claude", Wired: WiredError}}, want...)
+				want = append([]Agent{{ID: "claude_code", ConfigPath: "~/.claude", Wired: WiredError, Installed: InstalledNo, Configured: true}}, want...)
 			case "cancelled":
 				cancel()
 				incomplete = true
@@ -127,6 +130,7 @@ func TestScan(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := Scan(ctx, home, func(key string) string { return env[key] }, now, ScanOptions{Wired: wired})
+			got.Sources = nil
 			if !reflect.DeepEqual(got, Inventory{Agents: want, ReportedAt: now.Format(time.RFC3339), Incomplete: incomplete}) {
 				t.Fatalf("Scan = %+v, want agents %+v, incomplete %t", got, want, incomplete)
 			}
@@ -191,11 +195,11 @@ func TestCatalogAndWireContract(t *testing.T) {
 		}
 	}
 	activity := "2026-09-09T08:12:00Z"
-	data, err := json.Marshal(Inventory{Agents: []Agent{{"claude_code", "~/.claude", WiredYes, &activity, nil, nil}, {"cursor", "~/.cursor", WiredUnsupported, nil, nil, nil}}, ReportedAt: "2026-09-09T08:20:00Z"})
+	data, err := json.Marshal(Inventory{Agents: []Agent{{"claude_code", "~/.claude", WiredYes, &activity, nil, nil, InstalledYes, true}, {"cursor", "~/.cursor", WiredUnsupported, nil, nil, nil, InstalledNo, false}}, ReportedAt: "2026-09-09T08:20:00Z"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `{"agents":[{"id":"claude_code","config_path":"~/.claude","wired":"yes","last_activity_at":"2026-09-09T08:12:00Z"},{"id":"cursor","config_path":"~/.cursor","wired":"unsupported","last_activity_at":null}],"agents_reported_at":"2026-09-09T08:20:00Z"}`
+	const want = `{"agents":[{"id":"claude_code","config_path":"~/.claude","wired":"yes","last_activity_at":"2026-09-09T08:12:00Z","installed":"yes","configured":true},{"id":"cursor","config_path":"~/.cursor","wired":"unsupported","last_activity_at":null,"installed":"no","configured":false}],"agents_reported_at":"2026-09-09T08:20:00Z"}`
 	if string(data) != want {
 		t.Fatalf("wire=%s", data)
 	}

@@ -44,6 +44,10 @@ type guard struct {
 	cache         map[string]fileResult
 	beginRead     func() func()
 	seen          map[string]bool
+	sources       map[string]*SourceHealth
+	finished      map[string]time.Time
+	order         []string
+	active        []*SourceHealth
 }
 
 func (g *guard) skip() { g.report.Coverage.SkippedFiles++ }
@@ -79,6 +83,11 @@ func (g *guard) access(path, mode string) fileResult {
 	if g.ctx.Err() != nil || g.opened >= maxFiles {
 		g.report.Truncated = true
 		g.skip()
+		if g.ctx.Err() != nil {
+			g.fail(ReasonDeadline)
+		} else {
+			g.fail(ReasonWalkLimit)
+		}
 		return fileResult{err: context.DeadlineExceeded}
 	}
 	path = filepath.Clean(path)
@@ -91,11 +100,13 @@ func (g *guard) access(path, mode string) fileResult {
 	}
 	if !allowed || !filepath.IsAbs(path) {
 		g.skip()
+		g.fail(ReasonPermissionDenied)
 		return fileResult{err: os.ErrPermission}
 	}
 	for _, root := range []string{filepath.Join(g.home, "Desktop"), filepath.Join(g.home, "Documents"), filepath.Join(g.home, "Downloads"), filepath.Join(g.home, "Library/Mobile Documents"), filepath.Join(g.home, "Library/CloudStorage"), "/Volumes"} {
 		if within(root, path) {
 			g.skip()
+			g.fail(ReasonPermissionDenied)
 			return fileResult{err: os.ErrPermission}
 		}
 	}
@@ -169,14 +180,17 @@ func (g *guard) access(path, mode string) fileResult {
 		if isEvictedErr(result.err) {
 			g.readError(path, "evicted, skipped")
 		}
+		g.noteAccess(result.err, mode)
 		return result
 	case <-g.ctx.Done():
 		g.report.Truncated = true
 		g.skip()
+		g.fail(ReasonDeadline)
 		return fileResult{err: g.ctx.Err()}
 	case <-timer.C:
 		g.skip()
 		g.readError(path, "read timeout")
+		g.fail(ReasonDeadline)
 		return fileResult{err: context.DeadlineExceeded}
 	}
 }
@@ -200,27 +214,37 @@ func guardedInfo(path string, stat func(string) (os.FileInfo, error), tail bool)
 	volume := filepath.VolumeName(path)
 	prefix := volume + string(filepath.Separator)
 	rest := filepath.ToSlash(path[len(volume):])
-	refused := func(info os.FileInfo) bool {
-		return info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) || isDataless(info) || (!tail && !info.IsDir() && info.Size() > maxFileBytes)
-	}
 	// The root is an ancestor too, checked like the others.
 	info, err := stat(prefix)
 	if err != nil {
 		return nil, err
 	}
-	if refused(info) {
-		return nil, os.ErrPermission
+	if err := refusal(info, tail); err != nil {
+		return nil, err
 	}
 	for _, part := range strings.Split(strings.TrimPrefix(rest, "/"), "/") {
 		prefix = filepath.Join(prefix, part)
 		if info, err = stat(prefix); err != nil {
 			return nil, err
 		}
-		if refused(info) {
-			return nil, os.ErrPermission
+		if err := refusal(info, tail); err != nil {
+			return nil, err
 		}
 	}
 	return info, nil
+}
+
+// refusal says why the guard will not touch this path component, if it won't.
+func refusal(info os.FileInfo, tail bool) error {
+	switch {
+	case info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()):
+		return os.ErrPermission
+	case isDataless(info):
+		return errDataless
+	case !tail && !info.IsDir() && info.Size() > maxFileBytes:
+		return errTooLarge
+	}
+	return nil
 }
 
 func sameFileVersion(a, b os.FileInfo) bool {
@@ -244,12 +268,14 @@ func readParsed[T any](g *guard, path string, parse func([]byte) (T, error), mod
 		return zero, result.err
 	}
 	if parsed, ok := result.parsed.(T); ok {
+		g.noteParse(result.parseErr)
 		return parsed, result.parseErr
 	}
 	value, err := parse(result.data)
 	if err != nil {
 		err = errors.Join(errParse, err)
 	}
+	g.noteParse(err)
 	if g.cache != nil {
 		result.data, result.parsed, result.parseErr = nil, value, err
 		g.cache[filepath.Clean(path)] = result
@@ -275,6 +301,7 @@ func (g *guard) sessionEntries(path string) []os.DirEntry {
 	if len(result.entries) > maxSessionEntries {
 		g.report.Coverage.Limits = append(g.report.Coverage.Limits, "session entries limited to 10000")
 		g.skip()
+		g.fail(ReasonWalkLimit)
 		result.entries = result.entries[:maxSessionEntries]
 	}
 	return result.entries
@@ -287,6 +314,7 @@ func (g *guard) entries(path string) []os.DirEntry {
 	if len(result.entries) > maxFiles {
 		g.report.Coverage.Limits = append(g.report.Coverage.Limits, "directory entries limited to 500")
 		g.skip()
+		g.fail(ReasonWalkLimit)
 		result.entries = result.entries[:maxFiles]
 	}
 	sort.Slice(result.entries, func(i, j int) bool { return result.entries[i].Name() < result.entries[j].Name() })
@@ -297,6 +325,18 @@ func readConfig[T any](g *guard, id, path string, parse func([]byte) (T, error),
 	value, err := readParsed(g, path, parse, modes...)
 	if errors.Is(err, errParse) {
 		g.parseError(id, filepath.Base(path))
+	}
+	return value, err == nil
+}
+
+// readListed reads a file just enumerated, so its absence means it vanished.
+func readListed[T any](g *guard, id, path string, parse func([]byte) (T, error)) (T, bool) {
+	value, err := readParsed(g, path, parse)
+	if errors.Is(err, errParse) {
+		g.parseError(id, filepath.Base(path))
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		g.fail(ReasonChangedDuringRead)
 	}
 	return value, err == nil
 }
