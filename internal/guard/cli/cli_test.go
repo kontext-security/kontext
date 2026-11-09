@@ -210,6 +210,9 @@ func TestPrintHookStatusReportsGuardAndHostedConflict(t *testing.T) {
       {
         "hooks": [
           {"type": "command", "command": "'/usr/local/bin/kontext' hook 'post-tool-use'"},
+          {"type": "command", "command": "C:\\Program Files\\Kontext\\kontext.exe", "args": ["hook", "stop"]},
+          {"type": "command", "command": "C:\\Program Files\\Kontext\\kontext.exe", "args": ["hook", "pre-tool-use", 123]},
+          {"type": "command", "command": "C:\\Program Files\\Kontext\\kontext.exe", "args": "hook user-prompt-submit"},
           {"type": "command", "command": "/usr/local/bin/not-kontext hook post-tool-use"}
         ]
       }
@@ -229,6 +232,14 @@ func TestPrintHookStatusReportsGuardAndHostedConflict(t *testing.T) {
 	}
 	if !strings.Contains(got, "Claude Code hosted hook: '/usr/local/bin/kontext' hook 'post-tool-use'") {
 		t.Fatalf("PrintHookStatus() = %q, want hosted hook line", got)
+	}
+	// Windows writes the exec form: the command is the executable, the rest is args.
+	if !strings.Contains(got, `Claude Code hosted hook: C:\Program Files\Kontext\kontext.exe hook stop`) {
+		t.Fatalf("PrintHookStatus() = %q, want the exec-form hosted hook line", got)
+	}
+	// Malformed args make the handler no hook at all, not a shorter one.
+	if strings.Contains(got, "kontext.exe hook pre-tool-use") || strings.Contains(got, "user-prompt-submit") || strings.Count(got, "kontext.exe") != 1 {
+		t.Fatalf("PrintHookStatus() = %q, want handlers with malformed args ignored", got)
 	}
 	if strings.Contains(got, "not-kontext") {
 		t.Fatalf("PrintHookStatus() = %q, want foreign hook ignored", got)

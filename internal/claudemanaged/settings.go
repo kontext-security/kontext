@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -22,6 +23,13 @@ const (
 	// reading outside the project. It names that directory only.
 	SavedOutputReadRule = "Read(~/Library/Application Support/Kontext/**/managed-observe/tool-output/**)"
 )
+
+// ExecForm makes Template write each hook in Claude Code's exec form: the
+// binary in `command` and `hook <alias>` in `args`, which Claude Code runs
+// without a shell. Windows needs it, because a shell-form hook runs in
+// PowerShell there, which can't parse the POSIX-quoted command line. Reading
+// accepts both forms on every OS. A variable so tests can pin either form.
+var ExecForm = runtime.GOOS == "windows"
 
 type Event struct {
 	Name  hook.HookName
@@ -133,6 +141,9 @@ func Template(kontextBinary string) Settings {
 			Type:    "command",
 			Command: hookCommand(kontextBinary, event.Alias),
 			Timeout: DefaultHookTimeout,
+		}
+		if ExecForm {
+			handler.Command, handler.Args = kontextBinary, []string{"hook", event.Alias}
 		}
 		if event.Async {
 			value := true
@@ -278,7 +289,7 @@ func MissingRequiredEvents(data []byte) ([]string, string) {
 			if len(groups[0].Hooks) == 0 {
 				return nil, ""
 			}
-			fields, ok := agenthooks.SplitLiteralCommand(groups[0].Hooks[0].Command)
+			fields, ok := hookFields(groups[0].Hooks[0], agenthooks.SplitLiteralCommand)
 			if !ok || len(fields) != 3 {
 				return nil, ""
 			}
@@ -326,11 +337,11 @@ func ManagedObserveHookBinary(data []byte) (string, bool) {
 				continue
 			}
 			for _, handler := range group.Hooks {
-				if handler.Type != "command" || len(handler.Args) != 0 || validateAsync(event, handler.Async) != nil {
+				if handler.Type != "command" || validateAsync(event, handler.Async) != nil {
 					continue
 				}
-				fields, ok := agenthooks.SplitCommand(handler.Command)
-				if !ok || len(fields) != 3 || filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != event.Alias {
+				fields, ok := hookFields(handler, agenthooks.SplitCommand)
+				if !ok || !isHookCall(fields, event.Alias) {
 					continue
 				}
 				if binary == "" {
@@ -381,14 +392,14 @@ func hasManagedObserveHook(groups []MatcherGroup, event Event) bool {
 			continue
 		}
 		for _, handler := range group.Hooks {
-			if handler.Type != "command" || len(handler.Args) != 0 {
+			if handler.Type != "command" {
 				continue
 			}
 			if err := validateAsync(event, handler.Async); err != nil {
 				continue
 			}
-			fields, ok := agenthooks.SplitCommand(handler.Command)
-			if ok && len(fields) == 3 && filepath.Base(fields[0]) == "kontext" && fields[1] == "hook" && fields[2] == event.Alias {
+			fields, ok := hookFields(handler, agenthooks.SplitCommand)
+			if ok && isHookCall(fields, event.Alias) {
 				return true
 			}
 		}
@@ -397,7 +408,7 @@ func hasManagedObserveHook(groups []MatcherGroup, event Event) bool {
 }
 
 func isCanonicalManagedDropInHandler(handler Handler, event Event) bool {
-	if handler.Type != "command" || len(handler.Args) != 0 || handler.Timeout != DefaultHookTimeout {
+	if handler.Type != "command" || handler.Timeout != DefaultHookTimeout {
 		return false
 	}
 	if event.Async {
@@ -407,11 +418,26 @@ func isCanonicalManagedDropInHandler(handler Handler, event Event) bool {
 	} else if handler.Async != nil {
 		return false
 	}
-	fields, ok := agenthooks.SplitCommand(handler.Command)
-	return ok && len(fields) == 3 &&
-		filepath.Base(fields[0]) == "kontext" &&
-		fields[1] == "hook" &&
-		fields[2] == event.Alias
+	fields, ok := hookFields(handler, agenthooks.SplitCommand)
+	return ok && isHookCall(fields, event.Alias)
+}
+
+// hookFields returns the words a handler runs: its shell command line split
+// into words or, in exec form, its command followed by its args. Exec form has
+// no shell, so the command is the executable's path exactly as written.
+func hookFields(handler Handler, split func(string) ([]string, bool)) ([]string, bool) {
+	if len(handler.Args) == 0 {
+		return split(handler.Command)
+	}
+	if handler.Command == "" {
+		return nil, false
+	}
+	return append([]string{handler.Command}, handler.Args...), true
+}
+
+// isHookCall reports whether fields run Kontext's flagless `hook <alias>`.
+func isHookCall(fields []string, alias string) bool {
+	return len(fields) == 3 && agenthooks.IsKontextBinary(fields[0]) && fields[1] == "hook" && fields[2] == alias
 }
 
 func ParseEventAlias(value string) (hook.HookName, bool) {
@@ -443,13 +469,19 @@ func validateEvent(groups []MatcherGroup, event Event, kontextBinary string) err
 	for _, group := range groups {
 		for _, handler := range group.Hooks {
 			fields, ok := agenthooks.SplitLiteralCommand(handler.Command)
-			if !ok || len(fields) != 3 || fields[0] != kontextBinary || fields[1] != "hook" || fields[2] != event.Alias {
+			shell := ok && len(fields) == 3 && fields[0] == kontextBinary && fields[1] == "hook" && fields[2] == event.Alias
+			// Claude Code runs the exec form on every OS; only Windows requires it.
+			exec := handler.Command == kontextBinary && slices.Equal(handler.Args, []string{"hook", event.Alias})
+			if !shell && !exec {
 				continue
 			}
 			if handler.Type != "command" {
 				return fmt.Errorf("%s Kontext handler type = %q, want command", event.Name, handler.Type)
 			}
-			if len(handler.Args) > 0 {
+			if ExecForm && !exec {
+				return fmt.Errorf("%s Kontext handler must name the binary in command and %q in args", event.Name, "hook "+event.Alias)
+			}
+			if !exec && len(handler.Args) > 0 {
 				return fmt.Errorf("%s Kontext handler args must be omitted", event.Name)
 			}
 			if err := validateAsync(event, handler.Async); err != nil {

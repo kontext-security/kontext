@@ -227,14 +227,15 @@ func PrintHookStatus(out io.Writer) HookStatus {
 		} else {
 			hosted, guard := false, false
 			for _, raw := range hooks {
-				visitHookCommands(raw, func(command string) {
+				visitHookCommands(raw, func(command string, args []string) {
+					line := strings.Join(append([]string{command}, args...), " ")
 					switch {
-					case isGuardHookCommand(command):
+					case claudemanaged.IsGuardHookHandler(command, args):
 						guard = true
-						fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
-					case claudemanaged.IsManagedHookCommand(command):
+						fmt.Fprintf(out, "Claude Code Guard hook: %s\n", line)
+					case claudemanaged.IsManagedHookHandler(command, args):
 						hosted = true
-						fmt.Fprintf(out, "Claude Code hosted hook: %s\n", command)
+						fmt.Fprintf(out, "Claude Code hosted hook: %s\n", line)
 					}
 				})
 			}
@@ -276,7 +277,7 @@ func printInstalledHookStatus(out io.Writer, scope hookinstall.Scope) HookStatus
 	return HookStatus{Healthy: hookinstall.Diagnose(out, scope, home)}
 }
 
-func visitHookCommands(raw any, visit func(string)) {
+func visitHookCommands(raw any, visit func(command string, args []string)) {
 	groups, ok := raw.([]any)
 	if !ok {
 		return
@@ -295,11 +296,42 @@ func visitHookCommands(raw any, visit func(string)) {
 			if !ok {
 				continue
 			}
-			if command, ok := hookMap["command"].(string); ok {
-				visit(command)
+			command, ok := hookMap["command"].(string)
+			if !ok {
+				continue
 			}
+			// The exec form keeps the executable in command and the rest in args.
+			// Args that aren't a list of strings make the handler malformed, so it
+			// can't stand for an installed hook.
+			args, ok := hookArgs(hookMap)
+			if !ok {
+				continue
+			}
+			visit(command, args)
 		}
 	}
+}
+
+// hookArgs returns a handler's args, and false if they're present but not a
+// list of strings.
+func hookArgs(hookMap map[string]any) ([]string, bool) {
+	raw, present := hookMap["args"]
+	if !present || raw == nil {
+		return nil, true
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, false
+	}
+	args := make([]string, 0, len(list))
+	for _, arg := range list {
+		text, ok := arg.(string)
+		if !ok {
+			return nil, false
+		}
+		args = append(args, text)
+	}
+	return args, true
 }
 
 func runHooks(args []string, out io.Writer) error {
