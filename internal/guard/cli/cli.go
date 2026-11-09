@@ -301,17 +301,37 @@ func visitHookCommands(raw any, visit func(command string, args []string)) {
 				continue
 			}
 			// The exec form keeps the executable in command and the rest in args.
-			var args []string
-			if list, ok := hookMap["args"].([]any); ok {
-				for _, arg := range list {
-					if text, ok := arg.(string); ok {
-						args = append(args, text)
-					}
-				}
+			// Args that aren't a list of strings make the handler malformed, so it
+			// can't stand for an installed hook.
+			args, ok := hookArgs(hookMap)
+			if !ok {
+				continue
 			}
 			visit(command, args)
 		}
 	}
+}
+
+// hookArgs returns a handler's args, and false if they're present but not a
+// list of strings.
+func hookArgs(hookMap map[string]any) ([]string, bool) {
+	raw, present := hookMap["args"]
+	if !present || raw == nil {
+		return nil, true
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, false
+	}
+	args := make([]string, 0, len(list))
+	for _, arg := range list {
+		text, ok := arg.(string)
+		if !ok {
+			return nil, false
+		}
+		args = append(args, text)
+	}
+	return args, true
 }
 
 func runHooks(args []string, out io.Writer) error {
