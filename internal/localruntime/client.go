@@ -55,10 +55,6 @@ func (c Client) ProcessHoldable(ctx context.Context, event hook.Event, maxHold t
 		return hook.Result{}, false, err
 	}
 	defer conn.Close()
-	// A cancelled caller cuts the connection's deadline to now, which ends
-	// any read, including one waiting through a hold.
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
-	defer stop()
 	failed := func(err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -68,6 +64,12 @@ func (c Client) ProcessHoldable(ctx context.Context, event hook.Event, maxHold t
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return hook.Result{}, false, failed(err)
 	}
+	// A cancelled caller cuts the connection's deadline to now, which ends
+	// any read, including one waiting through a hold. Registered only after
+	// the first deadline is set, so that deadline can't overwrite a cancel;
+	// a context already cancelled by now runs the cut at once.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
 	if err := WriteMessage(conn, req); err != nil {
 		return hook.Result{}, false, failed(err)
 	}
