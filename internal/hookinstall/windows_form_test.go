@@ -73,14 +73,24 @@ func TestWindowsUserInstallWritesClaudeExecFormOnly(t *testing.T) {
 			t.Errorf("%s exists after a Windows install (err %v)", path, err)
 		}
 	}
+	// Every other agent's file is reported as unsupported and none of Claude's,
+	// however many agents the install knows.
 	skipped := 0
 	for _, row := range lines(out.String()) {
-		if len(row) == 4 && row[0] == "skip" && row[3] == windowsUnsupported {
+		if len(row) != 4 {
+			continue
+		}
+		claude := strings.HasPrefix(row[2], filepath.Join(home, ".claude"))
+		unsupported := row[0] == "skip" && row[3] == windowsUnsupported
+		if claude == unsupported {
+			t.Errorf("Claude file %v, reported as unsupported %v: %v", claude, unsupported, row)
+		}
+		if unsupported {
 			skipped++
 		}
 	}
-	if skipped != 3 {
-		t.Fatalf("want Codex's two files and Cursor's reported as unsupported, got:\n%s", out.String())
+	if skipped < 3 {
+		t.Fatalf("want at least Codex's two files and Cursor's reported as unsupported, got:\n%s", out.String())
 	}
 
 	// A rerun changes nothing, and remove takes out every entry install wrote.
