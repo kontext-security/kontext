@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.21.0](https://github.com/kontext-security/kontext/compare/v1.20.0...v1.21.0) (2026-11-09)
+
+
+### Features
+
+* **hooks:** skip self-serve hooks for agents a scan is sure are absent ([#722](https://github.com/kontext-security/kontext/issues/722)) ([dc0ed3f](https://github.com/kontext-security/kontext/commit/dc0ed3f1596b110dfb62c4da8205215f74606856))
+* **inventory:** report per-source scan outcomes and install evidence ([#720](https://github.com/kontext-security/kontext/issues/720)) ([02ce594](https://github.com/kontext-security/kontext/commit/02ce594a563730e21d3e801ac92cb3400dbae692))
+* **inventory:** upload source outcomes and keep them until acknowledged ([#721](https://github.com/kontext-security/kontext/issues/721)) ([5962b22](https://github.com/kontext-security/kontext/commit/5962b22baf94b8a962f0cda52b9424c4b841aaf7))
+
+
+### Bug Fixes
+
+* **inventory:** close gaps found in review of source scans ([#723](https://github.com/kontext-security/kontext/issues/723)) ([aa02d7f](https://github.com/kontext-security/kontext/commit/aa02d7f75773019892e835ecbd1cf9f4e8b72cba))
+
 ## [1.20.0](https://github.com/kontext-security/kontext/compare/v1.19.0...v1.20.0) (2026-11-08)
 
 
