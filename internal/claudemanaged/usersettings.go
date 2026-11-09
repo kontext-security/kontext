@@ -189,12 +189,14 @@ func KontextBinaries(data []byte) []string {
 func expectedUserHooks(binary string, machine [][]byte) Settings {
 	// Events machine-wide settings lack use that binary too, so every handler
 	// in the user copy names one executable, as doctor expects.
+	// Only a source whose hook the copy repeats counts: a shell-form one on
+	// Windows isn't copied, so its binary, perhaps an older one, isn't either.
 	for _, data := range machine {
-		if machineBinary, ok := ManagedObserveHookBinary(data); ok && runnable(machineBinary) {
+		if machineBinary, ok := ManagedObserveHookBinary(data); ok && runnable(machineBinary) && copiesHookOf(data, machineBinary) {
 			binary = machineBinary
 			break
 		}
-		if _, machineBinary := MissingRequiredEvents(data); machineBinary != "" && runnable(machineBinary) {
+		if _, machineBinary := MissingRequiredEvents(data); machineBinary != "" && runnable(machineBinary) && copiesHookOf(data, machineBinary) {
 			binary = machineBinary
 			break
 		}
@@ -220,6 +222,25 @@ func expectedUserHooks(binary string, machine [][]byte) Settings {
 		}
 	}
 	return expected
+}
+
+// copiesHookOf reports whether data holds a Kontext hook naming binary that a
+// user copy repeats.
+func copiesHookOf(data []byte, binary string) bool {
+	var settings Settings
+	if json.Unmarshal(data, &settings) != nil {
+		return false
+	}
+	for _, event := range SupportedEvents {
+		for _, group := range settings.Hooks[event.Name.String()] {
+			for _, handler := range group.Hooks {
+				if hookBinary, ok := kontextHook(group, handler, event); ok && hookBinary == binary {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // runnable never stats a binary in a privacy-guarded folder: the daemon calls

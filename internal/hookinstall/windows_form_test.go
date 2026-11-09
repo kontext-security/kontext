@@ -134,6 +134,29 @@ func TestWindowsUserInstallDoesNotCopyAShellFormMachineHook(t *testing.T) {
 	}
 }
 
+// The shell-form drop-in may name an older kontext.exe that still exists; the
+// user copy takes the binary it was given, not that one.
+func TestWindowsUserInstallIgnoresAShellFormMachineHooksBinary(t *testing.T) {
+	home, binary := asWindows(t)
+	old := filepath.Join(filepath.Dir(binary), "old", "kontext.exe")
+	write(t, old, "MZ", 0755)
+	claudemanaged.ExecForm = false
+	shell, err := json.Marshal(claudemanaged.Template(old))
+	claudemanaged.ExecForm = true
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, machineClaudeDropIn, string(shell), 0644)
+
+	if err := Install(Options{Scope: User, Home: home, Binary: binary, Out: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
+	}
+	data := read(t, filepath.Join(home, ".claude", "settings.json"))
+	if !claudemanaged.UserHooksMatch([]byte(data), binary) || strings.Contains(data, old) {
+		t.Fatalf("settings.json doesn't name %s alone:\n%s", binary, data)
+	}
+}
+
 func TestWindowsSystemInstallWritesTheManagedDropIn(t *testing.T) {
 	_, binary := asWindows(t)
 	dropIn := filepath.Join(t.TempDir(), "ClaudeCode", "managed-settings.d", "20-kontext.json")
