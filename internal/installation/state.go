@@ -29,7 +29,7 @@ type State struct {
 
 // errNoPath reports an identity path that couldn't be worked out, so nothing is
 // read from or written to the current folder instead.
-var errNoPath = errors.New("installation state path is unknown")
+var errNoPath = errors.New("installation state path is unknown: this user's local app data folder can't be found")
 
 // PathFromEnv is the override when one is set, and SystemPath otherwise.
 func PathFromEnv() string {

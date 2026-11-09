@@ -1,6 +1,7 @@
 package installation
 
 import (
+	"errors"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -31,10 +32,10 @@ func TestPathFromEnvDefaultsToSystemPath(t *testing.T) {
 
 // A path that couldn't be worked out is an error, not a file in the current folder.
 func TestEmptyPathIsRefused(t *testing.T) {
-	if _, err := LoadFile(""); err == nil {
-		t.Error("LoadFile(\"\") succeeded")
+	if _, err := LoadFile(""); !errors.Is(err, errNoPath) {
+		t.Errorf("LoadFile(\"\") error = %v, want %v", err, errNoPath)
 	}
-	if _, err := EnsureFile(""); err == nil {
-		t.Error("EnsureFile(\"\") succeeded")
+	if _, err := EnsureFile(""); !errors.Is(err, errNoPath) {
+		t.Errorf("EnsureFile(\"\") error = %v, want %v", err, errNoPath)
 	}
 }

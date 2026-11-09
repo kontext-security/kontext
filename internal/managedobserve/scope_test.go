@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -17,6 +18,11 @@ func TestInstallationPathForScope(t *testing.T) {
 	t.Setenv(installation.EnvPath, "")
 
 	userPath := filepath.Join("/Users/example", "Library", "Application Support", "Kontext", "installation.json")
+	// The literal, so this test notices a change to the macOS and Linux default.
+	systemPath := "/Library/Application Support/Kontext/installation.json"
+	if runtime.GOOS == "windows" {
+		systemPath = installation.SystemPath()
+	}
 
 	cases := []struct {
 		name  string
@@ -26,9 +32,9 @@ func TestInstallationPathForScope(t *testing.T) {
 		// System and env-resolved configs keep the enterprise default so MDM
 		// daemons behave byte-identically to before self-serve existed. On
 		// Windows that default is per user.
-		{"system scope", managedconfig.ScopeSystem, installation.SystemPath()},
-		{"env scope", managedconfig.ScopeEnv, installation.SystemPath()},
-		{"empty scope (LoadFile callers)", managedconfig.Scope(""), installation.SystemPath()},
+		{"system scope", managedconfig.ScopeSystem, systemPath},
+		{"env scope", managedconfig.ScopeEnv, systemPath},
+		{"empty scope (LoadFile callers)", managedconfig.Scope(""), systemPath},
 		{"user scope", managedconfig.ScopeUser, userPath},
 	}
 	for _, tc := range cases {
