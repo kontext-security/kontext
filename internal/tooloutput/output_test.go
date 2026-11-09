@@ -116,3 +116,18 @@ func TestResolvePath(t *testing.T) {
 		}
 	}
 }
+
+func TestReadIsNotACandidateByDefault(t *testing.T) {
+	compactRead = false
+	defer func() { compactRead = true }()
+	long := strings.Repeat("x", minOutputBytes+1)
+	event := hook.Event{Agent: "claude", HookName: hook.HookPostToolUse, ToolName: "Read",
+		ToolResponse: map[string]any{"type": "text", "file": map[string]any{"content": long, "filePath": "/repo/a.go", "startLine": json.Number("1")}}}
+	if LiveCandidate(event) {
+		t.Fatal("a Claude Code Read is a live candidate; Read compaction is off")
+	}
+	bash := hook.Event{Agent: "claude", HookName: hook.HookPostToolUse, ToolName: "Bash", ToolResponse: map[string]any{"stdout": long}}
+	if !LiveCandidate(bash) {
+		t.Fatal("a Claude Code Bash stdout stopped being a live candidate")
+	}
+}

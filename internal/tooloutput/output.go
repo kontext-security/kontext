@@ -31,7 +31,7 @@ type output struct {
 }
 
 // LiveCandidate reports whether a PostToolUse carries an output live
-// compaction handles: a Claude Code Bash stdout or Read text, or a Codex shell
+// compaction handles: a Claude Code Bash stdout, or a Codex shell
 // call's output, over 2048 bytes. The hook asks the daemon only about these,
 // so every other call costs nothing extra.
 func LiveCandidate(event hook.Event) bool {
@@ -52,6 +52,13 @@ func liveOutput(event hook.Event) (output, bool) {
 	return output{}, false
 }
 
+// compactRead is whether live compaction takes up a Claude Code Read. It does
+// not: in real sessions two thirds of cut Reads were read back, mostly in full,
+// and in the Claude bench the agent rarely uses Read, so cutting it saved little
+// and cost a tool call each time. The Read path stays for the offline replay and
+// the tests, which turn it on.
+var compactRead = false
+
 func claudeOutput(event hook.Event) (output, bool) {
 	response := event.ToolResponse
 	switch event.ToolName {
@@ -68,6 +75,9 @@ func claudeOutput(event hook.Event) (output, bool) {
 			return rebuilt
 		}}, true
 	case "Read":
+		if !compactRead {
+			return output{}, false
+		}
 		file, _ := response["file"].(map[string]any)
 		content, isText := file["content"].(string)
 		path, _ := file["filePath"].(string)
