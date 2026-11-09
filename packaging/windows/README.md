@@ -6,8 +6,8 @@
 
 | Property | Required | Meaning |
 |---|---|---|
-| `CLOUD_URL` | on a first install | Kontext cloud URL, `https://` only. |
-| `INSTALL_TOKEN` | no | Install token, written to the `InstallToken` policy value. Hidden: Windows Installer keeps it out of its log. Optional when an MDM sets that value, for example Intune through an ingested ADMX. |
+| `CLOUD_URL` | on a first install | Kontext cloud URL: `https://<host>`, at most with a port. A path, query or anything else after the host fails the install, as the daemon would refuse it. |
+| `INSTALL_TOKEN` | no | Install token, written to the `InstallToken` policy value. Hidden: Windows Installer keeps it out of its log. Optional when an MDM sets that value, for example Intune through an ingested ADMX; a value the installer didn't write stays on uninstall. |
 | `MODE` | no, default `observe` | `observe` or `enforce`. |
 
 An upgrade or repair without `CLOUD_URL` or `INSTALL_TOKEN` keeps what was written before. Given again, they replace it; a new `MODE` takes effect only together with `CLOUD_URL`.
@@ -22,15 +22,17 @@ An upgrade or repair without `CLOUD_URL` or `INSTALL_TOKEN` keeps what was writt
 | `%ProgramData%\Kontext\` | system configuration folder | owner Administrators; SYSTEM and Administrators full control; Users read and list; nothing inherited from ProgramData |
 | `%ProgramData%\Kontext\managed.json` | `cloud_url`, `mode`, `"install_token_ref": "registry:InstallToken"` | inherited: SYSTEM and Administrators full control, Users read |
 | `HKLM\SOFTWARE\Policies\Kontext`, value `InstallToken` (REG_SZ, 64-bit view) | the install token | the key's default: administrators and SYSTEM write, Users read |
-| `%LOCALAPPDATA%\Kontext\daemon.log`, per user | what the daemon started by the task would print; rotated to `daemon.log.1` past 10 MB | the user's own folder; not installed, written by the daemon |
+| `%LOCALAPPDATA%\Kontext\daemon.log`, per user | what the daemon started by the task would print, crashes included; a daemon that starts and finds it past 10 MB moves it to `daemon.log.1` | the user's own folder; not installed, written by the daemon |
 | `%ProgramData%\OpenAI\Codex\` | Codex's system folder, created only if missing and left in place on uninstall | owner Administrators; SYSTEM and Administrators full control; Users read and execute |
 
 On install, upgrade and repair the installer also runs, as LocalSystem:
 
 - `kontext.exe hooks install --scope system --binary "<install folder>\kontext.exe"`;
-- registers the scheduled task `\Kontext\Kontext Daemon`: at the logon of any member of Users, as that user with least privilege, it starts `kontextw.exe managed-observe-daemon`. One instance per user, no time limit, runs on battery, restarts every minute on failure (up to 999 times), normal priority.
+- registers the scheduled task `\Kontext\Kontext Daemon`: at the logon of any member of Users, as that user with least privilege, it starts `kontextw.exe managed-observe-daemon`. One instance per user, no time limit, runs on battery, restarts every minute on failure (up to 999 times), normal priority. An install or upgrade also starts it right away for everyone already signed in.
 
-A full uninstall stops the daemons the task started, deletes the task, runs `kontext.exe hooks remove --scope system`, deletes `managed.json` and the `InstallToken` value, and the policy key if nothing else is left in it. A major upgrade keeps all of them. A failed first install rolls them back.
+A full uninstall stops the daemons the task started, deletes the task, runs `kontext.exe hooks remove --scope system`, deletes `managed.json`, and the `InstallToken` value if the installer wrote it, then the policy key and `%ProgramData%\Kontext` if nothing else is left in them. It keeps what it removes until it commits, so a cancelled or failed uninstall puts everything back.
+
+An upgrade keeps the configuration, the token, the hooks and the task. It stops the running daemons, removes the old version and installs the new one in one transaction, and starts the daemons again; a failed upgrade restores the old version. A failed first install rolls everything back.
 
 `managed.json`, the token value and the task are written by `kontext-install.js`, a JScript custom action inside the MSI, so the token passes through no command line and no installer log.
 
