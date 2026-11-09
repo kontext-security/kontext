@@ -82,3 +82,16 @@ func TestLifecycleDoesNotRetryAHeldCall(t *testing.T) {
 		t.Fatalf("requests = %d, want 1: a held call is not retried", got)
 	}
 }
+
+// The budget comes on top of the hold: a daemon that decides a little after
+// a short hold ends still gets its answer through, rather than the hook
+// giving up at the hold's end.
+func TestLifecycleAddsTheBudgetToTheHold(t *testing.T) {
+	socketPath, _ := holdingDaemon(t, 500, 1200*time.Millisecond, false)
+	lifecycle := Lifecycle{SocketPath: socketPath, Label: DefaultLaunchdLabel, Mode: "enforce", Kickstart: func(context.Context, string) error { return nil }}
+
+	result := lifecycle.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Bash", ToolUseID: "toolu_budget"})
+	if result.Decision != hook.DecisionDeny {
+		t.Fatalf("result = %+v, want the answer that came 700 ms after the hold ended", result)
+	}
+}
