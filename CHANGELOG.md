@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.20.0](https://github.com/kontext-security/kontext/compare/v1.19.0...v1.20.0) (2026-11-08)
+
+
+### Features
+
+* **agent:** record and enforce Antigravity tool calls ([#714](https://github.com/kontext-security/kontext/issues/714)) ([062016a](https://github.com/kontext-security/kontext/commit/062016aa3c4c0a95291f0fc740cde69de645f2d7))
+
+
+### Bug Fixes
+
+* **cedarpolicy:** keep enforcing through a short run of policy 401s (ENG-978) ([#719](https://github.com/kontext-security/kontext/issues/719)) ([9102408](https://github.com/kontext-security/kontext/commit/91024085f568cff302f885119ecfe7a5f3a51dac))
+* **daemon:** serve the hook socket before the step-safety model loads ([#710](https://github.com/kontext-security/kontext/issues/710)) ([20064eb](https://github.com/kontext-security/kontext/commit/20064eb62248588bca1cc269cfad383d4c897a09))
+* **managedobserve:** refresh the policy right after a fresh endpoint's first accepted post ([#708](https://github.com/kontext-security/kontext/issues/708)) ([debbda3](https://github.com/kontext-security/kontext/commit/debbda3bcec95dedbfa89ab88af1efbf88de3bca))
+
 ## [1.19.0](https://github.com/kontext-security/kontext/compare/v1.18.0...v1.19.0) (2026-11-05)
 
 
