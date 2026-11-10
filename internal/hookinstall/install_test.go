@@ -21,6 +21,7 @@ import (
 
 func fixture(t *testing.T, scope Scope) (Options, []Definition) {
 	t.Helper()
+	hermetic.NotOnWindows(t, "ENG-1001", "the fixture pins the macOS layout, with the Codex and Cursor files Windows doesn't install yet")
 	t.Setenv("CODEX_HOME", "")
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	root := t.TempDir()
@@ -91,6 +92,7 @@ func read(t *testing.T, path string) string {
 }
 
 func TestSkipAgentWritesNothingForThatAgentAndNeverBlocksRemoval(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "skipping an agent is about the Codex and Cursor files, which Windows doesn't install yet")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", "")
 	binary := filepath.Join(t.TempDir(), "kontext")
@@ -1292,6 +1294,7 @@ func TestMachineCodexCoverageCountsAnyRunnableHook(t *testing.T) {
 // The daemon repairs one agent per pass with a Skip filter, so asking about
 // every agent on every pass would scan each one four times a minute.
 func TestSkipAgentAsksOnlyAboutAgentsThePassReaches(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "skipping an agent is about the Codex and Cursor files, which Windows doesn't install yet")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", "")
 	binary := filepath.Join(t.TempDir(), "kontext")

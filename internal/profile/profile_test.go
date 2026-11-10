@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func withRoot(t *testing.T) string {
@@ -356,6 +358,7 @@ func TestCompareAndSetActive(t *testing.T) {
 // A live claim pins the directory: rm and rename refuse while the claiming
 // process runs, and stop refusing the moment its claim is released.
 func TestRemoveAndRenameRefuseALiveClaim(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1002", "profiles are macOS-only, and the claim's liveness check is a stub on Windows")
 	withRoot(t)
 	release, err := Claim("mid-setup")
 	if err != nil {

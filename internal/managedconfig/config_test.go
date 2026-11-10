@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -412,7 +413,9 @@ func TestRewriteModePreservesOtherFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows has no mode bits; how a user's config is kept private there
+	// comes with setup on Windows (ENG-1002).
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("file mode = %v, want 0600", info.Mode().Perm())
 	}
 }

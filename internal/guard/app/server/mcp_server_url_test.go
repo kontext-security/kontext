@@ -12,6 +12,7 @@ import (
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/guard/risk"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/mcpconfig"
 )
 
@@ -52,6 +53,7 @@ func writeConfig(t *testing.T, path, content string) {
 // closes). Servers that stay unidentified keep their raw name and are
 // allowed.
 func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1006", "the MCP config readers aren't ported to Windows yet")
 	const (
 		account         = "11111111-2222-4333-8444-555555555555"
 		org             = "66666666-7777-4888-9999-000000000000"

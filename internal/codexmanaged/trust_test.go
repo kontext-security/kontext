@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 // Hashes Codex 0.165 saved after trusting the template for
@@ -103,6 +105,7 @@ func TestHookHashMatchesCodex(t *testing.T) {
 
 // Codex resolves a symlinked CODEX_HOME before it builds the trust key.
 func TestUntrustedHooksResolvesCodexHome(t *testing.T) {
+	hermetic.Symlinks(t)
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "codex-link")
 	if err := os.Symlink(real, link); err != nil {

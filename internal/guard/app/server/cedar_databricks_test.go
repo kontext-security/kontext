@@ -85,6 +85,7 @@ func databricksSQLEntryPoints(sql string) map[string]risk.HookEvent {
 }
 
 func TestCedarDatabricksSQLParity(t *testing.T) {
+	posixShellHost(t)
 	// The MCP entry point is a configured Databricks SQL server.
 	home := useMCPHome(t)
 	writeConfig(t, filepath.Join(home, ".claude.json"), `{"mcpServers": {"wh": {"type": "http", "url": "https://dbc-1234.cloud.databricks.com/api/2.0/mcp/sql"}}}`)
@@ -107,6 +108,7 @@ func TestCedarDatabricksSQLParity(t *testing.T) {
 // TestCedarDatabricksShellPresets checks each preset on its own against the
 // CLI, databricks api and curl, through Claude's Bash and Codex's shell tools.
 func TestCedarDatabricksShellPresets(t *testing.T) {
+	posixShellHost(t)
 	commands := map[string][]string{
 		"databricks clusters list":                                                          nil,
 		"databricks bundle validate":                                                        nil,
@@ -163,4 +165,14 @@ func TestCedarDatabricksShellPresets(t *testing.T) {
 			}
 		}
 	}
+}
+
+// posixShellHost pins the daemon's host to one where Codex runs a POSIX shell.
+// On Windows a Codex command is read as PowerShell too (see shellProjections),
+// and these tests pin the POSIX reading; cedar_test.go covers both readings.
+func posixShellHost(t *testing.T) {
+	t.Helper()
+	hostOS := shellHostOS
+	shellHostOS = "darwin"
+	t.Cleanup(func() { shellHostOS = hostOS })
 }

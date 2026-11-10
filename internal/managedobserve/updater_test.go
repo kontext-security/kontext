@@ -23,6 +23,9 @@ import (
 // homebrew-core install, which Homebrew does not allow.
 
 func TestHomebrewUpdaterInstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew doesn't run on Windows")
+	}
 	for _, tc := range []struct {
 		name, goos, resolved, optOut string
 		scope                        managedconfig.Scope

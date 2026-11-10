@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 // adminLayers points AdminRouteBlocker at an empty system folder and no
@@ -86,6 +88,7 @@ func TestNoAdministratorLayerRoutesCodex(t *testing.T) {
 // routes Codex itself, the ones Kontext's line would override and the ones
 // that would override it alike.
 func TestEachAdministratorLayerThatRoutesCodexBlocks(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "Codex's administrator layers are read for its route, which runs on macOS only")
 	encode := func(content string) string { return base64.StdEncoding.EncodeToString([]byte(content)) }
 	for _, layer := range []struct {
 		name  string

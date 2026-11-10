@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 // Ways the installed file can fail, each pinned below:
@@ -20,6 +22,7 @@ import (
 //   - a binary path with spaces breaks the command
 //   - an admin's command that merely contains the Kontext path counts as ours
 func TestMergeWritesEveryEventInTheShapeAntigravityReads(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "Antigravity's hooks aren't written on Windows yet")
 	t.Parallel()
 	settings := map[string]any{}
 	if err := MergeManagedHooks(settings, "/opt/homebrew/bin/kontext"); err != nil {
@@ -69,6 +72,7 @@ func TestMergeWritesEveryEventInTheShapeAntigravityReads(t *testing.T) {
 }
 
 func TestMergeAndRemoveKeepOtherHooks(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "Antigravity's hooks aren't written on Windows yet")
 	t.Parallel()
 	mine := map[string]any{"PreToolUse": []any{map[string]any{"matcher": "run_command", "hooks": []any{map[string]any{"command": "./audit.sh"}}}}}
 	settings := map[string]any{"safety-gate": mine}
@@ -139,6 +143,7 @@ func TestValidateInstalledFindsProblems(t *testing.T) {
 }
 
 func TestHookCommandParsesBack(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "Antigravity's hooks aren't written on Windows yet")
 	t.Parallel()
 	for _, binary := range []string{"/usr/local/bin/kontext", "/Applications/Kontext (Dev)/kontext"} {
 		command := hookCommand(binary, "pre-tool-use")
@@ -163,6 +168,7 @@ func TestHookCommandParsesBack(t *testing.T) {
 // nothing that stops the agent, so the command itself has to survive it: run it
 // through the shell Antigravity uses.
 func TestHookCommandPassesWhenTheBinaryIsGone(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "Antigravity's hooks aren't written on Windows yet")
 	t.Parallel()
 	gone := filepath.Join(t.TempDir(), "kontext")
 	out, err := exec.Command("sh", "-c", hookCommand(gone, "pre-tool-use")).Output()
@@ -175,6 +181,7 @@ func TestHookCommandPassesWhenTheBinaryIsGone(t *testing.T) {
 }
 
 func TestUserHooksPath(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "Antigravity's hooks aren't written on Windows yet")
 	t.Parallel()
 	if got := UserHooksPath("/Users/dev"); got != "/Users/dev/.gemini/config/hooks.json" {
 		t.Fatalf("path = %q", got)

@@ -44,6 +44,14 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	hermetic.NotOnWindows(t, "ENG-1002", "kontext setup runs on macOS only, and the harness drives that flow")
+	return newHarnessOnAnyOS(t)
+}
+
+// newHarnessOnAnyOS is the harness without the Windows skip, for what setup
+// does on every OS.
+func newHarnessOnAnyOS(t *testing.T) *harness {
+	t.Helper()
 	h := &harness{t: t, home: t.TempDir(), keychain: map[string]string{}}
 	hermetic.SetHome(t, h.home)
 	t.Setenv("CODEX_HOME", "")
@@ -827,7 +835,7 @@ func TestRunRequiresTokenWithoutTTY(t *testing.T) {
 }
 
 func TestRunNonDarwin(t *testing.T) {
-	h := newHarness(t)
+	h := newHarnessOnAnyOS(t)
 	overrideVar(t, &goos, "linux")
 	server := pingServer(t, "tok")
 

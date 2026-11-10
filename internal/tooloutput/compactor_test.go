@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
@@ -943,6 +944,7 @@ func TestTokenLookupKeepsToItsCaller(t *testing.T) {
 // Any spelling of a saved output's path counts: redundant separators, dot
 // elements and paths relative to the working directory.
 func TestSavedOutputPathSpellings(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-932", "tool output compaction isn't ported to Windows paths yet")
 	c := newTestCompactor(t, replace("short"))
 	if c.Compact(context.Background(), c.bash("make test", bigText(80))) == nil {
 		t.Fatal("not compacted")
@@ -996,6 +998,7 @@ func TestOversizedInputFailsClosed(t *testing.T) {
 // A read-back late in an input too long for the compaction check is still
 // reported: that check fails closed, while reporting reads every word.
 func TestReadBackPastTheScanCap(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-932", "tool output compaction isn't ported to Windows paths yet")
 	c := newTestCompactor(t, replace("short"))
 	if c.Compact(context.Background(), c.bash("make test", bigText(80))) == nil {
 		t.Fatal("not compacted")

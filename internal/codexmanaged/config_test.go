@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -142,7 +143,8 @@ func TestEnsureHooksEnabledPreservesModeAndBacksUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	// Windows has no mode bits to preserve.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 		t.Fatalf("mode = %v, want 0644 preserved", info.Mode().Perm())
 	}
 	entries, err := os.ReadDir(filepath.Dir(path))
