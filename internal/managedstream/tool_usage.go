@@ -25,7 +25,7 @@ func reconcileToolUsage(ctx context.Context, opts Options) error {
 	if cachePath == "" {
 		cachePath = endpointconfig.DefaultCachePathForDB(opts.DBPath)
 	}
-	cache := endpointconfig.NewCache(cachePath)
+	cache := endpointconfig.NewCacheForDB(cachePath, opts.DBPath)
 	if err := cache.Load(); err == nil {
 		snapshot := cache.Current()
 		store.SetPayloadCaptureConfiguration(payloadcapture.RuntimeConfiguration{

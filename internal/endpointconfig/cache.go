@@ -24,6 +24,8 @@ const (
 
 var defaultConfig = Config{PayloadCaptureMode: payloadcapture.ModeSummary}
 
+var ErrCacheInvalidated = errors.New("endpoint configuration cache invalidated; refresh required")
+
 type Status struct {
 	FetchedAt     time.Time
 	LastAttemptAt time.Time
@@ -56,8 +58,9 @@ type cacheFile struct {
 }
 
 type Cache struct {
-	path string
-	now  func() time.Time
+	path         string
+	rejectedPath string
+	now          func() time.Time
 
 	mu       sync.RWMutex
 	fetched  time.Time
@@ -67,7 +70,15 @@ type Cache struct {
 }
 
 func NewCache(path string) *Cache {
-	return &Cache{path: path, now: time.Now}
+	return &Cache{path: path, rejectedPath: path + ".rejected", now: time.Now}
+}
+
+// Keep revocation in the installation's writable state directory, independently
+// of a custom cache location whose directory may prevent deletion or replacement.
+func NewCacheForDB(path, dbPath string) *Cache {
+	c := NewCache(path)
+	c.rejectedPath = dbPath + ".endpoint-config-rejected"
+	return c
 }
 
 func DefaultCachePathForDB(dbPath string) string {
@@ -79,6 +90,11 @@ func DefaultCachePathForDB(dbPath string) string {
 func (c *Cache) Load() error {
 	if c.path == "" {
 		return nil
+	}
+	if _, err := os.Stat(c.rejectedPath); err == nil {
+		return ErrCacheInvalidated
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("endpoint configuration cache: revocation journal: %w", err)
 	}
 	data, err := os.ReadFile(c.path)
 	if err != nil {
@@ -173,11 +189,15 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt, Stale: true}
 	c.mu.Unlock()
 	if err := c.persist(file); err != nil {
-		if c.path != "" {
-			_ = os.Remove(c.path)
-		}
+		err = errors.Join(err, c.invalidatePersisted())
 		c.MarkFailed(err, fetchedAt)
 		return err
+	}
+	if c.path != "" {
+		if err := os.Remove(c.rejectedPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.MarkFailed(err, fetchedAt)
+			return fmt.Errorf("endpoint configuration cache: clear revocation: %w", err)
+		}
 	}
 	c.mu.Lock()
 	c.fetched = fetchedAt
@@ -405,7 +425,7 @@ func (r *Refresher) Run(ctx context.Context) {
 func (r *Refresher) fail(err error) error {
 	if r.Cache != nil {
 		if errors.Is(err, ErrAuthorityRejected) {
-			r.Cache.rejectAuthority(err, r.now())
+			err = errors.Join(err, r.Cache.rejectAuthority(err, r.now()))
 		} else {
 			r.Cache.MarkFailed(err, r.now())
 		}
@@ -420,16 +440,35 @@ func (r *Refresher) fail(err error) error {
 	return err
 }
 
-func (c *Cache) rejectAuthority(err error, at time.Time) {
+func (c *Cache) rejectAuthority(err error, at time.Time) error {
 	c.mu.Lock()
 	c.active = nil
 	c.lastGood = nil
 	c.status = Status{FetchedAt: c.fetched, LastAttemptAt: at, Stale: true, Invalid: true, LastError: err.Error()}
 	c.mu.Unlock()
-	// A rejected enrollment must not be restored by a worker or restart.
-	if c.path != "" {
-		_ = os.Remove(c.path)
+	return c.invalidatePersisted()
+}
+
+func (c *Cache) invalidatePersisted() error {
+	if c.path == "" {
+		return nil
 	}
+	if err := os.MkdirAll(filepath.Dir(c.rejectedPath), 0700); err == nil {
+		if err := os.WriteFile(c.rejectedPath, []byte("refresh required\n"), 0600); err == nil {
+			return nil
+		}
+	}
+	// A directory can deny deletion while its existing file remains writable.
+	// Truncation is fail-closed even if interrupted; Load rejects the empty file.
+	writeErr := os.WriteFile(c.path, nil, 0600)
+	if writeErr == nil {
+		return nil
+	}
+	removeErr := os.Remove(c.path)
+	if removeErr == nil || errors.Is(removeErr, os.ErrNotExist) {
+		return nil
+	}
+	return fmt.Errorf("endpoint configuration cache: cannot durably invalidate: %w", errors.Join(writeErr, removeErr))
 }
 
 func (r *Refresher) recovered() {

@@ -3,6 +3,7 @@ package managedstream
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"github.com/kontext-security/kontext/internal/guard/app/server"
 	"github.com/kontext-security/kontext/internal/guard/risk"
@@ -21,7 +22,8 @@ func TestDirectiveAuthorityE2E(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "endpoint.json")
-	cache := endpointconfig.NewCache(path)
+	dbPath := filepath.Join(dir, "guard.db")
+	cache := endpointconfig.NewCacheForDB(path, dbPath)
 	on, off := true, false
 	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off}
 	var mu sync.Mutex
@@ -108,10 +110,17 @@ func TestDirectiveAuthorityE2E(t *testing.T) {
 		t.Fatal("expected cache write failure")
 	}
 	prompt("stricter-policy-write-failed", sqlite.TurnPromptSkipped)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
 	mu.Lock()
 	status = 200
 	mu.Unlock()
 	if err := refresher.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	oldCache, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
@@ -121,12 +130,30 @@ func TestDirectiveAuthorityE2E(t *testing.T) {
 		t.Fatal("expected rejected authority")
 	}
 	prompt("revoked-authority", sqlite.TurnPromptSkipped)
-	restart := endpointconfig.NewCache(path)
-	if err := restart.Load(); err != nil {
+	// Simulate a cache file surviving failed deletion. The independent journal
+	// must reject it even after the original file becomes writable again.
+	if err := os.WriteFile(path, oldCache, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restart := endpointconfig.NewCacheForDB(path, dbPath)
+	if err := restart.Load(); err != nil && !errors.Is(err, endpointconfig.ErrCacheInvalidated) {
 		t.Fatal(err)
 	}
 	if restart.Current().Config.WorkTypeClassificationEnabled() {
 		t.Fatal("revoked directive survived restart")
+	}
+	mu.Lock()
+	status = 200
+	mu.Unlock()
+	if err := refresher.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	restored := endpointconfig.NewCacheForDB(path, dbPath)
+	if err := restored.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if !restored.Current().Config.WorkTypeClassificationEnabled() {
+		t.Fatal("fresh authorization did not clear durable rejection")
 	}
 	if path := os.Getenv("KONTEXT_RECOVERY_E2E_ARTIFACT"); path != "" {
 		body, _ := json.MarshalIndent(phases, "", "  ")

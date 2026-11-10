@@ -265,7 +265,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if endpointConfigCachePath == "" {
 		endpointConfigCachePath = endpointconfig.DefaultCachePathForDB(dbPath)
 	}
-	endpointConfigCache := endpointconfig.NewCache(endpointConfigCachePath)
+	endpointConfigCache := endpointconfig.NewCacheForDB(endpointConfigCachePath, dbPath)
 	if err := endpointConfigCache.Load(); err != nil {
 		endpointConfigCache.MarkInvalid(err)
 		opts.Diagnostic.Printf("endpoint configuration cache load: %v\n", err)
