@@ -139,7 +139,7 @@ func runVersion(home, binary string) (string, error) {
 	cmd := exec.CommandContext(ctx, binary, "--version")
 	out := &cappedBuffer{limit: 4096}
 	cmd.Stdout, cmd.Stderr = out, out
-	cmd.Env = append(os.Environ(), "PATH="+strings.Join(append([]string{filepath.Dir(binary)}, cliDirs(home)...), ":")+":"+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(), "PATH="+versionPath(home, binary))
 	ownProcessGroup(cmd)
 	cmd.WaitDelay = 2 * time.Second
 	err := cmd.Run()
@@ -150,6 +150,20 @@ func runVersion(home, binary string) (string, error) {
 		return "", nil // ran and failed: no version for this binary
 	}
 	return parseVersion(out.String()), nil
+}
+
+// versionPath is the PATH a CLI's --version runs with: its own folder and the
+// usual install folders, then the daemon's PATH. As in findCLI, a folder that
+// is not absolute stays out: on Windows the unix system folders have no
+// drive and would be taken on the current one.
+func versionPath(home, binary string) string {
+	dirs := []string{filepath.Dir(binary)}
+	for _, dir := range cliDirs(home) {
+		if filepath.IsAbs(dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	return strings.Join(append(dirs, os.Getenv("PATH")), string(os.PathListSeparator))
 }
 
 // cappedBuffer keeps the first limit bytes and discards the rest, so a CLI
@@ -174,29 +188,63 @@ type pending struct{}
 // findCLI also returns a lookup failure other than absence, so a caller can
 // tell "not installed" from "could not check".
 func findCLI(home, name string, clean map[string]bool) (string, error) {
-	// Only Windows needs LookPath, for its executable extensions. On unix it
-	// reports an unreadable PATH folder as not found.
+	// On Windows LookPath answers for PATH first, as the shell resolves it. On
+	// unix it reports an unreadable PATH folder as not found.
 	if runtime.GOOS == "windows" {
 		if path, err := exec.LookPath(name); err == nil {
 			return path, nil
 		}
 	}
 	var failure error
-	// The daemon runs under launchd with a minimal PATH, hence the fixed folders.
+	// The daemon runs with a minimal PATH (under launchd on macOS), hence the
+	// fixed folders.
 	for _, dir := range append(filepath.SplitList(os.Getenv("PATH")), cliDirs(home)...) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
-		path := filepath.Join(dir, name)
-		info, err := statCandidate(home, path, clean)
-		if err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
-			return path, nil
-		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			failure = err
+		for _, file := range programNames(name) {
+			path := filepath.Join(dir, file)
+			info, err := statCandidate(home, path, clean)
+			if err == nil && isProgram(info) {
+				return path, nil
+			}
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				failure = err
+			}
 		}
 	}
 	return "", failure
+}
+
+// programNames lists the file names under which name is a program in a
+// folder: the name itself on unix, and on Windows the name with each
+// extension PATHEXT lists, since the extension makes a file a program there.
+// Without PATHEXT it takes the extensions exec.LookPath falls back to.
+func programNames(name string) []string {
+	if runtime.GOOS != "windows" {
+		return []string{name}
+	}
+	pathext := os.Getenv("PATHEXT")
+	if pathext == "" {
+		pathext = ".com;.exe;.bat;.cmd"
+	}
+	var names []string
+	for _, ext := range strings.Split(pathext, ";") {
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		names = append(names, name+ext)
+	}
+	return names
+}
+
+// isProgram tells a program from another file: a regular file, on unix with
+// an execute bit. Windows has no such bit; programNames picks by extension.
+func isProgram(info os.FileInfo) bool {
+	return info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode()&0o111 != 0)
 }
 
 // statCandidate never follows an install candidate into a privacy-guarded

@@ -425,6 +425,9 @@ func TestGuardedInstallCandidatesAreNotTouched(t *testing.T) {
 	})
 }
 
+// A program on PATH counts although other PATH entries are relative or
+// missing. On Windows exec.LookPath answers this one before findCLI's own
+// walk runs; TestProgramInAFixedFolderCounts covers the walk on every OS.
 func TestPathExecutableStillCounts(t *testing.T) {
 	home, bin := t.TempDir(), t.TempDir()
 	executableFixture(t, filepath.Join(bin, "codex"))
