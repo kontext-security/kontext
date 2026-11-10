@@ -71,6 +71,30 @@ func TestTurnOutboxSequenceAndWireShape(t *testing.T) {
 
 // A restarted daemon resolves an event's turn from SQLite by the event's own
 // time, so a deferred write that runs late still finds the right turn.
+// Two turns of a session can start in the same instant on a coarse clock; they
+// leave in the order they were taken, not in the order of their ids.
+func TestPendingTurnsOfOneInstantKeepTheirSequence(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	at := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	for _, id := range []string{"turn_z", "turn_a"} {
+		if err := store.SaveTurn(ctx, testTurn(id, "s", at, SizeOnlyTurnPrompt(TurnPromptSkipped, 1))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, err := store.PendingTurns(ctx, 50)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("pending = %+v, %v", pending, err)
+	}
+	if pending[0].ID != "turn_z" || pending[0].Sequence != 1 || pending[1].ID != "turn_a" || pending[1].Sequence != 2 {
+		t.Fatalf("pending = %s (%d), %s (%d); want turn_z (1), turn_a (2)", pending[0].ID, pending[0].Sequence, pending[1].ID, pending[1].Sequence)
+	}
+}
+
 func TestCurrentTurnAt(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(filepath.Join(t.TempDir(), "guard.db"))
