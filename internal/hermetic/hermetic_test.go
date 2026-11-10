@@ -1,6 +1,7 @@
 package hermetic
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -60,5 +61,50 @@ func TestSymlinksSkipsOrAllows(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Symlink(filepath.Join(dir, "target"), filepath.Join(dir, "link")); err != nil {
 		t.Fatalf("Symlinks did not skip, but os.Symlink failed: %v", err)
+	}
+}
+
+// recorder stands in for a test, to see what a helper does to it.
+type recorder struct {
+	testing.TB
+	skipped, failed string
+}
+
+func (r *recorder) Helper() {}
+func (r *recorder) Skipf(format string, args ...any) {
+	r.skipped = fmt.Sprintf(format, args...)
+}
+func (r *recorder) Fatalf(format string, args ...any) {
+	r.failed = fmt.Sprintf(format, args...)
+}
+
+func TestNotOnWindowsSkipsThereAndNamesItsIssue(t *testing.T) {
+	var onWindows, elsewhere, unowned recorder
+	notOn(&onWindows, "windows", "ENG-1", "no launchd")
+	notOn(&elsewhere, "linux", "ENG-1", "no launchd")
+	notOn(&unowned, "windows", "later", "no launchd")
+	if onWindows.skipped != "not on Windows yet (ENG-1): no launchd" || onWindows.failed != "" {
+		t.Errorf("on Windows: skipped %q, failed %q", onWindows.skipped, onWindows.failed)
+	}
+	if elsewhere.skipped != "" || elsewhere.failed != "" {
+		t.Errorf("on Linux: skipped %q, failed %q", elsewhere.skipped, elsewhere.failed)
+	}
+	if unowned.failed == "" {
+		t.Error("a skip without an issue was accepted")
+	}
+}
+
+func TestKontextBinaryIsOneThisOSRuns(t *testing.T) {
+	path := KontextBinary(t, filepath.Join(t.TempDir(), "tools"))
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if filepath.Base(path) != "kontext.exe" {
+			t.Errorf("name = %s, want kontext.exe", filepath.Base(path))
+		}
+	} else if filepath.Base(path) != "kontext" || info.Mode().Perm()&0o111 == 0 {
+		t.Errorf("%s with mode %v, want kontext with the execute bit", filepath.Base(path), info.Mode().Perm())
 	}
 }

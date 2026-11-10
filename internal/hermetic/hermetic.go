@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sync"
 	"testing"
@@ -82,6 +83,45 @@ var symlinks = sync.OnceValue(func() error {
 	defer os.RemoveAll(dir)
 	return os.Symlink(filepath.Join(dir, "target"), filepath.Join(dir, "link"))
 })
+
+// KontextBinary writes a stand-in for the Kontext executable into dir and
+// returns its path: kontext with the execute bit, and kontext.exe on Windows,
+// where the name is what makes a file one that runs.
+func KontextBinary(t testing.TB, dir string) string {
+	t.Helper()
+	name := "kontext"
+	if runtime.GOOS == "windows" {
+		name = "kontext.exe"
+	}
+	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("hermetic: kontext binary: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("hermetic: kontext binary: %v", err)
+	}
+	return path
+}
+
+var issueID = regexp.MustCompile(`^ENG-[0-9]+$`)
+
+// NotOnWindows skips the test on Windows, where what it covers doesn't exist
+// yet. issue is the work item that brings it there, so every such skip has an
+// owner and can be found again; why says what is missing.
+func NotOnWindows(t testing.TB, issue, why string) {
+	t.Helper()
+	notOn(t, runtime.GOOS, issue, why)
+}
+
+func notOn(t testing.TB, goos, issue, why string) {
+	t.Helper()
+	if !issueID.MatchString(issue) {
+		t.Fatalf("hermetic: a Windows skip needs its issue, got %q", issue)
+	}
+	if goos == "windows" {
+		t.Skipf("not on Windows yet (%s): %s", issue, why)
+	}
+}
 
 // Symlinks skips the test when this user cannot create symlinks, as on
 // Windows without Developer Mode or the SeCreateSymbolicLinkPrivilege.
