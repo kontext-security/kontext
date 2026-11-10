@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.1](https://github.com/kontext-security/kontext/compare/v1.22.0...v1.22.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **turns:** recover missed prompts from agent transcripts ([#733](https://github.com/kontext-security/kontext/issues/733)) ([e9a106f](https://github.com/kontext-security/kontext/commit/e9a106f6c9dc4592b3ffa96422d5e297f0ede3b7))
+
 ## [1.22.0](https://github.com/kontext-security/kontext/compare/v1.21.1...v1.22.0) (2026-11-09)
 
 
