@@ -198,7 +198,6 @@ func TestClaudeAppAloneDoesNotListCowork(t *testing.T) {
 
 // Installed needs no folder at all: an app that was never launched is listed.
 func TestInstalledWithoutConfigIsListed(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1003", "the inventory doesn't know where agents are installed on Windows yet")
 	t.Run("app", func(t *testing.T) {
 		if runtime.GOOS != "darwin" {
 			t.Skip("app bundles are macOS-only")
@@ -216,10 +215,7 @@ func TestInstalledWithoutConfigIsListed(t *testing.T) {
 	})
 	t.Run("cli", func(t *testing.T) {
 		home, bin := t.TempDir(), t.TempDir()
-		path := filepath.Join(bin, "codex")
-		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		executableFixture(t, filepath.Join(bin, "codex"))
 		t.Setenv("PATH", bin)
 		row := rowOf(scanHome(t, home), "codex")
 		if row == nil || row.Installed != InstalledYes || row.Configured {
@@ -365,8 +361,13 @@ func TestReasonsNeverCarryPaths(t *testing.T) {
 	}
 }
 
+// executableFixture writes a file this OS finds as a program at path: with the
+// execute bit, and on Windows with the .exe that makes it one.
 func executableFixture(t *testing.T, path string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		path += ".exe"
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -424,11 +425,13 @@ func TestGuardedInstallCandidatesAreNotTouched(t *testing.T) {
 	})
 }
 
+// A program on PATH counts although other PATH entries are relative or
+// missing. On Windows exec.LookPath answers this one before findCLI's own
+// walk runs; TestProgramInAFixedFolderCounts covers the walk on every OS.
 func TestPathExecutableStillCounts(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1003", "the inventory doesn't know where agents are installed on Windows yet")
 	home, bin := t.TempDir(), t.TempDir()
 	executableFixture(t, filepath.Join(bin, "codex"))
-	t.Setenv("PATH", "relative/bin:"+filepath.Join(bin, "missing")+":"+bin)
+	t.Setenv("PATH", strings.Join([]string{"relative/bin", filepath.Join(bin, "missing"), bin}, string(os.PathListSeparator)))
 	if got, err := agentInstalled(home, "codex", map[string]bool{}); got != InstalledYes || err != nil {
 		t.Fatalf("installed = %s, %v", got, err)
 	}
