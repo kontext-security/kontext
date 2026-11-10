@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"github.com/kontext-security/kontext/internal/guard/app/server"
 	"github.com/kontext-security/kontext/internal/guard/risk"
@@ -88,7 +89,11 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cache := endpointconfig.NewCache(endpointconfig.DefaultCachePathForDB(dbPath))
+			cachePath := endpointconfig.DefaultCachePathForDB(dbPath)
+			if agent == "codex" {
+				cachePath = filepath.Join(dir, "custom-policy", "endpoint.json")
+			}
+			cache := endpointconfig.NewCache(cachePath)
 			if err := cache.Apply(endpointconfig.FetchResult{Response: &endpointconfig.Response{ResponseVersion: endpointconfig.ResponseVersion, Config: config, ConfigIdentity: identity}}, time.Now()); err != nil {
 				t.Fatal(err)
 			}
@@ -96,6 +101,7 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 			turns := map[string]sqlite.TurnRecord{}
 			updates := 0
 			turnUploads := 0
+			recoveryBefore := ""
 			cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var batch struct {
 					Turns []sqlite.TurnRecord      `json:"turns"`
@@ -130,10 +136,24 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(201)
-				w.Write([]byte(`{}`))
+				json.NewEncoder(w).Encode(map[string]string{"turn_recovery_before": recoveryBefore})
 			}))
 			defer cloud.Close()
-			opts := Options{DBPath: dbPath, CloudURL: cloud.URL, InstallationID: "ins_test", InstallToken: "fixture"}
+			opts := Options{DBPath: dbPath, CloudURL: cloud.URL, InstallationID: "ins_test", InstallToken: "fixture", EndpointConfigCachePath: cachePath, HeartbeatInterval: time.Nanosecond}
+			if err := Flush(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			if len(turns) != 0 {
+				t.Fatal("legacy unknown-policy prompts recovered without explicit authorization")
+			}
+			mu.Unlock()
+			mu.Lock()
+			recoveryBefore = time.Now().UTC().Format(time.RFC3339Nano)
+			mu.Unlock()
+			if err := Flush(ctx, opts); err != nil {
+				t.Fatal(err)
+			} // learns the authenticated workspace request
 			if err := Flush(ctx, opts); err != nil {
 				t.Fatal(err)
 			}
@@ -146,6 +166,27 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 				if after.TurnID == "" || after.Revision <= before.Revision || !reflect.DeepEqual(after.Tokens, before.Tokens) {
 					t.Fatalf("incorrect recovery: %+v -> %+v", before, after)
 				}
+			}
+			mu.Unlock()
+			// A queued prompt hook can arrive after the fallback was exported.
+			// Both paths must retain one canonical ID, including queued actions.
+			mu.Lock()
+			canonical := ledger["m0"].TurnID
+			mu.Unlock()
+			late := sqlite.TurnRecord{Schema: sqlite.TurnSchemaVersion, ID: "turn_" + uuid.NewString(), SessionID: session, Agent: agent, StartedAt: sqlite.FormatTurnTime(base.Add(100 * time.Millisecond)), Source: sqlite.TurnSourceUserPrompt, Prompt: sqlite.CaptureTurnPrompt("Build the missing report export using "+secret, payloadcapture.RuntimeConfiguration{ConfiguredMode: payloadcapture.ModeFull, EffectiveMode: payloadcapture.ModeFull, Confirmed: true, ConfigIdentity: identity, WorkTypeClassification: true})}
+			if err := store.SaveTurn(ctx, late); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := store.ResolveTurnID(ctx, late.ID)
+			if err != nil || resolved != canonical {
+				t.Fatalf("late hook alias: %s, %v", resolved, err)
+			}
+			if err := Flush(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			if len(turns) != 2 || turnUploads != 2 {
+				t.Fatal("one prompt was uploaded as two turns")
 			}
 			mu.Unlock()
 			// The old file is unchanged and its rows were already acknowledged.
@@ -196,6 +237,20 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 			mu.Unlock()
 			// A deliberately disabled workspace must not recover subsequent text,
 			// including after the setting is enabled again.
+			oldDB, err := sql.Open("sqlite", dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := oldDB.Exec("delete from turns where id=(select json_extract(payload,'$.turn_id') from tool_usage_records where message_id='m1')"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := oldDB.Exec("update tool_usage_records set payload=json_remove(payload,'$.turn_id') where message_id='m1'"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := oldDB.Exec("update tool_usage_sources set turn_recovery_version=0"); err != nil {
+				t.Fatal(err)
+			}
+			oldDB.Close()
 			config.WorkTypeClassification = &off
 			identity, _ = endpointconfig.ComputeIdentity(config)
 			if err := cache.Apply(endpointconfig.FetchResult{Response: &endpointconfig.Response{ResponseVersion: endpointconfig.ResponseVersion, Config: config, ConfigIdentity: identity}}, time.Now()); err != nil {
@@ -220,6 +275,9 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 			if ledger["m3"].TurnID != "" || len(turns) != 3 {
 				t.Fatal("recovery captured an explicitly opted-out prompt")
 			}
+			if ledger["m1"].TurnID == "" {
+				t.Fatal("a disabled read consumed historical recovery for a previously permitted prompt")
+			}
 			mu.Unlock()
 			data += fixture(4, "Capture the new request after the setting is enabled")
 			if err := os.WriteFile(transcript, []byte(data), 0600); err != nil {
@@ -229,9 +287,44 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 				t.Fatal(err)
 			}
 			mu.Lock()
-			defer mu.Unlock()
 			if ledger["m3"].TurnID != "" || ledger["m4"].TurnID == "" || len(turns) != 4 {
 				t.Fatal("file growth lost the stored opt-out decision")
+			}
+			mu.Unlock()
+			mu.Lock()
+			recoveryBefore = ""
+			mu.Unlock()
+			if err := Flush(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			data += fixture(5, "A legacy prompt outside the withdrawn request")
+			if err := os.WriteFile(transcript, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := Flush(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			// A new prompt after recovery was introduced is prospective, not
+			// historical. It requires no operator backfill request.
+			epochDB, err := sql.Open("sqlite", dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := epochDB.Exec("update turn_recovery_policy set started_at=?", sqlite.FormatTurnTime(base.Add(-time.Minute))); err != nil {
+				t.Fatal(err)
+			}
+			epochDB.Close()
+			data += fixture(6, "A newly observed permitted prompt")
+			if err := os.WriteFile(transcript, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := Flush(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if ledger["m5"].TurnID != "" || ledger["m6"].TurnID == "" {
+				t.Fatal("historical request revocation or prospective recovery failed")
 			}
 			reports = append(reports, map[string]any{"agent": agent, "existingRequestsRecovered": 2, "futureMissedHooksRecovered": 2, "totalRequests": len(ledger), "recoveredTurns": len(turns), "repeatWasIdempotent": true, "optOutRespected": true, "hostedLinksSurviveLocalRetention": true})
 		})
@@ -339,7 +432,7 @@ func TestSkippedPromptRecoveryE2E(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer cloud.Close()
-	opts := Options{DBPath: dbPath, CloudURL: cloud.URL, InstallationID: "ins_test", InstallToken: "fixture"}
+	opts := Options{DBPath: dbPath, CloudURL: cloud.URL, InstallationID: "ins_test", InstallToken: "fixture", AllowHistoricalTurnRecovery: true}
 	for range 2 {
 		if err := Flush(ctx, opts); err != nil {
 			t.Fatal(err)

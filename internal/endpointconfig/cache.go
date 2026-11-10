@@ -163,7 +163,20 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 		FetchedAt: fetchedAt.UTC().Format(time.RFC3339Nano),
 		Response:  cloneResponse(confirmed),
 	}
+	// A verified directive is authoritative even if the local disk fails.
+	// In particular, retaining an older Full directive after a valid opt-out
+	// would contradict the workspace's known settings.
+	c.mu.Lock()
+	c.fetched = fetchedAt
+	c.active = cloneResponse(confirmed)
+	c.lastGood = cloneResponse(confirmed)
+	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt, Stale: true}
+	c.mu.Unlock()
 	if err := c.persist(file); err != nil {
+		if c.path != "" {
+			_ = os.Remove(c.path)
+		}
+		c.MarkFailed(err, fetchedAt)
 		return err
 	}
 	c.mu.Lock()
@@ -391,7 +404,11 @@ func (r *Refresher) Run(ctx context.Context) {
 
 func (r *Refresher) fail(err error) error {
 	if r.Cache != nil {
-		r.Cache.MarkFailed(err, r.now())
+		if errors.Is(err, ErrAuthorityRejected) {
+			r.Cache.rejectAuthority(err, r.now())
+		} else {
+			r.Cache.MarkFailed(err, r.now())
+		}
 		r.notify()
 	}
 	// Log once per distinct error, not once per attempt: the loop retries
@@ -401,6 +418,18 @@ func (r *Refresher) fail(err error) error {
 		diagnostic.LogAlways(r.Diagnostic, "endpoint config refresh failed (retaining last validated settings when available): %v\n", err)
 	}
 	return err
+}
+
+func (c *Cache) rejectAuthority(err error, at time.Time) {
+	c.mu.Lock()
+	c.active = nil
+	c.lastGood = nil
+	c.status = Status{FetchedAt: c.fetched, LastAttemptAt: at, Stale: true, Invalid: true, LastError: err.Error()}
+	c.mu.Unlock()
+	// A rejected enrollment must not be restored by a worker or restart.
+	if c.path != "" {
+		_ = os.Remove(c.path)
+	}
 }
 
 func (r *Refresher) recovered() {

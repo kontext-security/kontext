@@ -11,6 +11,9 @@ import (
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
+const MaxTurnPromptBytes = 1 << 20
+const TurnExcerptBytes = 64_000
+
 // CaptureTurnPrompt applies the same capture policy, redaction and bounds to
 // hook prompts and recovered transcript prompts.
 func CaptureTurnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) TurnPrompt {
@@ -19,7 +22,7 @@ func CaptureTurnPrompt(prompt string, capture payloadcapture.RuntimeConfiguratio
 	if capture.EffectiveMode == payloadcapture.ModeOmitted {
 		return SizeOnlyTurnPrompt(TurnPromptOmitted, chars)
 	}
-	if !capture.WorkTypeClassification || len(prompt) > 1<<20 {
+	if !capture.WorkTypeClassification || len(prompt) > MaxTurnPromptBytes {
 		return SizeOnlyTurnPrompt(TurnPromptSkipped, chars)
 	}
 	digest := sha256.Sum256([]byte(strings.Join(strings.Fields(prompt), " ")))
@@ -30,7 +33,7 @@ func CaptureTurnPrompt(prompt string, capture payloadcapture.RuntimeConfiguratio
 		}
 		return r
 	}, text)), " ")
-	const limit = 64_000
+	const limit = TurnExcerptBytes
 	truncated := len(text) > limit
 	if truncated {
 		const marker = "\n[Context omitted]\n"

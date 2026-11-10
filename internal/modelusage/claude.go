@@ -508,7 +508,7 @@ func (s *claudeState) promptsSoFar() []Prompt {
 }
 
 func (s *claudeState) clone() transcriptState {
-	c := &claudeState{line: s.line, records: slices.Clone(s.records), indices: maps.Clone(s.indices), attemptOf: maps.Clone(s.attemptOf),
+	c := &claudeState{capturePromptText: s.capturePromptText, line: s.line, records: slices.Clone(s.records), indices: maps.Clone(s.indices), attemptOf: maps.Clone(s.attemptOf),
 		pendingResults: make(map[string][]string, len(s.pendingResults)), tools: maps.Clone(s.tools), prompts: slices.Clone(s.prompts)}
 	for i := range c.records {
 		c.records[i].ToolUseIDs = slices.Clone(c.records[i].ToolUseIDs)

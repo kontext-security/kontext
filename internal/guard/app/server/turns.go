@@ -18,11 +18,11 @@ import (
 const (
 	// maxTurnPromptBytes is the hook-metadata redaction guard: a longer prompt
 	// is not redacted at all and its turn carries its size only.
-	maxTurnPromptBytes = 1 << 20
+	maxTurnPromptBytes = sqlite.MaxTurnPromptBytes
 	// turnExcerptBytes bounds the excerpt under Summaries and Full payloads
 	// alike: the captured-payload cap. Bytes, so the wire's character bound
 	// holds too.
-	turnExcerptBytes = 64_000
+	turnExcerptBytes = sqlite.TurnExcerptBytes
 	// maxTrackedTurnSessions bounds the cache; dropped sessions are rebuilt
 	// from SQLite on their next event.
 	maxTrackedTurnSessions = 4096
@@ -145,6 +145,22 @@ func (r guardHookRuntime) recordTurn(ctx context.Context, event *risk.HookEvent,
 		}
 		event.TurnID = id
 	}
+	original := event.TurnID
+	canonical, err := r.store.ResolveTurnID(ctx, original)
+	if err != nil {
+		log.Printf("resolve canonical turn: %v", err)
+		return
+	}
+	if canonical != original {
+		event.TurnID = canonical
+		r.turns.mu.Lock()
+		session := sqlite.NormalizeSessionID(event.SessionID)
+		if r.turns.current[session] == original {
+			r.turns.current[session] = canonical
+		}
+		r.turns.mu.Unlock()
+	}
+
 }
 
 // appInternalThread reports a Codex thread the app runs for itself rather
@@ -197,8 +213,4 @@ func turnSource(prompt string, isInterrupt *bool) string {
 // in spacing share a label.
 func turnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) sqlite.TurnPrompt {
 	return sqlite.CaptureTurnPrompt(prompt, capture)
-}
-
-func collapseWhitespace(value string) string {
-	return strings.Join(strings.Fields(value), " ")
 }

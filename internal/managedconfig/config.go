@@ -128,10 +128,11 @@ func ResolvePath() (string, Scope) {
 }
 
 type Config struct {
-	Version  string `json:"version"`
-	CloudURL string `json:"cloud_url"`
-	Mode     string `json:"mode"`
-	Agent    string `json:"agent"`
+	RecoverHistoricalTurnPrompts bool   `json:"recover_historical_turn_prompts,omitempty"`
+	Version                      string `json:"version"`
+	CloudURL                     string `json:"cloud_url"`
+	Mode                         string `json:"mode"`
+	Agent                        string `json:"agent"`
 	// AllowHTTPLoopback permits a plaintext http cloud_url when — and only
 	// when — the host is loopback. It exists so a local-development endpoint is
 	// declared on disk rather than through an environment variable the daemon

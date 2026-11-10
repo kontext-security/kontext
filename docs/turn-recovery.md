@@ -5,20 +5,28 @@ never reached the daemon. With validated settings that allow classification
 and do not omit payloads, it recovers the missing turn from the real user prompt.
 
 Recovery is automatic for new missed hooks. The first eligible reconcile after
-an upgrade also schedules unchanged and historical registered transcripts once,
-bounded to 100 changed sources per pass. Missing or unreadable files retain
+an upgrade schedules registered transcripts once, bounded to 100 changed sources
+per pass. Legacy unknown-policy prompts require an explicit historical request.
+Missing or unreadable files retain
 normal retry/retirement behavior. Unrecoverable usage remains accounted for.
 
 Provider ownership and prompt-boundary rules exclude subagents, copied history,
 harness envelopes and compaction summaries. A five-second grace period lets the
 hook-recording queue finish before using a transcript fallback.
 
+A delayed hook adopts the recovered turn ID through a durable alias. Recovery
+also reads registered parent transcripts outside the current usage-reader batch.
+Pending historical sources remain eligible after seven days and retry with
+backoff; growing files are read through a stable prefix.
+
 The cached incremental reader retains metadata only. Recovery uses a separate
 short-lived reader after checking capture policy, and applies the same redaction,
 hashing and 64,000-byte excerpt bound as a prompt hook. Raw text is not retained
 in the metadata cursor or usage payload. Recorded explicit opt-outs remain
 excluded after settings change and the transcript grows. Validated last-known
-settings survive refresh failures and offline restarts; invalid caches stay off.
+settings survive transient refresh failures and offline restarts; invalid caches
+and rejected authority stay off. Verified stricter directives apply even if a
+cache write fails.
 
 Recovered IDs are deterministic per session and prompt timestamp. Existing
 hook-created turns take precedence. Already-uploaded usage is revised under its
@@ -47,3 +55,18 @@ KONTEXT_RECOVERY_E2E_ARTIFACT=/tmp/kontext-turn-recovery.json \
 The report contains counts and policy outcomes without prompt text. Tests cover
 acknowledged requests, new missed hooks, redaction, repeat runs, database reopening,
 local retention and explicit opt-outs across later file growth.
+
+## Authorizing a bounded historical repair
+
+Historical prompts with unknown capture policy are excluded by default. Current
+workspace capture settings must also allow recovery. An authenticated batch
+acknowledgement can authorize recovery through a specific timestamp, using the
+workspace's operator-set `metadata.historicalTurnRecoveryBefore` ISO timestamp.
+Only clients advertising `X-Kontext-Turn-Recovery: v1` receive the directive.
+Removing the metadata key withdraws it. Recorded opt-outs remain excluded.
+For an explicitly administered local installation, managed configuration can
+alternatively opt in with `recover_historical_turn_prompts: true`.
+
+Transient configuration refresh failures retain the last validated settings.
+An explicit authorization rejection clears them; a newly validated stricter
+setting takes effect even if persisting the cache fails.

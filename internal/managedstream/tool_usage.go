@@ -20,7 +20,12 @@ func reconcileToolUsage(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer store.Close()
-	cache := endpointconfig.NewCache(endpointconfig.DefaultCachePathForDB(opts.DBPath))
+	store.SetHistoricalTurnRecovery(opts.AllowHistoricalTurnRecovery)
+	cachePath := opts.EndpointConfigCachePath
+	if cachePath == "" {
+		cachePath = endpointconfig.DefaultCachePathForDB(opts.DBPath)
+	}
+	cache := endpointconfig.NewCache(cachePath)
 	if err := cache.Load(); err == nil {
 		snapshot := cache.Current()
 		store.SetPayloadCaptureConfiguration(payloadcapture.RuntimeConfiguration{
@@ -28,6 +33,9 @@ func reconcileToolUsage(ctx context.Context, opts Options) error {
 			ConfigIdentity: snapshot.ConfigIdentity, Confirmed: snapshot.Confirmed,
 			WorkTypeClassification: snapshot.Config.WorkTypeClassificationEnabled(),
 		})
+	}
+	if opts.CaptureConfiguration != nil {
+		store.SetPayloadCaptureConfiguration(opts.CaptureConfiguration())
 	}
 	return store.ReconcileToolUsage(ctx)
 }

@@ -147,10 +147,18 @@ type toolUsageUpdate struct {
 func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 	now := time.Now().UTC()
 	capture := s.PayloadCaptureConfiguration()
+	recoveryVersion := 1
+	cutoff, err := s.HistoricalTurnRecoveryBefore(ctx)
+	if err != nil {
+		return err
+	}
+	if s.historicalTurnRecoveryAllowed() || !cutoff.IsZero() {
+		recoveryVersion = 2
+	}
 	if capture.Confirmed && capture.WorkTypeClassification && capture.EffectiveMode != "omitted" {
 		// Once per upgrade, include unchanged and historical registered sources.
 		// -1 is scheduled; failed reads retain the normal retry backoff.
-		if _, err := s.db.ExecContext(ctx, `update tool_usage_sources set fingerprint='',turn_recovery_version=-1 where turn_recovery_version=0`); err != nil {
+		if _, err := s.db.ExecContext(ctx, `update tool_usage_sources set fingerprint='',turn_recovery_version=-1 where turn_recovery_version>=0 and turn_recovery_version<?`, recoveryVersion); err != nil {
 			return err
 		}
 	}
@@ -196,7 +204,9 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 			if capture.Confirmed {
 				allowed := capture.WorkTypeClassification && capture.EffectiveMode != "omitted"
 				update.captureAllowed = &allowed
-				update.recoveryVersion = 1
+				if allowed {
+					update.recoveryVersion = recoveryVersion
+				}
 			}
 		}
 		updates = append(updates, update)
@@ -210,7 +220,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 
 func (s *Store) toolUsageSources(ctx context.Context, now time.Time) ([]toolUsageSource, error) {
 	rows, err := s.db.QueryContext(ctx, `select session_id, transcript_path, agent, last_seen, checked_at, fingerprint, error, error_fingerprint, model from tool_usage_sources
- where last_seen >= ? or fingerprint = ''`, now.Add(-7*24*time.Hour).Format(time.RFC3339Nano))
+ where last_seen >= ? or fingerprint = '' or turn_recovery_version=-1`, now.Add(-7*24*time.Hour).Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
 	}
@@ -425,6 +435,16 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 	if len(updates) == 0 {
 		return nil
 	}
+	var epochText string
+	// This immutable epoch is read before the write transaction so its first
+	// statement still acquires the writer lock and honors busy_timeout.
+	if err := s.db.QueryRowContext(ctx, `select started_at from turn_recovery_policy where id=1`).Scan(&epochText); err != nil {
+		return err
+	}
+	epoch, err := time.Parse(time.RFC3339Nano, epochText)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -446,14 +466,17 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 		// which SQLite refuses with SQLITE_BUSY at once instead of waiting
 		// out busy_timeout.
 		if update.read {
+			if update.recoveryPending {
+				update.recoveryVersion = -1
+			}
 			fingerprint := update.fingerprint
 			if update.recoveryPending && fingerprint != "" && !strings.HasPrefix(fingerprint, restampFingerprintPrefix) {
 				fingerprint = restampFingerprintPrefix + fingerprint
 			}
 			// A hook naming a model during the read cleared the fingerprint so the records
 			// this read withheld get another; writing it back would lose them.
-			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=case when model=? then ? else fingerprint end, error=?, error_fingerprint=?, turn_recovery_version=case when ?='' then ? else turn_recovery_version end where session_id=? and transcript_path=?`,
-				checkedAt, src.model, fingerprint, update.message, update.errorFingerprint, update.message, update.recoveryVersion, src.session, src.path)
+			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=case when model=? then ? else fingerprint end, error=?, error_fingerprint=?, turn_recovery_version=case when ?=-1 then -1 when ?='' then ? else turn_recovery_version end where session_id=? and transcript_path=?`,
+				checkedAt, src.model, fingerprint, update.message, update.errorFingerprint, update.recoveryVersion, update.message, update.recoveryVersion, src.session, src.path)
 		} else {
 			_, err = tx.ExecContext(ctx, `update tool_usage_sources set error=?, error_fingerprint='' where session_id=? and transcript_path=?`,
 				update.message, src.session, src.path)
@@ -464,8 +487,12 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 		if err := saveChangedToolUsage(ctx, tx, src, update.records); err != nil {
 			return err
 		}
-		for _, at := range update.newPrompts {
-			if _, err := tx.ExecContext(ctx, `insert or ignore into tool_usage_prompts(session_id, started_at, capture_allowed) values(?,?,?)`, src.session, FormatTurnTime(at), update.captureAllowed); err != nil {
+		for _, at := range update.prompts {
+			allowed := update.captureAllowed
+			if allowed != nil && *allowed && at.Before(epoch) {
+				allowed = nil
+			}
+			if _, err := tx.ExecContext(ctx, `insert into tool_usage_prompts(session_id, started_at, capture_allowed) values(?,?,?) on conflict(session_id,started_at) do update set capture_allowed=case when excluded.capture_allowed=0 then coalesce(tool_usage_prompts.capture_allowed,0) else tool_usage_prompts.capture_allowed end`, src.session, FormatTurnTime(at), allowed); err != nil {
 				return err
 			}
 		}

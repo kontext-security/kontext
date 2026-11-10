@@ -37,6 +37,10 @@ create table if not exists turns (
 );
 create index if not exists turns_session_started on turns(session_id, started_at);
 create index if not exists turns_pending on turns(exported, started_at);
+create table if not exists turn_aliases(alias_id text primary key, turn_id text not null);
+create table if not exists turn_recovery_policy(id integer primary key check(id=1), started_at text not null);
+insert or ignore into turn_recovery_policy(id,started_at) values(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
 -- Turn boundaries per session, from every transcript of the session. A
 -- subagent transcript has none of its own and is matched against these.
 create table if not exists tool_usage_prompts (
@@ -108,35 +112,8 @@ func FormatTurnTime(at time.Time) string {
 // session's transcripts are marked for another read: usage read before the
 // turn existed is stamped again even if no transcript changes after it.
 func (s *Store) SaveTurn(ctx context.Context, turn TurnRecord) error {
-	if turn.ID == "" || turn.SessionID == "" || turn.StartedAt == "" {
-		return errors.New("turn requires id, session and start time")
-	}
-	var text, sha256 any
-	truncated := false
-	if turn.Prompt.Mode == TurnPromptExcerpt {
-		if turn.Prompt.Text == nil || turn.Prompt.SHA256 == nil || turn.Prompt.Truncated == nil {
-			return errors.New("turn excerpt requires text, hash and truncation")
-		}
-		text, sha256, truncated = *turn.Prompt.Text, *turn.Prompt.SHA256, *turn.Prompt.Truncated
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `insert or ignore into turns(id, session_id, sequence, agent, started_at, source, prompt_mode, prompt_text, prompt_chars, prompt_sha256, prompt_truncated)
- select ?, ?, coalesce(max(sequence), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ? from turns where session_id = ?`,
-		turn.ID, turn.SessionID, turn.Agent, turn.StartedAt, turn.Source, turn.Prompt.Mode, text, turn.Prompt.Chars, sha256, truncated, turn.SessionID)
-	if err != nil {
-		return err
-	}
-	if inserted, err := result.RowsAffected(); err != nil || inserted == 0 {
-		return err
-	}
-	if err := markToolUsageSourcesForRestamp(ctx, tx, turn.SessionID, nil); err != nil {
-		return err
-	}
-	return tx.Commit()
+	_, err := s.SaveTurnCanonical(ctx, turn)
+	return err
 }
 
 // restampFingerprintPrefix marks a source's stored fingerprint so the next
@@ -149,7 +126,7 @@ const restampFingerprintPrefix = "restamp:"
 // and their usage may now belong to a different turn. Sources never read
 // successfully are read anyway.
 func markToolUsageSourcesForRestamp(ctx context.Context, db execer, sessionID string, skip []string) error {
-	query := `update tool_usage_sources set fingerprint = ? || fingerprint where session_id = ? and fingerprint <> '' and substr(fingerprint, 1, ?) <> ?`
+	query := `update tool_usage_sources set fingerprint = ? || fingerprint,error_fingerprint='' where session_id = ? and fingerprint <> '' and substr(fingerprint, 1, ?) <> ?`
 	args := []any{restampFingerprintPrefix, sessionID, len(restampFingerprintPrefix), restampFingerprintPrefix}
 	if len(skip) > 0 {
 		query += ` and transcript_path not in (` + strings.TrimRight(strings.Repeat("?,", len(skip)), ",") + `)`

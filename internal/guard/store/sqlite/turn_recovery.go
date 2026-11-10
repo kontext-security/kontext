@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/kontext-security/kontext/internal/modelusage"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
@@ -37,13 +36,33 @@ func (s *Store) recoverSessionTurns(ctx context.Context, session string, updates
 		return err
 	}
 	blocked := map[int64]bool{}
-	rows, err := s.db.QueryContext(ctx, `select started_at from tool_usage_prompts where session_id=? and capture_allowed=0`, session)
+	var epochText string
+	if err := s.db.QueryRowContext(ctx, `select started_at from turn_recovery_policy where id=1`).Scan(&epochText); err != nil {
+		return err
+	}
+	epoch, err := time.Parse(time.RFC3339Nano, epochText)
+	if err != nil {
+		return err
+	}
+	history := s.historicalTurnRecoveryAllowed()
+	cutoff, err := s.HistoricalTurnRecoveryBefore(ctx)
+	if err != nil {
+		return err
+	}
+	permittedHistory := func(at time.Time) bool { return history || (!cutoff.IsZero() && !at.After(cutoff)) }
+	for _, at := range prompts {
+		if !permittedHistory(at) && at.Before(epoch) {
+			blocked[at.UnixNano()] = true
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, `select started_at,capture_allowed from tool_usage_prompts where session_id=?`, session)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var at string
-		if err := rows.Scan(&at); err != nil {
+		var allowed sql.NullBool
+		if err := rows.Scan(&at, &allowed); err != nil {
 			rows.Close()
 			return err
 		}
@@ -52,7 +71,11 @@ func (s *Store) recoverSessionTurns(ctx context.Context, session string, updates
 			rows.Close()
 			return e
 		}
-		blocked[value.UnixNano()] = true
+		if allowed.Valid {
+			blocked[value.UnixNano()] = !allowed.Bool
+		} else if !permittedHistory(value) {
+			blocked[value.UnixNano()] = true
+		}
 	}
 	err = rows.Err()
 	rows.Close()
@@ -61,7 +84,7 @@ func (s *Store) recoverSessionTurns(ctx context.Context, session string, updates
 	}
 	rehydrate := map[string]bool{}
 	rows, err = s.db.QueryContext(ctx, `select t.id from turns t where t.session_id=? and t.prompt_mode='skipped' and exists (
- select 1 from authorization_actions a where a.turn_id=t.id
+ select 1 from authorization_actions a where a.session_id=t.session_id and a.turn_id=t.id
  and json_extract(case when json_valid(a.context_json) then a.context_json else '{}' end,'$.hook_event_name')='UserPromptSubmit'
  and json_extract(case when json_valid(a.context_json) then a.context_json else '{}' end,'$.payload_capture.confirmed')=0)`, session)
 	if err != nil {
@@ -117,21 +140,42 @@ func (s *Store) recoverSessionTurns(ctx context.Context, session string, updates
 	if len(targets) == 0 {
 		return nil
 	}
-	for _, index := range indices {
+	sources := []toolUsageSource{}
+	rows, err = s.db.QueryContext(ctx, `select session_id,transcript_path,agent,model from tool_usage_sources where session_id=?`, session)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var source toolUsageSource
+		if err := rows.Scan(&source.session, &source.path, &source.agent, &source.model); err != nil {
+			rows.Close()
+			return err
+		}
+		sources = append(sources, source)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, transcriptSource := range sources {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		found, err := readRecoveryPrompts(updates[index].source)
+		found, err := readRecoveryPrompts(transcriptSource)
 		if err != nil {
-			updates[index].recoveryPending = true
 			continue
 		}
 		for _, prompt := range found {
-			if prompt.SessionID != session || prompt.Text == nil {
+			if prompt.SessionID != session {
 				continue
 			}
 			target, ok := targets[prompt.Timestamp.UnixNano()]
 			if !ok {
+				continue
+			}
+			if prompt.Text == nil {
+				delete(targets, prompt.Timestamp.UnixNano())
 				continue
 			}
 			captured := CaptureTurnPrompt(*prompt.Text, capture)
@@ -147,15 +191,26 @@ func (s *Store) recoverSessionTurns(ctx context.Context, session string, updates
 				if strings.HasPrefix(*prompt.Text, "/") {
 					source = TurnSourceSlashCommand
 				}
-				id := "turn_" + uuid.NewSHA1(uuid.NameSpaceOID, []byte("kontext:transcript-turn:v1\n"+session+"\n"+FormatTurnTime(target.start))).String()
-				record := TurnRecord{Schema: TurnSchemaVersion, ID: id, SessionID: session, Agent: updates[index].source.agent, StartedAt: FormatTurnTime(target.start), Source: source, Prompt: captured}
+				id := recoveredTurnID(session, target.start)
+				record := TurnRecord{Schema: TurnSchemaVersion, ID: id, SessionID: session, Agent: transcriptSource.agent, StartedAt: FormatTurnTime(target.start), Source: source, Prompt: captured}
 				if err := s.saveRecoveredTurn(ctx, record, target.start.Add(-modelusage.PromptHookSkew), target.end); err != nil {
 					return err
 				}
 			}
 			delete(targets, prompt.Timestamp.UnixNano())
+			if _, err := s.db.ExecContext(ctx, `insert into tool_usage_prompts(session_id,started_at,capture_allowed) values(?,?,1) on conflict(session_id,started_at) do update set capture_allowed=coalesce(tool_usage_prompts.capture_allowed,1)`, session, FormatTurnTime(prompt.Timestamp)); err != nil {
+				return err
+			}
 		}
 	}
+	if len(targets) > 0 {
+		for _, index := range indices {
+			updates[index].recoveryPending = true
+			updates[index].message = "turn recovery: prompt text not yet available"
+			updates[index].errorFingerprint = updates[index].attempted
+		}
+	}
+
 	return nil
 }
 
@@ -192,16 +247,18 @@ func readRecoveryPrompts(source toolUsageSource) ([]modelusage.Prompt, error) {
 		return nil, errors.New("recovery transcript is not a bounded regular file")
 	}
 	reader := newToolTranscript(transcriptFormat(source.agent), source.session)
+	reader.SetModel(source.model)
 	reader.EnablePromptText()
-	if _, err := reader.Read(io.LimitReader(f, maxTranscriptBytes+1)); err != nil {
+	if _, err := reader.Read(io.LimitReader(f, before.Size())); err != nil {
 		return nil, err
 	}
 	after, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
-	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-		return nil, errors.New("transcript changed during recovery")
+	pathInfo, pathErr := os.Stat(source.path)
+	if pathErr != nil || !os.SameFile(before, pathInfo) || after.Size() < before.Size() {
+		return nil, errors.New("transcript replaced or truncated during recovery")
 	}
 	return reader.Prompts(), nil
 }
