@@ -96,16 +96,17 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck -mode=binary ./bin/kontext
 
-  # Native Windows tests for the packages that already pass there, so they
-  # cannot regress unseen. Not a required check yet; the list grows as the
-  # Windows port fixes packages (.github/windows-test-packages.txt).
+  # Every package's tests, natively on Windows. A test for something Windows
+  # doesn't have yet skips there and names its issue (hermetic.NotOnWindows);
+  # a test for something that exists on macOS only says so.
+  # Not a required check yet.
   verify-windows:
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: verify-windows
+          - name: verify-windows-amd64
             runner: windows-latest
           - name: verify-windows-arm64
             runner: windows-11-arm
@@ -121,16 +122,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test the packages that pass on Windows
+      - name: Test
         shell: bash
-        run: grep -v '^#' .github/windows-test-packages.txt | xargs go test -count=1
-
-      # Windows-specific tests in packages that do not pass as a whole yet; they
-      # move into the list above with their package.
-      - name: Test the Windows-specific tests of the other packages
-        shell: bash
-        run: |
-          go test -count=1 -run '^(TestGuardedInfoStartsAtTheVolume|TestGuardedInfoRefusesAFlaggedRoot|TestStatRefusesJunctionAndPlaceholderAncestors|TestReadGuardedFailsClosed|TestDatalessRecallAttributes)$' ./pkg/agentauthority/
-          go test -count=1 -run '^(TestDefaultSocketPathListensUnderLocalAppData|TestEnsureSocketDirRefusesPathsWindowsCannotBind|TestEnsureSocketDirSetsOwnerOnlyDACL|TestEnsureSocketDirRejectsNonDirectoryParent|TestEnsureSocketDirRejectsSymlinkParent|TestConnectionLostCoversWinsockDrops|TestLifecycleRetriesWhenDaemonClosesWithRequestUnread|TestLifecycleRetriesWhenDaemonStopsBetweenProbeAndRPC|TestLifecycleEnforceFailsOpenWhenDaemonDropsRPC|TestRunDaemonRefusesWhileAnotherHoldsTheSocket|TestRunDaemonStartsWhenTheLockCannotBeTaken|TestRunDaemonReleasesTheLockWhenItStops|TestRunDaemonParkedDoesNotTakeTheLock|TestRunDaemonRefusesWhenSomethingAnswersOnTheSocket|TestRunDaemonReplacesASocketNothingAnswersOn|TestRunDaemonWithoutTheLockStillChecksTheSocket|TestRunDaemonWaitsForADaemonThatIsLeaving|TestConnectFailureMeansBusy|TestRunDaemonLocksTheSocketItWillBind|TestDaemonStopBudgetIsBelowTheInstanceLockWait|TestRunDaemonWritesQueuedRecordsWhenStopped|TestRunDaemonStopsScoringToWriteABacklog|TestStopWaitGivesUpOnWorkThatWontEnd|TestStopClockKeepsOneDeadline|TestStopSignalLetsTheDaemonFinish|TestStuckStopExitsPastTheBudget|TestStuckStopExitsEvenIfItsLogIsStuck|TestSecondStopSignalExitsAtOnce)$' ./internal/managedobserve/
-          go test -count=1 -run '^(TestSystemPathsAreUnderProgramData|TestLoadRefusesASystemFileAUserCouldWrite|TestLoadPassesAnAdminOnlyFileToTheParser|TestReadAdminOnlyKeepsANotFoundError|TestLoadChecksOnlyTheSystemFile|TestLoadFailsWithoutASystemFolder|TestDeploymentVersionChecksTheDefaultFile|TestLoadIgnoresASystemFileThatIsNotAnAdmins|TestResolvePathKeepsTheSystemFileWhenItCantTell|TestResolvePathIgnoresAFileThisUserOwns|TestResolvePathIgnoresAFileThisUserCantOpen)$' ./internal/managedconfig
-          go test -count=1 -run '^(TestInspectInstallationChecksOnlyTheSystemFile|TestInspectInstallationWithoutASystemFile|TestInspectInstallationRefusesASystemFileAUserCouldWrite|TestInspectInstallationPassesAnAdminOnlyFileToTheParser|TestDefaultInstallationPathsFailsWithoutASystemFolder)$' ./internal/codexmanaged
+        run: go test -count=1 ./...
