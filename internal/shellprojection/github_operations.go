@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -159,26 +160,37 @@ func ghOperations(key string, rest []string) []string {
 	return operations
 }
 
-// ghFlags collects the option words of a gh command, expanding clustered
-// short flags (`-ds` is `-d -s`) and dropping `--option=value` values, so
-// flag-sensitive operations can test presence. Option values that happen
-// to look like flags are counted too; the projection prefers to over-report
-// an effect rather than miss one.
+// ghFlags reports which option words of a gh command are switched on,
+// expanding clustered short flags (`-ds` is `-d -s`). A flag written with a
+// value (`--auto=false`, `-d=true`) is on unless gh reads that value as
+// false, and a later spelling of the same word replaces an earlier one, as
+// in gh. Option values that happen to look like flags are counted too; the
+// projection prefers to over-report an effect rather than miss one.
 func ghFlags(args []string) map[string]bool {
 	flags := make(map[string]bool, len(args))
 	for _, arg := range args {
 		if arg == "--" {
 			break
 		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			continue
+		}
+		name, value, hasValue := strings.Cut(arg, "=")
+		on := true
+		if parsed, err := strconv.ParseBool(value); hasValue && err == nil {
+			on = parsed
+		}
 		switch {
-		case strings.HasPrefix(arg, "--"):
-			name, _, _ := strings.Cut(arg, "=")
-			flags[name] = true
-		case shortFlagCluster.MatchString(arg):
-			for _, flag := range arg[1:] {
+		case strings.HasPrefix(name, "--") || len(name) == 2:
+			flags[name] = on
+		case shortFlagCluster.MatchString(name):
+			// The value belongs to the last flag of the cluster.
+			last := len(name) - 1
+			for _, flag := range name[1:last] {
 				flags["-"+string(flag)] = true
 			}
-		case strings.HasPrefix(arg, "-") && arg != "-":
+			flags["-"+name[last:]] = on
+		default:
 			flags[arg] = true
 		}
 	}

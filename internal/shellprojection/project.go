@@ -1418,7 +1418,8 @@ func classifyGHAPI(args []string, complete bool) cedareval.ShellProjectionV2 {
 				method = "POST"
 			}
 		case (strings.HasPrefix(arg, "-f") || strings.HasPrefix(arg, "-F")) && len(arg) > 2:
-			fields = append(fields, arg[2:])
+			// The attached forms: -Fforce=true and -F=force=true.
+			fields = append(fields, strings.TrimPrefix(arg[2:], "="))
 			if method == "GET" {
 				method = "POST"
 			}
