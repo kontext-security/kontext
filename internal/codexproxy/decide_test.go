@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/localruntime"
 )
 
@@ -16,12 +16,7 @@ import (
 // with answer, or never answers when answer is nil.
 func fakeDaemon(t *testing.T, answer func(DecideRequest) DecideResponse) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "kx-proxy-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "kontext.sock")
+	socket := filepath.Join(hermetic.SocketDir(t), "kontext.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
