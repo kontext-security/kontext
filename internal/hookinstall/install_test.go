@@ -93,8 +93,10 @@ func read(t *testing.T, path string) string {
 
 func TestSkipAgentWritesNothingForThatAgentAndNeverBlocksRemoval(t *testing.T) {
 	hermetic.NotOnWindows(t, "ENG-1001", "skipping an agent is about the Codex and Cursor files, which Windows doesn't install yet")
+	// Points the machine-wide files at an empty folder: this machine's own
+	// organization hooks would otherwise cover Codex and leave its file unwritten.
+	fixture(t, User)
 	home := t.TempDir()
-	t.Setenv("CODEX_HOME", "")
 	binary := filepath.Join(t.TempDir(), "kontext")
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
