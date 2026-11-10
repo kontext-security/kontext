@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 const testPort = 49321
@@ -142,6 +143,14 @@ type scutilAnswer struct {
 const build2 = "kontext build 2\n"
 
 func newTestRouter(t *testing.T) testRouter {
+	t.Helper()
+	hermetic.NotOnWindows(t, "ENG-1001", "the Codex proxy's job runs on macOS only")
+	return newTestRouterOnAnyOS(t)
+}
+
+// newTestRouterOnAnyOS is the router without the Windows skip, for what the
+// route does off macOS.
+func newTestRouterOnAnyOS(t *testing.T) testRouter {
 	t.Helper()
 	home := t.TempDir()
 	r := testRouter{home: home, launchd: &fakeLaunchd{}, healthy: new(bool), reaches: new(bool), env: map[string]string{},
@@ -475,7 +484,7 @@ func TestACreatedConfigGoesWithTheLine(t *testing.T) {
 }
 
 func TestOffMacOSNothingChanges(t *testing.T) {
-	r := newTestRouter(t)
+	r := newTestRouterOnAnyOS(t)
 	r.opts.GOOS = "linux"
 	status, err := r.Enable(context.Background())
 	if err != nil || status.Routed || status.Skipped == "" || len(r.launchd.commands) != 0 {
@@ -1077,6 +1086,7 @@ func TestASessionStartLeavesANewRouteAlone(t *testing.T) {
 // Only the health check's refused connection or its timeout count as no
 // answer, as the real check reports them.
 func TestOnlyNoAnswerCountsAsNoAnswer(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "the health check doesn't read Winsock's refusal as no answer yet")
 	token := strings.Repeat("k", 32)
 	listen := func() (net.Listener, int) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")

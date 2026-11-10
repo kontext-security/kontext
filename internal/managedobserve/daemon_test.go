@@ -110,6 +110,7 @@ func TestDaemonSessionEndClosesHookSessionID(t *testing.T) {
 }
 
 func TestDaemonStreamsLedgerBatches(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
 	// The authority guard refuses symlinked ancestors; macOS's temp dir has one.
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -792,10 +793,7 @@ func TestLegacyCoworkRejectsDisabledManagedSettingsSource(t *testing.T) {
 
 func TestManagedObserveHooksFact(t *testing.T) {
 	// Hooks count only when the binary they name can run.
-	binary := filepath.Join(t.TempDir(), "kontext")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	binary := hermetic.KontextBinary(t, t.TempDir())
 	template, err := claudemanaged.TemplateJSON(binary)
 	if err != nil {
 		t.Fatal(err)
@@ -860,11 +858,14 @@ func TestManagedObserveHooksFact(t *testing.T) {
 	})
 
 	t.Run("machine file linked into a privacy-guarded folder", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("the macOS privacy-folder guard does not read Windows paths")
+		}
 		enabled := privacyfolder.Enabled
 		privacyfolder.Enabled = true
 		t.Cleanup(func() { privacyfolder.Enabled = enabled })
 		home := t.TempDir()
-		t.Setenv("HOME", home)
+		hermetic.SetHome(t, home)
 		target := filepath.Join(home, "Documents", "managed-settings.json")
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			t.Fatal(err)
@@ -1539,7 +1540,7 @@ func TestHookHealerNeverRunsForOrganizationConfig(t *testing.T) {
 // An edit that keeps a hook file's size and time still triggers a rescan.
 func TestHookFilesFingerprintSeesSameSizeEdits(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	// A relative CODEX_HOME is invalid, but must not hide the other agents' files.
 	t.Setenv("CODEX_HOME", "relative/codex")
@@ -1569,11 +1570,14 @@ func TestHookFilesFingerprintSeesSameSizeEdits(t *testing.T) {
 
 // The fingerprint never follows a machine-wide Claude file into a guarded folder.
 func TestHookFilesFingerprintSkipsGuardedMachineFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the macOS privacy-folder guard does not read Windows paths")
+	}
 	enabled := privacyfolder.Enabled
 	privacyfolder.Enabled = true
 	t.Cleanup(func() { privacyfolder.Enabled = enabled })
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CODEX_HOME", "")
 	target := filepath.Join(home, "Documents", "managed-settings.json")
@@ -1597,7 +1601,7 @@ func TestHookFilesFingerprintSkipsGuardedMachineFiles(t *testing.T) {
 // Hooks the explicit command wrote under an absolute CODEX_HOME are watched too.
 func TestHookFilesFingerprintWatchesCodexHome(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	codexHome := filepath.Join(home, "codex-elsewhere")
 	t.Setenv("CODEX_HOME", codexHome)

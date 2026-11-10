@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
@@ -66,11 +67,7 @@ func writeHomeFile(t *testing.T, home, rel, content string) {
 
 func installAllHooks(t *testing.T, home string) string {
 	t.Helper()
-	binary := filepath.Join(home, "tools", "kontext")
-	writeHomeFile(t, home, "tools/kontext", "#!/bin/sh\n")
-	if err := os.Chmod(binary, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	binary := hermetic.KontextBinary(t, filepath.Join(home, "tools"))
 	if err := hookinstall.Install(hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary, ClaudePath: filepath.Join(home, "none", "dropin.json"), CursorPath: filepath.Join(home, "none", "cursor.json"), CodexPath: filepath.Join(home, "none", "codex.json")}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +132,7 @@ func TestAgentOwnedFilesBesideHooksAreConfigured(t *testing.T) {
 }
 
 func TestSymlinkInConfigFolderIsAgentOwned(t *testing.T) {
+	hermetic.Symlinks(t)
 	home := t.TempDir()
 	writeHomeFile(t, home, "dotfiles/hooks.json", `{}`)
 	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o700); err != nil {
@@ -200,6 +198,7 @@ func TestClaudeAppAloneDoesNotListCowork(t *testing.T) {
 
 // Installed needs no folder at all: an app that was never launched is listed.
 func TestInstalledWithoutConfigIsListed(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1003", "the inventory doesn't know where agents are installed on Windows yet")
 	t.Run("app", func(t *testing.T) {
 		if runtime.GOOS != "darwin" {
 			t.Skip("app bundles are macOS-only")
@@ -426,6 +425,7 @@ func TestGuardedInstallCandidatesAreNotTouched(t *testing.T) {
 }
 
 func TestPathExecutableStillCounts(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1003", "the inventory doesn't know where agents are installed on Windows yet")
 	home, bin := t.TempDir(), t.TempDir()
 	executableFixture(t, filepath.Join(bin, "codex"))
 	t.Setenv("PATH", "relative/bin:"+filepath.Join(bin, "missing")+":"+bin)

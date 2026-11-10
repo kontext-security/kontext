@@ -22,6 +22,13 @@ var fixtureTime = time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
 
 func fixtureHome(t *testing.T, name string) string {
 	t.Helper()
+	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
+	return fixtureHomeOnAnyOS(t, name)
+}
+
+// fixtureHomeOnAnyOS copies the fixture for a scan that reads none of it.
+func fixtureHomeOnAnyOS(t *testing.T, name string) string {
+	t.Helper()
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +60,7 @@ func fixtureHome(t *testing.T, name string) string {
 }
 func writeFixture(t *testing.T, home, path, data string) {
 	t.Helper()
+	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
 	path = filepath.Join(home, path)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
@@ -221,7 +229,7 @@ func TestParentSymlinkAndOutsideRoot(t *testing.T) {
 	}
 }
 func TestCancelledScan(t *testing.T) {
-	home := fixtureHome(t, "home_claude_full")
+	home := fixtureHomeOnAnyOS(t, "home_claude_full")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	r := scan(ctx, home, Environment{}, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}}, fixtureTime, filepath.Join(home, "managed"))
@@ -235,11 +243,19 @@ func TestSecretArgumentsAndPermissionRules(t *testing.T) {
 			t.Errorf("kept secret arg %q", arg)
 		}
 	}
-	for _, arg := range []string{"/Users/someone/file", "--config=/etc/file", "https://person:password@example.test", "https://person:password@%invalid"} {
+	for _, arg := range []string{"https://person:password@example.test", "https://person:password@%invalid"} {
 		if safeArg(arg) != "<redacted>" {
-			t.Errorf("kept private path or url %q", arg)
+			t.Errorf("kept private url %q", arg)
 		}
 	}
+	t.Run("paths", func(t *testing.T) {
+		hermetic.NotOnWindows(t, "ENG-1004", "the report's path handling isn't ported to Windows yet")
+		for _, arg := range []string{"/Users/someone/file", "--config=/etc/file"} {
+			if safeArg(arg) != "<redacted>" {
+				t.Errorf("kept private path %q", arg)
+			}
+		}
+	})
 	for _, args := range [][]string{{"--password", "P@ssw0rd123"}, {"--TOKEN", "P@ssw0rd123"}, {"--api-key", "P@ssw0rd123"}, {"--AuthToken=secret"}} {
 		if got := safeArgs(append(args, "--verbose")); len(got) != 1 || got[0] != "--verbose" {
 			t.Fatalf("kept secret arguments: %q", got)

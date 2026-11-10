@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -29,6 +30,9 @@ func TestBinaryWatchdogFiresWhenFileDeleted(t *testing.T) {
 }
 
 func TestBinaryWatchdogFiresWhenFileReplaced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the binary watchdog runs on macOS only, and this case needs the file identity macOS reports after a rename")
+	}
 	resetUpdaterSeams(t)
 	t.Setenv(envBinaryWatchInterval, "10ms")
 	runtimeGOOS = "darwin"

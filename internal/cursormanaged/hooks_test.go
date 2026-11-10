@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 // Ways the hooks.json edit can fail, from review: an administrator's hook is
 // dropped or claimed as ours, a file without our hooks is emptied on removal,
 // a version Cursor rejects survives, and validation calls a broken set wired.
 func TestMergeRemoveValidate(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "Cursor's hooks aren't written on Windows yet")
 	const binary = "/usr/local/bin/kontext"
 	admin := `{"version":null,"hooks":{
 		"preToolUse":[{"command":"/opt/audit/hook"}],

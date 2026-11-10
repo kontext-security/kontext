@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -322,7 +323,8 @@ func TestStoreKeepsDecisionsAcrossRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(dir, "s1.jsonl"))
-	if err != nil || info.Mode().Perm() != 0o600 {
+	// Windows has no mode bits.
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("session file = %v, %v", info, err)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 2 {

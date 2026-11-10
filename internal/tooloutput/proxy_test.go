@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/modelusage"
 )
@@ -37,6 +38,7 @@ func (c testCompactor) proxyOutput(script, printed string) ProxyOutput {
 }
 
 func TestProxiedPartIsReplacedSavedAndDecidedOnce(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-932", "tool output compaction isn't ported to Windows paths yet")
 	c := newTestCompactor(t, replace("2 tests failed: TestA, TestB"))
 	out := c.proxyOutput(`text(await tools.exec_command({cmd: "go test ./..."}))`, bigText(80))
 

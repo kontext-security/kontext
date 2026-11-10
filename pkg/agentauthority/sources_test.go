@@ -13,10 +13,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
 func tempHome(t *testing.T) string {
+	t.Helper()
+	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
+	return tempHomeOnAnyOS(t)
+}
+
+// tempHomeOnAnyOS is a home for a scan that reads no file content.
+func tempHomeOnAnyOS(t *testing.T) string {
 	t.Helper()
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -56,7 +64,7 @@ func skipIfRoot(t *testing.T) {
 }
 
 func TestAbsentAgentStatesEverySourceAsEmpty(t *testing.T) {
-	home := tempHome(t)
+	home := tempHomeOnAnyOS(t)
 	r := scanFixture(home, []AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor", Absent: true}, {ID: "claude_code", ConfigPath: "~/.claude", Absent: true}})
 	assertSource(t, r, "cursor/mcp", StatusComplete)
 	assertSource(t, r, "cursor/permissions", StatusComplete)
@@ -174,7 +182,7 @@ func TestSymlinkedConfigIsDeniedNotAbsent(t *testing.T) {
 func TestDeadlineFailsEverySource(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	home := tempHome(t)
+	home := tempHomeOnAnyOS(t)
 	r := scan(ctx, home, Environment{}, []AgentLocation{{ID: "cursor", ConfigPath: "~/.cursor"}, {ID: "codex", ConfigPath: "~/.codex", Absent: true}}, fixtureTime, filepath.Join(home, "managed"))
 	for _, id := range []string{"host/credentials", "cursor/mcp", "cursor/permissions", "codex/mcp", "codex/permissions"} {
 		assertSource(t, r, id, StatusFailed, ReasonDeadline)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 )
 
@@ -102,6 +103,7 @@ func TestEachWord(t *testing.T) {
 }
 
 func TestResolvePath(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-932", "tool output compaction isn't ported to Windows paths yet")
 	for word, want := range map[string]string{
 		"~/Documents/a":     "/home/u/Documents/a",
 		"$HOME/Desktop":     "/home/u/Desktop",

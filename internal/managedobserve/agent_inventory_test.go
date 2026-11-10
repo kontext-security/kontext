@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -315,11 +316,14 @@ func TestAgentWiringCodexLayers(t *testing.T) {
 
 // The background scan never stats a hook binary in a privacy-guarded folder.
 func TestCursorWiredSkipsGuardedBinaries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the macOS privacy-folder guard does not read Windows paths")
+	}
 	enabled := privacyfolder.Enabled
 	privacyfolder.Enabled = true
 	t.Cleanup(func() { privacyfolder.Enabled = enabled })
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	swapCursorSystemHooks(t, filepath.Join(home, "missing", "hooks.json"))
 	settings := map[string]any{}
 	if err := cursormanaged.MergeManagedHooks(settings, filepath.Join(home, "Downloads", "kontext")); err != nil {
@@ -339,8 +343,9 @@ func TestCursorWiredSkipsGuardedBinaries(t *testing.T) {
 
 // A complete machine-wide Cursor set wires Cursor whatever the user's file holds.
 func TestCursorWiredCompleteMachineSetIgnoresUserFile(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "Cursor's and Antigravity's hooks aren't written on Windows yet")
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	hermetic.SetHome(t, home)
 	binary := filepath.Join(home, "bin", "kontext")
 	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
 		t.Fatal(err)
@@ -384,6 +389,7 @@ func swapCursorSystemHooks(t *testing.T, path string) {
 // as wired; a hook naming a deleted binary counts as wired, though it now passes
 // every call unrecorded; an unreadable file counts as simply absent.
 func TestAntigravityWired(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1001", "Cursor's and Antigravity's hooks aren't written on Windows yet")
 	home := hermetic.Home(t)
 	path := antigravitymanaged.UserHooksPath(home)
 	if got := antigravityWired(); got != agentinventory.WiredNo {

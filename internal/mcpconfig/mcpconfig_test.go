@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,9 @@ func TestServerURLSkipsNonRegularFiles(t *testing.T) {
 // server falls back to its name, even when a lower scope defines the same
 // name with another URL. The same project outside such a folder resolves.
 func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the macOS privacy-folder guard does not read Windows paths")
+	}
 	enabled := privacyfolder.Enabled
 	privacyfolder.Enabled = true
 	t.Cleanup(func() { privacyfolder.Enabled = enabled })
@@ -163,6 +167,9 @@ func TestDesktopConnectorReadsCoworkAgentRecords(t *testing.T) {
 // An agent folder that links into a guarded folder is checked before it is
 // listed, so macOS never asks for access on the daemon's behalf.
 func TestDesktopRecordsSkipGuardedAgentFolder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the macOS privacy-folder guard does not read Windows paths")
+	}
 	enabled := privacyfolder.Enabled
 	privacyfolder.Enabled = true
 	t.Cleanup(func() { privacyfolder.Enabled = enabled })

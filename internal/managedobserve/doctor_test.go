@@ -24,6 +24,9 @@ import (
 )
 
 func TestDoctorHomebrewOutdated(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew doesn't run on Windows")
+	}
 	for _, name := range []string{"outdated", "up to date", "brew error", "brew missing", "not Homebrew", "untrusted tap"} {
 		t.Run(name, func(t *testing.T) {
 			env := newDoctorTestEnv(t)
@@ -326,6 +329,7 @@ func TestPrintStatusDaemonDevVersionDoesNotWarn(t *testing.T) {
 }
 
 func TestPrintStatusDaemonDeadPIDTreatedAsUnknownAndFixable(t *testing.T) {
+	hermetic.NotOnWindows(t, "ENG-1007", "the liveness check is a stub on Windows")
 	env := newDoctorTestEnv(t)
 	env.writeDaemonStatus(t, deadPID(t), "1.2.2")
 
