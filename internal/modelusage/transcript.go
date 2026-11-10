@@ -21,6 +21,17 @@ type Transcript struct {
 	prompts []Prompt
 }
 
+// EnablePromptText is for a short-lived recovery reader, never the incremental
+// metadata cursor. Its caller must check capture policy before enabling it.
+func (t *Transcript) EnablePromptText() {
+	switch state := t.state.(type) {
+	case *claudeState:
+		state.capturePromptText = true
+	case *codexState:
+		state.capturePromptText = true
+	}
+}
+
 // transcriptState is a provider parser's state after its last parsed line.
 type transcriptState interface {
 	parseLine(line []byte) error

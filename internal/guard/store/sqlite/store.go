@@ -410,6 +410,12 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "tool_usage_sources", "model", "text not null default ''"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "tool_usage_sources", "turn_recovery_version", "integer not null default 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "tool_usage_prompts", "capture_allowed", "integer"); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, ledgerExportSkipsDDL); err != nil {
 		return err
 	}

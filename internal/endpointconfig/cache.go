@@ -74,8 +74,8 @@ func DefaultCachePathForDB(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "endpoint-config.json")
 }
 
-// Load restores only the conditional value. The effective configuration stays
-// at the privacy-safe default until the server confirms it with 200 or 304.
+// Load restores validated settings. Freshness is tracked separately so an
+// offline restart does not change the last successfully applied directive.
 func (c *Cache) Load() error {
 	if c.path == "" {
 		return nil
@@ -123,9 +123,9 @@ func (c *Cache) Load() error {
 	}
 	c.mu.Lock()
 	c.fetched = fetchedAt
-	c.active = nil
+	c.active = cloneResponse(file.Response)
 	c.lastGood = cloneResponse(file.Response)
-	c.status = Status{FetchedAt: fetchedAt, Stale: true, LastError: "persisted configuration not yet confirmed"}
+	c.status = Status{FetchedAt: fetchedAt, Stale: true}
 	c.mu.Unlock()
 	return nil
 }
@@ -175,8 +175,7 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	return nil
 }
 
-// MarkFailed immediately returns the effective config to summary while
-// retaining the validated value solely for conditional revalidation.
+// MarkFailed retains the last validated directive while recording its staleness.
 func (c *Cache) MarkFailed(err error, attemptedAt time.Time) {
 	if attemptedAt.IsZero() {
 		attemptedAt = c.now().UTC()
@@ -187,7 +186,6 @@ func (c *Cache) MarkFailed(err error, attemptedAt time.Time) {
 }
 
 func (c *Cache) markFailedLocked(err error, attemptedAt time.Time) {
-	c.active = nil
 	c.status.FetchedAt = c.fetched
 	c.status.LastAttemptAt = attemptedAt
 	c.status.Stale = true
@@ -199,6 +197,7 @@ func (c *Cache) markFailedLocked(err error, attemptedAt time.Time) {
 func (c *Cache) MarkInvalid(err error) {
 	attemptedAt := c.now().UTC()
 	c.mu.Lock()
+	c.active = nil
 	c.markFailedLocked(err, attemptedAt)
 	c.status.Invalid = true
 	c.mu.Unlock()
@@ -399,7 +398,7 @@ func (r *Refresher) fail(err error) error {
 	// every minute and a repeated line per retry would drown the daemon log.
 	if message := err.Error(); message != r.lastFailure {
 		r.lastFailure = message
-		diagnostic.LogAlways(r.Diagnostic, "endpoint config refresh failed (capture degrades to summary until it recovers): %v\n", err)
+		diagnostic.LogAlways(r.Diagnostic, "endpoint config refresh failed (retaining last validated settings when available): %v\n", err)
 	}
 	return err
 }

@@ -49,8 +49,8 @@ func TestResponseWithoutTheSwitchIsRejected(t *testing.T) {
 	}
 }
 
-// The switch reads as off until a directive is confirmed, and as the server
-// says once it is.
+// The switch stays off until a directive is validated. A validated cache
+// preserves the same directive across restarts.
 func TestWorkTypeSwitchOffUntilConfirmed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "endpoint-config.json")
 	cache := NewCache(path)
@@ -69,8 +69,8 @@ func TestWorkTypeSwitchOffUntilConfirmed(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := reloaded.Current()
-	if snapshot.Config.WorkTypeClassificationEnabled() || !snapshot.Configured.WorkTypeClassificationEnabled() {
-		t.Fatalf("a persisted directive must stay unconfirmed until revalidated: %+v", snapshot)
+	if !snapshot.Config.WorkTypeClassificationEnabled() || !snapshot.Confirmed || !snapshot.Status.Stale {
+		t.Fatalf("a validated directive must remain effective across restarts: %+v", snapshot)
 	}
 }
 
@@ -175,7 +175,7 @@ func TestFallbackVersionCacheLoads(t *testing.T) {
 	if err := cache.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := cache.Current(); snapshot.Confirmed || snapshot.Status.Invalid || snapshot.LastKnownGood == nil {
+	if snapshot := cache.Current(); !snapshot.Confirmed || !snapshot.Status.Stale || snapshot.Status.Invalid || snapshot.LastKnownGood == nil {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	if cache.ConditionalIdentity() != response.ConfigIdentity {

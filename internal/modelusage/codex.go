@@ -60,6 +60,7 @@ func NewCodexTranscript() *Transcript {
 // session is the ID hooks report that thread under: a top-level thread's own
 // ID, or for a sub-agent its root thread's.
 type codexState struct {
+	capturePromptText                     bool
 	line                                  int
 	records                               []Record
 	thread                                string
@@ -146,7 +147,7 @@ func (s *codexState) parseLine(text []byte) error {
 			if p.Role == "user" {
 				s.pending = nil
 				if !codexHarnessMessage(p.Content) {
-					s.addPrompt(row.Timestamp)
+					s.addPrompt(row.Timestamp, codexPromptText(p.Content))
 				}
 			}
 			if p.Role != "assistant" {
@@ -244,8 +245,17 @@ func codexHarnessMessage(content json.RawMessage) bool {
 // rollout records none: it begins with its parent's history copied under the
 // copy's timestamp, and its own tasks come from the parent agent, inside the
 // root session's turns.
-func (s *codexState) addPrompt(timestamp string) {
-	if s.opened || s.thread == "" || strings.TrimPrefix(s.session, "codex-") != s.thread {
+func (s *codexState) addPrompt(timestamp string, text ...string) {
+	if s.thread == "" || strings.TrimPrefix(s.session, "codex-") != s.thread {
+		return
+	}
+	if s.opened {
+		// task_started precedes its user message. The last real user text
+		// before model output carries the request, after context envelopes.
+		if s.capturePromptText && len(text) > 0 && len(text[0]) > 0 && len(text[0]) <= 1<<20 && len(s.prompts) > 0 {
+			value := text[0]
+			s.prompts[len(s.prompts)-1].Text = &value
+		}
 		return
 	}
 	at, err := time.Parse(time.RFC3339Nano, timestamp)
@@ -254,6 +264,26 @@ func (s *codexState) addPrompt(timestamp string) {
 	}
 	s.opened = true
 	s.prompts = append(s.prompts, Prompt{SessionID: "codex-" + s.thread, Timestamp: at})
+	if s.capturePromptText && len(text) > 0 && len(text[0]) > 0 && len(text[0]) <= 1<<20 {
+		value := text[0]
+		s.prompts[len(s.prompts)-1].Text = &value
+	}
+}
+
+func codexPromptText(content json.RawMessage) string {
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &parts) != nil {
+		return ""
+	}
+	var text []string
+	for _, part := range parts {
+		if part.Text != "" {
+			text = append(text, part.Text)
+		}
+	}
+	return strings.Join(text, "\n")
 }
 
 func (s *codexState) promptsSoFar() []Prompt {

@@ -30,9 +30,9 @@ func TestCaptureConfigurationCarriesWorkTypeSwitchOnlyWhenConfirmed(t *testing.T
 	if !got.WorkTypeClassification || got.EffectiveMode != payloadcapture.ModeFull || !got.Confirmed {
 		t.Fatalf("confirmed directive not applied: %+v", got)
 	}
-	// A failed refresh degrades both together.
+	// A failed refresh retains the last validated directive.
 	cache.MarkFailed(nil, time.Now().UTC())
-	if got := captureConfiguration(cache.Current()); got.WorkTypeClassification || got.EffectiveMode != payloadcapture.ModeSummary {
-		t.Fatalf("failed refresh kept the switch: %+v", got)
+	if got := captureConfiguration(cache.Current()); !got.WorkTypeClassification || got.EffectiveMode != payloadcapture.ModeFull || !got.Confirmed {
+		t.Fatalf("failed refresh lost the switch: %+v", got)
 	}
 }

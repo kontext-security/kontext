@@ -5,16 +5,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/modelusage"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 // turnsDDL holds the turns the daemon minted on prompt hooks and the turn
-// boundaries the usage reader found in transcripts. A turn never changes
-// after it is minted, so its outbox is an exported flag acknowledged by turn
-// id. Both tables live here rather than in memory because the usage reader
+// boundaries the usage reader found in transcripts. Identity and time never
+// change; recovery may restore text skipped under an unconfirmed directive and
+// reset its export flag. Both tables live here because the usage reader
 // runs later, in the stream worker, and after a restart.
 const turnsDDL = `
 create table if not exists turns (
@@ -300,7 +303,7 @@ func (s *Store) toolUsagePrompts(ctx context.Context, sessionID string) (map[int
 // transcripts, stored by earlier passes or read in this one: a subagent's
 // transcript has none of its own, and is often first read in the same pass
 // as the parent prompt it runs under.
-func (s *Store) assignToolUsageTurns(ctx context.Context, updates []toolUsageUpdate) error {
+func (s *Store) assignToolUsageTurns(ctx context.Context, updates []toolUsageUpdate, capture payloadcapture.RuntimeConfiguration, now time.Time) error {
 	bySession := map[string][]int{}
 	var order []string
 	for i, update := range updates {
@@ -330,12 +333,78 @@ func (s *Store) assignToolUsageTurns(ctx context.Context, updates []toolUsageUpd
 		for _, at := range known {
 			prompts = append(prompts, at)
 		}
+		slices.SortFunc(prompts, func(a, b time.Time) int { return a.Compare(b) })
+		links, err := s.storedToolUsageTurnLinks(ctx, session)
+		if err != nil {
+			return err
+		}
+		before, err := s.TurnsForSession(ctx, session)
+		if err != nil {
+			return err
+		}
+		present := map[string]bool{}
+		for _, turn := range before {
+			present[turn.ID] = true
+		}
+		// A pruned local turn can still identify valid hosted usage. Reuse
+		// unambiguous IDs within their transcript prompt instead of inventing
+		// a replacement or clearing the association during a historical rescan.
+		hints, ambiguous := map[int64]string{}, map[int64]bool{}
+		for _, index := range bySession[session] {
+			for _, record := range updates[index].records {
+				id := links[record.MessageID]
+				if id == "" || present[id] {
+					continue
+				}
+				at, e := time.Parse(time.RFC3339Nano, record.Timestamp)
+				if e != nil {
+					continue
+				}
+				k := sort.Search(len(prompts), func(k int) bool { return prompts[k].After(at) }) - 1
+				if k < 0 {
+					continue
+				}
+				key := prompts[k].UnixNano()
+				if previous := hints[key]; previous != "" && previous != id {
+					ambiguous[key] = true
+				}
+				hints[key] = id
+			}
+		}
+		for key := range ambiguous {
+			delete(hints, key)
+		}
+		if err := s.recoverSessionTurns(ctx, session, updates, bySession[session], prompts, capture, now, links, present, hints); err != nil {
+			return err
+		}
 		turns, err := s.TurnsForSession(ctx, session)
 		if err != nil {
 			return err
 		}
+		present = map[string]bool{}
+		for _, turn := range turns {
+			present[turn.ID] = true
+		}
 		for _, i := range bySession[session] {
 			modelusage.AssignTurns(updates[i].records, prompts, turns)
+			for j := range updates[i].records {
+				record := &updates[i].records[j]
+				if old := links[record.MessageID]; old != "" && !present[old] {
+					record.TurnID = old
+					continue
+				}
+				if record.TurnID != "" {
+					continue
+				}
+				at, e := time.Parse(time.RFC3339Nano, record.Timestamp)
+				if e != nil {
+					continue
+				}
+				k := sort.Search(len(prompts), func(k int) bool { return prompts[k].After(at) }) - 1
+				if k >= 0 {
+					record.TurnID = hints[prompts[k].UnixNano()]
+				}
+			}
 		}
 	}
 	return nil

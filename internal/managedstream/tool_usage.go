@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 func reconcileToolUsage(ctx context.Context, opts Options) error {
@@ -18,6 +20,15 @@ func reconcileToolUsage(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer store.Close()
+	cache := endpointconfig.NewCache(endpointconfig.DefaultCachePathForDB(opts.DBPath))
+	if err := cache.Load(); err == nil {
+		snapshot := cache.Current()
+		store.SetPayloadCaptureConfiguration(payloadcapture.RuntimeConfiguration{
+			ConfiguredMode: snapshot.Configured.PayloadCaptureMode, EffectiveMode: snapshot.Config.PayloadCaptureMode,
+			ConfigIdentity: snapshot.ConfigIdentity, Confirmed: snapshot.Confirmed,
+			WorkTypeClassification: snapshot.Config.WorkTypeClassificationEnabled(),
+		})
+	}
 	return store.ReconcileToolUsage(ctx)
 }
 

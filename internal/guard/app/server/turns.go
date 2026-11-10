@@ -2,13 +2,9 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"log"
 	"strings"
 	"sync"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -200,26 +196,7 @@ func turnSource(prompt string, isInterrupt *bool) string {
 // over the trimmed, whitespace-collapsed original, so prompts differing only
 // in spacing share a label.
 func turnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) sqlite.TurnPrompt {
-	chars := int64(utf8.RuneCountInString(prompt))
-	switch {
-	case capture.EffectiveMode == payloadcapture.ModeOmitted:
-		return sqlite.SizeOnlyTurnPrompt(sqlite.TurnPromptOmitted, chars)
-	case !capture.WorkTypeClassification || len(prompt) > maxTurnPromptBytes:
-		return sqlite.SizeOnlyTurnPrompt(sqlite.TurnPromptSkipped, chars)
-	}
-	digest := sha256.Sum256([]byte(collapseWhitespace(prompt)))
-	// Redact before collapsing whitespace, on text shaped as the rules expect,
-	// and before bounding, so a secret across the bound leaves no prefix.
-	text := redactMerlinReviewText(modelusage.HarnessBlocks.ReplaceAllString(prompt, " "))
-	// Control characters would expand sixfold in the JSON upload.
-	text = collapseWhitespace(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, text))
-	text, truncated := boundedReviewText(text, turnExcerptBytes)
-	return sqlite.ExcerptTurnPrompt(text, chars, truncated, hex.EncodeToString(digest[:]))
+	return sqlite.CaptureTurnPrompt(prompt, capture)
 }
 
 func collapseWhitespace(value string) string {

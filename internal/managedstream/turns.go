@@ -12,8 +12,8 @@ import (
 )
 
 // flushTurns uploads minted turns, each batch with only the sessions its
-// turns name. The hosted ledger inserts a turn once and ignores a resent id,
-// so a retry after a lost response is harmless. A quarantined turn is
+// turns name. The hosted ledger also accepts one recovery of a skipped excerpt;
+// retries of either operation are idempotent. A quarantined turn is
 // acknowledged like an accepted one: resending identical bytes would only be
 // quarantined again.
 func flushTurns(ctx context.Context, opts Options) error {

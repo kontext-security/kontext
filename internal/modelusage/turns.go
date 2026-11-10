@@ -9,10 +9,12 @@ import (
 // Prompt is where one of a transcript's turns begins: a prompt the agent
 // received from its user, or one the harness submitted on the user's behalf
 // (a queued prompt, a background task notification). Only the session and the
-// time are kept, never the text.
+// time are kept by the metadata reader. Text is populated only by an ephemeral
+// recovery reader, after capture policy has been checked.
 type Prompt struct {
 	SessionID string
 	Timestamp time.Time
+	Text      *string `json:"-"`
 }
 
 // Turn is a turn the daemon minted when a prompt hook reached it.

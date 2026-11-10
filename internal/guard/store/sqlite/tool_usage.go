@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,11 +118,14 @@ type toolUsageSource struct {
 // toolUsageUpdate is the outcome of one source in a reconcile pass, applied
 // together with the other outcomes in a single short write transaction.
 type toolUsageUpdate struct {
-	source      toolUsageSource
-	retire      bool
-	read        bool
-	fingerprint string
-	message     string
+	captureAllowed  *bool
+	recoveryVersion int
+	recoveryPending bool
+	source          toolUsageSource
+	retire          bool
+	read            bool
+	fingerprint     string
+	message         string
 	// attempted is the file state seen when the read was scheduled.
 	attempted        string
 	errorFingerprint string
@@ -142,6 +146,14 @@ type toolUsageUpdate struct {
 // WAL traffic.
 func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 	now := time.Now().UTC()
+	capture := s.PayloadCaptureConfiguration()
+	if capture.Confirmed && capture.WorkTypeClassification && capture.EffectiveMode != "omitted" {
+		// Once per upgrade, include unchanged and historical registered sources.
+		// -1 is scheduled; failed reads retain the normal retry backoff.
+		if _, err := s.db.ExecContext(ctx, `update tool_usage_sources set fingerprint='',turn_recovery_version=-1 where turn_recovery_version=0`); err != nil {
+			return err
+		}
+	}
 	sources, err := s.toolUsageSources(ctx, now)
 	if err != nil {
 		return err
@@ -181,11 +193,16 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 			update.fingerprint, update.message, update.errorFingerprint = update.source.fingerprint, readErr.Error(), update.attempted
 		} else {
 			update.fingerprint, update.records, update.prompts = fingerprint, records, prompts
+			if capture.Confirmed {
+				allowed := capture.WorkTypeClassification && capture.EffectiveMode != "omitted"
+				update.captureAllowed = &allowed
+				update.recoveryVersion = 1
+			}
 		}
 		updates = append(updates, update)
 	}
 	transcriptCursors.evict(now)
-	if err := s.assignToolUsageTurns(ctx, updates); err != nil {
+	if err := s.assignToolUsageTurns(ctx, updates, capture, now); err != nil {
 		return err
 	}
 	return s.applyToolUsageUpdates(ctx, updates, now)
@@ -429,10 +446,14 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 		// which SQLite refuses with SQLITE_BUSY at once instead of waiting
 		// out busy_timeout.
 		if update.read {
+			fingerprint := update.fingerprint
+			if update.recoveryPending && fingerprint != "" && !strings.HasPrefix(fingerprint, restampFingerprintPrefix) {
+				fingerprint = restampFingerprintPrefix + fingerprint
+			}
 			// A hook naming a model during the read cleared the fingerprint so the records
 			// this read withheld get another; writing it back would lose them.
-			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=case when model=? then ? else fingerprint end, error=?, error_fingerprint=? where session_id=? and transcript_path=?`,
-				checkedAt, src.model, update.fingerprint, update.message, update.errorFingerprint, src.session, src.path)
+			_, err = tx.ExecContext(ctx, `update tool_usage_sources set checked_at=?, fingerprint=case when model=? then ? else fingerprint end, error=?, error_fingerprint=?, turn_recovery_version=case when ?='' then ? else turn_recovery_version end where session_id=? and transcript_path=?`,
+				checkedAt, src.model, fingerprint, update.message, update.errorFingerprint, update.message, update.recoveryVersion, src.session, src.path)
 		} else {
 			_, err = tx.ExecContext(ctx, `update tool_usage_sources set error=?, error_fingerprint='' where session_id=? and transcript_path=?`,
 				update.message, src.session, src.path)
@@ -444,7 +465,7 @@ func (s *Store) applyToolUsageUpdates(ctx context.Context, updates []toolUsageUp
 			return err
 		}
 		for _, at := range update.newPrompts {
-			if _, err := tx.ExecContext(ctx, `insert or ignore into tool_usage_prompts(session_id, started_at) values(?,?)`, src.session, FormatTurnTime(at)); err != nil {
+			if _, err := tx.ExecContext(ctx, `insert or ignore into tool_usage_prompts(session_id, started_at, capture_allowed) values(?,?,?)`, src.session, FormatTurnTime(at), update.captureAllowed); err != nil {
 				return err
 			}
 		}

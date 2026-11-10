@@ -223,9 +223,10 @@ func NewClaudeTranscript() *Transcript {
 }
 
 type claudeState struct {
-	line    int
-	records []Record
-	indices map[[2]string]int
+	capturePromptText bool
+	line              int
+	records           []Record
+	indices           map[[2]string]int
 	// attemptOf maps a refused attempt's record to the record of the message
 	// its request produced, whose tool links and pricing tier it shares.
 	attemptOf map[int]int
@@ -269,7 +270,7 @@ func (s *claudeState) parseLine(text []byte) error {
 	if envelope.Type == "queue-operation" && envelope.Operation == "remove" && envelope.Reason == "absorbed_mid_turn" && !envelope.IsSidechain {
 		var prompt string
 		if json.Unmarshal(envelope.Content, &prompt) != nil || !IsHarnessEnvelope(prompt) {
-			s.addPrompt(envelope.SessionID, envelope.Timestamp)
+			s.addPrompt(envelope.SessionID, envelope.Timestamp, prompt)
 		}
 		return nil
 	}
@@ -319,7 +320,7 @@ func (s *claudeState) parseLine(text []byte) error {
 				isPrompt = false
 			}
 			if isPrompt && !envelope.IsSidechain && !envelope.IsMeta && !envelope.IsCompactSummary && !envelope.IsVisibleInTranscriptOnly {
-				s.addPrompt(envelope.SessionID, envelope.Timestamp)
+				s.addPrompt(envelope.SessionID, envelope.Timestamp, prompt)
 			}
 		} else {
 			for _, id := range ids {
@@ -489,12 +490,17 @@ func (s *claudeState) finish() ([]Record, error) {
 
 // addPrompt records a turn boundary. A row without a valid timestamp cannot
 // be placed in time and is skipped.
-func (s *claudeState) addPrompt(sessionID, timestamp string) {
+func (s *claudeState) addPrompt(sessionID, timestamp string, text ...string) {
 	at, err := time.Parse(time.RFC3339Nano, timestamp)
 	if err != nil || sessionID == "" {
 		return
 	}
-	s.prompts = append(s.prompts, Prompt{SessionID: sessionID, Timestamp: at})
+	prompt := Prompt{SessionID: sessionID, Timestamp: at}
+	if s.capturePromptText && len(text) > 0 && len(text[0]) > 0 && len(text[0]) <= 1<<20 {
+		value := text[0]
+		prompt.Text = &value
+	}
+	s.prompts = append(s.prompts, prompt)
 }
 
 func (s *claudeState) promptsSoFar() []Prompt {
