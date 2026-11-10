@@ -1389,7 +1389,9 @@ func stripGHGlobals(args []string) ([]string, bool) {
 }
 
 func classifyGHAPI(args []string, complete bool) cedareval.ShellProjectionV2 {
-	method := "GET"
+	// gh sends a request with fields or a body file as a POST unless the
+	// command names a method, wherever in the command it does so.
+	method, namesMethod, sendsBody := "GET", false, false
 	path := ""
 	fields := make([]string, 0, 2)
 	for i := 0; i < len(args); i++ {
@@ -1402,11 +1404,14 @@ func classifyGHAPI(args []string, complete bool) cedareval.ShellProjectionV2 {
 			}
 			i++
 			method = strings.ToUpper(args[i])
+			namesMethod = true
 		case strings.HasPrefix(arg, "--method="):
 			method = strings.ToUpper(strings.TrimPrefix(arg, "--method="))
+			namesMethod = true
 		case strings.HasPrefix(arg, "-X") && len(arg) > 2:
 			// The attached forms: -XDELETE and -X=DELETE.
 			method = strings.ToUpper(strings.TrimPrefix(arg[2:], "="))
+			namesMethod = true
 		case arg == "-f" || arg == "-F" || arg == "--raw-field" || arg == "--field":
 			if i+1 >= len(args) {
 				complete = false
@@ -1414,29 +1419,21 @@ func classifyGHAPI(args []string, complete bool) cedareval.ShellProjectionV2 {
 			}
 			i++
 			fields = append(fields, args[i])
-			if method == "GET" {
-				method = "POST"
-			}
+			sendsBody = true
 		case (strings.HasPrefix(arg, "-f") || strings.HasPrefix(arg, "-F")) && len(arg) > 2:
 			// The attached forms: -Fforce=true and -F=force=true.
 			fields = append(fields, strings.TrimPrefix(arg[2:], "="))
-			if method == "GET" {
-				method = "POST"
-			}
+			sendsBody = true
 		case strings.HasPrefix(arg, "--raw-field=") || strings.HasPrefix(arg, "--field="):
 			fields = append(fields, strings.SplitN(arg, "=", 2)[1])
-			if method == "GET" {
-				method = "POST"
-			}
+			sendsBody = true
 		case arg == "--input" || strings.HasPrefix(arg, "--input="):
 			// A request body file makes gh default to POST; its contents are
 			// invisible here, so the request stays unrecognized.
 			if arg == "--input" {
 				i++
 			}
-			if method == "GET" {
-				method = "POST"
-			}
+			sendsBody = true
 			complete = false
 		case ghAPINeutralFlags[arg] || hasPrefix(arg, ghAPINeutralValuePrefixes...):
 			// Output and transport flags shape the response, not the request.
@@ -1452,6 +1449,9 @@ func classifyGHAPI(args []string, complete bool) cedareval.ShellProjectionV2 {
 		case !strings.HasPrefix(arg, "-") && path == "":
 			path = arg
 		}
+	}
+	if sendsBody && !namesMethod {
+		method = "POST"
 	}
 	facts := []string{"gh/command=api", "github/route=catalogued", "http/method=" + method}
 	if path != "" {
