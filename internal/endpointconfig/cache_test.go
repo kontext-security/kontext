@@ -14,7 +14,7 @@ import (
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
-func TestCacheRestartRequiresServerConfirmation(t *testing.T) {
+func TestCacheRestartRestoresValidatedSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "endpoint-configuration.json")
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	full := testResponse(t, payloadcapture.ModeFull)
@@ -34,7 +34,7 @@ func TestCacheRestartRequiresServerConfirmation(t *testing.T) {
 	if err := restored.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := restored.Current(); snapshot.Config.PayloadCaptureMode != payloadcapture.ModeSummary || snapshot.LastKnownGood == nil || !snapshot.Status.Stale {
+	if snapshot := restored.Current(); snapshot.Config.PayloadCaptureMode != payloadcapture.ModeFull || !snapshot.Confirmed || snapshot.LastKnownGood == nil || !snapshot.Status.Stale {
 		t.Fatalf("unconfirmed snapshot = %#v", snapshot)
 	}
 	if err := restored.Apply(FetchResult{NotModified: true, ETag: full.ConfigIdentity}, now.Add(time.Minute)); err != nil {
@@ -45,7 +45,7 @@ func TestCacheRestartRequiresServerConfirmation(t *testing.T) {
 	}
 }
 
-func TestCacheFailureFallsBackWithoutDiscardingConditionalValue(t *testing.T) {
+func TestCacheFailureRetainsValidatedSettings(t *testing.T) {
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
 	full := testResponse(t, payloadcapture.ModeFull)
 	if err := cache.Apply(FetchResult{Response: &full}, time.Now().UTC()); err != nil {
@@ -53,7 +53,7 @@ func TestCacheFailureFallsBackWithoutDiscardingConditionalValue(t *testing.T) {
 	}
 	cache.MarkFailed(errors.New("offline"), time.Now().UTC())
 	snapshot := cache.Current()
-	if snapshot.Config.PayloadCaptureMode != payloadcapture.ModeSummary || snapshot.ConfigIdentity != full.ConfigIdentity || snapshot.LastKnownGood == nil || !snapshot.Status.Stale || snapshot.FallbackReason != "refresh_failed" {
+	if snapshot.Config.PayloadCaptureMode != payloadcapture.ModeFull || !snapshot.Confirmed || snapshot.ConfigIdentity != full.ConfigIdentity || snapshot.LastKnownGood == nil || !snapshot.Status.Stale || snapshot.Status.LastError != "offline" {
 		t.Fatalf("failed snapshot = %#v", snapshot)
 	}
 	if cache.ConditionalIdentity() != full.ConfigIdentity {
@@ -132,7 +132,7 @@ func TestCacheConcurrentApplyAndMarkInvalidPreserveSnapshotInvariant(t *testing.
 	}
 }
 
-func TestRefresherFailureNotifiesSafeDefault(t *testing.T) {
+func TestRefresherFailureNotifiesRetainedSettings(t *testing.T) {
 	cache := NewCache("")
 	full := testResponse(t, payloadcapture.ModeFull)
 	if err := cache.Apply(FetchResult{Response: &full}, time.Now().UTC()); err != nil {
@@ -151,7 +151,7 @@ func TestRefresherFailureNotifiesSafeDefault(t *testing.T) {
 	}
 	select {
 	case snapshot := <-changed:
-		if snapshot.Config.PayloadCaptureMode != payloadcapture.ModeSummary {
+		if snapshot.Config.PayloadCaptureMode != payloadcapture.ModeFull || !snapshot.Confirmed {
 			t.Fatalf("notified config = %#v", snapshot.Config)
 		}
 	default:

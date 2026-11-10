@@ -32,14 +32,28 @@ type Store struct {
 
 	// Capture configuration lives on Store so each persisted decision can
 	// snapshot behavior and evidence atomically.
-	captureMu     sync.RWMutex
-	captureConfig payloadcapture.RuntimeConfiguration
+	captureMu                   sync.RWMutex
+	allowHistoricalTurnRecovery bool
+	captureConfig               payloadcapture.RuntimeConfiguration
 }
 
 func (s *Store) SetPayloadCaptureConfiguration(config payloadcapture.RuntimeConfiguration) {
 	s.captureMu.Lock()
 	defer s.captureMu.Unlock()
 	s.captureConfig = payloadcapture.SafeRuntimeConfiguration(config)
+}
+
+// Historical prompt capture requires an explicit operator opt-in in addition
+// to current workspace permission. Recorded opt-outs always remain denied.
+func (s *Store) SetHistoricalTurnRecovery(allow bool) {
+	s.captureMu.Lock()
+	s.allowHistoricalTurnRecovery = allow
+	s.captureMu.Unlock()
+}
+func (s *Store) historicalTurnRecoveryAllowed() bool {
+	s.captureMu.RLock()
+	defer s.captureMu.RUnlock()
+	return s.allowHistoricalTurnRecovery
 }
 
 // PayloadCaptureConfiguration is the capture snapshot a decision recorded
@@ -408,6 +422,15 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "tool_usage_sources", "model", "text not null default ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "tool_usage_sources", "turn_recovery_version", "integer not null default 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "tool_usage_prompts", "capture_allowed", "integer"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "turn_recovery_policy", "historical_before", "text not null default ''"); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, ledgerExportSkipsDDL); err != nil {

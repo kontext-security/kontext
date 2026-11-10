@@ -17,6 +17,8 @@ import (
 	"github.com/kontext-security/kontext/internal/cloudhttp"
 )
 
+var ErrAuthorityRejected = errors.New("endpoint configuration authority rejected")
+
 var installationIDPattern = regexp.MustCompile(`^ins_[A-Za-z0-9_-]{32}$`)
 
 type FetchResult struct {
@@ -113,6 +115,9 @@ func (c *Client) fetch(ctx context.Context, version int, installToken, installat
 		return FetchResult{}, fmt.Errorf("endpoint configuration fetch: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+		return FetchResult{}, fmt.Errorf("%w: status %d", ErrAuthorityRejected, response.StatusCode)
+	}
 	etag := parseETag(response.Header.Get("ETag"))
 	if response.StatusCode == http.StatusNotModified {
 		if configIdentity == "" || etag != configIdentity {

@@ -33,8 +33,9 @@ import (
 )
 
 type DaemonOptions struct {
-	SocketPath string
-	DBPath     string
+	streamCaptureConfiguration func() payloadcapture.RuntimeConfiguration
+	SocketPath                 string
+	DBPath                     string
 	// NoCodexRoute keeps the daemon from routing Codex through its proxy,
 	// for a daemon run by hand next to a test that routes Codex itself.
 	NoCodexRoute            bool
@@ -264,7 +265,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if endpointConfigCachePath == "" {
 		endpointConfigCachePath = endpointconfig.DefaultCachePathForDB(dbPath)
 	}
-	endpointConfigCache := endpointconfig.NewCache(endpointConfigCachePath)
+	endpointConfigCache := endpointconfig.NewCacheForDB(endpointConfigCachePath, dbPath)
 	if err := endpointConfigCache.Load(); err != nil {
 		endpointConfigCache.MarkInvalid(err)
 		opts.Diagnostic.Printf("endpoint configuration cache load: %v\n", err)
@@ -350,6 +351,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// Persisted endpoint configuration is conditional state only. Capture stays
 	// at the privacy-safe default until this process receives a confirming 200
 	// or matching 304 from the independent configuration endpoint.
+	opts.EndpointConfigCachePath = endpointConfigCachePath
+	opts.streamCaptureConfiguration = func() payloadcapture.RuntimeConfiguration { return captureConfiguration(endpointConfigCache.Current()) }
 	host.SetPayloadCaptureConfiguration(captureConfiguration(endpointConfigCache.Current()))
 
 	policyCtx, stopPolicyRefresh := context.WithCancel(ctx)
@@ -940,24 +943,27 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 	deviceKey := deviceKeys.resolve(ctx, loadedConfig.Config.CloudURL, installToken, installationID, opts.StreamHTTPClient, opts.Diagnostic)
 	accepted := false
 	err = managedstream.Flush(ctx, managedstream.Options{
-		DBPath:             dbPath,
-		StatePath:          opts.StreamStatePath,
-		CloudURL:           loadedConfig.Config.CloudURL,
-		InstallationID:     installationID,
-		InstallToken:       installToken,
-		DeviceLabel:        loadedConfig.Config.Device.Label,
-		UserEmail:          loadedConfig.Config.Device.UserEmail,
-		DeploymentVersion:  deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
-		CLIVersion:         opts.BinaryVersion,
-		HooksFact:          func() (managedstream.HooksFact, bool) { return managedObserveHooksFact(loadedConfig.Scope) },
-		AgentsFact:         inventoryHolder.Fact,
-		Inventory:          inventoryHolder.store,
-		AuthorityFact:      authorityHolder.Fact,
-		AuthorityAvailable: authorityHolder.resend,
-		AuthorityScanKnown: authorityHolder.known,
-		DeviceKey:          func() string { return deviceKey },
-		HTTPClient:         opts.StreamHTTPClient,
-		Diagnostic:         opts.Diagnostic,
+		AllowHistoricalTurnRecovery: loadedConfig.Config.RecoverHistoricalTurnPrompts,
+		EndpointConfigCachePath:     opts.EndpointConfigCachePath,
+		CaptureConfiguration:        opts.streamCaptureConfiguration,
+		DBPath:                      dbPath,
+		StatePath:                   opts.StreamStatePath,
+		CloudURL:                    loadedConfig.Config.CloudURL,
+		InstallationID:              installationID,
+		InstallToken:                installToken,
+		DeviceLabel:                 loadedConfig.Config.Device.Label,
+		UserEmail:                   loadedConfig.Config.Device.UserEmail,
+		DeploymentVersion:           deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
+		CLIVersion:                  opts.BinaryVersion,
+		HooksFact:                   func() (managedstream.HooksFact, bool) { return managedObserveHooksFact(loadedConfig.Scope) },
+		AgentsFact:                  inventoryHolder.Fact,
+		Inventory:                   inventoryHolder.store,
+		AuthorityFact:               authorityHolder.Fact,
+		AuthorityAvailable:          authorityHolder.resend,
+		AuthorityScanKnown:          authorityHolder.known,
+		DeviceKey:                   func() string { return deviceKey },
+		HTTPClient:                  opts.StreamHTTPClient,
+		Diagnostic:                  opts.Diagnostic,
 		OnFlushSuccess: func() {
 			// Once per flush, on the first accepted post: a flush can make several,
 			// and draining a backlog shouldn't hold the policy back.

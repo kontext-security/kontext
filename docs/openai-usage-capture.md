@@ -48,7 +48,7 @@ which does not change the owner.
 Only the `openai` model provider is accepted; custom OpenAI-compatible providers
 must not inherit OpenAI rates based on a model name alone.
 
-Transcript content stays local. Only IDs, tool names and optional type/namespace/
+Tool-call arguments and results stay local. Only IDs, tool names and optional type/namespace/
 toolset/server metadata, model, timestamp, usage, and optional service tier enter
 the usage payload. In code mode, `exec` is the model-facing wrapper. Its inner
 tool calls cannot be inferred safely from the usage record; the cloud groups it
@@ -57,6 +57,10 @@ whole-session usage are outside this feature. Codex hooks report a sub-agent's
 tool calls under its root thread's session (`session_meta.session_id`) with the
 sub-agent's own rollout as `transcript_path`, so its usage carries that session.
 Parent usage is not used to guess a sub-agent's cost.
+
+Missing prompts can be repaired through the separate policy-controlled
+[turn recovery](turn-recovery.md) path. Redacted prompt excerpts are uploaded as
+turn records, never as usage payload content.
 
 Turns (see `anthropic-usage-capture.md`, step 7) work the same way for Codex:
 the managed `UserPromptSubmit` hook mints the turn, and the reader starts a

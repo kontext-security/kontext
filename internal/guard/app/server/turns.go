@@ -2,13 +2,9 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"log"
 	"strings"
 	"sync"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -22,11 +18,11 @@ import (
 const (
 	// maxTurnPromptBytes is the hook-metadata redaction guard: a longer prompt
 	// is not redacted at all and its turn carries its size only.
-	maxTurnPromptBytes = 1 << 20
+	maxTurnPromptBytes = sqlite.MaxTurnPromptBytes
 	// turnExcerptBytes bounds the excerpt under Summaries and Full payloads
 	// alike: the captured-payload cap. Bytes, so the wire's character bound
 	// holds too.
-	turnExcerptBytes = 64_000
+	turnExcerptBytes = sqlite.TurnExcerptBytes
 	// maxTrackedTurnSessions bounds the cache; dropped sessions are rebuilt
 	// from SQLite on their next event.
 	maxTrackedTurnSessions = 4096
@@ -149,6 +145,22 @@ func (r guardHookRuntime) recordTurn(ctx context.Context, event *risk.HookEvent,
 		}
 		event.TurnID = id
 	}
+	original := event.TurnID
+	canonical, err := r.store.ResolveTurnID(ctx, original)
+	if err != nil {
+		log.Printf("resolve canonical turn: %v", err)
+		return
+	}
+	if canonical != original {
+		event.TurnID = canonical
+		r.turns.mu.Lock()
+		session := sqlite.NormalizeSessionID(event.SessionID)
+		if r.turns.current[session] == original {
+			r.turns.current[session] = canonical
+		}
+		r.turns.mu.Unlock()
+	}
+
 }
 
 // appInternalThread reports a Codex thread the app runs for itself rather
@@ -200,28 +212,5 @@ func turnSource(prompt string, isInterrupt *bool) string {
 // over the trimmed, whitespace-collapsed original, so prompts differing only
 // in spacing share a label.
 func turnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) sqlite.TurnPrompt {
-	chars := int64(utf8.RuneCountInString(prompt))
-	switch {
-	case capture.EffectiveMode == payloadcapture.ModeOmitted:
-		return sqlite.SizeOnlyTurnPrompt(sqlite.TurnPromptOmitted, chars)
-	case !capture.WorkTypeClassification || len(prompt) > maxTurnPromptBytes:
-		return sqlite.SizeOnlyTurnPrompt(sqlite.TurnPromptSkipped, chars)
-	}
-	digest := sha256.Sum256([]byte(collapseWhitespace(prompt)))
-	// Redact before collapsing whitespace, on text shaped as the rules expect,
-	// and before bounding, so a secret across the bound leaves no prefix.
-	text := redactMerlinReviewText(modelusage.HarnessBlocks.ReplaceAllString(prompt, " "))
-	// Control characters would expand sixfold in the JSON upload.
-	text = collapseWhitespace(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, text))
-	text, truncated := boundedReviewText(text, turnExcerptBytes)
-	return sqlite.ExcerptTurnPrompt(text, chars, truncated, hex.EncodeToString(digest[:]))
-}
-
-func collapseWhitespace(value string) string {
-	return strings.Join(strings.Fields(value), " ")
+	return sqlite.CaptureTurnPrompt(prompt, capture)
 }

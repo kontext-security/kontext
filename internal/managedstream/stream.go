@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 	"io"
 	"net/http"
 	"net/url"
@@ -59,14 +60,17 @@ const (
 var hostedErrorSecretPattern = regexp.MustCompile(`(?i)("(?:[^"]*(?:api[_-]?key|authorization|client[_-]?secret|credential|install[_-]?token|password|secret|token)[^"]*)"\s*:\s*")([^"]*)(")`)
 
 type Options struct {
-	DBPath            string
-	StatePath         string
-	CloudURL          string
-	InstallationID    string
-	InstallToken      string
-	DeviceLabel       string
-	UserEmail         string
-	DeploymentVersion func() string
+	AllowHistoricalTurnRecovery bool
+	EndpointConfigCachePath     string
+	CaptureConfiguration        func() payloadcapture.RuntimeConfiguration
+	DBPath                      string
+	StatePath                   string
+	CloudURL                    string
+	InstallationID              string
+	InstallToken                string
+	DeviceLabel                 string
+	UserEmail                   string
+	DeploymentVersion           func() string
 	// CLIVersion identifies the running binary, independently of the deployment
 	// marker, which can change while this process is still running.
 	CLIVersion string
@@ -594,8 +598,9 @@ func nonNilRecords(records []sqlite.LedgerRecord) []sqlite.LedgerRecord {
 // ingestResult is what a hosted ingest response says about the accepted
 // rows. Altered is nil when the server does not report alterations at all.
 type ingestResult struct {
-	Quarantined []ingestRow  `json:"quarantined"`
-	Altered     *[]ingestRow `json:"altered"`
+	TurnRecoveryBefore *string      `json:"turn_recovery_before"`
+	Quarantined        []ingestRow  `json:"quarantined"`
+	Altered            *[]ingestRow `json:"altered"`
 	// InventorySources is apart from the row verdicts above; absent means no
 	// source was acknowledged.
 	InventorySources []InventoryAck `json:"inventory_sources"`
@@ -618,6 +623,7 @@ func post(ctx context.Context, opts Options, body []byte) (ingestResult, error) 
 		return ingestResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Kontext-Turn-Recovery", "v1")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(opts.InstallToken))
 
 	client := opts.HTTPClient
@@ -641,6 +647,28 @@ func post(ctx context.Context, opts Options, body []byte) (ingestResult, error) 
 	if data, err := io.ReadAll(io.LimitReader(resp.Body, maxIngestResponseBytes)); err == nil {
 		if err := json.Unmarshal(data, &result); err != nil {
 			result = ingestResult{}
+		}
+	}
+	if result.TurnRecoveryBefore != nil {
+		value := *result.TurnRecoveryBefore
+		before := time.Time{}
+		valid := value == ""
+		if value != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, value)
+			if err == nil && !parsed.After(time.Now().Add(5*time.Minute)) {
+				before = parsed
+				valid = true
+			}
+		}
+		if valid {
+			store, err := sqlite.OpenStore(opts.DBPath)
+			if err == nil {
+				err = store.SetHistoricalTurnRecoveryBefore(ctx, before)
+				store.Close()
+			}
+			if err != nil {
+				diagnostic.LogAlways(opts.Diagnostic, "turn recovery directive persistence failed: %v\n", err)
+			}
 		}
 	}
 	return result, nil

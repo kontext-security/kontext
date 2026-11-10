@@ -24,6 +24,8 @@ const (
 
 var defaultConfig = Config{PayloadCaptureMode: payloadcapture.ModeSummary}
 
+var ErrCacheInvalidated = errors.New("endpoint configuration cache invalidated; refresh required")
+
 type Status struct {
 	FetchedAt     time.Time
 	LastAttemptAt time.Time
@@ -56,8 +58,9 @@ type cacheFile struct {
 }
 
 type Cache struct {
-	path string
-	now  func() time.Time
+	path         string
+	rejectedPath string
+	now          func() time.Time
 
 	mu       sync.RWMutex
 	fetched  time.Time
@@ -67,18 +70,31 @@ type Cache struct {
 }
 
 func NewCache(path string) *Cache {
-	return &Cache{path: path, now: time.Now}
+	return &Cache{path: path, rejectedPath: path + ".rejected", now: time.Now}
+}
+
+// Keep revocation in the installation's writable state directory, independently
+// of a custom cache location whose directory may prevent deletion or replacement.
+func NewCacheForDB(path, dbPath string) *Cache {
+	c := NewCache(path)
+	c.rejectedPath = dbPath + ".endpoint-config-rejected"
+	return c
 }
 
 func DefaultCachePathForDB(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "endpoint-config.json")
 }
 
-// Load restores only the conditional value. The effective configuration stays
-// at the privacy-safe default until the server confirms it with 200 or 304.
+// Load restores validated settings. Freshness is tracked separately so an
+// offline restart does not change the last successfully applied directive.
 func (c *Cache) Load() error {
 	if c.path == "" {
 		return nil
+	}
+	if _, err := os.Stat(c.rejectedPath); err == nil {
+		return ErrCacheInvalidated
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("endpoint configuration cache: revocation journal: %w", err)
 	}
 	data, err := os.ReadFile(c.path)
 	if err != nil {
@@ -123,9 +139,9 @@ func (c *Cache) Load() error {
 	}
 	c.mu.Lock()
 	c.fetched = fetchedAt
-	c.active = nil
+	c.active = cloneResponse(file.Response)
 	c.lastGood = cloneResponse(file.Response)
-	c.status = Status{FetchedAt: fetchedAt, Stale: true, LastError: "persisted configuration not yet confirmed"}
+	c.status = Status{FetchedAt: fetchedAt, Stale: true}
 	c.mu.Unlock()
 	return nil
 }
@@ -163,8 +179,25 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 		FetchedAt: fetchedAt.UTC().Format(time.RFC3339Nano),
 		Response:  cloneResponse(confirmed),
 	}
+	// A verified directive is authoritative even if the local disk fails.
+	// In particular, retaining an older Full directive after a valid opt-out
+	// would contradict the workspace's known settings.
+	c.mu.Lock()
+	c.fetched = fetchedAt
+	c.active = cloneResponse(confirmed)
+	c.lastGood = cloneResponse(confirmed)
+	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt, Stale: true}
+	c.mu.Unlock()
 	if err := c.persist(file); err != nil {
+		err = errors.Join(err, c.invalidatePersisted())
+		c.MarkFailed(err, fetchedAt)
 		return err
+	}
+	if c.path != "" {
+		if err := os.Remove(c.rejectedPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			c.MarkFailed(err, fetchedAt)
+			return fmt.Errorf("endpoint configuration cache: clear revocation: %w", err)
+		}
 	}
 	c.mu.Lock()
 	c.fetched = fetchedAt
@@ -175,8 +208,7 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	return nil
 }
 
-// MarkFailed immediately returns the effective config to summary while
-// retaining the validated value solely for conditional revalidation.
+// MarkFailed retains the last validated directive while recording its staleness.
 func (c *Cache) MarkFailed(err error, attemptedAt time.Time) {
 	if attemptedAt.IsZero() {
 		attemptedAt = c.now().UTC()
@@ -187,7 +219,6 @@ func (c *Cache) MarkFailed(err error, attemptedAt time.Time) {
 }
 
 func (c *Cache) markFailedLocked(err error, attemptedAt time.Time) {
-	c.active = nil
 	c.status.FetchedAt = c.fetched
 	c.status.LastAttemptAt = attemptedAt
 	c.status.Stale = true
@@ -199,6 +230,7 @@ func (c *Cache) markFailedLocked(err error, attemptedAt time.Time) {
 func (c *Cache) MarkInvalid(err error) {
 	attemptedAt := c.now().UTC()
 	c.mu.Lock()
+	c.active = nil
 	c.markFailedLocked(err, attemptedAt)
 	c.status.Invalid = true
 	c.mu.Unlock()
@@ -392,16 +424,51 @@ func (r *Refresher) Run(ctx context.Context) {
 
 func (r *Refresher) fail(err error) error {
 	if r.Cache != nil {
-		r.Cache.MarkFailed(err, r.now())
+		if errors.Is(err, ErrAuthorityRejected) {
+			err = errors.Join(err, r.Cache.rejectAuthority(err, r.now()))
+		} else {
+			r.Cache.MarkFailed(err, r.now())
+		}
 		r.notify()
 	}
 	// Log once per distinct error, not once per attempt: the loop retries
 	// every minute and a repeated line per retry would drown the daemon log.
 	if message := err.Error(); message != r.lastFailure {
 		r.lastFailure = message
-		diagnostic.LogAlways(r.Diagnostic, "endpoint config refresh failed (capture degrades to summary until it recovers): %v\n", err)
+		diagnostic.LogAlways(r.Diagnostic, "endpoint config refresh failed (retaining last validated settings when available): %v\n", err)
 	}
 	return err
+}
+
+func (c *Cache) rejectAuthority(err error, at time.Time) error {
+	c.mu.Lock()
+	c.active = nil
+	c.lastGood = nil
+	c.status = Status{FetchedAt: c.fetched, LastAttemptAt: at, Stale: true, Invalid: true, LastError: err.Error()}
+	c.mu.Unlock()
+	return c.invalidatePersisted()
+}
+
+func (c *Cache) invalidatePersisted() error {
+	if c.path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(c.rejectedPath), 0700); err == nil {
+		if err := os.WriteFile(c.rejectedPath, []byte("refresh required\n"), 0600); err == nil {
+			return nil
+		}
+	}
+	// A directory can deny deletion while its existing file remains writable.
+	// Truncation is fail-closed even if interrupted; Load rejects the empty file.
+	writeErr := os.WriteFile(c.path, nil, 0600)
+	if writeErr == nil {
+		return nil
+	}
+	removeErr := os.Remove(c.path)
+	if removeErr == nil || errors.Is(removeErr, os.ErrNotExist) {
+		return nil
+	}
+	return fmt.Errorf("endpoint configuration cache: cannot durably invalidate: %w", errors.Join(writeErr, removeErr))
 }
 
 func (r *Refresher) recovered() {

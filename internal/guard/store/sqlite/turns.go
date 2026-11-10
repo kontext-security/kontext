@@ -5,16 +5,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/modelusage"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 // turnsDDL holds the turns the daemon minted on prompt hooks and the turn
-// boundaries the usage reader found in transcripts. A turn never changes
-// after it is minted, so its outbox is an exported flag acknowledged by turn
-// id. Both tables live here rather than in memory because the usage reader
+// boundaries the usage reader found in transcripts. Identity and time never
+// change; recovery may restore text skipped under an unconfirmed directive and
+// reset its export flag. Both tables live here because the usage reader
 // runs later, in the stream worker, and after a restart.
 const turnsDDL = `
 create table if not exists turns (
@@ -34,6 +37,10 @@ create table if not exists turns (
 );
 create index if not exists turns_session_started on turns(session_id, started_at);
 create index if not exists turns_pending on turns(exported, started_at);
+create table if not exists turn_aliases(alias_id text primary key, turn_id text not null);
+create table if not exists turn_recovery_policy(id integer primary key check(id=1), started_at text not null);
+insert or ignore into turn_recovery_policy(id,started_at) values(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
 -- Turn boundaries per session, from every transcript of the session. A
 -- subagent transcript has none of its own and is matched against these.
 create table if not exists tool_usage_prompts (
@@ -105,35 +112,8 @@ func FormatTurnTime(at time.Time) string {
 // session's transcripts are marked for another read: usage read before the
 // turn existed is stamped again even if no transcript changes after it.
 func (s *Store) SaveTurn(ctx context.Context, turn TurnRecord) error {
-	if turn.ID == "" || turn.SessionID == "" || turn.StartedAt == "" {
-		return errors.New("turn requires id, session and start time")
-	}
-	var text, sha256 any
-	truncated := false
-	if turn.Prompt.Mode == TurnPromptExcerpt {
-		if turn.Prompt.Text == nil || turn.Prompt.SHA256 == nil || turn.Prompt.Truncated == nil {
-			return errors.New("turn excerpt requires text, hash and truncation")
-		}
-		text, sha256, truncated = *turn.Prompt.Text, *turn.Prompt.SHA256, *turn.Prompt.Truncated
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `insert or ignore into turns(id, session_id, sequence, agent, started_at, source, prompt_mode, prompt_text, prompt_chars, prompt_sha256, prompt_truncated)
- select ?, ?, coalesce(max(sequence), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ? from turns where session_id = ?`,
-		turn.ID, turn.SessionID, turn.Agent, turn.StartedAt, turn.Source, turn.Prompt.Mode, text, turn.Prompt.Chars, sha256, truncated, turn.SessionID)
-	if err != nil {
-		return err
-	}
-	if inserted, err := result.RowsAffected(); err != nil || inserted == 0 {
-		return err
-	}
-	if err := markToolUsageSourcesForRestamp(ctx, tx, turn.SessionID, nil); err != nil {
-		return err
-	}
-	return tx.Commit()
+	_, err := s.SaveTurnCanonical(ctx, turn)
+	return err
 }
 
 // restampFingerprintPrefix marks a source's stored fingerprint so the next
@@ -146,7 +126,7 @@ const restampFingerprintPrefix = "restamp:"
 // and their usage may now belong to a different turn. Sources never read
 // successfully are read anyway.
 func markToolUsageSourcesForRestamp(ctx context.Context, db execer, sessionID string, skip []string) error {
-	query := `update tool_usage_sources set fingerprint = ? || fingerprint where session_id = ? and fingerprint <> '' and substr(fingerprint, 1, ?) <> ?`
+	query := `update tool_usage_sources set fingerprint = ? || fingerprint,error_fingerprint='' where session_id = ? and fingerprint <> '' and substr(fingerprint, 1, ?) <> ?`
 	args := []any{restampFingerprintPrefix, sessionID, len(restampFingerprintPrefix), restampFingerprintPrefix}
 	if len(skip) > 0 {
 		query += ` and transcript_path not in (` + strings.TrimRight(strings.Repeat("?,", len(skip)), ",") + `)`
@@ -300,7 +280,7 @@ func (s *Store) toolUsagePrompts(ctx context.Context, sessionID string) (map[int
 // transcripts, stored by earlier passes or read in this one: a subagent's
 // transcript has none of its own, and is often first read in the same pass
 // as the parent prompt it runs under.
-func (s *Store) assignToolUsageTurns(ctx context.Context, updates []toolUsageUpdate) error {
+func (s *Store) assignToolUsageTurns(ctx context.Context, updates []toolUsageUpdate, capture payloadcapture.RuntimeConfiguration, now time.Time) error {
 	bySession := map[string][]int{}
 	var order []string
 	for i, update := range updates {
@@ -330,12 +310,78 @@ func (s *Store) assignToolUsageTurns(ctx context.Context, updates []toolUsageUpd
 		for _, at := range known {
 			prompts = append(prompts, at)
 		}
+		slices.SortFunc(prompts, func(a, b time.Time) int { return a.Compare(b) })
+		links, err := s.storedToolUsageTurnLinks(ctx, session)
+		if err != nil {
+			return err
+		}
+		before, err := s.TurnsForSession(ctx, session)
+		if err != nil {
+			return err
+		}
+		present := map[string]bool{}
+		for _, turn := range before {
+			present[turn.ID] = true
+		}
+		// A pruned local turn can still identify valid hosted usage. Reuse
+		// unambiguous IDs within their transcript prompt instead of inventing
+		// a replacement or clearing the association during a historical rescan.
+		hints, ambiguous := map[int64]string{}, map[int64]bool{}
+		for _, index := range bySession[session] {
+			for _, record := range updates[index].records {
+				id := links[record.MessageID]
+				if id == "" || present[id] {
+					continue
+				}
+				at, e := time.Parse(time.RFC3339Nano, record.Timestamp)
+				if e != nil {
+					continue
+				}
+				k := sort.Search(len(prompts), func(k int) bool { return prompts[k].After(at) }) - 1
+				if k < 0 {
+					continue
+				}
+				key := prompts[k].UnixNano()
+				if previous := hints[key]; previous != "" && previous != id {
+					ambiguous[key] = true
+				}
+				hints[key] = id
+			}
+		}
+		for key := range ambiguous {
+			delete(hints, key)
+		}
+		if err := s.recoverSessionTurns(ctx, session, updates, bySession[session], prompts, capture, now, links, present, hints); err != nil {
+			return err
+		}
 		turns, err := s.TurnsForSession(ctx, session)
 		if err != nil {
 			return err
 		}
+		present = map[string]bool{}
+		for _, turn := range turns {
+			present[turn.ID] = true
+		}
 		for _, i := range bySession[session] {
 			modelusage.AssignTurns(updates[i].records, prompts, turns)
+			for j := range updates[i].records {
+				record := &updates[i].records[j]
+				if old := links[record.MessageID]; old != "" && !present[old] {
+					record.TurnID = old
+					continue
+				}
+				if record.TurnID != "" {
+					continue
+				}
+				at, e := time.Parse(time.RFC3339Nano, record.Timestamp)
+				if e != nil {
+					continue
+				}
+				k := sort.Search(len(prompts), func(k int) bool { return prompts[k].After(at) }) - 1
+				if k >= 0 {
+					record.TurnID = hints[prompts[k].UnixNano()]
+				}
+			}
 		}
 	}
 	return nil
