@@ -1,6 +1,8 @@
 package shellprojection
 
 import (
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -254,5 +256,105 @@ func TestProjectPowerShellCarriesDialect(t *testing.T) {
 		if contains(projection.Facts, FactDialectPowerShell) {
 			t.Errorf("POSIX shell projection %#v carries %s", projection, FactDialectPowerShell)
 		}
+	}
+}
+
+// EvaluateV2 refuses a projection whose text it cannot carry, and a refused
+// call is not judged. Every projection must therefore stay within its limits.
+func TestProjectionsStayWithinEvaluatorLimits(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	for name, command := range map[string]string{
+		"long program": "rm -rf ~/x; " + long,
+		"long fact":    "curl -X DELETE https://api.github.com/repos/acme/" + long,
+	} {
+		for dialect, project := range map[string]func(string) []cedareval.ShellProjectionV2{"posix": Project, "powershell": ProjectPowerShell} {
+			t.Run(name+"/"+dialect, func(t *testing.T) {
+				projections := project(command)
+				if len(projections) == 0 {
+					t.Fatal("no projections")
+				}
+				incomplete := false
+				for _, p := range projections {
+					if !cedareval.ValidShellText(p.Program) {
+						t.Errorf("program of %d bytes is not evaluable", len(p.Program))
+					}
+					for _, values := range [][]string{p.Facts, p.Features} {
+						for _, value := range values {
+							if !cedareval.ValidShellText(value) {
+								t.Errorf("value of %d bytes is not evaluable", len(value))
+							}
+						}
+					}
+					if !p.ParseComplete {
+						incomplete = true
+						if !contains(p.Facts, FactParseIncomplete) {
+							t.Errorf("incomplete projection lacks %s: %v", FactParseIncomplete, p.Facts)
+						}
+					}
+				}
+				if !incomplete {
+					t.Errorf("no projection is marked incomplete: %+v", projections)
+				}
+			})
+		}
+	}
+}
+
+func TestEvaluableLeavesOutWhatTheEvaluatorRefuses(t *testing.T) {
+	facts := []string{"kept=1", strings.Repeat("y", 5000), "bad=\xff"}
+	for i := 0; i < cedareval.MaxShellFacts+10; i++ {
+		facts = append(facts, fmt.Sprintf("more/%04d", i))
+	}
+	fits := projection("git", []string{"github/write=true"}, []string{"nested-script"}, true)
+	got := evaluable([]cedareval.ShellProjectionV2{
+		projection(strings.Repeat("p", 5000), facts, nil, true),
+		fits,
+	})
+	p := got[0]
+	if p.Program != "unknown" || p.ParseComplete {
+		t.Errorf("program %.20q complete %v, want unknown and incomplete", p.Program, p.ParseComplete)
+	}
+	if len(p.Facts) > cedareval.MaxShellFacts || !contains(p.Facts, "kept=1") || !contains(p.Facts, FactParseIncomplete) {
+		t.Errorf("%d facts; want at most %d with kept=1 and %s", len(p.Facts), cedareval.MaxShellFacts, FactParseIncomplete)
+	}
+	for _, fact := range p.Facts {
+		if !cedareval.ValidShellText(fact) {
+			t.Errorf("kept a fact of %d bytes", len(fact))
+		}
+	}
+	if !contains(p.Features, "oversized-projection") {
+		t.Errorf("features %v do not say why", p.Features)
+	}
+	if !reflect.DeepEqual(got[1], fits) {
+		t.Errorf("a projection that fits changed: %+v", got[1])
+	}
+}
+
+// The evaluator takes exactly MaxShellFacts values, so a projection holding
+// that many is not oversized.
+func TestEvaluableKeepsAProjectionAtTheLimit(t *testing.T) {
+	full := make([]string, cedareval.MaxShellFacts)
+	for i := range full {
+		full[i] = fmt.Sprintf("fact/%04d", i)
+	}
+	atLimit := projection("curl", full, full, true)
+	got := evaluable([]cedareval.ShellProjectionV2{projection("curl", full, full, true)})[0]
+	if !reflect.DeepEqual(got, atLimit) {
+		t.Errorf("a projection at the limit changed: complete %v, %d facts, %d features", got.ParseComplete, len(got.Facts), len(got.Features))
+	}
+
+	// One value has to go to make room for each marker, and no more than one.
+	got = evaluable([]cedareval.ShellProjectionV2{projection(strings.Repeat("p", 5000), full, full, true)})[0]
+	for name, values := range map[string][]string{FactParseIncomplete: got.Facts, "oversized-projection": got.Features} {
+		if len(values) != cedareval.MaxShellFacts || !contains(values, name) {
+			t.Errorf("%d values with %s present %v; want %d with it", len(values), name, contains(values, name), cedareval.MaxShellFacts)
+		}
+	}
+
+	// A marker that is already there takes no second slot.
+	incomplete := projection("curl", full[1:], nil, false)
+	got = evaluable([]cedareval.ShellProjectionV2{projection(strings.Repeat("p", 5000), full[1:], nil, false)})[0]
+	if !reflect.DeepEqual(got.Facts, incomplete.Facts) {
+		t.Errorf("%d facts, want the same %d", len(got.Facts), len(incomplete.Facts))
 	}
 }
