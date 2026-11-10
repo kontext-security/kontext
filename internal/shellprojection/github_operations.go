@@ -1,6 +1,7 @@
 package shellprojection
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/url"
 	"regexp"
@@ -130,6 +131,11 @@ func ghOperations(key string, rest []string) []string {
 		}
 		if flags["-d"] || flags["--delete-branch"] {
 			operations = append(operations, OperationDeleteRef)
+		}
+	case "pr/close":
+		// Closing is an other-write; --delete-branch also removes the head ref.
+		if flags["-d"] || flags["--delete-branch"] {
+			operations = append(operations, OperationOtherWrite, OperationDeleteRef)
 		}
 	case "pr/review":
 		if flags["-a"] || flags["--approve"] {
@@ -556,7 +562,7 @@ func blankGraphqlNoise(query string) string {
 				out[i] = ' '
 				i++
 			}
-		case strings.HasPrefix(string(out[i:]), `"""`):
+		case bytes.HasPrefix(out[i:], []byte(`"""`)):
 			// A block string ends at the first """ that is not escaped as \""".
 			stop := len(out)
 			for j := i + 3; j+3 <= len(out); j++ {

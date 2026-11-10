@@ -1033,8 +1033,10 @@ func unwrapTimeout(words []string) ([]string, bool) {
 }
 
 func unwrapXargs(words []string) ([]string, bool) {
-	valueOptions := map[string]bool{"-a": true, "--arg-file": true, "-d": true, "--delimiter": true, "-E": true, "--eof": true, "-I": true, "--replace": true, "-L": true, "--max-lines": true, "-l": true, "-n": true, "--max-args": true, "-P": true, "--max-procs": true, "-s": true, "--max-chars": true, "-S": true, "-J": true, "-R": true, "--process-slot-var": true}
-	flags := map[string]bool{"-0": true, "--null": true, "-r": true, "--no-run-if-empty": true, "-t": true, "--verbose": true, "-p": true, "--interactive": true, "-x": true, "--exit": true, "-o": true, "--open-tty": true, "-i": true}
+	valueOptions := map[string]bool{"-a": true, "--arg-file": true, "-d": true, "--delimiter": true, "-E": true, "-I": true, "-L": true, "-n": true, "--max-args": true, "-P": true, "--max-procs": true, "-s": true, "--max-chars": true, "-S": true, "-J": true, "-R": true, "--process-slot-var": true}
+	flags := map[string]bool{"-0": true, "--null": true, "-r": true, "--no-run-if-empty": true, "-t": true, "--verbose": true, "-p": true, "--interactive": true, "-x": true, "--exit": true, "-o": true, "--open-tty": true, "-i": true, "-l": true, "--max-lines": true, "--replace": true, "--eof": true}
+	// GNU xargs takes the value of -i, -l, --replace, --max-lines and --eof
+	// only when attached (-l1, --max-lines=1); the next word is the command.
 	for len(words) > 0 {
 		word := words[0]
 		switch {
@@ -1047,8 +1049,8 @@ func unwrapXargs(words []string) ([]string, bool) {
 			words = words[2:]
 		case flags[word]:
 			words = words[1:]
-		case len(word) > 2 && !strings.HasPrefix(word, "--") && (valueOptions[word[:2]] || word[:2] == "-i"):
-			// Attached value: -n1, -I{}, -P4.
+		case len(word) > 2 && !strings.HasPrefix(word, "--") && (valueOptions[word[:2]] || word[:2] == "-i" || word[:2] == "-l"):
+			// Attached value: -n1, -I{}, -P4, -l1.
 			words = words[1:]
 		case strings.HasPrefix(word, "--") && strings.Contains(word, "="):
 			words = words[1:]
@@ -1402,6 +1404,9 @@ func classifyGHAPI(args []string, complete bool) cedareval.ShellProjectionV2 {
 			method = strings.ToUpper(args[i])
 		case strings.HasPrefix(arg, "--method="):
 			method = strings.ToUpper(strings.TrimPrefix(arg, "--method="))
+		case strings.HasPrefix(arg, "-X") && len(arg) > 2:
+			// The attached forms: -XDELETE and -X=DELETE.
+			method = strings.ToUpper(strings.TrimPrefix(arg[2:], "="))
 		case arg == "-f" || arg == "-F" || arg == "--raw-field" || arg == "--field":
 			if i+1 >= len(args) {
 				complete = false
@@ -1412,7 +1417,7 @@ func classifyGHAPI(args []string, complete bool) cedareval.ShellProjectionV2 {
 			if method == "GET" {
 				method = "POST"
 			}
-		case strings.HasPrefix(arg, "-f") && len(arg) > 2:
+		case (strings.HasPrefix(arg, "-f") || strings.HasPrefix(arg, "-F")) && len(arg) > 2:
 			fields = append(fields, arg[2:])
 			if method == "GET" {
 				method = "POST"
@@ -1612,7 +1617,7 @@ func readCurl(args, source []string, complete, opaqueValues, urlGlobs bool) (ced
 	}
 	var operations []curlOperation
 	var op curlOperation
-	safeFlags := map[string]bool{"-s": true, "-S": true, "--silent": true, "--show-error": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
+	safeFlags := map[string]bool{"-s": true, "-S": true, "--silent": true, "--show-error": true, "-f": true, "--fail": true, "--fail-with-body": true, "--compressed": true}
 	unknownBefore := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -1920,7 +1925,7 @@ func classifyCurlURL(urlText, method string, bodies []string, complete, bodyFile
 		// Plain HTTP to a provider is still that provider's request; it is
 		// judged like HTTPS but never as a catalogued route.
 		host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-		if isAtlassianHost(host) || isHubSpotHost(host) || databricksHost(host) || isJiraServerPath(parsed.Path) {
+		if isAtlassianHost(host) || isHubSpotHost(host) || databricksHost(host) || isJiraServerPath(parsed.Path) || host == "api.github.com" || host == "uploads.github.com" {
 			parsed.Scheme = "https"
 			complete = false
 		}
@@ -2169,7 +2174,7 @@ var ghWriteCommands = map[string]bool{
 	"ssh-key/add": true, "ssh-key/delete": true, "gpg-key/add": true, "gpg-key/delete": true,
 	"codespace/create": true, "codespace/delete": true, "codespace/rebuild": true, "codespace/stop": true,
 	"gist/create": true, "gist/delete": true, "gist/edit": true,
-	"issue/close": true, "issue/create": true, "issue/delete": true, "issue/develop": true, "issue/edit": true, "issue/reopen": true, "issue/transfer": true,
+	"issue/close": true, "issue/comment": true, "issue/create": true, "issue/delete": true, "issue/develop": true, "issue/edit": true, "issue/reopen": true, "issue/transfer": true,
 	"label/clone": true, "label/create": true, "label/delete": true, "label/edit": true,
 	"pr/close": true, "pr/comment": true, "pr/create": true, "pr/edit": true, "pr/merge": true, "pr/ready": true, "pr/reopen": true, "pr/review": true,
 	"release/create": true, "release/delete": true, "release/delete-asset": true, "release/edit": true, "release/upload": true,

@@ -218,17 +218,20 @@ func classifyInvokeExpression(args []string, complete bool, w walk) []cedareval.
 	if !complete {
 		return single(projection("invoke-expression", nil, []string{"dynamic-script"}, false))
 	}
-	return nestedPowerShell("invoke-expression", strings.Join(args, " "), w)
+	return nestedPowerShell("invoke-expression", strings.Join(args, " "), w, true)
 }
 
-func nestedPowerShell(program, script string, w walk) []cedareval.ShellProjectionV2 {
+// nestedPowerShell projects a script a command runs. sameSession is true for
+// Invoke-Expression, whose script sees the caller's $PSDefaultParameterValues;
+// a new host process starts without them.
+func nestedPowerShell(program, script string, w walk, sameSession bool) []cedareval.ShellProjectionV2 {
 	if strings.TrimSpace(script) == "" {
 		return single(projection(program, nil, []string{"dynamic-script"}, false))
 	}
 	if w.depth >= maxScriptDepth {
 		return single(projection(program, nil, []string{"script-depth-exceeded"}, false))
 	}
-	inner := withDialect(projectPowerShell(script, walk{depth: w.depth + 1}, false))
+	inner := withDialect(projectPowerShell(script, walk{depth: w.depth + 1, cmdletDefaults: sameSession && w.cmdletDefaults}, false))
 	for i := range inner {
 		inner[i].Features = sortedUnique(append(inner[i].Features, "nested-script"))
 	}
@@ -338,7 +341,7 @@ func powerShellHostScript(program string, args []string, complete bool, w walk) 
 	if !complete {
 		return single(projection(program, nil, []string{"dynamic-script"}, false))
 	}
-	return nestedPowerShell(program, strings.Join(args, " "), w)
+	return nestedPowerShell(program, strings.Join(args, " "), w, false)
 }
 
 // typographicQuotes are the curly quotes PowerShell reads as straight ones,

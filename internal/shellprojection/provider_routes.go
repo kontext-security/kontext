@@ -179,9 +179,7 @@ func apiResourceSegments(path string) []string {
 	}
 	segments := []string{parts[start]}
 	if parts[start] == "project" || parts[start] == "projects" || parts[start] == "space" || parts[start] == "spaces" {
-		for _, nested := range parts[start+1:] {
-			segments = append(segments, nested)
-		}
+		segments = append(segments, parts[start+1:]...)
 	}
 	return segments
 }
