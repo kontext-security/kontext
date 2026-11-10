@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -491,6 +492,28 @@ func TestCedarEnforceAllowsEvaluationErrorsAndPreservesDenies(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A shell call with a word longer than the evaluator carries used to fail
+// evaluation as a whole, which enforce mode allows. It is judged as a call
+// Kontext could not read.
+func TestCedarEnforceJudgesAShellCallWithAnOversizedWord(t *testing.T) {
+	policy := `@id("permit") permit(principal, action, resource);
+@id("block-unread") forbid(principal, action, resource) when { context has shell && context.shell.facts.contains("shell/parse-complete=false") };`
+	deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, policy)
+	current := &countingHookPolicy{decision: risk.RiskDecision{Decision: risk.DecisionAllow}}
+	provider := newCedarPolicyProvider(current, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
+	command := "echo ok; " + strings.Repeat("x", 5000)
+	decision, err := provider.DecideHook(context.Background(), cedarHookEvent("Bash", map[string]any{"command": command}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionDeny || decision.ReasonCode != string(cedareval.ReasonExplicitForbid) {
+		t.Fatalf("decision = %s/%s, want deny/%s", decision.Decision, decision.ReasonCode, cedareval.ReasonExplicitForbid)
+	}
+	if decision.Cedar == nil || decision.Cedar.Mapping.EvaluationState != cedareval.EvaluationStateEvaluated || decision.Cedar.EngineErrorCount != 0 {
+		t.Fatalf("Cedar evidence = %#v, want an evaluated call without engine errors", decision.Cedar)
 	}
 }
 

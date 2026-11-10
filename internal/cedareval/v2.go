@@ -180,7 +180,7 @@ func validateInputV2(input ToolUseInputV2) error {
 	if input.Shell == nil {
 		return nil
 	}
-	if input.Shell.Version != 1 || !validText(input.Shell.Program, 4096) {
+	if input.Shell.Version != 1 || !ValidShellText(input.Shell.Program) {
 		return fmt.Errorf("cedareval: invalid shell projection")
 	}
 	if err := validateStrings(input.Shell.Facts); err != nil {
@@ -193,16 +193,23 @@ func validateInputV2(input ToolUseInputV2) error {
 }
 
 func validateStrings(values []string) error {
-	if len(values) > 1024 {
+	if len(values) > MaxShellFacts {
 		return fmt.Errorf("too many values")
 	}
 	for _, value := range values {
-		if !validText(value, 4096) {
+		if !ValidShellText(value) {
 			return fmt.Errorf("value must contain 1 to 4096 characters")
 		}
 	}
 	return nil
 }
+
+// MaxShellFacts is the most facts or features one shell projection may carry.
+const MaxShellFacts = 1024
+
+// ValidShellText reports whether EvaluateV2 accepts value as a shell
+// projection's program, fact or feature.
+func ValidShellText(value string) bool { return validText(value, 4096) }
 
 func validText(value string, maximum int) bool {
 	return utf8.ValidString(value) && stringLength(value) > 0 && stringLength(value) <= maximum

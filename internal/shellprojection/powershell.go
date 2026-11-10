@@ -27,7 +27,7 @@ const FactDialectPowerShell = "shell/dialect=powershell"
 // no facts of their own, except the web cmdlets, whose requests are read as
 // curl's (http_clients.go).
 func ProjectPowerShell(command string) []cedareval.ShellProjectionV2 {
-	return withDialect(projectPowerShell(command, walk{}, true))
+	return evaluable(withDialect(projectPowerShell(command, walk{}, true)))
 }
 
 func withDialect(projections []cedareval.ShellProjectionV2) []cedareval.ShellProjectionV2 {

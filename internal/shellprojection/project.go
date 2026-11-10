@@ -46,7 +46,7 @@ var shortFlagCluster = regexp.MustCompile(`^-[A-Za-z0-9]{2,}$`)
 // carrying the shell/parse-error feature so policy decides what to do with
 // it, instead of a projection error denying every hook under enforce.
 func Project(command string) []cedareval.ShellProjectionV2 {
-	return project(command, walk{})
+	return evaluable(project(command, walk{}))
 }
 
 // walk carries what a nested script inherits from the command around it.
@@ -2110,6 +2110,43 @@ func projection(program string, facts, features []string, complete bool) cedarev
 		Features:      sortedUnique(features),
 		ParseComplete: complete,
 	}
+}
+
+// evaluable keeps every projection within what EvaluateV2 accepts. It refuses
+// text it cannot carry (over-long, not UTF-8, or too many values), and a
+// refused call is not judged at all; such text is left out here and the
+// reading marked incomplete, so the call is still evaluated.
+func evaluable(projections []cedareval.ShellProjectionV2) []cedareval.ShellProjectionV2 {
+	for i := range projections {
+		p := &projections[i]
+		programFits := cedareval.ValidShellText(p.Program)
+		facts, factsFit := carriable(p.Facts)
+		features, featuresFit := carriable(p.Features)
+		if programFits && factsFit && featuresFit {
+			continue
+		}
+		if !programFits {
+			p.Program = "unknown"
+		}
+		p.ParseComplete = false
+		p.Facts = sortedUnique(append(facts, FactParseIncomplete))
+		p.Features = sortedUnique(append(features, "oversized-projection"))
+	}
+	return projections
+}
+
+// carriable copies values without the ones EvaluateV2 would reject, leaving
+// room for the marker evaluable adds. It reports whether all of them fit.
+func carriable(values []string) ([]string, bool) {
+	kept, fit := make([]string, 0, len(values)+1), true
+	for _, value := range values {
+		if !cedareval.ValidShellText(value) || len(kept) == cedareval.MaxShellFacts-1 {
+			fit = false
+			continue
+		}
+		kept = append(kept, value)
+	}
+	return kept, fit
 }
 
 func sortedUnique(values []string) []string {
