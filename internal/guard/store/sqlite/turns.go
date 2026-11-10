@@ -174,10 +174,11 @@ func (s *Store) TurnsForSession(ctx context.Context, sessionID string) ([]modelu
 }
 
 // PendingTurns returns up to limit turns not yet acknowledged by the hosted
-// ledger, oldest first.
+// ledger, oldest first. Turns that started in the same instant, as a coarse
+// clock gives them, keep their session's sequence.
 func (s *Store) PendingTurns(ctx context.Context, limit int) ([]TurnRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `select id, session_id, sequence, agent, started_at, source, prompt_mode, prompt_text, prompt_chars, prompt_sha256, prompt_truncated
- from turns where exported = 0 order by started_at, id limit ?`, limit)
+ from turns where exported = 0 order by started_at, sequence, id limit ?`, limit)
 	if err != nil {
 		return nil, err
 	}
