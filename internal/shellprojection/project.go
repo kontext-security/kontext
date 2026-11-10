@@ -2115,38 +2115,40 @@ func projection(program string, facts, features []string, complete bool) cedarev
 // evaluable keeps every projection within what EvaluateV2 accepts. It refuses
 // text it cannot carry (over-long, not UTF-8, or too many values), and a
 // refused call is not judged at all; such text is left out here and the
-// reading marked incomplete, so the call is still evaluated.
+// reading marked incomplete, so the call is still evaluated. A projection the
+// evaluator accepts as it is stays unchanged.
 func evaluable(projections []cedareval.ShellProjectionV2) []cedareval.ShellProjectionV2 {
 	for i := range projections {
 		p := &projections[i]
 		programFits := cedareval.ValidShellText(p.Program)
-		facts, factsFit := carriable(p.Facts)
-		features, featuresFit := carriable(p.Features)
-		if programFits && factsFit && featuresFit {
+		if programFits && carried(p.Facts) && carried(p.Features) {
 			continue
 		}
 		if !programFits {
 			p.Program = "unknown"
 		}
 		p.ParseComplete = false
-		p.Facts = sortedUnique(append(facts, FactParseIncomplete))
-		p.Features = sortedUnique(append(features, "oversized-projection"))
+		p.Facts = carriable(p.Facts, FactParseIncomplete)
+		p.Features = carriable(p.Features, "oversized-projection")
 	}
 	return projections
 }
 
-// carriable copies values without the ones EvaluateV2 would reject, leaving
-// room for the marker evaluable adds. It reports whether all of them fit.
-func carriable(values []string) ([]string, bool) {
-	kept, fit := make([]string, 0, len(values)+1), true
+// carried reports whether EvaluateV2 accepts values as they are.
+func carried(values []string) bool {
+	return len(values) <= cedareval.MaxShellFacts && !slices.ContainsFunc(values, func(value string) bool { return !cedareval.ValidShellText(value) })
+}
+
+// carriable returns the values EvaluateV2 accepts together with marker,
+// leaving out as many as it takes to stay within the evaluator's count.
+func carriable(values []string, marker string) []string {
+	kept := make([]string, 0, min(len(values), cedareval.MaxShellFacts))
 	for _, value := range values {
-		if !cedareval.ValidShellText(value) || len(kept) == cedareval.MaxShellFacts-1 {
-			fit = false
-			continue
+		if value != marker && cedareval.ValidShellText(value) && len(kept) < cedareval.MaxShellFacts-1 {
+			kept = append(kept, value)
 		}
-		kept = append(kept, value)
 	}
-	return kept, fit
+	return sortedUnique(append(kept, marker))
 }
 
 func sortedUnique(values []string) []string {

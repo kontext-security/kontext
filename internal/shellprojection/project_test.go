@@ -329,3 +329,32 @@ func TestEvaluableLeavesOutWhatTheEvaluatorRefuses(t *testing.T) {
 		t.Errorf("a projection that fits changed: %+v", got[1])
 	}
 }
+
+// The evaluator takes exactly MaxShellFacts values, so a projection holding
+// that many is not oversized.
+func TestEvaluableKeepsAProjectionAtTheLimit(t *testing.T) {
+	full := make([]string, cedareval.MaxShellFacts)
+	for i := range full {
+		full[i] = fmt.Sprintf("fact/%04d", i)
+	}
+	atLimit := projection("curl", full, full, true)
+	got := evaluable([]cedareval.ShellProjectionV2{projection("curl", full, full, true)})[0]
+	if !reflect.DeepEqual(got, atLimit) {
+		t.Errorf("a projection at the limit changed: complete %v, %d facts, %d features", got.ParseComplete, len(got.Facts), len(got.Features))
+	}
+
+	// One value has to go to make room for each marker, and no more than one.
+	got = evaluable([]cedareval.ShellProjectionV2{projection(strings.Repeat("p", 5000), full, full, true)})[0]
+	for name, values := range map[string][]string{FactParseIncomplete: got.Facts, "oversized-projection": got.Features} {
+		if len(values) != cedareval.MaxShellFacts || !contains(values, name) {
+			t.Errorf("%d values with %s present %v; want %d with it", len(values), name, contains(values, name), cedareval.MaxShellFacts)
+		}
+	}
+
+	// A marker that is already there takes no second slot.
+	incomplete := projection("curl", full[1:], nil, false)
+	got = evaluable([]cedareval.ShellProjectionV2{projection(strings.Repeat("p", 5000), full[1:], nil, false)})[0]
+	if !reflect.DeepEqual(got.Facts, incomplete.Facts) {
+		t.Errorf("%d facts, want the same %d", len(got.Facts), len(incomplete.Facts))
+	}
+}
