@@ -191,6 +191,7 @@ func TestPowerShellWebCmdlets(t *testing.T) {
 		{name: "end of parameters", command: "irm -Method Delete -- " + repo, programs: []string{"irm"}, facts: []string{deleteRepo, write, catalogued}, complete: true},
 		{name: "a computed method stays unknown", command: "irm -Method:$m " + repo, programs: []string{"irm"}, facts: []string{unrecognized}, absentFacts: []string{write}, complete: false},
 		{name: "defaults the script may set", command: "$PSDefaultParameterValues['Invoke-RestMethod:Method'] = 'Delete'; irm " + repo, programs: []string{"irm"}, facts: []string{unrecognized}, absentFacts: []string{catalogued}, complete: false},
+		{name: "defaults reach an Invoke-Expression script", command: "$PSDefaultParameterValues['Invoke-RestMethod:Method'] = 'Delete'; iex 'irm " + repo + "'", programs: []string{"irm"}, facts: []string{unrecognized}, absentFacts: []string{catalogued}, complete: false},
 		{name: "a batch file named irm", command: `.\irm.cmd ` + repo, programs: []string{"irm"}, absentFacts: []string{catalogued, "http/method=GET"}, complete: true},
 		{name: "an executable named irm", command: `C:\tools\irm.exe -Method Delete ` + repo, programs: []string{"irm"}, absentFacts: []string{deleteRepo, write}, complete: true},
 		{name: "-Form is the body", command: `irm -Method Post https://api.github.com/graphql -Form '{"query":"mutation { deleteRepository(input: {}) { clientMutationId } }"}'`, programs: []string{"irm"}, facts: []string{write, "github/operation=other-write"}, features: []string{FeatureOperationFromGraphQL}, complete: true},

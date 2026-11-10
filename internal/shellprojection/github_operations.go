@@ -1,9 +1,11 @@
 package shellprojection
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -116,7 +118,7 @@ var ghCommandOperations = map[string][]string{
 // ghOperations classifies a non-api gh write command from its key and the
 // literal arguments after the key words.
 func ghOperations(key string, rest []string) []string {
-	flags := ghFlags(rest)
+	flags := ghFlags(key, rest)
 	var operations []string
 	switch key {
 	case "pr/merge":
@@ -130,6 +132,11 @@ func ghOperations(key string, rest []string) []string {
 		}
 		if flags["-d"] || flags["--delete-branch"] {
 			operations = append(operations, OperationDeleteRef)
+		}
+	case "pr/close":
+		// Closing is an other-write; --delete-branch also removes the head ref.
+		if flags["-d"] || flags["--delete-branch"] {
+			operations = append(operations, OperationOtherWrite, OperationDeleteRef)
 		}
 	case "pr/review":
 		if flags["-a"] || flags["--approve"] {
@@ -153,27 +160,65 @@ func ghOperations(key string, rest []string) []string {
 	return operations
 }
 
-// ghFlags collects the option words of a gh command, expanding clustered
-// short flags (`-ds` is `-d -s`) and dropping `--option=value` values, so
-// flag-sensitive operations can test presence. Option values that happen
-// to look like flags are counted too; the projection prefers to over-report
-// an effect rather than miss one.
-func ghFlags(args []string) map[string]bool {
+// ghValueOptions names, per flag-sensitive gh command, the options that take
+// a value. Their value is text, not a flag, whatever it looks like.
+var ghValueOptions = map[string]map[string]bool{
+	"pr/merge":       {"-A": true, "--author-email": true, "-b": true, "--body": true, "-F": true, "--body-file": true, "--match-head-commit": true, "-t": true, "--subject": true, "-R": true, "--repo": true},
+	"pr/close":       {"-c": true, "--comment": true, "-R": true, "--repo": true},
+	"pr/review":      {"-b": true, "--body": true, "-F": true, "--body-file": true, "-R": true, "--repo": true},
+	"release/delete": {"-R": true, "--repo": true},
+	"repo/sync":      {"-b": true, "--branch": true, "-s": true, "--source": true},
+}
+
+// ghEffectFlags add an effect to a command. Once one is switched on, no
+// later word switches it off: an option this projection does not know could
+// take that word as its value, and a missed effect is worse than an extra one.
+var ghEffectFlags = map[string]bool{"-d": true, "--delete-branch": true, "-a": true, "--approve": true, "--cleanup-tag": true, "--force": true}
+
+// ghFlags reports which flags of the gh command named by key are switched
+// on, reading the words as gh does: a value option takes the next word or
+// the rest of its own, clustered short flags expand (`-ds` is `-d -s`), a
+// flag written with a value (`--auto=false`, `-d=true`) is on unless gh
+// reads that value as false, and a later spelling replaces an earlier one.
+func ghFlags(key string, args []string) map[string]bool {
+	takesValue := ghValueOptions[key]
 	flags := make(map[string]bool, len(args))
-	for _, arg := range args {
+	set := func(name string, on bool) {
+		flags[name] = on || (flags[name] && ghEffectFlags[name])
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if arg == "--" {
 			break
 		}
-		switch {
-		case strings.HasPrefix(arg, "--"):
-			name, _, _ := strings.Cut(arg, "=")
-			flags[name] = true
-		case shortFlagCluster.MatchString(arg):
-			for _, flag := range arg[1:] {
-				flags["-"+string(flag)] = true
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			continue
+		}
+		name, value, hasValue := strings.Cut(arg, "=")
+		on := true
+		if parsed, err := strconv.ParseBool(value); hasValue && err == nil {
+			on = parsed
+		}
+		if strings.HasPrefix(name, "--") {
+			switch {
+			case !takesValue[name]:
+				set(name, on)
+			case !hasValue:
+				i++
 			}
-		case strings.HasPrefix(arg, "-") && arg != "-":
-			flags[arg] = true
+			continue
+		}
+		letters := name[1:]
+		for at, letter := range letters {
+			flag, last := "-"+string(letter), at == len(letters)-1
+			if takesValue[flag] {
+				// Its value is the rest of the word, or the next word.
+				if last && !hasValue {
+					i++
+				}
+				break
+			}
+			set(flag, !last || on)
 		}
 	}
 	return flags
@@ -556,7 +601,7 @@ func blankGraphqlNoise(query string) string {
 				out[i] = ' '
 				i++
 			}
-		case strings.HasPrefix(string(out[i:]), `"""`):
+		case bytes.HasPrefix(out[i:], []byte(`"""`)):
 			// A block string ends at the first """ that is not escaped as \""".
 			stop := len(out)
 			for j := i + 3; j+3 <= len(out); j++ {
