@@ -22,12 +22,6 @@ brew install --cask kontext-security/tap/kontext
 kontext setup
 ```
 
-Until the Guard PR is merged and released, test from source:
-
-```bash
-go run ./cmd/kontext setup
-```
-
 ## Runtime boundary
 
 Both paths are local-first for the decision path: the runtime, policy evaluation, risk annotation, and SQLite ledger are local. The network boundary differs:
@@ -55,7 +49,7 @@ Claude Code
 Guard uses two layers:
 
 1. Deterministic policy for obvious risk, such as credential access, direct provider API calls with credential material, production mutations, and destructive persistent-resource operations.
-2. Probabilistic risk for cases deterministic policy allows.
+2. Probabilistic risk annotation for every outcome, denies included. It is advisory and never changes the decision.
 
 Alongside those, the observe-mode risk classifier logs a verdict per bash command without participating in the decision. See [Risk classifier](#risk-classifier-observe-mode).
 
@@ -73,7 +67,7 @@ Receipt signing is intentionally small for the local implementation. Set `KONTEX
 
 The SQLite store also exposes raw ledger export and verification helpers for follow-on managed streaming work. `LedgerBatch` returns sessions, selected actions plus any bridge actions needed by a contiguous receipt range, receipts, and a receipt-chain anchor for incremental batches. `VerifyReceipts` checks receipt hashes, previous-hash links, and local Ed25519 signatures when signing is enabled.
 
-Provider-reported hook metadata is preserved under `authorization_actions.context_json.hook_metadata` and in new receipt payloads under `action.hook_metadata`. Optional fields are `duration_ms` (provider-reported execution time, not observer elapsed time), `is_interrupt` (whether the reported failure was due to user interruption), `permission_mode` (the agent's permission setting, separate from Kontext's observe/enforce mode), and `error_redacted`. Missing fields remain absent; explicit zero durations and `false` interruption flags are retained. Claude's adapter accepts all four; Codex currently supplies the permission-mode field through its adapter, without synthesizing the other fields from tool output.
+Provider-reported hook metadata is preserved under `authorization_actions.context_json.hook_metadata` and in new receipt payloads under `action.hook_metadata`. Optional fields are `duration_ms` (provider-reported execution time, not observer elapsed time), `is_interrupt` (whether the reported failure was due to user interruption), `permission_mode` (the agent's permission setting, separate from Kontext's observe/enforce mode), and `error_redacted`. On macOS the hook process also records `full_disk_access`, its own probe of whether the invoking agent's app can read protected folders; it is absent when the probe is inconclusive. Missing fields remain absent; explicit zero durations and `false` interruption flags are retained. Claude's adapter accepts all four provider-reported fields; Codex currently supplies the permission-mode field through its adapter, without synthesizing the other fields from tool output.
 
 Error text is redacted before truncation to 4 KiB, and permission-mode text is redacted and capped at 256 bytes. Text exceeding the 1 MiB redaction-input limit is omitted with a marker. The provider error also populates the existing `error_redacted` action column and outcome receipt field; a policy explanation is not substituted when no tool error was supplied. Metadata recording adds no model calls, changes neither allow/deny decisions nor the existing hook-name-based outcome labels, and does not rewrite historical receipts or change the Decision Fact v1 schema.
 
