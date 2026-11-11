@@ -142,15 +142,31 @@ func fireAnsweredEvents(t *testing.T, socketPath string, count int) {
 
 func decidedRecords(t *testing.T, path string) int {
 	t.Helper()
+	return storeCount(t, path, `select count(distinct tool_use_id) from authorization_actions
+		where canonical_event_type = 'request.decided' and tool_use_id like 'stop-%'`)
+}
+
+// storeCount runs a counting query on the store at path. A daemon that ran
+// out of its stop budget is still writing, so the read waits for a busy
+// store rather than fail on it.
+func storeCount(t *testing.T, path, query string) int {
+	t.Helper()
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var count int
-	if err := db.QueryRow(`select count(distinct tool_use_id) from authorization_actions
-		where canonical_event_type = 'request.decided' and tool_use_id like 'stop-%'`).Scan(&count); err != nil {
+	conn, err := db.Conn(context.Background())
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "pragma busy_timeout = 5000"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := conn.QueryRowContext(context.Background(), query).Scan(&count); err != nil {
+		t.Fatalf("read the store: %v", err)
 	}
 	return count
 }
@@ -331,16 +347,7 @@ func TestRunDaemonStopsScoringToWriteABacklog(t *testing.T) {
 	if got := model.calls.Load(); got == 0 || got >= answered {
 		t.Errorf("the model ran %d times for %d calls, so it wasn't cut off part way", got, answered)
 	}
-	db, err := sql.Open("sqlite", fixture.dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var unscored int
-	if err := db.QueryRow(`select count(*) from step_safety_verdicts where error_code = 'daemon_stopping'`).Scan(&unscored); err != nil {
-		t.Fatal(err)
-	}
-	if unscored == 0 {
+	if unscored := storeCount(t, fixture.dbPath, `select count(*) from step_safety_verdicts where error_code = 'daemon_stopping'`); unscored == 0 {
 		t.Error("no verdict says the daemon was stopping, so no record got past the model")
 	}
 }
