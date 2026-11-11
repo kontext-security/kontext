@@ -4,8 +4,8 @@
 // another process may have open at that moment: the daemon replaces them
 // while doctor reads them. Windows refuses a rename or a remove while a
 // reader has the file open, and an open while the file is being replaced.
-// The functions here try again for a moment; elsewhere they are the plain
-// os calls.
+// The functions here try again for up to two seconds; elsewhere they are
+// the plain os calls.
 package busyfile
 
 import (
@@ -15,9 +15,12 @@ import (
 	"time"
 )
 
-// wait bounds the retries. Another handle keeps such a file busy for as long
-// as one read or one rename takes.
-const wait = 250 * time.Millisecond
+// wait bounds the retries. A reader or a writer keeps such a file busy for
+// as long as one read or one rename takes, but a virus scanner that opens a
+// file right after it was written can hold it far longer on a slow machine:
+// 250 ms was too short on a CI runner. Two seconds is what Go's own testing
+// package allows for the same two errors when it removes a temporary folder.
+var wait = 2 * time.Second
 
 const errorSharingViolation syscall.Errno = 32
 

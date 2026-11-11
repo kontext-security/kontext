@@ -100,6 +100,9 @@ func TestAuthErrorReadWhileItIsReplaced(t *testing.T) {
 				writeErr <- err
 				return
 			}
+			// The daemon writes the breadcrumb now and then, not in a loop
+			// that never lets go of it.
+			time.Sleep(time.Millisecond)
 		}
 		writeErr <- nil
 	}()

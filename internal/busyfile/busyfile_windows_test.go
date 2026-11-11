@@ -13,6 +13,9 @@ import (
 // the two answers Windows gives for a file another handle has, wrapped as os
 // wraps them, against one it gives for anything else.
 func TestRetryTriesAgainOnlyWhileBusy(t *testing.T) {
+	previous := wait
+	wait = 250 * time.Millisecond
+	t.Cleanup(func() { wait = previous })
 	for name, test := range map[string]struct {
 		err   error
 		again bool

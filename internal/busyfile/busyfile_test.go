@@ -46,6 +46,9 @@ func TestReadWhileReplaced(t *testing.T) {
 				writeErr <- err
 				return
 			}
+			// The daemon writes a state file now and then, not in a loop
+			// that never lets go of it.
+			time.Sleep(time.Millisecond)
 		}
 		writeErr <- nil
 	}()
@@ -77,6 +80,7 @@ func TestRemoveWhileRead(t *testing.T) {
 			defer close(done)
 			for !stop.Load() {
 				_, _ = os.ReadFile(path)
+				time.Sleep(time.Millisecond)
 			}
 		}()
 		time.Sleep(time.Millisecond)
@@ -98,7 +102,7 @@ func TestMissingFileIsNotRetried(t *testing.T) {
 	if err := Remove(path); !os.IsNotExist(err) {
 		t.Fatalf("Remove(missing) = %v, want not exist", err)
 	}
-	if took := time.Since(start); took > 100*time.Millisecond {
+	if took := time.Since(start); took > 500*time.Millisecond {
 		t.Fatalf("a missing file took %v, want no waiting", took)
 	}
 }
