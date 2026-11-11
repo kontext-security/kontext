@@ -24,10 +24,11 @@ consumer was subsequently moved out.
 
 ## What is pinned
 
-`cmd/kontext/json_contract_test.go` pins the **key set** of each payload against a
-golden file in `cmd/kontext/testdata/`. Values are not pinned — paths, pids, and
-versions are machine-specific — but adding, removing, or renaming a field fails
-the test.
+`cmd/kontext/json_contract_test.go` pins the **top-level key set** of each payload
+against a golden file in `cmd/kontext/testdata/`. Values are not pinned — paths,
+pids, and versions are machine-specific — but adding, removing, or renaming a
+top-level field fails the test. Nested fields, such as the entries of
+`agents.agents`, are not pinned.
 
 To change a contract deliberately:
 
@@ -58,7 +59,9 @@ message whether it is:
   a stream of authorization prompts.
 
 `doctor --json` optionally includes `agents`, the daemon's cached inventory:
-`agents.agents` is an array of `{id, config_path, wired, last_activity_at}`,
+`agents.agents` is an array of
+`{id, config_path, wired, last_activity_at, installed, configured}` with optional
+`sandboxed` and `version`,
 `agents.agents_reported_at` is the scan time in RFC 3339 UTC, and
 `agents.incomplete` is present when a scan hits an entry or time limit.
 Unreadable metadata is skipped. `last_activity_at` is a timestamp or null. Paths under home use `~/`;
