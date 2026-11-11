@@ -106,9 +106,9 @@ type doctorOptions struct {
 	Dial               func(network, address string, timeout time.Duration) (net.Conn, error)
 	Now                func() time.Time
 	LaunchAgentPresent func() bool
-	// AutostartPresent reports whether a Windows user install's sign-in entry
-	// is there: what starts its daemon, as the launch agent does on macOS.
-	AutostartPresent func() bool
+	// AutostartEntry reads the Windows sign-in entry, "" when there is none:
+	// what starts a user install's daemon, as the launch agent does on macOS.
+	AutostartEntry func() (string, error)
 	// LaunchAgentLoaded asks launchd whether the agent the hook kickstarts is
 	// still loaded. An error means unknown and keeps the default readout.
 	LaunchAgentLoaded func() (bool, error)
@@ -143,6 +143,15 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	}()
 	staleDaemon := false
 	repairTargetAvailable := false
+	// A user install on Windows has no automatic repair, and no managing
+	// installation either: `kontext setup` is what restarts its daemon.
+	windowsUserInstall := false
+	restartHint := func() string {
+		if windowsUserInstall {
+			return "run `kontext setup` to restart it"
+		}
+		return "restart it through its managing installation"
+	}
 	if opts.DBPath == "" {
 		opts.DBPath = DefaultDBPath()
 	}
@@ -162,11 +171,8 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	if opts.LaunchAgentLoaded == nil {
 		opts.LaunchAgentLoaded = launchAgentLoaded
 	}
-	if opts.AutostartPresent == nil {
-		opts.AutostartPresent = func() bool {
-			entry, err := autostart.Entry()
-			return err == nil && entry != ""
-		}
+	if opts.AutostartEntry == nil {
+		opts.AutostartEntry = autostart.Entry
 	}
 	if opts.LoadConfig == nil {
 		opts.LoadConfig = managedconfig.Load
@@ -259,12 +265,22 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	case runtimeGOOS == "windows":
 		// A user install on Windows has no launch agent: its daemon starts
 		// from the user's sign-in entry.
-		if opts.AutostartPresent() {
-			fmt.Fprintln(out, "  sign-in entry: present (the background agent starts when you sign in)")
-		} else {
+		entry, err := opts.AutostartEntry()
+		program := autostart.Program(entry)
+		switch {
+		case err != nil:
+			fmt.Fprintf(out, "  sign-in entry: could not be read (%v)\n", err)
+			status.Healthy = false
+		case entry == "":
 			fmt.Fprintln(out, "  sign-in entry: missing (run `kontext setup` to restore the background agent)")
 			status.Healthy = false
+		case !regularFile(program):
+			fmt.Fprintf(out, "  sign-in entry: starts a program that is not there (%s); run `kontext setup` from the current install\n", program)
+			status.Healthy = false
+		default:
+			fmt.Fprintln(out, "  sign-in entry: present (the background agent starts when you sign in)")
 		}
+		windowsUserInstall, repairTargetAvailable = true, false
 	case !launchAgentPresent:
 		fmt.Fprintln(out, "  launch agent: missing (run `kontext setup` to restore the background agent)")
 		status.Healthy = false
@@ -336,7 +352,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 				if repairTargetAvailable {
 					warn("%s — run 'kontext doctor --fix' to restart it", reason)
 				} else {
-					warn("%s — restart it through its managing installation", reason)
+					warn("%s — %s", reason, restartHint())
 				}
 				staleDaemon = true
 			}
@@ -351,7 +367,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 				if repairTargetAvailable {
 					warn("daemon version is unknown — it likely predates v%s; run 'kontext doctor --fix' to restart it", installedVersion)
 				} else {
-					warn("daemon version is unknown — restart it through its managing installation")
+					warn("daemon version is unknown — %s", restartHint())
 				}
 				staleDaemon = true
 			}
@@ -366,7 +382,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 			if status.SelfServe {
 				fmt.Fprintln(out, "  daemon: not running (it starts when you sign in; `kontext setup` starts it now)")
 			} else {
-				fmt.Fprintln(out, "  daemon: not running (it starts at sign-in)")
+				fmt.Fprintln(out, "  daemon: not running (the installer's logon task starts it)")
 			}
 		} else if loaded, err := opts.LaunchAgentLoaded(); err == nil && !loaded {
 			if repairTargetAvailable {
@@ -422,6 +438,15 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 				warn("this Mac is organization-managed but a self-serve agent is also installed; run `kontext setup --uninstall` to remove it")
 				status.Healthy = false
 			}
+		}
+	}
+
+	// The same on Windows: a sign-in entry left by a user's own setup beside
+	// a machine-wide install, whose config wins.
+	if runtimeGOOS == "windows" && loaded.Scope == managedconfig.ScopeSystem {
+		if entry, err := opts.AutostartEntry(); err == nil && entry != "" {
+			warn("this machine is organization-managed but a sign-in entry of your own setup is also there; run `kontext setup --uninstall` to remove it")
+			status.Healthy = false
 		}
 	}
 
@@ -840,4 +865,9 @@ func installTokenFixHint(ref managedconfig.TokenRef) string {
 		return "re-run `kontext setup` in a desktop session"
 	}
 	return "re-run `kontext setup` or unlock your login keychain"
+}
+
+func regularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
