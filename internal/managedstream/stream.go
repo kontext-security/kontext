@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kontext-security/kontext/internal/busyfile"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 	"io"
 	"net/http"
@@ -961,7 +962,7 @@ func heartbeatDue(lastAttemptAt string, interval time.Duration, now time.Time) b
 }
 
 func LoadState(path string) (State, error) {
-	data, err := os.ReadFile(path)
+	data, err := busyfile.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return State{}, nil

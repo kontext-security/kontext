@@ -77,8 +77,8 @@ func (s *arrivingPolicy) Current() cedarpolicy.Snapshot {
 
 // startHoldingHost runs the daemon's real runtime host, as RunDaemon wires
 // it, with the hold of wait from its start and a policy that arrives
-// arriveAfter once the host is up. It returns the socket and when the host
-// was up.
+// arriveAfter once the host is up. It returns the socket and when the hold
+// began, which is before the host started.
 func startHoldingHost(t *testing.T, mode guardhookruntime.Mode, arriveAfter, wait time.Duration) (string, time.Time) {
 	t.Helper()
 	return startHoldingHostIn(t, context.Background(), mode, arriveAfter, wait)
@@ -111,9 +111,8 @@ func startHoldingHostIn(t *testing.T, ctx context.Context, mode guardhookruntime
 		t.Fatalf("runtimehost.Start() error = %v", err)
 	}
 	t.Cleanup(func() { _ = host.Close(context.Background()) })
-	up := time.Now()
-	policies.arrive.Store(up.Add(arriveAfter).UnixNano())
-	return host.SocketPath, up
+	policies.arrive.Store(time.Now().Add(arriveAfter).UnixNano())
+	return host.SocketPath, started
 }
 
 func stackWriteCall(id string) hook.Event {
@@ -127,7 +126,10 @@ func stackWriteCall(id string) hook.Event {
 func TestHookHeldUntilThePolicyArrives(t *testing.T) {
 	for _, mode := range []guardhookruntime.Mode{guardhookruntime.ModeEnforce, guardhookruntime.ModeRemote} {
 		t.Run(string(mode), func(t *testing.T) {
-			socket, _ := startHoldingHost(t, mode, 1300*time.Millisecond, 3*time.Second)
+			// The hold counts from daemon start and the policy from when the
+			// host is up, so the hold is long enough for any start-up: the
+			// call is still held when the policy arrives.
+			socket, _ := startHoldingHost(t, mode, 1300*time.Millisecond, 10*time.Second)
 			lifecycle := Lifecycle{SocketPath: socket, Label: DefaultLaunchdLabel, Mode: string(mode), Kickstart: func(context.Context, string) error { return nil }}
 
 			start := time.Now()
@@ -153,18 +155,24 @@ func TestHookLetThroughWhenTheHoldEnds(t *testing.T) {
 	for _, mode := range []guardhookruntime.Mode{guardhookruntime.ModeEnforce, guardhookruntime.ModeRemote} {
 		t.Run(string(mode), func(t *testing.T) {
 			// The hold counts from daemon start, so make it outlast the host's
-			// start-up and check the call came back at about its end.
-			socket, up := startHoldingHost(t, mode, time.Hour, 2*time.Second)
+			// start-up and check the call came back at about its end. How long
+			// the start-up takes varies with the machine, so the call is
+			// measured against the hold's end, not against its own start.
+			const hold = 3 * time.Second
+			socket, held := startHoldingHost(t, mode, time.Hour, hold)
 			lifecycle := Lifecycle{SocketPath: socket, Label: DefaultLaunchdLabel, Mode: string(mode), Kickstart: func(context.Context, string) error { return nil }}
 
 			start := time.Now()
+			if rest := hold - start.Sub(held); rest < 300*time.Millisecond {
+				t.Fatalf("the host took %v to start, which leaves %v of the %v hold: too little to tell a held call from one let through at once", start.Sub(held), rest, hold)
+			}
 			result := lifecycle.Process(context.Background(), stackWriteCall("toolu_timeout"))
-			took := time.Since(start)
+			past := time.Since(held) - hold
 			if result.Decision == hook.DecisionDeny {
 				t.Fatalf("result = %+v, want the call let through at the hold's end", result)
 			}
-			if took < time.Second || took > 2500*time.Millisecond {
-				t.Fatalf("took %v (host up %v before the call), want about the rest of the 2 s hold", took, start.Sub(up))
+			if past < -50*time.Millisecond || past > 800*time.Millisecond {
+				t.Fatalf("the call came back %v from the hold's end (it began %v into the %v hold), want it let through at about the end", past, start.Sub(held), hold)
 			}
 		})
 	}

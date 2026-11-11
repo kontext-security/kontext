@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
+	"github.com/kontext-security/kontext/internal/busyfile"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
@@ -96,7 +97,7 @@ func InventoryStatePath(streamStatePath string) string {
 // another installation: a lost counter recovers from the first stale verdict.
 func OpenInventoryStore(path, installationID string) *InventoryStore {
 	store := &InventoryStore{path: path}
-	if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &store.file) == nil && store.file.InstallationID == installationID {
+	if data, err := busyfile.ReadFile(path); err == nil && json.Unmarshal(data, &store.file) == nil && store.file.InstallationID == installationID {
 		if store.file.Pending == nil {
 			store.file.Pending = map[string]pendingSource{}
 		}
@@ -108,7 +109,7 @@ func OpenInventoryStore(path, installationID string) *InventoryStore {
 
 // LoadInventoryHealth reads the bookkeeping only, for doctor.
 func LoadInventoryHealth(path string) (InventoryHealth, bool) {
-	data, err := os.ReadFile(path)
+	data, err := busyfile.ReadFile(path)
 	if err != nil {
 		return InventoryHealth{}, false
 	}
@@ -562,7 +563,7 @@ func writeFileAtomic(path string, data []byte, tempPattern string) error {
 		_ = os.Remove(tempPath)
 		return err
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := busyfile.Rename(tempPath, path); err != nil {
 		_ = os.Remove(tempPath)
 		return err
 	}

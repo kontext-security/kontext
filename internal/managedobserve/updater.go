@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/buildinfo"
+	"github.com/kontext-security/kontext/internal/busyfile"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/profile"
@@ -191,7 +192,7 @@ func runUpdateSchedule(ctx context.Context, source string, interval time.Duratio
 // LoadUpdateState reads the last update check.
 func LoadUpdateState() (UpdateState, error) {
 	var state UpdateState
-	data, err := os.ReadFile(updateStatePath())
+	data, err := busyfile.ReadFile(updateStatePath())
 	if err == nil {
 		err = json.Unmarshal(data, &state)
 	}

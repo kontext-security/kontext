@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,10 +46,36 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// daemonDir is a folder for the store and state of a daemon a test runs.
+// A daemon that runs out of its stop budget returns with writes still under
+// way and the store open; a slow or busy machine is enough for that. Windows
+// can't remove a folder that holds an open file, which fails a test that
+// keeps the store in t.TempDir although its own checks passed. This folder
+// is removed once that works and left to the temp folder's own cleanup if it
+// never does.
+func daemonDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "kontext-daemon-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		var err error
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			if err = os.RemoveAll(dir); err == nil {
+				return
+			}
+		}
+		t.Logf("left %s behind, the store in it is still open: %v", dir, err)
+	})
+	return dir
+}
+
 // holdStoreWriteLock keeps every writer of the store waiting, so answered hooks
 // pile up as records nobody has written yet. The returned func lets go.
 func holdStoreWriteLock(t *testing.T, path string) func() {
 	t.Helper()
+	// The plain path, not a file: URI, so a '#' or '%' in it names this file.
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
@@ -59,8 +84,13 @@ func holdStoreWriteLock(t *testing.T, path string) func() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.ExecContext(context.Background(), "begin immediate"); err != nil {
+	// The daemon may be in a write of its own at this moment, such as one
+	// from its start: the busy timeout waits for it rather than fail.
+	if _, err := conn.ExecContext(context.Background(), "pragma busy_timeout = 5000"); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(context.Background(), "begin immediate"); err != nil {
+		t.Fatalf("take the store's write lock: %v", err)
 	}
 	var once sync.Once
 	release := func() {
@@ -112,15 +142,31 @@ func fireAnsweredEvents(t *testing.T, socketPath string, count int) {
 
 func decidedRecords(t *testing.T, path string) int {
 	t.Helper()
+	return storeCount(t, path, `select count(distinct tool_use_id) from authorization_actions
+		where canonical_event_type = 'request.decided' and tool_use_id like 'stop-%'`)
+}
+
+// storeCount runs a counting query on the store at path. A daemon that ran
+// out of its stop budget is still writing, so the read waits for a busy
+// store rather than fail on it.
+func storeCount(t *testing.T, path, query string) int {
+	t.Helper()
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var count int
-	if err := db.QueryRow(`select count(distinct tool_use_id) from authorization_actions
-		where canonical_event_type = 'request.decided' and tool_use_id like 'stop-%'`).Scan(&count); err != nil {
+	conn, err := db.Conn(context.Background())
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "pragma busy_timeout = 5000"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := conn.QueryRowContext(context.Background(), query).Scan(&count); err != nil {
+		t.Fatalf("read the store: %v", err)
 	}
 	return count
 }
@@ -161,9 +207,6 @@ func TestRunDaemonWritesQueuedRecordsWhenStopped(t *testing.T) {
 }
 
 func TestRunDaemonStopsByItsDeadlineAndSaysWhatIsLeft(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the daemon leaves its store open past the deadline, and Windows can't then remove the test's folder")
-	}
 	previous := daemonStopBudget
 	daemonStopBudget = 400 * time.Millisecond
 	t.Cleanup(func() { daemonStopBudget = previous })
@@ -202,9 +245,6 @@ func TestRunDaemonStopsByItsDeadlineAndSaysWhatIsLeft(t *testing.T) {
 // A cleanup tick on a busy store mustn't hold the stop up, or the stop's deadline
 // wouldn't start until the tick gave up.
 func TestRunDaemonStopsDuringACleanupTick(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the daemon leaves its store open past the deadline, and Windows can't then remove the test's folder")
-	}
 	previous := daemonStopBudget
 	daemonStopBudget = 400 * time.Millisecond
 	t.Cleanup(func() { daemonStopBudget = previous })
@@ -301,16 +341,7 @@ func TestRunDaemonStopsScoringToWriteABacklog(t *testing.T) {
 	if got := model.calls.Load(); got == 0 || got >= answered {
 		t.Errorf("the model ran %d times for %d calls, so it wasn't cut off part way", got, answered)
 	}
-	db, err := sql.Open("sqlite", fixture.dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var unscored int
-	if err := db.QueryRow(`select count(*) from step_safety_verdicts where error_code = 'daemon_stopping'`).Scan(&unscored); err != nil {
-		t.Fatal(err)
-	}
-	if unscored == 0 {
+	if unscored := storeCount(t, fixture.dbPath, `select count(*) from step_safety_verdicts where error_code = 'daemon_stopping'`); unscored == 0 {
 		t.Error("no verdict says the daemon was stopping, so no record got past the model")
 	}
 }

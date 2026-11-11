@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -256,24 +257,15 @@ func TestLifecycleReservesShadowBudgetAfterAuthoritativePolicy(t *testing.T) {
 	defer listener.Close()
 
 	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		// Probes connect without an RPC. Accept until the actual request;
-		// the newer restart logic needs only one probe on a healthy socket.
-		var connection net.Conn
-		for {
-			candidate, acceptErr := listener.Accept()
-			if acceptErr != nil {
-				return
-			}
-			var request localruntime.EvaluateRequest
-			if localruntime.ReadMessage(candidate, &request) == nil {
-				connection = candidate
-				break
-			}
-			_ = candidate.Close()
+	var answered sync.Once
+	// Probes connect without an RPC; the newer restart logic needs only one
+	// on a healthy socket.
+	go serveEach(listener, func(connection net.Conn) {
+		var request localruntime.EvaluateRequest
+		if localruntime.ReadMessage(connection, &request) != nil {
+			return
 		}
-		defer connection.Close()
+		defer answered.Do(func() { close(done) })
 		// Longer than the former complete 250 ms PreToolUse budget, but still
 		// within the independently reserved shadow-inference window.
 		time.Sleep(600 * time.Millisecond)
@@ -283,7 +275,7 @@ func TestLifecycleReservesShadowBudgetAfterAuthoritativePolicy(t *testing.T) {
 			Reason:   "policy allowed; shadow timed out open",
 			Mode:     "enforce",
 		})
-	}()
+	})
 
 	lifecycle := Lifecycle{
 		SocketPath: socketPath,
@@ -728,21 +720,16 @@ func TestLifecycleWaitsForDaemonRestartBeyondDecisionBudget(t *testing.T) {
 				if err != nil {
 					return
 				}
-				defer ln.Close()
-				defer close(done)
-				for {
-					conn, err := ln.Accept()
-					if err != nil {
-						return
-					}
+				t.Cleanup(func() { _ = ln.Close() })
+				var answered sync.Once
+				serveEach(ln, func(conn net.Conn) {
 					var req localruntime.EvaluateRequest
-					if err := localruntime.ReadMessage(conn, &req); err == nil {
-						_ = localruntime.WriteMessage(conn, localruntime.EvaluateResult{Decision: "allow", Allowed: true, Reason: "local Cedar policy decision", Mode: "enforce"})
-						_ = conn.Close()
+					if localruntime.ReadMessage(conn, &req) != nil {
 						return
 					}
-					_ = conn.Close()
-				}
+					_ = localruntime.WriteMessage(conn, localruntime.EvaluateResult{Decision: "allow", Allowed: true, Reason: "local Cedar policy decision", Mode: "enforce"})
+					answered.Do(func() { close(done) })
+				})
 			}()
 			return nil
 		},
@@ -771,27 +758,21 @@ func TestLifecycleCompactsLargeOutputs(t *testing.T) {
 	defer listener.Close()
 	var compactions atomic.Int32
 	replacement := json.RawMessage(`{"stdout":"short","stderr":""}`)
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			var request localruntime.EvaluateRequest
-			if localruntime.ReadMessage(conn, &request) == nil {
-				if request.Type == localruntime.CompactRequestType {
-					compactions.Add(1)
-					_ = localruntime.WriteMessage(conn, localruntime.CompactResult{Type: "compact_result", UpdatedToolOutput: replacement})
-				} else {
-					var response map[string]any
-					_ = json.Unmarshal(request.ToolResponse, &response)
-					offer := request.HookEvent == "PostToolUse" && response["stderr"] != "no offer"
-					_ = localruntime.WriteMessage(conn, localruntime.EvaluateResult{Decision: "allow", Allowed: true, CompactToolOutput: offer})
-				}
-			}
-			_ = conn.Close()
+	go serveEach(listener, func(conn net.Conn) {
+		var request localruntime.EvaluateRequest
+		if localruntime.ReadMessage(conn, &request) != nil {
+			return
 		}
-	}()
+		if request.Type == localruntime.CompactRequestType {
+			compactions.Add(1)
+			_ = localruntime.WriteMessage(conn, localruntime.CompactResult{Type: "compact_result", UpdatedToolOutput: replacement})
+			return
+		}
+		var response map[string]any
+		_ = json.Unmarshal(request.ToolResponse, &response)
+		offer := request.HookEvent == "PostToolUse" && response["stderr"] != "no offer"
+		_ = localruntime.WriteMessage(conn, localruntime.EvaluateResult{Decision: "allow", Allowed: true, CompactToolOutput: offer})
+	})
 
 	lifecycle := Lifecycle{SocketPath: socketPath, Label: DefaultLaunchdLabel}
 	large := strings.Repeat("output line\n", 300)
@@ -836,5 +817,24 @@ func TestLifecycleCompactionWithoutDaemonLeavesOutput(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("took %v", elapsed)
+	}
+}
+
+// serveEach is a fake daemon's accept loop: it hands every connection to
+// handle in its own goroutine, as the daemon serves them, and closes it
+// after. The hook's probe is a connection that sends nothing, and on Windows
+// a read of one can hang, so no call may wait behind it; the deadline ends
+// such a read before it outlives the test by much.
+func serveEach(listener net.Listener, handle func(net.Conn)) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+			handle(conn)
+		}()
 	}
 }
