@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -148,6 +150,59 @@ func TestHungTokenSourceReleasesInitialPolicyWait(t *testing.T) {
 	pending := refresh.tokenPending
 	if err := refresh.Refresh(ctx); err == nil || refresh.tokenPending != pending {
 		t.Fatal("hung token lookup spawned another worker")
+	}
+}
+
+// A token lookup that ended with an earlier call's deadline must not fail the
+// next refresh: that error belongs to the call that timed out. A credential
+// helper killed at the deadline reports the kill, not the context's error.
+func TestRefreshAsksAgainAfterATimedOutTokenLookup(t *testing.T) {
+	for name, lateError := range map[string]error{
+		"deadline":      context.DeadlineExceeded,
+		"cancelled":     context.Canceled,
+		"killed helper": errors.New("read install token from keychain: signal: killed"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }))
+			defer server.Close()
+			client, err := NewClient(server.URL, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls atomic.Int32
+			// The first lookup answers only after the call that started it has
+			// returned, so that call always ends on its own deadline.
+			firstReturned := make(chan struct{})
+			refresh := Refresher{Client: client, Cache: NewCache("", 0), InstallationID: testInstallationID, TokenSource: func(ctx context.Context) (string, error) {
+				if calls.Add(1) == 1 {
+					<-firstReturned
+					return "", lateError
+				}
+				return "token", nil
+			}}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			err = refresh.Refresh(ctx)
+			close(firstReturned)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("first Refresh() = %v, want a deadline error", err)
+			}
+			// The first worker has answered once its result is buffered.
+			deadline := time.Now().Add(time.Second)
+			for len(refresh.tokenPending) == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("first token lookup never returned")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			err = refresh.Refresh(context.Background())
+			if got := calls.Load(); got != 2 {
+				t.Fatalf("TokenSource called %d times, want 2", got)
+			}
+			if err == nil || !strings.Contains(err.Error(), "500") {
+				t.Fatalf("second Refresh() = %v, want the server's failure", err)
+			}
+		})
 	}
 }
 

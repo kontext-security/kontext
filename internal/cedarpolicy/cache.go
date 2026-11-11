@@ -556,19 +556,30 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	defer cancel()
 	// A hung credential helper may ignore cancellation. Keep at most one worker
 	// outstanding while allowing the initial refresh and daemon shutdown to finish.
-	if r.tokenPending == nil {
-		pending := make(chan tokenResult, 1)
-		r.tokenPending = pending
-		go func() { token, err := r.TokenSource(ctx); pending <- tokenResult{token, err} }()
-	}
 	var token string
 	var err error
-	select {
-	case <-ctx.Done():
-		err = ctx.Err()
-	case result := <-r.tokenPending:
-		r.tokenPending = nil
-		token, err = result.token, result.err
+	for {
+		started := r.tokenPending == nil
+		if started {
+			pending := make(chan tokenResult, 1)
+			r.tokenPending = pending
+			go func() { token, err := r.TokenSource(ctx); pending <- tokenResult{token, err} }()
+		}
+		select {
+		case <-ctx.Done():
+			err = ctx.Err()
+		case result := <-r.tokenPending:
+			r.tokenPending = nil
+			if !started && result.err != nil {
+				// This worker outlived the call that started it, so its
+				// context had ended. Its error is that ending, whatever it
+				// says (a killed credential helper reports "signal: killed"),
+				// and tells nothing about this call: ask again.
+				continue
+			}
+			token, err = result.token, result.err
+		}
+		break
 	}
 	if err != nil {
 		r.recordFailure(err)
