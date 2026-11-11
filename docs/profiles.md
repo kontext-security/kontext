@@ -138,7 +138,10 @@ profiles. On a machine that has profiles, it rotates the *active* profile's
 token when the new token belongs to that profile's workspace. A token for a
 workspace that another profile already holds rotates that profile's token and
 switches to it; a token for a workspace with no profile adds a profile and
-switches to it.
+switches to it. One exception: when the active profile's config or workspace
+record is missing or unreadable, setup writes the new token into that profile
+instead of adding one, because re-running setup is how a damaged profile is
+repaired.
 
 ## Local development
 
