@@ -51,7 +51,9 @@ func (b *syncBuffer) String() string {
 // pile up as records nobody has written yet. The returned func lets go.
 func holdStoreWriteLock(t *testing.T, path string) func() {
 	t.Helper()
-	db, err := sql.Open("sqlite", path)
+	// The daemon may be in a write of its own at this moment, such as one
+	// from its start: the busy timeout waits for it rather than fail.
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +62,7 @@ func holdStoreWriteLock(t *testing.T, path string) func() {
 		t.Fatal(err)
 	}
 	if _, err := conn.ExecContext(context.Background(), "begin immediate"); err != nil {
-		t.Fatal(err)
+		t.Fatalf("take the store's write lock: %v", err)
 	}
 	var once sync.Once
 	release := func() {

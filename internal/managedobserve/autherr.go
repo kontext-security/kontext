@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/busyfile"
 )
 
 // AuthError is the on-disk breadcrumb a daemon leaves when it cannot
@@ -79,7 +81,7 @@ func writeJSONBreadcrumb(path string, v any) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := busyfile.Rename(tempPath, path); err != nil {
 		return err
 	}
 	cleanup = false
@@ -87,7 +89,7 @@ func writeJSONBreadcrumb(path string, v any) error {
 }
 
 func ClearAuthError(dbPath string) error {
-	err := os.Remove(AuthErrorPath(dbPath))
+	err := busyfile.Remove(AuthErrorPath(dbPath))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -98,7 +100,7 @@ func ClearAuthError(dbPath string) error {
 // corrupt files are returned as a distinct diagnostic kind so doctor never
 // turns a local breadcrumb problem into a false revoked-token warning.
 func LoadAuthError(dbPath string) *AuthError {
-	data, err := os.ReadFile(AuthErrorPath(dbPath))
+	data, err := busyfile.ReadFile(AuthErrorPath(dbPath))
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return &AuthError{Kind: authErrorKindCorrupt, Message: err.Error()}

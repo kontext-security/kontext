@@ -21,6 +21,23 @@ import (
 type instanceFixture struct {
 	dir, socketPath, dbPath string
 	opts                    DaemonOptions
+	// log is what the fixture's daemon wrote to its diagnostic log, each
+	// line with the time since the fixture was made.
+	log *stampedLog
+}
+
+// stampedLog keeps what is written to it, each write behind the time since
+// start.
+type stampedLog struct {
+	syncBuffer
+	start time.Time
+}
+
+func (l *stampedLog) Write(p []byte) (int, error) {
+	if _, err := l.syncBuffer.Write([]byte(time.Since(l.start).Round(time.Millisecond).String() + " " + string(p))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func newInstanceFixture(t *testing.T) instanceFixture {
@@ -37,7 +54,16 @@ func newInstanceFixture(t *testing.T) instanceFixture {
 	dbPath := filepath.Join(dir, "guard.db")
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)
 	writeTestInstallation(t, filepath.Join(dir, "installation.json"))
-	return instanceFixture{dir: dir, socketPath: socketPath, dbPath: dbPath, opts: DaemonOptions{
+	// The daemon's log goes to the fixture, not to stderr, and a failed test
+	// shows it with times, so a daemon that hangs names where.
+	log := &stampedLog{start: time.Now()}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("the daemon logged:\n%s", log.String())
+		}
+	})
+	return instanceFixture{dir: dir, socketPath: socketPath, dbPath: dbPath, log: log, opts: DaemonOptions{
+		Diagnostic:       diagnostic.New(log, true),
 		SocketPath:       socketPath,
 		DBPath:           dbPath,
 		IdleTimeout:      time.Hour,
@@ -47,6 +73,28 @@ func newInstanceFixture(t *testing.T) instanceFixture {
 		PolicyHTTPClient: server.Client(),
 		BinaryVersion:    "test",
 	}}
+}
+
+// waitForAnswer waits until the daemon started in errCh answers on the
+// fixture's socket. A daemon that does not is reported with what the last
+// check of the socket said; the fixture adds what the daemon logged.
+func (f instanceFixture) waitForAnswer(t *testing.T, errCh chan error) {
+	t.Helper()
+	checks := &syncBuffer{}
+	deadline := time.Now().Add(10 * time.Second)
+	for !socketAnswers(f.socketPath, diagnostic.New(checks, true)) {
+		select {
+		case err := <-errCh:
+			errCh <- err
+			t.Fatalf("RunDaemon() returned early: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			lines := strings.Split(strings.TrimSpace(checks.String()), "\n")
+			t.Fatalf("the daemon never answered on the socket; the last check said: %s", lines[len(lines)-1])
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // blockInstanceLock puts a folder where the lock file goes, which no open takes.
@@ -190,19 +238,7 @@ func TestRunDaemonReplacesASocketNothingAnswersOn(t *testing.T) {
 			t.Error("RunDaemon did not stop")
 		}
 	}()
-	deadline := time.Now().Add(10 * time.Second)
-	for !socketAnswers(fixture.socketPath, diagnostic.Logger{}) {
-		select {
-		case err := <-errCh:
-			errCh <- err
-			t.Fatalf("RunDaemon() returned early: %v", err)
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the daemon never answered on the socket")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	fixture.waitForAnswer(t, errCh)
 }
 
 // A daemon on its way out still answers until it closes its socket, and it lets
@@ -244,19 +280,7 @@ func TestRunDaemonWaitsForADaemonThatIsLeaving(t *testing.T) {
 		}
 	}()
 	time.Sleep(400 * time.Millisecond) // Past the old daemon's exit.
-	deadline := time.Now().Add(10 * time.Second)
-	for !socketAnswers(fixture.socketPath, diagnostic.Logger{}) {
-		select {
-		case err := <-errCh:
-			errCh <- err
-			t.Fatalf("RunDaemon() returned early: %v", err)
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the daemon never answered on the socket")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	fixture.waitForAnswer(t, errCh)
 }
 
 func TestConnectFailureMeansBusy(t *testing.T) {

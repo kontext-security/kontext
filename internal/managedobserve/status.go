@@ -8,6 +8,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/buildinfo"
+	"github.com/kontext-security/kontext/internal/busyfile"
 )
 
 // DaemonStatus is the on-disk breadcrumb a daemon leaves after its socket is
@@ -53,7 +54,7 @@ func WriteDaemonStatus(dbPath, version string) error {
 }
 
 func LoadDaemonStatus(dbPath string) *DaemonStatus {
-	data, err := os.ReadFile(DaemonStatusPath(dbPath))
+	data, err := busyfile.ReadFile(DaemonStatusPath(dbPath))
 	if err != nil {
 		return nil
 	}
@@ -71,7 +72,7 @@ func AgentInventoryPath(dbPath string) string {
 
 // LoadAgentInventory is a breadcrumb read only. Doctor never rescans the disk.
 func LoadAgentInventory(dbPath string) *agentinventory.Inventory {
-	data, err := os.ReadFile(AgentInventoryPath(dbPath))
+	data, err := busyfile.ReadFile(AgentInventoryPath(dbPath))
 	if err != nil {
 		return nil
 	}
