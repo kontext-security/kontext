@@ -73,8 +73,9 @@ V3 was developed using benchmark data and private training/selection examples;
 only model parameters and aggregate evaluation results are released here.
 Upstream dataset/model terms continue to apply; consult the bundled attribution
 and provenance files. The checkpoint is a research release (`other` license),
-not a blanket commercial-use license. Runtime source follows the repository
-Apache-2.0 license. The older request-intent asset remains for provenance but is
+not a blanket commercial-use license. The contextual checkpoint was fine-tuned
+on TS-Bench (Apache-2.0); see the bundled attribution file for credits. Runtime
+source follows the repository MIT license. The older request-intent asset remains for provenance but is
 not used by the ungated inference path.
 
 The [original gated V3 report](merlin-v3-gated.md) is retained for historical comparison. Kontext retains asynchronous advisory inference (`enforced=false`), the existing default-on setting and explicit opt-out.
