@@ -185,7 +185,7 @@ func TestDaemonStreamsLedgerBatches(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
@@ -323,7 +323,7 @@ func TestDaemonRefreshesStreamInstallToken(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
@@ -404,7 +404,7 @@ func TestDaemonServesHooksWhileAnnotationRewriteRuns(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext.sock")
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)
 	t.Setenv("KONTEXT_INSTALL_TOKEN", "install-token")
@@ -568,7 +568,7 @@ func testDaemonAuthFailure(t *testing.T, rejectedStatus int) {
 	t.Cleanup(server.Close)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
@@ -655,7 +655,7 @@ func TestRunDaemonExitsCleanlyAfterHomebrewUpgradeSignal(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	socketDir := hermetic.SocketDir(t)
 	socketPath := filepath.Join(socketDir, "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
@@ -1035,7 +1035,7 @@ func TestEnsureSocketDirRejectsSymlinkParent(t *testing.T) {
 func startTestDaemon(t *testing.T) (string, string, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
@@ -1422,7 +1422,7 @@ func TestDeviceKeySource(t *testing.T) {
 }
 
 func TestBoundElsewhereAlertMessage(t *testing.T) {
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	t.Setenv(managedconfig.EnvPath, filepath.Join(dir, "no-config"))
 	output, err := os.CreateTemp(dir, "stderr")
 	if err != nil {
@@ -1447,7 +1447,7 @@ func TestBoundElsewhereAlertMessage(t *testing.T) {
 
 func TestPruneExportedLedgerFollowsStreamCursor(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	dbPath := filepath.Join(dir, "guard.db")
 	store, err := sqlite.OpenStore(dbPath)
 	if err != nil {

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,15 +46,16 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// storeDirThatMayStayOpen is a folder for the store of a daemon that may run
-// out of its stop budget. It then returns with writes still under way and
-// the store open, and Windows can't remove a folder that holds an open file,
-// which fails a test that keeps the store in t.TempDir. This folder is
-// removed once that works and left to the temp folder's own cleanup if it
+// daemonDir is a folder for the store and state of a daemon a test runs.
+// A daemon that runs out of its stop budget returns with writes still under
+// way and the store open; a slow or busy machine is enough for that. Windows
+// can't remove a folder that holds an open file, which fails a test that
+// keeps the store in t.TempDir although its own checks passed. This folder
+// is removed once that works and left to the temp folder's own cleanup if it
 // never does.
-func storeDirThatMayStayOpen(t *testing.T) string {
+func daemonDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "kontext-store-")
+	dir, err := os.MkdirTemp("", "kontext-daemon-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,9 +207,6 @@ func TestRunDaemonWritesQueuedRecordsWhenStopped(t *testing.T) {
 }
 
 func TestRunDaemonStopsByItsDeadlineAndSaysWhatIsLeft(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the daemon leaves its store open past the deadline, and Windows can't then remove the test's folder")
-	}
 	previous := daemonStopBudget
 	daemonStopBudget = 400 * time.Millisecond
 	t.Cleanup(func() { daemonStopBudget = previous })
@@ -248,9 +245,6 @@ func TestRunDaemonStopsByItsDeadlineAndSaysWhatIsLeft(t *testing.T) {
 // A cleanup tick on a busy store mustn't hold the stop up, or the stop's deadline
 // wouldn't start until the tick gave up.
 func TestRunDaemonStopsDuringACleanupTick(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the daemon leaves its store open past the deadline, and Windows can't then remove the test's folder")
-	}
 	previous := daemonStopBudget
 	daemonStopBudget = 400 * time.Millisecond
 	t.Cleanup(func() { daemonStopBudget = previous })
@@ -301,7 +295,7 @@ func TestRunDaemonStopsScoringToWriteABacklog(t *testing.T) {
 	daemonStopBudget = 6 * time.Second
 	t.Cleanup(func() { daemonStopBudget = previous })
 
-	fixture := newInstanceFixtureIn(t, storeDirThatMayStayOpen(t))
+	fixture := newInstanceFixture(t)
 	log := &syncBuffer{}
 	fixture.opts.Diagnostic = diagnostic.New(log, true)
 	model := &slowModel{}

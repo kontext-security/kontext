@@ -42,13 +42,7 @@ func (l *stampedLog) Write(p []byte) (int, error) {
 
 func newInstanceFixture(t *testing.T) instanceFixture {
 	t.Helper()
-	return newInstanceFixtureIn(t, t.TempDir())
-}
-
-// newInstanceFixtureIn is newInstanceFixture with the daemon's store and
-// state in dir.
-func newInstanceFixtureIn(t *testing.T, dir string) instanceFixture {
-	t.Helper()
+	dir := daemonDir(t)
 	hermetic.Home(t)
 	// Windows keeps its state here, not under the home variables.
 	t.Setenv("LOCALAPPDATA", t.TempDir())

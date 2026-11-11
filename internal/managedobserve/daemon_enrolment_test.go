@@ -47,7 +47,7 @@ func (c *enrolmentCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func startEnrolmentDaemon(t *testing.T, cloud *enrolmentCloud) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	server := httptest.NewTLSServer(cloud)
 	t.Cleanup(server.Close)
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)

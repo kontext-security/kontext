@@ -150,7 +150,7 @@ func startPolicyDaemon(t *testing.T, mode string) *policyDaemon {
 	cloud := newPolicyCloud(t)
 	server := httptest.NewTLSServer(cloud)
 	t.Cleanup(server.Close)
-	dir := t.TempDir()
+	dir := daemonDir(t)
 	configPath := filepath.Join(dir, "managed.json")
 	writeTestManagedConfigWithCloudURL(t, configPath, server.URL)
 	config, err := os.ReadFile(configPath)
