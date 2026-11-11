@@ -270,7 +270,7 @@ it receives, which events can block, and how each integration is installed.
 | **Claude Code** | Session lifecycle, prompt submission, pre-tool-use, successful and failed post-tool-use, stop and subagent stop | Pre-tool-use | Installed by `kontext setup` |
 | **Codex** | Session start, pre-tool-use, post-tool-use, prompt submission, stop | Pre-tool-use | Installed by `kontext setup`; trust the hooks once in the Codex CLI's `/hooks` |
 | **Claude Cowork** | Claude Code-compatible session and tool events | Pre-tool-use | Configure the hook inside the Cowork environment |
-| **Cursor** | Session lifecycle, prompt submission (IDE only), pre-tool-use, successful and failed post-tool-use | Pre-tool-use | Installed by `kontext setup` |
+| **Cursor** | Session lifecycle, prompt submission (IDE only), pre-tool-use, successful and failed post-tool-use, stop | Pre-tool-use | Installed by `kontext setup` |
 | **Antigravity** | Session start, prompt submission, pre-tool-use, successful and failed post-tool-use, stop | Pre-tool-use | Installed by `kontext setup` |
 
 See the [agent support matrix](docs/coverage.md) for exact behavior, deployment
