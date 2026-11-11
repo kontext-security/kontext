@@ -50,8 +50,8 @@ no decision, so the agent's own permission settings apply.
 - **Managed rollout:** distribute policy and review redacted records across an
   organization.
 
-Kontext currently supports **Claude Code, Claude Cowork, and Codex**. Exact
-event and enforcement coverage varies by agent—see the
+Kontext currently supports **Claude Code, Claude Cowork, Codex, Cursor, and
+Antigravity**. Exact event and enforcement coverage varies by agent—see the
 [agent support matrix](docs/coverage.md).
 
 Managed Claude hooks recognize Cowork sessions with either full or shortened
@@ -235,7 +235,7 @@ sends telemetry.
 The decision path stays local:
 
 ```text
-Claude Code / Cowork / Codex
+       supported agent
               |
               v
         supported hook
@@ -267,9 +267,11 @@ it receives, which events can block, and how each integration is installed.
 
 | Agent | What Kontext records | Pre-action blocking | Installation |
 | --- | --- | --- | --- |
-| **Claude Code** | Session lifecycle, pre-tool-use, successful and failed post-tool-use | Pre-tool-use | Installed by `kontext setup` |
+| **Claude Code** | Session lifecycle, prompt submission, pre-tool-use, successful and failed post-tool-use, stop and subagent stop | Pre-tool-use | Installed by `kontext setup` |
 | **Codex** | Session start, pre-tool-use, post-tool-use, prompt submission, stop | Pre-tool-use | Installed by `kontext setup`; trust the hooks once in the Codex CLI's `/hooks` |
 | **Claude Cowork** | Claude Code-compatible session and tool events | Pre-tool-use | Configure the hook inside the Cowork environment |
+| **Cursor** | Session lifecycle, prompt submission (IDE only), pre-tool-use, successful and failed post-tool-use, stop | Pre-tool-use | Installed by `kontext setup` |
+| **Antigravity** | Session start, prompt submission, pre-tool-use, successful and failed post-tool-use, stop | Pre-tool-use | Installed by `kontext setup` |
 
 See the [agent support matrix](docs/coverage.md) for exact behavior, deployment
 scope, and known gaps. It is the authoritative source for enforcement coverage.

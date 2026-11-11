@@ -135,7 +135,13 @@ inactive one touches nothing the daemon is reading and leaves it alone.
 
 `kontext setup` still works and is unchanged for anyone who never touches
 profiles. On a machine that has profiles, it rotates the *active* profile's
-token.
+token when the new token belongs to that profile's workspace. A token for a
+workspace that another profile already holds rotates that profile's token and
+switches to it; a token for a workspace with no profile adds a profile and
+switches to it. One exception: when the active profile's config or workspace
+record is missing or unreadable, setup writes the new token into that profile
+instead of adding one, because re-running setup is how a damaged profile is
+repaired.
 
 ## Local development
 
@@ -195,8 +201,8 @@ local-dev profile is obvious rather than something to infer from the URL.
 
 Each profile also gets its own login-keychain item,
 `kontext-install-token.<profile>`. The profile's `managed.json` names it, so the
-daemon resolves whatever the active config points at and a switch needs no
-keychain work at all.
+daemon resolves whatever the active config points at and a switch writes
+nothing to the keychain; it only reads the target's token to check it.
 
 ## What a switch does
 
