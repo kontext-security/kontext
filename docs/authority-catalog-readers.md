@@ -33,7 +33,7 @@ Verified against the public sources below on 2026-09-19 and, for Factory's top-l
 - Factory, Auggie, Junie, and Grok document plugin/extension systems, but the reviewed public sources do not establish a complete local installed-manifest path plus activation mapping. Those plugin readers are skipped rather than assuming Claude's cache layout. Kilo loads executable plugins without a required manifest, which this scanner does not execute.
 - Grok's legacy `approval_mode`/`yolo` aliases are not read because the cited public guide does not disambiguate their persisted table placement.
 
-The YAML decoder was already in the module graph through `github.com/stretchr/testify@v1.11.1 -> gopkg.in/yaml.v3@v3.0.1`; this change promotes that exact version to a direct dependency.
+The YAML decoder is `go.yaml.in/yaml/v3` (see `go.mod` for the version), the maintained continuation of the archived `gopkg.in/yaml.v3`, which stays in the module graph only for the tests of `testify` and `jcs`.
 
 ## Verification
 
