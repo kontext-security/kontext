@@ -18,7 +18,7 @@ func fakeHome(t *testing.T) string {
 
 func TestUserPathFallsBackToLegacyWithoutActiveProfile(t *testing.T) {
 	home := fakeHome(t)
-	want := filepath.Join(home, "Library", "Application Support", "Kontext", "installation.json")
+	want := filepath.Join(hermetic.StateDir(home), "installation.json")
 	if got := UserPath(); got != want {
 		t.Fatalf("UserPath() = %q, want legacy %q", got, want)
 	}
@@ -33,7 +33,7 @@ func TestUserPathIsPerProfile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	base := filepath.Join(home, "Library", "Application Support", "Kontext", "profiles")
+	base := filepath.Join(hermetic.StateDir(home), "profiles")
 
 	if err := profile.SetActive("prod"); err != nil {
 		t.Fatal(err)

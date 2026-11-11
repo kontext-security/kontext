@@ -23,6 +23,19 @@ type target struct {
 	ConfigPath   string
 	IdentityPath string
 	KeychainItem string
+	// TokenSource is where the install key is kept: "" for the macOS keychain,
+	// "credential" for the Windows credential store. KeychainItem names the
+	// entry in either.
+	TokenSource string
+}
+
+// tokenRef is the reference the written config carries for the install key.
+func (t target) tokenRef() managedconfig.TokenRef {
+	source := t.TokenSource
+	if source == "" {
+		source = "keychain"
+	}
+	return managedconfig.TokenRef{Source: source, Name: t.KeychainItem}
 }
 
 func (t target) label() string {

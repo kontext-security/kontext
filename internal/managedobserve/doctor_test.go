@@ -644,7 +644,7 @@ func newDoctorTestEnv(t *testing.T) doctorTestEnv {
 	t.Helper()
 	dir := t.TempDir()
 	hermetic.SetHome(t, dir)
-	configPath := filepath.Join(dir, "Library", "Application Support", "Kontext", "managed.json")
+	configPath := filepath.Join(hermetic.StateDir(dir), "managed.json")
 	installationPath := filepath.Join(dir, "installation.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatal(err)

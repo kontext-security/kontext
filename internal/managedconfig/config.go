@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/platform"
 	"github.com/kontext-security/kontext/internal/profile"
 )
@@ -337,6 +338,15 @@ func ResolveInstallToken(ctx context.Context, ref TokenRef) (string, error) {
 		return token, nil
 	case "keychain":
 		return resolveKeychainInstallToken(ctx, ref.Name)
+	case "credential":
+		token, err := credstore.Read(ref.Name)
+		if err != nil {
+			return "", fmt.Errorf("read install token from the Windows credential store: %w", err)
+		}
+		if token = strings.TrimSpace(token); token == "" {
+			return "", fmt.Errorf("install token credential %s is empty", ref.Name)
+		}
+		return token, nil
 	case "registry":
 		value, err := readRegistryString(InstallTokenRegistryKey, ref.Name)
 		if err != nil {
@@ -348,7 +358,7 @@ func ResolveInstallToken(ctx context.Context, ref TokenRef) (string, error) {
 		}
 		return token, nil
 	default:
-		return "", errors.New("install token ref source must be keychain, env or registry")
+		return "", errors.New("install token ref source must be keychain, env, registry or credential")
 	}
 }
 
@@ -507,9 +517,9 @@ func isLoopbackHost(host string) bool {
 
 func validateTokenRef(ref TokenRef) error {
 	switch ref.Source {
-	case "keychain", "env", "registry":
+	case "keychain", "env", "registry", "credential":
 	default:
-		return errors.New("install token ref source must be keychain, env or registry")
+		return errors.New("install token ref source must be keychain, env, registry or credential")
 	}
 	if ref.Name == "" {
 		return errors.New("install token ref name is required")

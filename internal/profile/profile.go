@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/fsperm"
+	"github.com/kontext-security/kontext/internal/platform"
 )
 
 const (
@@ -76,11 +77,13 @@ func Root() string {
 	if root := strings.TrimSpace(os.Getenv(EnvRoot)); root != "" {
 		return root
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
+	// The user's state folder of this OS: ~/Library/Application Support/Kontext
+	// on macOS, %LOCALAPPDATA%\Kontext on Windows.
+	dir, err := platform.UserStateDir()
+	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, "Library", "Application Support", "Kontext")
+	return dir
 }
 
 // ActivePath is the active-pointer file location, or "" without a root.

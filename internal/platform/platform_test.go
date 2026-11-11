@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/codexmanaged"
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
@@ -101,10 +102,7 @@ func TestManagedMCPFileIsWhereClaudeCodeReadsIt(t *testing.T) {
 }
 
 func TestUserStateDirIsTheProfileRoot(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("profile.Root moves to the user state directory in its own change")
-	}
-	t.Setenv("HOME", t.TempDir())
+	hermetic.Home(t)
 	t.Setenv(profile.EnvRoot, "")
 	if got, want := join(t, platform.UserStateDir), profile.Root(); got != want {
 		t.Fatalf("UserStateDir() = %q, want profile.Root() %q", got, want)

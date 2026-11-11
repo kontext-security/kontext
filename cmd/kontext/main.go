@@ -45,6 +45,7 @@ func main() {
 	// log stays open until the process exits, for main's final error line.
 	if len(os.Args) > 1 && os.Args[1] == daemonCommand {
 		_ = redirectDaemonLog()
+		startedByTheShell()
 	}
 	root := newRootCmd()
 	if err := root.Execute(); err != nil {

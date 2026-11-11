@@ -68,7 +68,7 @@ func TestLoadIgnoresASystemFileThatIsNotAnAdmins(t *testing.T) {
 		return nil, nil
 	}
 
-	userDir := filepath.Join(home, "Library", "Application Support", "Kontext")
+	userDir := hermetic.StateDir(home)
 	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
