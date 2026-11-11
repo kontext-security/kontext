@@ -169,16 +169,21 @@ func TestRefreshAsksAgainAfterATimedOutTokenLookup(t *testing.T) {
 				t.Fatal(err)
 			}
 			var calls atomic.Int32
+			// The first lookup answers only after the call that started it has
+			// returned, so that call always ends on its own deadline.
+			firstReturned := make(chan struct{})
 			refresh := Refresher{Client: client, Cache: NewCache("", 0), InstallationID: testInstallationID, TokenSource: func(ctx context.Context) (string, error) {
 				if calls.Add(1) == 1 {
-					<-ctx.Done()
+					<-firstReturned
 					return "", lateError(ctx)
 				}
 				return "token", nil
 			}}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			defer cancel()
-			if err := refresh.Refresh(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			err = refresh.Refresh(ctx)
+			close(firstReturned)
+			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("first Refresh() = %v, want a deadline error", err)
 			}
 			// The first worker has answered once its result is buffered.
