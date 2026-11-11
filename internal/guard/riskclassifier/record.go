@@ -40,7 +40,8 @@ type Record struct {
 	// when the daemon has not observed one.
 	AgentTask string `json:"agent_task,omitempty"`
 
-	SVM *SVMVerdict `json:"svm,omitempty"`
+	SVM    *SVMVerdict    `json:"svm,omitempty"`
+	Impact *ImpactVerdict `json:"impact,omitempty"`
 	// Operations is local shadow data, separate from the legacy binary score.
 	Operations *OperationVerdict `json:"operations,omitempty"`
 	// RiskTypeError records advisory model load/inference degradation for an

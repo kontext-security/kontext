@@ -6,6 +6,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/guard/decision"
+	"github.com/kontext-security/kontext/internal/ledgerfact"
 )
 
 type HookEvent struct {
@@ -183,14 +184,15 @@ type CedarEvidence struct {
 // ClassifierAnnotation is one action's risk annotation. AgentTask and the
 // command fields stay local; only the verdict block is uploaded.
 type ClassifierAnnotation struct {
-	SVM              *ClassifierSVM        `json:"svm,omitempty"`
-	Operations       *ClassifierOperations `json:"-"`
-	RiskTypes        *ClassifierRiskTypes  `json:"-"`
-	RiskTypeError    string                `json:"-"`
-	Command          string                `json:"-"`
-	CommandHash      string                `json:"-"`
-	CommandTruncated bool                  `json:"-"`
-	AgentTask        string                `json:"-"`
+	Impact           *ledgerfact.ClassifierImpact `json:"impact,omitempty"`
+	SVM              *ClassifierSVM               `json:"svm,omitempty"`
+	Operations       *ClassifierOperations        `json:"-"`
+	RiskTypes        *ClassifierRiskTypes         `json:"-"`
+	RiskTypeError    string                       `json:"-"`
+	Command          string                       `json:"-"`
+	CommandHash      string                       `json:"-"`
+	CommandTruncated bool                         `json:"-"`
+	AgentTask        string                       `json:"-"`
 }
 
 // ClassifierSVM uses the field names the hosted ingest

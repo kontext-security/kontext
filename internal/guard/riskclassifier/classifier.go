@@ -30,6 +30,7 @@ type Redactor func(string) string
 // first and only then attaches this.
 type Verdicts struct {
 	SVM           *SVMVerdict
+	Impact        *ImpactVerdict
 	Operations    *OperationVerdict
 	RiskTypes     *RiskTypeVerdict
 	RiskTypeError string
@@ -48,6 +49,8 @@ type Verdicts struct {
 // ClassifierOptions configure the in-path classifier.
 type ClassifierOptions struct {
 	SVM            *SVM            // required
+	Impact         *ImpactModel    // optional independent advisory capability model
+	ImpactError    bool            // load failure; never disables existing Kestrel
 	Operations     *OperationModel // optional, local shadow only
 	OperationError bool            // optional load failure; never disables the old SVM
 	RiskTypes      *RiskTypeSVM    // optional; nil leaves the second stage absent
@@ -55,8 +58,11 @@ type ClassifierOptions struct {
 	Redact         Redactor        // required
 }
 
-// Classifier runs the binary SVM, local AWS shadow model and risk-type SVM.
+// Classifier runs the original SVM, independent Impact model, local AWS shadow
+// model and risk-type SVM. All are advisory.
 type Classifier struct {
+	impact         *ImpactModel
+	impactError    bool
 	svm            *SVM
 	operations     *OperationModel
 	operationError bool
@@ -72,6 +78,8 @@ func NewClassifier(opts ClassifierOptions) *Classifier {
 		return nil
 	}
 	return &Classifier{
+		impact:         opts.Impact,
+		impactError:    opts.ImpactError,
 		svm:            opts.SVM,
 		operations:     opts.Operations,
 		operationError: opts.OperationError,
@@ -124,6 +132,16 @@ func (c *Classifier) Classify(_ context.Context, sessionID, toolName, command st
 		CommandHash:      hex.EncodeToString(storedHash[:]),
 		CommandTruncated: truncated,
 		AgentTask:        c.agentTask(sessionID),
+	}
+	// Impact is independent of the legacy SVM outcome and task context.
+	if IsShellCommandTool(toolName) {
+		if c.impact != nil {
+			v := c.impact.Classify(command)
+			verdicts.Impact = &v
+		} else if c.impactError {
+			v := impactNotAssessed("model_unavailable")
+			verdicts.Impact = &v
+		}
 	}
 	c.attachOperations(toolName, command, &verdicts)
 	c.attachRiskTypes(toolName, command, svmVerdict, &verdicts)

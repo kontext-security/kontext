@@ -215,6 +215,11 @@ func cloneClassifier(classifier *Classifier) *Classifier {
 	cloned := *classifier
 	cloned.LLMError = cloneString(classifier.LLMError)
 	cloned.Command = cloneString(classifier.Command)
+	if classifier.Impact != nil {
+		impact := *classifier.Impact
+		impact.Score = cloneFloat64(classifier.Impact.Score)
+		cloned.Impact = &impact
+	}
 	if classifier.SVM != nil {
 		svm := *classifier.SVM
 		cloned.SVM = &svm
