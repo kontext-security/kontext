@@ -1,5 +1,9 @@
 # Merlin V3: precision-first contextual issue detection
 
+Historical report, kept for comparison. It describes the gated candidate that
+[Merlin V3](merlin-v3.md) replaced; the runtime no longer uses the request gates
+described below.
+
 Candidate `merlin-v3-precision-20261007` combines a repaired Claude prompt path
 with a deliberately narrow contextual detector. This is a review candidate;
 creating this change does not update an installed daemon or hook configuration.

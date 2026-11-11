@@ -17,8 +17,9 @@ an eligibility rejection; context-presence flags remain available for review.
 
 ## Embedded runtime
 
-Native Go runs the embedded float32 contextual checkpoint, tokenizer and two
-small sparse classifiers. Endpoints need no Python, ONNX Runtime, downloads or
+Native Go runs the embedded float32 contextual checkpoint, tokenizer and one
+small sparse action-agreement classifier; the older request-intent asset is
+still embedded but not loaded. Endpoints need no Python, ONNX Runtime, downloads or
 installed model directory. The hidden historical ONNX installer does not replace
 this candidate. Serving provenance is in `model/native/PROVENANCE.json`; the
 older `model/PROVENANCE.json` describes only that historical installer.
@@ -161,12 +162,13 @@ feedback can be posted to `POST /api/step-safety/{action_id}/feedback`:
 {"user_feedback":"should_allow"}
 ```
 
-`should_block` is the other accepted label. The candidate calibration is
-`sigmoid(1.3003148180546902 * (unsafe_logit - safe_logit) - 5.527577655786232)`;
-the advisory threshold is `0.5`.
+`should_block` is the other accepted label. The candidate score is
+`sigmoid(min(encoder, sparse))`, where each term is that model's calibrated
+margin minus the logit of its own threshold; the advisory threshold is `0.5`.
 
 ## Validation
 
 Current candidate parity checks, research results and their limits are recorded
-in [the matched-replay trial](merlin-matched-replay-trial.md). Historical ONNX numbers do
-not describe the embedded candidate.
+in [Merlin V3](merlin-v3.md). [The matched-replay trial](merlin-matched-replay-trial.md)
+is a historical V2 trial, and historical ONNX numbers do not describe the
+embedded candidate.
