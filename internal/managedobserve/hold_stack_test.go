@@ -126,7 +126,10 @@ func stackWriteCall(id string) hook.Event {
 func TestHookHeldUntilThePolicyArrives(t *testing.T) {
 	for _, mode := range []guardhookruntime.Mode{guardhookruntime.ModeEnforce, guardhookruntime.ModeRemote} {
 		t.Run(string(mode), func(t *testing.T) {
-			socket, _ := startHoldingHost(t, mode, 1300*time.Millisecond, 3*time.Second)
+			// The hold counts from daemon start and the policy from when the
+			// host is up, so the hold is long enough for any start-up: the
+			// call is still held when the policy arrives.
+			socket, _ := startHoldingHost(t, mode, 1300*time.Millisecond, 10*time.Second)
 			lifecycle := Lifecycle{SocketPath: socket, Label: DefaultLaunchdLabel, Mode: string(mode), Kickstart: func(context.Context, string) error { return nil }}
 
 			start := time.Now()
