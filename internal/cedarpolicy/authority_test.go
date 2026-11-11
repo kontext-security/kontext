@@ -157,9 +157,10 @@ func TestHungTokenSourceReleasesInitialPolicyWait(t *testing.T) {
 // next refresh: that error belongs to the call that timed out. A credential
 // helper killed at the deadline reports the kill, not the context's error.
 func TestRefreshAsksAgainAfterATimedOutTokenLookup(t *testing.T) {
-	for name, lateError := range map[string]func(context.Context) error{
-		"context error": func(ctx context.Context) error { return ctx.Err() },
-		"killed helper": func(context.Context) error { return errors.New("read install token from keychain: signal: killed") },
+	for name, lateError := range map[string]error{
+		"deadline":      context.DeadlineExceeded,
+		"cancelled":     context.Canceled,
+		"killed helper": errors.New("read install token from keychain: signal: killed"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }))
@@ -175,7 +176,7 @@ func TestRefreshAsksAgainAfterATimedOutTokenLookup(t *testing.T) {
 			refresh := Refresher{Client: client, Cache: NewCache("", 0), InstallationID: testInstallationID, TokenSource: func(ctx context.Context) (string, error) {
 				if calls.Add(1) == 1 {
 					<-firstReturned
-					return "", lateError(ctx)
+					return "", lateError
 				}
 				return "token", nil
 			}}
