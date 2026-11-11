@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
+	"github.com/kontext-security/kontext/internal/autostart"
 	"github.com/kontext-security/kontext/internal/buildinfo"
+	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
@@ -104,6 +106,9 @@ type doctorOptions struct {
 	Dial               func(network, address string, timeout time.Duration) (net.Conn, error)
 	Now                func() time.Time
 	LaunchAgentPresent func() bool
+	// AutostartPresent reports whether a Windows user install's sign-in entry
+	// is there: what starts its daemon, as the launch agent does on macOS.
+	AutostartPresent func() bool
 	// LaunchAgentLoaded asks launchd whether the agent the hook kickstarts is
 	// still loaded. An error means unknown and keeps the default readout.
 	LaunchAgentLoaded func() (bool, error)
@@ -156,6 +161,12 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	}
 	if opts.LaunchAgentLoaded == nil {
 		opts.LaunchAgentLoaded = launchAgentLoaded
+	}
+	if opts.AutostartPresent == nil {
+		opts.AutostartPresent = func() bool {
+			entry, err := autostart.Entry()
+			return err == nil && entry != ""
+		}
 	}
 	if opts.LoadConfig == nil {
 		opts.LoadConfig = managedconfig.Load
@@ -243,7 +254,18 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	}
 	launchAgentPresent := opts.LaunchAgentPresent()
 	repairTargetAvailable = runtime.GOOS == "darwin" && loaded.Scope == managedconfig.ScopeUser && launchAgentPresent
-	if loaded.Scope == managedconfig.ScopeUser && !launchAgentPresent {
+	switch {
+	case loaded.Scope != managedconfig.ScopeUser:
+	case runtimeGOOS == "windows":
+		// A user install on Windows has no launch agent: its daemon starts
+		// from the user's sign-in entry.
+		if opts.AutostartPresent() {
+			fmt.Fprintln(out, "  sign-in entry: present (the background agent starts when you sign in)")
+		} else {
+			fmt.Fprintln(out, "  sign-in entry: missing (run `kontext setup` to restore the background agent)")
+			status.Healthy = false
+		}
+	case !launchAgentPresent:
 		fmt.Fprintln(out, "  launch agent: missing (run `kontext setup` to restore the background agent)")
 		status.Healthy = false
 	}
@@ -293,6 +315,11 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 			warn("install token file is not readable (%v) — the daemon cannot stream; re-run the MDM install action while a user is logged in so the wrapper rewrites %s", fileErr, opts.InstallTokenFile)
 			status.Healthy = false
 		}
+	} else if errors.Is(err, credstore.ErrNoLogonSession) {
+		// Not a fault of the install: this session (SSH signed in with a key,
+		// for one) has no credential store, so the key can't be judged from
+		// here. The daemon runs in the user's desktop session, which has one.
+		warn("install token can't be checked from this session, which has no Windows credential store; run `kontext doctor` in a desktop session")
 	} else {
 		warn("install token is not readable (%v) — the agent cannot stream; %s", err, installTokenFixHint(tokenRef))
 		status.Healthy = false
@@ -333,7 +360,15 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 		// The hook only kickstarts the agent. That revives a loaded agent but
 		// not one launchd has unloaded (Stop daemon in the menu bar, an
 		// interrupted profile switch), so only promise a restart when loaded.
-		if loaded, err := opts.LaunchAgentLoaded(); err == nil && !loaded {
+		if runtimeGOOS == "windows" {
+			// Nothing starts the daemon with a session here: the hook's
+			// kickstart is launchd's.
+			if status.SelfServe {
+				fmt.Fprintln(out, "  daemon: not running (it starts when you sign in; `kontext setup` starts it now)")
+			} else {
+				fmt.Fprintln(out, "  daemon: not running (it starts at sign-in)")
+			}
+		} else if loaded, err := opts.LaunchAgentLoaded(); err == nil && !loaded {
 			if repairTargetAvailable {
 				fmt.Fprintf(out, "  daemon: stopped (launchd has unloaded its agent, so your next Claude Code session will not start it; run `launchctl bootstrap gui/%d %q`)\n",
 					os.Getuid(), selfServeLaunchAgentPath())
@@ -800,6 +835,9 @@ func selfExecutablePath() string {
 func installTokenFixHint(ref managedconfig.TokenRef) string {
 	if ref.Source == "registry" {
 		return `an administrator has to set HKLM\` + managedconfig.InstallTokenRegistryKey + `\` + ref.Name + `, through the installer's INSTALL_TOKEN or an MDM policy`
+	}
+	if ref.Source == "credential" {
+		return "re-run `kontext setup` in a desktop session"
 	}
 	return "re-run `kontext setup` or unlock your login keychain"
 }

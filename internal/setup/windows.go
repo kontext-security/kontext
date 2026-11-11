@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kontext-security/kontext/internal/autostart"
 	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
@@ -27,8 +28,8 @@ const windowsDaemonName = "kontextw.exe"
 var (
 	storeWindowsToken   = credstore.Write
 	deleteWindowsToken  = credstore.Delete
-	setWindowsAutostart = setAutostart
-	delWindowsAutostart = removeAutostart
+	setWindowsAutostart = autostart.Set
+	delWindowsAutostart = autostart.Remove
 	startWindowsDaemon  = startDetached
 	installWindowsHooks = hookinstall.Install
 	removeWindowsHooks  = hookinstall.Remove

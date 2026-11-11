@@ -225,12 +225,6 @@ func TestRunWindowsNeedsTheDaemonBesideTheCLI(t *testing.T) {
 	}
 }
 
-func TestAutostartCommandQuotesTheProgram(t *testing.T) {
-	if got, want := autostartCommand(`C:\Program Files\Kontext\kontextw.exe`), `"C:\Program Files\Kontext\kontextw.exe" managed-observe-daemon`; got != want {
-		t.Fatalf("autostartCommand = %q, want %q", got, want)
-	}
-}
-
 // A setup over an existing install that fails part way leaves that install
 // as it was: nothing of it is taken back.
 func TestRunWindowsLeavesAnExistingInstallWhenARerunFails(t *testing.T) {

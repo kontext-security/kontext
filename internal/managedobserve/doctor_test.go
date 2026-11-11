@@ -372,6 +372,12 @@ func TestPrintStatusDaemonDownReadoutFollowsLaunchdState(t *testing.T) {
 		{"unloaded org-managed", managedconfig.ScopeSystem, func() (bool, error) { return false, nil }, unloaded + "restart it through its managing installation)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// launchd's states are read on macOS and Linux; Windows has its own
+			// line (TestDoctorJudgesAWindowsUserInstallByItsSignInEntry).
+			if runtimeGOOS == "windows" {
+				runtimeGOOS = "linux"
+				t.Cleanup(func() { runtimeGOOS = runtime.GOOS })
+			}
 			env := newDoctorTestEnv(t)
 			opts := env.options()
 			opts.Dial = func(string, string, time.Duration) (net.Conn, error) {
@@ -797,4 +803,56 @@ func TestDoctorDropsAFixedTrustFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A user install on Windows is judged by its sign-in entry, not by a launch
+// agent it cannot have, and a stopped daemon is not promised a start with the
+// next Claude Code session.
+func TestDoctorJudgesAWindowsUserInstallByItsSignInEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		present     bool
+		wantHealthy bool
+		wantLine    string
+	}{
+		{name: "entry present", present: true, wantHealthy: true, wantLine: "sign-in entry: present"},
+		{name: "entry missing", wantLine: "sign-in entry: missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetUpdaterSeams(t)
+			runtimeGOOS = "windows"
+			env := newDoctorTestEnv(t)
+			env.writeDaemonStatus(t, os.Getpid(), "1.2.3")
+			opts := env.options()
+			opts.LaunchAgentPresent = func() bool { return false }
+			opts.AutostartPresent = func() bool { return tc.present }
+
+			var out bytes.Buffer
+			status, _ := printStatus(&out, "1.2.3", opts)
+			if strings.Contains(out.String(), "launch agent") {
+				t.Errorf("doctor speaks of a launch agent on Windows:\n%s", out.String())
+			}
+			if !strings.Contains(out.String(), tc.wantLine) {
+				t.Errorf("output lacks %q:\n%s", tc.wantLine, out.String())
+			}
+			if status.Healthy != tc.wantHealthy {
+				t.Errorf("healthy = %v, want %v:\n%s", status.Healthy, tc.wantHealthy, out.String())
+			}
+		})
+	}
+
+	t.Run("daemon down", func(t *testing.T) {
+		resetUpdaterSeams(t)
+		runtimeGOOS = "windows"
+		env := newDoctorTestEnv(t)
+		opts := env.options()
+		opts.AutostartPresent = func() bool { return true }
+		opts.Dial = func(string, string, time.Duration) (net.Conn, error) { return nil, errors.New("nothing listens") }
+
+		var out bytes.Buffer
+		printStatus(&out, "1.2.3", opts)
+		if strings.Contains(out.String(), "next Claude Code session") || !strings.Contains(out.String(), "daemon: not running (it starts when you sign in") {
+			t.Errorf("the stopped daemon's line is wrong for Windows:\n%s", out.String())
+		}
+	})
 }

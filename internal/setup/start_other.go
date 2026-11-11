@@ -8,10 +8,4 @@ import "errors"
 // them through the seams in windows.go.
 var errWindowsOnly = errors.New("only on Windows")
 
-func setAutostart(string) error { return errWindowsOnly }
-
-func removeAutostart() error { return errWindowsOnly }
-
-func autostartEntry() (string, error) { return "", errWindowsOnly }
-
 func startDetached(string, ...string) error { return errWindowsOnly }
