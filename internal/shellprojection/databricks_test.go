@@ -258,7 +258,11 @@ func TestDatabricksShellFacts(t *testing.T) {
 		{"curl in eval after a nameref", `declare -n H='headers[@]'; eval 'curl -H "$H" ` + dbHost + `/api/2.0/repos/12'`, []string{dbP("workspace"), dbUnk}, false},
 		{"curl in a loop with a later nameref", `for i in 1 2; do curl -H "$H" ` + dbHost + `/api/2.0/repos/12; declare -n H='headers[@]'; done`, []string{dbP("workspace"), dbUnk}, false},
 		{"curl after a declare in a leading redirection", `< <(declare -n H='headers[@]'; curl -H "$H" ` + dbHost + `/api/2.0/repos/12) source /dev/null`, []string{dbP("workspace"), dbUnk}, false},
-		{"curl with a declare inside its own word", `curl -H "${ declare -gn H='headers[@]'; }$H" ` + dbHost + "/api/2.0/repos/12", []string{dbA, dbD, "databricks/export=true", dbP("execution"), dbP("secrets"), dbUnk, dbW}, false},
+		// ${ ...; } and ${| ...; } run in the current shell: a declare inside
+		// one is a state change before the call ends, like the nameref above.
+		{"curl with a declare inside its own word", `curl -H "${ declare -gn H='headers[@]'; }$H" ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
+		{"curl with a declare inside its own reply-variable word", `curl -H "${| declare -gn H='headers[@]'; }$H" ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
+		{"curl after a declare in an assignment's current-shell substitution", `X=${ declare -gn H='headers[@]'; }; curl -H "$H" ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
 		{"curl after a declare in its own command substitution", `curl -H "$(declare -n H='headers[@]')$H" ` + dbHost + "/api/2.0/repos/12", []string{dbP("workspace"), dbUnk}, false},
 		{"curl in bash -c with a BASH_ENV startup file", `printf '%s\n' 'declare -n H="headers[@]"' | BASH_ENV=/dev/stdin bash -c 'curl -H "$H" ` + dbHost + `/api/2.0/repos/12'`, []string{dbP("workspace"), dbUnk}, false},
 		{"curl in bash -c with an env BASH_ENV", `env BASH_ENV=/tmp/rc bash -c 'curl -H "$H" ` + dbHost + `/api/2.0/repos/12'`, []string{dbP("workspace"), dbUnk}, false},
