@@ -168,7 +168,9 @@ margin minus the logit of its own threshold; the advisory threshold is `0.5`.
 
 ## Validation
 
-Current candidate parity checks, research results and their limits are recorded
-in [Merlin V3](merlin-v3.md). [The matched-replay trial](merlin-matched-replay-trial.md)
+Current candidate evaluation results and their limits are recorded in
+[Merlin V3](merlin-v3.md); its parity tests are in `internal/guard/stepsafety`
+(`TestCandidateMatchesPython`, `TestScopedPythonNativeParity`).
+[The matched-replay trial](merlin-matched-replay-trial.md)
 is a historical V2 trial, and historical ONNX numbers do not describe the
 embedded candidate.
