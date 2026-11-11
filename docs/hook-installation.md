@@ -2,7 +2,9 @@
 
 `internal/hookinstall.Definitions` owns the hook set for `kontext setup`,
 `kontext hooks`, and doctor. Both installation channels install every supported
-agent's hooks, even when that agent is absent.
+agent's hooks, even when that agent is absent, with one exception: a self-serve
+`kontext setup` run from the Homebrew binary on macOS skips an agent it does not
+find, because the background agent there repairs hooks and adds them later.
 
 | Scope | Agent | Files |
 | --- | --- | --- |
@@ -160,7 +162,7 @@ activation is unverified and directs the user to a fresh session's `/status`,
 fetch is started by doctor. The doctor JSON contract is unchanged.
 
 The optional native dispatch test verifies the actual installer output with
-Claude 2.1.300, including system-only and user-only installs, a user copy next
+Claude 2.1.304, including system-only and user-only installs, a user copy next
 to an earlier drop-in (same and different binary path), a differing-path
 negative control, managed restrictions, and project `disableAllHooks`:
 
