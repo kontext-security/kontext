@@ -337,7 +337,7 @@ func (r *Resolver) claudeScopes(root readers.ClaudeRoot, configDir, project, ser
 	if project == "" {
 		return lower()
 	}
-	config := root.Projects[project]
+	config := root.Projects[projectKey(project)]
 	if url, found := find(config.MCPServers, server); found {
 		return url, true
 	}
@@ -374,7 +374,14 @@ func listed(names []string, server string) bool {
 }
 
 func (r *Resolver) projectScopes(root readers.ClaudeRoot, dir string) []map[string]readers.MCP {
-	return []map[string]readers.MCP{root.Projects[dir].MCPServers, r.servers(filepath.Join(dir, ".mcp.json"))}
+	return []map[string]readers.MCP{root.Projects[projectKey(dir)].MCPServers, r.servers(filepath.Join(dir, ".mcp.json"))}
+}
+
+// projectKey is dir as Claude Code writes a project's key in ~/.claude.json:
+// with forward slashes, which on Windows is not the cleaned path (seen there
+// with Claude Code 2.1.292).
+func projectKey(dir string) string {
+	return filepath.ToSlash(dir)
 }
 
 func projectRoot(root readers.ClaudeRoot, cwd string) string {
@@ -382,7 +389,7 @@ func projectRoot(root readers.ClaudeRoot, cwd string) string {
 		return ""
 	}
 	for dir := filepath.Clean(cwd); ; dir = filepath.Dir(dir) {
-		if _, ok := root.Projects[dir]; ok {
+		if _, ok := root.Projects[projectKey(dir)]; ok {
 			return dir
 		}
 		if dir == filepath.Dir(dir) {

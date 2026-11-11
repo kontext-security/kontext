@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +13,6 @@ import (
 	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/guard/risk"
-	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/mcpconfig"
 )
 
@@ -37,6 +37,20 @@ func useMCPHome(t *testing.T) string {
 	return home
 }
 
+// claudeProjectKey is dir as Claude Code writes a project's key in
+// ~/.claude.json: with forward slashes (seen on Windows with Claude Code
+// 2.1.292).
+func claudeProjectKey(dir string) string {
+	return filepath.ToSlash(dir)
+}
+
+// jsonPath is path as it stands inside a JSON string: a Windows path's
+// backslashes have to be escaped there.
+func jsonPath(path string) string {
+	quoted, _ := json.Marshal(path)
+	return string(quoted[1 : len(quoted)-1])
+}
+
 func writeConfig(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -53,7 +67,6 @@ func writeConfig(t *testing.T, path, content string) {
 // closes). Servers that stay unidentified keep their raw name and are
 // allowed.
 func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1006", "the MCP config readers aren't ported to Windows yet")
 	const (
 		account         = "11111111-2222-4333-8444-555555555555"
 		org             = "66666666-7777-4888-9999-000000000000"
@@ -70,10 +83,10 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
   "mcpServers": {"work": `+atlassian+`, "tickets": {"url": "https://mcp.linear.app/sse"}, "0f6a1c2d-3b4e-4f5a-8b6c-7d8e9f0a1b2c": `+atlassian+`, "bridge": {"command": "npx", "args": ["mcp-remote", "https://mcp.atlassian.com/v1/sse"]},
     "jira": `+atlassian+`, "atlassian-pending": `+atlassian+`, "claude_ai_Configured": `+atlassian+`, "jira.prod": `+atlassian+`, "jira_prod": `+hubspot+`},
   "projects": {
-    "`+project+`": {"mcpServers": {"local.desk": `+atlassian+`}, "enabledMcpjsonServers": ["tickets"], "disabledMcpjsonServers": ["jira"]},
-    "`+filepath.Join(home, "src/shadow")+`": {},
-    "`+filepath.Join(home, "src/outer")+`": {"mcpServers": {"atlassian": {"url": "https://api.githubcopilot.com/mcp/"}, "work": {"url": "https://api.githubcopilot.com/mcp/"}}},
-    "`+filepath.Join(home, "src/outer/repo")+`": {}
+    "`+claudeProjectKey(project)+`": {"mcpServers": {"local.desk": `+atlassian+`}, "enabledMcpjsonServers": ["tickets"], "disabledMcpjsonServers": ["jira"]},
+    "`+claudeProjectKey(filepath.Join(home, "src/shadow"))+`": {},
+    "`+claudeProjectKey(filepath.Join(home, "src/outer"))+`": {"mcpServers": {"atlassian": {"url": "https://api.githubcopilot.com/mcp/"}, "work": {"url": "https://api.githubcopilot.com/mcp/"}}},
+    "`+claudeProjectKey(filepath.Join(home, "src/outer/repo"))+`": {}
   }
 }`)
 	// An approved project .mcp.json entry overrides the user entry of the
@@ -95,13 +108,16 @@ func TestCedarResolvesMCPServersByConfiguredURL(t *testing.T) {
 		writeConfig(t, filepath.Join(dup, ".mcp.json"), `{"mcpServers": {"cloud": `+server+`}}`)
 	}
 	writeConfig(t, filepath.Join(home, ".claude/plugins/installed_plugins.json"), `{"plugins": {
-  "jira-tools@market": [{"installPath": "`+plugin+`"}],
-  "dup-tools@m0": [{"installPath": "`+filepath.Join(home, ".claude/plugins/cache/m0/dup-tools/1.0.0")+`"}],
-  "dup-tools@m1": [{"installPath": "`+filepath.Join(home, ".claude/plugins/cache/m1/dup-tools/1.0.0")+`"}]
+  "jira-tools@market": [{"installPath": "`+jsonPath(plugin)+`"}],
+  "dup-tools@m0": [{"installPath": "`+jsonPath(filepath.Join(home, ".claude/plugins/cache/m0/dup-tools/1.0.0"))+`"}],
+  "dup-tools@m1": [{"installPath": "`+jsonPath(filepath.Join(home, ".claude/plugins/cache/m1/dup-tools/1.0.0"))+`"}]
 }}`)
 	// Claude Desktop names a claude.ai connector's tools by its UUID and
 	// records the connector in the session's record. Another session's
-	// record, with the same UUID elsewhere, must not count.
+	// record, with the same UUID elsewhere, must not count. The Desktop
+	// files sit in the macOS location on every OS, as the resolver reads
+	// them: on Windows these cases show nothing about Claude Desktop there
+	// until its locations are read (ENG-1009).
 	sessions := filepath.Join(home, "Library/Application Support/Claude/claude-code-sessions/acct/org")
 	writeConfig(t, filepath.Join(sessions, "local_other.json"), `{"cliSessionId": "session-2", "remoteMcpServersConfig": [{"uuid": "`+connectorURL+`", "name": "Docs", "url": "https://api.githubcopilot.com/mcp/"}]}`)
 	writeConfig(t, filepath.Join(sessions, "local_this.json"), `{"cliSessionId": "session-1", "title": "x", "remoteMcpServersConfig": [
