@@ -13,7 +13,7 @@ require (
 	golang.org/x/term v0.45.0
 	golang.org/x/text v0.43.0
 	modernc.org/sqlite v1.54.0
-	mvdan.cc/sh/v3 v3.13.1
+	mvdan.cc/sh/v3 v3.14.1
 )
 
 require (

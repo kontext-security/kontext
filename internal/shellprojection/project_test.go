@@ -72,6 +72,7 @@ func TestForcePushBypassCorpus(t *testing.T) {
 		{name: "plus refspec without colon", command: "git push origin +main", programs: []string{"git"}, facts: []string{forcePush, write}, complete: true},
 		{name: "plus refspec after double dash", command: "git push -- origin +main", programs: []string{"git"}, facts: []string{forcePush}, complete: true},
 		{name: "backslash escaped program", command: `\git push -f origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
+		{name: "beside a current-shell substitution in quotes", command: `git push -f origin main; echo "${ :; }"`, programs: []string{"git", "echo", ":"}, facts: []string{forcePush, write}, complete: false},
 		{name: "backslash escaped flag", command: `git push \-f origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
 		{name: "double quoted escapes", command: `"git" push "--force" origin main`, programs: []string{"git"}, facts: []string{forcePush}, complete: true},
 		{name: "exec wrapper", command: "exec git push -f origin main", programs: []string{"git"}, facts: []string{forcePush}, complete: true},
