@@ -403,7 +403,7 @@ func (s *RiskTypeSVM) count(ngram string, counts map[int32]int) {
 // shell-looking text but were never executed by a shell.
 func IsShellCommandTool(toolName string) bool {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "bash", "shell", "shell_command", "exec_command", "functions.exec_command":
+	case "bash", "shell", "shell_command", "unified_exec", "exec_command", "local_shell", "functions.exec_command":
 		return true
 	default:
 		return false

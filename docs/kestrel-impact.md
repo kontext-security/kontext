@@ -7,7 +7,9 @@ when that model returns a low-risk verdict. Neither score changes the local
 Cedar policy decision.
 
 The pilot uses the frozen `command-risk-process/9-P_process` linear model and
-`kontext-command-risk-features/2` extractor. Both use Kontext's existing
+`kontext-command-risk-features/2` training extractor. Serving extractor
+`kontext-command-risk-features/2.1` corrects asynchronous condition status; the
+frozen weights, artifact hash and threshold are unchanged. Both use Kontext's existing
 `mvdan.cc/sh/v3` Bash parser dependency. Parsing is inert: no command execution,
 variable expansion, environment lookup, filesystem access, or network access.
 The extractor and scorer are imported from the evaluated research implementation;
@@ -44,12 +46,24 @@ Failure modes to exercise:
 Tests pass command strings only as inert data. The original incident is a
 regression check only; no fitting or threshold selection is part of this change.
 
+Review corrections are checked for missing Codex aliases, explicit PowerShell
+exclusion, false/invalid environment values, and asynchronous condition status.
+Background lists have success status independently of the child command's exit
+code (GNU Bash manual, Lists of Commands); negation inside a background job must
+not invert that list status. Cover then/else and while/until conditions using
+inert AST fixtures. Any semantic correction gets an extractor version and a
+paired replay against the frozen implementation before claiming compatibility.
+
 ## Serving and rollout
 
 The model is embedded compressed, checked against its frozen SHA-256, decoded
 once per process and scored in Go. There is no additional inference service.
 Existing Kestrel remains enabled if Impact is unavailable. Set
 `KONTEXT_KESTREL_IMPACT_ENABLED=false` before starting Guard to disable Impact.
+Boolean values are trimmed and case-insensitive: false/f/0/off/no disable it;
+true/t/1/on/yes enable it. Unset or blank retains the enabled default. An invalid
+nonempty value disables only Impact and emits a startup warning without the raw
+value. Existing Kestrel and authorization continue unchanged.
 
 Annotations persist separately from the legacy SVM score, with model/extractor
 versions, source artifact hash, status, margin, threshold, verdict and
@@ -66,3 +80,20 @@ Evaluate alert volume per session as well as per call. Review capability labels
 (`consequential`, `clear false alert`, `uncertain`) separately from existing
 Kestrel allow/block feedback. Retain the 0.5% setting for offline comparison;
 the serving threshold is fixed to the approved 1% setting.
+
+## Extractor 2.1 compatibility
+
+Bash background condition lists return success rather than their eventual child
+exit status, including negated jobs. See the [GNU Bash reference manual](https://www.gnu.org/s/bash/manual/html_node/Lists.html).
+The serving correction is explicitly versioned as `kontext-command-risk-features/2.1`;
+the artifact loader still pins the frozen training extractor contract `/2`.
+No weights, vocabulary, normalization, fitting data or threshold were changed.
+
+`model/impact.compatibility.json` records an exact paired comparison of structural
+features and scores against the pre-fix implementation: 11,640 fitting, 2,156
+calibration, 1,548 held-out test, 11,853 unique staging, and 16 regression rows.
+All 27,213 are unchanged; thus the original fit and calibration remain compatible.
+This is a regression/compatibility check, not a new independent performance claim.
+Twenty-eight inert background-condition cases separately check then/else,
+while/until, negation, arithmetic, tests and redirection. Corpus commands were
+never executed.

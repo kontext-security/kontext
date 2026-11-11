@@ -1,7 +1,7 @@
 {
   "name": "Kestrel Impact",
   "model_version": "command-risk-process/9-P_process",
-  "extractor_version": "kontext-command-risk-features/2",
+  "extractor_version": "kontext-command-risk-features/2.1",
   "source_model_sha256": "7105b32a4ce7c98f9efa1cba414d4f285f27c44d71137cef4829b045310b5e0d",
   "parser": "mvdan.cc/sh/v3@v3.13.1",
   "threshold_setting": "one_percent",
@@ -17,6 +17,9 @@
   },
   "port_changes": [
     "Go package renamed to impactfeatures",
-    "File-based loader replaced by byte-based loader; score and feature semantics unchanged."
-  ]
+    "File-based loader replaced by byte-based loader; frozen model weights and threshold unchanged.",
+    "Serving extractor 2.1 corrects Bash asynchronous condition-list status and hoists constant regexes. All 27,213 existing corpus rows retain identical structural features, scores and alert decisions; see compatibility receipt."
+  ],
+  "training_extractor_version": "kontext-command-risk-features/2",
+  "compatibility_receipt": "impact.compatibility.json"
 }

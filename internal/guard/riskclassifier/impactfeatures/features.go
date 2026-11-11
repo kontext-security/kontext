@@ -15,7 +15,10 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-const Version = "kontext-command-risk-features/2"
+// TrainingVersion pins the unchanged frozen artifact. Version identifies the
+// serving semantics, including the asynchronous-list correction in 2.1.
+const TrainingVersion = "kontext-command-risk-features/2"
+const Version = "kontext-command-risk-features/2.1"
 const MaxCommandBytes = 64 * 1024
 const maxNodes = 10000
 const maxDepth = 128

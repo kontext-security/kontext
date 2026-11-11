@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -169,7 +170,7 @@ func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 	operations, operationErr := riskclassifier.LoadOperationModel()
 	var impact *riskclassifier.ImpactModel
 	var impactErr error
-	if !strings.EqualFold(strings.TrimSpace(os.Getenv("KONTEXT_KESTREL_IMPACT_ENABLED")), "false") {
+	if impactPilotEnabled(os.Getenv("KONTEXT_KESTREL_IMPACT_ENABLED")) {
 		impact, impactErr = riskclassifier.LoadImpactModel()
 	}
 	riskTypeError := ""
@@ -195,6 +196,27 @@ func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 		// silently break this, with no failing test in that diff.
 		Redact: redactEvidence,
 	})
+}
+
+// Invalid nonempty settings disable only the advisory pilot. Never log the raw
+// environment value: a misconfigured deployment could have put a secret there.
+func impactPilotEnabled(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return true
+	}
+	switch value {
+	case "on", "yes":
+		value = "true"
+	case "off", "no":
+		value = "false"
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		slog.Warn("Kestrel Impact disabled: unrecognized KONTEXT_KESTREL_IMPACT_ENABLED setting")
+		return false
+	}
+	return enabled
 }
 
 func (s *Server) Handler() http.Handler {

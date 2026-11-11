@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kontext-security/kontext/internal/guard/riskclassifier/impactfeatures"
 )
 
 // The golden predictions come from the frozen research binary, not this port.
@@ -42,7 +44,7 @@ func TestImpactFrozenResearchParity(t *testing.T) {
 		t.Run(row.ID, func(t *testing.T) {
 			got := m.Classify(row.Command)
 			want := row.Expected.Prediction
-			if got.Status != want.Status || got.Enforced || got.Threshold != ImpactThreshold || got.ModelSHA256 != ImpactModelSHA256 {
+			if got.Status != want.Status || got.Enforced || got.Threshold != ImpactThreshold || got.ModelSHA256 != ImpactModelSHA256 || got.ExtractorVersion != impactfeatures.Version {
 				t.Fatalf("metadata mismatch: %+v", got)
 			}
 			if want.Score == nil {
@@ -78,7 +80,7 @@ func TestImpactIndependentShellAnnotationAndFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := NewClassifier(ClassifierOptions{SVM: svm, Impact: m, Redact: func(s string) string { return s }})
-	for _, tool := range []string{"Bash", "exec_command", "functions.exec_command"} {
+	for _, tool := range []string{"Bash", "exec_command", "functions.exec_command", "unified_exec", "local_shell", " LOCAL_SHELL "} {
 		v := c.Classify(context.Background(), "session", tool, `pkill -f "apps/web/server.js"`)
 		if v.Impact == nil || v.Impact.Verdict != "flagged" {
 			t.Fatalf("%s missing independent impact flag: %+v", tool, v)
@@ -87,7 +89,7 @@ func TestImpactIndependentShellAnnotationAndFailure(t *testing.T) {
 			t.Fatalf("fixture must exercise an Impact-only alert: %+v", v)
 		}
 	}
-	for _, tool := range []string{"apply_patch", "Read", "mcp__search"} {
+	for _, tool := range []string{"apply_patch", "Read", "mcp__search", "powershell", "pwsh", "not_a_shell"} {
 		if c.Classify(context.Background(), "session", tool, "pkill -x unbound").Impact != nil {
 			t.Fatalf("non-shell %s classified", tool)
 		}

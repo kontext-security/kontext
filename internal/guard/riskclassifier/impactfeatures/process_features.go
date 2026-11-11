@@ -16,6 +16,8 @@ type processPass struct {
 
 var intText = regexp.MustCompile(`^[+-]?(0|[1-9][0-9]*)$`)
 var compareText = regexp.MustCompile(`^([+-]?(?:0|[1-9][0-9]*))\s*(==|!=|<=|>=|<|>|-eq|-ne|-lt|-le|-gt|-ge)\s*([+-]?(?:0|[1-9][0-9]*))$`)
+var testCompareText = regexp.MustCompile(`^([+-]?(?:0|[1-9][0-9]*))\s+(==|!=|<=|>=|<|>|-eq|-ne|-lt|-le|-gt|-ge)\s+([+-]?(?:0|[1-9][0-9]*))$`)
+var commLiteral = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func constantText(s string) int {
 	s = strings.TrimSpace(s)
@@ -37,7 +39,7 @@ func constantText(s string) int {
 	}
 	m := compareText.FindStringSubmatch(s)
 	if testForm {
-		m = regexp.MustCompile(`^([+-]?(?:0|[1-9][0-9]*))\s+(==|!=|<=|>=|<|>|-eq|-ne|-lt|-le|-gt|-ge)\s+([+-]?(?:0|[1-9][0-9]*))$`).FindStringSubmatch(s)
+		m = testCompareText.FindStringSubmatch(s)
 	}
 	if m == nil {
 		return 0
@@ -84,7 +86,15 @@ func constantText(s string) int {
 	return -1
 }
 func constantStmt(source string, s *syntax.Stmt, blocked bool) int {
-	if s == nil || len(s.Redirs) > 0 {
+	if s == nil {
+		return 0
+	}
+	// Bash returns success for the asynchronous list, not the background
+	// command's eventual status. This also applies when that job is negated.
+	if s.Background {
+		return 1
+	}
+	if len(s.Redirs) > 0 {
 		return 0
 	}
 	v := 0
@@ -731,7 +741,7 @@ func (p *processPass) facts(mode, utility string, ws []string, ks []bool) {
 		}
 		v := ws[i]
 		plain := strings.TrimSuffix(strings.TrimPrefix(v, "^"), "$")
-		if !full && (utility == "pkill" || utility == "pgrep" || utility == "pidwait") && regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(plain) && len(plain) > 15 {
+		if !full && (utility == "pkill" || utility == "pgrep" || utility == "pidwait") && commLiteral.MatchString(plain) && len(plain) > 15 {
 			add("pattern=linux_comm_literal_over15")
 		}
 		if utility == "kill" {

@@ -73,3 +73,24 @@ func TestGuardEvidenceIsConservative(t *testing.T) {
 		}
 	}
 }
+
+// Bash asynchronous lists return success independently of the child result.
+// No shell is spawned: these are inert syntax/feature regressions only.
+func TestBackgroundConditionsUseListStatus(t *testing.T) {
+	for _, condition := range []string{"false", "true", "! true", "! false", "((0))", "[[ 1 -eq 2 ]]", "false >/missing"} {
+		for _, shellCase := range []struct{ command, mode string }{
+			{"if " + condition + " & then pkill -x daemon-zeta; fi", "executed"},
+			{"if " + condition + " & then :; else pkill -x daemon-zeta; fi", "unreachable"},
+			{"while " + condition + " & do pkill -x daemon-zeta; break; done", "executed"},
+			{"until " + condition + " & do pkill -x daemon-zeta; break; done", "unreachable"},
+		} {
+			f := Extract(shellCase.command)
+			if f.Status != "parsed" {
+				t.Fatalf("invalid fixture %q: %s", shellCase.command, f.Status)
+			}
+			if f.Structure["process/"+shellCase.mode+"/utility=pkill"] != 1 {
+				t.Errorf("wrong context for %q: %v", shellCase.command, f.Structure)
+			}
+		}
+	}
+}

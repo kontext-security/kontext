@@ -67,11 +67,29 @@ func TestKestrelImpactAdvisoryHookToSignedFact(t *testing.T) {
 }
 
 func TestKestrelImpactPilotCanBeDisabled(t *testing.T) {
-	t.Setenv("KONTEXT_KESTREL_IMPACT_ENABLED", "false")
-	s, _ := newClassifierServer(t)
-	defer s.Close()
-	v := s.classifier.Classify(context.Background(), "session", "Bash", "pkill -x unbound")
-	if v.Impact != nil || v.SVM == nil {
-		t.Fatalf("Impact kill switch affects existing Kestrel: %+v", v)
+	for _, value := range []string{"false", "FALSE", " FaLsE ", "0", "off", " OFF ", "no", "No", "f", "invalid-value"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("KONTEXT_KESTREL_IMPACT_ENABLED", value)
+			s, _ := newClassifierServer(t)
+			defer s.Close()
+			v := s.classifier.Classify(context.Background(), "session", "Bash", "pkill -x unbound")
+			if v.Impact != nil || v.SVM == nil {
+				t.Fatalf("Impact kill switch affects existing Kestrel: %+v", v)
+			}
+		})
+	}
+}
+
+func TestKestrelImpactPilotEnabledValues(t *testing.T) {
+	for _, value := range []string{"", " ", "true", " TrUe ", "1", "t", "on", "YES"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("KONTEXT_KESTREL_IMPACT_ENABLED", value)
+			s, _ := newClassifierServer(t)
+			defer s.Close()
+			v := s.classifier.Classify(context.Background(), "session", "Bash", "pkill -x unbound")
+			if v.Impact == nil || v.SVM == nil {
+				t.Fatal("enabled/default pilot missing a classifier")
+			}
+		})
 	}
 }

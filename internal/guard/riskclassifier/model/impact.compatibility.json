@@ -1,0 +1,56 @@
+{
+  "training_extractor_version": "kontext-command-risk-features/2",
+  "serving_extractor_version": "kontext-command-risk-features/2.1",
+  "frozen_model_sha256": "7105b32a4ce7c98f9efa1cba414d4f285f27c44d71137cef4829b045310b5e0d",
+  "threshold": 1.1957946473415046,
+  "new_fitting_or_calibration": false,
+  "summary": {
+    "training": {
+      "rows": 11640,
+      "changed_structure": 0,
+      "changed_score": 0,
+      "changed_status": 0,
+      "changed_alert": 0,
+      "max_absolute_score_difference": 0
+    },
+    "calibration": {
+      "rows": 2156,
+      "changed_structure": 0,
+      "changed_score": 0,
+      "changed_status": 0,
+      "changed_alert": 0,
+      "max_absolute_score_difference": 0
+    },
+    "test": {
+      "rows": 1548,
+      "changed_structure": 0,
+      "changed_score": 0,
+      "changed_status": 0,
+      "changed_alert": 0,
+      "max_absolute_score_difference": 0
+    },
+    "staging": {
+      "rows": 11853,
+      "changed_structure": 0,
+      "changed_score": 0,
+      "changed_status": 0,
+      "changed_alert": 0,
+      "max_absolute_score_difference": 0
+    },
+    "regression": {
+      "rows": 16,
+      "changed_structure": 0,
+      "changed_score": 0,
+      "changed_status": 0,
+      "changed_alert": 0,
+      "max_absolute_score_difference": 0
+    }
+  },
+  "changed_rows": [],
+  "comparison_source_sha256": "e144eaecd4fdeb687abc8a3d39afd8067de53e19d37a248fa7bd4b35e22c1ddf",
+  "serving_source_sha256": {
+    "internal/guard/riskclassifier/impactfeatures/process_features.go": "fd15d738e157f0ddf75c1f1620470f14e5d1bb203dc6dbd8501654fa80faacfe",
+    "internal/guard/riskclassifier/impactfeatures/features.go": "4e06708aabeac0b00691d6121ac5f95dee2baa10b2c98c2b608fa361ece660b7",
+    "internal/guard/riskclassifier/impactfeatures/scorer.go": "0f758bfa8222c0af768e772687aa2115a038a7b79498b462be8c7238caae7753"
+  }
+}

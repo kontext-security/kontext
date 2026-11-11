@@ -36,7 +36,7 @@ func LoadModelBytes(b []byte) (*Model, error) {
 	if err = json.Unmarshal(b, &m); err != nil {
 		return nil, err
 	}
-	if m.Schema != "kontext-command-risk-linear/1" || m.ExtractorVersion != Version || m.Version == "" {
+	if m.Schema != "kontext-command-risk-linear/1" || m.ExtractorVersion != TrainingVersion || m.Version == "" {
 		return nil, fmt.Errorf("unsupported artifact contract")
 	}
 	for j, x := range []Block{m.Characters, m.Tokens, m.Structure} {
