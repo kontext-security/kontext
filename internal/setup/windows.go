@@ -95,11 +95,16 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 		fmt.Fprintf(opts.Stdout, "  ✓ Connected to %s (workspace key, no person attached)\n", workspace)
 	}
 
-	// From here on the run writes. What it wrote is taken back if a later
-	// step fails, so a failed setup leaves no half-installed agent behind.
+	// From here on the run writes. On a first install, what it wrote is
+	// taken back if a later step fails, so a failed setup leaves no
+	// half-installed agent behind. Over an existing install nothing is taken
+	// back: its key, config, hooks and sign-in entry were there before this
+	// run and are what keeps the machine connected.
+	_, statErr := os.Stat(slot.ConfigPath)
+	firstInstall := errors.Is(statErr, os.ErrNotExist)
 	var undo []func()
 	defer func() {
-		if retErr == nil {
+		if retErr == nil || !firstInstall {
 			return
 		}
 		for i := len(undo) - 1; i >= 0; i-- {
@@ -138,8 +143,11 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 		return fmt.Errorf("start the background agent: %w", err)
 	}
 	fmt.Fprintln(opts.Stdout, "  ✓ Background agent starts at sign-in")
+	// The install is in place and the daemon is starting. One that is slow to
+	// answer is no reason to take its key and config away under it.
+	undo = nil
 	if err := waitForDaemon(ctx, opts.Stdout); err != nil {
-		return fmt.Errorf("the background agent did not come up: %w; `kontext doctor` shows why", err)
+		return fmt.Errorf("setup is written, but the background agent has not answered yet: %w; `kontext doctor` shows its state", err)
 	}
 
 	fmt.Fprintln(opts.Stdout, "\nNext")

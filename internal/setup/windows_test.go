@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/hookinstall"
@@ -214,5 +215,53 @@ func TestRunWindowsNeedsTheDaemonBesideTheCLI(t *testing.T) {
 func TestAutostartCommandQuotesTheProgram(t *testing.T) {
 	if got, want := autostartCommand(`C:\Program Files\Kontext\kontextw.exe`), `"C:\Program Files\Kontext\kontextw.exe" managed-observe-daemon`; got != want {
 		t.Fatalf("autostartCommand = %q, want %q", got, want)
+	}
+}
+
+// A setup over an existing install that fails part way leaves that install
+// as it was: nothing of it is taken back.
+func TestRunWindowsLeavesAnExistingInstallWhenARerunFails(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	server := pingServer(t, "tok")
+	if err := Run(context.Background(), h.options("tok", server)); err != nil {
+		t.Fatalf("first Run() = %v", err)
+	}
+	run.failAt = "autostart"
+	if err := Run(context.Background(), h.options("tok", server)); err == nil {
+		t.Fatal("second Run() = nil, want the step's failure")
+	}
+	if run.stored[WindowsCredentialName] != "tok" {
+		t.Errorf("the key was taken away: %v", run.stored)
+	}
+	if _, err := os.Stat(managedconfig.LegacyUserPath()); err != nil {
+		t.Errorf("the config was taken away: %v", err)
+	}
+	if run.autostart != run.daemon {
+		t.Errorf("the sign-in entry was taken away: %q", run.autostart)
+	}
+	if run.hooksGone != 0 {
+		t.Errorf("the hooks were removed %d times", run.hooksGone)
+	}
+}
+
+// A daemon that is slow to answer keeps what setup wrote for it.
+func TestRunWindowsKeepsTheInstallWhenTheDaemonIsSlow(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	overrideVar(t, &dialSocket, func(string, time.Duration) error { return errors.New("not listening yet") })
+	overrideVar(t, &daemonStartWait, time.Millisecond)
+	server := pingServer(t, "tok")
+	err := Run(context.Background(), h.options("tok", server))
+	if err == nil || !strings.Contains(err.Error(), "has not answered yet") {
+		t.Fatalf("Run() = %v, want it to say the agent has not answered yet", err)
+	}
+	if run.stored[WindowsCredentialName] != "tok" || run.autostart != run.daemon || run.hooksGone != 0 {
+		t.Errorf("the install was taken back: key %v, autostart %q, hooks removed %d", run.stored, run.autostart, run.hooksGone)
+	}
+	if _, err := os.Stat(managedconfig.LegacyUserPath()); err != nil {
+		t.Errorf("the config was taken away: %v", err)
 	}
 }
