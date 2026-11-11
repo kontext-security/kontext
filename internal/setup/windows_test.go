@@ -12,6 +12,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/hookinstall"
+	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 )
 
@@ -27,6 +28,8 @@ type windowsRun struct {
 	daemon     string
 	failAt     string
 	storeError error
+	stops      int
+	delError   error
 }
 
 func newWindowsRun(t *testing.T, h *harness) *windowsRun {
@@ -53,7 +56,17 @@ func newWindowsRun(t *testing.T, h *harness) *windowsRun {
 		run.stored[name] = secret
 		return nil
 	})
-	overrideVar(t, &deleteWindowsToken, func(name string) error { delete(run.stored, name); return nil })
+	overrideVar(t, &deleteWindowsToken, func(name string) error {
+		if run.delError != nil {
+			return run.delError
+		}
+		if _, ok := run.stored[name]; !ok {
+			return credstore.ErrNotFound
+		}
+		delete(run.stored, name)
+		return nil
+	})
+	overrideVar(t, &stopWindowsDaemon, func() error { run.stops++; return nil })
 	overrideVar(t, &installWindowsHooks, func(opts hookinstall.Options) error {
 		if run.failAt == "hooks" {
 			return errors.New("hooks failed")
@@ -263,5 +276,91 @@ func TestRunWindowsKeepsTheInstallWhenTheDaemonIsSlow(t *testing.T) {
 	}
 	if _, err := os.Stat(managedconfig.LegacyUserPath()); err != nil {
 		t.Errorf("the config was taken away: %v", err)
+	}
+}
+
+// The old daemon holds the old key and the socket, so a setup over an
+// existing install ends it before it starts the new one. A first install has
+// none to end.
+func TestRunWindowsRestartsTheDaemonOnARerun(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	server := pingServer(t, "tok")
+	if err := Run(context.Background(), h.options("tok", server)); err != nil {
+		t.Fatalf("first Run() = %v", err)
+	}
+	if run.stops != 0 {
+		t.Fatalf("a first install stopped a daemon %d times", run.stops)
+	}
+	run.started = nil
+	if err := Run(context.Background(), h.options("tok", server)); err != nil {
+		t.Fatalf("second Run() = %v", err)
+	}
+	if run.stops != 1 || len(run.started) == 0 {
+		t.Fatalf("on the re-run the daemon was stopped %d times and started %q, want one stop and a start", run.stops, run.started)
+	}
+}
+
+func TestUninstallWindowsTakesBackWhatSetupWrote(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	server := pingServer(t, "tok")
+	opts := h.options("tok", server)
+	if err := Run(context.Background(), opts); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	identity, err := os.ReadFile(installation.LegacyUserPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	opts.Stdout = &out
+	if err := Uninstall(context.Background(), opts); err != nil {
+		t.Fatalf("Uninstall() = %v\n%s", err, out.String())
+	}
+	if len(run.stored) != 0 {
+		t.Errorf("the key is still stored: %v", run.stored)
+	}
+	if _, err := os.Stat(managedconfig.LegacyUserPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the config is still there: %v", err)
+	}
+	if run.autostart != "" || run.hooksGone != 1 || run.stops != 1 {
+		t.Errorf("autostart %q, hooks removed %d times, daemon stopped %d times; want none, 1, 1", run.autostart, run.hooksGone, run.stops)
+	}
+	if kept, err := os.ReadFile(installation.LegacyUserPath()); err != nil || string(kept) != string(identity) {
+		t.Errorf("the installation identity was not kept as it was: %v", err)
+	}
+	// A second uninstall finds nothing and still succeeds.
+	if err := Uninstall(context.Background(), opts); err != nil {
+		t.Fatalf("second Uninstall() = %v", err)
+	}
+	if run.stops != 1 {
+		t.Errorf("an uninstall without a user install stopped a daemon (%d stops)", run.stops)
+	}
+}
+
+// A session without a credential store can't remove the key. Uninstall says
+// so and takes nothing else away.
+func TestUninstallWindowsStopsBeforeAnythingWhenTheSessionHasNoStore(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	server := pingServer(t, "tok")
+	opts := h.options("tok", server)
+	if err := Run(context.Background(), opts); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	run.delError = credstore.ErrNoLogonSession
+	err := Uninstall(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "desktop session") {
+		t.Fatalf("Uninstall() = %v, want it to send the user to a desktop session", err)
+	}
+	if run.autostart != run.daemon || run.hooksGone != 0 || run.stops != 0 {
+		t.Errorf("uninstall went on: autostart %q, hooks removed %d, stops %d", run.autostart, run.hooksGone, run.stops)
+	}
+	if _, err := os.Stat(managedconfig.LegacyUserPath()); err != nil {
+		t.Errorf("the config was removed: %v", err)
 	}
 }

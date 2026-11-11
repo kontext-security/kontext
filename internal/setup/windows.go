@@ -12,6 +12,7 @@ import (
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
 // WindowsCredentialName is the entry in the user's Windows credential store
@@ -32,6 +33,15 @@ var (
 	installWindowsHooks = hookinstall.Install
 	removeWindowsHooks  = hookinstall.Remove
 	userHome            = os.UserHomeDir
+	// stopWindowsDaemon ends the user's running daemon, found through its
+	// status file; no daemon is not an error.
+	stopWindowsDaemon = func() error {
+		status := managedobserve.LoadDaemonStatus(managedobserve.DefaultDBPath())
+		if status == nil || status.PID <= 0 {
+			return nil
+		}
+		return stopProcess(status.PID)
+	}
 )
 
 // runWindows is setup for one user of a Windows machine, without administrator
@@ -139,6 +149,13 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 		return fmt.Errorf("register the background agent to start at sign-in: %w", err)
 	}
 	undo = append(undo, func() { _ = delWindowsAutostart() })
+	// Over an existing install the old daemon still holds the old key and the
+	// socket, and a second one would give way to it: end it first.
+	if !firstInstall {
+		if err := stopWindowsDaemon(); err != nil {
+			return fmt.Errorf("stop the running background agent: %w", err)
+		}
+	}
 	if err := startWindowsDaemon(daemon, "managed-observe-daemon"); err != nil {
 		return fmt.Errorf("start the background agent: %w", err)
 	}
@@ -162,4 +179,68 @@ func deviceLabelWindows() string {
 		return ""
 	}
 	return host
+}
+
+// uninstallWindows takes back what runWindows wrote for this user: the
+// sign-in entry, the running daemon, Claude Code's user hooks, the key in the
+// credential store and the config. Every step tolerates what is already
+// gone, so it can be run again.
+//
+// Kept: the installation identity, so a later setup reports the same endpoint
+// (on Windows a machine-wide install uses the same file, which is one more
+// reason to leave it); the local records; the programs.
+func uninstallWindows(_ context.Context, opts Options) error {
+	slot, err := legacyTarget()
+	if err != nil {
+		return err
+	}
+	home, err := userHome()
+	if err != nil {
+		return fmt.Errorf("cannot resolve your home directory: %w", err)
+	}
+	fmt.Fprintln(opts.Stdout, "Kontext uninstall")
+	if _, err := os.Lstat(systemConfigPath); err == nil {
+		fmt.Fprintf(opts.Stderr, "This machine is also managed by your organization (%s); that install stays and keeps reporting.\n", systemConfigPath)
+	}
+
+	// The key first: a session without a credential store can't remove it,
+	// and then nothing else is taken away either.
+	switch err := deleteWindowsToken(WindowsCredentialName); {
+	case err == nil:
+		fmt.Fprintln(opts.Stdout, "  ✓ Install key removed from Windows Credential Manager")
+	case errors.Is(err, credstore.ErrNotFound):
+	case errors.Is(err, credstore.ErrNoLogonSession):
+		return errors.New("this session has no Windows credential store, so the install key can't be removed: run `kontext setup --uninstall` in a desktop session, not over SSH with a key")
+	default:
+		return fmt.Errorf("remove the install key: %w", err)
+	}
+
+	if err := delWindowsAutostart(); err != nil {
+		return fmt.Errorf("remove the sign-in entry: %w", err)
+	}
+	fmt.Fprintln(opts.Stdout, "  ✓ Background agent no longer starts at sign-in")
+	// Only a user install's daemon is ours to end; a machine-wide install runs
+	// its own for this user.
+	if _, err := os.Stat(slot.ConfigPath); err == nil {
+		if err := stopWindowsDaemon(); err != nil {
+			return fmt.Errorf("stop the background agent: %w", err)
+		}
+		fmt.Fprintln(opts.Stdout, "  ✓ Background agent stopped")
+	}
+	binary, _ := StableBinaryPath()
+	if err := removeWindowsHooks(hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary, Out: opts.Stdout}); err != nil {
+		return fmt.Errorf("remove the Claude Code hooks: %w", err)
+	}
+	if err := os.Remove(slot.ConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove the config: %w", err)
+	}
+	fmt.Fprintf(opts.Stdout, "  ✓ Config removed: %s\n", slot.ConfigPath)
+
+	fmt.Fprintln(opts.Stdout, "\nKept")
+	if _, err := os.Lstat(slot.IdentityPath); err == nil {
+		fmt.Fprintf(opts.Stdout, "  • Installation identity (%s)\n", slot.IdentityPath)
+	}
+	fmt.Fprintf(opts.Stdout, "  • Local records and logs under %s\n", filepath.Dir(slot.ConfigPath))
+	fmt.Fprintln(opts.Stdout, "  • The kontext programs")
+	return nil
 }
