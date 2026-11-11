@@ -146,6 +146,7 @@ func advisoryClassifier(decision risk.RiskDecision) *ledgerfact.Classifier {
 	}
 	classifier := ledgerfact.Classifier{
 		CommandTruncated: annotation.CommandTruncated,
+		Impact:           annotation.Impact,
 		SVM: &ledgerfact.ClassifierSVM{
 			Verdict:      annotation.SVM.Verdict,
 			Score:        annotation.SVM.Score,

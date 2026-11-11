@@ -350,6 +350,7 @@ func (r guardHookRuntime) annotate(ctx context.Context, event risk.HookEvent, de
 		return
 	}
 	annotation := &risk.ClassifierAnnotation{
+		Impact:           verdicts.Impact,
 		RiskTypeError:    verdicts.RiskTypeError,
 		Command:          verdicts.Command,
 		CommandHash:      verdicts.CommandHash,
@@ -390,6 +391,7 @@ func (r guardHookRuntime) recordAnnotation(ctx context.Context, actionID string,
 		CommandHash:      annotation.CommandHash,
 		CommandTruncated: annotation.CommandTruncated,
 		AgentTask:        annotation.AgentTask,
+		Impact:           annotation.Impact,
 		RiskTypeError:    annotation.RiskTypeError,
 		SVM: &riskclassifier.SVMVerdict{
 			Verdict:      annotation.SVM.Verdict,

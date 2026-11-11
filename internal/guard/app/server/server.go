@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -70,7 +72,7 @@ type Options struct {
 	DeferRecord func(job func(context.Context) error) error
 }
 
-// RiskClassifierOptions enables the embedded binary and risk-type SVMs.
+// RiskClassifierOptions enables Kestrel and its independent advisory models.
 type RiskClassifierOptions struct{}
 
 // ClassifierFeedbackRequest is the dashboard's ground-truth label for one
@@ -166,6 +168,11 @@ func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 	}
 	riskTypes, riskTypeErr := riskclassifier.LoadRiskTypeSVM()
 	operations, operationErr := riskclassifier.LoadOperationModel()
+	var impact *riskclassifier.ImpactModel
+	var impactErr error
+	if impactPilotEnabled(os.Getenv("KONTEXT_KESTREL_IMPACT_ENABLED")) {
+		impact, impactErr = riskclassifier.LoadImpactModel()
+	}
 	riskTypeError := ""
 	if riskTypeErr != nil {
 		// The binary SVM remains useful and continues running. Retain the error
@@ -174,6 +181,8 @@ func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 	}
 	return riskclassifier.NewClassifier(riskclassifier.ClassifierOptions{
 		SVM:            svm,
+		Impact:         impact,
+		ImpactError:    impactErr != nil,
 		Operations:     operations,
 		OperationError: operationErr != nil,
 		RiskTypes:      riskTypes,
@@ -187,6 +196,27 @@ func newRiskClassifier(opts *RiskClassifierOptions) *riskclassifier.Classifier {
 		// silently break this, with no failing test in that diff.
 		Redact: redactEvidence,
 	})
+}
+
+// Invalid nonempty settings disable only the advisory pilot. Never log the raw
+// environment value: a misconfigured deployment could have put a secret there.
+func impactPilotEnabled(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return true
+	}
+	switch value {
+	case "on", "yes":
+		value = "true"
+	case "off", "no":
+		value = "false"
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		slog.Warn("Kestrel Impact disabled: unrecognized KONTEXT_KESTREL_IMPACT_ENABLED setting")
+		return false
+	}
+	return enabled
 }
 
 func (s *Server) Handler() http.Handler {

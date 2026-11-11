@@ -1,0 +1,25 @@
+{
+  "name": "Kestrel Impact",
+  "model_version": "command-risk-process/9-P_process",
+  "extractor_version": "kontext-command-risk-features/2.1",
+  "source_model_sha256": "7105b32a4ce7c98f9efa1cba414d4f285f27c44d71137cef4829b045310b5e0d",
+  "parser": "mvdan.cc/sh/v3@v3.13.1",
+  "threshold_setting": "one_percent",
+  "threshold": 1.1957946473415046,
+  "calibration_fpr_budget": 0.01,
+  "enforced": false,
+  "research_source_sha256": {
+    "features.go": "033b9aa6769d77a862085a022ae66e0dd70a70ac2acede3c1f47cb4018d98d5d",
+    "process_features.go": "05dd4e687282f5caf58a05f50c398bf9f1d151e00fd627bdc329ef3607893833",
+    "scorer.go": "5208cc81b9a81fee7b92556e73e0705dd055bd9d2e1d981c1f0c8166c7807669",
+    "features_test.go": "33dfa4c137c2f11e6a1215cf0e75c1343104dd9e8847a5301e36f73eeca9e143",
+    "process_features_test.go": "20468964d23ed5e3b6e872537f47b55bb8a375e92258b66a9b0f12967e76910b"
+  },
+  "port_changes": [
+    "Go package renamed to impactfeatures",
+    "File-based loader replaced by byte-based loader; frozen model weights and threshold unchanged.",
+    "Serving extractor 2.1 corrects Bash asynchronous condition-list status and hoists constant regexes. All 27,213 existing corpus rows retain identical structural features, scores and alert decisions; see compatibility receipt."
+  ],
+  "training_extractor_version": "kontext-command-risk-features/2",
+  "compatibility_receipt": "impact.compatibility.json"
+}

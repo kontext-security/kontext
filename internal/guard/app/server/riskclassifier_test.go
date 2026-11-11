@@ -460,6 +460,9 @@ func TestCedarEnforceDenyIsStillAnnotated(t *testing.T) {
 	if record.SVM == nil {
 		t.Fatalf("denied action has no svm verdict: %+v", record)
 	}
+	if record.Impact == nil || record.Impact.Enforced {
+		t.Fatalf("denied Cedar action lost its independent advisory Impact annotation: %+v", record)
+	}
 }
 
 // A denied call still gets an SVM annotation.

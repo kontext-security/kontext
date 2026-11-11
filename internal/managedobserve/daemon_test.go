@@ -462,13 +462,16 @@ func TestDaemonServesHooksWhileAnnotationRewriteRuns(t *testing.T) {
 	}()
 	t.Cleanup(func() {
 		cancel()
+		// Deferred records may use the full stop budget on Windows ARM64.
+		// Keep the one-second hook-response assertion below unchanged.
+		shutdownWait := daemonStopBudget + stopGrace
 		select {
 		case err := <-errCh:
 			if err != nil {
 				t.Fatalf("RunDaemon() error = %v", err)
 			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("RunDaemon did not stop")
+		case <-time.After(shutdownWait):
+			t.Fatalf("RunDaemon did not stop within its shutdown budget (%s)", shutdownWait)
 		}
 	})
 	waitForSocket(t, socketPath, errCh)

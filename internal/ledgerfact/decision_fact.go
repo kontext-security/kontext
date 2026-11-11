@@ -69,7 +69,8 @@ type Risk struct {
 // final and nothing consults it. Field names are the shared ingest contract and
 // must not be renamed on either side of the mirror.
 type Classifier struct {
-	SVM *ClassifierSVM `json:"svm"`
+	SVM    *ClassifierSVM    `json:"svm"`
+	Impact *ClassifierImpact `json:"impact,omitempty"`
 	// Legacy fields are not omitempty in the signed contract; new facts emit null.
 	LLM      *ClassifierLLM `json:"llm"`
 	LLMError *string        `json:"llm_error"`
@@ -543,6 +544,7 @@ func (fact DecisionFact) validateClassifier(invalid func(string, ...any)) {
 	if classifier == nil {
 		return
 	}
+	validateImpact(classifier.Impact, invalid)
 	if classifier.LLMError != nil && *classifier.LLMError == "" {
 		invalid("classifier.llm_error must be null or non-empty")
 	}
