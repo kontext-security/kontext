@@ -47,6 +47,30 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// storeDirThatMayStayOpen is a folder for the store of a daemon that may run
+// out of its stop budget. It then returns with writes still under way and
+// the store open, and Windows can't remove a folder that holds an open file,
+// which fails a test that keeps the store in t.TempDir. This folder is
+// removed once that works and left to the temp folder's own cleanup if it
+// never does.
+func storeDirThatMayStayOpen(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "kontext-store-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		var err error
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			if err = os.RemoveAll(dir); err == nil {
+				return
+			}
+		}
+		t.Logf("left %s behind, the store in it is still open: %v", dir, err)
+	})
+	return dir
+}
+
 // holdStoreWriteLock keeps every writer of the store waiting, so answered hooks
 // pile up as records nobody has written yet. The returned func lets go.
 func holdStoreWriteLock(t *testing.T, path string) func() {
@@ -261,7 +285,7 @@ func TestRunDaemonStopsScoringToWriteABacklog(t *testing.T) {
 	daemonStopBudget = 6 * time.Second
 	t.Cleanup(func() { daemonStopBudget = previous })
 
-	fixture := newInstanceFixture(t)
+	fixture := newInstanceFixtureIn(t, storeDirThatMayStayOpen(t))
 	log := &syncBuffer{}
 	fixture.opts.Diagnostic = diagnostic.New(log, true)
 	model := &slowModel{}

@@ -42,6 +42,13 @@ func (l *stampedLog) Write(p []byte) (int, error) {
 
 func newInstanceFixture(t *testing.T) instanceFixture {
 	t.Helper()
+	return newInstanceFixtureIn(t, t.TempDir())
+}
+
+// newInstanceFixtureIn is newInstanceFixture with the daemon's store and
+// state in dir.
+func newInstanceFixtureIn(t *testing.T, dir string) instanceFixture {
+	t.Helper()
 	hermetic.Home(t)
 	// Windows keeps its state here, not under the home variables.
 	t.Setenv("LOCALAPPDATA", t.TempDir())
@@ -49,7 +56,6 @@ func newInstanceFixture(t *testing.T) instanceFixture {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	t.Cleanup(server.Close)
-	dir := t.TempDir()
 	socketPath := filepath.Join(hermetic.SocketDir(t), "kontext.sock")
 	dbPath := filepath.Join(dir, "guard.db")
 	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), server.URL)
@@ -58,8 +64,8 @@ func newInstanceFixture(t *testing.T) instanceFixture {
 	// shows it with times, so a daemon that hangs names where.
 	log := &stampedLog{start: time.Now()}
 	t.Cleanup(func() {
-		if t.Failed() {
-			t.Logf("the daemon logged:\n%s", log.String())
+		if logged := log.String(); t.Failed() && logged != "" {
+			t.Logf("the daemon logged:\n%s", logged)
 		}
 	})
 	return instanceFixture{dir: dir, socketPath: socketPath, dbPath: dbPath, log: log, opts: DaemonOptions{
