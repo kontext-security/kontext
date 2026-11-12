@@ -4,7 +4,7 @@
 # config in a temporary HOME against a local stand-in for the cloud, and checks
 # what a managed Mac needs for Antigravity, which reads no machine-wide hooks
 # file: the daemon writes the user's hooks, the inventory it sends reports the
-# agent wired, doctor flags a missing file, and removal leaves no hook behind.
+# agent wired, removal leaves no hook behind, and doctor flags a missing file.
 # macOS only. Needs no sudo and touches no real hook file.
 set -euo pipefail
 
@@ -146,22 +146,31 @@ done
 [[ "${wired}" == "yes" ]] || fail "inventory reports Antigravity wired=${wired:-<no inventory sent>}"
 echo "    antigravity wired=${wired}"
 
-echo "==> doctor flags an installed agent whose hooks are gone"
-kill "${DAEMON_PID}" && wait "${DAEMON_PID}" 2>/dev/null || true
+echo "==> package removal: root leaves the user's file alone, the daemon removes its hook as it stops"
+python3 - "${HOOKS}" <<'PY' # another tool's hook beside Kontext's
+import json, sys
+hooks = json.load(open(sys.argv[1]))
+hooks["other-tool"] = {"Stop": [{"type": "command", "command": "/usr/bin/true"}]}
+json.dump(hooks, open(sys.argv[1], "w"))
+PY
+"${BIN}" hooks remove --scope system --dry-run >"${WORK}/remove.txt"
+grep -F "${HOOKS}" "${WORK}/remove.txt" | sed 's/^/    root: /'
+grep -qF "skip	user	${HOOKS}	user-daemon" "${WORK}/remove.txt" || fail "root's removal plans to touch the user's file"
+# What root's removal does first: delete the package's machine-wide hooks.
+rm "${DROPIN}"
+kill -TERM "${DAEMON_PID}" && wait "${DAEMON_PID}" 2>/dev/null || true
 DAEMON_PID=""
+python3 - "${HOOKS}" <<'PY' || fail "the stopped daemon left Kontext's hook, or took the other tool's"
+import json, sys
+hooks = json.load(open(sys.argv[1]))
+assert "kontext" not in hooks and "other-tool" in hooks, hooks
+PY
+grep -h "managed hooks: removed" "${LOG}" | sed 's/^/    daemon: /'
+
+echo "==> doctor flags an installed agent whose hooks are gone"
 rm "${HOOKS}"
 "${BIN}" doctor >"${WORK}/doctor.txt" 2>&1 || true
 grep '^Antigravity hooks' "${WORK}/doctor.txt" | sed 's/^/    /'
 grep -qF "Antigravity hooks: missing (${HOOKS})" "${WORK}/doctor.txt" || fail "doctor does not flag the missing Antigravity hooks"
-
-echo "==> system removal drops Kontext's hook from the user's file and keeps the other tool's"
-printf '{"other-tool":{"Stop":[{"type":"command","command":"/usr/bin/true"}]}}\n' >"${HOOKS}"
-"${BIN}" hooks install --scope user --binary "${BIN}" >/dev/null # Kontext's hook beside another tool's
-# A real system removal needs root; this checks its plan for the per-user file.
-# internal/hookinstall's TestSystemRemovalCleansEveryHome runs the removal.
-"${BIN}" hooks remove --scope system --dry-run >"${WORK}/remove.txt"
-grep -F "${HOOKS}" "${WORK}/remove.txt" | sed 's/^/    /'
-grep -qF "would-write	user	${HOOKS}	owned" "${WORK}/remove.txt" || fail "system removal does not plan the per-user file"
-python3 -c 'import json,sys; assert "kontext" in json.load(open(sys.argv[1]))' "${HOOKS}" || fail "the dry run changed the file"
 
 echo "PASS"

@@ -1,11 +1,14 @@
 package managedobserve
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/antigravitymanaged"
@@ -93,15 +96,38 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 		t.Fatal("a second pass changed a complete file")
 	}
 	// Package removal deletes the machine-wide hooks first; from then on the
-	// daemon, still running until the remover stops it, adds nothing back.
-	if err := os.Remove(antigravitymanaged.UserHooksPath(home)); err != nil {
+	// daemon, still running until the remover stops it, removes the user's
+	// hooks and keeps another tool's entry. A drop-in naming another binary is
+	// unclear, and the daemon then changes nothing.
+	hooks := antigravitymanaged.UserHooksPath(home)
+	withForeign := strings.Replace(string(raw), "{", `{"other-tool":{"Stop":[{"type":"command","command":"/usr/bin/true"}]},`, 1)
+	if err := os.WriteFile(hooks, []byte(withForeign), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	other, err := claudemanaged.TemplateJSON(hermetic.KontextBinary(t, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dropIn, other, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if heal() {
+		t.Fatal("the daemon changed hooks while the package's hooks name another binary")
 	}
 	if err := os.Remove(dropIn); err != nil {
 		t.Fatal(err)
 	}
+	if !heal() {
+		t.Fatal("the daemon left its hook after the package's hooks were removed")
+	}
+	if left, err := os.ReadFile(hooks); err != nil || strings.Contains(string(left), `"kontext"`) || !strings.Contains(string(left), "other-tool") {
+		t.Fatalf("after removal: %s %v", left, err)
+	}
 	if heal() {
-		t.Fatal("the daemon re-added hooks after the package's hooks were removed")
+		t.Fatal("a second removal pass changed something")
+	}
+	if err := os.Remove(hooks); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(dropIn, template, 0o644); err != nil {
 		t.Fatal(err)
@@ -128,5 +154,77 @@ func TestEveryWiredAgentHasAnInventoryCheck(t *testing.T) {
 				t.Errorf("%s has hooks but no wiring check: add it to agentWiring in agent_inventory.go", def.Agent)
 			}
 		}
+	}
+}
+
+// The remover deletes the package's machine-wide hooks and then stops the
+// daemon, sooner than its next pass a minute later. The daemon removes the
+// user's hooks as it stops, before the binary they name is deleted.
+func TestManagedDaemonRemovesItsHooksAsItStops(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the daemon heals hooks on macOS only")
+	}
+	home := t.TempDir()
+	hermetic.SetHome(t, home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	state := filepath.Join(home, ".gemini", "antigravity", "state.json")
+	if err := os.MkdirAll(filepath.Dir(state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "managed.json")
+	if err := os.WriteFile(config, []byte(`{"version":"managed-install-v1","cloud_url":"https://api.kontext.dev","mode":"observe","agent":"claude","credentials":{"install_token_ref":"env:KONTEXT_INSTALL_TOKEN"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(managedconfig.EnvPath, config)
+	loaded, err := managedconfig.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := hermetic.KontextBinary(t, t.TempDir())
+	previousBinary, previousExe := managedHookBinary, executablePath
+	managedHookBinary, executablePath = binary, func() (string, error) { return binary, nil }
+	t.Cleanup(func() { managedHookBinary, executablePath = previousBinary, previousExe })
+	dropIn := filepath.Join(t.TempDir(), "20-kontext.json")
+	swapManagedSettingsPaths(t, dropIn, filepath.Join(filepath.Dir(dropIn), "managed-settings.json"))
+	template, err := claudemanaged.TemplateJSON(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dropIn, template, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	rescanned := make(chan struct{}, 1)
+	go func() {
+		defer close(done)
+		runHookWatch(ctx, loaded, diagnostic.Logger{}, func() {
+			select {
+			case rescanned <- struct{}{}:
+			default:
+			}
+		})
+	}()
+	hooks := antigravitymanaged.UserHooksPath(home)
+	select {
+	case <-rescanned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the daemon installed nothing")
+	}
+	if _, err := os.Stat(hooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(dropIn); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	<-done
+	if _, err := os.Lstat(hooks); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the stopped daemon left its hook: %v", err)
 	}
 }

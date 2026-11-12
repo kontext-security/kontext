@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/BurntSushi/toml"
 	"github.com/kontext-security/kontext/internal/agenthooks"
@@ -116,7 +115,8 @@ const perUserHome = "~"
 
 // List is what an install of this scope keeps for each agent, for a release
 // check to compare a machine against. System scope names a per-user file under
-// "~": the daemon of each user who has the agent writes it.
+// "~": the daemon of each user who has the agent writes it, and removes it once
+// the package's machine-wide hooks are gone.
 func List(scope Scope, home string) ([]Definition, error) {
 	if scope == System {
 		home = ""
@@ -270,9 +270,8 @@ type Options struct {
 	// is set, without setup's other behavior.
 	SetupPaths bool
 	// PerUser, at system scope, handles only the files an organization install
-	// keeps in the user's home (the daemon runs as that user). Without it system
-	// scope installs only the machine-wide files, and removal also cleans the
-	// per-user files of every home.
+	// keeps in the user's home: the user's daemon installs and removes them.
+	// Without it system scope handles only the machine-wide files.
 	PerUser bool
 }
 
@@ -370,14 +369,9 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 			fmt.Fprintf(opts.Out, "%s\t%s\t%s\t%s\n", action, r.File.Scope, r.File.Path, r.Reason)
 		}
 	}
-	if len(perUser) == 0 {
-		return nil
-	}
-	if remove {
-		removePerUser(opts)
-		return nil
-	}
-	// Root has no user's home to write into; each user's daemon does it.
+	// Root never reads or writes a user's home: each user's daemon installs
+	// these files, and removes them once the package's machine-wide hooks are
+	// gone.
 	for _, file := range perUser {
 		r := Result{File: file, Action: "skip", Reason: "user-daemon"}
 		if opts.Report != nil {
@@ -388,81 +382,6 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 		}
 	}
 	return nil
-}
-
-// removePerUser cleans, after the machine-wide files, the per-user files of
-// every home, each as the user who owns it: root never writes through a path a
-// user controls. A user's file that cannot be cleaned is reported and does not
-// fail the removal, so it can't keep the machine-wide hooks on a machine.
-func removePerUser(opts Options) {
-	for _, home := range perUserHomes(opts) {
-		o := opts
-		// No backup: it would read the file once more, and the change only drops
-		// Kontext's own entry.
-		o.PerUser, o.Home, o.NoBackup = true, home.Path, true
-		o.Skip = func(file File) bool {
-			// Following a link into a privacy-guarded folder would prompt.
-			if !privacyfolder.Guarded(home.Path, file.Path) {
-				return false
-			}
-			if opts.Out != nil {
-				fmt.Fprintf(opts.Out, "skip\t%s\t%s\tprivacy-guarded\n", file.Scope, file.Path)
-			}
-			return true
-		}
-		if err := asOwner(home, func() error { return run(o, true) }); err != nil && opts.Out != nil {
-			fmt.Fprintf(opts.Out, "error\t%s\t%s\t%v\n", User, home.Path, err)
-		}
-	}
-}
-
-// maxUserHookFile bounds what a system removal reads from a user's file.
-const maxUserHookFile = 1 << 20
-
-// readHookFile reads a hook file. A system-scope run reads a user's file only
-// if it is a regular file, and at most maxUserHookFile bytes: a FIFO would
-// block the package's removal and a link to /dev/zero would fill its memory.
-// Opening without blocking and checking the open file leaves no gap to swap
-// the file in between.
-func readHookFile(file File, opts Options) ([]byte, error) {
-	if opts.Scope != System || file.Scope != User {
-		return os.ReadFile(file.Path)
-	}
-	f, err := os.OpenFile(file.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("refusing non-regular file %s", file.Path)
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxUserHookFile+1))
-	if err == nil && len(data) > maxUserHookFile {
-		err = fmt.Errorf("refusing %s: larger than %d bytes", file.Path, maxUserHookFile)
-	}
-	return data, err
-}
-
-// userHome is a home folder and the identity of the user who owns it.
-type userHome struct {
-	Path     string
-	UID, GID int
-}
-
-// perUserHomes lists the homes a system removal cleans (a test seam): every
-// local user's as root, else only the caller's own.
-var perUserHomes = func(opts Options) []userHome {
-	if os.Geteuid() == 0 {
-		return localHomes(usersDir)
-	}
-	if !filepath.IsAbs(opts.Home) {
-		return nil
-	}
-	return []userHome{{Path: opts.Home, UID: os.Geteuid(), GID: os.Getegid()}}
 }
 
 // installableName reports whether binary's file name is one Kontext writes
@@ -510,7 +429,7 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			return c, fmt.Errorf("resolve %s symlink: %w", file.Path, err)
 		}
 	}
-	c.before, err = readHookFile(file, opts)
+	c.before, err = os.ReadFile(file.Path)
 	c.missing = errors.Is(err, os.ErrNotExist)
 	if err != nil && !c.missing {
 		return c, err
@@ -651,7 +570,7 @@ func apply(c change, opts Options) error {
 				return err
 			}
 		}
-		current, err := readHookFile(file, opts)
+		current, err := os.ReadFile(file.Path)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

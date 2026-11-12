@@ -44,6 +44,12 @@ func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log di
 		last, started = current, true
 		select {
 		case <-ctx.Done():
+			// One last pass as the daemon stops: package removal deletes the
+			// machine-wide hooks and then stops this daemon, which removes the
+			// user's hooks here, before the binary they name is deleted.
+			if heal != nil {
+				heal()
+			}
 			return
 		case <-ticker.C:
 		}
@@ -89,24 +95,23 @@ var managedHookBinary = claudemanaged.DefaultKontextBinary
 // check below (a build seam for end-to-end runs).
 var managedHookDropIn string
 
-// packageHooksInPlace reports whether the package's machine-wide Claude hooks
-// still name its binary. A system removal deletes them before it cleans the
-// users' files, so from then on a daemon waiting to be stopped adds nothing
-// back.
-func packageHooksInPlace() bool {
+// packageHooks reads the package's machine-wide Claude hooks: in place when
+// they name its binary, gone when the file is missing (package removal deletes
+// it first), unclear otherwise.
+func packageHooks() (inPlace, gone bool) {
 	path := managedHookDropIn
 	if path == "" {
 		path = managedSettingsDropInPath
 	}
 	if privacyfolder.Guarded("", path) {
-		return false
+		return false, false
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return false, errors.Is(err, os.ErrNotExist)
 	}
 	binary, ok := claudemanaged.ManagedObserveHookBinary(raw)
-	return ok && binary == managedHookBinary
+	return ok && binary == managedHookBinary, false
 }
 
 // hookHealer gates on the config source, not on file paths, and on the stable
@@ -138,15 +143,33 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func()
 		lastErr = fmt.Sprint(err)
 	}
 	return func() bool {
-		// A config of the other kind installed while this daemon runs takes
-		// over; the daemon it starts heals from then on.
-		if current, err := managedconfig.Load(); err != nil || (current.Scope == managedconfig.ScopeUser) != selfServe {
-			return false
+		current, loadErr := managedconfig.Load()
+		// The package is being removed: it deleted its machine-wide hooks
+		// first, and may delete its config next. The user's hooks go too, and
+		// only this daemon, running as the user, touches them; root never does.
+		remove := false
+		if !selfServe && (loadErr != nil || current.Scope != managedconfig.ScopeUser) {
+			inPlace, gone := packageHooks()
+			if !inPlace && !gone {
+				return false
+			}
+			remove = gone
 		}
-		// After an upgrade replaces the binary this process is the old version;
-		// it restarts, and the new one installs its hooks.
-		if !runningStableBinary(binary) || !selfServe && !packageHooksInPlace() {
-			return false
+		if !remove {
+			// A config of the other kind installed while this daemon runs takes
+			// over; the daemon it starts heals from then on.
+			if loadErr != nil || (current.Scope == managedconfig.ScopeUser) != selfServe {
+				return false
+			}
+			// After an upgrade replaces the binary this process is the old
+			// version; it restarts, and the new one installs its hooks.
+			if !runningStableBinary(binary) {
+				return false
+			}
+		}
+		apply, verb := hookinstall.Install, "installed"
+		if remove {
+			apply, verb = hookinstall.Remove, "removed"
 		}
 		defs, err := hookinstall.SetupDefinitions(scope, home)
 		if err != nil {
@@ -158,7 +181,7 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func()
 		// One pass per agent: a broken file of one agent must not stop the
 		// repair of another.
 		for _, def := range defs {
-			err := hookinstall.Install(hookinstall.Options{
+			err := apply(hookinstall.Options{
 				// At system scope PerUser keeps the daemon to the user's files: the
 				// package's machine-wide files already run Claude Code, Codex and
 				// Cursor hooks, and a user copy would run each twice.
@@ -187,7 +210,7 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func()
 			}
 		}
 		if len(changed) > 0 {
-			logAlways(log, "%s: installed %s\n", label, strings.Join(changed, ", "))
+			logAlways(log, "%s: %s %s\n", label, verb, strings.Join(changed, ", "))
 		}
 		if len(guarded) > 0 {
 			hint := ""

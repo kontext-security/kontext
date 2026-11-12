@@ -69,7 +69,8 @@ func hooksCmd() *cobra.Command {
 		Use:   "list",
 		Short: "Print, as JSON, every agent and the hook files an install of this scope keeps",
 		Long: "Print, as JSON, every agent and the hook files an install of this scope keeps.\n" +
-			"With --scope system a file in the user's home starts with ~/: the Kontext daemon of each user writes it.",
+			"With --scope system a file in the user's home starts with ~/: the Kontext daemon of each user writes it,\n" +
+			"and removes it once the package's machine-wide hooks are gone. Root never touches it.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home, _ := os.UserHomeDir()

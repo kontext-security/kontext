@@ -23,9 +23,12 @@ import (
 //       into a path relative to the working directory when HOME is empty.
 //   F4  The existing entries of a user's hooks file are lost.
 // Removal
-//   R1  Machine-wide removal leaves a user's hook naming a deleted binary.
-//   R2  One user's broken file stops the removal for every other user.
-//   R3  Removal takes another tool's entries along with Kontext's.
+//   R1  The package's root removal reads or writes a user's file: a user
+//       controls everything in their home (links, FIFOs, mounted disks), and
+//       root must never touch more than that user could.
+//   R2  The user's hook outlives the package and names a deleted binary.
+//   R3  A repair already running when the package is removed writes the hook
+//       back after it was removed.
 //   R4  Removal needs a home folder, which root under an MDM does not have.
 // Doctor and list
 //   D1  An agent that is installed but not wired reads as healthy.
@@ -166,79 +169,35 @@ func TestSystemDefinitionsWithoutHomeNameNoRelativePath(t *testing.T) {
 	}
 }
 
-// R1, R2, R3, F4: removal cleans the hook of every home, keeps other tools'
-// entries, and a broken file of one user does not stop the next.
-func TestSystemRemovalCleansEveryHome(t *testing.T) {
+// R1: the package's root removal reads and writes no user's file, whatever is
+// there: a link, a FIFO, another user's mount. It reports who removes it.
+func TestSystemRemovalLeavesUserHomesAlone(t *testing.T) {
 	opts, defs := managedInstall(t)
-	root := t.TempDir()
-	homes := map[string]string{}
-	for _, name := range []string{"only-kontext", "with-foreign", "broken", "no-antigravity"} {
-		homes[name] = filepath.Join(root, name)
-		if err := os.MkdirAll(homes[name], 0o755); err != nil {
-			t.Fatal(err)
+	var perUser File
+	for _, d := range defs {
+		for _, f := range d.Files {
+			if f.Scope == User {
+				perUser = f
+			}
 		}
 	}
-	hooks := func(name string) string { return antigravitymanaged.UserHooksPath(homes[name]) }
-	for _, name := range []string{"only-kontext", "with-foreign"} {
-		o := Options{Scope: System, PerUser: true, Home: homes[name], Binary: opts.Binary, NoBackup: true}
-		if name == "with-foreign" {
-			write(t, hooks(name), `{"other-tool":{"Stop":[{"type":"command","command":"/bin/true"}]}}`, 0o600)
-		}
-		if err := Install(o); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := antigravitymanaged.ValidateInstalled([]byte(read(t, hooks(name)))); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !strings.Contains(read(t, hooks("with-foreign")), "other-tool") {
-		t.Fatal("install dropped another tool's hook")
-	}
-	write(t, hooks("broken"), "{", 0o600)
-	// A FIFO would block a plain read forever; a link to /dev/zero never ends.
-	homes["fifo"], homes["zero"] = filepath.Join(root, "fifo"), filepath.Join(root, "zero")
-	for _, name := range []string{"fifo", "zero"} {
-		if err := os.MkdirAll(filepath.Dir(hooks(name)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := mkfifo(hooks("fifo")); err != nil {
+	// A link root must never follow; reading it would fail the removal.
+	if err := os.Remove(perUser.Path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/dev/zero", hooks("zero")); err != nil {
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), perUser.Path); err != nil {
 		t.Fatal(err)
 	}
-	previous := perUserHomes
-	perUserHomes = func(Options) []userHome {
-		var list []userHome
-		for _, name := range []string{"broken", "fifo", "zero", "only-kontext", "with-foreign", "no-antigravity"} {
-			list = append(list, userHome{Path: homes[name], UID: os.Geteuid(), GID: os.Getegid()})
-		}
-		return list
-	}
-	t.Cleanup(func() { perUserHomes = previous })
-
 	var out bytes.Buffer
 	opts.Out = &out
 	if err := runDefinitions(opts, defs, true); err != nil {
-		t.Fatalf("a user's broken file failed the removal: %v\n%s", err, &out)
+		t.Fatal(err)
 	}
-	if _, err := os.Lstat(hooks("only-kontext")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("a file holding only Kontext's hook remains: %v", err)
+	if !strings.Contains(out.String(), "skip\tuser\t"+perUser.Path+"\tuser-daemon\n") {
+		t.Fatalf("removal does not say who removes %s:\n%s", perUser.Path, &out)
 	}
-	if left := read(t, hooks("with-foreign")); strings.Contains(left, "kontext") || !strings.Contains(left, "other-tool") {
-		t.Fatalf("removal must drop Kontext's hook and keep the other: %s", left)
-	}
-	if read(t, hooks("broken")) != "{" {
-		t.Fatal("removal rewrote a file it could not read")
-	}
-	for _, name := range []string{"broken", "fifo", "zero"} {
-		if !strings.Contains(out.String(), "error\tuser\t"+homes[name]+"\t"+hooks(name)) {
-			t.Fatalf("the %s file is not reported:\n%s", name, &out)
-		}
-	}
-	if _, err := os.Lstat(filepath.Join(homes["no-antigravity"], ".gemini")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("removal created a folder: %v", err)
+	if target, err := os.Readlink(perUser.Path); err != nil || !strings.HasSuffix(target, "missing") {
+		t.Fatalf("root touched the user's file: %q %v", target, err)
 	}
 	for _, d := range defs {
 		for _, f := range d.Files {
@@ -251,26 +210,32 @@ func TestSystemRemovalCleansEveryHome(t *testing.T) {
 	}
 }
 
-// Root finds the homes to clean under /Users and never treats a link, the
-// shared folder or a root-owned folder as one.
-func TestLocalHomes(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1001", "per-user hook files exist on macOS only")
-	if os.Geteuid() == 0 {
-		t.Skip("the fixture's homes belong to the user running the test, and root's are never homes")
-	}
-	dir := t.TempDir()
-	for _, name := range []string{"alice", "Shared"} {
-		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+// R2, F4: the daemon's removal drops Kontext's hook and keeps another tool's;
+// a file left empty goes.
+func TestPerUserRemovalKeepsOtherEntries(t *testing.T) {
+	opts, _ := fixture(t, System)
+	for _, foreign := range []bool{false, true} {
+		home := t.TempDir()
+		path := antigravitymanaged.UserHooksPath(home)
+		if foreign {
+			write(t, path, `{"other-tool":{"Stop":[{"type":"command","command":"/bin/true"}]}}`, 0o600)
+		}
+		o := Options{Scope: System, PerUser: true, Home: home, Binary: opts.Binary, NoBackup: true}
+		if err := Install(o); err != nil {
 			t.Fatal(err)
 		}
-	}
-	write(t, filepath.Join(dir, ".localized"), "", 0o644)
-	if err := os.Symlink(filepath.Join(dir, "alice"), filepath.Join(dir, "link")); err != nil {
-		t.Fatal(err)
-	}
-	got := localHomes(dir)
-	if len(got) != 1 || got[0].Path != filepath.Join(dir, "alice") || got[0].UID != os.Geteuid() {
-		t.Fatalf("homes = %+v", got)
+		if err := Remove(o); err != nil {
+			t.Fatal(err)
+		}
+		if !foreign {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a file holding only Kontext's hook remains: %v", err)
+			}
+			continue
+		}
+		if left := read(t, path); strings.Contains(left, `"kontext"`) || !strings.Contains(left, "other-tool") {
+			t.Fatalf("removal must drop Kontext's hook and keep the other: %s", left)
+		}
 	}
 }
 
