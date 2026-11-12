@@ -3,9 +3,13 @@ package setup
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -373,16 +377,16 @@ func TestRunWindowsPutsTheOldKeyBackWhenARerunWithANewKeyFails(t *testing.T) {
 	h := newHarnessOnAnyOS(t)
 	run := newWindowsRun(t, h)
 	allowLoopback(t)
-	if err := Run(context.Background(), h.options("old-key", pingServer(t, "old-key"))); err != nil {
+	server := pingServerForKeys(t, "old-key", "new-key")
+	if err := Run(context.Background(), h.options("old-key", server)); err != nil {
 		t.Fatalf("first Run() = %v", err)
 	}
-	// The second setup is for another server, so its config differs too.
 	before, err := os.ReadFile(managedconfig.LegacyUserPath())
 	if err != nil {
 		t.Fatal(err)
 	}
 	run.failAt = "autostart"
-	if err := Run(context.Background(), h.options("new-key", pingServer(t, "new-key"))); err == nil {
+	if err := Run(context.Background(), h.options("new-key", server)); err == nil {
 		t.Fatal("second Run() = nil, want the step's failure")
 	}
 	if got := run.stored[WindowsCredentialName]; got != "old-key" {
@@ -405,11 +409,12 @@ func TestRunWindowsKeepsTheNewKeyOnceTheOldDaemonIsStopped(t *testing.T) {
 			h := newHarnessOnAnyOS(t)
 			run := newWindowsRun(t, h)
 			allowLoopback(t)
-			if err := Run(context.Background(), h.options("old-key", pingServer(t, "old-key"))); err != nil {
+			server := pingServerForKeys(t, "old-key", "new-key")
+			if err := Run(context.Background(), h.options("old-key", server)); err != nil {
 				t.Fatalf("first Run() = %v", err)
 			}
 			run.failAt = failAt
-			err := Run(context.Background(), h.options("new-key", pingServer(t, "new-key")))
+			err := Run(context.Background(), h.options("new-key", server))
 			if (err != nil) != (failAt != "") {
 				t.Fatalf("second Run() = %v with failAt %q", err, failAt)
 			}
@@ -442,5 +447,66 @@ func TestRunWindowsWarnsWhenClaudeCodeHasAllHooksDisabled(t *testing.T) {
 	}
 	if !strings.Contains(h.errOut.String(), "warning: disableAllHooks in "+settings) {
 		t.Fatalf("setup did not warn about disableAllHooks:\n%s", h.errOut.String())
+	}
+}
+
+// pingServerForKeys is one server that knows several keys, for a second
+// setup with a new key: a new key for the same server.
+func pingServerForKeys(t *testing.T, keys ...string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/authorization-ledger/ping" {
+			http.NotFound(w, r)
+			return
+		}
+		if !slices.Contains(keys, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"organization_id": "org_test", "organization_name": "Acme"})
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// One install per user keeps one set of records. A setup for another server
+// over an install is refused before that server is asked anything and before
+// anything is written: the key, the config and the running daemon stay.
+func TestRunWindowsRefusesAnotherServerOverAnInstall(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	if err := Run(context.Background(), h.options("old-key", pingServer(t, "old-key"))); err != nil {
+		t.Fatalf("first Run() = %v", err)
+	}
+	before, err := os.ReadFile(managedconfig.LegacyUserPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { asked++ }))
+	t.Cleanup(other.Close)
+	err = Run(context.Background(), h.options("new-key", other))
+	if err == nil || !strings.Contains(err.Error(), "kontext uninstall") {
+		t.Fatalf("Run() for another server = %v, want a refusal that names the way out", err)
+	}
+	if asked != 0 {
+		t.Errorf("the other server was asked %d times by a setup that was refused", asked)
+	}
+	if got := run.stored[WindowsCredentialName]; got != "old-key" {
+		t.Errorf("stored key = %q, want the old key", got)
+	}
+	if after, err := os.ReadFile(managedconfig.LegacyUserPath()); err != nil || !bytes.Equal(after, before) {
+		t.Errorf("the config changed (%v)", err)
+	}
+	if run.stops != 0 {
+		t.Errorf("the running daemon was stopped %d times", run.stops)
+	}
+	// After an uninstall the PC is free for the other server.
+	if err := Uninstall(context.Background(), h.options("old-key", other)); err != nil {
+		t.Fatalf("Uninstall() = %v", err)
+	}
+	if err := Run(context.Background(), h.options("new-key", pingServer(t, "new-key"))); err != nil {
+		t.Fatalf("Run() after the uninstall = %v", err)
 	}
 }

@@ -90,6 +90,16 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 	slot.KeychainItem, slot.TokenSource = WindowsCredentialName, "credential"
 
 	fmt.Fprintln(opts.Stdout, "\nWorkspace")
+	// An install keeps its records beside its config, and there is one
+	// install per user here: no profiles to keep two servers' records apart.
+	// A setup for another server would hand the records still waiting to be
+	// sent to that server, so it is refused before anything is asked of it
+	// or written. A config that cannot be read does not refuse: setup is how
+	// a damaged install is repaired.
+	if loaded, err := managedconfig.LoadFile(slot.ConfigPath); err == nil && loaded.Config.CloudURL != cloudURL {
+		state := filepath.Dir(slot.ConfigPath)
+		return fmt.Errorf("this PC is set up for %s, and the records under %s belong to it. To set it up for %s, run `kontext uninstall`, move that folder away, and run setup again", loaded.Config.CloudURL, state, cloudURL)
+	}
 	identity, err := installation.EnsureFile(slot.IdentityPath)
 	if err != nil {
 		return fmt.Errorf("create the installation identity: %w", err)
