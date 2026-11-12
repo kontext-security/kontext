@@ -105,11 +105,14 @@ func diagnoseClaudeSources(out io.Writer, dropin, userPath string) bool {
 	if managedOnlyAt != "" {
 		fmt.Fprintf(out, "Claude Code user hook fallback: restricted by allowManagedHooksOnly=true (%s) when this managed source is selected\n", managedOnlyAt)
 	}
-	cache := filepath.Join(filepath.Dir(userPath), "remote-settings.json")
-	if _, err := os.Lstat(cache); err == nil {
-		fmt.Fprintf(out, "Claude Code remote managed settings: cache found (%s); if active, remote policy can skip local drop-ins or restrict user hooks. Confirm Setting sources and Skipped sources in Claude `/status`; cache presence alone does not prove an active policy. If `/status` skips the drop-ins and the remote policy sets allowManagedHooksOnly, an organization Owner can add \"managedSourcesBehavior\": \"merge\" to the claude.ai managed settings so the Kontext drop-in loads with it.\n", cache)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintf(out, "Claude Code remote managed settings: cache unavailable (%v); policy selection unverified\n", err)
+	// Without a home folder there is no user and no cache of theirs to find.
+	if userPath != "" {
+		cache := filepath.Join(filepath.Dir(userPath), "remote-settings.json")
+		if _, err := os.Lstat(cache); err == nil {
+			fmt.Fprintf(out, "Claude Code remote managed settings: cache found (%s); if active, remote policy can skip local drop-ins or restrict user hooks. Confirm Setting sources and Skipped sources in Claude `/status`; cache presence alone does not prove an active policy. If `/status` skips the drop-ins and the remote policy sets allowManagedHooksOnly, an organization Owner can add \"managedSourcesBehavior\": \"merge\" to the claude.ai managed settings so the Kontext drop-in loads with it.\n", cache)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(out, "Claude Code remote managed settings: cache unavailable (%v); policy selection unverified\n", err)
+		}
 	}
 	fmt.Fprintln(out, "Claude Code hook activation: unverified (installed files do not confirm execution; start a fresh session, check `/status` and `/hooks`, then confirm a tool event in Kontext)")
 	return healthy

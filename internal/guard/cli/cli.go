@@ -269,8 +269,10 @@ func PrintOrganizationManagedHookStatus(out io.Writer) HookStatus {
 }
 
 func printInstalledHookStatus(out io.Writer, scope hookinstall.Scope) HookStatus {
+	// The machine-wide files need no home folder (root under an MDM has none);
+	// Diagnose then checks no user files.
 	home, err := os.UserHomeDir()
-	if err != nil {
+	if err != nil && scope == hookinstall.User {
 		fmt.Fprintf(out, "Hooks: %v\n", err)
 		return HookStatus{}
 	}

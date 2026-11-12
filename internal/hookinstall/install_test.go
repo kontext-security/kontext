@@ -1328,3 +1328,51 @@ func TestSkipAgentAsksOnlyAboutAgentsThePassReaches(t *testing.T) {
 		t.Fatalf("absent agent got a folder: %v", err)
 	}
 }
+
+// Without a home folder (an MDM runs scripts as root with an empty
+// environment) a machine-wide diagnosis has no user files to read. Their
+// names must not be read relative to the working directory instead.
+func TestSystemDiagnosisWithoutHomeIgnoresTheWorkingDirectory(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	agents := map[string][2]string{"claude_code": {"claude", "Claude.app"}, "codex": {"codex", "Codex.app"}, "cursor": {"cursor-agent", "Cursor.app"}, "antigravity": {"agy", "Antigravity.app"}}
+	decoy := t.TempDir()
+	for _, dir := range []string{".local/bin", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(decoy, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, names := range agents {
+		if err := os.WriteFile(filepath.Join(decoy, ".local", "bin", names[0]), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(decoy, "Applications", names[1]), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(decoy, ".codex", "config.toml"), []byte("[features]\nhooks = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	present := map[string]bool{}
+	for agent := range agents {
+		present[agent] = AgentPresent(agent, "")
+	}
+	t.Chdir(decoy)
+	for agent := range agents {
+		if AgentPresent(agent, "") != present[agent] {
+			t.Errorf("%s: found in the working directory", agent)
+		}
+	}
+	var out bytes.Buffer
+	Diagnose(&out, System, "")
+	for _, relative := range []string{"must be absolute", "(.codex", "(.claude"} {
+		if strings.Contains(out.String(), relative) {
+			t.Errorf("system diagnosis read a path relative to the working directory (%q):\n%s", relative, &out)
+		}
+	}
+	out.Reset()
+	if Diagnose(&out, User, "") || !strings.Contains(out.String(), "home directory") {
+		t.Errorf("user diagnosis without a home folder:\n%s", &out)
+	}
+}

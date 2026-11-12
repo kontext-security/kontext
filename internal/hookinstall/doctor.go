@@ -28,24 +28,33 @@ func Diagnose(out io.Writer, scope Scope, home string) bool {
 		fmt.Fprintf(out, "Hooks: %v\n", err)
 		return false
 	}
-	userConfig := filepath.Join(home, ".codex", "config.toml")
-	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
-		userConfig = filepath.Join(codexHome, "config.toml")
-
+	// System scope runs without a home folder (root under an MDM). There are
+	// then no user files, and their paths stay empty: joined onto an empty home
+	// they would be read relative to the working directory.
+	codexDir := os.Getenv("CODEX_HOME")
+	if codexDir == "" && home != "" {
+		codexDir = filepath.Join(home, ".codex")
+	}
+	userConfig, userHooks := "", ""
+	if codexDir != "" {
+		userConfig, userHooks = filepath.Join(codexDir, "config.toml"), filepath.Join(codexDir, "hooks.json")
 	}
 	otherHooks := codexmanaged.SystemHooksPath
 	if scope == System {
-		otherHooks = filepath.Join(filepath.Dir(userConfig), "hooks.json")
+		otherHooks = userHooks
 	}
 	healthy := diagnose(out, scope, defs, func(agent string) bool { return AgentPresent(agent, home) }, userConfig, otherHooks)
 	if scope == User {
 		fmt.Fprintln(out, "Hook repair: with a Homebrew install, the background agent restores removed Kontext hooks within a minute; `kontext setup --uninstall` switches Kontext off")
 	}
 	if AgentPresent("claude_code", home) {
-		userPath, err := claudemanaged.UserSettingsPathNoCreate(home)
-		if err != nil {
-			fmt.Fprintf(out, "Claude Code hook sources: %v\n", err)
-			return false
+		userPath := ""
+		if home != "" || os.Getenv("CLAUDE_CONFIG_DIR") != "" {
+			var err error
+			if userPath, err = claudemanaged.UserSettingsPathNoCreate(home); err != nil {
+				fmt.Fprintf(out, "Claude Code hook sources: %v\n", err)
+				return false
+			}
 		}
 		if !diagnoseClaudeSources(out, claudemanaged.DefaultManagedSettingsDropInPath(), userPath) {
 			healthy = false
@@ -348,12 +357,16 @@ func AgentPresent(agent, home string) bool {
 	if _, err := exec.LookPath(command); err == nil {
 		return true
 	}
-	for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin", filepath.Join(home, ".local", "bin")} {
+	bins, apps := []string{"/opt/homebrew/bin", "/usr/local/bin"}, []string{"/Applications"}
+	if home != "" {
+		bins, apps = append(bins, filepath.Join(home, ".local", "bin")), append(apps, filepath.Join(home, "Applications"))
+	}
+	for _, dir := range bins {
 		if executable(filepath.Join(dir, command)) {
 			return true
 		}
 	}
-	for _, dir := range []string{"/Applications", filepath.Join(home, "Applications")} {
+	for _, dir := range apps {
 		if info, err := os.Stat(filepath.Join(dir, app)); err == nil && info.IsDir() {
 			return true
 		}
