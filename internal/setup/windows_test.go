@@ -264,7 +264,9 @@ func TestRunWindowsTakesBackWhatItWroteWhenALaterStepFails(t *testing.T) {
 			if run.autostart != "" {
 				t.Errorf("autostart is still set: %q", run.autostart)
 			}
-			if step != "hooks" && run.hooksGone != 1 {
+			// Also when the hook install itself failed: it writes one agent's
+			// file after another, and what it wrote before failing goes too.
+			if run.hooksGone != 1 {
 				t.Errorf("the hooks were removed %d times, want once", run.hooksGone)
 			}
 		})

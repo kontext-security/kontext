@@ -254,6 +254,12 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", r.File.Path)
 			}
 		}}
+	// Registered before the install: it writes one agent's file after
+	// another, and a failure at the second must not leave the first behind.
+	// Taking hooks out where none were written changes nothing.
+	undo = append(undo, func() {
+		_ = removeWindowsHooks(hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary})
+	})
 	if err := installWindowsHooks(hooks); err != nil {
 		return fmt.Errorf("install the agent hooks: %w", err)
 	}
@@ -269,9 +275,6 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 			fmt.Fprintln(opts.Stdout, windowsCodexTrustHint)
 		}
 	}
-	undo = append(undo, func() {
-		_ = removeWindowsHooks(hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary})
-	})
 	// Claude Code runs no hook at all with this setting, and the installer
 	// keeps it; without a word here nothing would reach Kontext and nothing
 	// would say why.
