@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -213,7 +214,79 @@ func findCLI(home, name string, clean map[string]bool) (string, error) {
 			}
 		}
 	}
+	if name == "claude" && runtime.GOOS == "darwin" {
+		path, err := desktopClaudeCode(home, clean)
+		if path != "" {
+			return path, failure
+		}
+		if err != nil {
+			failure = err
+		}
+	}
 	return "", failure
+}
+
+// desktopClaudeCode finds the Claude Code that Claude Desktop keeps for itself,
+// with no claude command on any PATH: the program of the newest version folder
+// that has one, under claude-code/<version>/<build>/claude.app. A folder it
+// could not read is reported, so the agent reads as unknown rather than absent
+// unless an older copy works.
+func desktopClaudeCode(home string, clean map[string]bool) (string, error) {
+	root := filepath.Join(home, "Library", "Application Support", "Claude", "claude-code")
+	versions, err := readDirUnguarded(home, root)
+	if err != nil {
+		return "", err
+	}
+	slices.SortFunc(versions, func(a, b os.DirEntry) int { return compareVersions(b.Name(), a.Name()) })
+	var failure error
+	for _, version := range versions {
+		if !version.IsDir() || parseVersion(version.Name()) != version.Name() {
+			continue
+		}
+		builds, err := readDirUnguarded(home, filepath.Join(root, version.Name()))
+		if err != nil {
+			failure = err
+			continue
+		}
+		for _, build := range builds {
+			path := filepath.Join(root, version.Name(), build.Name(), "claude.app", "Contents", "MacOS", "claude")
+			info, err := statCandidate(home, path, clean)
+			if err == nil && isProgram(info) {
+				return path, nil
+			}
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				failure = err
+			}
+		}
+	}
+	return "", failure
+}
+
+// readDirUnguarded lists dir unless reading it, through a link or a moved
+// folder, would touch a privacy-guarded folder and prompt from the background.
+// A missing folder is no error.
+func readDirUnguarded(home, dir string) ([]os.DirEntry, error) {
+	if privacyfolder.Guarded(home, dir) {
+		return nil, errPrivacyGuarded
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return nil, nil
+	}
+	return entries, err
+}
+
+// compareVersions orders dotted versions by number: 2.1.10 after 2.1.9.
+func compareVersions(a, b string) int {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		x, _ := strconv.Atoi(as[i])
+		y, _ := strconv.Atoi(bs[i])
+		if x != y {
+			return x - y
+		}
+	}
+	return len(as) - len(bs)
 }
 
 // programNames lists the file names under which name is a program in a
