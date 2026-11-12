@@ -376,12 +376,20 @@ func TestRunWindowsPutsTheOldKeyBackWhenARerunWithANewKeyFails(t *testing.T) {
 	if err := Run(context.Background(), h.options("old-key", pingServer(t, "old-key"))); err != nil {
 		t.Fatalf("first Run() = %v", err)
 	}
+	// The second setup is for another server, so its config differs too.
+	before, err := os.ReadFile(managedconfig.LegacyUserPath())
+	if err != nil {
+		t.Fatal(err)
+	}
 	run.failAt = "autostart"
 	if err := Run(context.Background(), h.options("new-key", pingServer(t, "new-key"))); err == nil {
 		t.Fatal("second Run() = nil, want the step's failure")
 	}
 	if got := run.stored[WindowsCredentialName]; got != "old-key" {
 		t.Fatalf("stored key = %q, want the old key back", got)
+	}
+	if after, err := os.ReadFile(managedconfig.LegacyUserPath()); err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("the config was not put back with the key (%v):\n%s\nwant\n%s", err, after, before)
 	}
 	if run.stops != 0 {
 		t.Errorf("the running daemon was stopped %d times by a setup that failed", run.stops)
@@ -412,5 +420,27 @@ func TestRunWindowsKeepsTheNewKeyOnceTheOldDaemonIsStopped(t *testing.T) {
 				t.Fatalf("the old daemon was stopped %d times, want once", run.stops)
 			}
 		})
+	}
+}
+
+// Claude Code runs no hooks with disableAllHooks set, and the installer
+// keeps that setting: setup says so, as it does on macOS.
+func TestRunWindowsWarnsWhenClaudeCodeHasAllHooksDisabled(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	newWindowsRun(t, h)
+	allowLoopback(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	settings := filepath.Join(h.home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"disableAllHooks": true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(context.Background(), h.options("tok", pingServer(t, "tok"))); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if !strings.Contains(h.errOut.String(), "warning: disableAllHooks in "+settings) {
+		t.Fatalf("setup did not warn about disableAllHooks:\n%s", h.errOut.String())
 	}
 }

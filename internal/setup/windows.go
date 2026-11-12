@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kontext-security/kontext/internal/autostart"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
@@ -125,20 +126,27 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 	}()
 
 	fmt.Fprintln(opts.Stdout, "\nThis PC")
-	// The key of an existing install goes back if this run fails while the
-	// old daemon still runs: that daemon was started with it, and the next
-	// sign-in would otherwise use a key from a setup that reported a failure.
-	// Once the old daemon is stopped the new key stays, for the daemon this
+	// The key and the config of an existing install go back if this run
+	// fails while the old daemon still runs: that daemon was started with
+	// them, and the next sign-in would otherwise use what a setup that
+	// reported a failure left behind, such as the old key for a new server.
+	// Once the old daemon is stopped the new ones stay, for the daemon this
 	// run starts.
 	oldDaemonStopped := false
 	if !firstInstall {
-		if previous, err := readWindowsToken(WindowsCredentialName); err == nil && previous != token {
-			defer func() {
-				if retErr != nil && !oldDaemonStopped {
-					_ = storeWindowsToken(WindowsCredentialName, previous)
-				}
-			}()
-		}
+		previousKey, keyErr := readWindowsToken(WindowsCredentialName)
+		previousConfig, configErr := os.ReadFile(slot.ConfigPath)
+		defer func() {
+			if retErr == nil || oldDaemonStopped {
+				return
+			}
+			if keyErr == nil && previousKey != token {
+				_ = storeWindowsToken(WindowsCredentialName, previousKey)
+			}
+			if configErr == nil {
+				_ = os.WriteFile(slot.ConfigPath, previousConfig, 0o600)
+			}
+		}()
 	}
 	if err := storeWindowsToken(WindowsCredentialName, token); err != nil {
 		if errors.Is(err, credstore.ErrNoLogonSession) {
@@ -161,6 +169,14 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 		return fmt.Errorf("install the Claude Code hooks: %w", err)
 	}
 	undo = append(undo, func() { _ = removeWindowsHooks(hooks) })
+	// Claude Code runs no hook at all with this setting, and the installer
+	// keeps it; without a word here nothing would reach Kontext and nothing
+	// would say why.
+	if settings, err := claudemanaged.UserSettingsPathNoCreate(home); err == nil {
+		if raw, err := os.ReadFile(settings); err == nil && claudemanaged.DisablesAllHooks(raw) {
+			fmt.Fprintf(opts.Stderr, "warning: disableAllHooks in %s switches Claude Code hooks off; remove it so Kontext can observe Claude Code.\n", settings)
+		}
+	}
 
 	if err := setWindowsAutostart(daemon); err != nil {
 		return fmt.Errorf("register the background agent to start at sign-in: %w", err)
