@@ -1,5 +1,7 @@
 # Keep in sync with .goreleaser.yaml — a copy only because the private
 # staging workflow pins this filename; the build matrix must match prod.
+# One difference on purpose: prod also ships Windows zips; they are left out
+# here until the staging workflow, which moves the archives, is checked for them.
 version: 2
 
 project_name: kontext

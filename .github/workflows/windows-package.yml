@@ -2,7 +2,9 @@ name: Windows Package
 
 # Builds kontext.exe and kontextw.exe with .goreleaser.windows.yaml and the
 # MSIs in packaging/windows with WiX v7, and uploads them as an artifact.
-# Nothing is published. Not a required check.
+# Also builds the release's archives from .goreleaser.yaml as a snapshot and
+# checks the Windows zips, since nothing else runs that configuration before
+# a release does. Nothing is published. Not a required check.
 
 on:
   pull_request:
@@ -35,6 +37,67 @@ env:
   SIGNING_CONFIGURED: ${{ secrets.WINDOWS_SIGNING_ACCOUNT != '' }}
 
 jobs:
+  # The archives a release would publish, built the way the release builds
+  # them but without publishing, and the Windows zips among them checked.
+  release-archives:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser derives the snapshot version from the tags.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the release archives
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: "~> v2.18"
+          args: release --snapshot --clean --skip=publish
+
+      - name: Check the archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          ls -l *.tar.gz *.zip checksums.txt
+          fail() { echo "::error::$1"; exit 1; }
+          # What a release has shipped so far is still there, once each.
+          for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+            [ "$(ls kontext_*_"$target".tar.gz | wc -l)" -eq 1 ] || fail "want one archive for $target"
+          done
+          # One zip per Windows architecture, holding both programs.
+          for arch in amd64 arm64; do
+            zip="$(ls kontext_*_windows_"$arch".zip)"
+            [ "$(echo "$zip" | wc -l)" -eq 1 ] || fail "want one zip for windows_$arch, got: $zip"
+            names="$(unzip -Z1 "$zip")"
+            for program in kontext.exe kontextw.exe; do
+              echo "$names" | grep -qx "$program" || fail "$zip has no $program: $names"
+            done
+            grep -q "  $zip\$" checksums.txt || fail "checksums.txt does not list $zip"
+            sha256sum --check --ignore-missing checksums.txt | grep -q "^$zip: OK\$" || fail "$zip does not match its checksum"
+            # The CLI is a console program and the daemon a GUI one, both for this architecture.
+            unzip -q -o "$zip" kontext.exe kontextw.exe -d "check-$arch"
+            file "check-$arch/kontext.exe" "check-$arch/kontextw.exe"
+            machine="x86-64"; [ "$arch" = arm64 ] && machine="Aarch64"
+            file "check-$arch/kontext.exe" | grep -Eq "\(console\),? $machine" || fail "kontext.exe in $zip is not a console program for $arch"
+            file "check-$arch/kontextw.exe" | grep -Eq "\(GUI\),? $machine" || fail "kontextw.exe in $zip is not a GUI program for $arch"
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kontext-windows-zip
+          path: |
+            dist/kontext_*_windows_*.zip
+            dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 7
+
   msi:
     runs-on: windows-latest
     timeout-minutes: 30

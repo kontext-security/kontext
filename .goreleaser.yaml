@@ -1,11 +1,14 @@
 # Keep in sync with .goreleaser.staging.yaml — the staging channel must build
-# exactly what prod ships.
+# exactly what prod ships. One difference on purpose: the Windows archives
+# below are not in the staging file yet, because the private staging workflow
+# that moves the archives has not been checked for zip files.
 version: 2
 
 project_name: kontext
 
 builds:
-  - main: ./cmd/kontext
+  - id: kontext
+    main: ./cmd/kontext
     binary: kontext
     env:
       - CGO_ENABLED=0
@@ -17,6 +20,41 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}}
+
+  # Windows ships two programs from the same code, as the MSI does
+  # (.goreleaser.windows.yaml; keep the two in sync). kontext.exe is the CLI
+  # and the hook command: a console program, without the step-safety model,
+  # which only the daemon loads.
+  - id: kontext-windows
+    main: ./cmd/kontext
+    binary: kontext
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    tags:
+      - nostepsafetymodel
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+  # kontextw.exe is the daemon: linked for the GUI subsystem, so starting it
+  # at sign-in opens no console window. `kontext setup` expects it beside
+  # kontext.exe.
+  - id: kontextw-windows
+    main: ./cmd/kontext
+    binary: kontextw
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -H windowsgui
 
 # Sign the macOS binaries with the Developer ID certificate and notarize them,
 # so Gatekeeper accepts them when a Homebrew cask or a browser download
@@ -36,7 +74,19 @@ notarize:
         timeout: 20m
 
 archives:
-  - format: tar.gz
+  - id: unix
+    ids:
+      - kontext
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  # One zip per Windows architecture with both programs side by side. Not
+  # signed: Windows code signing is not set up yet.
+  - id: windows
+    ids:
+      - kontext-windows
+      - kontextw-windows
+    format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:

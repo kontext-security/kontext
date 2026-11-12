@@ -1,7 +1,8 @@
 # Windows executables for the MSI in packaging/windows, built by
-# .github/workflows/windows-package.yml. Kept apart from .goreleaser.yaml so a
-# release does not publish Windows assets until that is decided. The ldflags
-# follow .goreleaser.yaml; keep them in sync.
+# .github/workflows/windows-package.yml. Kept apart from .goreleaser.yaml
+# because the MSI is not a release asset yet; a release ships the same two
+# programs as a zip, built by .goreleaser.yaml. The builds here follow the
+# Windows builds there; keep them in sync.
 #
 #   goreleaser build --snapshot --clean --config .goreleaser.windows.yaml
 #
