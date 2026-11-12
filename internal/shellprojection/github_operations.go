@@ -74,6 +74,24 @@ const (
 // case (macOS runs GIT as git), as a path (/usr/bin/git) or as git.exe.
 var mentionsGitOrGH = regexp.MustCompile(`(?i)(^|[^a-z0-9_.-])(git|gh)([^a-z0-9_-]|$)`)
 
+// shellQuoting removes every quote, backslash and backtick, and a
+// backslash with the newline after it first. Bash runs g"it", g'i't, g\it
+// and g\ with it on the next line as git, and PowerShell runs g`it as git
+// (both measured). It removes more than a shell would, which only adds
+// matches.
+var shellQuoting = strings.NewReplacer("\\\n", "", `"`, "", `'`, "", `\`, "", "`", "")
+
+// namesGitOrGH reports text that names git or gh as written or once
+// shellQuoting has removed its quoting. Either reading counts, so removing
+// it never loses a match. It is a best-effort match on text the parser
+// could not read, not a reading of it.
+func namesGitOrGH(command string) bool {
+	if mentionsGitOrGH.MatchString(command) {
+		return true
+	}
+	return strings.ContainsAny(command, "\"'\\`") && mentionsGitOrGH.MatchString(shellQuoting.Replace(command))
+}
+
 // FeatureGitHubWorstCase marks a parse failure that carries githubWorstFacts,
 // so BesideReadable can take exactly those facts back out.
 const FeatureGitHubWorstCase = "github-worst-case"

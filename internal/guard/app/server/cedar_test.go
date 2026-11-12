@@ -280,6 +280,9 @@ func TestCedarCodexShellOnWindowsReadsBothDialects(t *testing.T) {
 		// Neither reading can read a command over the size limit, so the
 		// strictest GitHub facts stay.
 		{"codex on windows denies an unreadable force push", "codex", "windows", "& git push -f origin main # " + strings.Repeat("x", 70_000), risk.DecisionDeny, 3, nil},
+		// Bash takes the quotes out and runs git (measured), so the
+		// name still counts.
+		{"claude denies an unreadable force push with quotes in its name", "claude", "darwin", `g"it" push --force origin main # ` + strings.Repeat("x", 70_000), risk.DecisionDeny, 1, nil},
 		// With one reading only, an unreadable git command keeps the
 		// strictest GitHub facts.
 		{"codex elsewhere reads POSIX only", "codex", "darwin", "& git push --force origin main", risk.DecisionDeny, 1, nil},

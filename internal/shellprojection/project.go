@@ -618,7 +618,7 @@ func parseFailure(reason, command string) cedareval.ShellProjectionV2 {
 		facts = append(facts, databricksWorstFacts()...)
 	}
 	features := []string{FeatureParseError, reason}
-	if mentionsGitOrGH.MatchString(command) {
+	if namesGitOrGH(command) {
 		facts = append(facts, githubWorstFacts()...)
 		features = append(features, FeatureGitHubWorstCase)
 	}
