@@ -127,10 +127,16 @@ func namesBinary(content []byte, validate func([]byte) (string, error), binary s
 // Intel Homebrew install's or one put there after this process started, never
 // lets it remove hooks it did not write.
 func packageBinaryOurs(binary string, started os.FileInfo) bool {
-	info, err := os.Stat(binary)
-	if errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(binary); errors.Is(err, os.ErrNotExist) {
 		return true
 	}
+	return sameFile(binary, started)
+}
+
+// sameFile reports whether binary is the file this process started from.
+// Comparing paths would not do: after an upgrade both resolve to the new file.
+func sameFile(binary string, started os.FileInfo) bool {
+	info, err := os.Stat(binary)
 	return err == nil && started != nil && os.SameFile(started, info)
 }
 
@@ -204,7 +210,7 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(f
 			}
 			// After an upgrade replaces the binary this process is the old
 			// version; it restarts, and the new one installs its hooks.
-			if !runningStableBinary(binary) {
+			if !sameFile(binary, started) {
 				return false
 			}
 		}

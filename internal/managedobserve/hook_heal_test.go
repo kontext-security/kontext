@@ -215,6 +215,17 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if heal(false) {
 		t.Fatal("the daemon installed hooks while the package's hooks are gone")
 	}
+	// Nor while they are in place: an upgrade replaced the binary, and the old
+	// daemon would write its own, older hooks.
+	if err := os.WriteFile(dropIn, template, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if heal(false) {
+		t.Fatal("the old daemon installed hooks after its binary was replaced")
+	}
+	if err := os.Remove(dropIn); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(hooks, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
