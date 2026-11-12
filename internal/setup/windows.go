@@ -27,10 +27,11 @@ const windowsDaemonName = "kontextw.exe"
 // Seams: the parts of the Windows flow that touch the user's session.
 var (
 	storeWindowsToken   = credstore.Write
+	readWindowsToken    = credstore.Read
 	deleteWindowsToken  = credstore.Delete
 	setWindowsAutostart = autostart.Set
 	delWindowsAutostart = autostart.Remove
-	startWindowsDaemon  = startDetached
+	startWindowsDaemon  = autostart.Start
 	installWindowsHooks = hookinstall.Install
 	removeWindowsHooks  = hookinstall.Remove
 	userHome            = os.UserHomeDir
@@ -124,6 +125,18 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 	}()
 
 	fmt.Fprintln(opts.Stdout, "\nThis PC")
+	// The key of an existing install goes back if this run fails: the daemon
+	// that keeps running was started with it, and the next sign-in would
+	// otherwise use a key from a setup that reported a failure.
+	if !firstInstall {
+		if previous, err := readWindowsToken(WindowsCredentialName); err == nil && previous != token {
+			defer func() {
+				if retErr != nil {
+					_ = storeWindowsToken(WindowsCredentialName, previous)
+				}
+			}()
+		}
+	}
 	if err := storeWindowsToken(WindowsCredentialName, token); err != nil {
 		if errors.Is(err, credstore.ErrNoLogonSession) {
 			return errors.New("this session has no Windows credential store, so the install key can't be kept: run `kontext setup` in a desktop session, not over SSH with a key")
@@ -157,7 +170,7 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 			return fmt.Errorf("stop the running background agent: %w", err)
 		}
 	}
-	if err := startWindowsDaemon(daemon, "managed-observe-daemon"); err != nil {
+	if err := startWindowsDaemon(daemon, autostart.DaemonSubcommand); err != nil {
 		return fmt.Errorf("start the background agent: %w", err)
 	}
 	fmt.Fprintln(opts.Stdout, "  ✓ Background agent starts at sign-in")
@@ -182,9 +195,9 @@ func deviceLabelWindows() string {
 	return host
 }
 
-// uninstallWindows takes back what runWindows wrote for this user: the
-// sign-in entry, the running daemon, Claude Code's user hooks, the key in the
-// credential store and the config. Every step tolerates what is already
+// uninstallWindows takes back what runWindows wrote for this user: the key in
+// the credential store, the sign-in entry, the running daemon, Claude Code's
+// user hooks and the config. Every step tolerates what is already
 // gone, so it can be run again.
 //
 // Kept: the installation identity, so a later setup reports the same endpoint

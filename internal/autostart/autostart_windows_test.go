@@ -19,10 +19,10 @@ func TestEntryRoundTrip(t *testing.T) {
 	if got, err := Entry(); err != nil || got != "" {
 		t.Fatalf("entry before a write = %q, %v, want none", got, err)
 	}
-	if err := Set(`C:\Program Files\Kontext\kontextw.exe`); err != nil {
+	if err := Set(`C:\kontext-test-no-such-folder\kontextw.exe`); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if got, err := Entry(); err != nil || got != `"C:\Program Files\Kontext\kontextw.exe" managed-observe-daemon` {
+	if got, err := Entry(); err != nil || got != `"C:\kontext-test-no-such-folder\kontextw.exe" managed-observe-daemon` {
 		t.Fatalf("entry = %q, %v", got, err)
 	}
 	if err := Set(`C:\other\kontextw.exe`); err != nil {

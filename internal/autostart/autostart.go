@@ -5,10 +5,13 @@ package autostart
 
 import "strings"
 
+// DaemonSubcommand is the subcommand that runs the daemon.
+const DaemonSubcommand = "managed-observe-daemon"
+
 // Command is the command line the sign-in entry runs: the daemon's program,
 // quoted because its folder may hold spaces, and its subcommand.
 func Command(daemon string) string {
-	return `"` + daemon + `" managed-observe-daemon`
+	return `"` + daemon + `" ` + DaemonSubcommand
 }
 
 // Program is the program an entry starts: the quoted part Command writes, or

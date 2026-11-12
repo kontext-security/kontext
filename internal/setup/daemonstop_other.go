@@ -2,4 +2,6 @@
 
 package setup
 
-func stopProcess(int) error { return errWindowsOnly }
+import "errors"
+
+func stopProcess(int) error { return errors.New("only on Windows") }

@@ -56,6 +56,13 @@ func newWindowsRun(t *testing.T, h *harness) *windowsRun {
 		run.stored[name] = secret
 		return nil
 	})
+	overrideVar(t, &readWindowsToken, func(name string) (string, error) {
+		secret, ok := run.stored[name]
+		if !ok {
+			return "", credstore.ErrNotFound
+		}
+		return secret, nil
+	})
 	overrideVar(t, &deleteWindowsToken, func(name string) error {
 		if run.delError != nil {
 			return run.delError
@@ -356,5 +363,27 @@ func TestUninstallWindowsStopsBeforeAnythingWhenTheSessionHasNoStore(t *testing.
 	}
 	if _, err := os.Stat(managedconfig.LegacyUserPath()); err != nil {
 		t.Errorf("the config was removed: %v", err)
+	}
+}
+
+// A setup with a new key that fails over an existing install puts the old
+// key back: the running daemon was started with it, and the next sign-in
+// must not pick up a key from a setup that failed.
+func TestRunWindowsPutsTheOldKeyBackWhenARerunWithANewKeyFails(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	if err := Run(context.Background(), h.options("old-key", pingServer(t, "old-key"))); err != nil {
+		t.Fatalf("first Run() = %v", err)
+	}
+	run.failAt = "autostart"
+	if err := Run(context.Background(), h.options("new-key", pingServer(t, "new-key"))); err == nil {
+		t.Fatal("second Run() = nil, want the step's failure")
+	}
+	if got := run.stored[WindowsCredentialName]; got != "old-key" {
+		t.Fatalf("stored key = %q, want the old key back", got)
+	}
+	if run.stops != 0 {
+		t.Errorf("the running daemon was stopped %d times by a setup that failed", run.stops)
 	}
 }

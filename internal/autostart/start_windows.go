@@ -1,21 +1,24 @@
 //go:build windows
 
-package setup
+package autostart
 
 import (
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"golang.org/x/sys/windows"
 )
 
-// startDetached starts program on its own: no console, not in this process's
+// Start starts program on its own: no console, not in this process's
 // group, and not waited for, so it outlives the setup run that started it. It
 // gets no standard handles at all, as a program Explorer starts at sign-in
 // has none: the daemon writes its log file only when it has no error output,
 // and with the null device for one (what os/exec gives) it logged nowhere.
-func startDetached(program string, args ...string) error {
+func Start(program string, args ...string) error {
 	_, handle, err := syscall.StartProcess(program, append([]string{program}, args...), &syscall.ProcAttr{
+		// Its own folder, so it does not keep the caller's open.
+		Dir:   filepath.Dir(program),
 		Env:   os.Environ(),
 		Files: []uintptr{0, 0, 0},
 		Sys: &syscall.SysProcAttr{

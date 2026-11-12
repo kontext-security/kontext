@@ -1,6 +1,6 @@
 //go:build windows
 
-package setup
+package autostart
 
 import (
 	"os"
@@ -17,7 +17,7 @@ import (
 func TestHelperReportsItsStderr(t *testing.T) {
 	out := os.Getenv("KONTEXT_TEST_STDERR_REPORT")
 	if out == "" {
-		t.Skip("a helper for TestStartDetachedGivesNoErrorOutput")
+		t.Skip("a helper for TestStartGivesNoErrorOutput")
 	}
 	handle, err := windows.GetStdHandle(windows.STD_ERROR_HANDLE)
 	report := "present"
@@ -31,7 +31,7 @@ func TestHelperReportsItsStderr(t *testing.T) {
 
 // The daemon writes its log file only when it has no error output. One that
 // setup starts must be in that state, as one started at sign-in is.
-func TestStartDetachedGivesNoErrorOutput(t *testing.T) {
+func TestStartGivesNoErrorOutput(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -49,8 +49,8 @@ func TestStartDetachedGivesNoErrorOutput(t *testing.T) {
 
 	report := filepath.Join(t.TempDir(), "stderr")
 	t.Setenv("KONTEXT_TEST_STDERR_REPORT", report)
-	if err := startDetached(self, "-test.run=^TestHelperReportsItsStderr$"); err != nil {
-		t.Fatalf("startDetached() = %v", err)
+	if err := Start(self, "-test.run=^TestHelperReportsItsStderr$"); err != nil {
+		t.Fatalf("Start() = %v", err)
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {

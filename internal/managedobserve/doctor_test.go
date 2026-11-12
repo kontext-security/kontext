@@ -644,7 +644,9 @@ type doctorTestEnv struct {
 	dbPath     string
 	socketPath string
 	configPath string
-	now        time.Time
+	// daemonProgram is what this env's sign-in entry starts on Windows.
+	daemonProgram string
+	now           time.Time
 }
 
 func wantAutomaticDaemonRepair() bool {
@@ -669,12 +671,17 @@ func newDoctorTestEnv(t *testing.T) doctorTestEnv {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	daemonProgram := filepath.Join(dir, "kontextw.exe")
+	if err := os.WriteFile(daemonProgram, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	return doctorTestEnv{
-		dir:        dir,
-		dbPath:     filepath.Join(dir, "guard.db"),
-		socketPath: filepath.Join(dir, "kontext.sock"),
-		configPath: configPath,
-		now:        time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC),
+		daemonProgram: daemonProgram,
+		dir:           dir,
+		dbPath:        filepath.Join(dir, "guard.db"),
+		socketPath:    filepath.Join(dir, "kontext.sock"),
+		configPath:    configPath,
+		now:           time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -705,6 +712,7 @@ func (e doctorTestEnv) options() doctorOptions {
 		Now:                func() time.Time { return e.now },
 		LaunchAgentPresent: func() bool { return true },
 		LaunchAgentLoaded:  func() (bool, error) { return true, nil },
+		AutostartEntry:     func() (string, error) { return autostart.Command(e.daemonProgram), nil },
 		LoadConfig:         e.loadConfig(managedconfig.ScopeUser),
 	}
 }

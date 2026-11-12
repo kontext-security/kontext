@@ -4,6 +4,7 @@ package managedobserve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/kontext-security/kontext/internal/autostart"
 	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hook"
 )
@@ -83,5 +85,55 @@ func TestLifecycleRetriesWhenDaemonClosesWithRequestUnread(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatalf("daemon accepted %d connections, want 4: a probe and the dropped RPC, then both again for the retry", got)
 		}
+	}
+}
+
+// A hook starts the daemon the sign-in entry names, and nothing else.
+func TestStartFromSignInEntry(t *testing.T) {
+	program := filepath.Join(t.TempDir(), "kontextw.exe")
+	if err := os.WriteFile(program, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		entry     string
+		entryErr  error
+		wantStart bool
+		wantErr   bool
+	}{
+		{name: "the entry setup writes", entry: autostart.Command(program), wantStart: true},
+		{name: "no entry", entry: ""},
+		{name: "an entry with other arguments", entry: `"` + program + `" something-else`, wantErr: true},
+		{name: "an unquoted entry", entry: program + " " + autostart.DaemonSubcommand, wantErr: true},
+		{name: "a program that is gone", entry: autostart.Command(program + ".old"), wantErr: true},
+		{name: "an unreadable entry", entryErr: errors.New("access denied"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var started []string
+			err := startFromSignInEntry(
+				func() (string, error) { return tc.entry, tc.entryErr },
+				func(program string, args ...string) error {
+					started = append([]string{program}, args...)
+					return nil
+				},
+			)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, want an error: %v", err, tc.wantErr)
+			}
+			if tc.wantStart != (len(started) > 0) {
+				t.Fatalf("started %q, want a start: %v", started, tc.wantStart)
+			}
+			if tc.wantStart && (started[0] != program || len(started) != 2 || started[1] != autostart.DaemonSubcommand) {
+				t.Fatalf("started %q, want the entry's program with the daemon's subcommand", started)
+			}
+		})
+	}
+}
+
+// The hook's default start does nothing in a test: it would reach the real
+// sign-in entry of the machine the test runs on.
+func TestKickstartDaemonDoesNothingUnderTest(t *testing.T) {
+	if err := kickstartDaemon(context.Background(), ""); err != nil {
+		t.Fatalf("kickstartDaemon() = %v", err)
 	}
 }

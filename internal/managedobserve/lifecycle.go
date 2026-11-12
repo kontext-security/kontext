@@ -71,7 +71,7 @@ func NewLifecycle() Lifecycle {
 	return Lifecycle{
 		SocketPath: DefaultSocketPath(),
 		Label:      DefaultLabel(),
-		Kickstart:  KickstartLaunchd,
+		Kickstart:  kickstartDaemon,
 		Mode:       loadManagedMode(),
 	}
 }
@@ -114,7 +114,7 @@ func (l Lifecycle) Process(ctx context.Context, event hook.Event) hook.Result {
 		l.Label = DefaultLabel()
 	}
 	if l.Kickstart == nil {
-		l.Kickstart = KickstartLaunchd
+		l.Kickstart = kickstartDaemon
 	}
 
 	switch event.HookName {

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"testing"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
@@ -173,6 +174,11 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	}
 	if opts.AutostartEntry == nil {
 		opts.AutostartEntry = autostart.Entry
+		// A test's home does not cover the registry: without an entry of its
+		// own, a test would be judged by the machine it runs on.
+		if testing.Testing() {
+			opts.AutostartEntry = func() (string, error) { return "", nil }
+		}
 	}
 	if opts.LoadConfig == nil {
 		opts.LoadConfig = managedconfig.Load
