@@ -84,7 +84,8 @@ jobs:
             # The CLI is a console program and the daemon a GUI one, both for this architecture.
             unzip -q -o "$zip" kontext.exe kontextw.exe -d "check-$arch"
             file "check-$arch/kontext.exe" "check-$arch/kontextw.exe"
-            machine="x86-64"; [ "$arch" = arm64 ] && machine="Aarch64"
+            # The file tool spells the arm64 machine "Aarch64" or "ARM64", by version.
+            machine="x86-64"; [ "$arch" = arm64 ] && machine="(Aarch64|ARM64)"
             file "check-$arch/kontext.exe" | grep -Eq "\(console\),? $machine" || fail "kontext.exe in $zip is not a console program for $arch"
             file "check-$arch/kontextw.exe" | grep -Eq "\(GUI\),? $machine" || fail "kontextw.exe in $zip is not a GUI program for $arch"
           done
