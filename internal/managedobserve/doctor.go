@@ -143,6 +143,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	}()
 	staleDaemon := false
 	repairTargetAvailable := false
+	var daemonStarted time.Time
 	// A user install on Windows has no automatic repair, and no managing
 	// installation either: `kontext setup` is what restarts its daemon.
 	windowsUserInstall := false
@@ -355,6 +356,9 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 		if daemonStatus := LoadDaemonStatus(opts.DBPath); daemonStatus != nil && pidAlive(daemonStatus.PID) {
 			report.DaemonVersion = daemonStatus.Version
 			report.DaemonPID = daemonStatus.PID
+			// When the running daemon started, for the heartbeat readout; an
+			// unreadable time leaves it unknown.
+			daemonStarted, _ = time.Parse(time.RFC3339, daemonStatus.StartedAt)
 			fmt.Fprintf(out, "  daemon: running (%s, pid %d)\n", describeDaemonBuild(daemonStatus), daemonStatus.PID)
 			if reason, stale := daemonSkew(daemonStatus, installedVersion, buildinfo.Revision(), buildinfo.Modified()); stale {
 				if repairTargetAvailable {
@@ -421,7 +425,7 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 		fmt.Fprintf(out, "  export: ERROR %v\n", err)
 		status.Healthy = false
 	} else {
-		ok, age := printHeartbeat(out, state, opts.Now(), warn)
+		ok, age := printHeartbeat(out, state, opts.Now(), daemonStarted, warn)
 		report.HeartbeatAgeSeconds = age
 		if !ok {
 			status.Healthy = false
@@ -655,10 +659,31 @@ func daemonSkew(status *DaemonStatus, installedVersion, installedRevision string
 	return "", false
 }
 
+// heartbeatGrace is how long a daemon that has just started is given for its
+// first beat. The daemon sends it once its startup work is done, and tries
+// again a beat's interval later if that fails, so two intervals cover one
+// failed attempt. The state file outlives the daemon, so until that beat the
+// last one on record is the previous daemon's.
+//
+// The price: a daemon that dies before its first beat and is started again,
+// over and over, is inside its grace whenever doctor catches it up, and
+// reads "none yet". The line says how long ago it started.
+const heartbeatGrace = 2 * managedstream.DefaultHeartbeatInterval
+
 // printHeartbeat reports the daemon's last healthy beat, returning whether it is
 // acceptable and its age in seconds (nil when there is nothing to measure).
-func printHeartbeat(out io.Writer, state managedstream.State, now time.Time, warn func(string, ...any)) (bool, *float64) {
+// daemonStarted is when the running daemon started, zero when that is not
+// known. A daemon inside its grace is not judged by a beat it did not send:
+// after a stop of more than five minutes the record would otherwise read as a
+// stalled daemon for the first minute of the new one.
+func printHeartbeat(out io.Writer, state managedstream.State, now, daemonStarted time.Time, warn func(string, ...any)) (bool, *float64) {
+	uptime := now.Sub(daemonStarted)
+	fresh := !daemonStarted.IsZero() && uptime >= 0 && uptime < heartbeatGrace
 	if strings.TrimSpace(state.LastHeartbeatAt) == "" {
+		if fresh {
+			fmt.Fprintf(out, "  heartbeat: none yet (the daemon started %s ago)\n", doctorDuration(uptime))
+			return true, nil
+		}
 		fmt.Fprintln(out, "  heartbeat: none recorded yet (the daemon has not reported healthy)")
 		return false, nil
 	}
@@ -670,6 +695,10 @@ func printHeartbeat(out io.Writer, state managedstream.State, now time.Time, war
 	age := now.Sub(last)
 	if age < 0 {
 		age = 0
+	}
+	if fresh && last.Before(daemonStarted) {
+		fmt.Fprintf(out, "  heartbeat: none yet from this daemon (it started %s ago; the last one before it was %s ago)\n", doctorDuration(uptime), doctorDuration(age))
+		return true, nil
 	}
 	seconds := age.Seconds()
 	fmt.Fprintf(out, "  heartbeat: %s ago\n", doctorDuration(age))

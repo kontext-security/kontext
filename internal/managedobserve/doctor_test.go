@@ -723,9 +723,12 @@ func (e doctorTestEnv) writeDaemonStatus(t *testing.T, pid int, version string) 
 		t.Fatal(err)
 	}
 	if err := writeJSONBreadcrumb(DaemonStatusPath(e.dbPath), DaemonStatus{
-		Version:   version,
-		PID:       pid,
-		StartedAt: "2026-07-09T12:00:00Z",
+		Version: version,
+		PID:     pid,
+		// A daemon that has been up for an hour at the env's now, so its
+		// heartbeat is judged as a running daemon's, not as one that has
+		// just started.
+		StartedAt: "2026-07-09T11:00:00Z",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -919,4 +922,83 @@ func TestDoctorJudgesAWindowsUserInstallByItsSignInEntry(t *testing.T) {
 			t.Errorf("the leftover entry is not reported (healthy %v):\n%s", status.Healthy, out.String())
 		}
 	})
+}
+
+// A daemon that has just started is not judged by the heartbeat of the one
+// before it: the record outlives the daemon, and after a stop of more than
+// five minutes it read as a stalled daemon until the first beat of the new
+// one. Once the grace is over, the record counts again.
+func TestPrintHeartbeatGivesAFreshDaemonTimeForItsFirstBeat(t *testing.T) {
+	now := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	at := func(ago time.Duration) string { return now.Add(-ago).Format(time.RFC3339Nano) }
+	for _, tc := range []struct {
+		name        string
+		lastBeat    string
+		daemonUp    time.Duration // how long the running daemon has been up; 0 = not known, negative = a start in the future
+		wantOK      bool
+		wantAge     bool
+		wantLine    string
+		wantWarning bool
+	}{
+		{name: "the beat of the daemon before, fourteen minutes old", lastBeat: at(14 * time.Minute), daemonUp: 21 * time.Second,
+			wantOK: true, wantLine: "heartbeat: none yet from this daemon (it started 21s ago; the last one before it was 14m0s ago)"},
+		{name: "no beat on record, fresh daemon", daemonUp: 5 * time.Second,
+			wantOK: true, wantLine: "heartbeat: none yet (the daemon started 5s ago)"},
+		{name: "its own first beat", lastBeat: at(10 * time.Second), daemonUp: 50 * time.Second,
+			wantOK: true, wantAge: true, wantLine: "heartbeat: 10s ago"},
+		{name: "the grace is over and still no beat of its own", lastBeat: at(14 * time.Minute), daemonUp: heartbeatGrace + time.Second,
+			wantAge: true, wantLine: "heartbeat: 14m0s ago", wantWarning: true},
+		{name: "the grace is over and never a beat", daemonUp: heartbeatGrace + time.Second,
+			wantLine: "heartbeat: none recorded yet"},
+		{name: "an old beat, daemon start not known", lastBeat: at(14 * time.Minute),
+			wantAge: true, wantLine: "heartbeat: 14m0s ago", wantWarning: true},
+		{name: "no beat, daemon start not known",
+			wantLine: "heartbeat: none recorded yet"},
+		{name: "a daemon start in the future, after a clock change", lastBeat: at(14 * time.Minute), daemonUp: -time.Minute,
+			wantAge: true, wantLine: "heartbeat: 14m0s ago", wantWarning: true},
+		{name: "a long-running daemon that stopped beating", lastBeat: at(6 * time.Minute), daemonUp: time.Hour,
+			wantAge: true, wantLine: "heartbeat: 6m0s ago", wantWarning: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var started time.Time
+			if tc.daemonUp != 0 {
+				started = now.Add(-tc.daemonUp)
+			}
+			var out bytes.Buffer
+			warned := false
+			ok, age := printHeartbeat(&out, managedstream.State{LastHeartbeatAt: tc.lastBeat}, now, started, func(string, ...any) { warned = true })
+			if ok != tc.wantOK || (age != nil) != tc.wantAge || warned != tc.wantWarning {
+				t.Errorf("ok %v, age recorded %v, warned %v; want %v, %v, %v", ok, age != nil, warned, tc.wantOK, tc.wantAge, tc.wantWarning)
+			}
+			if !strings.Contains(out.String(), tc.wantLine) {
+				t.Errorf("output %q lacks %q", out.String(), tc.wantLine)
+			}
+		})
+	}
+}
+
+// The whole readout: a daemon restarted after a long stop is healthy at once.
+func TestPrintStatusIsHealthyRightAfterADaemonRestart(t *testing.T) {
+	env := newDoctorTestEnv(t)
+	if err := os.MkdirAll(filepath.Dir(DaemonStatusPath(env.dbPath)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONBreadcrumb(DaemonStatusPath(env.dbPath), DaemonStatus{
+		Version: "1.2.3", PID: os.Getpid(), StartedAt: env.now.Add(-21 * time.Second).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cursor := env.seedLedger(t)
+	if err := managedstream.SaveState(managedstream.DefaultStatePathForDB(env.dbPath), managedstream.State{
+		UpdatedAfter:    &cursor.UpdatedAt,
+		ActionID:        cursor.ActionID,
+		LastHeartbeatAt: env.now.Add(-14 * time.Minute).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	status, _ := printStatus(&out, "1.2.3", env.options())
+	if !status.Healthy || strings.Contains(out.String(), "may be stalled") || !strings.Contains(out.String(), "heartbeat: none yet from this daemon") {
+		t.Fatalf("healthy %v:\n%s", status.Healthy, out.String())
+	}
 }
