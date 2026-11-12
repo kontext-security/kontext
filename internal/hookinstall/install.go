@@ -36,18 +36,24 @@ const BackupLabel = "kontext-setup"
 const featureMarker = " # kontext-hooks-original:"
 
 type File struct {
-	Kind, Path string
-	Scope      Scope
+	Kind  string `json:"kind"`
+	Path  string `json:"path"`
+	Scope Scope  `json:"scope"`
 }
 type Definition struct {
-	Agent, Name string
-	Files       []File
-	Validate    func([]byte) (string, error)
+	Agent    string                       `json:"agent"`
+	Name     string                       `json:"name"`
+	Files    []File                       `json:"files"`
+	Validate func([]byte) (string, error) `json:"-"`
 }
 
-// Definitions is the only list of installations. Self-serve writes only files
-// in the user's home, so neither setup nor the daemon ever asks for an
-// administrator; organization packages keep the machine-wide files.
+// Definitions is the only list of installations, and every agent is in it at
+// both scopes: an agent wired for self-serve only stays ungoverned on every
+// organization-managed machine. Self-serve writes only files in the user's
+// home, so neither setup nor the daemon ever asks for an administrator;
+// organization packages keep the machine-wide files. An agent that reads no
+// machine-wide file has a user-scope file at system scope too, which the
+// package cannot write as root: the user's daemon installs it (Options.PerUser).
 func Definitions(scope Scope, home string) ([]Definition, error) {
 	return definitions(scope, home, os.Getenv("CODEX_HOME"))
 }
@@ -93,12 +99,39 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 		{Agent: "codex", Name: "Codex", Files: []File{{"codex", filepath.Join(codexDir, "hooks.json"), scope}, {"feature", filepath.Join(codexDir, "config.toml"), scope}}, Validate: codexmanaged.ValidateInstalled},
 		{Agent: "cursor", Name: "Cursor", Files: []File{cursor}, Validate: cursormanaged.ValidateInstalled},
 	}
-	// Antigravity documents no machine-wide hooks location, so it has no system
-	// file for an organization package to own.
-	if scope == User {
-		defs = append(defs, Definition{Agent: "antigravity", Name: "Antigravity", Files: []File{{"antigravity", antigravitymanaged.UserHooksPath(home), User}}, Validate: antigravitymanaged.ValidateInstalled})
+	// Antigravity documents no machine-wide hooks location, so at system scope
+	// too its file is the user's. Root's own home is never that user's, and
+	// root under an MDM may have none: the path is then a placeholder, never
+	// one relative to the working directory.
+	if scope == System && (!filepath.IsAbs(home) || os.Geteuid() == 0) {
+		home = perUserHome
 	}
+	defs = append(defs, Definition{Agent: "antigravity", Name: "Antigravity", Files: []File{{"antigravity", antigravitymanaged.UserHooksPath(home), User}}, Validate: antigravitymanaged.ValidateInstalled})
 	return defs, nil
+}
+
+// perUserHome stands for every user's home in a path nobody reads or writes.
+const perUserHome = "~"
+
+// List is what an install of this scope keeps for each agent, for a release
+// check to compare a machine against. System scope names a per-user file under
+// "~": the daemon of each user who has the agent writes it.
+func List(scope Scope, home string) ([]Definition, error) {
+	if scope == System {
+		home = ""
+	}
+	defs, err := Definitions(scope, home)
+	if err != nil {
+		return nil, err
+	}
+	list := []Definition{}
+	for _, def := range defs {
+		def.Files = slices.DeleteFunc(slices.Clone(def.Files), func(file File) bool { return skippedOnWindows(file.Kind) })
+		if len(def.Files) > 0 {
+			list = append(list, def)
+		}
+	}
+	return list, nil
 }
 
 // runtimeGOOS is the OS the hooks are installed for (a test seam).
@@ -235,6 +268,11 @@ type Options struct {
 	// SetupPaths writes the files setup wrote, ~/.codex even when CODEX_HOME
 	// is set, without setup's other behavior.
 	SetupPaths bool
+	// PerUser, at system scope, handles only the files an organization install
+	// keeps in the user's home (the daemon runs as that user). Without it system
+	// scope installs only the machine-wide files, and removal also cleans the
+	// per-user files of every home.
+	PerUser bool
 }
 
 type change struct {
@@ -271,11 +309,18 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 		return fmt.Errorf("hook binary is not executable: %s", opts.Binary)
 	}
 	var changes []change
+	var perUser []File
 	for _, def := range defs {
 		// Asked at most once, and only for an agent this pass reaches: the daemon
 		// runs one pass per agent, each filtering out the other agents' files.
 		absent := sync.OnceValue(func() bool { return !remove && opts.SkipAgent != nil && opts.SkipAgent(def.Agent) })
 		for _, file := range def.Files {
+			if opts.Scope == System && (file.Scope == User) != opts.PerUser {
+				if file.Scope == User && !skippedOnWindows(file.Kind) {
+					perUser = append(perUser, file)
+				}
+				continue
+			}
 			if opts.Skip != nil && opts.Skip(file) {
 				continue
 			}
@@ -324,7 +369,66 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 			fmt.Fprintf(opts.Out, "%s\t%s\t%s\t%s\n", action, r.File.Scope, r.File.Path, r.Reason)
 		}
 	}
+	if len(perUser) == 0 {
+		return nil
+	}
+	if remove {
+		removePerUser(opts)
+		return nil
+	}
+	// Root has no user's home to write into; each user's daemon does it.
+	for _, file := range perUser {
+		r := Result{File: file, Action: "skip", Reason: "user-daemon"}
+		if opts.Report != nil {
+			opts.Report(r)
+		}
+		if opts.Out != nil {
+			fmt.Fprintf(opts.Out, "%s\t%s\t%s\t%s\n", r.Action, file.Scope, file.Path, r.Reason)
+		}
+	}
 	return nil
+}
+
+// removePerUser cleans, after the machine-wide files, the per-user files of
+// every home, each as the user who owns it: root never writes through a path a
+// user controls. A user's file that cannot be cleaned is reported and does not
+// fail the removal, so it can't keep the machine-wide hooks on a machine.
+func removePerUser(opts Options) {
+	for _, home := range perUserHomes(opts) {
+		o := opts
+		o.PerUser, o.Home = true, home.Path
+		o.Skip = func(file File) bool {
+			// Following a link into a privacy-guarded folder would prompt.
+			if !privacyfolder.Guarded(home.Path, file.Path) {
+				return false
+			}
+			if opts.Out != nil {
+				fmt.Fprintf(opts.Out, "skip\t%s\t%s\tprivacy-guarded\n", file.Scope, file.Path)
+			}
+			return true
+		}
+		if err := asOwner(home, func() error { return run(o, true) }); err != nil && opts.Out != nil {
+			fmt.Fprintf(opts.Out, "error\t%s\t%s\t%v\n", User, home.Path, err)
+		}
+	}
+}
+
+// userHome is a home folder and the identity of the user who owns it.
+type userHome struct {
+	Path     string
+	UID, GID int
+}
+
+// perUserHomes lists the homes a system removal cleans (a test seam): every
+// local user's as root, else only the caller's own.
+var perUserHomes = func(opts Options) []userHome {
+	if os.Geteuid() == 0 {
+		return localHomes(usersDir)
+	}
+	if !filepath.IsAbs(opts.Home) {
+		return nil
+	}
+	return []userHome{{Path: opts.Home, UID: os.Geteuid(), GID: os.Getegid()}}
 }
 
 // installableName reports whether binary's file name is one Kontext writes

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -58,5 +59,25 @@ func hooksCmd() *cobra.Command {
 		}
 		cmd.AddCommand(sub)
 	}
+	var scope string
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "Print, as JSON, every agent and the hook files an install of this scope keeps",
+		Long: "Print, as JSON, every agent and the hook files an install of this scope keeps.\n" +
+			"With --scope system a file in the user's home starts with ~/: the Kontext daemon of each user writes it.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			home, _ := os.UserHomeDir()
+			defs, err := hookinstall.List(hookinstall.Scope(scope), home)
+			if err != nil {
+				return err
+			}
+			out := json.NewEncoder(cmd.OutOrStdout())
+			out.SetIndent("", "  ")
+			return out.Encode(defs)
+		},
+	}
+	list.Flags().StringVar(&scope, "scope", "system", "Installation scope: user or system")
+	cmd.AddCommand(list)
 	return cmd
 }

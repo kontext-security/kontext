@@ -23,13 +23,14 @@ import (
 const hookWatchInterval = time.Minute
 
 // runHookWatch keeps the agent scan current when hook files change, so the
-// dashboard does not wait for the next periodic scan. For a self-serve config
-// it also keeps the user's hook files complete: it restores removed entries and
-// adds a newly supported agent's hooks after an upgrade, never asking for an
-// administrator because every file is in the user's home. Organization-managed
-// configs are watched only; their packages own the machine-wide files.
+// dashboard does not wait for the next periodic scan. It also keeps the user's
+// hook files complete: it restores removed entries and adds a newly supported
+// agent's hooks after an upgrade, never asking for an administrator because
+// every file it writes is in the user's home. For a self-serve config that is
+// every hook file; for an organization-managed config, whose package owns the
+// machine-wide files, only the files of agents that read none (Antigravity).
 func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log diagnostic.Logger, rescan func()) {
-	heal := selfServeHookHealer(loaded, log)
+	heal := hookHealer(loaded, log)
 	last, started := "", false
 	ticker := time.NewTicker(hookWatchInterval)
 	defer ticker.Stop()
@@ -49,9 +50,6 @@ func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log di
 	}
 }
 
-// selfServeHookHealer gates on the config source, not on file paths, and on a
-// Homebrew binary, the stable path every hook names. It returns nil when the
-// daemon must leave hook files alone; the healer reports whether it changed one.
 // HookRepairAvailable reports whether this install's daemon adds hooks later,
 // which is what lets setup leave out an agent that is not on the machine yet.
 func HookRepairAvailable() bool {
@@ -83,47 +81,67 @@ func agentAbsent(home, agent string) bool {
 	return agentinventory.Absent(ctx, home, os.Getenv, agent)
 }
 
-func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func() bool {
-	if runtime.GOOS != "darwin" || loaded.Scope != managedconfig.ScopeUser {
+// managedHookBinary is the binary an organization package installs and every
+// machine-wide hook names (a build seam for end-to-end runs).
+var managedHookBinary = claudemanaged.DefaultKontextBinary
+
+// hookHealer gates on the config source, not on file paths, and on the stable
+// binary every hook names: Homebrew's for self-serve, the package's otherwise.
+// It returns nil when the daemon must leave hook files alone; the healer
+// reports whether it changed one.
+func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func() bool {
+	if runtime.GOOS != "darwin" {
 		return nil
 	}
-	brew, _, ok := currentExecutableBrewPath()
-	if !ok {
-		return nil
+	selfServe := loaded.Scope == managedconfig.ScopeUser
+	scope, binary, label := hookinstall.System, managedHookBinary, "managed hooks"
+	if selfServe {
+		brew, _, ok := currentExecutableBrewPath()
+		if !ok {
+			return nil
+		}
+		scope, binary, label = hookinstall.User, filepath.Join(filepath.Dir(brew), "kontext"), "self-serve hooks"
 	}
-	binary := filepath.Join(filepath.Dir(brew), "kontext")
 	home, err := os.UserHomeDir()
-	if err != nil {
+	if err != nil || !filepath.IsAbs(home) {
 		return nil
 	}
 	lastErr := ""
 	report := func(err error) {
 		if msg := fmt.Sprint(err); err != nil && msg != lastErr {
-			logAlways(log, "self-serve hooks: %v\n", err)
+			logAlways(log, "%s: %v\n", label, err)
 		}
 		lastErr = fmt.Sprint(err)
 	}
 	return func() bool {
-		// An organization config installed while this daemon runs takes over;
-		// from then on its package owns the hooks.
-		if current, err := managedconfig.Load(); err != nil || current.Scope != managedconfig.ScopeUser {
+		// A config of the other kind installed while this daemon runs takes
+		// over; the daemon it starts heals from then on.
+		if current, err := managedconfig.Load(); err != nil || (current.Scope == managedconfig.ScopeUser) != selfServe {
 			return false
 		}
-		// After Homebrew retargets the symlink this process is the old version;
-		// the binary watchdog restarts it, and the new one installs its hooks.
+		// After an upgrade replaces the binary this process is the old version;
+		// it restarts, and the new one installs its hooks.
 		if !runningStableBinary(binary) {
+			return false
+		}
+		defs, err := hookinstall.SetupDefinitions(scope, home)
+		if err != nil {
+			report(err)
 			return false
 		}
 		var guarded, changed []string
 		var errs []error
 		// One pass per agent: a broken file of one agent must not stop the
 		// repair of another.
-		for _, kinds := range [][]string{{"claude-user"}, {"codex", "feature"}, {"cursor"}, {"antigravity"}} {
+		for _, def := range defs {
 			err := hookinstall.Install(hookinstall.Options{
-				Scope: hookinstall.User, Home: home, Binary: binary, NoBackup: true, SetupPaths: true,
+				// At system scope PerUser keeps the daemon to the user's files: the
+				// package's machine-wide files already run Claude Code, Codex and
+				// Cursor hooks, and a user copy would run each twice.
+				Scope: scope, PerUser: !selfServe, Home: home, Binary: binary, NoBackup: true, SetupPaths: true,
 				SkipAgent: func(agent string) bool { return agentAbsent(home, agent) },
 				Skip: func(file hookinstall.File) bool {
-					if !slices.Contains(kinds, file.Kind) {
+					if !slices.Contains(def.Files, file) {
 						return true
 					}
 					// The daemon lacks the terminal's folder access: following a
@@ -145,10 +163,14 @@ func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logge
 			}
 		}
 		if len(changed) > 0 {
-			logAlways(log, "self-serve hooks: installed %s\n", strings.Join(changed, ", "))
+			logAlways(log, "%s: installed %s\n", label, strings.Join(changed, ", "))
 		}
 		if len(guarded) > 0 {
-			errs = append(errs, fmt.Errorf("skipped %s in a macOS privacy-guarded folder; run `kontext hooks install --scope user` in a terminal", strings.Join(guarded, ", ")))
+			hint := ""
+			if selfServe {
+				hint = "; run `kontext hooks install --scope user` in a terminal"
+			}
+			errs = append(errs, fmt.Errorf("skipped %s in a macOS privacy-guarded folder%s", strings.Join(guarded, ", "), hint))
 		}
 		report(errors.Join(errs...))
 		return len(changed) > 0

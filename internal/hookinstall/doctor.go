@@ -1,6 +1,7 @@
 package hookinstall
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,7 +23,7 @@ const promptHookMissing = "prompt hook missing: turns and type of work unavailab
 
 // Diagnose uses the same definitions for both installation channels. Agent
 // presence comes from executables/apps, never the inert files we install.
-func Diagnose(out io.Writer, scope Scope, home string) bool {
+func Diagnose(out io.Writer, scope Scope, home string, configured func(agent string) bool) bool {
 	defs, err := Definitions(scope, home)
 	if err != nil {
 		fmt.Fprintf(out, "Hooks: %v\n", err)
@@ -43,7 +44,13 @@ func Diagnose(out io.Writer, scope Scope, home string) bool {
 	if scope == System {
 		otherHooks = userHooks
 	}
-	healthy := diagnose(out, scope, defs, func(agent string) bool { return AgentPresent(agent, home) }, userConfig, otherHooks)
+	// configured adds the agents the inventory lists by their config alone: the
+	// dashboard shows such an agent Not Governed when its hooks are missing, and
+	// so must the doctor.
+	present := func(agent string) bool {
+		return AgentPresent(agent, home) || configured != nil && configured(agent)
+	}
+	healthy := diagnose(out, scope, defs, present, userConfig, otherHooks)
 	if scope == User {
 		fmt.Fprintln(out, "Hook repair: with a Homebrew install, the background agent restores removed Kontext hooks within a minute; `kontext setup --uninstall` switches Kontext off")
 	}
@@ -172,10 +179,19 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 				}
 				continue
 			}
+			// A file an organization install keeps in each user's home: the
+			// daemon writes it, and root without a home folder has none to read.
+			perUser := scope == System && file.Scope == User
+			if perUser && !filepath.IsAbs(file.Path) {
+				fmt.Fprintf(out, "%s hooks: installed per user by the Kontext daemon; run `kontext doctor` as that user to check (%s)\n", def.Name, file.Path)
+				continue
+			}
 			raw, err := os.ReadFile(file.Path)
 			binary := ""
 			if err == nil {
 				binary, err = def.Validate(raw)
+			} else if errors.Is(err, os.ErrNotExist) {
+				err = errors.New("missing")
 			}
 			var machine [][]byte
 			if file.Kind == "claude-user" {
@@ -209,6 +225,9 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 					}
 				}
 				fmt.Fprintf(out, "%s hooks: %v (%s)\n", def.Name, err, file.Path)
+				if perUser {
+					fmt.Fprintf(out, "%s hooks: the Kontext daemon writes this file within a minute while it runs; check its log if it does not\n", def.Name)
+				}
 			} else {
 				fmt.Fprintf(out, "%s hooks: installed (%s; binary %s)\n", def.Name, file.Path, binary)
 				if file.Kind == "claude-user" && !diagnoseClaudeUser(out, file.Path, binary, machine) {

@@ -1,0 +1,49 @@
+{
+  "kontext": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "'<bin>' hook --agent 'antigravity' 'post-tool-use' || exit 0",
+            "timeout": 20,
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      }
+    ],
+    "PreInvocation": [
+      {
+        "command": "'<bin>' hook --agent 'antigravity' 'user-prompt-submit' || exit 0",
+        "timeout": 20,
+        "type": "command"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "'<bin>' hook --agent 'antigravity' 'pre-tool-use' || exit 0",
+            "timeout": 20,
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      }
+    ],
+    "SessionStart": [
+      {
+        "command": "'<bin>' hook --agent 'antigravity' 'session-start' || exit 0",
+        "timeout": 20,
+        "type": "command"
+      }
+    ],
+    "Stop": [
+      {
+        "command": "'<bin>' hook --agent 'antigravity' 'stop' || exit 0",
+        "timeout": 20,
+        "type": "command"
+      }
+    ]
+  }
+}

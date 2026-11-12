@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/app/server"
@@ -276,7 +277,15 @@ func printInstalledHookStatus(out io.Writer, scope hookinstall.Scope) HookStatus
 		fmt.Fprintf(out, "Hooks: %v\n", err)
 		return HookStatus{}
 	}
-	return HookStatus{Healthy: hookinstall.Diagnose(out, scope, home)}
+	return HookStatus{Healthy: hookinstall.Diagnose(out, scope, home, func(agent string) bool {
+		if !filepath.IsAbs(home) {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		// Unclear counts as present: the doctor must not hide a missing hook.
+		return !agentinventory.Absent(ctx, home, os.Getenv, agent)
+	})}
 }
 
 func visitHookCommands(raw any, visit func(command string, args []string)) {
