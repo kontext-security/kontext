@@ -28,8 +28,10 @@ func hooksCmd() *cobra.Command {
 			if scope == "system" && !dryRun && !hooksPrivileged() {
 				return errors.New(hooksPrivilegeHint)
 			}
+			// System scope writes only machine-wide files, so it needs no home
+			// folder: an MDM runs it as root with an empty environment.
 			home, err := os.UserHomeDir()
-			if err != nil {
+			if err != nil && scope == "user" {
 				return err
 			}
 			// User scope writes only the user's own files; organization packages

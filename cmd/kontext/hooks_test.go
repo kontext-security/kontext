@@ -80,3 +80,35 @@ func TestHooksSystemScopeNeedsPrivilege(t *testing.T) {
 		}
 	}
 }
+
+// An MDM runs its scripts as root with an empty environment, so no home folder
+// resolves. System scope writes only machine-wide files and must not ask for
+// one; user scope has nowhere to write without it.
+func TestHooksSystemScopeNeedsNoHome(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("kontext hooks runs on macOS and Windows")
+	}
+	hermetic.SetHome(t, "")
+	_, noHome := os.UserHomeDir()
+	if noHome == nil {
+		t.Fatal("the home folder still resolves")
+	}
+	binary := filepath.Join(t.TempDir(), "kontext")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	for _, action := range [][]string{{"install", "--binary", binary}, {"remove"}} {
+		for _, scope := range []string{"system", "user"} {
+			cmd := hooksCmd()
+			cmd.SetArgs(append(action, "--scope", scope, "--dry-run"))
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			// A dry run plans against this machine's own files, which decide
+			// everything else about the result; only the home error is checked.
+			err := cmd.Execute()
+			if stopped := err != nil && err.Error() == noHome.Error(); stopped != (scope == "user") {
+				t.Errorf("%s --scope %s without a home folder: err = %v", action[0], scope, err)
+			}
+		}
+	}
+}
