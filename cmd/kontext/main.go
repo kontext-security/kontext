@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/agent"
+	"github.com/kontext-security/kontext/internal/autostart"
 	"github.com/kontext-security/kontext/internal/buildinfo"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
@@ -56,7 +57,7 @@ func main() {
 
 // daemonCommand runs the managed-observe daemon; the launch agents and the
 // Windows logon task start it by this name.
-const daemonCommand = "managed-observe-daemon"
+const daemonCommand = autostart.DaemonSubcommand
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{

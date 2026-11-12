@@ -101,10 +101,16 @@ func TestManagedMCPFileIsWhereClaudeCodeReadsIt(t *testing.T) {
 	}
 }
 
+// The profile root is the user state directory, and both are where a test's
+// home says the state lives. profile.Root is built on UserStateDir, so the
+// two are also compared with a folder spelled out independently of both.
 func TestUserStateDirIsTheProfileRoot(t *testing.T) {
-	hermetic.Home(t)
+	want := hermetic.StateDir(hermetic.Home(t))
 	t.Setenv(profile.EnvRoot, "")
-	if got, want := join(t, platform.UserStateDir), profile.Root(); got != want {
-		t.Fatalf("UserStateDir() = %q, want profile.Root() %q", got, want)
+	if got := join(t, platform.UserStateDir); got != want {
+		t.Fatalf("UserStateDir() = %q, want %q", got, want)
+	}
+	if got := profile.Root(); got != want {
+		t.Fatalf("profile.Root() = %q, want %q", got, want)
 	}
 }
