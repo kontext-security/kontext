@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/autostart"
+	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
@@ -39,6 +40,10 @@ type windowsRun struct {
 	// stopError makes every stop fail.
 	stopError error
 	delError  error
+	// codexPresent says Codex is installed on the machine; codexHooks is the
+	// file its hooks are written to.
+	codexPresent bool
+	codexHooks   string
 }
 
 func newWindowsRun(t *testing.T, h *harness) *windowsRun {
@@ -105,8 +110,15 @@ func newWindowsRun(t *testing.T, h *harness) *windowsRun {
 		}
 		run.hooks = append(run.hooks, opts)
 		reportClaudeHooks(opts, "write")
+		// Codex's hooks, where setup does not skip the agent as absent.
+		if opts.Report != nil && (opts.SkipAgent == nil || !opts.SkipAgent("codex")) {
+			writeCodexHooks(t, run.codexHooks, opts.Binary)
+			opts.Report(hookinstall.Result{File: hookinstall.File{Kind: "codex", Path: run.codexHooks}, Action: "write"})
+		}
 		return nil
 	})
+	run.codexHooks = filepath.Join(t.TempDir(), ".codex", "hooks.json")
+	overrideVar(t, &codexInstalled, func(string) bool { return run.codexPresent })
 	overrideVar(t, &removeWindowsHooks, func(opts hookinstall.Options) error {
 		run.hooksGone++
 		// The installer writes the file only when it held Kontext's hooks.
@@ -114,6 +126,10 @@ func newWindowsRun(t *testing.T, h *harness) *windowsRun {
 			reportClaudeHooks(opts, "write")
 		} else {
 			reportClaudeHooks(opts, "skip")
+		}
+		// A file that held only Kontext's hooks is removed, and reported so.
+		if err := os.Remove(run.codexHooks); err == nil && opts.Report != nil {
+			opts.Report(hookinstall.Result{File: hookinstall.File{Kind: "codex", Path: run.codexHooks}, Action: "remove"})
 		}
 		return nil
 	})
@@ -716,7 +732,75 @@ func reportClaudeHooks(opts hookinstall.Options, action string) {
 		return
 	}
 	opts.Report(hookinstall.Result{File: hookinstall.File{Kind: "claude-user", Path: `C:\Users\someone\.claude\settings.json`}, Action: action})
-	opts.Report(hookinstall.Result{File: hookinstall.File{Kind: "codex", Path: `C:\Users\someone\.codex\hooks.json`}, Action: "skip", Reason: "unsupported-on-windows"})
+	opts.Report(hookinstall.Result{File: hookinstall.File{Kind: "cursor", Path: `C:\Users\someone\.cursor\hooks.json`}, Action: "skip", Reason: "unsupported-on-windows"})
+}
+
+// writeCodexHooks writes Codex's hook file as the installer does on Windows.
+func writeCodexHooks(t *testing.T, path, binary string) {
+	t.Helper()
+	previous := codexmanaged.PowerShellForm
+	codexmanaged.PowerShellForm = true
+	defer func() { codexmanaged.PowerShellForm = previous }()
+	data, err := codexmanaged.TemplateJSON(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Where Codex is installed, setup writes its hooks too and says what only
+// the user can do: trust them in Codex. Uninstall takes them out again.
+func TestWindowsSetupHooksCodexWhereItIsInstalled(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	run.codexPresent = true
+	allowLoopback(t)
+	opts := h.options("tok", pingServer(t, "tok"))
+	var out bytes.Buffer
+	opts.Stdout = &out
+	if err := Run(context.Background(), opts); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	for _, want := range []string{"✓ Codex hooks installed (" + run.codexHooks + ")", "it asks about new hooks, and /hooks lists them. Trust the Kontext hooks"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("setup's output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "Codex: not found") {
+		t.Errorf("setup says Codex was not found:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := Uninstall(context.Background(), opts); err != nil {
+		t.Fatalf("Uninstall() = %v", err)
+	}
+	if !strings.Contains(out.String(), "✓ Codex hooks removed (") {
+		t.Errorf("uninstall's output lacks the Codex line:\n%s", out.String())
+	}
+}
+
+// Without Codex on the machine, setup writes no Codex hooks and says so.
+func TestWindowsSetupLeavesCodexAloneWhereItIsNotInstalled(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	opts := h.options("tok", pingServer(t, "tok"))
+	var out bytes.Buffer
+	opts.Stdout = &out
+	if err := Run(context.Background(), opts); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if _, err := os.Stat(run.codexHooks); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Codex's hooks were written without Codex: %v", err)
+	}
+	if !strings.Contains(out.String(), "Codex: not found") || strings.Contains(out.String(), "Codex hooks installed") {
+		t.Errorf("setup's output about Codex:\n%s", out.String())
+	}
 }
 
 // Setup and uninstall say what they did to Claude Code's hooks in one line
@@ -734,7 +818,7 @@ func TestWindowsSetupAndUninstallSpeakOfTheHooksInTheirOwnWords(t *testing.T) {
 	if len(run.hooks) != 1 || run.hooks[0].Out != nil {
 		t.Fatalf("setup handed the hook installer an output to print its plan to: %+v", run.hooks)
 	}
-	if !strings.Contains(out.String(), "✓ Claude Code hooks installed (") || strings.Contains(out.String(), "unsupported-on-windows") || strings.Contains(out.String(), ".codex") {
+	if !strings.Contains(out.String(), "✓ Claude Code hooks installed (") || strings.Contains(out.String(), "unsupported-on-windows") || strings.Contains(out.String(), ".cursor") {
 		t.Fatalf("setup's output about the hooks:\n%s", out.String())
 	}
 
@@ -781,5 +865,30 @@ func TestRunWindowsUndoDoesNotClaimTheHooksWereInstalled(t *testing.T) {
 	}
 	if run.hooksGone != 1 {
 		t.Fatalf("the hooks were taken back %d times, want once", run.hooksGone)
+	}
+}
+
+// Codex counts as installed for setup by doctor's rule: its command on the
+// PATH, or a config of its own in the home. With only the config (a winget
+// install without elevation puts no `codex` command on the PATH), setup must
+// still write the hooks, or doctor reports them as missing.
+func TestCodexInstalledFollowsTheInventoryNotOnlyThePath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("CODEX_HOME", "")
+	home := t.TempDir()
+	// A machine that has Codex itself (its app, or its command in a fixed
+	// folder) says installed whatever the home holds; the difference a config
+	// makes can only be shown where it has not.
+	if codexInstalled(home) {
+		t.Skip("Codex is installed on this machine")
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte("model = \"x\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !codexInstalled(home) {
+		t.Fatal("Codex with a config of its own and no codex command does not count as installed")
 	}
 }
