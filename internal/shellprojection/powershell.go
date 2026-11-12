@@ -68,6 +68,10 @@ func powerShellCalls(command string, w walk, top bool) []cedareval.ShellProjecti
 	}
 	statements, nested, reason := scanScript(command, dialectPowerShell)
 	if reason != "" {
+		// No FeatureRanNothing here, although PowerShell parses a whole script
+		// before it runs it: the verdict is this scanner's, and text it
+		// rejects that PowerShell accepts would run. A scanner failure keeps
+		// the strictest facts beside any other reading.
 		return scriptParseFailure(reason, command)
 	}
 	if strings.Contains(strings.ToLower(command), "psdefaultparameter") {

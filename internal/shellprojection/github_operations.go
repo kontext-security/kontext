@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/kontext-security/kontext/internal/cedareval"
 )
 
 // GitHub operation facts name the verb-object effect a shell call has on
@@ -70,6 +73,60 @@ const (
 // mentionsGitOrGH matches a command that names git or gh as a word, in any
 // case (macOS runs GIT as git), as a path (/usr/bin/git) or as git.exe.
 var mentionsGitOrGH = regexp.MustCompile(`(?i)(^|[^a-z0-9_.-])(git|gh)([^a-z0-9_-]|$)`)
+
+// FeatureGitHubWorstCase marks a parse failure that carries githubWorstFacts,
+// so BesideReadable can take exactly those facts back out.
+const FeatureGitHubWorstCase = "github-worst-case"
+
+// FeatureRanNothing marks a parse failure whose shell cannot have run any of
+// the text: POSIX text that starts with & as a control operator, which bash
+// rejects as its first token (startsWithControlOperator), decided on the
+// text, not on where the parser stopped. Bash runs each line it has read
+// before it reaches an error on a later line, so no other POSIX failure gets
+// it, and neither do the PowerShell scanner's own failure projections, cmd
+// scripts or commands over the size limit. A PowerShell reading can still
+// carry it on the POSIX readings scriptParseFailure appends; those fail with
+// the POSIX reading of the same text, so beside it nothing is dropped.
+const FeatureRanNothing = "parse-failure-ran-nothing"
+
+// ranNothing marks failure with FeatureRanNothing.
+func ranNothing(failure cedareval.ShellProjectionV2) cedareval.ShellProjectionV2 {
+	failure.Features = append(slices.Clone(failure.Features), FeatureRanNothing)
+	return failure
+}
+
+// BesideReadable returns reading without the strictest GitHub facts its
+// parse failures added, when other, a reading of the same call in another
+// dialect, parsed completely, and only for failures marked FeatureRanNothing:
+// then the failed shell ran none of the text and the other reading's own
+// facts judge the call. A failure that may have run part of the text keeps
+// its facts, since the other dialect may read that part differently. When
+// every reading fails, as for a command over the size limit, the strictest
+// facts stay.
+func BesideReadable(reading, other []cedareval.ShellProjectionV2) []cedareval.ShellProjectionV2 {
+	if len(other) == 0 {
+		return reading
+	}
+	for _, projection := range other {
+		if !projection.ParseComplete || slices.Contains(projection.Features, FeatureParseError) {
+			return reading
+		}
+	}
+	// This removes every fact in the worst set, which is exactly what
+	// parseFailure added: a parse failure has no facts of its own inside that
+	// set (TestBesideReadable pins its facts exactly).
+	worst := githubWorstFacts()
+	result := make([]cedareval.ShellProjectionV2, 0, len(reading))
+	for _, projection := range reading {
+		if slices.Contains(projection.Features, FeatureGitHubWorstCase) && slices.Contains(projection.Features, FeatureRanNothing) {
+			facts := slices.DeleteFunc(slices.Clone(projection.Facts), func(fact string) bool { return slices.Contains(worst, fact) })
+			features := slices.DeleteFunc(slices.Clone(projection.Features), func(feature string) bool { return feature == FeatureGitHubWorstCase })
+			projection.Facts, projection.Features = facts, features
+		}
+		result = append(result, projection)
+	}
+	return result
+}
 
 // githubWorstFacts are the facts of a git or gh call the projection cannot
 // read at all: a write, a force push and every GitHub operation, so each

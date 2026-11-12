@@ -80,7 +80,11 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "command")
 	if err != nil {
-		return []cedareval.ShellProjectionV2{parseFailure("syntax-error", command)}
+		failure := parseFailure("syntax-error", command)
+		if startsWithControlOperator(command) {
+			failure = ranNothing(failure)
+		}
+		return []cedareval.ShellProjectionV2{failure}
 	}
 
 	calls := make([]*syntax.CallExpr, 0, 4)
@@ -613,10 +617,24 @@ func parseFailure(reason, command string) cedareval.ShellProjectionV2 {
 	if mentionsDatabricks.MatchString(command) {
 		facts = append(facts, databricksWorstFacts()...)
 	}
+	features := []string{FeatureParseError, reason}
 	if mentionsGitOrGH.MatchString(command) {
 		facts = append(facts, githubWorstFacts()...)
+		features = append(features, FeatureGitHubWorstCase)
 	}
-	return projection(program, facts, []string{FeatureParseError, reason}, false)
+	return projection(program, facts, features, false)
+}
+
+// startsWithControlOperator reports text that starts, after spaces, tabs
+// and newlines, with & as a control operator (& or &&): bash rejects it as
+// the first token of a command and runs none of the text, whatever this
+// parser makes of the rest. &> and &>> are redirections a command may start
+// with, so & followed by > is not one. A carriage return is not blank to
+// bash, which runs it as a command name and goes on, so it ends the check.
+// It decides on the text alone, not on where the parser stopped.
+func startsWithControlOperator(command string) bool {
+	text := strings.TrimLeft(command, " \t\n")
+	return strings.HasPrefix(text, "&") && !strings.HasPrefix(text, "&>")
 }
 
 func literalWords(words []*syntax.Word) ([]string, bool) {

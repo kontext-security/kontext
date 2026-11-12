@@ -446,13 +446,19 @@ var shellHostOS = runtime.GOOS
 // either reading is denied. Every PowerShell reading is kept, with its dialect
 // fact. Known limitation: a rule on shell/dialect=powershell therefore matches
 // every Codex command on Windows, since any of them may have run in
-// PowerShell, until the shell a call ran in can be told.
+// PowerShell, until the shell a call ran in can be told. A POSIX reading that
+// fails to parse and whose text starts with & (as in `& git status`, where
+// bash runs nothing) drops its strictest GitHub facts when the PowerShell
+// reading parses completely, so that reading judges the call; every other
+// parse failure keeps them (shellprojection.BesideReadable). The PowerShell
+// reading keeps all of its facts: its own failures are the scanner's verdict.
 func shellProjections(agent, command string) []cedareval.ShellProjectionV2 {
 	projections := shellprojection.Project(command)
 	if shellHostOS != "windows" || agent != "codex" && agent != cedareval.AgentCodexV2 {
 		return projections
 	}
-	return append(projections, shellprojection.ProjectPowerShell(command)...)
+	powershell := shellprojection.ProjectPowerShell(command)
+	return append(shellprojection.BesideReadable(projections, powershell), powershell...)
 }
 
 // unknownToolLiteral is how a policy names the pre-pass-through catch-all.

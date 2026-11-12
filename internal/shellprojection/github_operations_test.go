@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/toolcatalog"
 )
 
@@ -390,5 +392,116 @@ func TestGraphqlMutationFieldsHonoursEscapedBlockStringQuotes(t *testing.T) {
 	want := []string{"createIssue", "updateRef"}
 	if got := graphqlMutationFields(query); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("fields = %v, want %v", got, want)
+	}
+}
+
+// TestBesideReadable pins how a dual-dialect read drops the strictest GitHub
+// facts: only when the other reading parsed completely, only for a failure
+// that ran none of the text, and only the facts the parse failure added.
+func TestBesideReadable(t *testing.T) {
+	failed := Project("& git status")
+	if !contains(failed[0].Features, FeatureGitHubWorstCase) || !contains(failed[0].Features, FeatureRanNothing) || !contains(failed[0].Facts, forcePush) {
+		t.Fatalf("parse failure = %#v, want the strictest GitHub facts, marked as having run nothing", failed)
+	}
+	// BesideReadable removes the whole worst set, which is safe only while a
+	// parse failure has no facts of its own inside it: pin its facts exactly.
+	wantFacts := append([]string{incomplete}, githubWorstFacts()...)
+	slices.Sort(wantFacts)
+	if gotFacts := slices.Sorted(slices.Values(failed[0].Facts)); !slices.Equal(gotFacts, wantFacts) {
+		t.Fatalf("parse failure facts = %v, want exactly %v", gotFacts, wantFacts)
+	}
+	// With no other reading, nothing is dropped.
+	if got := BesideReadable(failed, nil); !contains(got[0].Facts, forcePush) {
+		t.Fatalf("beside no other reading = %#v, want the strictest GitHub facts", got)
+	}
+	readable := ProjectPowerShell("& git status")
+	kept := BesideReadable(failed, readable)
+	if contains(kept[0].Facts, forcePush) || contains(kept[0].Facts, write) || contains(kept[0].Features, FeatureGitHubWorstCase) {
+		t.Fatalf("beside a readable reading = %#v, want no strictest GitHub facts", kept)
+	}
+	if !contains(kept[0].Facts, incomplete) || !contains(kept[0].Features, FeatureParseError) || kept[0].Version != failed[0].Version {
+		t.Fatalf("beside a readable reading = %#v, want it still incomplete", kept)
+	}
+	if !contains(failed[0].Facts, forcePush) {
+		t.Fatalf("BesideReadable changed its input: %#v", failed)
+	}
+	padded := "git push -f origin main # " + strings.Repeat("x", 70_000)
+	if got := BesideReadable(Project(padded), ProjectPowerShell(padded)); !contains(got[0].Facts, forcePush) {
+		t.Fatalf("beside an unreadable reading = %#v, want the strictest GitHub facts", got)
+	}
+	// A POSIX error after a complete command keeps the facts. Bash reads
+	// input a line at a time, so on this one line it runs nothing either;
+	// the rule stays narrower than that because the parser's error position
+	// need not be where bash stops.
+	later := Project("git status; (")
+	if contains(later[0].Features, FeatureRanNothing) {
+		t.Fatalf("later error = %#v, want no ran-nothing mark", later)
+	}
+	if got := BesideReadable(later, readable); !contains(got[0].Facts, forcePush) {
+		t.Fatalf("later error beside a readable reading = %#v, want the strictest GitHub facts", got)
+	}
+	// Beside a reading that is incomplete without a parse error, the facts
+	// stay too.
+	incompleteReading := []cedareval.ShellProjectionV2{{Program: "unknown", ParseComplete: false}}
+	if got := BesideReadable(failed, incompleteReading); !contains(got[0].Facts, forcePush) {
+		t.Fatalf("beside an incomplete reading = %#v, want the strictest GitHub facts", got)
+	}
+	// A projection the parser read keeps its own facts.
+	real := Project("git push -f origin main")
+	if got := BesideReadable(real, readable); !contains(got[0].Facts, forcePush) {
+		t.Fatalf("complete projection = %#v, want its facts kept", got)
+	}
+}
+
+// TestParseFailureRanNothing pins which failures are marked as having run
+// none of the text.
+func TestParseFailureRanNothing(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		want    bool
+	}{
+		// A leading & or &&: bash rejects its first token and runs nothing
+		// (measured with bash 3.2 and a stand-in git).
+		{"& git status", true},
+		{"  \n\t& git status", true},
+		{"&& git push --force origin main", true},
+		// Bash runs a carriage return as a command name and goes on to the
+		// push (measured), so it is not blank here.
+		{"\r& git push --force origin main", false},
+		// Other operators bash also rejects first are left out: & is the
+		// one PowerShell text starts with.
+		{"| git push --force origin main", false},
+		// Anything else may have run part of the text.
+		{"git status; (", false},
+		{"git status\n& git log", false},
+		{"# note\n& git status", false},
+		{"((git push --force origin main); (true))", false},
+		{"git push -f origin main # " + strings.Repeat("x", 70_000), false},
+		// Over the size limit nothing is parsed, so a leading & is not read.
+		{"& git push -f origin main # " + strings.Repeat("x", 70_000), false},
+	} {
+		got := Project(tc.command)
+		if !contains(got[0].Features, FeatureParseError) {
+			t.Fatalf("Project(%.40q) = %#v, want a parse failure", tc.command, got[0])
+		}
+		if marked := contains(got[0].Features, FeatureRanNothing); marked != tc.want {
+			t.Errorf("Project(%.40q) ran-nothing = %t, want %t: %#v", tc.command, marked, tc.want, got[0].Features)
+		}
+	}
+	// &> is a redirection a command may start with: bash runs the push.
+	if startsWithControlOperator("&>/dev/null git push --force origin main") {
+		t.Error("&> taken for a control operator")
+	}
+	// The scanner's own failure projection never gets the mark, whatever the
+	// reason. (The POSIX readings scriptParseFailure appends after it keep
+	// their own marks; they fail with the POSIX reading of the same text.)
+	for _, command := range []string{
+		"git status; @'",
+		strings.Repeat("(", maxSyntaxDepth+1) + "git push -f origin main" + strings.Repeat(")", maxSyntaxDepth+1),
+	} {
+		got := ProjectPowerShell(command)
+		if !contains(got[0].Features, FeatureParseError) || contains(got[0].Features, FeatureRanNothing) {
+			t.Errorf("ProjectPowerShell(%.40q) = %#v, want a parse failure without the ran-nothing mark", command, got[0])
+		}
 	}
 }
