@@ -1532,14 +1532,6 @@ func TestLegacySelfServeCoworkStartsWithAnOlderDropIn(t *testing.T) {
 	}
 }
 
-// Self-heal writes hook files; an organization-managed config must never reach
-// it, whatever files exist on disk.
-func TestHookHealerNeverRunsForOrganizationConfig(t *testing.T) {
-	if heal := selfServeHookHealer(managedconfig.LoadedConfig{Scope: managedconfig.ScopeSystem}, diagnostic.Logger{}); heal != nil {
-		t.Fatal("organization-managed config got a hook healer")
-	}
-}
-
 // An edit that keeps a hook file's size and time still triggers a rescan.
 func TestHookFilesFingerprintSeesSameSizeEdits(t *testing.T) {
 	home := t.TempDir()

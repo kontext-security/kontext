@@ -11,10 +11,8 @@ import (
 // leave every byte they write identical; regenerate only for an intended MDM
 // change with KONTEXT_UPDATE_SYSTEM_PIN=1.
 func TestSystemScopeOutputPinned(t *testing.T) {
-	opts, defs := fixture(t, System)
-	if err := runDefinitions(opts, defs, false); err != nil {
-		t.Fatal(err)
-	}
+	// Both halves: the package's files and the one the user's daemon writes.
+	opts, defs := managedInstall(t)
 	root := filepath.Dir(opts.Binary)
 	for _, d := range defs {
 		for _, f := range d.Files {

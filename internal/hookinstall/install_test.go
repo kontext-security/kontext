@@ -152,6 +152,17 @@ func TestDefinitionsInstallRemove(t *testing.T) {
 			if err := runDefinitions(opts, defs, false); err != nil {
 				t.Fatal(err)
 			}
+			// The half of an organization install the user's daemon does.
+			perUser := func(remove bool) {
+				if scope == System {
+					o := opts
+					o.PerUser, o.Out = true, nil
+					if err := runDefinitions(o, defs, remove); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			perUser(false)
 			for _, d := range defs {
 				if _, err := d.Validate([]byte(read(t, d.Files[0].Path))); err != nil {
 					t.Fatal(err)
@@ -192,6 +203,7 @@ func TestDefinitionsInstallRemove(t *testing.T) {
 			if err := runDefinitions(opts, defs, true); err != nil {
 				t.Fatal(err)
 			}
+			perUser(true)
 			for _, d := range defs {
 				for _, f := range d.Files {
 					if f.Kind == "claude-user" {
@@ -448,12 +460,8 @@ func TestRefreshStaleHooksAndRemoveDryRun(t *testing.T) {
 			stale := opts
 			stale.Binary = filepath.Join(filepath.Dir(opts.Binary), "old", "kontext")
 			write(t, stale.Binary, "#!/bin/sh\n", 0755)
-			if err := runDefinitions(stale, defs, false); err != nil {
-				t.Fatal(err)
-			}
-			if err := runDefinitions(opts, defs, false); err != nil {
-				t.Fatal(err)
-			}
+			installBothHalves(t, stale, defs)
+			installBothHalves(t, opts, defs)
 			for _, d := range defs {
 				binary, err := d.Validate([]byte(read(t, d.Files[0].Path)))
 				if err != nil || binary != opts.Binary {
@@ -483,7 +491,7 @@ func TestRefreshStaleHooksAndRemoveDryRun(t *testing.T) {
 
 func TestForeignOnlyFilesUnchangedOnRemoval(t *testing.T) {
 	opts, defs := fixture(t, System)
-	data := []string{`{"permissions":{}}`, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo foreign"}]}]}}`, "[features]\nhooks = true\n", `{"version":1,"hooks":{"stop":[{"command":"echo foreign"}]}}`}
+	data := []string{`{"permissions":{}}`, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo foreign"}]}]}}`, "[features]\nhooks = true\n", `{"version":1,"hooks":{"stop":[{"command":"echo foreign"}]}}`, `{"other":{"Stop":[{"type":"command","command":"echo foreign"}]}}`}
 	i := 0
 	for _, d := range defs {
 		for _, f := range d.Files {
@@ -1365,14 +1373,14 @@ func TestSystemDiagnosisWithoutHomeIgnoresTheWorkingDirectory(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	Diagnose(&out, System, "")
+	Diagnose(&out, System, "", nil)
 	for _, relative := range []string{"must be absolute", "(.codex", "(.claude"} {
 		if strings.Contains(out.String(), relative) {
 			t.Errorf("system diagnosis read a path relative to the working directory (%q):\n%s", relative, &out)
 		}
 	}
 	out.Reset()
-	if Diagnose(&out, User, "") || !strings.Contains(out.String(), "home directory") {
+	if Diagnose(&out, User, "", nil) || !strings.Contains(out.String(), "home directory") {
 		t.Errorf("user diagnosis without a home folder:\n%s", &out)
 	}
 }

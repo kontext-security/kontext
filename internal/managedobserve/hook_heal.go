@@ -23,18 +23,19 @@ import (
 const hookWatchInterval = time.Minute
 
 // runHookWatch keeps the agent scan current when hook files change, so the
-// dashboard does not wait for the next periodic scan. For a self-serve config
-// it also keeps the user's hook files complete: it restores removed entries and
-// adds a newly supported agent's hooks after an upgrade, never asking for an
-// administrator because every file is in the user's home. Organization-managed
-// configs are watched only; their packages own the machine-wide files.
+// dashboard does not wait for the next periodic scan. It also keeps the user's
+// hook files complete: it restores removed entries and adds a newly supported
+// agent's hooks after an upgrade, never asking for an administrator because
+// every file it writes is in the user's home. For a self-serve config that is
+// every hook file; for an organization-managed config, whose package owns the
+// machine-wide files, only the files of agents that read none (Antigravity).
 func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log diagnostic.Logger, rescan func()) {
-	heal := selfServeHookHealer(loaded, log)
+	heal := hookHealer(loaded, log)
 	last, started := "", false
 	ticker := time.NewTicker(hookWatchInterval)
 	defer ticker.Stop()
 	for {
-		healed := heal != nil && heal()
+		healed := heal != nil && heal(false)
 		current := hookFilesFingerprint()
 		// The inventory scans once at start; later changes need a rescan.
 		if healed || started && current != last {
@@ -43,15 +44,19 @@ func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log di
 		last, started = current, true
 		select {
 		case <-ctx.Done():
+			// One last pass as the daemon stops, removal only: package removal
+			// deletes the machine-wide hooks and then stops this daemon, which
+			// removes the user's hooks here. It never installs: a self-serve
+			// uninstall stops the daemon before it removes the hooks.
+			if heal != nil {
+				heal(true)
+			}
 			return
 		case <-ticker.C:
 		}
 	}
 }
 
-// selfServeHookHealer gates on the config source, not on file paths, and on a
-// Homebrew binary, the stable path every hook names. It returns nil when the
-// daemon must leave hook files alone; the healer reports whether it changed one.
 // HookRepairAvailable reports whether this install's daemon adds hooks later,
 // which is what lets setup leave out an agent that is not on the machine yet.
 func HookRepairAvailable() bool {
@@ -83,47 +88,157 @@ func agentAbsent(home, agent string) bool {
 	return agentinventory.Absent(ctx, home, os.Getenv, agent)
 }
 
-func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func() bool {
-	if runtime.GOOS != "darwin" || loaded.Scope != managedconfig.ScopeUser {
-		return nil
+// managedHookBinary is the binary an organization package installs and every
+// machine-wide hook names (a build seam for end-to-end runs).
+var managedHookBinary = claudemanaged.DefaultKontextBinary
+
+// managedHookDropIn, when set, replaces Claude's machine-wide drop-in in the
+// check below (a build seam for end-to-end runs).
+var managedHookDropIn string
+
+// packageHooks reads the package's machine-wide Claude hooks: in place when
+// they name its binary, gone when the file is missing (package removal deletes
+// it first), unclear otherwise.
+func packageHooks() (inPlace, gone bool) {
+	path := managedHookDropIn
+	if path == "" {
+		path = managedSettingsDropInPath
 	}
-	brew, _, ok := currentExecutableBrewPath()
-	if !ok {
-		return nil
+	if privacyfolder.Guarded("", path) {
+		return false, false
 	}
-	binary := filepath.Join(filepath.Dir(brew), "kontext")
-	home, err := os.UserHomeDir()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false, errors.Is(err, os.ErrNotExist)
+	}
+	binary, ok := claudemanaged.ManagedObserveHookBinary(raw)
+	return ok && binary == managedHookBinary, false
+}
+
+// namesBinary reports whether content is a complete Kontext hook set that
+// runs binary.
+func namesBinary(content []byte, validate func([]byte) (string, error), binary string) bool {
+	named, err := validate(content)
+	return err == nil && named == binary
+}
+
+// packageBinaryOurs reports whether binary is the file this process started
+// from, or is gone (package removal deletes it). Another file at that path, an
+// Intel Homebrew install's or one put there after this process started, never
+// lets it remove hooks it did not write.
+func packageBinaryOurs(binary string, started os.FileInfo) bool {
+	if _, err := os.Stat(binary); errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	return sameFile(binary, started)
+}
+
+// sameFile reports whether binary is the file this process started from.
+// Comparing paths would not do: after an upgrade both resolve to the new file.
+func sameFile(binary string, started os.FileInfo) bool {
+	info, err := os.Stat(binary)
+	return err == nil && started != nil && os.SameFile(started, info)
+}
+
+// startedFrom is the file this process was started from, or nil.
+func startedFrom() os.FileInfo {
+	exe, err := executablePath()
 	if err != nil {
 		return nil
 	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return nil
+	}
+	return info
+}
+
+// hookHealer gates on the config source, not on file paths, and on the stable
+// binary every hook names: Homebrew's for self-serve, the package's otherwise.
+// It returns nil when the daemon must leave hook files alone; the healer
+// reports whether it changed one.
+func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(final bool) bool {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	selfServe := loaded.Scope == managedconfig.ScopeUser
+	scope, binary, label := hookinstall.System, managedHookBinary, "managed hooks"
+	if selfServe {
+		brew, _, ok := currentExecutableBrewPath()
+		if !ok {
+			return nil
+		}
+		scope, binary, label = hookinstall.User, filepath.Join(filepath.Dir(brew), "kontext"), "self-serve hooks"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return nil
+	}
+	started := startedFrom()
 	lastErr := ""
 	report := func(err error) {
 		if msg := fmt.Sprint(err); err != nil && msg != lastErr {
-			logAlways(log, "self-serve hooks: %v\n", err)
+			logAlways(log, "%s: %v\n", label, err)
 		}
 		lastErr = fmt.Sprint(err)
 	}
-	return func() bool {
-		// An organization config installed while this daemon runs takes over;
-		// from then on its package owns the hooks.
-		if current, err := managedconfig.Load(); err != nil || current.Scope != managedconfig.ScopeUser {
+	return func(final bool) bool {
+		current, loadErr := managedconfig.Load()
+		// The package is being removed: it deleted its machine-wide hooks
+		// first, and may delete its config next, which can bring a self-serve
+		// config back into view. The user's hooks that name the package's
+		// binary go too, whatever config is found; only this daemon, running as
+		// the user, touches them, and root never does.
+		remove := false
+		if !selfServe {
+			// Install only while the package's hooks are in place; once they are
+			// gone, remove or do nothing.
+			inPlace, gone := packageHooks()
+			if !inPlace && !(gone && packageBinaryOurs(binary, started)) {
+				return false
+			}
+			remove = !inPlace
+		}
+		if final && !remove {
 			return false
 		}
-		// After Homebrew retargets the symlink this process is the old version;
-		// the binary watchdog restarts it, and the new one installs its hooks.
-		if !runningStableBinary(binary) {
+		if !remove {
+			// A config of the other kind installed while this daemon runs takes
+			// over; the daemon it starts heals from then on.
+			if loadErr != nil || (current.Scope == managedconfig.ScopeUser) != selfServe {
+				return false
+			}
+			// After an upgrade replaces the binary this process is the old
+			// version; it restarts, and the new one installs its hooks.
+			if !sameFile(binary, started) {
+				return false
+			}
+		}
+		apply, verb := hookinstall.Install, "installed"
+		if remove {
+			apply, verb = hookinstall.Remove, "removed"
+		}
+		defs, err := hookinstall.SetupDefinitions(scope, home)
+		if err != nil {
+			report(err)
 			return false
 		}
 		var guarded, changed []string
 		var errs []error
 		// One pass per agent: a broken file of one agent must not stop the
 		// repair of another.
-		for _, kinds := range [][]string{{"claude-user"}, {"codex", "feature"}, {"cursor"}, {"antigravity"}} {
-			err := hookinstall.Install(hookinstall.Options{
-				Scope: hookinstall.User, Home: home, Binary: binary, NoBackup: true, SetupPaths: true,
+		for _, def := range defs {
+			err := apply(hookinstall.Options{
+				// At system scope PerUser keeps the daemon to the user's files: the
+				// package's machine-wide files already run Claude Code, Codex and
+				// Cursor hooks, and a user copy would run each twice.
+				Scope: scope, PerUser: !selfServe, Home: home, Binary: binary, NoBackup: true, SetupPaths: true,
 				SkipAgent: func(agent string) bool { return agentAbsent(home, agent) },
+				// Removal takes only hooks that name the package's binary: a
+				// Homebrew install's, or one a person changed, stay.
+				RemoveIf: func(_ hookinstall.File, content []byte) bool { return namesBinary(content, def.Validate, binary) },
 				Skip: func(file hookinstall.File) bool {
-					if !slices.Contains(kinds, file.Kind) {
+					if !slices.Contains(def.Files, file) {
 						return true
 					}
 					// The daemon lacks the terminal's folder access: following a
@@ -145,10 +260,14 @@ func selfServeHookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logge
 			}
 		}
 		if len(changed) > 0 {
-			logAlways(log, "self-serve hooks: installed %s\n", strings.Join(changed, ", "))
+			logAlways(log, "%s: %s %s\n", label, verb, strings.Join(changed, ", "))
 		}
 		if len(guarded) > 0 {
-			errs = append(errs, fmt.Errorf("skipped %s in a macOS privacy-guarded folder; run `kontext hooks install --scope user` in a terminal", strings.Join(guarded, ", ")))
+			hint := ""
+			if selfServe {
+				hint = "; run `kontext hooks install --scope user` in a terminal"
+			}
+			errs = append(errs, fmt.Errorf("skipped %s in a macOS privacy-guarded folder%s", strings.Join(guarded, ", "), hint))
 		}
 		report(errors.Join(errs...))
 		return len(changed) > 0

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,6 +35,11 @@ func hooksCmd() *cobra.Command {
 			if err != nil && scope == "user" {
 				return err
 			}
+			// Root's own home holds no user's hooks; a system removal finds each
+			// user's home itself.
+			if scope == "system" && hooksPrivileged() {
+				home = ""
+			}
 			// User scope writes only the user's own files; organization packages
 			// install the machine-wide set with --scope system.
 			if binary == "" && scope == "user" {
@@ -58,5 +64,26 @@ func hooksCmd() *cobra.Command {
 		}
 		cmd.AddCommand(sub)
 	}
+	var scope string
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "Print, as JSON, every agent and the hook files an install of this scope keeps",
+		Long: "Print, as JSON, every agent and the hook files an install of this scope keeps.\n" +
+			"With --scope system a file in the user's home starts with ~/: the Kontext daemon of each user writes it,\n" +
+			"and removes it once the package's machine-wide hooks are gone. Root never touches it.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			home, _ := os.UserHomeDir()
+			defs, err := hookinstall.List(hookinstall.Scope(scope), home)
+			if err != nil {
+				return err
+			}
+			out := json.NewEncoder(cmd.OutOrStdout())
+			out.SetIndent("", "  ")
+			return out.Encode(defs)
+		},
+	}
+	list.Flags().StringVar(&scope, "scope", "system", "Installation scope: user or system")
+	cmd.AddCommand(list)
 	return cmd
 }
