@@ -282,7 +282,8 @@ func printInstalledHookStatus(out io.Writer, scope hookinstall.Scope) HookStatus
 		home = ""
 	}
 	return HookStatus{Healthy: hookinstall.Diagnose(out, scope, home, func(agent string) bool {
-		if !filepath.IsAbs(home) {
+		// The scan follows a user's folders, which root must not do.
+		if !filepath.IsAbs(home) || os.Geteuid() == 0 {
 			return false
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -184,7 +184,8 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	// Another binary (an old process after an upgrade, or a developer build)
 	// writes nothing.
 	executablePath = func() (string, error) { return hermetic.KontextBinary(t, t.TempDir()), nil }
-	if heal(false) {
+	stranger := hookHealer(loaded, diagnostic.Logger{})
+	if stranger(false) {
 		t.Fatal("a binary other than the package's wrote hooks")
 	}
 	// Nor does it remove hooks that name the package's path while that binary
@@ -195,8 +196,18 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if err := os.Remove(dropIn); err != nil {
 		t.Fatal(err)
 	}
-	if heal(false) || heal(true) {
+	if stranger(false) || stranger(true) {
 		t.Fatal("a binary other than the package's removed hooks naming the package's path")
+	}
+	// The package's daemon itself keeps them once another file has replaced
+	// its binary at the same path.
+	executablePath = func() (string, error) { return binary, nil }
+	if err := os.Remove(binary); err != nil {
+		t.Fatal(err)
+	}
+	hermetic.KontextBinary(t, filepath.Dir(binary))
+	if heal(true) {
+		t.Fatal("the daemon removed hooks after its binary was replaced by another file")
 	}
 	if got, err := os.ReadFile(hooks); err != nil || string(got) != string(raw) {
 		t.Fatalf("hooks changed: %v", err)
@@ -206,7 +217,7 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if err := os.Remove(binary); err != nil {
 		t.Fatal(err)
 	}
-	if !heal(true) {
+	if !stranger(true) {
 		t.Fatal("the last pass left hooks naming a deleted binary")
 	}
 }

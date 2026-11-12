@@ -122,14 +122,29 @@ func namesBinary(content []byte, validate func([]byte) (string, error), binary s
 	return err == nil && named == binary
 }
 
-// packageBinaryOurs reports whether this process is the package's binary, or
-// that binary is gone (package removal deletes it). Another process at that
-// path, an Intel Homebrew install's, never removes hooks it did not write.
-func packageBinaryOurs(binary string) bool {
-	if _, err := os.Stat(binary); errors.Is(err, os.ErrNotExist) {
+// packageBinaryOurs reports whether binary is the file this process started
+// from, or is gone (package removal deletes it). Another file at that path, an
+// Intel Homebrew install's or one put there after this process started, never
+// lets it remove hooks it did not write.
+func packageBinaryOurs(binary string, started os.FileInfo) bool {
+	info, err := os.Stat(binary)
+	if errors.Is(err, os.ErrNotExist) {
 		return true
 	}
-	return runningStableBinary(binary)
+	return err == nil && started != nil && os.SameFile(started, info)
+}
+
+// startedFrom is the file this process was started from, or nil.
+func startedFrom() os.FileInfo {
+	exe, err := executablePath()
+	if err != nil {
+		return nil
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return nil
+	}
+	return info
 }
 
 // hookHealer gates on the config source, not on file paths, and on the stable
@@ -153,6 +168,7 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(f
 	if err != nil || !filepath.IsAbs(home) {
 		return nil
 	}
+	started := startedFrom()
 	lastErr := ""
 	report := func(err error) {
 		if msg := fmt.Sprint(err); err != nil && msg != lastErr {
@@ -173,7 +189,7 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(f
 			if !inPlace && !gone {
 				return false
 			}
-			remove = gone && packageBinaryOurs(binary)
+			remove = gone && packageBinaryOurs(binary, started)
 		}
 		if final && !remove {
 			return false
