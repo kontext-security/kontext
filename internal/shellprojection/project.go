@@ -80,7 +80,11 @@ func project(command string, w walk) []cedareval.ShellProjectionV2 {
 	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "command")
 	if err != nil {
-		return []cedareval.ShellProjectionV2{parseFailure("syntax-error", command)}
+		failure := parseFailure("syntax-error", command)
+		if startsWithControlOperator(command) {
+			failure = ranNothing(failure)
+		}
+		return []cedareval.ShellProjectionV2{failure}
 	}
 
 	calls := make([]*syntax.CallExpr, 0, 4)
@@ -599,8 +603,10 @@ var programName = regexp.MustCompile(`^[A-Za-z0-9_./-]{1,128}$`)
 
 // parseFailure is the projection of a command that cannot be parsed. It keeps
 // the program its first word names. A command that mentions Databricks gets
-// the strictest Databricks facts: it is known to be Databricks and cannot be
-// read, so a padded or broken DROP is not let through (the base tier rule).
+// the strictest Databricks facts, and one that mentions git or gh the
+// strictest GitHub facts: it is known to reach that provider and cannot be
+// read, so a padded or broken DROP or force push is not let through (the
+// base tier rule).
 func parseFailure(reason, command string) cedareval.ShellProjectionV2 {
 	program := "unknown"
 	if fields := strings.Fields(command[:min(len(command), 4096)]); len(fields) > 0 && programName.MatchString(fields[0]) {
@@ -611,7 +617,24 @@ func parseFailure(reason, command string) cedareval.ShellProjectionV2 {
 	if mentionsDatabricks.MatchString(command) {
 		facts = append(facts, databricksWorstFacts()...)
 	}
-	return projection(program, facts, []string{FeatureParseError, reason}, false)
+	features := []string{FeatureParseError, reason}
+	if namesGitOrGH(command) {
+		facts = append(facts, githubWorstFacts()...)
+		features = append(features, FeatureGitHubWorstCase)
+	}
+	return projection(program, facts, features, false)
+}
+
+// startsWithControlOperator reports text that starts, after spaces, tabs
+// and newlines, with & as a control operator (& or &&): bash rejects it as
+// the first token of a command and runs none of the text, whatever this
+// parser makes of the rest. &> and &>> are redirections a command may start
+// with, so & followed by > is not one. A carriage return is not blank to
+// bash, which runs it as a command name and goes on, so it ends the check.
+// It decides on the text alone, not on where the parser stopped.
+func startsWithControlOperator(command string) bool {
+	text := strings.TrimLeft(command, " \t\n")
+	return strings.HasPrefix(text, "&") && !strings.HasPrefix(text, "&>")
 }
 
 func literalWords(words []*syntax.Word) ([]string, bool) {

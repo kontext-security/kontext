@@ -251,16 +251,42 @@ forbid(principal, action, resource) when { context has shell && context.shell.fa
 }
 
 func TestCedarCodexShellOnWindowsReadsBothDialects(t *testing.T) {
+	// Bash would run a force push in each of the deny rows below: it runs
+	// each line it has read before it reaches a syntax error on a later line.
+	// The backtick, carriage-return, single-quoted and bash -lc rows read as
+	// one harmless command in PowerShell, so they rest on the leading-& rule;
+	// in the double-quoted and bash -c rows the PowerShell reading is
+	// incomplete too. readings 0 skips the count.
+	const backtick = "echo hello `\ngit push --force origin main\n`\n& git status"
 	for _, test := range []struct {
 		name, agent, hostOS, command string
 		want                         risk.Decision
 		readings                     int
+		argv                         []any
 	}{
-		{"codex on windows reads PowerShell too", "codex", "windows", "& git push --force origin main", risk.DecisionDeny, 2},
-		{"codex on windows keeps the PowerShell reading of a plain command", "codex", "windows", "git push -f origin main", risk.DecisionDeny, 2},
-		{"codex on windows allows a read", "codex", "windows", "& git status", risk.DecisionAllow, 2},
-		{"codex elsewhere reads POSIX only", "codex", "darwin", "& git push --force origin main", risk.DecisionAllow, 1},
-		{"claude bash on windows is Git Bash", "claude", "windows", "& git push --force origin main", risk.DecisionAllow, 1},
+		{"codex on windows reads PowerShell too", "codex", "windows", "& git push --force origin main", risk.DecisionDeny, 2, nil},
+		{"codex on windows keeps the PowerShell reading of a plain command", "codex", "windows", "git push -f origin main", risk.DecisionDeny, 2, nil},
+		// The POSIX reading fails and the text starts with &, so bash ran
+		// nothing; the PowerShell reading parses completely and judges the
+		// call alone.
+		{"codex on windows allows a read", "codex", "windows", "& git status", risk.DecisionAllow, 2, nil},
+		{"codex on windows denies a push a backtick continuation hides", "codex", "windows", backtick, risk.DecisionDeny, 0, nil},
+		// Bash runs a leading carriage return as a command name and goes on.
+		{"codex on windows denies a push behind a carriage return", "codex", "windows", "\r& " + backtick, risk.DecisionDeny, 0, nil},
+		{"codex on windows denies a push in a double-quoted here-string", "codex", "windows", "echo @\"\n`git push --force origin main`\n\"@\n& git status", risk.DecisionDeny, 0, nil},
+		{"codex on windows denies a push a single-quoted here-string hides", "codex", "windows", "echo @'\n'; git push --force origin main; echo '\n'@\n& git status", risk.DecisionDeny, 0, nil},
+		{"codex on windows denies a push in a broken bash -c script", "codex", "windows", "\"bash\" -c 'git push --force origin main\n& x'", risk.DecisionDeny, 0, nil},
+		{"codex on windows denies a push in a bash -lc argv", "codex", "windows", "", risk.DecisionDeny, 0, []any{"bash", "-lc", backtick}},
+		// Neither reading can read a command over the size limit, so the
+		// strictest GitHub facts stay.
+		{"codex on windows denies an unreadable force push", "codex", "windows", "& git push -f origin main # " + strings.Repeat("x", 70_000), risk.DecisionDeny, 3, nil},
+		// Bash takes the quotes out and runs git (measured), so the
+		// name still counts.
+		{"claude denies an unreadable force push with quotes in its name", "claude", "darwin", `g"it" push --force origin main # ` + strings.Repeat("x", 70_000), risk.DecisionDeny, 1, nil},
+		// With one reading only, an unreadable git command keeps the
+		// strictest GitHub facts.
+		{"codex elsewhere reads POSIX only", "codex", "darwin", "& git push --force origin main", risk.DecisionDeny, 1, nil},
+		{"claude bash on windows is Git Bash", "claude", "windows", "& git push --force origin main", risk.DecisionDeny, 1, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			hostOS := shellHostOS
@@ -268,7 +294,11 @@ func TestCedarCodexShellOnWindowsReadsBothDialects(t *testing.T) {
 			t.Cleanup(func() { shellHostOS = hostOS })
 			deployment := cedarTestDeployment(t, cedareval.RolloutModeEnforce, githubForcePushPolicy)
 			provider := newCedarPolicyProvider(staticHookPolicy{}, staticCedarSnapshots{snapshot: cedarpolicy.Snapshot{Deployment: &deployment, State: cedarpolicy.StateSuccess}}, CedarEnforcementRemote)
-			event := cedarHookEvent("Bash", map[string]any{"command": test.command})
+			var command any = test.command
+			if test.argv != nil {
+				command = test.argv
+			}
+			event := cedarHookEvent("Bash", map[string]any{"command": command})
 			event.Agent = test.agent
 			decision, err := provider.DecideHook(context.Background(), event)
 			if err != nil {
@@ -277,7 +307,7 @@ func TestCedarCodexShellOnWindowsReadsBothDialects(t *testing.T) {
 			if decision.Decision != test.want || decision.Cedar == nil || decision.Cedar.ToolID != cedareval.ToolShellV2 {
 				t.Fatalf("decision = %#v, want %s with tool %s", decision, test.want, cedareval.ToolShellV2)
 			}
-			if len(decision.Cedar.Shell) != test.readings {
+			if test.readings != 0 && len(decision.Cedar.Shell) != test.readings {
 				t.Fatalf("shell evidence = %#v, want %d readings", decision.Cedar.Shell, test.readings)
 			}
 		})
@@ -1074,8 +1104,10 @@ func TestCedarParseFailureIsPolicyDecided(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Decision != risk.DecisionAllow || decision.Cedar.EngineErrorCount != 0 {
-		t.Fatalf("decision = %#v, want policy-decided allow without engine error", decision)
+	// The command cannot be read and names git, so it carries the strictest
+	// GitHub facts and the force-push rule decides it.
+	if decision.Decision != risk.DecisionDeny || decision.Reason != "Blocked by rule github-block-force-push" || decision.Cedar.EngineErrorCount != 0 {
+		t.Fatalf("decision = %#v, want policy-decided deny without engine error", decision)
 	}
 	if len(decision.Cedar.Shell) != 1 || !containsString(decision.Cedar.Shell[0].Features, "shell/parse-error") {
 		t.Fatalf("shell evidence = %#v, want parse-error feature", decision.Cedar.Shell)
@@ -1090,7 +1122,7 @@ when { context.shell.features.contains("shell/parse-error") };`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Decision != risk.DecisionDeny || decision.Reason != "Blocked by rule github-block-unparseable" {
+	if decision.Decision != risk.DecisionDeny || decision.Reason != "Blocked by rule github-block-force-push, github-block-unparseable" {
 		t.Fatalf("decision = %#v, want strict policy to deny unparseable commands", decision)
 	}
 }
