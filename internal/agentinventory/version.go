@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -213,7 +214,47 @@ func findCLI(home, name string, clean map[string]bool) (string, error) {
 			}
 		}
 	}
+	if name == "claude" && runtime.GOOS == "darwin" {
+		if path := desktopClaudeCode(home, clean); path != "" {
+			return path, failure
+		}
+	}
 	return "", failure
+}
+
+// desktopClaudeCode finds the Claude Code that Claude Desktop keeps for itself,
+// with no claude command on any PATH: the program of the newest version folder
+// that has one, under claude-code/<version>/<build>/claude.app.
+func desktopClaudeCode(home string, clean map[string]bool) string {
+	root := filepath.Join(home, "Library", "Application Support", "Claude", "claude-code")
+	versions, _ := os.ReadDir(root)
+	slices.SortFunc(versions, func(a, b os.DirEntry) int { return compareVersions(b.Name(), a.Name()) })
+	for _, version := range versions {
+		if !version.IsDir() || parseVersion(version.Name()) != version.Name() {
+			continue
+		}
+		builds, _ := os.ReadDir(filepath.Join(root, version.Name()))
+		for _, build := range builds {
+			path := filepath.Join(root, version.Name(), build.Name(), "claude.app", "Contents", "MacOS", "claude")
+			if info, err := statCandidate(home, path, clean); err == nil && isProgram(info) {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+// compareVersions orders dotted versions by number: 2.1.10 after 2.1.9.
+func compareVersions(a, b string) int {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		x, _ := strconv.Atoi(as[i])
+		y, _ := strconv.Atoi(bs[i])
+		if x != y {
+			return x - y
+		}
+	}
+	return len(as) - len(bs)
 }
 
 // programNames lists the file names under which name is a program in a
