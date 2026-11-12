@@ -248,14 +248,17 @@ func TestSecretArgumentsAndPermissionRules(t *testing.T) {
 			t.Errorf("kept private url %q", arg)
 		}
 	}
-	t.Run("paths", func(t *testing.T) {
-		hermetic.NotOnWindows(t, "ENG-1004", "the report's path handling isn't ported to Windows yet")
-		for _, arg := range []string{"/Users/someone/file", "--config=/etc/file"} {
-			if safeArg(arg) != "<redacted>" {
-				t.Errorf("kept private path %q", arg)
-			}
+	// Paths of either system, on either system.
+	for _, arg := range []string{"/Users/someone/file", "--config=/etc/file", `C:\Users\someone\file`, `c:/Users/someone/file`, `--config=C:\ProgramData\file`, `"C:\Program Files\x\y.exe"`, `\\server\share\file`, `--out=\\server\share`, `\Users\someone\file`, `--out=\Users\someone\file`} {
+		if safeArg(arg) != "<redacted>" {
+			t.Errorf("kept private path %q", arg)
 		}
-	})
+	}
+	for _, arg := range []string{"-y", "@scope/package", "server:8080", "--level=a:b", `\d+`, "a\\b"} {
+		if safeArg(arg) != arg {
+			t.Errorf("safeArg(%q) = %q, want it kept", arg, safeArg(arg))
+		}
+	}
 	for _, args := range [][]string{{"--password", "P@ssw0rd123"}, {"--TOKEN", "P@ssw0rd123"}, {"--api-key", "P@ssw0rd123"}, {"--AuthToken=secret"}} {
 		if got := safeArgs(append(args, "--verbose")); len(got) != 1 || got[0] != "--verbose" {
 			t.Fatalf("kept secret arguments: %q", got)

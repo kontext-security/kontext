@@ -3,7 +3,6 @@ package agentauthority
 import (
 	"encoding/json"
 	"net/url"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -92,6 +91,12 @@ func secretFlag(arg string) bool {
 	return false
 }
 
+// windowsPath finds a drive path, a UNC path or a path rooted at the current
+// drive (\Users\name\x) that starts the value or follows something that is
+// not part of a word, such as the = of a flag. A lone backslash with no
+// second one after it, as in a regular expression's \d+, is not a path.
+var windowsPath = regexp.MustCompile(`(?:^|[^A-Za-z0-9\\])(?:[A-Za-z]:[\\/]|\\\\[^\\/]|\\[^\\/]+[\\/])`)
+
 func safeArg(arg string) string {
 	if name, _, hasValue := strings.Cut(arg, "="); hasValue && secretArgName.MatchString(name) {
 		return ""
@@ -106,8 +111,15 @@ func safeArg(arg string) string {
 		}
 		return safe(u.Scheme+"://"+u.Host, 64)
 	}
+	// A path names the machine's user and layout whichever system wrote it,
+	// and a report from Windows can hold either kind (a POSIX path under WSL
+	// or Git Bash), so both are told by their spelling, not by this system's
+	// rules: /… , C:\… or C:/… , \\server\… and \folder\… .
+	if windowsPath.MatchString(arg) {
+		return "<redacted>"
+	}
 	for _, part := range strings.FieldsFunc(arg, func(r rune) bool { return r == '=' || r == ':' }) {
-		if filepath.IsAbs(part) {
+		if strings.HasPrefix(part, "/") {
 			return "<redacted>"
 		}
 	}
