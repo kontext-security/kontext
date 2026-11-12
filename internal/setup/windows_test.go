@@ -387,3 +387,30 @@ func TestRunWindowsPutsTheOldKeyBackWhenARerunWithANewKeyFails(t *testing.T) {
 		t.Errorf("the running daemon was stopped %d times by a setup that failed", run.stops)
 	}
 }
+
+// A setup with a new key over an existing install keeps the new key when it
+// succeeds, and also when it fails after the old daemon was stopped: the
+// daemon this run starts, or the next one, has to find it.
+func TestRunWindowsKeepsTheNewKeyOnceTheOldDaemonIsStopped(t *testing.T) {
+	for _, failAt := range []string{"", "start"} {
+		t.Run("fails at "+failAt, func(t *testing.T) {
+			h := newHarnessOnAnyOS(t)
+			run := newWindowsRun(t, h)
+			allowLoopback(t)
+			if err := Run(context.Background(), h.options("old-key", pingServer(t, "old-key"))); err != nil {
+				t.Fatalf("first Run() = %v", err)
+			}
+			run.failAt = failAt
+			err := Run(context.Background(), h.options("new-key", pingServer(t, "new-key")))
+			if (err != nil) != (failAt != "") {
+				t.Fatalf("second Run() = %v with failAt %q", err, failAt)
+			}
+			if got := run.stored[WindowsCredentialName]; got != "new-key" {
+				t.Fatalf("stored key = %q, want the new key", got)
+			}
+			if run.stops != 1 {
+				t.Fatalf("the old daemon was stopped %d times, want once", run.stops)
+			}
+		})
+	}
+}

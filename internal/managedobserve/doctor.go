@@ -280,6 +280,10 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 		case entry == "":
 			fmt.Fprintln(out, "  sign-in entry: missing (run `kontext setup` to restore the background agent)")
 			status.Healthy = false
+		case entry != autostart.Command(program):
+			// What the hook refuses to start, doctor does not call present.
+			fmt.Fprintln(out, "  sign-in entry: not the one `kontext setup` writes; run `kontext setup` to restore it")
+			status.Healthy = false
 		case !regularFile(program):
 			fmt.Fprintf(out, "  sign-in entry: starts a program that is not there (%s); run `kontext setup` from the current install\n", program)
 			status.Healthy = false

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -42,7 +43,7 @@ func startFromSignInEntry(entry func() (string, error), start func(string, ...st
 		return nil
 	}
 	program := autostart.Program(value)
-	if value != autostart.Command(program) {
+	if !filepath.IsAbs(program) || value != autostart.Command(program) {
 		return errors.New("the sign-in entry is not the one kontext setup writes")
 	}
 	if !regularFile(program) {

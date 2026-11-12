@@ -125,13 +125,16 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 	}()
 
 	fmt.Fprintln(opts.Stdout, "\nThis PC")
-	// The key of an existing install goes back if this run fails: the daemon
-	// that keeps running was started with it, and the next sign-in would
-	// otherwise use a key from a setup that reported a failure.
+	// The key of an existing install goes back if this run fails while the
+	// old daemon still runs: that daemon was started with it, and the next
+	// sign-in would otherwise use a key from a setup that reported a failure.
+	// Once the old daemon is stopped the new key stays, for the daemon this
+	// run starts.
+	oldDaemonStopped := false
 	if !firstInstall {
 		if previous, err := readWindowsToken(WindowsCredentialName); err == nil && previous != token {
 			defer func() {
-				if retErr != nil {
+				if retErr != nil && !oldDaemonStopped {
 					_ = storeWindowsToken(WindowsCredentialName, previous)
 				}
 			}()
@@ -169,6 +172,7 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 		if err := stopWindowsDaemon(); err != nil {
 			return fmt.Errorf("stop the running background agent: %w", err)
 		}
+		oldDaemonStopped = true
 	}
 	if err := startWindowsDaemon(daemon, autostart.DaemonSubcommand); err != nil {
 		return fmt.Errorf("start the background agent: %w", err)

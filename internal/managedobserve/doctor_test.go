@@ -838,6 +838,7 @@ func TestDoctorJudgesAWindowsUserInstallByItsSignInEntry(t *testing.T) {
 		{name: "entry present", entry: autostart.Command(program), wantHealthy: true, wantLine: "sign-in entry: present"},
 		{name: "entry missing", wantLine: "sign-in entry: missing"},
 		{name: "entry names a program that is gone", entry: autostart.Command(program + ".old"), wantLine: "sign-in entry: starts a program that is not there"},
+		{name: "entry written by hand", entry: program + " " + autostart.DaemonSubcommand, wantLine: "sign-in entry: not the one `kontext setup` writes"},
 		{name: "entry unreadable", err: errors.New("access denied"), wantLine: "sign-in entry: could not be read (access denied)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

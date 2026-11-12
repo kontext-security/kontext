@@ -105,6 +105,7 @@ func TestStartFromSignInEntry(t *testing.T) {
 		{name: "no entry", entry: ""},
 		{name: "an entry with other arguments", entry: `"` + program + `" something-else`, wantErr: true},
 		{name: "an unquoted entry", entry: program + " " + autostart.DaemonSubcommand, wantErr: true},
+		{name: "a relative program", entry: autostart.Command("kontextw.exe"), wantErr: true},
 		{name: "a program that is gone", entry: autostart.Command(program + ".old"), wantErr: true},
 		{name: "an unreadable entry", entryErr: errors.New("access denied"), wantErr: true},
 	} {
