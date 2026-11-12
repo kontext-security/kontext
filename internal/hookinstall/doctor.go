@@ -32,9 +32,14 @@ func Diagnose(out io.Writer, scope Scope, home string, configured func(agent str
 	// System scope runs without a home folder (root under an MDM). There are
 	// then no user files, and their paths stay empty: joined onto an empty home
 	// they would be read relative to the working directory.
-	codexDir := os.Getenv("CODEX_HOME")
-	if codexDir == "" && home != "" {
-		codexDir = filepath.Join(home, ".codex")
+	// Without a home (root passes none) the user overrides do not count either:
+	// they would point root at files a user controls.
+	codexDir := ""
+	if home != "" {
+		codexDir = os.Getenv("CODEX_HOME")
+		if codexDir == "" {
+			codexDir = filepath.Join(home, ".codex")
+		}
 	}
 	userConfig, userHooks := "", ""
 	if codexDir != "" {
@@ -56,7 +61,7 @@ func Diagnose(out io.Writer, scope Scope, home string, configured func(agent str
 	}
 	if AgentPresent("claude_code", home) {
 		userPath := ""
-		if home != "" || os.Getenv("CLAUDE_CONFIG_DIR") != "" {
+		if home != "" {
 			var err error
 			if userPath, err = claudemanaged.UserSettingsPathNoCreate(home); err != nil {
 				fmt.Fprintf(out, "Claude Code hook sources: %v\n", err)

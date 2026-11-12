@@ -2,6 +2,7 @@ package managedobserve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -18,6 +19,8 @@ import (
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 )
+
+var managedConfigJSON = []byte(`{"version":"managed-install-v1","cloud_url":"https://api.kontext.dev","mode":"observe","agent":"claude","credentials":{"install_token_ref":"env:KONTEXT_INSTALL_TOKEN"}}`)
 
 // On an organization-managed Mac the daemon writes the hooks of an agent that
 // reads no machine-wide file (Antigravity), naming the package's binary, and
@@ -47,7 +50,7 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 		}
 	}
 	config := filepath.Join(t.TempDir(), "managed.json")
-	if err := os.WriteFile(config, []byte(`{"version":"managed-install-v1","cloud_url":"https://api.kontext.dev","mode":"observe","agent":"claude","credentials":{"install_token_ref":"env:KONTEXT_INSTALL_TOKEN"}}`), 0o600); err != nil {
+	if err := os.WriteFile(config, managedConfigJSON, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(managedconfig.EnvPath, config)
@@ -117,6 +120,20 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if err := os.Remove(dropIn); err != nil {
 		t.Fatal(err)
 	}
+	// The remover may delete the system config before the daemon's last pass,
+	// so a self-serve config left from earlier comes into view. The package's
+	// hook still goes.
+	t.Setenv(managedconfig.EnvPath, "")
+	userConfig := managedconfig.UserPath()
+	if err := os.MkdirAll(filepath.Dir(userConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userConfig, managedConfigJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if current, err := managedconfig.Load(); err != nil || current.Scope != managedconfig.ScopeUser {
+		t.Fatalf("config %+v: %v", current, err)
+	}
 	if !heal() {
 		t.Fatal("the daemon left its hook after the package's hooks were removed")
 	}
@@ -126,6 +143,30 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if heal() {
 		t.Fatal("a second removal pass changed something")
 	}
+	// A hook naming another binary (a Homebrew install's) is not the package's
+	// to remove.
+	brew, err := os.ReadFile(hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(brew, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := antigravitymanaged.MergeManagedHooks(settings, "/opt/homebrew/bin/kontext"); err != nil {
+		t.Fatal(err)
+	}
+	brew, _ = json.Marshal(settings)
+	if err := os.WriteFile(hooks, brew, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if heal() {
+		t.Fatal("the daemon removed a hook that names another binary")
+	}
+	if err := os.Remove(userConfig); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(managedconfig.EnvPath, config)
 	if err := os.Remove(hooks); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +217,7 @@ func TestManagedDaemonRemovesItsHooksAsItStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := filepath.Join(t.TempDir(), "managed.json")
-	if err := os.WriteFile(config, []byte(`{"version":"managed-install-v1","cloud_url":"https://api.kontext.dev","mode":"observe","agent":"claude","credentials":{"install_token_ref":"env:KONTEXT_INSTALL_TOKEN"}}`), 0o600); err != nil {
+	if err := os.WriteFile(config, managedConfigJSON, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(managedconfig.EnvPath, config)

@@ -268,6 +268,17 @@ func TestDoctorManagedPerUserHooks(t *testing.T) {
 		t.Fatalf("doctor does not name the unwired agent and its file:\n%s", &out)
 	}
 	// Root without a home folder: nothing to read, and nothing reported broken.
+	// A user's overrides in root's environment do not count either.
+	userCodex := filepath.Join(t.TempDir(), "user-codex")
+	write(t, filepath.Join(userCodex, "config.toml"), "[features]\nhooks = false\n", 0o600)
+	write(t, filepath.Join(userCodex, "hooks.json"), "{", 0o600)
+	t.Setenv("CODEX_HOME", userCodex)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "user-claude"))
+	out.Reset()
+	Diagnose(&out, System, "", func(string) bool { return true })
+	if strings.Contains(out.String(), "user-codex") || strings.Contains(out.String(), "user-claude") {
+		t.Fatalf("root's doctor read a user's override:\n%s", &out)
+	}
 	noHome, err := Definitions(System, "")
 	if err != nil {
 		t.Fatal(err)

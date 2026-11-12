@@ -114,6 +114,20 @@ func packageHooks() (inPlace, gone bool) {
 	return ok && binary == managedHookBinary, false
 }
 
+// namesBinary reports whether path holds a complete Kontext hook set that runs
+// binary. A path in a privacy-guarded folder is never read.
+func namesBinary(home, path string, validate func([]byte) (string, error), binary string) bool {
+	if privacyfolder.Guarded(home, path) {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	named, err := validate(raw)
+	return err == nil && named == binary
+}
+
 // hookHealer gates on the config source, not on file paths, and on the stable
 // binary every hook names: Homebrew's for self-serve, the package's otherwise.
 // It returns nil when the daemon must leave hook files alone; the healer
@@ -145,10 +159,12 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func()
 	return func() bool {
 		current, loadErr := managedconfig.Load()
 		// The package is being removed: it deleted its machine-wide hooks
-		// first, and may delete its config next. The user's hooks go too, and
-		// only this daemon, running as the user, touches them; root never does.
+		// first, and may delete its config next, which can bring a self-serve
+		// config back into view. The user's hooks that name the package's
+		// binary go too, whatever config is found; only this daemon, running as
+		// the user, touches them, and root never does.
 		remove := false
-		if !selfServe && (loadErr != nil || current.Scope != managedconfig.ScopeUser) {
+		if !selfServe {
 			inPlace, gone := packageHooks()
 			if !inPlace && !gone {
 				return false
@@ -189,6 +205,11 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func()
 				SkipAgent: func(agent string) bool { return agentAbsent(home, agent) },
 				Skip: func(file hookinstall.File) bool {
 					if !slices.Contains(def.Files, file) {
+						return true
+					}
+					// Removal takes only hooks that name the package's binary: a
+					// Homebrew install's, or one a person changed, stay.
+					if remove && !namesBinary(home, file.Path, def.Validate, binary) {
 						return true
 					}
 					// The daemon lacks the terminal's folder access: following a

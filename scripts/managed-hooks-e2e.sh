@@ -140,7 +140,8 @@ for name in sorted(os.listdir(d), reverse=True):
         print(found); break
 PY
 )"
-  [[ -n "${wired}" ]] && break
+  # An early scan can predate the daemon's first repair and report "no".
+  [[ "${wired}" == "yes" ]] && break
   sleep 0.2
 done
 [[ "${wired}" == "yes" ]] || fail "inventory reports Antigravity wired=${wired:-<no inventory sent>}"
