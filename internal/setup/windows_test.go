@@ -487,7 +487,7 @@ func TestRunWindowsRefusesAnotherServerOverAnInstall(t *testing.T) {
 	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { asked++ }))
 	t.Cleanup(other.Close)
 	err = Run(context.Background(), h.options("new-key", other))
-	if err == nil || !strings.Contains(err.Error(), "kontext uninstall") {
+	if err == nil || !strings.Contains(err.Error(), "kontext setup --uninstall") {
 		t.Fatalf("Run() for another server = %v, want a refusal that names the way out", err)
 	}
 	if asked != 0 {
@@ -508,5 +508,49 @@ func TestRunWindowsRefusesAnotherServerOverAnInstall(t *testing.T) {
 	}
 	if err := Run(context.Background(), h.options("new-key", pingServer(t, "new-key"))); err != nil {
 		t.Fatalf("Run() after the uninstall = %v", err)
+	}
+}
+
+// The same server spelled another way is not another server: a new key for
+// it goes in without an uninstall.
+func TestRunWindowsTakesANewKeyForTheSameServerSpelledAnotherWay(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	server := pingServerForKeys(t, "old-key", "new-key")
+	first := h.options("old-key", server)
+	first.CloudURL += "/"
+	if err := Run(context.Background(), first); err != nil {
+		t.Fatalf("first Run() = %v", err)
+	}
+	if err := Run(context.Background(), h.options("new-key", server)); err != nil {
+		t.Fatalf("Run() with the URL spelled without its slash = %v", err)
+	}
+	if got := run.stored[WindowsCredentialName]; got != "new-key" {
+		t.Errorf("stored key = %q, want the new key", got)
+	}
+}
+
+func TestSameServer(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"https://api.example.com", "https://api.example.com", true},
+		{"https://api.example.com/", "https://api.example.com", true},
+		{"https://API.Example.com", "https://api.example.com", true},
+		{"https://api.example.com:443", "https://api.example.com", true},
+		{"http://127.0.0.1:80", "http://127.0.0.1/", true},
+		{"https://api.example.com", "https://staging.example.com", false},
+		{"https://api.example.com:8443", "https://api.example.com", false},
+		{"http://127.0.0.1:8080", "https://127.0.0.1:8080", false},
+		{"http://127.0.0.1:8080", "http://127.0.0.1:8081", false},
+	} {
+		if got := sameServer(tc.a, tc.b); got != tc.want {
+			t.Errorf("sameServer(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+		if got := sameServer(tc.b, tc.a); got != tc.want {
+			t.Errorf("sameServer(%q, %q) = %v, want %v", tc.b, tc.a, got, tc.want)
+		}
 	}
 }

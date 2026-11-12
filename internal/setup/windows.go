@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,36 @@ import (
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 )
+
+// sameServer reports whether two cloud URLs name one server: the scheme and
+// host whatever their case, the port whether written out or left to the
+// scheme, and the path empty or "/", which is all a cloud URL may carry.
+func sameServer(a, b string) bool {
+	if a == b {
+		return true
+	}
+	left, err := url.Parse(a)
+	if err != nil {
+		return false
+	}
+	right, err := url.Parse(b)
+	if err != nil {
+		return false
+	}
+	port := func(u *url.URL) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+		if strings.EqualFold(u.Scheme, "http") {
+			return "80"
+		}
+		return "443"
+	}
+	return strings.EqualFold(left.Scheme, right.Scheme) &&
+		strings.EqualFold(left.Hostname(), right.Hostname()) &&
+		port(left) == port(right) &&
+		strings.TrimSuffix(left.EscapedPath(), "/") == strings.TrimSuffix(right.EscapedPath(), "/")
+}
 
 // WindowsCredentialName is the entry in the user's Windows credential store
 // that holds the install key of a self-serve setup.
@@ -95,10 +126,11 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 	// A setup for another server would hand the records still waiting to be
 	// sent to that server, so it is refused before anything is asked of it
 	// or written. A config that cannot be read does not refuse: setup is how
-	// a damaged install is repaired.
-	if loaded, err := managedconfig.LoadFile(slot.ConfigPath); err == nil && loaded.Config.CloudURL != cloudURL {
+	// a damaged install is repaired. The same server spelled another way is
+	// the same server, so a new key for it needs no uninstall.
+	if loaded, err := managedconfig.LoadFile(slot.ConfigPath); err == nil && !sameServer(loaded.Config.CloudURL, cloudURL) {
 		state := filepath.Dir(slot.ConfigPath)
-		return fmt.Errorf("this PC is set up for %s, and the records under %s belong to it. To set it up for %s, run `kontext uninstall`, move that folder away, and run setup again", loaded.Config.CloudURL, state, cloudURL)
+		return fmt.Errorf("this PC is set up for %s, and the records under %s belong to it. To set it up for %s, run `kontext setup --uninstall`, move that folder away, and run setup again", loaded.Config.CloudURL, state, cloudURL)
 	}
 	identity, err := installation.EnsureFile(slot.IdentityPath)
 	if err != nil {
