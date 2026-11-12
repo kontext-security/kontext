@@ -101,10 +101,10 @@ func definitions(scope Scope, home, codexHome string) ([]Definition, error) {
 		{Agent: "cursor", Name: "Cursor", Files: []File{cursor}, Validate: cursormanaged.ValidateInstalled},
 	}
 	// Antigravity documents no machine-wide hooks location, so at system scope
-	// too its file is the user's. Root's own home is never that user's, and
-	// root under an MDM may have none: the path is then a placeholder, never
-	// one relative to the working directory.
-	if scope == System && (!filepath.IsAbs(home) || os.Geteuid() == 0) {
+	// too its file is the user's. Without a home (root passes none: its own is
+	// never that user's) the path is a placeholder, never one relative to the
+	// working directory.
+	if scope == System && !filepath.IsAbs(home) {
 		home = perUserHome
 	}
 	defs = append(defs, Definition{Agent: "antigravity", Name: "Antigravity", Files: []File{{"antigravity", antigravitymanaged.UserHooksPath(home), User}}, Validate: antigravitymanaged.ValidateInstalled})

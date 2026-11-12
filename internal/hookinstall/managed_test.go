@@ -255,6 +255,9 @@ func TestSystemRemovalCleansEveryHome(t *testing.T) {
 // shared folder or a root-owned folder as one.
 func TestLocalHomes(t *testing.T) {
 	hermetic.NotOnWindows(t, "ENG-1001", "per-user hook files exist on macOS only")
+	if os.Geteuid() == 0 {
+		t.Skip("the fixture's homes belong to the user running the test, and root's are never homes")
+	}
 	dir := t.TempDir()
 	for _, name := range []string{"alice", "Shared"} {
 		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {

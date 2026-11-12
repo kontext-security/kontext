@@ -35,6 +35,11 @@ func hooksCmd() *cobra.Command {
 			if err != nil && scope == "user" {
 				return err
 			}
+			// Root's own home holds no user's hooks; a system removal finds each
+			// user's home itself.
+			if scope == "system" && hooksPrivileged() {
+				home = ""
+			}
 			// User scope writes only the user's own files; organization packages
 			// install the machine-wide set with --scope system.
 			if binary == "" && scope == "user" {

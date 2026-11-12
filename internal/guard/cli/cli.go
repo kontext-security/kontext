@@ -277,6 +277,10 @@ func printInstalledHookStatus(out io.Writer, scope hookinstall.Scope) HookStatus
 		fmt.Fprintf(out, "Hooks: %v\n", err)
 		return HookStatus{}
 	}
+	// Root's own home holds no user's hooks.
+	if scope == hookinstall.System && os.Geteuid() == 0 {
+		home = ""
+	}
 	return HookStatus{Healthy: hookinstall.Diagnose(out, scope, home, func(agent string) bool {
 		if !filepath.IsAbs(home) {
 			return false
