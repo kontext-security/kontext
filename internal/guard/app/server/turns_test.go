@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -227,16 +228,18 @@ func TestRuntimeMintsTurnsAndStampsActions(t *testing.T) {
 		t.Fatalf("turn fields: %+v", first)
 	}
 	got := actionTurns(t, store)
+	// Each prompt event's own row carries the turn it minted. Matched as a
+	// set: rows written in one clock tick leave the ledger in the order of
+	// their random ids.
+	if prompts := got["UserPromptSubmit"]; len(prompts) != 2 || !slices.Contains(prompts, first.ID) || !slices.Contains(prompts, second.ID) {
+		t.Fatalf("prompt rows = %v, want one on %s and one on %s", prompts, first.ID, second.ID)
+	}
 	for key, want := range map[string]string{
-		"UserPromptSubmit": first.ID, // the prompt event's own row
-		"PreToolUse:t1":    first.ID,
-		"PostToolUse:t1":   first.ID,
-		"PreToolUse:t2":    second.ID,
+		"PreToolUse:t1":  first.ID,
+		"PostToolUse:t1": first.ID,
+		"PreToolUse:t2":  second.ID,
 	} {
 		rows := got[key]
-		if key == "UserPromptSubmit" {
-			rows = rows[:1]
-		}
 		if len(rows) == 0 {
 			t.Fatalf("no %s action: %v", key, got)
 		}
@@ -444,15 +447,17 @@ func TestHarnessMessagesMintNoTurn(t *testing.T) {
 		}
 	}
 	// Each prompt event's own row: the two typed ones carry their new turn,
-	// the five harness messages the turn already current.
+	// the five harness messages the turn already current. Counted, not read in
+	// order: rows written in one clock tick (a coarse clock, as on Windows)
+	// leave the ledger in the order of their random ids. Only the last prompt
+	// can carry the second turn, which is minted by it, and a turn minted for
+	// a harness message fails the two-turn check above.
 	prompts := got["UserPromptSubmit"]
-	want := []string{turns[0].ID, turns[0].ID, turns[0].ID, turns[0].ID, turns[0].ID, turns[0].ID, turns[1].ID}
-	if len(prompts) != len(want) {
-		t.Fatalf("prompt rows = %v", prompts)
+	perTurn := map[string]int{}
+	for _, turn := range prompts {
+		perTurn[turn]++
 	}
-	for i := range want {
-		if prompts[i] != want[i] {
-			t.Fatalf("prompt row %d turn = %q, want %q (all: %v)", i, prompts[i], want[i], prompts)
-		}
+	if len(prompts) != 7 || perTurn[turns[0].ID] != 6 || perTurn[turns[1].ID] != 1 {
+		t.Fatalf("prompt rows per turn = %v, want 6 on %s and 1 on %s (all: %v)", perTurn, turns[0].ID, turns[1].ID, prompts)
 	}
 }
