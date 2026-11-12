@@ -383,10 +383,10 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 		// not one launchd has unloaded (Stop daemon in the menu bar, an
 		// interrupted profile switch), so only promise a restart when loaded.
 		if runtimeGOOS == "windows" {
-			// Nothing starts the daemon with a session here: the hook's
-			// kickstart is launchd's.
+			// A user install's hook starts the daemon its sign-in entry
+			// names; a machine-wide install's daemon is its logon task's.
 			if status.SelfServe {
-				fmt.Fprintln(out, "  daemon: not running (it starts when you sign in; `kontext setup` starts it now)")
+				fmt.Fprintln(out, "  daemon: not running (it starts with your next Claude Code session, or when you sign in)")
 			} else {
 				fmt.Fprintln(out, "  daemon: not running (the installer's logon task starts it)")
 			}

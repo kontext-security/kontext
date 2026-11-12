@@ -820,8 +820,9 @@ func TestDoctorDropsAFixedTrustFailure(t *testing.T) {
 
 // A user install on Windows is judged by its sign-in entry, not by a launch
 // agent it cannot have: the entry has to be there and start a program that
-// exists. A stopped daemon is not promised a start with the next Claude Code
-// session, and an older daemon is restarted by `kontext setup`.
+// exists. A stopped daemon starts with the next Claude Code session or the
+// next sign-in; a machine-wide install's is left to its logon task. An older
+// daemon is restarted by `kontext setup`.
 func TestDoctorJudgesAWindowsUserInstallByItsSignInEntry(t *testing.T) {
 	program := filepath.Join(t.TempDir(), "kontextw.exe")
 	if err := os.WriteFile(program, nil, 0o700); err != nil {
@@ -878,7 +879,7 @@ func TestDoctorJudgesAWindowsUserInstallByItsSignInEntry(t *testing.T) {
 		opts.Dial = down
 		var out bytes.Buffer
 		printStatus(&out, "1.2.3", opts)
-		if strings.Contains(out.String(), "next Claude Code session") || !strings.Contains(out.String(), "daemon: not running (it starts when you sign in") {
+		if !strings.Contains(out.String(), "daemon: not running (it starts with your next Claude Code session, or when you sign in)") {
 			t.Errorf("the stopped daemon's line is wrong for Windows:\n%s", out.String())
 		}
 	})
