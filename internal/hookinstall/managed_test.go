@@ -224,6 +224,21 @@ func TestPerUserRemovalKeepsOtherEntries(t *testing.T) {
 		if err := Install(o); err != nil {
 			t.Fatal(err)
 		}
+		installed := read(t, path)
+		// RemoveIf sees the bytes the removal plans with, and can keep them.
+		keep := o
+		keep.RemoveIf = func(_ File, content []byte) bool {
+			if string(content) != installed {
+				t.Errorf("RemoveIf saw other bytes than the file's")
+			}
+			return false
+		}
+		if err := Remove(keep); err != nil {
+			t.Fatal(err)
+		}
+		if read(t, path) != installed {
+			t.Fatal("a removal RemoveIf rejected changed the file")
+		}
 		if err := Remove(o); err != nil {
 			t.Fatal(err)
 		}

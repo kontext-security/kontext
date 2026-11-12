@@ -77,7 +77,7 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if heal == nil {
 		t.Fatal("an organization-managed config got no hook healer")
 	}
-	if !heal() {
+	if !heal(false) {
 		t.Fatal("the healer changed nothing")
 	}
 	raw, err := os.ReadFile(antigravitymanaged.UserHooksPath(home))
@@ -95,7 +95,7 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if wired := antigravityWired(); wired != agentinventory.WiredYes {
 		t.Fatalf("inventory reports Antigravity %q", wired)
 	}
-	if heal() {
+	if heal(false) {
 		t.Fatal("a second pass changed a complete file")
 	}
 	// Package removal deletes the machine-wide hooks first; from then on the
@@ -114,7 +114,7 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if err := os.WriteFile(dropIn, other, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if heal() {
+	if heal(false) {
 		t.Fatal("the daemon changed hooks while the package's hooks name another binary")
 	}
 	if err := os.Remove(dropIn); err != nil {
@@ -134,13 +134,13 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if current, err := managedconfig.Load(); err != nil || current.Scope != managedconfig.ScopeUser {
 		t.Fatalf("config %+v: %v", current, err)
 	}
-	if !heal() {
+	if !heal(false) {
 		t.Fatal("the daemon left its hook after the package's hooks were removed")
 	}
 	if left, err := os.ReadFile(hooks); err != nil || strings.Contains(string(left), `"kontext"`) || !strings.Contains(string(left), "other-tool") {
 		t.Fatalf("after removal: %s %v", left, err)
 	}
-	if heal() {
+	if heal(false) {
 		t.Fatal("a second removal pass changed something")
 	}
 	// A hook naming another binary (a Homebrew install's) is not the package's
@@ -160,7 +160,7 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if err := os.WriteFile(hooks, brew, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if heal() {
+	if heal(false) {
 		t.Fatal("the daemon removed a hook that names another binary")
 	}
 	if err := os.Remove(userConfig); err != nil {
@@ -173,11 +173,41 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if err := os.WriteFile(dropIn, template, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The pass as the daemon stops only removes: a self-serve uninstall stops
+	// the daemon before it removes the hooks.
+	if heal(true) {
+		t.Fatal("the last pass installed hooks")
+	}
+	if _, err := os.Lstat(hooks); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the last pass wrote %s: %v", hooks, err)
+	}
 	// Another binary (an old process after an upgrade, or a developer build)
 	// writes nothing.
 	executablePath = func() (string, error) { return hermetic.KontextBinary(t, t.TempDir()), nil }
-	if heal() {
+	if heal(false) {
 		t.Fatal("a binary other than the package's wrote hooks")
+	}
+	// Nor does it remove hooks that name the package's path while that binary
+	// is not it: on an Intel Mac Homebrew's kontext is /usr/local/bin/kontext.
+	if err := os.WriteFile(hooks, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(dropIn); err != nil {
+		t.Fatal(err)
+	}
+	if heal(false) || heal(true) {
+		t.Fatal("a binary other than the package's removed hooks naming the package's path")
+	}
+	if got, err := os.ReadFile(hooks); err != nil || string(got) != string(raw) {
+		t.Fatalf("hooks changed: %v", err)
+	}
+	// Once the remover has deleted the binary, any daemon still stopping
+	// removes them.
+	if err := os.Remove(binary); err != nil {
+		t.Fatal(err)
+	}
+	if !heal(true) {
+		t.Fatal("the last pass left hooks naming a deleted binary")
 	}
 }
 

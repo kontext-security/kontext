@@ -35,7 +35,7 @@ func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log di
 	ticker := time.NewTicker(hookWatchInterval)
 	defer ticker.Stop()
 	for {
-		healed := heal != nil && heal()
+		healed := heal != nil && heal(false)
 		current := hookFilesFingerprint()
 		// The inventory scans once at start; later changes need a rescan.
 		if healed || started && current != last {
@@ -44,11 +44,12 @@ func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log di
 		last, started = current, true
 		select {
 		case <-ctx.Done():
-			// One last pass as the daemon stops: package removal deletes the
-			// machine-wide hooks and then stops this daemon, which removes the
-			// user's hooks here, before the binary they name is deleted.
+			// One last pass as the daemon stops, removal only: package removal
+			// deletes the machine-wide hooks and then stops this daemon, which
+			// removes the user's hooks here. It never installs: a self-serve
+			// uninstall stops the daemon before it removes the hooks.
 			if heal != nil {
-				heal()
+				heal(true)
 			}
 			return
 		case <-ticker.C:
@@ -114,25 +115,28 @@ func packageHooks() (inPlace, gone bool) {
 	return ok && binary == managedHookBinary, false
 }
 
-// namesBinary reports whether path holds a complete Kontext hook set that runs
-// binary. A path in a privacy-guarded folder is never read.
-func namesBinary(home, path string, validate func([]byte) (string, error), binary string) bool {
-	if privacyfolder.Guarded(home, path) {
-		return false
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	named, err := validate(raw)
+// namesBinary reports whether content is a complete Kontext hook set that
+// runs binary.
+func namesBinary(content []byte, validate func([]byte) (string, error), binary string) bool {
+	named, err := validate(content)
 	return err == nil && named == binary
+}
+
+// packageBinaryOurs reports whether this process is the package's binary, or
+// that binary is gone (package removal deletes it). Another process at that
+// path, an Intel Homebrew install's, never removes hooks it did not write.
+func packageBinaryOurs(binary string) bool {
+	if _, err := os.Stat(binary); errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	return runningStableBinary(binary)
 }
 
 // hookHealer gates on the config source, not on file paths, and on the stable
 // binary every hook names: Homebrew's for self-serve, the package's otherwise.
 // It returns nil when the daemon must leave hook files alone; the healer
 // reports whether it changed one.
-func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func() bool {
+func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(final bool) bool {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
@@ -156,7 +160,7 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func()
 		}
 		lastErr = fmt.Sprint(err)
 	}
-	return func() bool {
+	return func(final bool) bool {
 		current, loadErr := managedconfig.Load()
 		// The package is being removed: it deleted its machine-wide hooks
 		// first, and may delete its config next, which can bring a self-serve
@@ -169,7 +173,10 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func()
 			if !inPlace && !gone {
 				return false
 			}
-			remove = gone
+			remove = gone && packageBinaryOurs(binary)
+		}
+		if final && !remove {
+			return false
 		}
 		if !remove {
 			// A config of the other kind installed while this daemon runs takes
@@ -203,13 +210,11 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func()
 				// Cursor hooks, and a user copy would run each twice.
 				Scope: scope, PerUser: !selfServe, Home: home, Binary: binary, NoBackup: true, SetupPaths: true,
 				SkipAgent: func(agent string) bool { return agentAbsent(home, agent) },
+				// Removal takes only hooks that name the package's binary: a
+				// Homebrew install's, or one a person changed, stay.
+				RemoveIf: func(_ hookinstall.File, content []byte) bool { return namesBinary(content, def.Validate, binary) },
 				Skip: func(file hookinstall.File) bool {
 					if !slices.Contains(def.Files, file) {
-						return true
-					}
-					// Removal takes only hooks that name the package's binary: a
-					// Homebrew install's, or one a person changed, stay.
-					if remove && !namesBinary(home, file.Path, def.Validate, binary) {
 						return true
 					}
 					// The daemon lacks the terminal's folder access: following a

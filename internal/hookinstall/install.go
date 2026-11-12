@@ -259,6 +259,9 @@ type Options struct {
 	Report       func(Result)
 	// Skip leaves a file out entirely, e.g. one the caller must not read.
 	Skip func(File) bool
+	// RemoveIf, when set, keeps a file whose content it rejects out of a
+	// removal: the daemon removes only hooks that name the package's binary.
+	RemoveIf func(file File, content []byte) bool
 	// SkipAgent leaves out an agent that is not on this machine. Only installs
 	// consult it: removal must reach whatever an earlier install wrote.
 	SkipAgent func(agent string) bool
@@ -437,6 +440,12 @@ func plan(file File, opts Options, remove bool) (change, error) {
 	err = nil
 	if remove && c.missing {
 		c.result.Reason = "absent"
+		return c, nil
+	}
+	// Judged on the bytes this removal plans with; apply refuses if they
+	// change before the write.
+	if remove && opts.RemoveIf != nil && !opts.RemoveIf(file, c.before) {
+		c.result.Reason = "not-ours"
 		return c, nil
 	}
 	switch file.Kind {
