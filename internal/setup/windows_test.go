@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/autostart"
 	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
@@ -33,7 +34,9 @@ type windowsRun struct {
 	failAt     string
 	storeError error
 	stops      int
-	delError   error
+	// stoppedProgram is the daemon program the last stop was limited to.
+	stoppedProgram string
+	delError       error
 }
 
 func newWindowsRun(t *testing.T, h *harness) *windowsRun {
@@ -77,7 +80,20 @@ func newWindowsRun(t *testing.T, h *harness) *windowsRun {
 		delete(run.stored, name)
 		return nil
 	})
-	overrideVar(t, &stopWindowsDaemon, func() error { run.stops++; return nil })
+	overrideVar(t, &stopWindowsDaemon, func(program string) (bool, error) {
+		run.stops++
+		run.stoppedProgram = program
+		// A daemon runs once setup started one, until a stop ends it.
+		running := len(run.started) > 0
+		run.started = nil
+		return running, nil
+	})
+	overrideVar(t, &readWindowsAutostart, func() (string, error) {
+		if run.autostart == "" {
+			return "", nil
+		}
+		return autostart.Command(run.autostart), nil
+	})
 	overrideVar(t, &installWindowsHooks, func(opts hookinstall.Options) error {
 		if run.failAt == "hooks" {
 			return errors.New("hooks failed")
@@ -331,6 +347,12 @@ func TestUninstallWindowsTakesBackWhatSetupWrote(t *testing.T) {
 	if _, err := os.Stat(managedconfig.LegacyUserPath()); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the config is still there: %v", err)
 	}
+	if run.stoppedProgram != "" {
+		t.Errorf("alone on the machine, uninstall limited its stop to %q, want whichever daemon serves the user", run.stoppedProgram)
+	}
+	if !strings.Contains(out.String(), "✓ Background agent stopped") {
+		t.Errorf("uninstall ended the daemon and did not say so:\n%s", out.String())
+	}
 	if run.autostart != "" || run.hooksGone != 1 || run.stops != 1 {
 		t.Errorf("autostart %q, hooks removed %d times, daemon stopped %d times; want none, 1, 1", run.autostart, run.hooksGone, run.stops)
 	}
@@ -552,5 +574,58 @@ func TestSameServer(t *testing.T) {
 		if got := sameServer(tc.b, tc.a); got != tc.want {
 			t.Errorf("sameServer(%q, %q) = %v, want %v", tc.b, tc.a, got, tc.want)
 		}
+	}
+}
+
+// Beside a machine-wide install, uninstall ends only the daemon its own
+// sign-in entry names, and none when there is no entry to tell them apart.
+// It says "stopped" only when it ended one.
+func TestUninstallWindowsBesideAMachineWideInstallEndsOnlyItsOwnDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		dropEntry   bool
+		daemonGone  bool
+		wantProgram string
+		wantStops   int
+		wantSaid    bool
+	}{
+		{name: "its entry names the daemon", wantStops: 1, wantSaid: true},
+		{name: "the daemon is not running", daemonGone: true, wantStops: 1},
+		{name: "no entry", dropEntry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessOnAnyOS(t)
+			run := newWindowsRun(t, h)
+			allowLoopback(t)
+			opts := h.options("tok", pingServer(t, "tok"))
+			if err := Run(context.Background(), opts); err != nil {
+				t.Fatalf("Run() = %v", err)
+			}
+			// A machine-wide install arrives after the user's own.
+			if err := os.MkdirAll(filepath.Dir(systemConfigPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(systemConfigPath, []byte("{}"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			want := run.daemon
+			if tc.dropEntry {
+				run.autostart, want = "", ""
+			}
+			if tc.daemonGone {
+				run.started = nil
+			}
+			var out bytes.Buffer
+			opts.Stdout, opts.Stderr = &out, &out
+			if err := Uninstall(context.Background(), opts); err != nil {
+				t.Fatalf("Uninstall() = %v\n%s", err, out.String())
+			}
+			if run.stops != tc.wantStops || (tc.wantStops > 0 && run.stoppedProgram != want) {
+				t.Errorf("stops = %d limited to %q, want %d limited to %q", run.stops, run.stoppedProgram, tc.wantStops, want)
+			}
+			if said := strings.Contains(out.String(), "Background agent stopped"); said != tc.wantSaid {
+				t.Errorf("said stopped: %v, want %v:\n%s", said, tc.wantSaid, out.String())
+			}
+		})
 	}
 }

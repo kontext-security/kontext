@@ -6,8 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
-	"testing"
+	"time"
 
 	"golang.org/x/sys/windows"
 
@@ -17,15 +18,37 @@ import (
 // kickstartDaemon is what a hook does when nothing listens on the daemon's
 // socket. Windows has no launchd to ask, so the hook starts the daemon
 // itself, from the user's sign-in entry: the same program a sign-in starts.
-//
-// Under `go test` it does nothing. A test's home does not cover the registry,
-// so a test that got here would start the daemon of the real install on the
-// machine it runs on.
+// (To a test the machine has no entry, so a test starts nothing: autostart.)
 func kickstartDaemon(context.Context, string) error {
-	if testing.Testing() {
+	stamp := filepath.Join(filepath.Dir(DefaultSocketPath()), "daemon-start.stamp")
+	if startInProgress(stamp, time.Now()) {
 		return nil
 	}
-	return startFromSignInEntry(autostart.Entry, autostart.Start)
+	return startFromSignInEntry(autostart.Entry, func(program string, args ...string) error {
+		// Before the start, so hooks arriving while the daemon loads see it.
+		// A stamp that cannot be written costs the window, not the start.
+		_ = os.WriteFile(stamp, nil, 0o600)
+		return autostart.Start(program, args...)
+	})
+}
+
+// daemonStartWindow is how long one start of the daemon is given before a
+// hook starts another. A daemon that comes up listens well inside it, and one
+// that gives way to another waits as long for the other's lock. Without it
+// every hook call that finds no daemon starts a process, and a daemon that
+// cannot start at all gets one per call.
+const daemonStartWindow = 5 * time.Second
+
+// startInProgress reports a start another hook made within the window. The
+// stamp is that start's mark; its age is all that counts, so a stale one
+// needs no cleanup.
+func startInProgress(stamp string, now time.Time) bool {
+	info, err := os.Stat(stamp)
+	if err != nil {
+		return false
+	}
+	age := now.Sub(info.ModTime())
+	return age >= 0 && age < daemonStartWindow
 }
 
 // startFromSignInEntry starts the daemon the sign-in entry names, and only
