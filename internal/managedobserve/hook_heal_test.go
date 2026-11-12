@@ -206,8 +206,17 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	hermetic.KontextBinary(t, filepath.Dir(binary))
-	if heal(true) {
-		t.Fatal("the daemon removed hooks after its binary was replaced by another file")
+	if heal(true) || heal(false) {
+		t.Fatal("the daemon changed hooks after its binary was replaced by another file")
+	}
+	if err := os.Remove(hooks); err != nil {
+		t.Fatal(err)
+	}
+	if heal(false) {
+		t.Fatal("the daemon installed hooks while the package's hooks are gone")
+	}
+	if err := os.WriteFile(hooks, raw, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(hooks); err != nil || string(got) != string(raw) {
 		t.Fatalf("hooks changed: %v", err)

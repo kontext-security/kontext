@@ -185,11 +185,13 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(f
 		// the user, touches them, and root never does.
 		remove := false
 		if !selfServe {
+			// Install only while the package's hooks are in place; once they are
+			// gone, remove or do nothing.
 			inPlace, gone := packageHooks()
-			if !inPlace && !gone {
+			if !inPlace && !(gone && packageBinaryOurs(binary, started)) {
 				return false
 			}
-			remove = gone && packageBinaryOurs(binary, started)
+			remove = !inPlace
 		}
 		if final && !remove {
 			return false
