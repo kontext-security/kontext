@@ -119,9 +119,13 @@ func (g *guard) access(path, mode string) fileResult {
 	if read == nil {
 		read = func(path, mode string) fileResult { return readGuarded(readCtx, path, mode) }
 	}
-	stat := g.lstat
-	if stat == nil {
-		stat = os.Lstat
+	// What a path is, before anything of it is read: the system's own way,
+	// or lstat component by component where a test supplies one.
+	what := statGuarded
+	if g.lstat != nil {
+		what = func(_ context.Context, path, mode string) (os.FileInfo, error) {
+			return guardedInfo(path, g.lstat, mode == "tail" || mode == "cursor")
+		}
 	}
 	if g.seen != nil {
 		g.seen[path] = true
@@ -132,14 +136,14 @@ func (g *guard) access(path, mode string) fileResult {
 		if beginRead != nil {
 			defer beginRead()()
 		}
-		info, err := guardedInfo(path, stat, mode == "tail" || mode == "cursor")
+		info, err := what(readCtx, path, mode)
 		if err != nil {
 			done <- fileResult{err: err}
 			return
 		}
 		var walInfo os.FileInfo
 		if mode == "cursor" {
-			walInfo, err = guardedInfo(path+"-wal", stat, true)
+			walInfo, err = what(readCtx, path+"-wal", "tail")
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				done <- fileResult{err: err}
 				return
@@ -155,7 +159,7 @@ func (g *guard) access(path, mode string) fileResult {
 		}
 		if hasCache && sameFileVersion(cached.info, info) && sameFileVersion(cached.walInfo, walInfo) {
 			// A chmod or ACL change leaves the version alone.
-			if err := readable(path); err != nil {
+			if err := readable(path, mode); err != nil {
 				done <- fileResult{err: err}
 				return
 			}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -20,14 +21,8 @@ import (
 
 var fixtureTime = time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
 
+// fixtureHome copies the named fixture into a home for a scan.
 func fixtureHome(t *testing.T, name string) string {
-	t.Helper()
-	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
-	return fixtureHomeOnAnyOS(t, name)
-}
-
-// fixtureHomeOnAnyOS copies the fixture for a scan that reads none of it.
-func fixtureHomeOnAnyOS(t *testing.T, name string) string {
 	t.Helper()
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -47,7 +42,13 @@ func fixtureHomeOnAnyOS(t *testing.T, name string) string {
 		if err != nil {
 			return err
 		}
-		data = bytes.ReplaceAll(data, []byte("{{HOME}}"), []byte(home))
+		// In a JSON file the home is a string's content: a Windows path's
+		// backslashes are written as JSON writes them.
+		written := home
+		if filepath.Ext(path) == ".json" {
+			written = strings.ReplaceAll(home, `\`, `\\`)
+		}
+		data = bytes.ReplaceAll(data, []byte("{{HOME}}"), []byte(written))
 		if err = os.WriteFile(dest, data, 0600); err != nil {
 			return err
 		}
@@ -60,7 +61,6 @@ func fixtureHomeOnAnyOS(t *testing.T, name string) string {
 }
 func writeFixture(t *testing.T, home, path, data string) {
 	t.Helper()
-	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
 	path = filepath.Join(home, path)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestParentSymlinkAndOutsideRoot(t *testing.T) {
 	}
 }
 func TestCancelledScan(t *testing.T) {
-	home := fixtureHomeOnAnyOS(t, "home_claude_full")
+	home := fixtureHome(t, "home_claude_full")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	r := scan(ctx, home, Environment{}, []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}}, fixtureTime, filepath.Join(home, "managed"))
@@ -608,5 +608,42 @@ func TestCustomConfigDirectoryDoesNotExpandReadAllowlist(t *testing.T) {
 	r := scanFixture(home, []AgentLocation{{ID: "claude_code", ConfigPath: filepath.Join(home, "custom-claude")}})
 	if r.Agents[0].Permissions.DefaultMode != nil || len(r.Agents[0].Plugins) != 0 || r.Coverage.SkippedFiles == 0 || r.Truncated {
 		t.Fatalf("custom discovery location expanded the read rule: %+v", r)
+	}
+}
+
+// A second scan of an unchanged home answers from what the first one read,
+// folders included: it must report what the first did, with every source
+// as complete as before.
+func TestASecondScanOfAnUnchangedHomeReportsTheSame(t *testing.T) {
+	home := fixtureHome(t, "home_claude_full")
+	writeFixture(t, home, ".ssh/id_ed25519", "not a key")
+	writeFixture(t, home, ".ssh/id_ed25519.pub", "not a key")
+	agents := []AgentLocation{{ID: "claude_code", ConfigPath: "~/.claude"}}
+	scanner := new(Scanner)
+	first := scanner.Scan(context.Background(), home, Environment{}, agents, fixtureTime)
+	second := scanner.Scan(context.Background(), home, Environment{}, agents, fixtureTime)
+	if len(first.Credentials) == 0 || len(first.Agents[0].Plugins) == 0 {
+		t.Fatalf("the fixture gives the first scan no folder facts: %d credentials, %d plugins", len(first.Credentials), len(first.Agents[0].Plugins))
+	}
+	want, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("the second scan reports differently\nfirst:  %s\nsecond: %s", want, got)
+	}
+	outcome := func(sources []SourceResult) []string {
+		var out []string
+		for _, source := range sources {
+			out = append(out, fmt.Sprintf("%s %s %v", source.ID, source.Status, source.Reasons))
+		}
+		return out
+	}
+	if !reflect.DeepEqual(outcome(first.Sources), outcome(second.Sources)) {
+		t.Errorf("the second scan's sources differ\nfirst:  %v\nsecond: %v", outcome(first.Sources), outcome(second.Sources))
 	}
 }

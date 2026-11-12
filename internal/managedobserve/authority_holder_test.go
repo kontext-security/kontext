@@ -14,7 +14,6 @@ import (
 )
 
 func TestAuthorityHolderStartupAndSwitch(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

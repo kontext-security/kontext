@@ -110,7 +110,6 @@ func TestDaemonSessionEndClosesHookSessionID(t *testing.T) {
 }
 
 func TestDaemonStreamsLedgerBatches(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
 	// The authority guard refuses symlinked ancestors; macOS's temp dir has one.
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

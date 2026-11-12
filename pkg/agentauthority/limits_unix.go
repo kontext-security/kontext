@@ -18,7 +18,12 @@ import (
 // downloading the file.
 func isEvictedErr(err error) bool { return errors.Is(err, unix.EDEADLK) }
 
-func readable(path string) error { return unix.Access(path, unix.R_OK) }
+func readable(path, _ string) error { return unix.Access(path, unix.R_OK) }
+
+// statGuarded says what a path is by lstat, component by component.
+func statGuarded(_ context.Context, path, mode string) (os.FileInfo, error) {
+	return guardedInfo(path, os.Lstat, mode == "tail" || mode == "cursor")
+}
 
 func readGuarded(ctx context.Context, path, mode string) (result fileResult) {
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
