@@ -3,6 +3,7 @@ package shellprojection
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/toolcatalog"
@@ -38,6 +39,12 @@ func TestOperationVocabulary(t *testing.T) {
 	})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("vocabulary = %v, want %v", got, want)
+	}
+	worst := githubWorstFacts()
+	for _, fact := range append(want, op(OperationEditOrganization), op(OperationEditTeams), op(OperationEditAccountKeys)) {
+		if !slices.Contains(worst, fact) {
+			t.Errorf("githubWorstFacts lacks %s", fact)
+		}
 	}
 	if got := toolcatalog.Operations(toolcatalog.GitHubToolPrefix + "merge_pull_request"); !reflect.DeepEqual(got, []string{OperationMergePullRequest}) {
 		t.Fatalf("toolcatalog merge operations = %v", got)

@@ -599,8 +599,10 @@ var programName = regexp.MustCompile(`^[A-Za-z0-9_./-]{1,128}$`)
 
 // parseFailure is the projection of a command that cannot be parsed. It keeps
 // the program its first word names. A command that mentions Databricks gets
-// the strictest Databricks facts: it is known to be Databricks and cannot be
-// read, so a padded or broken DROP is not let through (the base tier rule).
+// the strictest Databricks facts, and one that mentions git or gh the
+// strictest GitHub facts: it is known to reach that provider and cannot be
+// read, so a padded or broken DROP or force push is not let through (the
+// base tier rule).
 func parseFailure(reason, command string) cedareval.ShellProjectionV2 {
 	program := "unknown"
 	if fields := strings.Fields(command[:min(len(command), 4096)]); len(fields) > 0 && programName.MatchString(fields[0]) {
@@ -610,6 +612,9 @@ func parseFailure(reason, command string) cedareval.ShellProjectionV2 {
 	facts = append(facts, providerHostFacts(command)...)
 	if mentionsDatabricks.MatchString(command) {
 		facts = append(facts, databricksWorstFacts()...)
+	}
+	if mentionsGitOrGH.MatchString(command) {
+		facts = append(facts, githubWorstFacts()...)
 	}
 	return projection(program, facts, []string{FeatureParseError, reason}, false)
 }

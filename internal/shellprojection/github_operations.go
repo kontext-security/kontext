@@ -67,6 +67,27 @@ const (
 	hostGitHubUploads = "uploads.github.com"
 )
 
+// mentionsGitOrGH matches a command that names git or gh as a word, in any
+// case (macOS runs GIT as git), as a path (/usr/bin/git) or as git.exe.
+var mentionsGitOrGH = regexp.MustCompile(`(?i)(^|[^a-z0-9_.-])(git|gh)([^a-z0-9_-]|$)`)
+
+// githubWorstFacts are the facts of a git or gh call the projection cannot
+// read at all: a write, a force push and every GitHub operation, so each
+// GitHub preset forbids it on its own. github/route=unrecognized stays out:
+// the presets rely on it naming a resolved git, gh or curl program.
+func githubWorstFacts() []string {
+	return append([]string{"github/write=true", "github/force-push=true", "git/force=true"}, operationFacts([]string{
+		OperationForcePush, OperationForcePushWithLease, OperationDeleteRef, OperationMoveTag, OperationUpdateRef,
+		OperationMergePullRequest, OperationEnableAutoMerge, OperationDisableAutoMerge, OperationMergeBranch,
+		OperationApprovePullRequest, OperationCreateRelease, OperationEditRelease, OperationDeleteRelease,
+		OperationUploadReleaseAsset, OperationRunWorkflow, OperationRerunWorkflowRun, OperationCancelWorkflowRun,
+		OperationApproveWorkflowRun, OperationDeleteWorkflowRun, OperationEnableWorkflow, OperationDisableWorkflow,
+		OperationEditRepository, OperationDeleteRepository, OperationTransferRepository, OperationEditBranchProtection,
+		OperationEditEnvironment, OperationEditCollaborators, OperationEditWebhooks, OperationEditDeployKeys,
+		OperationEditSecrets, OperationEditOrganization, OperationEditTeams, OperationEditAccountKeys, OperationOtherWrite,
+	})...)
+}
+
 // OperationFact renders an operation as the fact string Cedar matches.
 func OperationFact(operation string) string {
 	return factOperationPrefix + operation

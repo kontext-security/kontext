@@ -258,9 +258,12 @@ func TestCedarCodexShellOnWindowsReadsBothDialects(t *testing.T) {
 	}{
 		{"codex on windows reads PowerShell too", "codex", "windows", "& git push --force origin main", risk.DecisionDeny, 2},
 		{"codex on windows keeps the PowerShell reading of a plain command", "codex", "windows", "git push -f origin main", risk.DecisionDeny, 2},
-		{"codex on windows allows a read", "codex", "windows", "& git status", risk.DecisionAllow, 2},
-		{"codex elsewhere reads POSIX only", "codex", "darwin", "& git push --force origin main", risk.DecisionAllow, 1},
-		{"claude bash on windows is Git Bash", "claude", "windows", "& git push --force origin main", risk.DecisionAllow, 1},
+		// The POSIX reading of `&` at the start cannot be parsed, and an
+		// unreadable git command gets the strictest GitHub facts, so a read
+		// is denied too: the cost of failing closed.
+		{"codex on windows denies a read the POSIX reading cannot parse", "codex", "windows", "& git status", risk.DecisionDeny, 2},
+		{"codex elsewhere reads POSIX only", "codex", "darwin", "& git push --force origin main", risk.DecisionDeny, 1},
+		{"claude bash on windows is Git Bash", "claude", "windows", "& git push --force origin main", risk.DecisionDeny, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			hostOS := shellHostOS
@@ -1074,8 +1077,10 @@ func TestCedarParseFailureIsPolicyDecided(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Decision != risk.DecisionAllow || decision.Cedar.EngineErrorCount != 0 {
-		t.Fatalf("decision = %#v, want policy-decided allow without engine error", decision)
+	// The command cannot be read and names git, so it carries the strictest
+	// GitHub facts and the force-push rule decides it.
+	if decision.Decision != risk.DecisionDeny || decision.Reason != "Blocked by rule github-block-force-push" || decision.Cedar.EngineErrorCount != 0 {
+		t.Fatalf("decision = %#v, want policy-decided deny without engine error", decision)
 	}
 	if len(decision.Cedar.Shell) != 1 || !containsString(decision.Cedar.Shell[0].Features, "shell/parse-error") {
 		t.Fatalf("shell evidence = %#v, want parse-error feature", decision.Cedar.Shell)
@@ -1090,7 +1095,7 @@ when { context.shell.features.contains("shell/parse-error") };`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Decision != risk.DecisionDeny || decision.Reason != "Blocked by rule github-block-unparseable" {
+	if decision.Decision != risk.DecisionDeny || !strings.Contains(decision.Reason, "github-block-unparseable") {
 		t.Fatalf("decision = %#v, want strict policy to deny unparseable commands", decision)
 	}
 }
