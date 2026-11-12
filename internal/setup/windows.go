@@ -309,6 +309,12 @@ func uninstallWindows(_ context.Context, opts Options) error {
 	if _, err := os.Stat(slot.ConfigPath); err == nil {
 		stopped, err := stopOwnDaemon(entry)
 		if err != nil {
+			// The entry is what tells this install's daemon from another's.
+			// Without it a second uninstall could not find the daemon it
+			// failed to stop, so it goes back.
+			if program := autostart.Program(entry); program != "" {
+				_ = setWindowsAutostart(program)
+			}
 			return fmt.Errorf("stop the background agent: %w", err)
 		}
 		if stopped {
@@ -340,7 +346,9 @@ func uninstallWindows(_ context.Context, opts Options) error {
 // and writes the same status file, it is only the one running the entry's
 // program; with no entry to tell them apart, none is ended.
 func stopOwnDaemon(entry string) (bool, error) {
-	if _, err := os.Lstat(systemConfigPath); err != nil {
+	// Only a machine-wide config that is not there makes this install the
+	// only one. One that cannot be looked at may well be there.
+	if _, err := os.Lstat(systemConfigPath); errors.Is(err, os.ErrNotExist) {
 		return stopWindowsDaemon("")
 	}
 	program := autostart.Program(entry)

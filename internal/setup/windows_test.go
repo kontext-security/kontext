@@ -36,7 +36,9 @@ type windowsRun struct {
 	stops      int
 	// stoppedProgram is the daemon program the last stop was limited to.
 	stoppedProgram string
-	delError       error
+	// stopError makes every stop fail.
+	stopError error
+	delError  error
 }
 
 func newWindowsRun(t *testing.T, h *harness) *windowsRun {
@@ -83,6 +85,9 @@ func newWindowsRun(t *testing.T, h *harness) *windowsRun {
 	overrideVar(t, &stopWindowsDaemon, func(program string) (bool, error) {
 		run.stops++
 		run.stoppedProgram = program
+		if run.stopError != nil {
+			return false, run.stopError
+		}
 		// A daemon runs once setup started one, until a stop ends it.
 		running := len(run.started) > 0
 		run.started = nil
@@ -627,5 +632,69 @@ func TestUninstallWindowsBesideAMachineWideInstallEndsOnlyItsOwnDaemon(t *testin
 				t.Errorf("said stopped: %v, want %v:\n%s", said, tc.wantSaid, out.String())
 			}
 		})
+	}
+}
+
+// Beside a machine-wide install the sign-in entry is what tells this
+// install's daemon from that one's. An uninstall whose stop fails puts the
+// entry back, so that the next uninstall can still find the daemon, and
+// takes nothing further away.
+func TestUninstallWindowsPutsTheEntryBackWhenTheStopFails(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	opts := h.options("tok", pingServer(t, "tok"))
+	if err := Run(context.Background(), opts); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(systemConfigPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(systemConfigPath, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run.stopError = errors.New("the process would not end")
+	if err := Uninstall(context.Background(), opts); err == nil {
+		t.Fatal("Uninstall() = nil, want the stop's failure")
+	}
+	if run.autostart != run.daemon {
+		t.Errorf("the sign-in entry is %q after a failed stop, want it back as %q", run.autostart, run.daemon)
+	}
+	if _, err := os.Stat(managedconfig.LegacyUserPath()); err != nil {
+		t.Errorf("the config was removed although the daemon still runs: %v", err)
+	}
+	// The next uninstall finds the daemon by the entry again.
+	run.stopError = nil
+	if err := Uninstall(context.Background(), opts); err != nil {
+		t.Fatalf("second Uninstall() = %v", err)
+	}
+	if run.stoppedProgram != run.daemon || run.autostart != "" {
+		t.Errorf("second uninstall: stop limited to %q, entry %q; want the stop limited to %q and no entry", run.stoppedProgram, run.autostart, run.daemon)
+	}
+}
+
+// A machine-wide config that cannot be looked at may well be there: the stop
+// stays limited to this install's own program. Only one that does not exist
+// makes this install the only one.
+func TestStopOwnDaemonTreatsAnUnreadableMachineConfigAsPresent(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	blocker := filepath.Join(t.TempDir(), "not-a-folder")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	overrideVar(t, &systemConfigPath, filepath.Join(blocker, "managed.json"))
+	if _, err := os.Lstat(systemConfigPath); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Skipf("this OS reports a path below a file as %v, so the case cannot be made here", err)
+	}
+	if _, err := stopOwnDaemon(autostart.Command(run.daemon)); err != nil {
+		t.Fatal(err)
+	}
+	if run.stoppedProgram != run.daemon {
+		t.Fatalf("the stop was limited to %q, want this install's program %q", run.stoppedProgram, run.daemon)
+	}
+	run.stops = 0
+	if stopped, err := stopOwnDaemon(""); err != nil || stopped || run.stops != 0 {
+		t.Fatalf("with no entry: stopped %v, %d stops, %v; want nothing stopped", stopped, run.stops, err)
 	}
 }

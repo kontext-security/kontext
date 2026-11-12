@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -169,5 +171,56 @@ func TestStartInProgressFollowsTheStampsAge(t *testing.T) {
 		if got := startInProgress(stamp, now); got != tc.want {
 			t.Errorf("a stamp %v old: in progress = %v, want %v", tc.age, got, tc.want)
 		}
+	}
+}
+
+// Hooks are separate processes that can find no daemon at the same instant.
+// However many ask at once, one start is made: with no stamp, and with a
+// stale one. A fresh stamp means a start is under way and none is made.
+func TestClaimStartLetsOneCallerStartTheDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stamp time.Duration // age of a stamp left by an earlier start; 0 = none
+		want  int32
+	}{
+		{name: "no stamp", want: 1},
+		{name: "a stale stamp", stamp: daemonStartWindow + time.Minute, want: 1},
+		{name: "a fresh stamp", stamp: time.Second, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stamp := filepath.Join(t.TempDir(), "daemon-start.stamp")
+			if tc.stamp > 0 {
+				if err := os.WriteFile(stamp, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				written := time.Now().Add(-tc.stamp)
+				if err := os.Chtimes(stamp, written, written); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var starts atomic.Int32
+			var wg sync.WaitGroup
+			release := make(chan struct{})
+			for i := 0; i < 40; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-release
+					if err := claimStart(stamp, func() error {
+						starts.Add(1)
+						// A start takes a moment; the others ask meanwhile.
+						time.Sleep(20 * time.Millisecond)
+						return nil
+					}); err != nil {
+						t.Errorf("claimStart() = %v", err)
+					}
+				}()
+			}
+			close(release)
+			wg.Wait()
+			if got := starts.Load(); got != tc.want {
+				t.Fatalf("%d callers at once made %d starts, want %d", 40, got, tc.want)
+			}
+		})
 	}
 }

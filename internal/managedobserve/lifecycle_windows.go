@@ -4,10 +4,14 @@ package managedobserve
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -21,15 +25,44 @@ import (
 // (To a test the machine has no entry, so a test starts nothing: autostart.)
 func kickstartDaemon(context.Context, string) error {
 	stamp := filepath.Join(filepath.Dir(DefaultSocketPath()), "daemon-start.stamp")
+	return claimStart(stamp, func() error {
+		return startFromSignInEntry(autostart.Entry, autostart.Start)
+	})
+}
+
+// claimStart runs start unless another hook has started the daemon within
+// the window, or is starting it at this moment. Hooks are separate
+// processes, so the check and the mark are made under a named mutex: two
+// hooks that find no daemon at the same instant would otherwise both pass
+// the check before either had left its mark. Windows releases the mutex of a
+// process that dies, so a hook killed half way blocks nobody. A mutex or a
+// stamp that cannot be had costs the window, not the start.
+func claimStart(stamp string, start func() error) error {
+	// A mutex belongs to the thread that took it.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	sum := sha256.Sum256([]byte(strings.ToLower(stamp)))
+	name, err := windows.UTF16PtrFromString(`Local\kontext-daemon-start-` + hex.EncodeToString(sum[:8]))
+	if err != nil {
+		return start()
+	}
+	// An existing mutex comes back as a handle together with an error.
+	mutex, _ := windows.CreateMutex(nil, false, name)
+	if mutex == 0 {
+		return start()
+	}
+	defer windows.CloseHandle(mutex)
+	event, err := windows.WaitForSingleObject(mutex, 0)
+	if err != nil || (event != windows.WAIT_OBJECT_0 && event != windows.WAIT_ABANDONED) {
+		return nil // another hook holds it: that one starts the daemon
+	}
+	defer windows.ReleaseMutex(mutex)
 	if startInProgress(stamp, time.Now()) {
 		return nil
 	}
-	return startFromSignInEntry(autostart.Entry, func(program string, args ...string) error {
-		// Before the start, so hooks arriving while the daemon loads see it.
-		// A stamp that cannot be written costs the window, not the start.
-		_ = os.WriteFile(stamp, nil, 0o600)
-		return autostart.Start(program, args...)
-	})
+	// Before the start, so hooks arriving while the daemon loads see it.
+	_ = os.WriteFile(stamp, nil, 0o600)
+	return start()
 }
 
 // daemonStartWindow is how long one start of the daemon is given before a
