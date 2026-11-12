@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.23.1](https://github.com/kontext-security/kontext/compare/v1.23.0...v1.23.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* **hooks:** run system scope without a home folder ([#760](https://github.com/kontext-security/kontext/issues/760)) ([76eb198](https://github.com/kontext-security/kontext/commit/76eb198efb75ffd17fdd2f457072249cfad0f099))
+* **hooks:** wire Antigravity on organization-managed Macs, and fail a test for any agent wired for self-serve only ([#762](https://github.com/kontext-security/kontext/issues/762)) ([80deb91](https://github.com/kontext-security/kontext/commit/80deb91c8ccb8f66a7e3b79439388749558c6272))
+* **inventory:** find the Claude Code that Claude Desktop bundles ([#763](https://github.com/kontext-security/kontext/issues/763)) ([4c19334](https://github.com/kontext-security/kontext/commit/4c193349e3876ec27ef20264afb8d2d96bb922c9))
+
 ## [1.23.0](https://github.com/kontext-security/kontext/compare/v1.22.1...v1.23.0) (2026-11-11)
 
 
