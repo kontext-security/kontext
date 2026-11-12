@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.23.0](https://github.com/kontext-security/kontext/compare/v1.22.1...v1.23.0) (2026-11-11)
+
+
+### Features
+
+* **kestrel:** add Impact advisory pilot at the 1% setting ([#751](https://github.com/kontext-security/kontext/issues/751)) ([0d213cc](https://github.com/kontext-security/kontext/commit/0d213ccd087fbc54c3d6b4de2a9b7089ded0d4e4))
+
+
+### Bug Fixes
+
+* **agentinventory:** find programs in the install folders on Windows ([#742](https://github.com/kontext-security/kontext/issues/742)) ([1fd86a8](https://github.com/kontext-security/kontext/commit/1fd86a803c37ec402346aa76fc883b04efbb7231))
+* **busyfile:** keep the daemon's state files usable on Windows ([#749](https://github.com/kontext-security/kontext/issues/749)) ([7f1c731](https://github.com/kontext-security/kontext/commit/7f1c731d95ba3da19879ce277f5fb2d6f0c488c0))
+* **cedarpolicy:** ask again after a timed-out token lookup ([#746](https://github.com/kontext-security/kontext/issues/746)) ([2d9f2b5](https://github.com/kontext-security/kontext/commit/2d9f2b570bcd913c893f55b7a0b0a34b7e6e8026))
+* **deps:** bump Go to 1.26.11 for GO-2026-6859 ([#748](https://github.com/kontext-security/kontext/issues/748)) ([16828a5](https://github.com/kontext-security/kontext/commit/16828a5b3587a4d60358a1a2189523fab5a9be0c))
+* **managedconfig:** lock the managed config for its writers on Windows ([#736](https://github.com/kontext-security/kontext/issues/736)) ([a8e41c5](https://github.com/kontext-security/kontext/commit/a8e41c583e7efec529cda4498822fc3b758435d9))
+* **mcpconfig:** find a project's MCP servers on Windows ([#743](https://github.com/kontext-security/kontext/issues/743)) ([4eb5ea0](https://github.com/kontext-security/kontext/commit/4eb5ea01102c3ca09af48298c2525bd9614ae06d))
+* **shellprojection:** close six shell-parsing gaps ([#744](https://github.com/kontext-security/kontext/issues/744)) ([989c58f](https://github.com/kontext-security/kontext/commit/989c58f6a8de28beecc8346f07298e87fcf20969))
+* **shellprojection:** keep oversized shell calls evaluable ([#735](https://github.com/kontext-security/kontext/issues/735)) ([0c08546](https://github.com/kontext-security/kontext/commit/0c08546389b42eca7e91fadad2fb19dcc58b3088))
+* **turns:** keep turns that start in the same instant in their sequence ([#740](https://github.com/kontext-security/kontext/issues/740)) ([b14b96a](https://github.com/kontext-security/kontext/commit/b14b96a53b579cec31caad930a3d8eeef848ac1c))
+
 ## [1.22.1](https://github.com/kontext-security/kontext/compare/v1.22.0...v1.22.1) (2026-11-10)
 
 
