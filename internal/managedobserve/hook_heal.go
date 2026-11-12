@@ -85,6 +85,30 @@ func agentAbsent(home, agent string) bool {
 // machine-wide hook names (a build seam for end-to-end runs).
 var managedHookBinary = claudemanaged.DefaultKontextBinary
 
+// managedHookDropIn, when set, replaces Claude's machine-wide drop-in in the
+// check below (a build seam for end-to-end runs).
+var managedHookDropIn string
+
+// packageHooksInPlace reports whether the package's machine-wide Claude hooks
+// still name its binary. A system removal deletes them before it cleans the
+// users' files, so from then on a daemon waiting to be stopped adds nothing
+// back.
+func packageHooksInPlace() bool {
+	path := managedHookDropIn
+	if path == "" {
+		path = managedSettingsDropInPath
+	}
+	if privacyfolder.Guarded("", path) {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	binary, ok := claudemanaged.ManagedObserveHookBinary(raw)
+	return ok && binary == managedHookBinary
+}
+
 // hookHealer gates on the config source, not on file paths, and on the stable
 // binary every hook names: Homebrew's for self-serve, the package's otherwise.
 // It returns nil when the daemon must leave hook files alone; the healer
@@ -121,7 +145,7 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func()
 		}
 		// After an upgrade replaces the binary this process is the old version;
 		// it restarts, and the new one installs its hooks.
-		if !runningStableBinary(binary) {
+		if !runningStableBinary(binary) || !selfServe && !packageHooksInPlace() {
 			return false
 		}
 		defs, err := hookinstall.SetupDefinitions(scope, home)

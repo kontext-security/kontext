@@ -195,10 +195,23 @@ func TestSystemRemovalCleansEveryHome(t *testing.T) {
 		t.Fatal("install dropped another tool's hook")
 	}
 	write(t, hooks("broken"), "{", 0o600)
+	// A FIFO would block a plain read forever; a link to /dev/zero never ends.
+	homes["fifo"], homes["zero"] = filepath.Join(root, "fifo"), filepath.Join(root, "zero")
+	for _, name := range []string{"fifo", "zero"} {
+		if err := os.MkdirAll(filepath.Dir(hooks(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mkfifo(hooks("fifo")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/zero", hooks("zero")); err != nil {
+		t.Fatal(err)
+	}
 	previous := perUserHomes
 	perUserHomes = func(Options) []userHome {
 		var list []userHome
-		for _, name := range []string{"broken", "only-kontext", "with-foreign", "no-antigravity"} {
+		for _, name := range []string{"broken", "fifo", "zero", "only-kontext", "with-foreign", "no-antigravity"} {
 			list = append(list, userHome{Path: homes[name], UID: os.Geteuid(), GID: os.Getegid()})
 		}
 		return list
@@ -219,8 +232,10 @@ func TestSystemRemovalCleansEveryHome(t *testing.T) {
 	if read(t, hooks("broken")) != "{" {
 		t.Fatal("removal rewrote a file it could not read")
 	}
-	if !strings.Contains(out.String(), "error\tuser\t"+homes["broken"]+"\t"+hooks("broken")) {
-		t.Fatalf("the broken file is not reported:\n%s", &out)
+	for _, name := range []string{"broken", "fifo", "zero"} {
+		if !strings.Contains(out.String(), "error\tuser\t"+homes[name]+"\t"+hooks(name)) {
+			t.Fatalf("the %s file is not reported:\n%s", name, &out)
+		}
 	}
 	if _, err := os.Lstat(filepath.Join(homes["no-antigravity"], ".gemini")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("removal created a folder: %v", err)

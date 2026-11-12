@@ -9,6 +9,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/antigravitymanaged"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
@@ -56,6 +57,16 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	managedHookBinary, executablePath = binary, func() (string, error) { return binary, nil }
 	t.Cleanup(func() { managedHookBinary, executablePath = previousBinary, previousExe })
 
+	dropIn := filepath.Join(t.TempDir(), "20-kontext.json")
+	swapManagedSettingsPaths(t, dropIn, filepath.Join(filepath.Dir(dropIn), "managed-settings.json"))
+	template, err := claudemanaged.TemplateJSON(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dropIn, template, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	heal := hookHealer(loaded, diagnostic.Logger{})
 	if heal == nil {
 		t.Fatal("an organization-managed config got no hook healer")
@@ -81,11 +92,22 @@ func TestManagedHealerWiresPerUserAgentsOnly(t *testing.T) {
 	if heal() {
 		t.Fatal("a second pass changed a complete file")
 	}
-	// Another binary (an old process after an upgrade, or a developer build)
-	// writes nothing.
+	// Package removal deletes the machine-wide hooks first; from then on the
+	// daemon, still running until the remover stops it, adds nothing back.
 	if err := os.Remove(antigravitymanaged.UserHooksPath(home)); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Remove(dropIn); err != nil {
+		t.Fatal(err)
+	}
+	if heal() {
+		t.Fatal("the daemon re-added hooks after the package's hooks were removed")
+	}
+	if err := os.WriteFile(dropIn, template, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Another binary (an old process after an upgrade, or a developer build)
+	// writes nothing.
 	executablePath = func() (string, error) { return hermetic.KontextBinary(t, t.TempDir()), nil }
 	if heal() {
 		t.Fatal("a binary other than the package's wrote hooks")

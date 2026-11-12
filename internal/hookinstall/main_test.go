@@ -8,9 +8,12 @@ import (
 	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
-// A system removal also cleans the caller's own per-user files: no test may
-// reach the developer's real home.
+// A system removal also cleans per-user files: no test may reach a real home,
+// whoever runs it.
 func TestMain(m *testing.M) {
+	// No fixture's system removal reaches a real home: a test that cleans
+	// homes names its own.
+	perUserHomes = func(Options) []userHome { return nil }
 	home, err := hermetic.MainHome()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

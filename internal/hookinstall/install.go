@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
 	"github.com/kontext-security/kontext/internal/agenthooks"
@@ -396,7 +397,9 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 func removePerUser(opts Options) {
 	for _, home := range perUserHomes(opts) {
 		o := opts
-		o.PerUser, o.Home = true, home.Path
+		// No backup: it would read the file once more, and the change only drops
+		// Kontext's own entry.
+		o.PerUser, o.Home, o.NoBackup = true, home.Path, true
 		o.Skip = func(file File) bool {
 			// Following a link into a privacy-guarded folder would prompt.
 			if !privacyfolder.Guarded(home.Path, file.Path) {
@@ -411,6 +414,37 @@ func removePerUser(opts Options) {
 			fmt.Fprintf(opts.Out, "error\t%s\t%s\t%v\n", User, home.Path, err)
 		}
 	}
+}
+
+// maxUserHookFile bounds what a system removal reads from a user's file.
+const maxUserHookFile = 1 << 20
+
+// readHookFile reads a hook file. A system-scope run reads a user's file only
+// if it is a regular file, and at most maxUserHookFile bytes: a FIFO would
+// block the package's removal and a link to /dev/zero would fill its memory.
+// Opening without blocking and checking the open file leaves no gap to swap
+// the file in between.
+func readHookFile(file File, opts Options) ([]byte, error) {
+	if opts.Scope != System || file.Scope != User {
+		return os.ReadFile(file.Path)
+	}
+	f, err := os.OpenFile(file.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("refusing non-regular file %s", file.Path)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxUserHookFile+1))
+	if err == nil && len(data) > maxUserHookFile {
+		err = fmt.Errorf("refusing %s: larger than %d bytes", file.Path, maxUserHookFile)
+	}
+	return data, err
 }
 
 // userHome is a home folder and the identity of the user who owns it.
@@ -476,7 +510,7 @@ func plan(file File, opts Options, remove bool) (change, error) {
 			return c, fmt.Errorf("resolve %s symlink: %w", file.Path, err)
 		}
 	}
-	c.before, err = os.ReadFile(file.Path)
+	c.before, err = readHookFile(file, opts)
 	c.missing = errors.Is(err, os.ErrNotExist)
 	if err != nil && !c.missing {
 		return c, err
@@ -617,7 +651,7 @@ func apply(c change, opts Options) error {
 				return err
 			}
 		}
-		current, err := os.ReadFile(file.Path)
+		current, err := readHookFile(file, opts)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

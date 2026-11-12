@@ -29,9 +29,14 @@ fail() {
   exit 1
 }
 
+DROPIN="${WORK}/20-kontext.json"
+PKG="github.com/kontext-security/kontext/internal/managedobserve"
 echo "==> build kontext; its hooks name ${BIN}, as a package's name /usr/local/bin/kontext"
 go build -C "${ROOT}" -o "${BIN}" \
-  -ldflags "-X github.com/kontext-security/kontext/internal/managedobserve.managedHookBinary=${BIN}" ./cmd/kontext
+  -ldflags "-X ${PKG}.managedHookBinary=${BIN} -X ${PKG}.managedHookDropIn=${DROPIN}" ./cmd/kontext
+# The package's machine-wide Claude hooks, which root writes: the daemon heals
+# only while they are in place.
+sed "s|<bin>|${BIN}|g" "${ROOT}/internal/hookinstall/testdata/system-pin/Library_Application-Support_ClaudeCode_managed-settings.d_20-kontext.json" >"${DROPIN}"
 
 export HOME="${WORK}/home"
 mkdir -p "${HOME}/.gemini/antigravity" "${REQUESTS}"
