@@ -9,6 +9,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 // flushTurns uploads minted turns, each batch with only the sessions its
@@ -49,6 +50,17 @@ func flushTurns(ctx context.Context, opts Options) error {
 				return err
 			}
 			continue
+		}
+		// A prompt kept on "Full tool calls and prompts" stays on the laptop
+		// once the workspace has moved off it; the directive is read again
+		// for every batch so a change mid-flush applies at once.
+		applyCaptureConfiguration(store, opts)
+		if !payloadcapture.PromptsAllowed(store.PayloadCaptureConfiguration()) {
+			for i := range turns {
+				if turns[i].Prompt.Mode == sqlite.TurnPromptExcerpt {
+					turns[i].Prompt = sqlite.SizeOnlyTurnPrompt(sqlite.TurnPromptSkipped, turns[i].Prompt.Chars)
+				}
+			}
 		}
 		payload := newPayload(opts, sessions, nil, nil, nil, nil, time.Now().UTC())
 		payload.Turns = turns

@@ -13,7 +13,53 @@ import (
 
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/modelusage"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
+
+// topStep is "Full tool calls and prompts", where turn excerpts may leave.
+func topStep() payloadcapture.RuntimeConfiguration {
+	return payloadcapture.RuntimeConfiguration{ConfiguredMode: payloadcapture.ModeFull, EffectiveMode: payloadcapture.ModeFull, ConfigIdentity: strings.Repeat("c", 64), Confirmed: true, WorkTypeClassification: true}
+}
+
+// A queued excerpt captured on the top step leaves as size only once the
+// workspace is below it, or has no confirmed directive (ENG-1045).
+func TestTurnUploadDropsQueuedExcerptBelowTopStep(t *testing.T) {
+	for name, capture := range map[string]func() payloadcapture.RuntimeConfiguration{
+		"commands": func() payloadcapture.RuntimeConfiguration {
+			return payloadcapture.RuntimeConfiguration{ConfiguredMode: payloadcapture.ModeSummary, EffectiveMode: payloadcapture.ModeSummary, ConfigIdentity: strings.Repeat("c", 64), Confirmed: true}
+		},
+		"full tool calls": func() payloadcapture.RuntimeConfiguration {
+			return payloadcapture.RuntimeConfiguration{ConfiguredMode: payloadcapture.ModeFull, EffectiveMode: payloadcapture.ModeFull, ConfigIdentity: strings.Repeat("c", 64), Confirmed: true}
+		},
+		"no directive, no cache": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "guard.db")
+			store, err := sqlite.OpenStore(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			saveTestTurns(t, store, "s1")
+			store.Close()
+			var sent []sqlite.TurnRecord
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var p Payload
+				if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+					t.Error(err)
+				}
+				sent = append(sent, p.Turns...)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+			if err := flushTurns(context.Background(), Options{CaptureConfiguration: capture, DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test"}); err != nil {
+				t.Fatal(err)
+			}
+			if len(sent) != 1 || sent[0].Prompt.Mode != sqlite.TurnPromptSkipped || sent[0].Prompt.Text != nil || sent[0].Prompt.SHA256 != nil || sent[0].Prompt.Chars != 21 {
+				t.Fatalf("turn left with prompt text: %+v", sent)
+			}
+		})
+	}
+}
 
 func saveTestTurns(t *testing.T, store *sqlite.Store, sessions ...string) {
 	t.Helper()
@@ -81,7 +127,7 @@ func TestTurnUploadRetriesAndAcknowledges(t *testing.T) {
 		_, _ = w.Write([]byte(`{"quarantined":[{"kind":"turn","id":"turn_s2"}],"altered":[]}`))
 	}))
 	defer server.Close()
-	opts := Options{DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test"}
+	opts := Options{CaptureConfiguration: topStep, DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test"}
 	if err := flushTurns(ctx, opts); err == nil {
 		t.Fatal("expected upload failure")
 	}
@@ -138,7 +184,7 @@ func TestTurnUploadHalvesOversizedBatches(t *testing.T) {
 		batches = append(batches, len(p.Turns))
 	}))
 	defer server.Close()
-	if err := flushTurns(ctx, Options{DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test"}); err != nil {
+	if err := flushTurns(ctx, Options{CaptureConfiguration: topStep, DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	total := 0
@@ -184,7 +230,7 @@ func TestFlushSendsTurnsBeforeToolUsage(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	if err := Flush(ctx, Options{DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test", StatePath: filepath.Join(t.TempDir(), "state.json")}); err != nil {
+	if err := Flush(ctx, Options{CaptureConfiguration: topStep, DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test", StatePath: filepath.Join(t.TempDir(), "state.json")}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(order, ",") != "turns,tool_usage" {
@@ -223,7 +269,7 @@ func TestTurnUploadKeepsBatchesAcceptable(t *testing.T) {
 		sent = append(sent, p.Turns...)
 	}))
 	defer server.Close()
-	if err := flushTurns(ctx, Options{DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test"}); err != nil {
+	if err := flushTurns(ctx, Options{CaptureConfiguration: topStep, DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(sent) != 1 || sent[0].ID != "turn_codex" || sent[0].Agent != "codex" {
@@ -262,7 +308,7 @@ func TestFlushUploadsUsageWhenTurnsFail(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	if err := Flush(ctx, Options{DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test", StatePath: filepath.Join(t.TempDir(), "state.json")}); err == nil {
+	if err := Flush(ctx, Options{CaptureConfiguration: topStep, DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test", StatePath: filepath.Join(t.TempDir(), "state.json")}); err == nil {
 		t.Fatal("expected the turn failure to be reported")
 	}
 	if usage, err := store.PendingToolUsage(ctx, 10); err != nil || len(usage) != 0 {

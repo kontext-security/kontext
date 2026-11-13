@@ -140,3 +140,68 @@ func TestMerlinUploadsAfterActionAndRetriesWithoutMutableFeedback(t *testing.T) 
 		t.Fatalf("annotation after the move not uploaded: %d", annotationPosts)
 	}
 }
+
+// A move off the top step during a flush applies to the next batch: the
+// directive is read again per batch, not once per flush (ENG-1045).
+func TestMerlinDropsReviewContextAfterMidFlushDowngrade(t *testing.T) {
+	store, dbPath := testStore(t)
+	saveTestDecision(t, store, "session-1", "toolu_1")
+	saveTestDecision(t, store, "session-1", "toolu_2")
+	actions, err := store.AuthorizationActions(context.Background(), sqlite.LedgerExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile("testdata/merlin-annotation.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture sqlite.MerlinAnnotationRecord
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"ssv_12345678-1234-1234-1234-123456789012", "ssv_22345678-1234-1234-1234-123456789012"}
+	n := 0
+	for _, action := range actions {
+		if action["canonical_event_type"] != "request.decided" {
+			continue
+		}
+		ageTestActionCursor(t, dbPath, action["id"].(string))
+		record := fixture.StepSafetyRecord
+		record.ID, record.ActionID, record.ToolUseID = ids[n], action["id"].(string), action["tool_use_id"].(string)
+		record.CreatedAt = time.Now().Add(time.Duration(n-2) * time.Second).UTC()
+		if _, err := store.SaveStepSafetyVerdict(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+		n++
+	}
+	promptsAllowed := true
+	capture := func() payloadcapture.RuntimeConfiguration {
+		mode := payloadcapture.ModeSummary
+		if promptsAllowed {
+			mode = payloadcapture.ModeFull
+		}
+		return payloadcapture.RuntimeConfiguration{ConfiguredMode: mode, EffectiveMode: mode, ConfigIdentity: strings.Repeat("c", 64), Confirmed: true, WorkTypeClassification: promptsAllowed}
+	}
+	var withContext []bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload Payload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		for _, annotation := range payload.MerlinAnnotations {
+			withContext = append(withContext, annotation.ReviewContext != nil)
+			promptsAllowed = false // the admin moves off the top step now
+		}
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+	opts := Options{CaptureConfiguration: capture, DBPath: dbPath, StatePath: filepath.Join(t.TempDir(), "state.json"), CloudURL: server.URL, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", InstallToken: "test-token", HTTPClient: server.Client(), BatchLimit: 1}
+	for i := 0; i < 4 && len(withContext) < 2; i++ {
+		if err := Flush(context.Background(), opts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(withContext) != 2 || !withContext[0] || withContext[1] {
+		t.Fatalf("review context per annotation = %v, want [true false]", withContext)
+	}
+}

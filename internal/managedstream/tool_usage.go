@@ -27,7 +27,8 @@ func reconcileToolUsage(ctx context.Context, opts Options) error {
 
 // applyCaptureConfiguration gives a store opened for one pass the capture
 // directive in force: the daemon's, else the cached endpoint config. Without
-// it the store reads as unconfirmed, which sends no prompt text.
+// it, or when neither source answers, the store reads as unconfirmed, which
+// sends no prompt text.
 func applyCaptureConfiguration(store *sqlite.Store, opts Options) {
 	if opts.CaptureConfiguration != nil {
 		store.SetPayloadCaptureConfiguration(opts.CaptureConfiguration())
@@ -38,7 +39,9 @@ func applyCaptureConfiguration(store *sqlite.Store, opts Options) {
 		cachePath = endpointconfig.DefaultCachePathForDB(opts.DBPath)
 	}
 	cache := endpointconfig.NewCacheForDB(cachePath, opts.DBPath)
-	if err := cache.Load(); err == nil {
+	if err := cache.Load(); err != nil {
+		store.SetPayloadCaptureConfiguration(payloadcapture.DefaultRuntimeConfiguration())
+	} else {
 		snapshot := cache.Current()
 		store.SetPayloadCaptureConfiguration(payloadcapture.RuntimeConfiguration{
 			ConfiguredMode: snapshot.Configured.PayloadCaptureMode, EffectiveMode: snapshot.Config.PayloadCaptureMode,
