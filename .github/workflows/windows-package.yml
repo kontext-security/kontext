@@ -162,6 +162,30 @@ jobs:
           if ($programs.Count -ne 4) { Write-Error "expected four programs in two zips, found $($programs.Count)"; exit 1 }
           ./scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @programs
 
+      # A check that cannot fail checks nothing: each of these must be
+      # refused, a signed program where signing is off, a test signature where
+      # the real signer is asked for, and an unsigned file where a signature
+      # is asked for.
+      - name: Check that the signature check refuses what it should
+        if: ${{ env.WINDOWS_SIGNING == 'test' }}
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem unpacked -Recurse -Filter kontext.exe | Select-Object -First 1 -ExpandProperty FullName
+          $unsigned = Join-Path $env:RUNNER_TEMP 'unsigned.exe'
+          Copy-Item (Get-Command go).Source $unsigned
+          if ((Get-AuthenticodeSignature $unsigned).SignerCertificate) { Set-Content $unsigned 'not a program, and not signed' }
+          $cases = @(
+            @{ what = 'a signed program with signing off'; mode = 'off'; subject = ''; file = $signed },
+            @{ what = 'a test signature where the real signer is asked for'; mode = 'artifact-signing'; subject = 'CoBrowser Technology GmbH'; file = $signed },
+            @{ what = 'an unsigned file where a test signature is asked for'; mode = 'test'; subject = ''; file = $unsigned }
+          )
+          $wrong = 0
+          foreach ($case in $cases) {
+            $out = pwsh -NoProfile -File scripts/verify-windows-signature.ps1 -Mode $case.mode -Subject "$($case.subject)" $case.file 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) { $wrong++; "NOT REFUSED: $($case.what)" } else { "refused: $($case.what): $(($out -split "`n" | Where-Object { $_ -match '^FAIL' } | Select-Object -First 1))" }
+          }
+          if ($wrong) { Write-Error "$wrong of $($cases.Count) cases were let through"; exit 1 }
+
   msi:
     runs-on: windows-latest
     timeout-minutes: 30
