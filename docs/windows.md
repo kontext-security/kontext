@@ -26,7 +26,7 @@ Each [release](https://github.com/kontext-security/kontext/releases/latest) has
 one zip per architecture, `kontext_<version>_windows_amd64.zip` and
 `kontext_<version>_windows_arm64.zip`, with two programs: `kontext.exe`, the
 command line tool and the hook the agents call, and `kontextw.exe`, the
-background agent. Download the zip for your PC and `checksums.txt`, then in
+background agent. The licence, the README and the changelog come along. Download the zip for your PC and `checksums.txt`, then in
 PowerShell, in the folder you downloaded them to:
 
 ```powershell
@@ -124,6 +124,32 @@ In observe mode a rule that would deny is recorded and the action continues. In
 enforce mode the action is stopped before it runs. You switch rules from one to
 the other in the dashboard, as on every system; nothing is done on the PC.
 
+## Update
+
+There is no automatic update yet. To move to a newer release, close Claude
+Code and Codex, since a running session calls the hook program and can start
+the background agent again. Download the release's zip and `checksums.txt`,
+check the hash as in step 1, then in the folder you downloaded them to:
+
+```powershell
+$zip = Get-Item kontext_*_windows_*.zip | Sort-Object LastWriteTime | Select-Object -Last 1
+$dir = "$env:LOCALAPPDATA\Programs\Kontext"
+
+# Stop the background agent first: Windows does not replace a running program.
+Get-Process kontextw -ErrorAction SilentlyContinue |
+    Where-Object Path -eq "$dir\kontextw.exe" |
+    Stop-Process -PassThru | Wait-Process
+
+Expand-Archive $zip -DestinationPath $dir -Force
+Start-Process "$dir\kontextw.exe" managed-observe-daemon
+& "$dir\kontext.exe" doctor
+```
+
+Doctor names the new version on its `daemon:` line. The install key, the
+config, the hooks and the sign-in entry stay as they are, so setup does not
+need to run again. If the unzip is started while the background agent runs, it
+stops halfway and the folder is incomplete: stop the agent and unzip again.
+
 ## Remove Kontext
 
 ```powershell
@@ -195,6 +221,7 @@ add an install of your own beside it.
 
 - The programs are not code-signed.
 - There is no automatic update and no winget package; both are in preparation.
+  Until then, see [Update](#update).
   The repairs the README describes for macOS (`doctor --fix`, hooks restored by
   the background agent) are not described for Windows.
 - Agents other than Claude Code and Codex are not hooked, and what desktop apps
