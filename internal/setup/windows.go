@@ -8,9 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/autostart"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/codexmanaged"
 	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/installation"
@@ -52,6 +55,11 @@ func sameServer(a, b string) bool {
 // that holds the install key of a self-serve setup.
 const WindowsCredentialName = KeychainItemName
 
+// windowsCodexTrustHint tells the user how to trust the Kontext hooks in
+// Codex. Codex asks about new hooks when it starts ("Hooks need review",
+// seen with Codex 0.161.0 on Windows 11), and /hooks shows them at any time.
+const windowsCodexTrustHint = "  • Codex: runs the Kontext hooks only after you trust them. Start `codex`: it asks about new hooks, and /hooks lists them. Trust the Kontext hooks"
+
 // windowsDaemonName is the daemon's program beside the CLI: the same code
 // built without a console window, so starting it at sign-in shows nothing.
 const windowsDaemonName = "kontextw.exe"
@@ -68,6 +76,21 @@ var (
 	removeWindowsHooks   = hookinstall.Remove
 	userHome             = os.UserHomeDir
 	readWindowsAutostart = autostart.Entry
+	// codexInstalled reports whether Codex is on this machine for the user: its
+	// command is on the PATH, or the inventory is not sure it is absent, which
+	// it is not once Codex has a config of its own. That is doctor's rule too,
+	// so setup never leaves out hooks that doctor then calls missing. A winget
+	// install without elevation is such a case: it puts no `codex` command on
+	// the PATH. (macOS setup also asks whether the daemon repairs hooks later,
+	// which it does not on Windows.)
+	codexInstalled = func(home string) bool {
+		if hookinstall.AgentPresent("codex", home) {
+			return true
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return !agentinventory.Absent(ctx, home, os.Getenv, "codex")
+	}
 	// stopWindowsDaemon ends the user's running daemon, found through its
 	// status file; no daemon is not an error. With program set, only a daemon
 	// running that file is ended (stopProcess).
@@ -83,9 +106,9 @@ var (
 
 // runWindows is setup for one user of a Windows machine, without administrator
 // rights: the key goes into the user's credential store, the config into the
-// user's state folder, Claude Code's user hooks are written, and the daemon
-// starts now and at every sign-in. Profiles are not available here yet, and
-// only Claude Code is hooked (hookinstall skips the other agents on Windows).
+// user's state folder, Claude Code's and Codex's user hooks are written, and
+// the daemon starts now and at every sign-in. Profiles are not available here
+// yet, and hookinstall skips the other agents on Windows.
 func runWindows(ctx context.Context, opts Options) (retErr error) {
 	if opts.Profile != "" || opts.DeriveProfileName {
 		return errors.New("profiles are not available on Windows yet; run `kontext setup` without one")
@@ -211,17 +234,47 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 
 	// One line for the file that was written, in setup's own words, not the
 	// installer's plan with a row per agent it has nothing to do for here.
-	hooks := hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary, Report: func(r hookinstall.Result) {
-		if r.File.Kind == "claude-user" {
-			fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks installed (%s)\n", r.File.Path)
-		}
-	}}
-	if err := installWindowsHooks(hooks); err != nil {
-		return fmt.Errorf("install the Claude Code hooks: %w", err)
-	}
+	codexHooks, codexMissing := "", false
+	hooks := hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary,
+		// Codex gets its hooks only where Codex is; Claude Code's are written
+		// either way, as before.
+		SkipAgent: func(agent string) bool {
+			if agent != "codex" || codexInstalled(home) {
+				return false
+			}
+			codexMissing = true
+			return true
+		},
+		Report: func(r hookinstall.Result) {
+			switch r.File.Kind {
+			case "claude-user":
+				fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks installed (%s)\n", r.File.Path)
+			case "codex":
+				codexHooks = r.File.Path
+				fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks installed (%s)\n", r.File.Path)
+			}
+		}}
+	// Registered before the install: it writes one agent's file after
+	// another, and a failure at the second must not leave the first behind.
+	// Taking hooks out where none were written changes nothing.
 	undo = append(undo, func() {
 		_ = removeWindowsHooks(hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary})
 	})
+	if err := installWindowsHooks(hooks); err != nil {
+		return fmt.Errorf("install the agent hooks: %w", err)
+	}
+	if codexMissing {
+		fmt.Fprintln(opts.Stdout, "  • Codex: not found. Run `kontext setup` again once it is installed")
+	}
+	if codexHooks != "" {
+		// Codex runs a user hook only once it is trusted in the Codex CLI's /hooks.
+		untrusted, err := codexmanaged.UntrustedHooks(codexHooks, filepath.Join(filepath.Dir(codexHooks), "config.toml"))
+		if err != nil {
+			fmt.Fprintf(opts.Stdout, "  • Codex: could not check whether you trust the Kontext hooks (%v). If Codex skips them, run `codex`, open /hooks and trust each Kontext hook\n", err)
+		} else if len(untrusted) > 0 {
+			fmt.Fprintln(opts.Stdout, windowsCodexTrustHint)
+		}
+	}
 	// Claude Code runs no hook at all with this setting, and the installer
 	// keeps it; without a word here nothing would reach Kontext and nothing
 	// would say why.
@@ -272,7 +325,7 @@ func deviceLabelWindows() string {
 
 // uninstallWindows takes back what runWindows wrote for this user: the key in
 // the credential store, the sign-in entry, the running daemon, Claude Code's
-// user hooks and the config. Every step tolerates what is already
+// and Codex's user hooks and the config. Every step tolerates what is already
 // gone, so it can be run again.
 //
 // Kept: the installation identity, so a later setup reports the same endpoint
@@ -335,12 +388,20 @@ func uninstallWindows(_ context.Context, opts Options) error {
 	}
 	binary, _ := StableBinaryPath()
 	unhook := hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary, Report: func(r hookinstall.Result) {
-		if r.File.Kind == "claude-user" && r.Action == "write" {
+		// The installer rewrites a file that keeps other entries and
+		// removes one that held only Kontext's.
+		if r.Action != "write" && r.Action != "remove" {
+			return
+		}
+		switch r.File.Kind {
+		case "claude-user":
 			fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks removed (%s)\n", r.File.Path)
+		case "codex":
+			fmt.Fprintf(opts.Stdout, "  ✓ Codex hooks removed (%s)\n", r.File.Path)
 		}
 	}}
 	if err := removeWindowsHooks(unhook); err != nil {
-		return fmt.Errorf("remove the Claude Code hooks: %w", err)
+		return fmt.Errorf("remove the agent hooks: %w", err)
 	}
 	switch err := os.Remove(slot.ConfigPath); {
 	case err == nil:

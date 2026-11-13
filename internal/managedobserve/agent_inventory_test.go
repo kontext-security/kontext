@@ -140,9 +140,19 @@ func TestAgentWiringRecognizesSystemCodexHooks(t *testing.T) {
 	}
 }
 
+// codexHookBinary names Kontext's CLI as Codex's hooks name it on the OS the
+// tests run on: on Windows the hooks are written for PowerShell and start
+// kontext.exe, so the fixtures test the form a Windows machine has.
+func codexHookBinary(path string) string {
+	if codexmanaged.PowerShellForm {
+		return path + ".exe"
+	}
+	return path
+}
+
 func mustCodexHooks(t *testing.T) []byte {
 	t.Helper()
-	data, err := json.Marshal(codexmanaged.Template("/opt/homebrew/bin/kontext"))
+	data, err := json.Marshal(codexmanaged.Template(codexHookBinary("/opt/homebrew/bin/kontext")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +259,7 @@ func TestCoworkInventoryUsesLatestSessionPlacement(t *testing.T) {
 
 func TestAgentWiringCodexLayers(t *testing.T) {
 	valid := mustCodexHooks(t)
-	other, err := codexmanaged.TemplateJSON("/Applications/Kontext/runtime/bin/kontext")
+	other, err := codexmanaged.TemplateJSON(codexHookBinary("/Applications/Kontext/runtime/bin/kontext"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +269,7 @@ func TestAgentWiringCodexLayers(t *testing.T) {
 	}
 	// Self-serve leaves out of the user file what the machine-wide one covers.
 	split := func(event string) (system, user []byte) {
-		machine := codexmanaged.Template("/opt/homebrew/bin/kontext")
+		machine := codexmanaged.Template(codexHookBinary("/opt/homebrew/bin/kontext"))
 		rest := codexmanaged.Settings{Hooks: map[string][]codexmanaged.MatcherGroup{event: machine.Hooks[event]}}
 		delete(machine.Hooks, event)
 		system, _ = json.Marshal(machine)
@@ -269,9 +279,9 @@ func TestAgentWiringCodexLayers(t *testing.T) {
 	partialSystem, promptOnly := split("UserPromptSubmit")
 	// A broken Kontext hook leaves its file's other hooks running: here Stop
 	// runs session-start, and PreToolUse names another binary.
-	flawed := codexmanaged.Template("/opt/homebrew/bin/kontext")
+	flawed := codexmanaged.Template(codexHookBinary("/opt/homebrew/bin/kontext"))
 	flawed.Hooks["Stop"] = flawed.Hooks["SessionStart"]
-	flawed.Hooks["PreToolUse"] = codexmanaged.Template("/Applications/Kontext/runtime/bin/kontext").Hooks["PreToolUse"]
+	flawed.Hooks["PreToolUse"] = codexmanaged.Template(codexHookBinary("/Applications/Kontext/runtime/bin/kontext")).Hooks["PreToolUse"]
 	flawedSystem, _ := json.Marshal(flawed)
 	_, stopOnly := split("Stop")
 	for _, tc := range []struct {

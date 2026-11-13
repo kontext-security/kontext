@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -396,7 +397,7 @@ func inspect(settings Settings, requireAll bool) (binary string, covered map[str
 					problems = append(problems, fmt.Sprintf("%s hook is invalid", event.Name))
 					continue
 				}
-				fields, _ := agenthooks.SplitCommand(handler.Command)
+				fields, _, _ := hookFields(handler.Command)
 				if fields[4] != event.Alias {
 					problems = append(problems, fmt.Sprintf("%s hook uses %q, want %q", event.Name, fields[4], event.Alias))
 					continue
@@ -423,11 +424,11 @@ func inspect(settings Settings, requireAll bool) (binary string, covered map[str
 // self-serve hooks. Matching on the alias rather than the exact binary path
 // lets setup replace stale entries after the binary moves.
 func IsManagedHookCommand(command string) bool {
-	fields, ok := agenthooks.SplitCommand(command)
+	fields, powerShell, ok := hookFields(command)
 	if !ok || len(fields) != 5 {
 		return false
 	}
-	if filepath.Base(fields[0]) != "kontext" || fields[1] != "hook" || fields[2] != "--agent" || fields[3] != "codex" {
+	if !kontextProgram(fields[0], powerShell) || fields[1] != "hook" || fields[2] != "--agent" || fields[3] != "codex" {
 		return false
 	}
 	for _, event := range SupportedEvents {
@@ -552,8 +553,40 @@ func validateEvent(groups []MatcherGroup, event hook.EventAlias, kontextBinary s
 	return fmt.Errorf("%s Kontext command hook missing for %s", event.Name, kontextBinary)
 }
 
+// PowerShellForm says the hooks are written for PowerShell, which is the
+// shell Codex hands a hook command to on Windows. A variable so tests on any
+// OS can write that form, as claudemanaged.ExecForm is.
+var PowerShellForm = runtime.GOOS == "windows"
+
+// hookCommand is the command Codex runs for one event. Codex hands it to a
+// shell as one string: a POSIX shell elsewhere, PowerShell on Windows, which
+// needs its own form (agenthooks.PowerShellCommand).
 func hookCommand(kontextBinary, alias string) string {
+	if PowerShellForm {
+		return agenthooks.PowerShellCommand(kontextBinary, "hook", "--agent", "codex", alias)
+	}
 	return agenthooks.ShellQuote(kontextBinary) + " hook --agent " + agenthooks.ShellQuote("codex") + " " + agenthooks.ShellQuote(alias)
+}
+
+// hookFields reads a hook command back into its words, in either form, and
+// says whether it was the PowerShell one.
+func hookFields(command string) (fields []string, powerShell, ok bool) {
+	if fields, ok := agenthooks.SplitPowerShellCommand(command); ok {
+		return fields, true, true
+	}
+	fields, ok = agenthooks.SplitCommand(command)
+	return fields, false, ok
+}
+
+// kontextProgram reports whether path names Kontext's CLI: kontext, or in a
+// PowerShell command kontext.exe. The folder may be spelled with either
+// separator, whatever the OS this runs on.
+func kontextProgram(path string, powerShell bool) bool {
+	name := path[strings.LastIndexAny(path, `/\`)+1:]
+	if powerShell {
+		return strings.EqualFold(name, "kontext.exe")
+	}
+	return name == "kontext"
 }
 
 func isAllMatcher(value string) bool {

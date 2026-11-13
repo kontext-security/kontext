@@ -9,24 +9,25 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/codexmanaged"
 )
 
-// asWindows installs as on Windows: Claude Code's exec form, kontext.exe, and
-// no Codex or Cursor files. It returns a temporary home and a kontext.exe in
+// asWindows installs as on Windows: Claude Code's exec form, Codex's hooks
+// for PowerShell, kontext.exe, and no Cursor file. It returns a temporary home and a kontext.exe in
 // it; the machine-wide files a user install reads are moved there too.
 func asWindows(t *testing.T) (home, binary string) {
 	t.Helper()
 	t.Setenv("CODEX_HOME", "")
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	goos, exec := runtimeGOOS, claudemanaged.ExecForm
-	runtimeGOOS, claudemanaged.ExecForm = "windows", true
+	goos, exec, powerShell := runtimeGOOS, claudemanaged.ExecForm, codexmanaged.PowerShellForm
+	runtimeGOOS, claudemanaged.ExecForm, codexmanaged.PowerShellForm = "windows", true, true
 	claudeDropIn, cursorHooks, codexHooks := machineClaudeDropIn, machineCursorHooks, machineCodexHooks
 	root := t.TempDir()
 	machineClaudeDropIn = filepath.Join(root, "ClaudeCode", "managed-settings.d", "20-kontext.json")
 	machineCursorHooks = filepath.Join(root, "Cursor", "hooks.json")
 	machineCodexHooks = filepath.Join(root, "Codex", "hooks.json")
 	t.Cleanup(func() {
-		runtimeGOOS, claudemanaged.ExecForm = goos, exec
+		runtimeGOOS, claudemanaged.ExecForm, codexmanaged.PowerShellForm = goos, exec, powerShell
 		machineClaudeDropIn, machineCursorHooks, machineCodexHooks = claudeDropIn, cursorHooks, codexHooks
 	})
 	home = filepath.Join(root, "home")
@@ -44,7 +45,7 @@ func lines(out string) [][]string {
 	return rows
 }
 
-func TestWindowsUserInstallWritesClaudeExecFormOnly(t *testing.T) {
+func TestWindowsUserInstallWritesClaudeExecFormAndCodexForPowerShell(t *testing.T) {
 	home, binary := asWindows(t)
 	var out bytes.Buffer
 	opts := Options{Scope: User, Home: home, Binary: binary, Out: &out}
@@ -68,29 +69,57 @@ func TestWindowsUserInstallWritesClaudeExecFormOnly(t *testing.T) {
 	if handler["command"] != binary || len(handler["args"].([]any)) != 2 {
 		t.Fatalf("PreToolUse handler = %v, want command %q and args", handler, binary)
 	}
-	for _, path := range []string{filepath.Join(home, ".codex"), filepath.Join(home, ".cursor")} {
+	// Codex's hooks are written for PowerShell, which Codex hands them to.
+	codexHooks := filepath.Join(home, ".codex", "hooks.json")
+	if err := codexmanaged.Validate([]byte(read(t, codexHooks)), binary); err != nil {
+		t.Fatalf("Codex's hooks.json is not the hook set for %s: %v\n%s", binary, err, read(t, codexHooks))
+	}
+	var codex struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal([]byte(read(t, codexHooks)), &codex); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := codex.Hooks["PreToolUse"][0].Hooks[0].Command, "$LASTEXITCODE = 1; & '"+binary+"' 'hook' '--agent' 'codex' 'pre-tool-use'; exit $LASTEXITCODE"; got != want {
+		t.Fatalf("Codex's PreToolUse command = %s, want %s", got, want)
+	}
+	// Codex's own config, where it keeps the user's settings and the trust
+	// given to hooks, is not written, and Cursor gets nothing.
+	for _, path := range []string{filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".cursor")} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Errorf("%s exists after a Windows install (err %v)", path, err)
 		}
 	}
-	// Every other agent's file is reported as unsupported and none of Claude's,
-	// however many agents the install knows.
-	skipped := 0
+	// Claude's and Codex's hook files are written; Codex's feature flag is
+	// left alone as on by default; every other agent's file is reported as
+	// unsupported, however many agents the install knows.
+	unsupported := 0
 	for _, row := range lines(out.String()) {
 		if len(row) != 4 {
 			t.Fatalf("output row %q has %d fields, want 4", strings.Join(row, "\t"), len(row))
 		}
-		claude := strings.HasPrefix(row[2], filepath.Join(home, ".claude"))
-		unsupported := row[0] == "skip" && row[3] == windowsUnsupported
-		if claude == unsupported {
-			t.Errorf("Claude file %v, reported as unsupported %v: %v", claude, unsupported, row)
-		}
-		if unsupported {
-			skipped++
+		switch {
+		case strings.HasPrefix(row[2], filepath.Join(home, ".claude")), row[2] == codexHooks:
+			if row[0] != "write" {
+				t.Errorf("want this file written: %v", row)
+			}
+		case row[2] == filepath.Join(home, ".codex", "config.toml"):
+			if row[0] != "skip" || row[3] != windowsHooksOnByDefault {
+				t.Errorf("want Codex's feature flag left alone as on by default: %v", row)
+			}
+		default:
+			if row[0] != "skip" || row[3] != windowsUnsupported {
+				t.Errorf("want this file reported as unsupported: %v", row)
+			}
+			unsupported++
 		}
 	}
-	if skipped < 3 {
-		t.Fatalf("want at least Codex's two files and Cursor's reported as unsupported, got:\n%s", out.String())
+	if unsupported < 1 {
+		t.Fatalf("want at least Cursor's file reported as unsupported, got:\n%s", out.String())
 	}
 
 	// A rerun changes nothing, and remove takes out every entry install wrote.
@@ -106,6 +135,9 @@ func TestWindowsUserInstallWritesClaudeExecFormOnly(t *testing.T) {
 	}
 	if got := read(t, settings); strings.Contains(strings.ToLower(got), "kontext") {
 		t.Fatalf("remove left Kontext entries:\n%s", got)
+	}
+	if got, err := os.ReadFile(codexHooks); err == nil && strings.Contains(strings.ToLower(string(got)), "kontext") {
+		t.Fatalf("remove left Kontext entries in Codex's hooks.json:\n%s", got)
 	}
 }
 
@@ -226,9 +258,14 @@ func TestWindowsDoctorDoesNotExpectSkippedAgents(t *testing.T) {
 	if !diagnose(&out, User, defs, everyAgent, filepath.Join(home, ".codex", "config.toml"), machineCodexHooks) {
 		t.Fatalf("doctor reports a Windows install as unhealthy:\n%s", out.String())
 	}
-	for _, name := range []string{"Codex", "Cursor"} {
-		if want := name + " hooks: not installed (" + windowsUnsupported + ")"; strings.Count(out.String(), want) != 1 {
-			t.Errorf("want %q once, got:\n%s", want, out.String())
+	if want := "Cursor hooks: not installed (" + windowsUnsupported + ")"; strings.Count(out.String(), want) != 1 {
+		t.Errorf("want %q once, got:\n%s", want, out.String())
+	}
+	// Codex's hooks are installed, and doctor says what is still to do: Codex
+	// runs them only once the user trusts them.
+	for _, want := range []string{"Codex hooks: installed (" + filepath.Join(home, ".codex", "hooks.json"), "Codex hooks: not trusted in Codex ("} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("want %q, got:\n%s", want, out.String())
 		}
 	}
 }

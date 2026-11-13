@@ -127,7 +127,7 @@ func List(scope Scope, home string) ([]Definition, error) {
 	}
 	list := []Definition{}
 	for _, def := range defs {
-		def.Files = slices.DeleteFunc(slices.Clone(def.Files), func(file File) bool { return skippedOnWindows(file.Kind) })
+		def.Files = slices.DeleteFunc(slices.Clone(def.Files), func(file File) bool { return skippedOnWindows(file) })
 		if len(def.Files) > 0 {
 			list = append(list, def)
 		}
@@ -138,16 +138,40 @@ func List(scope Scope, home string) ([]Definition, error) {
 // runtimeGOOS is the OS the hooks are installed for (a test seam).
 var runtimeGOOS = runtime.GOOS
 
-// windowsUnsupported is the reason Codex's and Cursor's files are left alone
-// on Windows. Claude Code runs a hook without a shell (its exec form); Codex
-// runs every hook command through PowerShell, which can't parse the POSIX
-// quoting Kontext writes, and Cursor's Windows behaviour is unverified.
+// windowsUnsupported is the reason a file is left alone on Windows. Claude
+// Code runs a hook without a shell (its exec form). Codex runs every hook
+// command through PowerShell, and a user's Codex hooks are written for it
+// (codexmanaged.PowerShellForm); its machine-wide hooks are not written yet,
+// and Cursor's and Antigravity's behaviour on Windows is unverified.
 const windowsUnsupported = "unsupported-on-windows"
 
-// skippedOnWindows reports a file kind that install leaves alone on Windows,
-// and that doctor therefore doesn't expect there.
-func skippedOnWindows(kind string) bool {
-	return runtimeGOOS == "windows" && kind != "claude" && kind != "claude-user"
+// windowsHooksOnByDefault is the reason Codex's feature flag is left alone
+// in a user's config on Windows: every Codex that runs hooks there has them
+// on by default, and that file is where Codex keeps the user's own settings
+// and the trust given to hooks.
+const windowsHooksOnByDefault = "on-by-default-on-windows"
+
+// skippedOnWindows reports a file that install leaves alone on Windows, and
+// that doctor therefore doesn't expect there.
+func skippedOnWindows(file File) bool {
+	if runtimeGOOS != "windows" {
+		return false
+	}
+	switch file.Kind {
+	case "claude", "claude-user":
+		return false
+	case "codex":
+		return file.Scope != User
+	}
+	return true
+}
+
+// windowsSkipReason says why skippedOnWindows left file alone.
+func windowsSkipReason(file File) string {
+	if file.Kind == "feature" && file.Scope == User {
+		return windowsHooksOnByDefault
+	}
+	return windowsUnsupported
 }
 
 // Machine-wide files a user-scope install reads but never writes (test seams).
@@ -319,7 +343,7 @@ func runDefinitions(opts Options, defs []Definition, remove bool) error {
 		absent := sync.OnceValue(func() bool { return !remove && opts.SkipAgent != nil && opts.SkipAgent(def.Agent) })
 		for _, file := range def.Files {
 			if opts.Scope == System && (file.Scope == User) != opts.PerUser {
-				if file.Scope == User && !skippedOnWindows(file.Kind) {
+				if file.Scope == User && !skippedOnWindows(file) {
 					perUser = append(perUser, file)
 				}
 				continue
@@ -407,8 +431,8 @@ func plan(file File, opts Options, remove bool) (change, error) {
 	c := change{result: Result{File: file, Action: "skip", Reason: "unchanged"}}
 	// Neither read nor written, so nothing creates Codex's system folder,
 	// which its installer has to own.
-	if skippedOnWindows(file.Kind) {
-		c.result.Reason = windowsUnsupported
+	if skippedOnWindows(file) {
+		c.result.Reason = windowsSkipReason(file)
 		return c, nil
 	}
 	// A user file whose every event a machine-wide Kontext hook already runs

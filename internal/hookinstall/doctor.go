@@ -158,8 +158,10 @@ func diagnose(out io.Writer, scope Scope, defs []Definition, present func(string
 		}
 		reported := false
 		for _, file := range def.Files {
-			if skippedOnWindows(file.Kind) {
-				if !reported {
+			if skippedOnWindows(file) {
+				// A file left alone because nothing has to be written there
+				// is not an agent without hooks.
+				if !reported && windowsSkipReason(file) == windowsUnsupported {
 					fmt.Fprintf(out, "%s hooks: not installed (%s)\n", def.Name, windowsUnsupported)
 					reported = true
 				}
