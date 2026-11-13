@@ -115,3 +115,15 @@ jobs:
           fi
           git commit -m "chore: update kontext formula to ${version}"
           git push
+
+  # The MSIs for the release, built from the programs in its Windows zips.
+  # They are not signed yet. A failure here leaves the release's other
+  # assets as they are; run "Windows MSI Release" by hand for the tag then.
+  windows-msi:
+    needs: [release-please, goreleaser]
+    if: ${{ needs.release-please.outputs.release_created }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/windows-msi-release.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}

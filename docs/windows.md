@@ -135,6 +135,62 @@ stops the background agent. It keeps the two programs, the installation
 identity and the local records under `%LOCALAPPDATA%\Kontext`; delete the
 folders to remove those too.
 
+## Machine-wide install with the MSI
+
+> Under active development. The MSI is not code-signed yet, and how a machine
+> is enrolled is about to change, so expect breaking changes between releases.
+
+For a rollout through device management, each release also carries an MSI per
+architecture, `kontext_<version>_windows_amd64.msi` and
+`kontext_<version>_windows_arm64.msi`, with `checksums_windows_msi.txt`. It
+installs Kontext for every user of the PC and takes the place of steps 1 and 2:
+an administrator, or the device management acting as one, installs and connects
+the PC in one go.
+
+```mermaid
+flowchart LR
+    msi["MSI, as administrator<br/>server address, mode"]
+    programs["Program Files\Kontext<br/>kontext.exe, kontextw.exe"]
+    config["ProgramData\Kontext<br/>machine config"]
+    token["Install token<br/>from the installer or a device policy"]
+    hooks["Machine-wide agent hooks"]
+    task["Logon task"]
+    agent["Background agent<br/>one per signed-in user"]
+    cloud["Your Kontext workspace"]
+
+    msi --> programs
+    msi --> config
+    msi --> hooks
+    msi --> task
+    task --> agent
+    config -. read by .-> agent
+    token -. read by .-> agent
+    agent <--> cloud
+```
+
+Install it silently from an elevated prompt or from your device management.
+`CLOUD_URL` is needed on a first install; `MODE` is `observe` unless you say
+`enforce`:
+
+```powershell
+msiexec /i kontext_<version>_windows_amd64.msi /qn /norestart /l*v kontext-install.log CLOUD_URL=https://<cloud host> MODE=observe
+```
+
+The install token reaches the PC in one of two ways: as the installer property
+`INSTALL_TOKEN`, or as a policy value that your device management sets. The
+package's own page has both, with every property and everything the installer
+writes: [packaging/windows/README.md](../packaging/windows/README.md).
+
+- **Upgrade:** install the newer MSI the same way, without properties. The
+  configuration, the token, the hooks and the logon task stay as they are.
+- **Check:** `& "C:\Program Files\Kontext\kontext.exe" doctor` in PowerShell, as
+  on a PC you set up yourself (step 3). Steps 4 and 5 are the same.
+- **Remove:** `msiexec /x kontext_<version>_windows_amd64.msi /qn /norestart`.
+  It removes the programs, the machine config, the hooks and the logon task.
+
+A PC with the MSI does not need steps 1 and 2, and `kontext setup` refuses to
+add an install of your own beside it.
+
 ## Not on Windows yet
 
 - The programs are not code-signed.
@@ -143,4 +199,5 @@ folders to remove those too.
   the background agent) are not described for Windows.
 - Agents other than Claude Code and Codex are not hooked, and what desktop apps
   add (Claude Desktop, Cursor, Windsurf, VS Code) is not in the inventory.
+  Cowork tasks in the Claude app are not observed on a PC you set up yourself.
 - Profiles (`kontext setup` for more than one workspace) are not available.
