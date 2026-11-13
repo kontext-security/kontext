@@ -3,6 +3,7 @@ package managedstream
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -58,6 +59,59 @@ func TestTurnUploadDropsQueuedExcerptBelowTopStep(t *testing.T) {
 				t.Fatalf("turn left with prompt text: %+v", sent)
 			}
 		})
+	}
+}
+
+// A move off the top step during a flush applies to the next turn batch:
+// later batches carry neither prompt text nor its hash (ENG-1045).
+func TestTurnUploadDropsExcerptsAfterMidFlushDowngrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "guard.db")
+	store, err := sqlite.OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	base := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	if _, err := store.EnsureObservedSessionWithMode(ctx, "s1", "claude", "/tmp", "observe"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 60; i++ {
+		prompt := sqlite.ExcerptTurnPrompt("rotate the staging key", 22, false, strings.Repeat("a", 64))
+		if err := store.SaveTurn(ctx, sqlite.TurnRecord{Schema: sqlite.TurnSchemaVersion, ID: fmt.Sprintf("turn_s1_%02d", i), SessionID: "s1", Sequence: int64(i + 1), Agent: "claude", StartedAt: sqlite.FormatTurnTime(base.Add(time.Duration(i) * time.Second)), Source: sqlite.TurnSourceUserPrompt, Prompt: prompt}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.Close()
+	allowed := true
+	capture := func() payloadcapture.RuntimeConfiguration {
+		if allowed {
+			return topStep()
+		}
+		return payloadcapture.RuntimeConfiguration{ConfiguredMode: payloadcapture.ModeSummary, EffectiveMode: payloadcapture.ModeSummary, ConfigIdentity: strings.Repeat("c", 64), Confirmed: true}
+	}
+	var batches [][]sqlite.TurnRecord
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p Payload
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			t.Error(err)
+		}
+		batches = append(batches, p.Turns)
+		allowed = false // the admin moves off the top step now
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	if err := flushTurns(ctx, Options{CaptureConfiguration: capture, DBPath: path, CloudURL: server.URL, InstallationID: "ins_test", InstallToken: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(batches) < 2 || batches[0][0].Prompt.Text == nil {
+		t.Fatalf("want a first batch with text, then more: %d batches", len(batches))
+	}
+	for _, batch := range batches[1:] {
+		for _, turn := range batch {
+			if turn.Prompt.Text != nil || turn.Prompt.SHA256 != nil || turn.Prompt.Mode != sqlite.TurnPromptSkipped {
+				t.Fatalf("turn after the move carries prompt data: %+v", turn.Prompt)
+			}
+		}
 	}
 }
 

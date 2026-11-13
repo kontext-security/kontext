@@ -3,6 +3,7 @@ package managedstream
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -203,5 +204,57 @@ func TestMerlinDropsReviewContextAfterMidFlushDowngrade(t *testing.T) {
 	}
 	if len(withContext) != 2 || !withContext[0] || withContext[1] {
 		t.Fatalf("review context per annotation = %v, want [true false]", withContext)
+	}
+}
+
+// With no daemon directive and no endpoint-config cache, a stored review
+// context does not leave: the export fails closed (ENG-1045).
+func TestMerlinExportFailsClosedWithoutDirective(t *testing.T) {
+	store, dbPath := testStore(t)
+	saveTestDecision(t, store, "session-1", "toolu_1")
+	actions, err := store.AuthorizationActions(context.Background(), sqlite.LedgerExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile("testdata/merlin-annotation.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture sqlite.MerlinAnnotationRecord
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range actions {
+		if action["canonical_event_type"] == "request.decided" {
+			ageTestActionCursor(t, dbPath, action["id"].(string))
+			fixture.ActionID = action["id"].(string)
+		}
+	}
+	fixture.CreatedAt = time.Now().Add(-time.Minute).UTC()
+	if fixture.ReviewContext == nil {
+		t.Fatal("fixture carries no review context")
+	}
+	if _, err := store.SaveStepSafetyVerdict(context.Background(), fixture.StepSafetyRecord); err != nil {
+		t.Fatal(err)
+	}
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+	opts := Options{DBPath: dbPath, EndpointConfigCachePath: filepath.Join(t.TempDir(), "missing.json"), StatePath: filepath.Join(t.TempDir(), "state.json"), CloudURL: server.URL, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", InstallToken: "test-token", HTTPClient: server.Client()}
+	for i := 0; i < 3; i++ {
+		if err := Flush(context.Background(), opts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sent := strings.Join(bodies, "\n")
+	if !strings.Contains(sent, fixture.ID) {
+		t.Fatalf("annotation not uploaded: %s", sent)
+	}
+	if strings.Contains(sent, "review_context") || strings.Contains(sent, fixture.ReviewContext.UserRequest) {
+		t.Fatal("review context left without a confirmed directive")
 	}
 }
