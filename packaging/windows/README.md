@@ -1,6 +1,6 @@
 # Windows MSI
 
-`Package.wxs` builds a per-machine MSI for x64 and arm64 with WiX v7. `.github/workflows/windows-package.yml` builds both from `.goreleaser.windows.yaml` and uploads them as the `kontext-windows-msi` artifact. Releases do not ship it yet, and it is not signed.
+`Package.wxs` builds a per-machine MSI for x64 and arm64 with WiX v7. `.github/workflows/windows-package.yml` builds both from `.goreleaser.windows.yaml` and uploads them as the `kontext-windows-msi` artifact, to check the package on pull requests. A release gets its MSIs from `.github/workflows/windows-msi-release.yml`, which builds them from the programs in that release's Windows zips and attaches `kontext_<version>_windows_amd64.msi`, `kontext_<version>_windows_arm64.msi` and `checksums_windows_msi.txt`. The MSIs are not signed yet.
 
 ## Properties
 

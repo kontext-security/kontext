@@ -1,8 +1,9 @@
-# Windows executables for the MSI in packaging/windows, built by
-# .github/workflows/windows-package.yml. Kept apart from .goreleaser.yaml
-# because the MSI is not a release asset yet; a release ships the same two
-# programs as a zip, built by .goreleaser.yaml. The builds here follow the
-# Windows builds there; keep them in sync.
+# Windows executables for the MSI that .github/workflows/windows-package.yml
+# builds on pull requests, to check the package without a release. A release
+# ships the same two programs as a zip, built by .goreleaser.yaml, and its
+# MSI is built from that zip (.github/workflows/windows-msi-release.yml), not
+# from here. The builds here follow the Windows builds there; keep them in
+# sync.
 #
 #   goreleaser build --snapshot --clean --config .goreleaser.windows.yaml
 #

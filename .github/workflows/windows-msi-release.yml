@@ -1,0 +1,146 @@
+name: Windows MSI Release
+
+# Builds the MSIs in packaging/windows for one release and attaches them to
+# it. The programs inside come out of that release's own Windows zips, checked
+# against its checksums.txt first, so an MSI installs the same kontext.exe and
+# kontextw.exe the zip holds. The MSIs are not signed yet; see the signing
+# note in windows-package.yml. Called by the release workflow after its
+# archives are up, and by hand for a release that already exists.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag, for example v1.24.0"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag of a release that has the Windows zips, for example v1.24.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-msi-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  # WiX v7 as a .NET tool: windows-latest ships only WiX 3.
+  WIX_VERSION: "7.0.1"
+
+jobs:
+  msi:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      # To attach the MSIs to the release.
+      contents: write
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check the tag
+        shell: pwsh
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') {
+            Write-Error "'$env:TAG' is not a release tag like v1.24.0"
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "KONTEXT_VERSION=$($env:TAG.Substring(1))"
+
+      # The package's sources as they were at the release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Download the release's Windows zips
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir release `
+            --pattern "kontext_$($env:KONTEXT_VERSION)_windows_*.zip" --pattern checksums.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem release | Format-Table Name, Length
+
+      - name: Check the zips and unpack them
+        shell: pwsh
+        run: |
+          $sums = Get-Content release\checksums.txt
+          foreach ($arch in 'amd64', 'arm64') {
+            $name = "kontext_$($env:KONTEXT_VERSION)_windows_$arch.zip"
+            $zip = Join-Path release $name
+            if (-not (Test-Path $zip)) { Write-Error "release $env:TAG has no $name"; exit 1 }
+            $listed = $sums | Where-Object { $_ -match "^([0-9a-f]{64})\s+$([regex]::Escape($name))$" } | ForEach-Object { $Matches[1] }
+            if (-not $listed) { Write-Error "checksums.txt does not list $name"; exit 1 }
+            $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+            if ($actual -ne $listed) { Write-Error "$name is $actual, checksums.txt says $listed"; exit 1 }
+            $bin = Join-Path bin $arch
+            Expand-Archive $zip -DestinationPath $bin
+            foreach ($program in 'kontext.exe', 'kontextw.exe') {
+              if (-not (Test-Path (Join-Path $bin $program))) { Write-Error "$name has no $program"; exit 1 }
+            }
+            "${name}: checksum ok, both programs there"
+          }
+
+      # The x64 program runs on this runner; it must report the release's version.
+      - name: Check the programs' version
+        shell: pwsh
+        run: |
+          $reported = & bin\amd64\kontext.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($reported -notmatch (" " + [regex]::Escape($env:KONTEXT_VERSION) + "( |$)")) {
+            Write-Error "kontext.exe reports '$reported', the release is $env:KONTEXT_VERSION"
+            exit 1
+          }
+          "kontext.exe: $reported"
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP 'wix'
+          dotnet tool install wix --version $env:WIX_VERSION --tool-path $tools
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content -Path $env:GITHUB_PATH -Value $tools
+          & (Join-Path $tools 'wix.exe') --version
+
+      - name: Build the MSIs
+        shell: pwsh
+        run: |
+          $version = $env:KONTEXT_VERSION
+          New-Item -ItemType Directory -Force out | Out-Null
+          foreach ($arch in @(@{ wix = 'x64'; go = 'amd64' }, @{ wix = 'arm64'; go = 'arm64' })) {
+            $bin = Join-Path $PWD "bin\$($arch.go)"
+            $msi = Join-Path $PWD "out\kontext_$($version)_windows_$($arch.go).msi"
+            # -acceptEula wix7 accepts the WiX v7 OSMF EULA for this build.
+            wix build packaging/windows/Package.wxs -arch $arch.wix `
+              -d "ProductVersion=$version" -d "BinDir=$bin" `
+              -acceptEula wix7 -o $msi
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            wix msi validate -acceptEula wix7 $msi
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      # The release's checksums.txt is left as published; the MSIs get a list
+      # of their own in the same format.
+      - name: Write the MSIs' checksums
+        shell: pwsh
+        run: |
+          $lines = Get-ChildItem out\*.msi | Sort-Object Name | ForEach-Object {
+            "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          }
+          # Unix line ends and no byte-order mark, as checksums.txt has.
+          [System.IO.File]::WriteAllText((Join-Path $PWD "out\checksums_windows_msi.txt"), (($lines -join "`n") + "`n"))
+          Get-Content out\checksums_windows_msi.txt
+
+      - name: Attach the MSIs to the release
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem out\*.msi | ForEach-Object FullName) + (Join-Path $PWD 'out\checksums_windows_msi.txt')
+          gh release upload $env:TAG --repo $env:GITHUB_REPOSITORY @files
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
