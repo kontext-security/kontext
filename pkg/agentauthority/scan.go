@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
@@ -419,12 +420,119 @@ func safeGrant(pattern string) string {
 	if !strings.HasPrefix(pattern, "Bash(") {
 		return safe(pattern, 128)
 	}
-	words := strings.Fields(strings.TrimSuffix(strings.TrimPrefix(pattern, "Bash("), ")"))
-	words = safeArgs(words)
+	words := safeArgs(grantWords(strings.TrimSuffix(strings.TrimPrefix(pattern, "Bash("), ")")))
 	if len(words) == 0 {
 		return ""
 	}
 	return safe("Bash("+strings.Join(words, " ")+")", 128)
+}
+
+// grantWords splits the command of a Bash grant into the words safeArgs
+// judges one by one, keeping a path with spaces in it together, so that the
+// path is redacted and not only its part before the first space:
+//
+//   - a quoted stretch that opens a word, escaped double quotes inside it
+//     included, is judged word by word as before,
+//     and if any of its words would be redacted or dropped, the whole stretch
+//     is redacted: it holds a path or a secret, and where that ends inside
+//     the quotes is not known. A quote that never closes takes the rest of
+//     the command. A quote inside a word, as in don't, opens nothing;
+//   - after a word that is a rooted path, the words up to the last one holding
+//     a path separator belong to it, as in C:\Program Files\App\run.exe. An
+//     option or another rooted path ends the stretch. A relative path that
+//     follows a rooted one is taken for its tail and goes with it: nothing
+//     tells the two apart, and redacting more is the safe side.
+//
+// Not covered: an unquoted path whose part after the last space holds no
+// separator, as in ls /Users/Jane Doe. That last word stays.
+func grantWords(command string) []string {
+	var words []string
+	var word strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		if word.Len() == 0 {
+			return
+		}
+		text := word.String()
+		word.Reset()
+		if inner := strings.Fields(strings.Trim(text, "\"'")); len(inner) > 1 {
+			cleaned := safeArgs(inner)
+			if len(cleaned) != len(inner) {
+				text = "<redacted>"
+			} else {
+				for i := range inner {
+					if cleaned[i] != inner[i] {
+						text = "<redacted>"
+						break
+					}
+				}
+			}
+		}
+		words = append(words, text)
+	}
+	for _, r := range command {
+		switch {
+		case quote != 0:
+			word.WriteRune(r)
+			switch {
+			case escaped:
+				escaped = false
+			case r == '\\' && quote == '"':
+				// Inside double quotes a backslash keeps the next quote in
+				// the stretch, as in sh -c "cat \"/Users/a b/x\"".
+				escaped = true
+			case r == quote:
+				quote = 0
+			}
+		case (r == '"' || r == '\'') && word.Len() == 0:
+			quote = r
+			word.WriteRune(r)
+		case unicode.IsSpace(r):
+			flush()
+		default:
+			word.WriteRune(r)
+		}
+	}
+	flush()
+	joined := make([]string, 0, len(words))
+	for i := 0; i < len(words); i++ {
+		current := words[i]
+		if rootedPath(current) {
+			last := i
+			for j := i + 1; j < len(words); j++ {
+				if strings.HasPrefix(words[j], "-") || rootedPath(words[j]) {
+					break
+				}
+				if strings.ContainsAny(words[j], `\/`) {
+					last = j
+				}
+			}
+			current = strings.Join(words[i:last+1], " ")
+			i = last
+		}
+		joined = append(joined, current)
+	}
+	return joined
+}
+
+// rootedPath reports whether a word of a grant holds a path that safeArg
+// redacts: a Windows path, or a POSIX path at the start of the word or of one
+// of its parts.
+func rootedPath(word string) bool {
+	word = strings.Trim(word, "\"'")
+	if strings.Contains(word, "://") {
+		return false
+	}
+	if windowsPath.MatchString(word) {
+		return true
+	}
+	for _, part := range strings.FieldsFunc(word, func(r rune) bool { return r == '=' || r == ':' }) {
+		if strings.HasPrefix(part, "/") {
+			return true
+		}
+	}
+	return false
 }
 func grantRisk(pattern string) string {
 	if pattern == "Bash" || pattern == "Bash(*)" {
