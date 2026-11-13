@@ -83,8 +83,10 @@ no elevation and creates no files, directories, or backups.
 
 On Windows, Claude Code hooks are written in exec form: `command` is the
 absolute path of `kontext.exe` and `args` carries the rest, because Claude Code
-runs a one-line hook command through PowerShell there. Codex and Cursor files
-are skipped and reported as `unsupported-on-windows`. System scope writes Claude
+runs a one-line hook command through PowerShell there. A user's Codex hooks
+are written too, as a command PowerShell can run, since Codex runs every hook
+through it. Codex's machine-wide hooks and Cursor's and Antigravity's files are
+skipped and reported as `unsupported-on-windows`. System scope writes Claude
 Code's managed drop-in under Program Files and needs `--binary`:
 
 ```powershell

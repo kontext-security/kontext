@@ -214,6 +214,10 @@ writes: [packaging/windows/README.md](../packaging/windows/README.md).
 - **Remove:** `msiexec /x kontext_<version>_windows_amd64.msi /qn /norestart`.
   It removes the programs, the machine config, the hooks and the logon task.
 
+The MSI hooks Claude Code for every user. It does not hook Codex yet: Codex's
+machine-wide hooks are not written on Windows, so on a PC with only the MSI,
+Codex is neither observed nor stopped.
+
 A PC with the MSI does not need steps 1 and 2, and `kontext setup` refuses to
 add an install of your own beside it.
 
