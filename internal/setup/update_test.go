@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/autostart"
+	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
@@ -74,6 +75,7 @@ func newUpdateRun(t *testing.T) *updateRun {
 		}
 		return os.Rename(from, to)
 	})
+	overrideVar(t, &readWindowsToken, func(string) (string, error) { return "kx-test-token", nil })
 	overrideVar(t, &daemonStartWait, 200*time.Millisecond)
 	overrideVar(t, &updateStatusEvery, 10*time.Millisecond)
 	return run
@@ -173,6 +175,9 @@ func TestUpdateRefusesAndChangesNothing(t *testing.T) {
 			if err := os.Remove(filepath.Join(run.release, windowsDaemonName)); err != nil {
 				t.Fatal(err)
 			}
+		}},
+		{"no credential store", "no Windows credential store", func(t *testing.T, run *updateRun) {
+			overrideVar(t, &readWindowsToken, func(string) (string, error) { return "", credstore.ErrNoLogonSession })
 		}},
 		{"stop fails", "stop the background agent", func(t *testing.T, run *updateRun) {
 			overrideVar(t, &stopWindowsDaemon, func(string) (bool, error) { return false, errors.New("access is denied") })

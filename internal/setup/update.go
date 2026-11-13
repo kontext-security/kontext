@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/autostart"
+	"github.com/kontext-security/kontext/internal/credstore"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
@@ -86,6 +87,13 @@ func Update(ctx context.Context, opts UpdateOptions) error {
 		if info, err := os.Stat(filepath.Join(installDir, name)); err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("%s is missing in %s, the folder your sign-in entry names: run `kontext setup` from this release's folder to install it there instead", name, installDir)
 		}
+	}
+
+	// The agent started below reads the install key from the credential store,
+	// which a session without one (SSH with a key) cannot reach: stopping the
+	// working agent there would leave the PC unobserved until the next sign-in.
+	if _, err := readWindowsToken(WindowsCredentialName); errors.Is(err, credstore.ErrNoLogonSession) {
+		return errors.New("this session has no Windows credential store, so the background agent could not read the install key after the update: run `kontext update` in a desktop session, not over SSH with a key")
 	}
 
 	fmt.Fprintln(out, "Kontext update")
