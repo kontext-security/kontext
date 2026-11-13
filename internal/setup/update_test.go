@@ -12,6 +12,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/autostart"
 	"github.com/kontext-security/kontext/internal/credstore"
+	"github.com/kontext-security/kontext/internal/instancelock"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
@@ -76,6 +77,11 @@ func newUpdateRun(t *testing.T) *updateRun {
 		return os.Rename(from, to)
 	})
 	overrideVar(t, &readWindowsToken, func(string) (string, error) { return "kx-test-token", nil })
+	overrideVar(t, &stopOldAgents, func(program string) (int, error) {
+		run.stops = append(run.stops, program)
+		return 0, nil
+	})
+	overrideVar(t, &probeNewDaemon, func(context.Context) error { return nil })
 	overrideVar(t, &daemonStartWait, 200*time.Millisecond)
 	overrideVar(t, &updateStatusEvery, 10*time.Millisecond)
 	return run
@@ -191,8 +197,14 @@ func TestUpdateRefusesAndChangesNothing(t *testing.T) {
 				t.Fatalf("Update = %v, want %q", err, tc.want)
 			}
 			entries, _ := os.ReadDir(run.install)
-			if len(entries) != len(updatePrograms) {
-				t.Errorf("install folder holds %d files after a refusal, want only the programs", len(entries))
+			var names []string
+			for _, entry := range entries {
+				if entry.Name() != updateLockName {
+					names = append(names, entry.Name())
+				}
+			}
+			if len(names) != len(updatePrograms) {
+				t.Errorf("install folder holds %q after a refusal, want only the programs", names)
 			}
 			for _, name := range updatePrograms {
 				if got := run.content(t, name); got != "old "+name {
@@ -210,12 +222,9 @@ func TestUpdateRefusesAndChangesNothing(t *testing.T) {
 // final check catches an old agent that answers.
 func TestUpdateStartsTheNewAgentWhenTheSecondStopFails(t *testing.T) {
 	run := newUpdateRun(t)
-	overrideVar(t, &stopWindowsDaemon, func(program string) (bool, error) {
+	overrideVar(t, &stopOldAgents, func(program string) (int, error) {
 		run.stops = append(run.stops, program)
-		if strings.HasSuffix(program, ".old") {
-			return false, errors.New("name the program of process 8140: A device attached to the system is not functioning.")
-		}
-		return true, nil
+		return 0, errors.New("name the program of process 8140: A device attached to the system is not functioning.")
 	})
 	var out bytes.Buffer
 	if err := Update(context.Background(), UpdateOptions{Version: "9.9.9", Stdout: &out}); err != nil {
@@ -223,6 +232,34 @@ func TestUpdateStartsTheNewAgentWhenTheSecondStopFails(t *testing.T) {
 	}
 	if run.starts != 1 || !strings.Contains(out.String(), "Could not check for an older background agent") {
 		t.Errorf("starts = %d, output:\n%s\nwant the new agent started and the failed check named", run.starts, out.String())
+	}
+}
+
+// The status file stays when an agent exits: a new agent that reported and
+// does not answer is no finished update.
+func TestUpdateFailsWhenTheNewAgentDoesNotAnswer(t *testing.T) {
+	newUpdateRun(t)
+	overrideVar(t, &probeNewDaemon, func(context.Context) error { return errors.New("no answer on the socket") })
+	err := Update(context.Background(), UpdateOptions{Version: "9.9.9"})
+	if err == nil || !strings.Contains(err.Error(), "does not answer") {
+		t.Fatalf("Update = %v, want it to say the new agent does not answer", err)
+	}
+}
+
+// Two updates at once would remove each other's copies: the second refuses.
+func TestUpdateRefusesWhileAnotherUpdateRuns(t *testing.T) {
+	run := newUpdateRun(t)
+	held, err := instancelock.Acquire(filepath.Join(run.install, updateLockName), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	err = Update(context.Background(), UpdateOptions{Version: "9.9.9"})
+	if err == nil || !strings.Contains(err.Error(), "another kontext update is running") {
+		t.Fatalf("Update = %v, want a refusal", err)
+	}
+	if run.starts != 0 || len(run.stops) != 0 {
+		t.Errorf("a refused update stopped or started an agent: stops %q, starts %d", run.stops, run.starts)
 	}
 }
 

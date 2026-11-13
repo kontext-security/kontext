@@ -12,6 +12,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/autostart"
 	"github.com/kontext-security/kontext/internal/credstore"
+	"github.com/kontext-security/kontext/internal/instancelock"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 )
 
@@ -26,11 +27,16 @@ type UpdateOptions struct {
 // Seams for Update.
 var (
 	renameFile       = os.Rename
+	stopOldAgents    = stopProgramProcesses
+	probeNewDaemon   = probeDaemon
 	loadDaemonStatus = func() *managedobserve.DaemonStatus {
 		return managedobserve.LoadDaemonStatus(managedobserve.DefaultDBPath())
 	}
 	updateStatusEvery = 250 * time.Millisecond
 )
+
+// updateLockName is the lock an update holds in the install folder.
+const updateLockName = "kontext-update.lock"
 
 // updatePrograms are the files an update replaces, the background agent
 // first: it is the one that is running.
@@ -95,6 +101,18 @@ func Update(ctx context.Context, opts UpdateOptions) error {
 	if _, err := readWindowsToken(WindowsCredentialName); errors.Is(err, credstore.ErrNoLogonSession) {
 		return errors.New("this session has no Windows credential store, so the background agent could not read the install key after the update: run `kontext update` in a desktop session, not over SSH with a key")
 	}
+
+	// One update at a time: two would remove each other's staged and kept
+	// copies. The operating system lets the lock go when this process ends.
+	lock, err := instancelock.Acquire(filepath.Join(installDir, updateLockName), 0)
+	if err != nil {
+		var held *instancelock.HeldError
+		if errors.As(err, &held) {
+			return fmt.Errorf("another kontext update is running for %s; wait for it to finish", installDir)
+		}
+		return fmt.Errorf("lock %s for the update: %w", installDir, err)
+	}
+	defer lock.Release()
 
 	fmt.Fprintln(out, "Kontext update")
 	fmt.Fprintf(out, "  From: %s\n  Into: %s\n", sourceDir, installDir)
@@ -161,10 +179,11 @@ func Update(ctx context.Context, opts UpdateOptions) error {
 	fmt.Fprintln(out, "  ✓ New programs in place")
 
 	// A hook may have started the old agent again before it was renamed; it
-	// now runs from the .old copy and would keep the new one from starting.
+	// now runs from the .old copy and would keep the new one from starting. It
+	// may not have written its status yet, so it is found by its program.
 	// A failure here is no reason to leave the PC without an agent: the check
 	// below finds an old agent that still answers.
-	if _, err := stopWindowsDaemon(daemon + ".old"); err != nil {
+	if _, err := stopOldAgents(daemon + ".old"); err != nil {
 		fmt.Fprintf(out, "  • Could not check for an older background agent started during the update (%v)\n", err)
 	}
 	if err := startWindowsDaemon(daemon, autostart.DaemonSubcommand); err != nil {
@@ -172,6 +191,11 @@ func Update(ctx context.Context, opts UpdateOptions) error {
 	}
 	if err := waitForNewDaemon(ctx, oldPID, opts.Version); err != nil {
 		return fmt.Errorf("the new programs are in place, but %w; `kontext doctor` shows which agent runs", err)
+	}
+	// The status file stays when an agent exits, so the new one also has to
+	// answer on its socket.
+	if err := probeNewDaemon(ctx); err != nil {
+		return fmt.Errorf("the new programs are in place and the new background agent started, but it does not answer: %w; `kontext doctor` shows its state", err)
 	}
 	fmt.Fprintf(out, "  ✓ Background agent runs %s (was %s)\n", opts.Version, oldVersion)
 	fmt.Fprintln(out, "\nThe install key, config, hooks and sign-in entry are unchanged.")

@@ -88,28 +88,27 @@ func TestUpdateEndsAnOldAgentAHookStartedMeanwhile(t *testing.T) {
 	old := startSleeperAt(t, daemon)
 	run.status = &managedobserve.DaemonStatus{Version: "1.0.0", PID: old.Process.Pid}
 	var respawned *exec.Cmd
-	var secondStop error
 	overrideVar(t, &stopWindowsDaemon, func(program string) (bool, error) {
-		if respawned == nil {
-			stopped, err := stopProcess(old.Process.Pid, program)
-			if err != nil || !stopped {
-				t.Fatalf("stop the old agent: %v, %v", stopped, err)
-			}
-			respawned = startSleeperAt(t, daemon) // the hook's start
-			time.Sleep(300 * time.Millisecond)
-			return true, nil
+		stopped, err := stopProcess(old.Process.Pid, program)
+		if err != nil || !stopped {
+			t.Fatalf("stop the old agent: %v, %v", stopped, err)
 		}
-		stopped, err := stopProcess(respawned.Process.Pid, program)
-		if err == nil && !stopped {
-			secondStop = os.ErrProcessDone
-		}
-		return stopped, err
+		// The hook's start; it writes no status, so only its program names it.
+		respawned = startSleeperAt(t, daemon)
+		time.Sleep(300 * time.Millisecond)
+		return true, nil
+	})
+	var ended int
+	overrideVar(t, &stopOldAgents, func(program string) (int, error) {
+		n, err := stopProgramProcesses(program)
+		ended += n
+		return n, err
 	})
 	if err := Update(context.Background(), UpdateOptions{Version: "9.9.9"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if secondStop != nil {
-		t.Fatal("the agent the hook started was not ended")
+	if ended != 1 {
+		t.Fatalf("stopProgramProcesses ended %d agents, want the one the hook started", ended)
 	}
 	if !exited(respawned, 5*time.Second) {
 		t.Fatal("the agent the hook started is still running from the .old copy")

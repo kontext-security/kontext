@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -93,4 +94,37 @@ func sameFile(a, b string) bool {
 	}
 	right, err := os.Stat(b)
 	return err == nil && os.SameFile(left, right)
+}
+
+// stopProgramProcesses ends every daemon process that runs program. It finds
+// them by listing the processes, not through the status file, so it also
+// finds a daemon that has not written its status yet. It reports how many it
+// ended.
+func stopProgramProcesses(program string) (int, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return 0, fmt.Errorf("list processes: %w", err)
+	}
+	defer windows.CloseHandle(snapshot)
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	ended := 0
+	var errs []error
+	for err = windows.Process32First(snapshot, &entry); err == nil; err = windows.Process32Next(snapshot, &entry) {
+		if !isDaemonProgram(windows.UTF16ToString(entry.ExeFile[:])) {
+			continue
+		}
+		stopped, err := stopProcess(int(entry.ProcessID), program)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if stopped {
+			ended++
+		}
+	}
+	if !errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+		errs = append(errs, fmt.Errorf("list processes: %w", err))
+	}
+	return ended, errors.Join(errs...)
 }
