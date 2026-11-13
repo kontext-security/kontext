@@ -149,6 +149,10 @@ hooks and the sign-in entry stay as they are, so setup does not need to run
 again. Don't unzip a release over the install folder: Windows does not replace
 a program that is running, and the unzip stops halfway.
 
+Run it in your desktop session. Over SSH it refuses before changing anything:
+the background agent needs your Windows credential store to read the install
+key.
+
 ## Remove Kontext
 
 ```powershell
