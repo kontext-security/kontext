@@ -63,6 +63,8 @@ session directory names, preserving their Cowork identity in activity records.
 
 ### Install Kontext
 
+**macOS**
+
 ```bash
 brew install --cask kontext-security/tap/kontext
 ```
@@ -85,7 +87,15 @@ It gets each release a few hours later, and you update it with
 brew install kontext
 ```
 
-### Connect this Mac
+**Windows** (Windows 11, x64 and Arm)
+
+Download the zip for your PC from the
+[latest release](https://github.com/kontext-security/kontext/releases/latest),
+unzip it into a folder you keep, and use `.\kontext.exe` there for the commands
+below. [Kontext on Windows](docs/windows.md) has the steps, what setup changes
+on the PC, and what Windows does not have yet.
+
+### Connect this machine
 
 Create an install token in the
 [Kontext dashboard](https://app.kontext.security), then run:
@@ -96,9 +106,11 @@ kontext setup
 
 Setup:
 
-- stores the install token in the macOS login keychain;
-- installs hooks for supported agents in your home folder, without `sudo`;
-- starts the local Kontext daemon;
+- stores the install token in the macOS login keychain, or in Windows Credential
+  Manager;
+- installs hooks for supported agents in your home folder, without `sudo` or
+  administrator rights;
+- starts the local Kontext daemon, and has it start when you sign in;
 - connects the installation to your Kontext organization.
 
 Verify the installation:
@@ -108,11 +120,17 @@ kontext doctor
 ```
 
 Then keep using Claude Code or Codex normally. You do not need to launch the
-agent through a separate wrapper.
+agent through a separate wrapper. Codex runs hooks only after you trust them:
+start `codex` once after setup, and trust the Kontext hooks when it asks, or in
+`/hooks`.
 
-> Self-serve setup currently supports macOS. Managed and cloud environments can
-> run the same local runtime when they provide a supported hook contract,
-> storage, and daemon lifecycle.
+The journey is the same on every system: install, connect with `kontext setup`,
+check with `kontext doctor`, keep working, and move from observing to enforcing
+in the dashboard. Only the install step differs.
+
+> Self-serve setup supports macOS and Windows. On Windows it covers Claude Code
+> and Codex. Managed and cloud environments can run the same local runtime when
+> they provide a supported hook contract, storage, and daemon lifecycle.
 
 ---
 
@@ -399,6 +417,9 @@ remove the installation:
 ```bash
 kontext setup --uninstall
 ```
+
+The repairs above are described for macOS; for Windows see
+[Kontext on Windows](docs/windows.md).
 
 ---
 
