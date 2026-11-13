@@ -232,7 +232,11 @@ func printStatus(out io.Writer, installedVersion string, opts doctorOptions) (st
 	// scope rather than inheriting whatever this Mac has under /Library.
 	loaded, err := opts.LoadConfig()
 	if errors.Is(err, managedconfig.ErrNotManaged) {
-		fmt.Fprintln(out, "  config: not configured (run `kontext setup` to connect this Mac to a workspace)")
+		machine := "Mac"
+		if runtimeGOOS == "windows" {
+			machine = "PC"
+		}
+		fmt.Fprintf(out, "  config: not configured (run `kontext setup` to connect this %s to a workspace)\n", machine)
 		return status, report
 	}
 	if err != nil {

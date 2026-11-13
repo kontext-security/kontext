@@ -50,7 +50,7 @@ func sameServer(a, b string) bool {
 
 // WindowsCredentialName is the entry in the user's Windows credential store
 // that holds the install key of a self-serve setup.
-const WindowsCredentialName = "kontext-install-token"
+const WindowsCredentialName = KeychainItemName
 
 // windowsDaemonName is the daemon's program beside the CLI: the same code
 // built without a console window, so starting it at sign-in shows nothing.
@@ -209,11 +209,19 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 	undo = append(undo, func() { _ = os.Remove(configPath) })
 	fmt.Fprintf(opts.Stdout, "  ✓ Config written: %s\n", configPath)
 
-	hooks := hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary, Out: opts.Stdout}
+	// One line for the file that was written, in setup's own words, not the
+	// installer's plan with a row per agent it has nothing to do for here.
+	hooks := hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary, Report: func(r hookinstall.Result) {
+		if r.File.Kind == "claude-user" {
+			fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks installed (%s)\n", r.File.Path)
+		}
+	}}
 	if err := installWindowsHooks(hooks); err != nil {
 		return fmt.Errorf("install the Claude Code hooks: %w", err)
 	}
-	undo = append(undo, func() { _ = removeWindowsHooks(hooks) })
+	undo = append(undo, func() {
+		_ = removeWindowsHooks(hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary})
+	})
 	// Claude Code runs no hook at all with this setting, and the installer
 	// keeps it; without a word here nothing would reach Kontext and nothing
 	// would say why.
@@ -305,7 +313,11 @@ func uninstallWindows(_ context.Context, opts Options) error {
 	if err := delWindowsAutostart(); err != nil {
 		return fmt.Errorf("remove the sign-in entry: %w", err)
 	}
-	fmt.Fprintln(opts.Stdout, "  ✓ Background agent no longer starts at sign-in")
+	// Said only of what was there: on a machine with nothing but a
+	// machine-wide install, uninstall has nothing of its own to remove.
+	if entry != "" {
+		fmt.Fprintln(opts.Stdout, "  ✓ Background agent no longer starts at sign-in")
+	}
 	if _, err := os.Stat(slot.ConfigPath); err == nil {
 		stopped, err := stopOwnDaemon(entry)
 		if err != nil {
@@ -322,13 +334,20 @@ func uninstallWindows(_ context.Context, opts Options) error {
 		}
 	}
 	binary, _ := StableBinaryPath()
-	if err := removeWindowsHooks(hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary, Out: opts.Stdout}); err != nil {
+	unhook := hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary, Report: func(r hookinstall.Result) {
+		if r.File.Kind == "claude-user" && r.Action == "write" {
+			fmt.Fprintf(opts.Stdout, "  ✓ Claude Code hooks removed (%s)\n", r.File.Path)
+		}
+	}}
+	if err := removeWindowsHooks(unhook); err != nil {
 		return fmt.Errorf("remove the Claude Code hooks: %w", err)
 	}
-	if err := os.Remove(slot.ConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	switch err := os.Remove(slot.ConfigPath); {
+	case err == nil:
+		fmt.Fprintf(opts.Stdout, "  ✓ Config removed: %s\n", slot.ConfigPath)
+	case !errors.Is(err, os.ErrNotExist):
 		return fmt.Errorf("remove the config: %w", err)
 	}
-	fmt.Fprintf(opts.Stdout, "  ✓ Config removed: %s\n", slot.ConfigPath)
 
 	fmt.Fprintln(opts.Stdout, "\nKept")
 	if _, err := os.Lstat(slot.IdentityPath); err == nil {

@@ -104,9 +104,19 @@ func newWindowsRun(t *testing.T, h *harness) *windowsRun {
 			return errors.New("hooks failed")
 		}
 		run.hooks = append(run.hooks, opts)
+		reportClaudeHooks(opts, "write")
 		return nil
 	})
-	overrideVar(t, &removeWindowsHooks, func(hookinstall.Options) error { run.hooksGone++; return nil })
+	overrideVar(t, &removeWindowsHooks, func(opts hookinstall.Options) error {
+		run.hooksGone++
+		// The installer writes the file only when it held Kontext's hooks.
+		if len(run.hooks) > 0 && run.hooksGone == 1 {
+			reportClaudeHooks(opts, "write")
+		} else {
+			reportClaudeHooks(opts, "skip")
+		}
+		return nil
+	})
 	overrideVar(t, &setWindowsAutostart, func(daemon string) error {
 		if run.failAt == "autostart" {
 			return errors.New("autostart failed")
@@ -696,5 +706,80 @@ func TestStopOwnDaemonTreatsAnUnreadableMachineConfigAsPresent(t *testing.T) {
 	run.stops = 0
 	if stopped, err := stopOwnDaemon(""); err != nil || stopped || run.stops != 0 {
 		t.Fatalf("with no entry: stopped %v, %d stops, %v; want nothing stopped", stopped, run.stops, err)
+	}
+}
+
+// reportClaudeHooks answers as the hook installer does: one result for
+// Claude Code's user file and one for an agent it skips on Windows.
+func reportClaudeHooks(opts hookinstall.Options, action string) {
+	if opts.Report == nil {
+		return
+	}
+	opts.Report(hookinstall.Result{File: hookinstall.File{Kind: "claude-user", Path: `C:\Users\someone\.claude\settings.json`}, Action: action})
+	opts.Report(hookinstall.Result{File: hookinstall.File{Kind: "codex", Path: `C:\Users\someone\.codex\hooks.json`}, Action: "skip", Reason: "unsupported-on-windows"})
+}
+
+// Setup and uninstall say what they did to Claude Code's hooks in one line
+// of their own, and do not print the hook installer's plan.
+func TestWindowsSetupAndUninstallSpeakOfTheHooksInTheirOwnWords(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	opts := h.options("tok", pingServer(t, "tok"))
+	var out bytes.Buffer
+	opts.Stdout = &out
+	if err := Run(context.Background(), opts); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if len(run.hooks) != 1 || run.hooks[0].Out != nil {
+		t.Fatalf("setup handed the hook installer an output to print its plan to: %+v", run.hooks)
+	}
+	if !strings.Contains(out.String(), "✓ Claude Code hooks installed (") || strings.Contains(out.String(), "unsupported-on-windows") || strings.Contains(out.String(), ".codex") {
+		t.Fatalf("setup's output about the hooks:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := Uninstall(context.Background(), opts); err != nil {
+		t.Fatalf("Uninstall() = %v", err)
+	}
+	for _, want := range []string{"✓ Claude Code hooks removed (", "✓ Background agent no longer starts at sign-in", "✓ Config removed: "} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("uninstall's output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "unsupported-on-windows") {
+		t.Errorf("uninstall printed the hook installer's plan:\n%s", out.String())
+	}
+
+	// With nothing of its own left, uninstall claims no removal.
+	out.Reset()
+	if err := Uninstall(context.Background(), opts); err != nil {
+		t.Fatalf("second Uninstall() = %v", err)
+	}
+	for _, claim := range []string{"hooks removed", "no longer starts", "Config removed", "Install key removed", "Background agent stopped"} {
+		if strings.Contains(out.String(), claim) {
+			t.Errorf("an uninstall with nothing to remove says %q:\n%s", claim, out.String())
+		}
+	}
+}
+
+// A first install that fails takes the hooks back without saying a second
+// time that they were installed.
+func TestRunWindowsUndoDoesNotClaimTheHooksWereInstalled(t *testing.T) {
+	h := newHarnessOnAnyOS(t)
+	run := newWindowsRun(t, h)
+	allowLoopback(t)
+	opts := h.options("tok", pingServer(t, "tok"))
+	var out bytes.Buffer
+	opts.Stdout = &out
+	run.failAt = "autostart"
+	if err := Run(context.Background(), opts); err == nil {
+		t.Fatal("Run() = nil, want the step's failure")
+	}
+	if got := strings.Count(out.String(), "Claude Code hooks installed"); got != 1 {
+		t.Fatalf("setup said the hooks were installed %d times, want once:\n%s", got, out.String())
+	}
+	if run.hooksGone != 1 {
+		t.Fatalf("the hooks were taken back %d times, want once", run.hooksGone)
 	}
 }
