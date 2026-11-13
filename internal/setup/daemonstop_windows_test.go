@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -67,7 +68,7 @@ func exited(cmd *exec.Cmd, within time.Duration) bool {
 // a status file that can be stale.
 func TestStopProcessEndsTheDaemonAndNothingElse(t *testing.T) {
 	daemon := startSleeper(t, windowsDaemonName)
-	if err := stopProcess(daemon.Process.Pid); err != nil {
+	if _, err := stopProcess(daemon.Process.Pid, ""); err != nil {
 		t.Fatalf("stopProcess(daemon) = %v", err)
 	}
 	if !exited(daemon, 5*time.Second) {
@@ -76,18 +77,18 @@ func TestStopProcessEndsTheDaemonAndNothingElse(t *testing.T) {
 
 	// The CLI's own program is not the daemon either: a hook may hold the pid.
 	cli := startSleeper(t, "kontext.exe")
-	if err := stopProcess(cli.Process.Pid); err != nil {
+	if _, err := stopProcess(cli.Process.Pid, ""); err != nil {
 		t.Fatalf("stopProcess(the CLI) = %v", err)
 	}
 	if exited(cli, 500*time.Millisecond) {
 		t.Fatal("stopProcess ended a CLI process")
 	}
-	if err := stopProcess(os.Getpid()); err != nil {
+	if _, err := stopProcess(os.Getpid(), ""); err != nil {
 		t.Fatalf("stopProcess(this process) = %v", err)
 	}
 
 	other := startSleeper(t, "notepad-like.exe")
-	if err := stopProcess(other.Process.Pid); err != nil {
+	if _, err := stopProcess(other.Process.Pid, ""); err != nil {
 		t.Fatalf("stopProcess(another program) = %v", err)
 	}
 	if exited(other, 500*time.Millisecond) {
@@ -96,7 +97,39 @@ func TestStopProcessEndsTheDaemonAndNothingElse(t *testing.T) {
 
 	// A process this user may not open (the System process) is not the
 	// daemon: no error.
-	if err := stopProcess(4); err != nil {
+	if _, err := stopProcess(4, ""); err != nil {
 		t.Fatalf("stopProcess(the System process) = %v", err)
+	}
+}
+
+// Told which program is this install's, stopProcess leaves a daemon running
+// another file alone: a machine-wide install's daemon has the same name and
+// writes the same status file.
+func TestStopProcessEndsOnlyTheNamedInstallsDaemon(t *testing.T) {
+	theirs := startSleeper(t, windowsDaemonName)
+	ours := startSleeper(t, windowsDaemonName)
+
+	if _, err := stopProcess(theirs.Process.Pid, ours.Path); err != nil {
+		t.Fatalf("stopProcess(the other install's daemon) = %v", err)
+	}
+	if exited(theirs, 500*time.Millisecond) {
+		t.Fatal("stopProcess ended the daemon of another install")
+	}
+
+	// The same file under another spelling is still this install's.
+	spelled := filepath.Join(filepath.Dir(ours.Path), ".", strings.ToUpper(filepath.Base(ours.Path)))
+	if _, err := stopProcess(ours.Process.Pid, spelled); err != nil {
+		t.Fatalf("stopProcess(this install's daemon) = %v", err)
+	}
+	if !exited(ours, 5*time.Second) {
+		t.Fatal("this install's daemon is still running")
+	}
+
+	// A program that is not there names no daemon.
+	if _, err := stopProcess(theirs.Process.Pid, filepath.Join(t.TempDir(), windowsDaemonName)); err != nil {
+		t.Fatalf("stopProcess with a missing program = %v", err)
+	}
+	if exited(theirs, 500*time.Millisecond) {
+		t.Fatal("stopProcess ended a daemon for a program that is not there")
 	}
 }

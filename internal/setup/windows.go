@@ -58,23 +58,26 @@ const windowsDaemonName = "kontextw.exe"
 
 // Seams: the parts of the Windows flow that touch the user's session.
 var (
-	storeWindowsToken   = credstore.Write
-	readWindowsToken    = credstore.Read
-	deleteWindowsToken  = credstore.Delete
-	setWindowsAutostart = autostart.Set
-	delWindowsAutostart = autostart.Remove
-	startWindowsDaemon  = autostart.Start
-	installWindowsHooks = hookinstall.Install
-	removeWindowsHooks  = hookinstall.Remove
-	userHome            = os.UserHomeDir
+	storeWindowsToken    = credstore.Write
+	readWindowsToken     = credstore.Read
+	deleteWindowsToken   = credstore.Delete
+	setWindowsAutostart  = autostart.Set
+	delWindowsAutostart  = autostart.Remove
+	startWindowsDaemon   = autostart.Start
+	installWindowsHooks  = hookinstall.Install
+	removeWindowsHooks   = hookinstall.Remove
+	userHome             = os.UserHomeDir
+	readWindowsAutostart = autostart.Entry
 	// stopWindowsDaemon ends the user's running daemon, found through its
-	// status file; no daemon is not an error.
-	stopWindowsDaemon = func() error {
+	// status file; no daemon is not an error. With program set, only a daemon
+	// running that file is ended (stopProcess).
+	// It reports whether it ended one.
+	stopWindowsDaemon = func(program string) (bool, error) {
 		status := managedobserve.LoadDaemonStatus(managedobserve.DefaultDBPath())
 		if status == nil || status.PID <= 0 {
-			return nil
+			return false, nil
 		}
-		return stopProcess(status.PID)
+		return stopProcess(status.PID, program)
 	}
 )
 
@@ -227,7 +230,9 @@ func runWindows(ctx context.Context, opts Options) (retErr error) {
 	// Over an existing install the old daemon still holds the old key and the
 	// socket, and a second one would give way to it: end it first.
 	if !firstInstall {
-		if err := stopWindowsDaemon(); err != nil {
+		// Whichever daemon serves this user: setup refuses beside a
+		// machine-wide install, so it is this install's.
+		if _, err := stopWindowsDaemon(""); err != nil {
 			return fmt.Errorf("stop the running background agent: %w", err)
 		}
 		oldDaemonStopped = true
@@ -291,17 +296,30 @@ func uninstallWindows(_ context.Context, opts Options) error {
 		return fmt.Errorf("remove the install key: %w", err)
 	}
 
+	// Read before it goes: beside a machine-wide install, the entry is what
+	// tells this install's daemon from that one's.
+	entry, err := readWindowsAutostart()
+	if err != nil {
+		return fmt.Errorf("read the sign-in entry: %w", err)
+	}
 	if err := delWindowsAutostart(); err != nil {
 		return fmt.Errorf("remove the sign-in entry: %w", err)
 	}
 	fmt.Fprintln(opts.Stdout, "  ✓ Background agent no longer starts at sign-in")
-	// Only a user install's daemon is ours to end; a machine-wide install runs
-	// its own for this user.
 	if _, err := os.Stat(slot.ConfigPath); err == nil {
-		if err := stopWindowsDaemon(); err != nil {
+		stopped, err := stopOwnDaemon(entry)
+		if err != nil {
+			// The entry is what tells this install's daemon from another's.
+			// Without it a second uninstall could not find the daemon it
+			// failed to stop, so it goes back.
+			if program := autostart.Program(entry); program != "" {
+				_ = setWindowsAutostart(program)
+			}
 			return fmt.Errorf("stop the background agent: %w", err)
 		}
-		fmt.Fprintln(opts.Stdout, "  ✓ Background agent stopped")
+		if stopped {
+			fmt.Fprintln(opts.Stdout, "  ✓ Background agent stopped")
+		}
 	}
 	binary, _ := StableBinaryPath()
 	if err := removeWindowsHooks(hookinstall.Options{Scope: hookinstall.User, Home: home, Binary: binary, Out: opts.Stdout}); err != nil {
@@ -319,4 +337,23 @@ func uninstallWindows(_ context.Context, opts Options) error {
 	fmt.Fprintf(opts.Stdout, "  • Local records and logs under %s\n", filepath.Dir(slot.ConfigPath))
 	fmt.Fprintln(opts.Stdout, "  • The kontext programs")
 	return nil
+}
+
+// stopOwnDaemon ends the daemon of the user's own install, whose sign-in
+// entry was entry. Alone on the machine, that is whichever daemon serves the
+// user, also one whose program was replaced since it started. Beside a
+// machine-wide install, which runs a daemon of the same name for the user
+// and writes the same status file, it is only the one running the entry's
+// program; with no entry to tell them apart, none is ended.
+func stopOwnDaemon(entry string) (bool, error) {
+	// Only a machine-wide config that is not there makes this install the
+	// only one. One that cannot be looked at may well be there.
+	if _, err := os.Lstat(systemConfigPath); errors.Is(err, os.ErrNotExist) {
+		return stopWindowsDaemon("")
+	}
+	program := autostart.Program(entry)
+	if program == "" {
+		return false, nil
+	}
+	return stopWindowsDaemon(program)
 }

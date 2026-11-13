@@ -3,7 +3,10 @@
 // administrator. Setup writes it, uninstall removes it, doctor reads it.
 package autostart
 
-import "strings"
+import (
+	"flag"
+	"strings"
+)
 
 // DaemonSubcommand is the subcommand that runs the daemon.
 const DaemonSubcommand = "managed-observe-daemon"
@@ -24,3 +27,8 @@ func Program(entry string) string {
 	program, _, _ := strings.Cut(strings.TrimSpace(entry), " ")
 	return program
 }
+
+// underTest reports a test binary, which registers the testing flags before
+// any test runs. Asked this way so the shipped program does not link the
+// testing package.
+func underTest() bool { return flag.Lookup("test.v") != nil }

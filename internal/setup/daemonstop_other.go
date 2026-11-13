@@ -4,4 +4,4 @@ package setup
 
 import "errors"
 
-func stopProcess(int) error { return errors.New("only on Windows") }
+func stopProcess(int, string) (bool, error) { return false, errors.New("only on Windows") }
