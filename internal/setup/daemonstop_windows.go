@@ -72,8 +72,11 @@ func stopProcess(pid int, program string) (stopped bool, err error) {
 	return true, nil
 }
 
+// isDaemonProgram also takes the daemon's program renamed by an update: a
+// running program can be renamed on Windows, and its process then reports
+// the new name.
 func isDaemonProgram(name string) bool {
-	return strings.EqualFold(name, windowsDaemonName)
+	return strings.EqualFold(name, windowsDaemonName) || strings.EqualFold(name, windowsDaemonName+".old")
 }
 
 // sameFile compares by the files' identity, not their spelling.
