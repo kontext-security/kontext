@@ -135,6 +135,21 @@ stops the background agent. It keeps the two programs, the installation
 identity and the local records under `%LOCALAPPDATA%\Kontext`; delete the
 folders to remove those too.
 
+## Machine-wide install with the MSI
+
+> Under active development. The MSI is not code-signed yet, and how a machine
+> is enrolled is about to change, so expect breaking changes between releases.
+
+For a rollout through device management, each release also carries an MSI per
+architecture, `kontext_<version>_windows_amd64.msi` and
+`kontext_<version>_windows_arm64.msi`, with `checksums_windows_msi.txt`. It
+installs Kontext for every user of the PC and needs administrator rights. Its
+properties, what it installs and the commands are in
+[packaging/windows/README.md](../packaging/windows/README.md).
+
+A PC with the MSI does not need the steps above, and `kontext setup` refuses to
+add an install of your own beside it.
+
 ## Not on Windows yet
 
 - The programs are not code-signed.
