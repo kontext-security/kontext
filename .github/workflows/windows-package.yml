@@ -185,6 +185,8 @@ jobs:
             if ($LASTEXITCODE -eq 0) { $wrong++; "NOT REFUSED: $($case.what)" } else { "refused: $($case.what): $(($out -split "`n" | Where-Object { $_ -match '^FAIL' } | Select-Object -First 1))" }
           }
           if ($wrong) { Write-Error "$wrong of $($cases.Count) cases were let through"; exit 1 }
+          # The last refusal left its exit code behind; this step passed.
+          exit 0
 
   msi:
     runs-on: windows-latest
