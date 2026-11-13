@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.24.0](https://github.com/kontext-security/kontext/compare/v1.23.1...v1.24.0) (2026-11-13)
+
+
+### Features
+
+* **inventory:** the scan reads agent configuration on Windows ([#769](https://github.com/kontext-security/kontext/issues/769)) ([7d6e54b](https://github.com/kontext-security/kontext/commit/7d6e54b4f01571439ce3a8f35c43e3dbd5a5ca43))
+* **release:** a release carries Windows MSIs ([#771](https://github.com/kontext-security/kontext/issues/771)) ([0e949c7](https://github.com/kontext-security/kontext/commit/0e949c719b9fba8c5f7d6cee2dab636fd1c9c60f))
+* **release:** Windows zips with kontext.exe and kontextw.exe ([#766](https://github.com/kontext-security/kontext/issues/766)) ([0446bc8](https://github.com/kontext-security/kontext/commit/0446bc8f2fe3523528c4c247a5e36b7ef371aa23))
+* **setup:** kontext setup for one user on Windows ([#755](https://github.com/kontext-security/kontext/issues/755)) ([d0e353d](https://github.com/kontext-security/kontext/commit/d0e353d0fe6a05a46cf7477bf0ccf4904f2678e4))
+* **windows:** Codex hooks on a user install ([#764](https://github.com/kontext-security/kontext/issues/764)) ([5bcdab9](https://github.com/kontext-security/kontext/commit/5bcdab90357c90e01be348c8a18751b9f7645ef6))
+
+
+### Bug Fixes
+
+* **doctor:** a daemon that has just started is not judged by the last daemon's heartbeat ([#765](https://github.com/kontext-security/kontext/issues/765)) ([7ef7733](https://github.com/kontext-security/kontext/commit/7ef77337b874ed33ad19468bb0514456aaf41990))
+* **guard:** send prompts and Merlin review context only on Full tool calls and prompts ([#773](https://github.com/kontext-security/kontext/issues/773)) ([c8f1527](https://github.com/kontext-security/kontext/commit/c8f15273aa58a2ae69edf3af4a9879fe1434ae21))
+* **shellprojection:** worst-case GitHub facts for commands that cannot be read ([#767](https://github.com/kontext-security/kontext/issues/767)) ([9330252](https://github.com/kontext-security/kontext/commit/9330252cd3a732022ac2d56f1e95099cd472936b))
+* **windows:** a daemon start and stop that hold up beside other installs ([#756](https://github.com/kontext-security/kontext/issues/756)) ([1c3cf1b](https://github.com/kontext-security/kontext/commit/1c3cf1b67d82c5457369131726f0ba181311ad53))
+* **windows:** setup and uninstall say what they did, in their own words ([#757](https://github.com/kontext-security/kontext/issues/757)) ([7ae503a](https://github.com/kontext-security/kontext/commit/7ae503a8fe346e2205fc0282b2a9c29689838e74))
+
 ## [1.23.1](https://github.com/kontext-security/kontext/compare/v1.23.0...v1.23.1) (2026-11-12)
 
 
