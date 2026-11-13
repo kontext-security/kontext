@@ -137,10 +137,23 @@ jobs:
           [System.IO.File]::WriteAllText((Join-Path $PWD "out\checksums_windows_msi.txt"), (($lines -join "`n") + "`n"))
           Get-Content out\checksums_windows_msi.txt
 
+      # A run that finds all three files on the release leaves them alone. A
+      # run that finds only some of them, after an upload that broke off,
+      # replaces those together with the rest, so the MSIs and their checksum
+      # list on the release always come from one build.
       - name: Attach the MSIs to the release
         shell: pwsh
         run: |
           $files = @(Get-ChildItem out\*.msi | ForEach-Object FullName) + (Join-Path $PWD 'out\checksums_windows_msi.txt')
-          gh release upload $env:TAG --repo $env:GITHUB_REPOSITORY @files
+          $names = $files | ForEach-Object { Split-Path $_ -Leaf }
+          $there = @(gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $have = @($names | Where-Object { $there -contains $_ })
+          if ($have.Count -eq $names.Count) {
+            "release $env:TAG already has $($names -join ', '); nothing uploaded"
+            exit 0
+          }
+          if ($have.Count -gt 0) { "replacing what an earlier run left: $($have -join ', ')" }
+          gh release upload $env:TAG --repo $env:GITHUB_REPOSITORY --clobber @files
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
