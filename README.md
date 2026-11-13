@@ -63,6 +63,8 @@ session directory names, preserving their Cowork identity in activity records.
 
 ### Install Kontext
 
+**macOS**
+
 ```bash
 brew install --cask kontext-security/tap/kontext
 ```
@@ -85,7 +87,35 @@ It gets each release a few hours later, and you update it with
 brew install kontext
 ```
 
-### Connect this Mac
+**Windows** (Windows 11, x64 and Arm)
+
+Each [release](https://github.com/kontext-security/kontext/releases/latest) has
+one zip per architecture, `kontext_<version>_windows_amd64.zip` and
+`kontext_<version>_windows_arm64.zip`, with two programs: `kontext.exe`, the
+command line tool, and `kontextw.exe`, the background agent. Download the zip for
+your PC and `checksums.txt`, then in PowerShell, in the folder you downloaded
+them to:
+
+```powershell
+$zip = Get-Item kontext_*_windows_*.zip
+# The hash must be the one checksums.txt lists for this zip.
+(Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+Select-String -Path checksums.txt -Pattern $zip.Name
+
+$dir = "$env:LOCALAPPDATA\Programs\Kontext"
+Expand-Archive $zip -DestinationPath $dir
+cd $dir
+.\kontext.exe --version
+```
+
+Keep both programs together in a folder that stays where it is: setup writes that
+folder into the agents' hooks and into the entry that starts the background agent
+when you sign in. If you move it, run setup again from the new place.
+
+The Windows programs are not code-signed yet, and there is no installer and no
+automatic update on Windows yet. A winget package is in preparation.
+
+### Connect this machine
 
 Create an install token in the
 [Kontext dashboard](https://app.kontext.security), then run:
@@ -94,11 +124,20 @@ Create an install token in the
 kontext setup
 ```
 
+On Windows, run it from the folder you unzipped to, in PowerShell on your own
+desktop (not in an SSH session, which cannot reach the credential store):
+
+```powershell
+.\kontext.exe setup
+```
+
 Setup:
 
-- stores the install token in the macOS login keychain;
-- installs hooks for supported agents in your home folder, without `sudo`;
-- starts the local Kontext daemon;
+- stores the install token in the macOS login keychain, or in Windows Credential
+  Manager;
+- installs hooks for supported agents in your home folder, without `sudo` or
+  administrator rights;
+- starts the local Kontext daemon, and has it start when you sign in;
 - connects the installation to your Kontext organization.
 
 Verify the installation:
@@ -108,11 +147,13 @@ kontext doctor
 ```
 
 Then keep using Claude Code or Codex normally. You do not need to launch the
-agent through a separate wrapper.
+agent through a separate wrapper. Codex runs hooks only after you trust them:
+start `codex` once after setup, and trust the Kontext hooks when it asks, or in
+`/hooks`.
 
-> Self-serve setup currently supports macOS. Managed and cloud environments can
-> run the same local runtime when they provide a supported hook contract,
-> storage, and daemon lifecycle.
+> Self-serve setup supports macOS and Windows. On Windows it covers Claude Code
+> and Codex. Managed and cloud environments can run the same local runtime when
+> they provide a supported hook contract, storage, and daemon lifecycle.
 
 ---
 
@@ -399,6 +440,13 @@ remove the installation:
 ```bash
 kontext setup --uninstall
 ```
+
+On Windows, run these commands as `.\kontext.exe` from the folder the programs
+are in. Uninstall there removes the install key, the hooks, the sign-in entry and
+the config, and stops the background agent. It keeps the two programs, the
+installation identity and the local records; delete the folder to remove the
+programs. The repairs above (`doctor --fix`, hooks restored by the background
+agent, automatic updates) are described for macOS.
 
 ---
 
