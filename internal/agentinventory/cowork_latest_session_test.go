@@ -7,12 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestCoworkLatestSessionFixtures(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
 	now := time.Date(2026, 9, 22, 13, 0, 0, 0, time.FixedZone("fixture", 2*60*60))
 	for _, tt := range []struct {
 		name string

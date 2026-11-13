@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/kontext-security/kontext/internal/hermetic"
 )
 
 func TestCoworkDiscovery(t *testing.T) {
@@ -135,7 +133,6 @@ func TestCoworkSandboxWithoutStore(t *testing.T) {
 }
 
 func TestLatestRemoteCoworkSessionIgnoresFutureMarkers(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +154,6 @@ func TestLatestRemoteCoworkSessionIgnoresFutureMarkers(t *testing.T) {
 }
 
 func TestLatestRemoteCoworkSessionReadsPast64K(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1003", "the scan reads no file content on Windows yet")
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

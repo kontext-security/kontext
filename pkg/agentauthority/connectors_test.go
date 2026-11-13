@@ -17,8 +17,9 @@ func writeSession(t *testing.T, home, root, name string, modified time.Time, sid
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(home, "Library/Application Support/Claude", root, "account", "org", name)
-	writeFixture(t, home, strings.TrimPrefix(path, home+"/"), string(data))
+	relative := filepath.Join("Library/Application Support/Claude", root, "account", "org", name)
+	path := filepath.Join(home, relative)
+	writeFixture(t, home, relative, string(data))
 	if err := os.Chtimes(path, modified, modified); err != nil {
 		t.Fatal(err)
 	}
