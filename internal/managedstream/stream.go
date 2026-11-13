@@ -270,6 +270,8 @@ func flushLedger(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer store.Close()
+	// The Merlin export reads it to decide whether review context may leave.
+	applyCaptureConfiguration(store, opts)
 
 	statePath := opts.StatePath
 	if statePath == "" {

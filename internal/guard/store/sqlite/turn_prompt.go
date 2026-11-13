@@ -22,7 +22,7 @@ func CaptureTurnPrompt(prompt string, capture payloadcapture.RuntimeConfiguratio
 	if capture.EffectiveMode == payloadcapture.ModeOmitted {
 		return SizeOnlyTurnPrompt(TurnPromptOmitted, chars)
 	}
-	if !capture.WorkTypeClassification || len(prompt) > MaxTurnPromptBytes {
+	if !payloadcapture.PromptsAllowed(capture) || len(prompt) > MaxTurnPromptBytes {
 		return SizeOnlyTurnPrompt(TurnPromptSkipped, chars)
 	}
 	digest := sha256.Sum256([]byte(strings.Join(strings.Fields(prompt), " ")))

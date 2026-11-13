@@ -27,7 +27,7 @@ type recoveryTarget struct {
 }
 
 func (s *Store) recoverSessionTurns(ctx context.Context, session string, updates []toolUsageUpdate, indices []int, prompts []time.Time, capture payloadcapture.RuntimeConfiguration, now time.Time, links map[string]string, present map[string]bool, hints map[int64]string) error {
-	if !capture.Confirmed || !capture.WorkTypeClassification || capture.EffectiveMode == payloadcapture.ModeOmitted {
+	if !payloadcapture.PromptsAllowed(capture) {
 		return nil
 	}
 	slices.SortFunc(prompts, func(a, b time.Time) int { return a.Compare(b) })

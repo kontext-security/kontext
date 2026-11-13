@@ -14,6 +14,7 @@ import (
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 	"github.com/kontext-security/kontext/internal/runtimecore"
 )
 
@@ -272,7 +273,10 @@ func (r guardHookRuntime) annotateStepSafety(ctx context.Context, input *stepsaf
 		HistoryOmitted:     result.HistoryOmitted,
 		ToolSchemasPresent: result.ToolSchemasPresent,
 	}
-	if result.ShadowDecision == stepsafety.DecisionUnsafe {
+	// The review context is the user's request and recent history, so it is
+	// built, kept and uploaded only where prompts may leave the endpoint.
+	if result.ShadowDecision == stepsafety.DecisionUnsafe &&
+		payloadcapture.PromptsAllowed(r.store.PayloadCaptureConfiguration()) {
 		decision.StepSafety.ReviewContext = merlinReviewContext(input.UserRequest, input.InteractionHistory)
 	}
 }
