@@ -22,6 +22,8 @@ func TestGrantRedactsWholePathWithSpaces(t *testing.T) {
 		{`Bash(pwsh -Command "Get-Content C:\Users\Jane Doe\notes.txt")`, `Bash(pwsh -Command <redacted>)`},
 		{`Bash(echo don't cat /Users/Jane Doe/notes.txt)`, `Bash(echo don't cat <redacted>)`},
 		{`Bash(sh -c 'cat /Users/Jane Doe/notes.txt)`, `Bash(sh -c <redacted>)`},
+		{`Bash(sh -c "cat \"/Users/Jane Doe/notes.txt\"")`, `Bash(sh -c <redacted>)`},
+		{`Bash(pwsh -Command "Get-Content \"C:\Users\Jane Doe\notes.txt\"")`, `Bash(pwsh -Command <redacted>)`},
 	} {
 		got := safeGrant(tc.grant)
 		if got != tc.want {

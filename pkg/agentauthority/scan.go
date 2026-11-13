@@ -431,7 +431,8 @@ func safeGrant(pattern string) string {
 // judges one by one, keeping a path with spaces in it together, so that the
 // path is redacted and not only its part before the first space:
 //
-//   - a quoted stretch that opens a word is judged word by word as before,
+//   - a quoted stretch that opens a word, escaped double quotes inside it
+//     included, is judged word by word as before,
 //     and if any of its words would be redacted or dropped, the whole stretch
 //     is redacted: it holds a path or a secret, and where that ends inside
 //     the quotes is not known. A quote that never closes takes the rest of
@@ -448,6 +449,7 @@ func grantWords(command string) []string {
 	var words []string
 	var word strings.Builder
 	var quote rune
+	escaped := false
 	flush := func() {
 		if word.Len() == 0 {
 			return
@@ -473,7 +475,14 @@ func grantWords(command string) []string {
 		switch {
 		case quote != 0:
 			word.WriteRune(r)
-			if r == quote {
+			switch {
+			case escaped:
+				escaped = false
+			case r == '\\' && quote == '"':
+				// Inside double quotes a backslash keeps the next quote in
+				// the stretch, as in sh -c "cat \"/Users/a b/x\"".
+				escaped = true
+			case r == quote:
 				quote = 0
 			}
 		case (r == '"' || r == '\'') && word.Len() == 0:
