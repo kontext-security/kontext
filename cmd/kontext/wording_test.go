@@ -60,6 +60,15 @@ func TestHelpOnWindowsNamesThePC(t *testing.T) {
 	}
 }
 
+// What other tests ask of setup's long help holds on every system.
+func TestSetupLongHelpNamesAgentHooksOnEverySystem(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		if long := helpFor(t, goos)["kontext setup (long)"]; !strings.Contains(long, "hooks for supported local agents") {
+			t.Errorf("on %s setup's long help does not name the agent hooks:\n%s", goos, long)
+		}
+	}
+}
+
 // The Mac's help is what it was.
 func TestHelpOnMacOSIsUnchanged(t *testing.T) {
 	texts := helpFor(t, "darwin")

@@ -25,9 +25,9 @@ func setupLong() string {
 		return `Connect this PC to your Kontext organization (self-serve managed observe).
 
 Setup asks for the install token created in the Kontext dashboard, stores it
-in Windows Credential Manager, installs hooks for Claude Code and Codex in
-your user profile, and starts a background agent that streams agent activity
-to your workspace. It needs no administrator rights. Run it in a desktop
+in Windows Credential Manager, installs hooks for supported local agents
+(Claude Code and Codex) in your user profile, and starts a background agent
+that streams agent activity to your workspace. It needs no administrator rights. Run it in a desktop
 session: an SSH session cannot reach the credential store.
 
 Re-running setup is safe. A new token for the same Kontext server replaces
