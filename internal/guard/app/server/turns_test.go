@@ -53,7 +53,9 @@ func TestTurnSourceAndPromptMode(t *testing.T) {
 		{name: "omitted, switch off", capture: confirmedCapture(payloadcapture.ModeOmitted, false), prompt: prompt, mode: sqlite.TurnPromptOmitted},
 		{name: "summaries, switch off", capture: confirmedCapture(payloadcapture.ModeSummary, false), prompt: prompt, mode: sqlite.TurnPromptSkipped},
 		{name: "full, switch off", capture: confirmedCapture(payloadcapture.ModeFull, false), prompt: prompt, mode: sqlite.TurnPromptSkipped},
-		{name: "summaries, switch on", capture: confirmedCapture(payloadcapture.ModeSummary, true), prompt: prompt, mode: sqlite.TurnPromptExcerpt, limit: 64_000},
+		// Commands with the switch left on (a row from before the three
+		// steps): prompts belong to the top step only.
+		{name: "summaries, switch on", capture: confirmedCapture(payloadcapture.ModeSummary, true), prompt: prompt, mode: sqlite.TurnPromptSkipped},
 		{name: "full, switch on", capture: confirmedCapture(payloadcapture.ModeFull, true), prompt: prompt, mode: sqlite.TurnPromptExcerpt, limit: 64_000},
 		{name: "2 MB paste", capture: confirmedCapture(payloadcapture.ModeFull, true), prompt: paste, mode: sqlite.TurnPromptSkipped},
 		{name: "2 MB paste, omitted", capture: confirmedCapture(payloadcapture.ModeOmitted, true), prompt: paste, mode: sqlite.TurnPromptOmitted},
@@ -74,12 +76,12 @@ func TestTurnSourceAndPromptMode(t *testing.T) {
 }
 
 func TestTurnPromptExcerpt(t *testing.T) {
-	summaries := confirmedCapture(payloadcapture.ModeSummary, true)
+	prompts := confirmedCapture(payloadcapture.ModeFull, true)
 	full := confirmedCapture(payloadcapture.ModeFull, true)
 	secret := "sk-proj-" + strings.Repeat("A1b2", 8)
 	prompt := "<system-reminder>\nThe user opened report.md\n</system-reminder>\nfix   the\tfailing\n\nspec, the key is " + secret +
 		" <pasted_content id=\"1\">\nhuge log\n</pasted_content> and <command-message>review is running</command-message>done\x00now"
-	got := turnPrompt(prompt, summaries)
+	got := turnPrompt(prompt, prompts)
 	if *got.Text != "fix the failing spec, the key is "+payloadcapture.RedactedPlaceholder+" and done now" || *got.Truncated {
 		t.Fatalf("excerpt = %q (truncated %v)", *got.Text, *got.Truncated)
 	}
@@ -90,28 +92,28 @@ func TestTurnPromptExcerpt(t *testing.T) {
 	// does not change it, and the excerpt's stripping does not either.
 	digest := sha256.Sum256([]byte("Continue"))
 	for _, variant := range []string{"Continue", " Continue \n", "Continue\t"} {
-		if hash := *turnPrompt(variant, summaries).SHA256; hash != hex.EncodeToString(digest[:]) {
+		if hash := *turnPrompt(variant, prompts).SHA256; hash != hex.EncodeToString(digest[:]) {
 			t.Errorf("sha256(%q) = %s", variant, hash)
 		}
 	}
 
 	long := strings.Repeat("word ", 20_000) + "the end"
 	// One bound under Summaries and Full alike: the captured-payload cap.
-	for _, capture := range []payloadcapture.RuntimeConfiguration{summaries, full} {
+	for _, capture := range []payloadcapture.RuntimeConfiguration{prompts, full} {
 		got := turnPrompt(long, capture)
 		if !*got.Truncated || len(*got.Text) > 64_000 || len(*got.Text) < 63_000 || !strings.Contains(*got.Text, "[Context omitted]") || !strings.HasSuffix(*got.Text, "the end") {
 			t.Fatalf("%s excerpt: %d bytes, truncated %v", capture.EffectiveMode, len(*got.Text), *got.Truncated)
 		}
 	}
 	under := strings.Repeat("word ", 2_000) + "the end"
-	if got := turnPrompt(under, summaries); *got.Truncated || *got.Text != strings.TrimSpace(under) {
+	if got := turnPrompt(under, prompts); *got.Truncated || *got.Text != strings.TrimSpace(under) {
 		t.Fatalf("a 10,000-byte prompt under Summaries was bounded: %d bytes, truncated %v", len(*got.Text), *got.Truncated)
 	}
 	// A secret across the bound leaves no prefix: redaction runs first. The
 	// secret starts eight bytes before the head cut, (64,000 − marker) / 2,
 	// so bounding first would keep "sk-proj-".
 	crossing := strings.Repeat("a ", 15_991) + secret + strings.Repeat(" b", 20_000)
-	if got := turnPrompt(crossing, summaries); !*got.Truncated || strings.Contains(*got.Text, "sk-proj-") || strings.Contains(*got.Text, "A1b2A1b2") {
+	if got := turnPrompt(crossing, prompts); !*got.Truncated || strings.Contains(*got.Text, "sk-proj-") || strings.Contains(*got.Text, "A1b2A1b2") {
 		t.Fatalf("secret prefix survived bounding (truncated %v)", *got.Truncated)
 	}
 }
@@ -193,7 +195,7 @@ func TestRuntimeMintsTurnsAndStampsActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	store.SetPayloadCaptureConfiguration(confirmedCapture(payloadcapture.ModeSummary, true))
+	store.SetPayloadCaptureConfiguration(confirmedCapture(payloadcapture.ModeFull, true))
 	h := newTurnHarness(t, store)
 
 	// The prompt's PreToolUse arrives before the prompt's deferred write ran,
@@ -416,7 +418,7 @@ func TestHarnessMessagesMintNoTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	store.SetPayloadCaptureConfiguration(confirmedCapture(payloadcapture.ModeSummary, true))
+	store.SetPayloadCaptureConfiguration(confirmedCapture(payloadcapture.ModeFull, true))
 	h := newTurnHarness(t, store)
 	h.hook(prompt("s", "run the probe in the background"))
 	h.hook(toolUse("s", "t1"))

@@ -203,12 +203,11 @@ func turnSource(prompt string, isInterrupt *bool) string {
 	}
 }
 
-// turnPrompt decides what a turn says about its prompt. Omitted capture sends
-// size only; so does a workspace with the work-type switch off, or without a
-// confirmed directive, which clears the switch. Otherwise the excerpt is the
+// turnPrompt decides what a turn says about its prompt. It sends size only
+// unless payloadcapture.PromptsAllowed: a confirmed full directive with the
+// work-type switch on ("Full tool calls and prompts"). Then the excerpt is the
 // prompt without harness blocks, redacted with the Merlin review redactor,
-// whitespace-collapsed, and bounded to 64,000 bytes whatever the capture
-// mode. Chars is the original's length in runes; the hash is
+// whitespace-collapsed, and bounded to 64,000 bytes. Chars is the original's length in runes; the hash is
 // over the trimmed, whitespace-collapsed original, so prompts differing only
 // in spacing share a label.
 func turnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) sqlite.TurnPrompt {

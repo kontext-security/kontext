@@ -21,12 +21,27 @@ func reconcileToolUsage(ctx context.Context, opts Options) error {
 	}
 	defer store.Close()
 	store.SetHistoricalTurnRecovery(opts.AllowHistoricalTurnRecovery)
+	applyCaptureConfiguration(store, opts)
+	return store.ReconcileToolUsage(ctx)
+}
+
+// applyCaptureConfiguration gives a store opened for one pass the capture
+// directive in force: the daemon's, else the cached endpoint config. Without
+// it, or when neither source answers, the store reads as unconfirmed, which
+// sends no prompt text.
+func applyCaptureConfiguration(store *sqlite.Store, opts Options) {
+	if opts.CaptureConfiguration != nil {
+		store.SetPayloadCaptureConfiguration(opts.CaptureConfiguration())
+		return
+	}
 	cachePath := opts.EndpointConfigCachePath
 	if cachePath == "" {
 		cachePath = endpointconfig.DefaultCachePathForDB(opts.DBPath)
 	}
 	cache := endpointconfig.NewCacheForDB(cachePath, opts.DBPath)
-	if err := cache.Load(); err == nil {
+	if err := cache.Load(); err != nil {
+		store.SetPayloadCaptureConfiguration(payloadcapture.DefaultRuntimeConfiguration())
+	} else {
 		snapshot := cache.Current()
 		store.SetPayloadCaptureConfiguration(payloadcapture.RuntimeConfiguration{
 			ConfiguredMode: snapshot.Configured.PayloadCaptureMode, EffectiveMode: snapshot.Config.PayloadCaptureMode,
@@ -34,10 +49,6 @@ func reconcileToolUsage(ctx context.Context, opts Options) error {
 			WorkTypeClassification: snapshot.Config.WorkTypeClassificationEnabled(),
 		})
 	}
-	if opts.CaptureConfiguration != nil {
-		store.SetPayloadCaptureConfiguration(opts.CaptureConfiguration())
-	}
-	return store.ReconcileToolUsage(ctx)
 }
 
 func flushToolUsage(ctx context.Context, opts Options) error {

@@ -356,6 +356,9 @@ func flushLedger(ctx context.Context, opts Options) error {
 		var merlinAnnotations []sqlite.MerlinAnnotationRecord
 		var merlinCursor *sqlite.MerlinAnnotationCursor
 		if len(batch.Actions) == 0 && len(riskTypeAnnotations) == 0 && state.UpdatedAfter != nil {
+			// Read the directive again per batch: a move off the top step
+			// during this flush keeps later review contexts on the laptop.
+			applyCaptureConfiguration(store, opts)
 			merlinAnnotations, merlinCursor, err = store.MerlinAnnotations(ctx, sqlite.MerlinAnnotationExportOptions{
 				CreatedAfter: pageMerlinCreatedAfter, CreatedAfterID: pageMerlinAnnotationID,
 				ActionUpdatedThrough: state.UpdatedAfter, ActionUpdatedThroughID: state.ActionID, Limit: limit,

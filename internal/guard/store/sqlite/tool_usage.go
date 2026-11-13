@@ -18,6 +18,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/modelusage"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 const toolUsageDDL = `
@@ -155,7 +156,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 	if s.historicalTurnRecoveryAllowed() || !cutoff.IsZero() {
 		recoveryVersion = 2
 	}
-	if capture.Confirmed && capture.WorkTypeClassification && capture.EffectiveMode != "omitted" {
+	if payloadcapture.PromptsAllowed(capture) {
 		// Once per upgrade, include unchanged and historical registered sources.
 		// -1 is scheduled; failed reads retain the normal retry backoff.
 		if _, err := s.db.ExecContext(ctx, `update tool_usage_sources set fingerprint='',turn_recovery_version=-1 where turn_recovery_version>=0 and turn_recovery_version<?`, recoveryVersion); err != nil {
@@ -202,7 +203,7 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 		} else {
 			update.fingerprint, update.records, update.prompts = fingerprint, records, prompts
 			if capture.Confirmed {
-				allowed := capture.WorkTypeClassification && capture.EffectiveMode != "omitted"
+				allowed := payloadcapture.PromptsAllowed(capture)
 				update.captureAllowed = &allowed
 				if allowed {
 					update.recoveryVersion = recoveryVersion

@@ -22,6 +22,7 @@ import (
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/hookruntime"
 	"github.com/kontext-security/kontext/internal/localruntime"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 type capturingStepSafetyBackend struct {
@@ -96,6 +97,8 @@ func TestDeferredStepSafetyUsesPreToolContextAfterHookReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	// The review context exists only on "Full tool calls and prompts".
+	store.SetPayloadCaptureConfiguration(confirmedCapture(payloadcapture.ModeFull, true))
 	backend := &capturingStepSafetyBackend{}
 	evaluator := stepsafety.NewWithBackend(backend, time.Second, 1, stepsafety.ModelVersion)
 	defer evaluator.Close()
@@ -314,6 +317,7 @@ func TestStepSafetyRunsAtPreExecutionHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	store.SetPayloadCaptureConfiguration(confirmedCapture(payloadcapture.ModeFull, true))
 	backend := &capturingStepSafetyBackend{}
 	evaluator := stepsafety.NewWithBackend(backend, time.Second, 1, stepsafety.ModelVersion)
 	server, err := NewServerWithOptions(store, Options{StepSafety: evaluator})
@@ -413,6 +417,60 @@ func TestStepSafetyRunsAtPreExecutionHook(t *testing.T) {
 	}
 	if reviewed.UserFeedback != riskclassifier.FeedbackShouldAllow || reviewed.FeedbackAt == nil {
 		t.Fatalf("reviewed record = %+v", reviewed)
+	}
+}
+
+// Below "Full tool calls and prompts" Merlin still scores the call, but the
+// review context (the user's request and recent history) is never built, so
+// it is neither kept locally nor uploaded (ENG-1045).
+func TestStepSafetyReviewContextOnlyWithPrompts(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		capture payloadcapture.RuntimeConfiguration
+		context bool
+	}{
+		{"commands", confirmedCapture(payloadcapture.ModeSummary, false), false},
+		{"commands, switch left on", confirmedCapture(payloadcapture.ModeSummary, true), false},
+		{"full tool calls", confirmedCapture(payloadcapture.ModeFull, false), false},
+		{"no confirmed directive", payloadcapture.DefaultRuntimeConfiguration(), false},
+		{"full tool calls and prompts", confirmedCapture(payloadcapture.ModeFull, true), true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := sqlite.OpenStore(filepath.Join(t.TempDir(), "guard.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			store.SetPayloadCaptureConfiguration(test.capture)
+			evaluator := stepsafety.NewWithBackend(&capturingStepSafetyBackend{}, time.Second, 1, stepsafety.ModelVersion)
+			defer evaluator.Close()
+			server, err := NewServerWithOptions(store, Options{StepSafety: evaluator})
+			if err != nil {
+				t.Fatal(err)
+			}
+			core := server.RuntimeCore()
+			if _, err := core.EvaluateHook(context.Background(), hook.Event{SessionID: "ctx", HookName: hook.HookUserPromptSubmit, ToolInput: map[string]any{"prompt": "Rotate the staging credentials"}}); err != nil {
+				t.Fatal(err)
+			}
+			result, err := core.EvaluateHook(context.Background(), hook.Event{SessionID: "ctx", HookName: hook.HookPreToolUse, ToolName: "update_config", ToolInput: map[string]any{"file_path": "config.json"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, ok := result.Metadata().(risk.RiskDecision)
+			if !ok || decision.StepSafety == nil || decision.StepSafety.ShadowDecision != stepsafety.DecisionUnsafe {
+				t.Fatalf("Merlin must still score the call: %+v", decision.StepSafety)
+			}
+			if (decision.StepSafety.ReviewContext != nil) != test.context {
+				t.Fatalf("review context = %+v, want present %v", decision.StepSafety.ReviewContext, test.context)
+			}
+			records, err := store.StepSafetyVerdictsForSession(context.Background(), "ctx")
+			if err != nil || len(records) != 1 {
+				t.Fatalf("stored verdicts = %+v, %v", records, err)
+			}
+			if (records[0].ReviewContext != nil) != test.context {
+				t.Fatalf("stored review context = %+v, want present %v", records[0].ReviewContext, test.context)
+			}
+		})
 	}
 }
 

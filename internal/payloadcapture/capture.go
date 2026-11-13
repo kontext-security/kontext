@@ -38,6 +38,15 @@ type RuntimeConfiguration struct {
 	WorkTypeClassification bool `json:"-"`
 }
 
+// PromptsAllowed reports whether what a person types may leave the endpoint:
+// only on "Full tool calls and prompts", a confirmed full directive with the
+// work-type switch on. Turn prompts and Merlin review context both follow it;
+// the server enforces the same rule (promptsAllowed in kontext-cloud).
+func PromptsAllowed(config RuntimeConfiguration) bool {
+	config = SafeRuntimeConfiguration(config)
+	return config.EffectiveMode == ModeFull && config.WorkTypeClassification
+}
+
 func DefaultRuntimeConfiguration() RuntimeConfiguration {
 	return RuntimeConfiguration{
 		ConfiguredMode: ModeSummary,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 // Feedback is mutable and deliberately omitted from the append-only wire record.
@@ -62,6 +64,9 @@ func (s *Store) MerlinAnnotations(ctx context.Context, opts MerlinAnnotationExpo
 	}
 	defer rows.Close()
 	records := []MerlinAnnotationRecord{}
+	// A context kept on "Full tool calls and prompts" stays on the laptop once
+	// the workspace moves off it, even if its annotation has not left yet.
+	promptsAllowed := payloadcapture.PromptsAllowed(s.PayloadCaptureConfiguration())
 	for rows.Next() {
 		var actionExported bool
 		record, err := scanStepSafetyVerdict(rows, &actionExported)
@@ -73,6 +78,9 @@ func (s *Store) MerlinAnnotations(ctx context.Context, opts MerlinAnnotationExpo
 		}
 		record.UserFeedback = ""
 		record.FeedbackAt = nil
+		if !promptsAllowed {
+			record.ReviewContext = nil
+		}
 		records = append(records, MerlinAnnotationRecord{SchemaVersion: "merlin_annotation/v1", StepSafetyRecord: record})
 	}
 	if err := rows.Err(); err != nil {
