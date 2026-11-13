@@ -12,27 +12,11 @@ func setupCmd() *cobra.Command {
 	var allowHTTPLoopback bool
 	cmd := &cobra.Command{
 		Use:           "setup",
-		Short:         "Connect this Mac to your Kontext organization",
+		Short:         "Connect " + thisMachine() + " to your Kontext organization",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Long: `Connect this Mac to your Kontext organization (self-serve managed observe).
-
-Setup asks for the install token created in the Kontext dashboard, stores it
-in your login keychain, installs hooks for supported local agents, and starts
-a background agent that streams agent activity to your workspace.
-
-Merlin provides local advisory assessment by default. It does not block tool calls.
-
-Re-running setup is safe, and never overwrites an existing workspace. A token
-for the workspace this Mac is already connected to rotates the stored token
-and restarts the agent. A token for a workspace that already has another
-profile rotates that profile's token and switches to it. A token for a new
-workspace adds a profile for it (like ` + "`kontext profile add`" + `) and switches to
-it, leaving the current profile untouched.
-
-Use --uninstall to remove everything setup installed (the kontext binary
-itself stays — it is managed by Homebrew).`,
-		Args: cobra.NoArgs,
+		Long:          setupLong(),
+		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := setup.Options{
 				Token:             token,
@@ -52,7 +36,7 @@ itself stays — it is managed by Homebrew).`,
 	cmd.Flags().StringVar(&token, "token", "", "install token from the Kontext dashboard (prompted interactively when omitted)")
 	cmd.Flags().StringVar(&cloudURL, "cloud-url", setup.CloudURL(), "Kontext cloud URL")
 	cmd.Flags().BoolVar(&tokenStdin, "token-stdin", false, "read the install token from stdin, so it never appears in the process list")
-	cmd.Flags().BoolVar(&uninstall, "uninstall", false, "remove the self-serve managed install from this Mac")
+	cmd.Flags().BoolVar(&uninstall, "uninstall", false, "remove the self-serve managed install from "+thisMachine())
 	cmd.Flags().BoolVar(&allowHTTPLoopback, "allow-http-loopback", false, "accept a plaintext http cloud URL pointing at localhost (local development)")
 	_ = cmd.Flags().MarkHidden("cloud-url")
 	_ = cmd.Flags().MarkHidden("allow-http-loopback")

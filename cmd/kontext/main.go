@@ -94,7 +94,7 @@ func whoamiCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:           "whoami",
-		Short:         "Show the workspace and person connected to this Mac",
+		Short:         "Show the workspace and person connected to " + thisMachine(),
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
