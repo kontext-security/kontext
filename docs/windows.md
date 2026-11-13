@@ -118,6 +118,11 @@ sequenceDiagram
     D-->>C: decision and outcome, for the ledger
 ```
 
+Which shell an agent uses depends on the PC: Claude Code runs commands with
+its Bash tool where Git Bash is installed and with its PowerShell tool
+elsewhere, and Codex runs them in PowerShell 7 or in Windows PowerShell 5.1.
+The hook sees each of them, and a rule on shell commands applies to all.
+
 ## 5. Observe, then enforce
 
 In observe mode a rule that would deny is recorded and the action continues. In
@@ -161,6 +166,10 @@ stops the background agent. It keeps the two programs, the installation
 identity and the local records under `%LOCALAPPDATA%\Kontext`; delete the
 folders to remove those too.
 
+The records belong to the Kontext server they were made for. To connect this
+PC to another server later, move `%LOCALAPPDATA%\Kontext` away before you run
+setup again.
+
 ## Machine-wide install with the MSI
 
 > Under active development. The MSI is not code-signed yet, and how a machine
@@ -172,6 +181,10 @@ architecture, `kontext_<version>_windows_amd64.msi` and
 installs Kontext for every user of the PC and takes the place of steps 1 and 2:
 an administrator, or the device management acting as one, installs and connects
 the PC in one go.
+
+As long as the MSI is not signed, a browser may hold the download back as a
+file that "isn't commonly downloaded". Keep it only once its SHA-256 is the
+one `checksums_windows_msi.txt` lists for it.
 
 ```mermaid
 flowchart LR
