@@ -183,8 +183,8 @@ writes: [packaging/windows/README.md](../packaging/windows/README.md).
 
 - **Upgrade:** install the newer MSI the same way, without properties. The
   configuration, the token, the hooks and the logon task stay as they are.
-- **Check:** `"C:\Program Files\Kontext\kontext.exe" doctor`, as on a PC you
-  set up yourself (step 3). Steps 4 and 5 are the same.
+- **Check:** `& "C:\Program Files\Kontext\kontext.exe" doctor` in PowerShell, as
+  on a PC you set up yourself (step 3). Steps 4 and 5 are the same.
 - **Remove:** `msiexec /x kontext_<version>_windows_amd64.msi /qn /norestart`.
   It removes the programs, the machine config, the hooks and the logon task.
 
