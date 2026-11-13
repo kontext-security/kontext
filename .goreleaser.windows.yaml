@@ -37,6 +37,12 @@ builds:
       - nostepsafetymodel
     ldflags:
       - -s -w -X main.version={{.Version}}
+    # Signed in place before it goes into an archive or an MSI, when
+    # WINDOWS_SIGNING says so; left as built otherwise.
+    hooks:
+      post:
+        - cmd: bash scripts/sign-windows.sh "{{ .Path }}"
+          output: true
 
   # The same program linked for the GUI subsystem, so the logon task that
   # starts the daemon opens no console window.
@@ -53,6 +59,12 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}} -H windowsgui
+    # Signed in place before it goes into an archive or an MSI, when
+    # WINDOWS_SIGNING says so; left as built otherwise.
+    hooks:
+      post:
+        - cmd: bash scripts/sign-windows.sh "{{ .Path }}"
+          output: true
 
 # Builds only: this file must never publish a release.
 release:

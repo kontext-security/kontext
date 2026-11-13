@@ -3,9 +3,14 @@ name: Windows MSI Release
 # Builds the MSIs in packaging/windows for one release and attaches them to
 # it. The programs inside come out of that release's own Windows zips, checked
 # against its checksums.txt first, so an MSI installs the same kontext.exe and
-# kontextw.exe the zip holds. The MSIs are not signed yet; see the signing
-# note in windows-package.yml. Called by the release workflow after its
+# kontextw.exe the zip holds. Called by the release workflow after its
 # archives are up, and by hand for a release that already exists.
+#
+# Signing follows the repository variable WINDOWS_SIGNING, as in the release
+# workflow. With artifact-signing the programs from the zips must already be
+# signed, and the MSIs are signed here; if either is not, the run fails and
+# attaches nothing. Otherwise programs and MSIs must all be unsigned, so a
+# release is never half signed.
 
 on:
   workflow_call:
@@ -31,17 +36,27 @@ concurrency:
 env:
   # WiX v7 as a .NET tool: windows-latest ships only WiX 3.
   WIX_VERSION: "7.0.1"
+  WINDOWS_SIGNING: ${{ vars.WINDOWS_SIGNING == 'artifact-signing' && 'artifact-signing' || 'off' }}
 
 jobs:
   msi:
     runs-on: windows-latest
     timeout-minutes: 30
+    # The signing identity is bound to this environment; it is named only
+    # when signing is on.
+    environment: ${{ vars.WINDOWS_SIGNING == 'artifact-signing' && 'windows-signing' || '' }}
     permissions:
       # To attach the MSIs to the release.
       contents: write
+      # For the sign-in to Azure, which uses this job's identity token.
+      id-token: write
     env:
       TAG: ${{ inputs.tag }}
       GH_TOKEN: ${{ github.token }}
+      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+      WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+      WINDOWS_SIGNING_SUBJECT: ${{ vars.WINDOWS_SIGNING_SUBJECT }}
     steps:
       - name: Check the tag
         shell: pwsh
@@ -87,6 +102,14 @@ jobs:
             "${name}: checksum ok, both programs there"
           }
 
+      # Signed programs with signing on, unsigned ones with signing off:
+      # anything else means the release's archives and this run disagree.
+      - name: Check the programs' signatures
+        shell: pwsh
+        run: |
+          $programs = Get-ChildItem bin\amd64\*.exe, bin\arm64\*.exe | ForEach-Object FullName
+          ./scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @programs
+
       # The x64 program runs on this runner; it must report the release's version.
       - name: Check the programs' version
         shell: pwsh
@@ -124,6 +147,25 @@ jobs:
             wix msi validate -acceptEula wix7 $msi
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+      - name: Set up signing
+        uses: ./.github/actions/windows-signing-setup
+        with:
+          mode: ${{ env.WINDOWS_SIGNING }}
+          azure-tenant-id: ${{ vars.WINDOWS_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ vars.WINDOWS_SIGNING_CLIENT_ID }}
+
+      # After the build and its validation, and before the checksums.
+      - name: Sign the MSIs
+        shell: bash
+        run: bash scripts/sign-windows.sh out/*.msi
+
+      - name: Check the MSIs' signatures
+        shell: pwsh
+        run: |
+          $msis = Get-ChildItem out\*.msi | ForEach-Object FullName
+          if ($msis.Count -ne 2) { Write-Error "expected two MSIs, found $($msis.Count)"; exit 1 }
+          ./scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @msis
 
       # The release's checksums.txt is left as published; the MSIs get a list
       # of their own in the same format.

@@ -5,6 +5,14 @@ name: Windows Package
 # Also builds the release's archives from .goreleaser.yaml as a snapshot and
 # checks the Windows zips, since nothing else runs that configuration before
 # a release does. Nothing is published. Not a required check.
+#
+# Signing runs here the way a release runs it (scripts/sign-windows.sh, then
+# scripts/verify-windows-signature.ps1), so the path is tried before a
+# release depends on it. On a pull request or a branch the signature is a
+# test signature from a certificate made for that run, which proves the
+# steps and nothing about who signed. A run on main uses the real signature
+# once the repository variable WINDOWS_SIGNING is artifact-signing: that is
+# the rehearsal, and its output is an artifact, not a release.
 
 on:
   pull_request:
@@ -13,6 +21,9 @@ on:
       - ".goreleaser.yaml"
       - ".goreleaser.windows.yaml"
       - ".github/workflows/windows-package.yml"
+      - ".github/actions/windows-signing-setup/**"
+      - "scripts/sign-windows.sh"
+      - "scripts/verify-windows-signature.ps1"
   push:
     branches:
       - main
@@ -21,6 +32,9 @@ on:
       - ".goreleaser.yaml"
       - ".goreleaser.windows.yaml"
       - ".github/workflows/windows-package.yml"
+      - ".github/actions/windows-signing-setup/**"
+      - "scripts/sign-windows.sh"
+      - "scripts/verify-windows-signature.ps1"
   workflow_dispatch:
 
 permissions:
@@ -33,8 +47,9 @@ concurrency:
 env:
   # WiX v7 as a .NET tool: windows-latest ships only WiX 3.
   WIX_VERSION: "7.0.1"
-  # "true" or "false"; the secret itself is passed only to the signing step.
-  SIGNING_CONFIGURED: ${{ secrets.WINDOWS_SIGNING_ACCOUNT != '' }}
+  # The real signature only on main and only when it is switched on;
+  # otherwise the test signature.
+  WINDOWS_SIGNING: ${{ (github.ref == 'refs/heads/main' && vars.WINDOWS_SIGNING == 'artifact-signing') && 'artifact-signing' || 'test' }}
 
 jobs:
   # The archives a release would publish, built the way the release builds
@@ -42,6 +57,17 @@ jobs:
   release-archives:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The signing identity is bound to this environment; it is named only
+    # when the real signature is asked for.
+    environment: ${{ (github.ref == 'refs/heads/main' && vars.WINDOWS_SIGNING == 'artifact-signing') && 'windows-signing' || '' }}
+    permissions:
+      contents: read
+      # For the sign-in to Azure, which uses this job's identity token.
+      id-token: write
+    env:
+      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+      WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,6 +79,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Set up signing
+        uses: ./.github/actions/windows-signing-setup
+        with:
+          mode: ${{ env.WINDOWS_SIGNING }}
+          azure-tenant-id: ${{ vars.WINDOWS_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ vars.WINDOWS_SIGNING_CLIENT_ID }}
 
       - name: Build the release archives
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -99,9 +132,48 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The programs inside the zips, checked where Windows itself reads the
+  # signature: the zips are built on Linux, which cannot.
+  verify-archives:
+    needs: release-archives
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kontext-windows-zip
+          path: zips
+
+      - name: Check the signatures of the programs in the zips
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_SUBJECT: ${{ vars.WINDOWS_SIGNING_SUBJECT }}
+        run: |
+          $programs = @()
+          foreach ($zip in Get-ChildItem zips -Recurse -Filter 'kontext_*_windows_*.zip') {
+            $to = Join-Path unpacked $zip.BaseName
+            Expand-Archive $zip.FullName -DestinationPath $to
+            $programs += Get-ChildItem $to -Filter '*.exe' | ForEach-Object FullName
+          }
+          if ($programs.Count -ne 4) { Write-Error "expected four programs in two zips, found $($programs.Count)"; exit 1 }
+          ./scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @programs
+
   msi:
     runs-on: windows-latest
     timeout-minutes: 30
+    environment: ${{ (github.ref == 'refs/heads/main' && vars.WINDOWS_SIGNING == 'artifact-signing') && 'windows-signing' || '' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+      WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+      WINDOWS_SIGNING_SUBJECT: ${{ vars.WINDOWS_SIGNING_SUBJECT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,6 +199,14 @@ jobs:
           $version = (Get-Content .release-please-manifest.json -Raw | ConvertFrom-Json).'.'
           Add-Content -Path $env:GITHUB_ENV -Value "KONTEXT_VERSION=$version"
 
+      - name: Set up signing
+        uses: ./.github/actions/windows-signing-setup
+        with:
+          mode: ${{ env.WINDOWS_SIGNING }}
+          azure-tenant-id: ${{ vars.WINDOWS_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ vars.WINDOWS_SIGNING_CLIENT_ID }}
+
+      # Each program is signed by its build's hook, before anything packs it.
       - name: Build the executables
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
@@ -143,6 +223,13 @@ jobs:
             exit 1
           }
           "kontext.exe: $reported"
+
+      - name: Check the executables' signatures
+        shell: pwsh
+        run: |
+          $programs = Get-ChildItem dist\windows_amd64\*.exe, dist\windows_arm64\*.exe | ForEach-Object FullName
+          if ($programs.Count -ne 4) { Write-Error "expected four programs, found $($programs.Count)"; exit 1 }
+          ./scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @programs
 
       - name: Install WiX
         shell: pwsh
@@ -171,19 +258,18 @@ jobs:
           }
           Get-ChildItem out\*.msi | Format-Table Name, Length
 
-      # OPTIONAL SIGNING, not implemented yet. Runs only when the signing secret
-      # exists; without it, it is skipped and the MSIs stay unsigned. Once
-      # signing lands: sign kontext.exe and kontextw.exe before "Build the
-      # MSIs" and the MSIs after it. Until then it fails, so a run with the
-      # secret set is never mistaken for a signed build.
-      - name: Sign (optional)
-        if: ${{ env.SIGNING_CONFIGURED == 'true' }}
-        env:
-          WINDOWS_SIGNING_ACCOUNT: ${{ secrets.WINDOWS_SIGNING_ACCOUNT }}
+      # The MSIs are signed after they are built and validated, and before
+      # anything takes their checksum.
+      - name: Sign the MSIs
+        shell: bash
+        run: bash scripts/sign-windows.sh out/*.msi
+
+      - name: Check the MSIs' signatures
         shell: pwsh
         run: |
-          Write-Output "::error::WINDOWS_SIGNING_ACCOUNT is set, but signing is not implemented in this workflow yet."
-          exit 1
+          $msis = Get-ChildItem out\*.msi | ForEach-Object FullName
+          if ($msis.Count -ne 2) { Write-Error "expected two MSIs, found $($msis.Count)"; exit 1 }
+          ./scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @msis
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
