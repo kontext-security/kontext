@@ -118,3 +118,21 @@ func TestUpdateEndsAnOldAgentAHookStartedMeanwhile(t *testing.T) {
 		t.Errorf("%s = %q, want the release's", windowsDaemonName, got)
 	}
 }
+
+// A process that has ended but is still held open by someone is not there to
+// stop, and asking for its program is no error.
+func TestStopProcessTakesAnEndedProcessAsGone(t *testing.T) {
+	dir := t.TempDir()
+	daemon := filepath.Join(dir, windowsDaemonName)
+	agent := startSleeperAt(t, daemon)
+	time.Sleep(300 * time.Millisecond)
+	if err := agent.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	// exec keeps its handle until Wait, so the process object stays.
+	time.Sleep(300 * time.Millisecond)
+	stopped, err := stopProcess(agent.Process.Pid, daemon)
+	if err != nil || stopped {
+		t.Fatalf("stopProcess(an ended process) = %v, %v; want false, nil", stopped, err)
+	}
+}

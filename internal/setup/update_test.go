@@ -206,6 +206,26 @@ func TestUpdateRefusesAndChangesNothing(t *testing.T) {
 	}
 }
 
+// A failed check for a restarted old agent still starts the new one: the
+// final check catches an old agent that answers.
+func TestUpdateStartsTheNewAgentWhenTheSecondStopFails(t *testing.T) {
+	run := newUpdateRun(t)
+	overrideVar(t, &stopWindowsDaemon, func(program string) (bool, error) {
+		run.stops = append(run.stops, program)
+		if strings.HasSuffix(program, ".old") {
+			return false, errors.New("name the program of process 8140: A device attached to the system is not functioning.")
+		}
+		return true, nil
+	})
+	var out bytes.Buffer
+	if err := Update(context.Background(), UpdateOptions{Version: "9.9.9", Stdout: &out}); err != nil {
+		t.Fatalf("Update: %v\n%s", err, out.String())
+	}
+	if run.starts != 1 || !strings.Contains(out.String(), "Could not check for an older background agent") {
+		t.Errorf("starts = %d, output:\n%s\nwant the new agent started and the failed check named", run.starts, out.String())
+	}
+}
+
 func TestUpdateRemovesTheCopiesOfAnEarlierUpdate(t *testing.T) {
 	run := newUpdateRun(t)
 	for _, name := range updatePrograms {

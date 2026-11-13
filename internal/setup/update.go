@@ -162,8 +162,10 @@ func Update(ctx context.Context, opts UpdateOptions) error {
 
 	// A hook may have started the old agent again before it was renamed; it
 	// now runs from the .old copy and would keep the new one from starting.
+	// A failure here is no reason to leave the PC without an agent: the check
+	// below finds an old agent that still answers.
 	if _, err := stopWindowsDaemon(daemon + ".old"); err != nil {
-		return fmt.Errorf("stop an older background agent that started again during the update: %w", err)
+		fmt.Fprintf(out, "  • Could not check for an older background agent started during the update (%v)\n", err)
 	}
 	if err := startWindowsDaemon(daemon, autostart.DaemonSubcommand); err != nil {
 		return fmt.Errorf("the new programs are in place, but the background agent did not start: %w; it starts at your next sign-in, and `kontext doctor` shows its state", err)

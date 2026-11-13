@@ -42,6 +42,12 @@ func stopProcess(pid int, program string) (stopped bool, err error) {
 		return false, fmt.Errorf("open process %d: %w", pid, err)
 	}
 	defer windows.CloseHandle(handle)
+	// A process that has ended can still be opened while anything holds a
+	// handle on it, and naming its program then fails (seen on Windows 11 on
+	// arm64 with error 31): it is not there to stop.
+	if event, err := windows.WaitForSingleObject(handle, 0); err == nil && event == windows.WAIT_OBJECT_0 {
+		return false, nil
+	}
 
 	path := make([]uint16, windows.MAX_LONG_PATH)
 	size := uint32(len(path))
