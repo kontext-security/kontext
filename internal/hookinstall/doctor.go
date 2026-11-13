@@ -56,7 +56,9 @@ func Diagnose(out io.Writer, scope Scope, home string, configured func(agent str
 		return AgentPresent(agent, home) || configured != nil && configured(agent)
 	}
 	healthy := diagnose(out, scope, defs, present, userConfig, otherHooks)
-	if scope == User {
+	if scope == User && runtimeGOOS == "windows" {
+		fmt.Fprintln(out, "Switching off: `kontext setup --uninstall` switches Kontext off")
+	} else if scope == User {
 		fmt.Fprintln(out, "Hook repair: with a Homebrew install, the background agent restores removed Kontext hooks within a minute; `kontext setup --uninstall` switches Kontext off")
 	}
 	if AgentPresent("claude_code", home) {

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/autostart"
 	"github.com/kontext-security/kontext/internal/guard/risk"
 	sqlitestore "github.com/kontext-security/kontext/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext/internal/hermetic"
@@ -372,6 +373,12 @@ func TestPrintStatusDaemonDownReadoutFollowsLaunchdState(t *testing.T) {
 		{"unloaded org-managed", managedconfig.ScopeSystem, func() (bool, error) { return false, nil }, unloaded + "restart it through its managing installation)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// launchd's states are read on macOS and Linux; Windows has its own
+			// line (TestDoctorJudgesAWindowsUserInstallByItsSignInEntry).
+			if runtimeGOOS == "windows" {
+				runtimeGOOS = "linux"
+				t.Cleanup(func() { runtimeGOOS = runtime.GOOS })
+			}
 			env := newDoctorTestEnv(t)
 			opts := env.options()
 			opts.Dial = func(string, string, time.Duration) (net.Conn, error) {
@@ -434,6 +441,10 @@ func TestPrintStatusDaemonWithoutBreadcrumbIsFixable(t *testing.T) {
 	wantWarning := "WARNING: daemon version is unknown — it likely predates v1.2.3"
 	if !wantAutomaticDaemonRepair() {
 		wantWarning = "WARNING: daemon version is unknown — restart it through its managing installation"
+	}
+	// A user install on Windows has no managing installation: setup restarts it.
+	if runtime.GOOS == "windows" {
+		wantWarning = "WARNING: daemon version is unknown — run `kontext setup` to restart it"
 	}
 	if !strings.Contains(output, wantWarning) {
 		t.Fatalf("output = %q, want warning %q", output, wantWarning)
@@ -633,7 +644,9 @@ type doctorTestEnv struct {
 	dbPath     string
 	socketPath string
 	configPath string
-	now        time.Time
+	// daemonProgram is what this env's sign-in entry starts on Windows.
+	daemonProgram string
+	now           time.Time
 }
 
 func wantAutomaticDaemonRepair() bool {
@@ -644,7 +657,7 @@ func newDoctorTestEnv(t *testing.T) doctorTestEnv {
 	t.Helper()
 	dir := t.TempDir()
 	hermetic.SetHome(t, dir)
-	configPath := filepath.Join(dir, "Library", "Application Support", "Kontext", "managed.json")
+	configPath := filepath.Join(hermetic.StateDir(dir), "managed.json")
 	installationPath := filepath.Join(dir, "installation.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatal(err)
@@ -658,12 +671,17 @@ func newDoctorTestEnv(t *testing.T) doctorTestEnv {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	daemonProgram := filepath.Join(dir, "kontextw.exe")
+	if err := os.WriteFile(daemonProgram, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	return doctorTestEnv{
-		dir:        dir,
-		dbPath:     filepath.Join(dir, "guard.db"),
-		socketPath: filepath.Join(dir, "kontext.sock"),
-		configPath: configPath,
-		now:        time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC),
+		daemonProgram: daemonProgram,
+		dir:           dir,
+		dbPath:        filepath.Join(dir, "guard.db"),
+		socketPath:    filepath.Join(dir, "kontext.sock"),
+		configPath:    configPath,
+		now:           time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -694,6 +712,7 @@ func (e doctorTestEnv) options() doctorOptions {
 		Now:                func() time.Time { return e.now },
 		LaunchAgentPresent: func() bool { return true },
 		LaunchAgentLoaded:  func() (bool, error) { return true, nil },
+		AutostartEntry:     func() (string, error) { return autostart.Command(e.daemonProgram), nil },
 		LoadConfig:         e.loadConfig(managedconfig.ScopeUser),
 	}
 }
@@ -797,4 +816,107 @@ func TestDoctorDropsAFixedTrustFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A user install on Windows is judged by its sign-in entry, not by a launch
+// agent it cannot have: the entry has to be there and start a program that
+// exists. A stopped daemon starts with the next Claude Code session or the
+// next sign-in; a machine-wide install's is left to its logon task. An older
+// daemon is restarted by `kontext setup`.
+func TestDoctorJudgesAWindowsUserInstallByItsSignInEntry(t *testing.T) {
+	program := filepath.Join(t.TempDir(), "kontextw.exe")
+	if err := os.WriteFile(program, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name        string
+		entry       string
+		err         error
+		wantHealthy bool
+		wantLine    string
+	}{
+		{name: "entry present", entry: autostart.Command(program), wantHealthy: true, wantLine: "sign-in entry: present"},
+		{name: "entry missing", wantLine: "sign-in entry: missing"},
+		{name: "entry names a program that is gone", entry: autostart.Command(program + ".old"), wantLine: "sign-in entry: starts a program that is not there"},
+		{name: "entry written by hand", entry: program + " " + autostart.DaemonSubcommand, wantLine: "sign-in entry: not the one `kontext setup` writes"},
+		{name: "entry unreadable", err: errors.New("access denied"), wantLine: "sign-in entry: could not be read (access denied)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetUpdaterSeams(t)
+			runtimeGOOS = "windows"
+			env := newDoctorTestEnv(t)
+			env.writeDaemonStatus(t, os.Getpid(), "1.2.3")
+			opts := env.options()
+			opts.LaunchAgentPresent = func() bool { return false }
+			opts.AutostartEntry = func() (string, error) { return tc.entry, tc.err }
+
+			var out bytes.Buffer
+			status, _ := printStatus(&out, "1.2.3", opts)
+			if strings.Contains(out.String(), "launch agent") {
+				t.Errorf("doctor speaks of a launch agent on Windows:\n%s", out.String())
+			}
+			if !strings.Contains(out.String(), tc.wantLine) {
+				t.Errorf("output lacks %q:\n%s", tc.wantLine, out.String())
+			}
+			if status.Healthy != tc.wantHealthy {
+				t.Errorf("healthy = %v, want %v:\n%s", status.Healthy, tc.wantHealthy, out.String())
+			}
+		})
+	}
+
+	windows := func(t *testing.T, scope managedconfig.Scope, entry string) (doctorTestEnv, doctorOptions) {
+		resetUpdaterSeams(t)
+		runtimeGOOS = "windows"
+		env := newDoctorTestEnv(t)
+		opts := env.options()
+		opts.LoadConfig = env.loadConfig(scope)
+		opts.AutostartEntry = func() (string, error) { return entry, nil }
+		return env, opts
+	}
+	down := func(string, string, time.Duration) (net.Conn, error) { return nil, errors.New("nothing listens") }
+
+	t.Run("daemon down", func(t *testing.T) {
+		_, opts := windows(t, managedconfig.ScopeUser, autostart.Command(program))
+		opts.Dial = down
+		var out bytes.Buffer
+		printStatus(&out, "1.2.3", opts)
+		if !strings.Contains(out.String(), "daemon: not running (it starts with your next Claude Code session, or when you sign in)") {
+			t.Errorf("the stopped daemon's line is wrong for Windows:\n%s", out.String())
+		}
+	})
+
+	t.Run("daemon down, machine-wide install", func(t *testing.T) {
+		_, opts := windows(t, managedconfig.ScopeSystem, "")
+		opts.Dial = down
+		var out bytes.Buffer
+		printStatus(&out, "1.2.3", opts)
+		if strings.Contains(out.String(), "next Claude Code session") || !strings.Contains(out.String(), "daemon: not running (the installer's logon task starts it)") {
+			t.Errorf("the stopped daemon's line is wrong for a machine-wide install:\n%s", out.String())
+		}
+		if strings.Contains(out.String(), "sign-in entry") {
+			t.Errorf("a machine-wide install without an entry speaks of one:\n%s", out.String())
+		}
+	})
+
+	t.Run("an older daemon is restarted by setup", func(t *testing.T) {
+		env, opts := windows(t, managedconfig.ScopeUser, autostart.Command(program))
+		env.writeDaemonStatus(t, os.Getpid(), "1.2.2")
+		var out bytes.Buffer
+		status, _ := printStatus(&out, "1.2.3", opts)
+		if !strings.Contains(out.String(), "run `kontext setup` to restart it") || strings.Contains(out.String(), "managing installation") {
+			t.Errorf("the remedy for an older daemon is wrong:\n%s", out.String())
+		}
+		if status.Repairable {
+			t.Error("doctor offers an automatic repair it does not have on Windows")
+		}
+	})
+
+	t.Run("an entry left beside a machine-wide install", func(t *testing.T) {
+		_, opts := windows(t, managedconfig.ScopeSystem, autostart.Command(program))
+		var out bytes.Buffer
+		status, _ := printStatus(&out, "1.2.3", opts)
+		if !strings.Contains(out.String(), "a sign-in entry of your own setup is also there") || status.Healthy {
+			t.Errorf("the leftover entry is not reported (healthy %v):\n%s", status.Healthy, out.String())
+		}
+	})
 }

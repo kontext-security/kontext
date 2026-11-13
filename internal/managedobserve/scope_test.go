@@ -14,10 +14,15 @@ import (
 )
 
 func TestInstallationPathForScope(t *testing.T) {
-	hermetic.SetHome(t, "/Users/example")
+	home := t.TempDir()
+	hermetic.SetHome(t, home)
 	t.Setenv(installation.EnvPath, "")
 
-	userPath := filepath.Join("/Users/example", "Library", "Application Support", "Kontext", "installation.json")
+	// The literal, so this test notices a change to the macOS and Linux default.
+	userPath := filepath.Join(home, "Library", "Application Support", "Kontext", "installation.json")
+	if runtime.GOOS == "windows" {
+		userPath = filepath.Join(home, "AppData", "Local", "Kontext", "installation.json")
+	}
 	// The literal, so this test notices a change to the macOS and Linux default.
 	systemPath := "/Library/Application Support/Kontext/installation.json"
 	if runtime.GOOS == "windows" {

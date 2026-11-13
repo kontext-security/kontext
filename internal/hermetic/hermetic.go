@@ -54,6 +54,23 @@ func setHome(setenv func(key, value string), dir string) {
 		setenv("HOMEDRIVE", volume)
 		setenv("HOMEPATH", dir[len(volume):])
 	}
+	// On Windows a user's state is not under the home variables but under
+	// these two, so a test with a home of its own must not reach the real
+	// ones.
+	if runtime.GOOS == "windows" {
+		setenv("LOCALAPPDATA", filepath.Join(dir, "AppData", "Local"))
+		setenv("APPDATA", filepath.Join(dir, "AppData", "Roaming"))
+	}
+}
+
+// StateDir is the Kontext state folder of a user whose home is home, laid out
+// as SetHome sets it: Library/Application Support/Kontext under the home, and
+// on Windows AppData\Local\Kontext under it.
+func StateDir(home string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(home, "AppData", "Local", "Kontext")
+	}
+	return filepath.Join(home, "Library", "Application Support", "Kontext")
 }
 
 // SocketDir returns a fresh directory short enough for a Unix socket path,

@@ -840,8 +840,8 @@ func TestRunNonDarwin(t *testing.T) {
 	server := pingServer(t, "tok")
 
 	err := Run(context.Background(), h.options("tok", server))
-	if err == nil || !strings.Contains(err.Error(), "macOS-only") {
-		t.Fatalf("Run() error = %v, want macOS-only", err)
+	if err == nil || !strings.Contains(err.Error(), "macOS and Windows only") {
+		t.Fatalf("Run() error = %v, want a refusal that names the supported systems", err)
 	}
 }
 

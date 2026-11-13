@@ -20,8 +20,9 @@ const (
 	// SavedOutputReadRule lets Claude Code read back, without asking, the
 	// full outputs that tool output compaction saves in the daemon's data
 	// directory (internal/tooloutput). The Read tool otherwise asks before
-	// reading outside the project. It names that directory only.
-	SavedOutputReadRule = "Read(~/Library/Application Support/Kontext/**/managed-observe/tool-output/**)"
+	// reading outside the project. It names that directory only, which is
+	// in the user's state folder of this OS (savedOutputStateDir).
+	SavedOutputReadRule = "Read(~/" + savedOutputStateDir + "/**/managed-observe/tool-output/**)"
 )
 
 // ExecForm makes Template write each hook in Claude Code's exec form: the
@@ -259,12 +260,21 @@ func IsManagedSettingsDropIn(data []byte) bool {
 }
 
 // ownPermissions reports whether a drop-in's permissions are exactly the ones
-// Template writes.
+// Template writes, or wrote before the rule followed the OS: early Windows
+// builds wrote the macOS folder there, and such a file is still ours to
+// replace or remove.
 func ownPermissions(data json.RawMessage) bool {
 	var permissions map[string][]string
-	return json.Unmarshal(data, &permissions) == nil && len(permissions) == 1 &&
-		slices.Equal(permissions["allow"], []string{SavedOutputReadRule})
+	if json.Unmarshal(data, &permissions) != nil || len(permissions) != 1 {
+		return false
+	}
+	allow := permissions["allow"]
+	return slices.Equal(allow, []string{SavedOutputReadRule}) || slices.Equal(allow, []string{macOSSavedOutputReadRule})
 }
+
+// macOSSavedOutputReadRule is the rule as written on macOS, and by Windows
+// builds before the rule followed the OS.
+const macOSSavedOutputReadRule = "Read(~/Library/Application Support/Kontext/**/managed-observe/tool-output/**)"
 
 // MissingRequiredEvents returns missing event names and the configured binary
 // only when an owned drop-in's remaining hooks pass validation. Other failures

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/profile"
@@ -25,7 +26,7 @@ func profileHarness(t *testing.T) *harness {
 }
 
 func kontextRoot(home string) string {
-	return filepath.Join(home, "Library", "Application Support", "Kontext")
+	return hermetic.StateDir(home)
 }
 
 // A machine that has never used profiles must keep resolving the exact paths

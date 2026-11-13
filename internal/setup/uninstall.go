@@ -47,8 +47,11 @@ var removeCodexRoute = func(ctx context.Context) (int, error) {
 //     records; locations are printed instead.
 //   - the binary — brew owns it (`brew uninstall kontext`).
 func Uninstall(ctx context.Context, opts Options) error {
+	if goos == "windows" {
+		return uninstallWindows(ctx, opts)
+	}
 	if goos != "darwin" {
-		return errors.New("kontext setup is currently macOS-only")
+		return errors.New("kontext setup is currently macOS and Windows only")
 	}
 
 	organizationManaged, err := organizationManagedInstall()

@@ -161,8 +161,11 @@ func CloudURL() string {
 // ordered so every irreversible action happens after the token is proven
 // valid, and re-running is always safe (token rotation restarts the agent).
 func Run(ctx context.Context, opts Options) (retErr error) {
+	if goos == "windows" {
+		return runWindows(ctx, opts)
+	}
 	if goos != "darwin" {
-		return errors.New("kontext setup is currently macOS-only")
+		return errors.New("kontext setup is currently macOS and Windows only")
 	}
 	binary, binaryNote := StableBinaryPath()
 	settingsData, err := managedSettingsData(binary)
@@ -896,7 +899,7 @@ func writeUserManagedConfig(slot target, cloudURL, label string, allowHTTPLoopba
 			// The token ref is the profile's own keychain item, so the daemon
 			// resolves whatever the ACTIVE config names and a switch needs no
 			// keychain work at all.
-			InstallTokenRef: managedconfig.TokenRef{Source: "keychain", Name: slot.KeychainItem},
+			InstallTokenRef: slot.tokenRef(),
 		},
 		Device: managedconfig.Device{Label: label},
 	}

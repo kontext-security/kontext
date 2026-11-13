@@ -20,7 +20,7 @@ func fakeHome(t *testing.T) string {
 }
 
 func kontextDir(home string) string {
-	return filepath.Join(home, "Library", "Application Support", "Kontext")
+	return hermetic.StateDir(home)
 }
 
 // An install that predates profiles has no pointer and must resolve exactly the

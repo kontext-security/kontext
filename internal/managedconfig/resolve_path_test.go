@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -58,7 +59,7 @@ func TestResolvePathFallsBackToUserWhenSystemAbsent(t *testing.T) {
 	hermetic.SetHome(t, home)
 
 	path, scope := ResolvePath()
-	want := filepath.Join(home, "Library", "Application Support", "Kontext", "managed.json")
+	want := filepath.Join(hermetic.StateDir(home), "managed.json")
 	if path != want || scope != ScopeUser {
 		t.Fatalf("ResolvePath() = %q, %q; want user path %q", path, scope, want)
 	}
@@ -96,7 +97,7 @@ func TestLoadResolvesUserScopeConfig(t *testing.T) {
 	home := filepath.Join(dir, "home")
 	hermetic.SetHome(t, home)
 
-	userDir := filepath.Join(home, "Library", "Application Support", "Kontext")
+	userDir := hermetic.StateDir(home)
 	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestLoadInvalidSystemConfigDoesNotFallThroughToUser(t *testing.T) {
 	home := filepath.Join(dir, "home")
 	hermetic.SetHome(t, home)
 
-	userDir := filepath.Join(home, "Library", "Application Support", "Kontext")
+	userDir := hermetic.StateDir(home)
 	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -137,9 +138,16 @@ func TestLoadInvalidSystemConfigDoesNotFallThroughToUser(t *testing.T) {
 	}
 }
 
-func TestUserPathUsesHomeLibrary(t *testing.T) {
-	hermetic.SetHome(t, "/Users/example")
-	want := filepath.Join("/Users/example", "Library", "Application Support", "Kontext", "managed.json")
+// The user's config is in the state folder of this OS: under the home's
+// Library on macOS, as the literal says, and under the user's local app data
+// on Windows.
+func TestUserPathUsesTheUsersStateFolder(t *testing.T) {
+	home := t.TempDir()
+	hermetic.SetHome(t, home)
+	want := filepath.Join(home, "Library", "Application Support", "Kontext", "managed.json")
+	if runtime.GOOS == "windows" {
+		want = filepath.Join(home, "AppData", "Local", "Kontext", "managed.json")
+	}
 	if got := UserPath(); got != want {
 		t.Fatalf("UserPath() = %q, want %q", got, want)
 	}
