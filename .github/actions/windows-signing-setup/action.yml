@@ -1,0 +1,93 @@
+name: Windows signing setup
+description: >
+  Prepares scripts/sign-windows.sh for the mode given: fetches jsign, and
+  either signs in to Azure for Artifact Signing or makes a throwaway
+  certificate for a test signature. With mode off it does nothing.
+
+inputs:
+  mode:
+    description: "off, artifact-signing or test (the value of WINDOWS_SIGNING)"
+    required: true
+  azure-tenant-id:
+    description: "Tenant of the signing identity (artifact-signing only)"
+    required: false
+    default: ""
+  azure-client-id:
+    description: "Client id of the signing identity (artifact-signing only)"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Check the signing mode
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        case "$MODE" in
+          off) echo "::notice::Windows signing is off: programs and installers from this run are not signed." ;;
+          artifact-signing|test) echo "Windows signing: $MODE" ;;
+          *) echo "::error::unknown Windows signing mode '$MODE' (off, artifact-signing or test)"; exit 1 ;;
+        esac
+
+    # jsign signs .exe and .msi on Linux and Windows alike. The jar is pinned
+    # by its SHA-256 as the 7.6 release lists it.
+    - name: Fetch jsign
+      if: ${{ inputs.mode != 'off' }}
+      shell: bash
+      env:
+        JSIGN_VERSION: "7.6"
+        JSIGN_SHA256: 6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP"
+        if command -v cygpath >/dev/null 2>&1; then dir="$(cygpath -m "$dir")"; fi
+        jar="$dir/jsign-$JSIGN_VERSION.jar"
+        curl --fail --silent --show-error --location --retry 3 \
+          -o "$jar" "https://github.com/ebourg/jsign/releases/download/$JSIGN_VERSION/jsign-$JSIGN_VERSION.jar"
+        echo "$JSIGN_SHA256  $jar" | sha256sum --check --strict -
+        java -version
+        echo "JSIGN_JAR=$jar" >> "$GITHUB_ENV"
+
+    # A certificate made for this run only. Windows does not trust it; it is
+    # there to run the signing path, not to vouch for anything.
+    - name: Make a throwaway certificate
+      if: ${{ inputs.mode == 'test' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP"
+        if command -v cygpath >/dev/null 2>&1; then dir="$(cygpath -m "$dir")"; fi
+        store="$dir/kontext-test-signing.p12"
+        password="$(openssl rand -hex 24)"
+        echo "::add-mask::$password"
+        rm -f "$store"
+        keytool -genkeypair -alias kontext-test -keyalg RSA -keysize 3072 -validity 2 \
+          -dname "CN=Kontext test signing (not for release)" -ext EKU=codeSigning \
+          -storetype PKCS12 -keystore "$store" -storepass "$password" >/dev/null
+        {
+          echo "WINDOWS_SIGNING_TEST_KEYSTORE=$store"
+          echo "WINDOWS_SIGNING_TEST_PASSWORD=$password"
+        } >> "$GITHUB_ENV"
+
+    # No stored secret: the job's own identity token is exchanged for an Azure
+    # sign-in, which Azure accepts only from the protected environment the
+    # signing identity is bound to.
+    - name: Sign in to Azure
+      if: ${{ inputs.mode == 'artifact-signing' }}
+      uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        client-id: ${{ inputs.azure-client-id }}
+        allow-no-subscriptions: true
+
+    - name: Get a signing token
+      if: ${{ inputs.mode == 'artifact-signing' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        token="$(az account get-access-token --resource https://codesigning.azure.net --query accessToken --output tsv)"
+        [ -n "$token" ] || { echo "::error::Azure gave no token for Artifact Signing"; exit 1; }
+        echo "::add-mask::$token"
+        echo "WINDOWS_SIGNING_TOKEN=$token" >> "$GITHUB_ENV"

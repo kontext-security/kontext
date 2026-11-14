@@ -39,6 +39,12 @@ builds:
       - nostepsafetymodel
     ldflags:
       - -s -w -X main.version={{.Version}}
+    # Signed in place before it goes into an archive or an MSI, when
+    # WINDOWS_SIGNING says so; left as built otherwise.
+    hooks:
+      post:
+        - cmd: bash scripts/sign-windows.sh "{{ .Path }}"
+          output: true
 
   # kontextw.exe is the daemon: linked for the GUI subsystem, so starting it
   # at sign-in opens no console window. `kontext setup` expects it beside
@@ -55,6 +61,12 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}} -H windowsgui
+    # Signed in place before it goes into an archive or an MSI, when
+    # WINDOWS_SIGNING says so; left as built otherwise.
+    hooks:
+      post:
+        - cmd: bash scripts/sign-windows.sh "{{ .Path }}"
+          output: true
 
 # Sign the macOS binaries with the Developer ID certificate and notarize them,
 # so Gatekeeper accepts them when a Homebrew cask or a browser download
@@ -80,8 +92,8 @@ archives:
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
-  # One zip per Windows architecture with both programs side by side. Not
-  # signed: Windows code signing is not set up yet.
+  # One zip per Windows architecture with both programs side by side. The
+  # programs are signed by their builds' hooks when WINDOWS_SIGNING is on.
   - id: windows
     ids:
       - kontext-windows

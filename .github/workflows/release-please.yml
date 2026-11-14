@@ -46,9 +46,21 @@ jobs:
     runs-on: ubuntu-latest
     # Notarization can wait up to 20 minutes for Apple.
     timeout-minutes: 45
+    # The Windows signing identity is bound to this environment; it is named
+    # only when the repository variable WINDOWS_SIGNING switches signing on.
+    environment: ${{ vars.WINDOWS_SIGNING == 'artifact-signing' && 'windows-signing' || '' }}
     permissions:
       contents: write
+      # For the sign-in to Azure, which uses this job's identity token.
+      id-token: write
     env:
+      # Windows programs are signed before they are archived when this is
+      # artifact-signing, and left unsigned otherwise. Anything in between
+      # fails the job (scripts/sign-windows.sh).
+      WINDOWS_SIGNING: ${{ vars.WINDOWS_SIGNING == 'artifact-signing' && 'artifact-signing' || 'off' }}
+      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+      WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
       # Gate each explicit secret reference separately so missing company
       # credentials cannot fall back to Michel's. Keep the selector unset until validated.
       MACOS_SIGNING_PROFILE: ${{ vars.MACOS_SIGNING_PROFILE }}
@@ -72,6 +84,13 @@ jobs:
 
       - name: Check macOS signing secrets
         run: bash scripts/check-macos-signing.sh
+
+      - name: Set up Windows signing
+        uses: ./.github/actions/windows-signing-setup
+        with:
+          mode: ${{ env.WINDOWS_SIGNING }}
+          azure-tenant-id: ${{ vars.WINDOWS_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ vars.WINDOWS_SIGNING_CLIENT_ID }}
 
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
@@ -124,6 +143,8 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created }}
     permissions:
       contents: write
+      # Passed on for the MSI job's sign-in to Azure when signing is on.
+      id-token: write
     uses: ./.github/workflows/windows-msi-release.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
