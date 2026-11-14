@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -42,6 +43,12 @@ func stopProcess(pid int, program string) (stopped bool, err error) {
 		return false, fmt.Errorf("open process %d: %w", pid, err)
 	}
 	defer windows.CloseHandle(handle)
+	// A process that has ended can still be opened while anything holds a
+	// handle on it, and naming its program then fails (seen on Windows 11 on
+	// arm64 with error 31): it is not there to stop.
+	if event, err := windows.WaitForSingleObject(handle, 0); err == nil && event == windows.WAIT_OBJECT_0 {
+		return false, nil
+	}
 
 	path := make([]uint16, windows.MAX_LONG_PATH)
 	size := uint32(len(path))
@@ -72,8 +79,11 @@ func stopProcess(pid int, program string) (stopped bool, err error) {
 	return true, nil
 }
 
+// isDaemonProgram also takes the daemon's program renamed by an update: a
+// running program can be renamed on Windows, and its process then reports
+// the new name.
 func isDaemonProgram(name string) bool {
-	return strings.EqualFold(name, windowsDaemonName)
+	return strings.EqualFold(name, windowsDaemonName) || strings.EqualFold(name, windowsDaemonName+".old")
 }
 
 // sameFile compares by the files' identity, not their spelling.
@@ -84,4 +94,37 @@ func sameFile(a, b string) bool {
 	}
 	right, err := os.Stat(b)
 	return err == nil && os.SameFile(left, right)
+}
+
+// stopProgramProcesses ends every daemon process that runs program. It finds
+// them by listing the processes, not through the status file, so it also
+// finds a daemon that has not written its status yet. It reports how many it
+// ended.
+func stopProgramProcesses(program string) (int, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return 0, fmt.Errorf("list processes: %w", err)
+	}
+	defer windows.CloseHandle(snapshot)
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	ended := 0
+	var errs []error
+	for err = windows.Process32First(snapshot, &entry); err == nil; err = windows.Process32Next(snapshot, &entry) {
+		if !isDaemonProgram(windows.UTF16ToString(entry.ExeFile[:])) {
+			continue
+		}
+		stopped, err := stopProcess(int(entry.ProcessID), program)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if stopped {
+			ended++
+		}
+	}
+	if !errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+		errs = append(errs, fmt.Errorf("list processes: %w", err))
+	}
+	return ended, errors.Join(errs...)
 }

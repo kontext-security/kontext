@@ -131,29 +131,27 @@ the other in the dashboard, as on every system; nothing is done on the PC.
 
 ## Update
 
-There is no automatic update yet. To move to a newer release, close Claude
-Code and Codex, since a running session calls the hook program and can start
-the background agent again. Download the release's zip and `checksums.txt`,
-check the hash as in step 1, then in the folder you downloaded them to:
+There is no automatic update yet. To move to a newer release, download its zip
+and `checksums.txt`, check the hash as in step 1, then unzip it to a folder of
+its own and let the new release install itself over yours:
 
 ```powershell
 $zip = Get-Item kontext_*_windows_*.zip | Sort-Object LastWriteTime | Select-Object -Last 1
-$dir = "$env:LOCALAPPDATA\Programs\Kontext"
-
-# Stop the background agent first: Windows does not replace a running program.
-Get-Process kontextw -ErrorAction SilentlyContinue |
-    Where-Object Path -eq "$dir\kontextw.exe" |
-    Stop-Process -PassThru | Wait-Process
-
-Expand-Archive $zip -DestinationPath $dir -Force
-Start-Process "$dir\kontextw.exe" managed-observe-daemon
-& "$dir\kontext.exe" doctor
+$new = Join-Path $env:TEMP $zip.BaseName
+Expand-Archive $zip -DestinationPath $new
+& "$new\kontext.exe" update
 ```
 
-Doctor names the new version on its `daemon:` line. The install key, the
-config, the hooks and the sign-in entry stay as they are, so setup does not
-need to run again. If the unzip is started while the background agent runs, it
-stops halfway and the folder is incomplete: stop the agent and unzip again.
+Update finds your install through its sign-in entry, stops the background
+agent, puts the new programs in place of the installed ones, starts the agent
+again and checks that the new one answers. The install key, the config, the
+hooks and the sign-in entry stay as they are, so setup does not need to run
+again. Don't unzip a release over the install folder: Windows does not replace
+a program that is running, and the unzip stops halfway.
+
+Run it in your desktop session. Over SSH it refuses before changing anything:
+the background agent needs your Windows credential store to read the install
+key.
 
 ## Remove Kontext
 
@@ -238,7 +236,7 @@ add an install of your own beside it.
 
 - The programs are not code-signed.
 - There is no automatic update and no winget package; both are in preparation.
-  Until then, see [Update](#update).
+  Until then, a newer release installs itself over yours: see [Update](#update).
   The repairs the README describes for macOS (`doctor --fix`, hooks restored by
   the background agent) are not described for Windows.
 - Agents other than Claude Code and Codex are not hooked, and what desktop apps

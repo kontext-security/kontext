@@ -72,6 +72,7 @@ func newRootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(setupCmd())
+	root.AddCommand(updateCmd())
 	root.AddCommand(whoamiCmd())
 	root.AddCommand(profileCmd())
 	root.AddCommand(hookCmd())
