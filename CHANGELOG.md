@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.24.1](https://github.com/kontext-security/kontext/compare/v1.24.0...v1.24.1) (2026-11-14)
+
+
+### Features
+
+* **windows:** kontext update installs a release over a running install ([#782](https://github.com/kontext-security/kontext/issues/782)) ([b720120](https://github.com/kontext-security/kontext/commit/b7201201ed82bbadb9935079d50b891e837a3cfd))
+
+
+### Bug Fixes
+
+* **inventory:** redact a path with spaces in a Bash grant ([#778](https://github.com/kontext-security/kontext/issues/778)) ([220983d](https://github.com/kontext-security/kontext/commit/220983df05998b61058f10479a43e3859f25d326))
+* **windows:** setup and whoami help name the PC ([#777](https://github.com/kontext-security/kontext/issues/777)) ([545aa76](https://github.com/kontext-security/kontext/commit/545aa76d087c1c84e880df672d20ac2908173847))
+
 ## [1.24.0](https://github.com/kontext-security/kontext/compare/v1.23.1...v1.24.0) (2026-11-13)
 
 
