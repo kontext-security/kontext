@@ -131,6 +131,35 @@ func TestStartUsesFullSessionIDForSessionDir(t *testing.T) {
 	}
 }
 
+// The daemon names its own socket; a session folder made for it would stay
+// behind whenever the process ends without Close.
+func TestStartWithANamedSocketMakesNoSessionDir(t *testing.T) {
+	sessionID := "abcdef1234567890abcdef1234567890"
+	socketDir, err := os.MkdirTemp("", "kh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	host, err := Start(context.Background(), Options{
+		AgentName:  "claude",
+		SessionID:  sessionID,
+		CWD:        t.TempDir(),
+		DBPath:     filepath.Join(t.TempDir(), "guard.db"),
+		SocketPath: filepath.Join(socketDir, "k.sock"),
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer host.Close(context.Background())
+
+	if host.SessionDir != "" {
+		t.Fatalf("session dir = %q, want none", host.SessionDir)
+	}
+	if _, err := os.Stat(filepath.Join(sessionRootDir(), sessionID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session folder was created: %v", err)
+	}
+}
+
 func TestSessionRootDirIsPerUser(t *testing.T) {
 	root := sessionRootDir()
 	if runtime.GOOS == "windows" {

@@ -177,14 +177,18 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		return nil, fmt.Errorf("secure runtime database: %w", err)
 	}
 
-	sessionDir := filepath.Join(sessionRootDir(), sessionID)
-	if err := createSessionDir(sessionDir); err != nil {
-		_ = closeStore()
-		_ = closeStepSafety()
-		return nil, err
-	}
+	// Only a host that picks its own socket needs a folder for it. The daemon
+	// names its socket, and a folder made for it would be left behind by every
+	// exit that skips Close.
 	socketPath := strings.TrimSpace(opts.SocketPath)
+	sessionDir := ""
 	if socketPath == "" {
+		sessionDir = filepath.Join(sessionRootDir(), sessionID)
+		if err := createSessionDir(sessionDir); err != nil {
+			_ = closeStore()
+			_ = closeStepSafety()
+			return nil, err
+		}
 		socketPath = filepath.Join(sessionDir, "kontext.sock")
 	}
 
