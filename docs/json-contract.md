@@ -70,6 +70,13 @@ An absent `agents` means no readable scan breadcrumb; an empty array means a
 reported scan found no agents. Doctor only reads this file, without scanning or
 network I/O. This addition is additive.
 
+`doctor --json` optionally includes `inventory`, the health of the daemon's
+inventory uploads: `last_attempt_at`, `last_complete_at` and `last_upload_at`
+(RFC 3339 UTC), `applied_revisions` and `incomplete_sources`, each present only
+when known. `profile ls --json` profiles optionally carry `environment`
+(`production`, `staging` or `local`; absent for any other backend). Both are
+additive.
+
 ## Version skew
 
 A consumer may be paired with an older CLI than it expects. A CLI that predates

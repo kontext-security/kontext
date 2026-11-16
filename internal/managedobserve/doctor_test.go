@@ -137,10 +137,15 @@ func TestPrintStatusWarnsOnUnsupportedConfigMode(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	status := PrintStatus(&out, "1.2.3")
+	status, report := Diagnose(&out, "1.2.3")
 	output := out.String()
 	if !strings.Contains(output, `WARNING: config requests mode "some-future-posture"`) {
 		t.Fatalf("PrintStatus() output = %q, want unsupported mode warning", output)
+	}
+	// A consumer of doctor --json reads healthy: false here; the report has to
+	// say why.
+	if !strings.Contains(strings.Join(report.Warnings, "\n"), `config requests mode "some-future-posture"`) {
+		t.Fatalf("report warnings = %v, want the unsupported mode warning", report.Warnings)
 	}
 	if strings.Contains(output, "config: ERROR") {
 		t.Fatalf("PrintStatus() output = %q, an unsupported mode must not read as an unloadable config", output)
