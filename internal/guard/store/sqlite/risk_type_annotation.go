@@ -339,6 +339,10 @@ order by r.created_at, r.id
 		}
 		candidates = append(candidates, row)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return RiskTypeEnrichmentResult{}, err
+	}
 	if err := rows.Close(); err != nil {
 		return RiskTypeEnrichmentResult{}, err
 	}

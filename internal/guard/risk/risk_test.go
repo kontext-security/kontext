@@ -59,6 +59,17 @@ func TestNormalizeDirectProviderAPI(t *testing.T) {
 	}
 }
 
+// A command naming two providers is recorded as the first one, every time.
+func TestNormalizeDirectProviderAPIPicksTheFirstHost(t *testing.T) {
+	command := "curl https://api.github.com/repos/acme/api -o out.json && curl https://storage.googleapis.com/bucket/out.json"
+	for i := 0; i < 50; i++ {
+		event := NormalizeHookEvent(HookEvent{ToolName: "Bash", ToolInput: map[string]any{"command": command}})
+		if event.Provider != "github" || event.ProviderCategory != "source_control" {
+			t.Fatalf("run %d: provider = %s (%s), want github (source_control)", i, event.Provider, event.ProviderCategory)
+		}
+	}
+}
+
 func TestNormalizeDestructiveOperation(t *testing.T) {
 	event := NormalizeHookEvent(HookEvent{ToolName: "Bash", ToolInput: map[string]any{"command": "railway volume delete production"}})
 	if event.Type != EventDestructiveProviderOperation {
