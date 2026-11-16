@@ -150,9 +150,6 @@ func classifyBash(event *RiskEvent, signalSet map[string]struct{}, command, comb
 		}
 		addSignal(event, signalSet, "shell_credential_access")
 	}
-	if strings.Contains(command, "curl") {
-		classifyProvider(event, signalSet, command)
-	}
 }
 
 func classifySourceControl(event *RiskEvent, signalSet map[string]struct{}, command string) {
@@ -197,21 +194,31 @@ func classifySourceControl(event *RiskEvent, signalSet map[string]struct{}, comm
 	}
 }
 
+// classifyProvider names the provider whose host comes first in text, so a
+// command that mentions two is always recorded the same way.
 func classifyProvider(event *RiskEvent, signalSet map[string]struct{}, text string) {
-	for host, provider := range directProviderHosts {
-		if strings.Contains(text, host) {
-			event.Type = EventDirectProviderAPICall
-			event.Provider = provider
-			event.DirectAPICall = true
-			if provider == "github" {
-				event.ProviderCategory = "source_control"
-			} else {
-				event.ProviderCategory = "infrastructure"
-			}
-			addSignal(event, signalSet, "direct_provider_api")
-			return
+	first, provider := -1, ""
+	for host, name := range directProviderHosts {
+		at := strings.Index(text, host)
+		if at < 0 {
+			continue
+		}
+		if first < 0 || at < first || at == first && name < provider {
+			first, provider = at, name
 		}
 	}
+	if first < 0 {
+		return
+	}
+	event.Type = EventDirectProviderAPICall
+	event.Provider = provider
+	event.DirectAPICall = true
+	if provider == "github" {
+		event.ProviderCategory = "source_control"
+	} else {
+		event.ProviderCategory = "infrastructure"
+	}
+	addSignal(event, signalSet, "direct_provider_api")
 }
 
 func commandFromInput(input map[string]any) string {
