@@ -138,6 +138,9 @@ jobs:
     needs: release-archives
     runs-on: windows-latest
     timeout-minutes: 15
+    # The signer's name (WINDOWS_SIGNING_SUBJECT) may live in this
+    # environment, as the signing jobs' settings do.
+    environment: ${{ (github.ref == 'refs/heads/main' && vars.WINDOWS_SIGNING == 'artifact-signing') && 'windows-signing' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -164,8 +167,11 @@ jobs:
 
       # A check that cannot fail checks nothing: each of these must be
       # refused, a signed program where signing is off, a test signature where
-      # the real signer is asked for, and an unsigned file where a signature
-      # is asked for.
+      # the real signer is asked for, an unsigned file where a signature is
+      # asked for, a signed program changed after signing, and one signed by
+      # the test signer without a timestamp. The last two are made here and
+      # checked for exactly that defect first, so a refusal for some other
+      # reason does not count.
       - name: Check that the signature check refuses what it should
         if: ${{ env.WINDOWS_SIGNING == 'test' }}
         shell: pwsh
@@ -174,10 +180,29 @@ jobs:
           $unsigned = Join-Path $env:RUNNER_TEMP 'unsigned.exe'
           Copy-Item (Get-Command go).Source $unsigned
           if ((Get-AuthenticodeSignature $unsigned).SignerCertificate) { Set-Content $unsigned 'not a program, and not signed' }
+          # Changed after signing: one byte in the middle of the program.
+          $changed = Join-Path $env:RUNNER_TEMP 'changed.exe'
+          Copy-Item $signed $changed
+          $bytes = [System.IO.File]::ReadAllBytes($changed)
+          $at = [int]($bytes.Length / 2)
+          $bytes[$at] = $bytes[$at] -bxor 0xFF
+          [System.IO.File]::WriteAllBytes($changed, $bytes)
+          $status = (Get-AuthenticodeSignature -LiteralPath $changed).Status
+          if ("$status" -ne 'HashMismatch') { Write-Error "the changed copy reads as $status, not HashMismatch: the case would not test that"; exit 1 }
+          # Signed by a certificate with the test signer's name, with no timestamp.
+          $untimed = Join-Path $env:RUNNER_TEMP 'untimed.exe'
+          Copy-Item $signed $untimed
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Kontext test signing (not for release)' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
+          $result = Set-AuthenticodeSignature -LiteralPath $untimed -Certificate $cert -HashAlgorithm SHA256
+          if (-not $result.SignerCertificate) { Write-Error "could not sign the copy without a timestamp: $($result.StatusMessage)"; exit 1 }
+          $check = Get-AuthenticodeSignature -LiteralPath $untimed
+          if ($check.TimeStamperCertificate -or $check.SignerCertificate.Subject -ne 'CN=Kontext test signing (not for release)') { Write-Error 'the untimed copy has a timestamp or another signer: the case would not test that'; exit 1 }
           $cases = @(
             @{ what = 'a signed program with signing off'; mode = 'off'; subject = ''; file = $signed },
             @{ what = 'a test signature where the real signer is asked for'; mode = 'artifact-signing'; subject = 'CoBrowser Technology GmbH'; file = $signed },
-            @{ what = 'an unsigned file where a test signature is asked for'; mode = 'test'; subject = ''; file = $unsigned }
+            @{ what = 'an unsigned file where a test signature is asked for'; mode = 'test'; subject = ''; file = $unsigned },
+            @{ what = 'a signed program changed after signing'; mode = 'test'; subject = ''; file = $changed },
+            @{ what = 'a test signature without a timestamp'; mode = 'test'; subject = ''; file = $untimed }
           )
           $wrong = 0
           foreach ($case in $cases) {

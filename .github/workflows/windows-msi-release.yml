@@ -73,6 +73,20 @@ jobs:
           ref: ${{ inputs.tag }}
           persist-credentials: false
 
+      # The signing and checking tools as this workflow has them, beside the
+      # release's sources: a release tagged before them has none, and a run
+      # by hand for it would otherwise fail even with signing off.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .signing-tools
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/sign-windows.sh
+            scripts/verify-windows-signature.ps1
+            .github/actions/windows-signing-setup
+          sparse-checkout-cone-mode: false
+
       - name: Download the release's Windows zips
         shell: pwsh
         run: |
@@ -108,7 +122,7 @@ jobs:
         shell: pwsh
         run: |
           $programs = Get-ChildItem bin\amd64\*.exe, bin\arm64\*.exe | ForEach-Object FullName
-          ./scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @programs
+          ./.signing-tools/scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @programs
 
       # The x64 program runs on this runner; it must report the release's version.
       - name: Check the programs' version
@@ -149,7 +163,7 @@ jobs:
           }
 
       - name: Set up signing
-        uses: ./.github/actions/windows-signing-setup
+        uses: ./.signing-tools/.github/actions/windows-signing-setup
         with:
           mode: ${{ env.WINDOWS_SIGNING }}
           azure-tenant-id: ${{ vars.WINDOWS_SIGNING_TENANT_ID }}
@@ -158,14 +172,14 @@ jobs:
       # After the build and its validation, and before the checksums.
       - name: Sign the MSIs
         shell: bash
-        run: bash scripts/sign-windows.sh out/*.msi
+        run: bash .signing-tools/scripts/sign-windows.sh out/*.msi
 
       - name: Check the MSIs' signatures
         shell: pwsh
         run: |
           $msis = Get-ChildItem out\*.msi | ForEach-Object FullName
           if ($msis.Count -ne 2) { Write-Error "expected two MSIs, found $($msis.Count)"; exit 1 }
-          ./scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @msis
+          ./.signing-tools/scripts/verify-windows-signature.ps1 -Mode $env:WINDOWS_SIGNING -Subject "$env:WINDOWS_SIGNING_SUBJECT" @msis
 
       # The release's checksums.txt is left as published; the MSIs get a list
       # of their own in the same format.
