@@ -14,6 +14,10 @@ import (
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
+// testLookupTimeout replaces the 250 ms lookup budget in tests that check
+// what a lookup finds, so a slow runner can't fail them on time alone.
+const testLookupTimeout = 30 * time.Second
+
 // A FIFO planted as a project's .mcp.json must not stall the hook.
 func TestServerURLSkipsNonRegularFiles(t *testing.T) {
 	home := t.TempDir()
@@ -58,7 +62,7 @@ func TestServerURLSkipsPrivacyGuardedFolders(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(userConfig), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json")}
+	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json"), Timeout: testLookupTimeout}
 	if got, _, _ := r.Server("claude", "s", open, "mcp__work__search"); got != url {
 		t.Fatalf("Server() outside a guarded folder = %q, want %q", got, url)
 	}
@@ -224,7 +228,7 @@ func TestDesktopConnectorDecodesOnlyTheCallersRecord(t *testing.T) {
 		others[i] = filepath.Join(dir, fmt.Sprintf("local_%d.json", i))
 		write(others[i], "", fmt.Sprintf("session-%d", i), time.Now())
 	}
-	r := &Resolver{Home: home}
+	r := &Resolver{Home: home, Timeout: testLookupTimeout}
 	decoded := func(path string) bool {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -259,7 +263,7 @@ func TestWarmStopsOnceItsContextIsDone(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r := &Resolver{Home: home}
+	r := &Resolver{Home: home, Timeout: testLookupTimeout}
 	cached := func() int {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -307,7 +311,7 @@ func TestServerForAntigravity(t *testing.T) {
 		"shadowed":{"url":"https://global.example/mcp"}
 	}}`)
 	write(filepath.Join(project, ".agents", "mcp_config.json"), `{"mcpServers":{"shadowed":{"url":"https://workspace.example/mcp"}}}`)
-	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json")}
+	r := &Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json"), Timeout: testLookupTimeout}
 	for _, tc := range []struct{ name, tool, want string }{
 		{"url", "mcp__plain__search", "https://plain.example/mcp"},
 		{"legacy serverUrl", "mcp__legacy__search", "https://legacy.example/mcp"},

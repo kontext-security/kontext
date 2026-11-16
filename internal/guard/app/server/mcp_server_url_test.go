@@ -16,13 +16,18 @@ import (
 	"github.com/kontext-security/kontext/internal/mcpconfig"
 )
 
+// testLookupTimeout replaces the hook's 250 ms lookup budget in these tests:
+// they check what a lookup finds, and a slow CI runner (Windows amd64) took
+// longer than 250 ms often enough to fail them.
+const testLookupTimeout = 30 * time.Second
+
 // TestMain keeps every test off the developer's own agent configs.
 func TestMain(m *testing.M) {
 	home, err := os.MkdirTemp("", "kontext-mcp-home")
 	if err != nil {
 		panic(err)
 	}
-	mcpServers = &mcpconfig.Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json")}
+	mcpServers = &mcpconfig.Resolver{Home: home, Managed: filepath.Join(home, "managed-mcp.json"), Timeout: testLookupTimeout}
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)
@@ -32,7 +37,7 @@ func useMCPHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	previous := mcpServers
-	mcpServers = &mcpconfig.Resolver{Home: home, Managed: filepath.Join(home, "managed/managed-mcp.json")}
+	mcpServers = &mcpconfig.Resolver{Home: home, Managed: filepath.Join(home, "managed/managed-mcp.json"), Timeout: testLookupTimeout}
 	t.Cleanup(func() { mcpServers = previous })
 	return home
 }
