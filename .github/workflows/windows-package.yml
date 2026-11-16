@@ -12,9 +12,11 @@ name: Windows Package
 # test signature from a certificate made for that run, which proves the
 # steps and nothing about who signed. A run on main uses the real signature
 # once the repository variable WINDOWS_SIGNING is artifact-signing, which
-# also switches on release signing. Before that, a run started by hand on
-# main with the input signing=artifact-signing signs with Azure for that run
-# only: the rehearsal. Its output is an artifact, never a release.
+# also switches on release signing. Before that, a run started by hand with
+# the input signing=artifact-signing signs with Azure for that run only, on a
+# branch the windows-signing environment admits (GitHub refuses the job on
+# any other): the end-to-end test of the signing path. Its output is an
+# artifact, never a release.
 
 on:
   pull_request:
@@ -40,7 +42,7 @@ on:
   workflow_dispatch:
     inputs:
       signing:
-        description: "test, or artifact-signing for a real signature in this run only (main only; releases stay as WINDOWS_SIGNING says)"
+        description: "test, or artifact-signing for a real signature in this run only (on a branch the windows-signing environment admits; releases stay as WINDOWS_SIGNING says)"
         type: choice
         options:
           - test
@@ -59,7 +61,7 @@ env:
   WIX_VERSION: "7.0.1"
   # The real signature only on main and only when it is switched on;
   # otherwise the test signature.
-  WINDOWS_SIGNING: ${{ (github.ref == 'refs/heads/main' && (vars.WINDOWS_SIGNING == 'artifact-signing' || (github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing'))) && 'artifact-signing' || 'test' }}
+  WINDOWS_SIGNING: ${{ ((github.ref == 'refs/heads/main' && vars.WINDOWS_SIGNING == 'artifact-signing') || (github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing')) && 'artifact-signing' || 'test' }}
 
 jobs:
   # The archives a release would publish, built the way the release builds
@@ -69,7 +71,7 @@ jobs:
     timeout-minutes: 30
     # The signing identity is bound to this environment; it is named only
     # when the real signature is asked for.
-    environment: ${{ (github.ref == 'refs/heads/main' && (vars.WINDOWS_SIGNING == 'artifact-signing' || (github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing'))) && 'windows-signing' || '' }}
+    environment: ${{ ((github.ref == 'refs/heads/main' && vars.WINDOWS_SIGNING == 'artifact-signing') || (github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing')) && 'windows-signing' || '' }}
     permissions:
       contents: read
       # For the sign-in to Azure, which uses this job's identity token.
@@ -79,13 +81,6 @@ jobs:
       WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
       WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
     steps:
-      - name: Refuse a real signature off main
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing' && github.ref != 'refs/heads/main' }}
-        shell: bash
-        run: |
-          echo "::error::signing=artifact-signing runs only on main; this run is on $GITHUB_REF"
-          exit 1
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # GoReleaser derives the snapshot version from the tags.
@@ -157,7 +152,7 @@ jobs:
     timeout-minutes: 15
     # The signer's name (WINDOWS_SIGNING_SUBJECT) may live in this
     # environment, as the signing jobs' settings do.
-    environment: ${{ (github.ref == 'refs/heads/main' && (vars.WINDOWS_SIGNING == 'artifact-signing' || (github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing'))) && 'windows-signing' || '' }}
+    environment: ${{ ((github.ref == 'refs/heads/main' && vars.WINDOWS_SIGNING == 'artifact-signing') || (github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing')) && 'windows-signing' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -233,7 +228,7 @@ jobs:
   msi:
     runs-on: windows-latest
     timeout-minutes: 30
-    environment: ${{ (github.ref == 'refs/heads/main' && (vars.WINDOWS_SIGNING == 'artifact-signing' || (github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing'))) && 'windows-signing' || '' }}
+    environment: ${{ ((github.ref == 'refs/heads/main' && vars.WINDOWS_SIGNING == 'artifact-signing') || (github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing')) && 'windows-signing' || '' }}
     permissions:
       contents: read
       id-token: write
@@ -243,13 +238,6 @@ jobs:
       WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
       WINDOWS_SIGNING_SUBJECT: ${{ vars.WINDOWS_SIGNING_SUBJECT }}
     steps:
-      - name: Refuse a real signature off main
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.signing == 'artifact-signing' && github.ref != 'refs/heads/main' }}
-        shell: bash
-        run: |
-          echo "::error::signing=artifact-signing runs only on main; this run is on $GITHUB_REF"
-          exit 1
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # GoReleaser derives the snapshot version from the tags.
