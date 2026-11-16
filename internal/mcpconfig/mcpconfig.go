@@ -82,6 +82,10 @@ const (
 type Resolver struct {
 	Home    string
 	Managed string
+	// Timeout bounds one lookup; zero means lookupTimeout. Tests that check
+	// what a lookup finds set it high, so a slow machine can't turn them into
+	// timing tests.
+	Timeout time.Duration
 
 	mu      sync.Mutex
 	cache   map[string]cachedFile
@@ -112,13 +116,17 @@ func (r *Resolver) SetScan(scan func() (agentauthority.Report, bool)) {
 // Desktop's cached claude.ai connector list, or a name from the last
 // authority scan, rather than a config or the session's own record, so it
 // may predate a change to the connector. A lookup that does not finish
-// within lookupTimeout returns nothing.
+// within the timeout returns nothing.
 func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name string, cached bool) {
 	if !strings.HasPrefix(toolName, "mcp__") {
 		return "", "", false
 	}
 	r.once.Do(func() { r.lookups = make(chan struct{}, maxLookups) })
-	timer := time.NewTimer(lookupTimeout)
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = lookupTimeout
+	}
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case r.lookups <- struct{}{}:
