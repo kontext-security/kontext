@@ -1132,6 +1132,11 @@ func preflightCodexUserHooks(binary string) error {
 	} else if err != nil {
 		return fmt.Errorf("check Codex hooks: %w", err)
 	}
+	// A dangling link reads as an empty file but cannot be written; it would
+	// fail only after credentials and other hooks are written.
+	if err := danglingLink(path); err != nil {
+		return fmt.Errorf("check Codex hooks: %w\n\nFix or move ~/.codex/hooks.json, then rerun setup.", err)
+	}
 	settings, err := codexmanaged.ReadHooks(path)
 	if err != nil {
 		return fmt.Errorf("check Codex hooks: %w\n\nFix or move ~/.codex/hooks.json, then rerun setup.", err)

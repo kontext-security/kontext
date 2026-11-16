@@ -1549,9 +1549,9 @@ func TestSetupRejectsPersonalKeyBeforeSavingCredentials(t *testing.T) {
 }
 
 func TestRunStopsBeforeWritingWhenAHookFileCannotBeWritten(t *testing.T) {
-	for _, name := range []string{"dangling Claude settings link", "Cursor folder not writable", "Claude settings link in a read-only folder", "Cursor file in a read-only folder"} {
+	for _, name := range []string{"dangling Claude settings link", "dangling Codex hooks link", "Cursor folder not writable", "Claude settings link in a read-only folder", "Cursor file in a read-only folder"} {
 		t.Run(name, func(t *testing.T) {
-			if name != "dangling Claude settings link" && !modeBitsDenyWrites(t) {
+			if !strings.HasPrefix(name, "dangling ") && !modeBitsDenyWrites(t) {
 				t.Skip("environment does not deny writes to a read-only directory (running as root?)")
 			}
 			h := newHarness(t)
@@ -1563,6 +1563,14 @@ func TestRunStopsBeforeWritingWhenAHookFileCannotBeWritten(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.Symlink(filepath.Join(h.home, "gone", "settings.json"), settings); err != nil {
+					t.Fatal(err)
+				}
+			case "dangling Codex hooks link":
+				hooks := filepath.Join(h.home, ".codex", "hooks.json")
+				if err := os.MkdirAll(filepath.Dir(hooks), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(h.home, "gone", "hooks.json"), hooks); err != nil {
 					t.Fatal(err)
 				}
 			case "Cursor folder not writable":
