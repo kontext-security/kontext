@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 // The liveness check tells a running process from one that has exited, and
@@ -28,5 +30,27 @@ func TestProcessAliveOnWindows(t *testing.T) {
 	}
 	if pidAlive(pid) {
 		t.Fatalf("pid %d of a child that has exited and been waited for counts as alive", pid)
+	}
+}
+
+// A process that has ended but is still held open by someone else can still
+// be opened (seen on Windows 11 on arm64); it does not count as alive.
+func TestProcessAliveOnWindowsEndedButHeldOpen(t *testing.T) {
+	child := exec.Command(os.Args[0], "-test.run=^$")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = child.Wait() }()
+	pid := child.Process.Pid
+	held, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		t.Fatalf("open the child: %v", err)
+	}
+	defer windows.CloseHandle(held)
+	if event, err := windows.WaitForSingleObject(held, 30000); err != nil || event != windows.WAIT_OBJECT_0 {
+		t.Fatalf("the child did not end: %v, %v", event, err)
+	}
+	if pidAlive(pid) {
+		t.Fatalf("pid %d of a child that has ended, still held open, counts as alive", pid)
 	}
 }
