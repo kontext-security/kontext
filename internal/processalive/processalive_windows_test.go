@@ -1,6 +1,6 @@
 //go:build windows
 
-package managedobserve
+package processalive
 
 import (
 	"os"
@@ -13,11 +13,11 @@ import (
 // The liveness check tells a running process from one that has exited, and
 // counts a process this user may not open as running.
 func TestProcessAliveOnWindows(t *testing.T) {
-	if !pidAlive(os.Getpid()) {
+	if !Alive(os.Getpid()) {
 		t.Fatal("this process does not count as alive")
 	}
 	// The System process: there, and not to be opened by a standard user.
-	if !pidAlive(4) {
+	if !Alive(4) {
 		t.Fatal("the System process does not count as alive")
 	}
 	child := exec.Command(os.Args[0], "-test.run=^$")
@@ -28,7 +28,7 @@ func TestProcessAliveOnWindows(t *testing.T) {
 	if err := child.Wait(); err != nil {
 		t.Fatalf("the child did not exit cleanly: %v", err)
 	}
-	if pidAlive(pid) {
+	if Alive(pid) {
 		t.Fatalf("pid %d of a child that has exited and been waited for counts as alive", pid)
 	}
 }
@@ -50,7 +50,7 @@ func TestProcessAliveOnWindowsEndedButHeldOpen(t *testing.T) {
 	if event, err := windows.WaitForSingleObject(held, 30000); err != nil || event != windows.WAIT_OBJECT_0 {
 		t.Fatalf("the child did not end: %v, %v", event, err)
 	}
-	if pidAlive(pid) {
+	if Alive(pid) {
 		t.Fatalf("pid %d of a child that has ended, still held open, counts as alive", pid)
 	}
 }

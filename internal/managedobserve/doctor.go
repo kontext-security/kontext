@@ -588,7 +588,7 @@ func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	return processAlive(pid)
+	return daemonAlive(pid)
 }
 
 func comparableVersion(version string) bool {

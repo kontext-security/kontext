@@ -1,6 +1,6 @@
 //go:build windows
 
-package managedobserve
+package processalive
 
 import (
 	"errors"
@@ -8,11 +8,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// processAlive reports whether a process with this pid is running. The unix
-// idiom, a signal 0, says "dead" for every pid on Windows, so the process is
-// opened and asked: one that has exited is signalled, a running one is not.
-// A process this user may not open exists all the same.
-func processAlive(pid int) bool {
+// Windows has no signal 0, so the process is opened and asked: one that has
+// ended is signalled, also while something else still holds it open, and a
+// running one is not. A process this user may not open exists all the same.
+func alive(pid int) bool {
 	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
 	if err != nil {
 		return errors.Is(err, windows.ERROR_ACCESS_DENIED)
