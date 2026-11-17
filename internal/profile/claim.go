@@ -3,6 +3,7 @@ package profile
 import (
 	"errors"
 	"fmt"
+	"github.com/kontext-security/kontext/internal/processalive"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -90,7 +91,7 @@ func HasLiveClaim(name string) (bool, error) {
 			// Not a marker this code wrote; never let it block anything.
 			continue
 		}
-		if pidAlive(pid) {
+		if processalive.Alive(pid) {
 			return true, nil
 		}
 		_ = os.Remove(filepath.Join(dir, entry.Name()))

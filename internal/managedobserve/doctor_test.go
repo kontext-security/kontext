@@ -330,7 +330,6 @@ func TestPrintStatusDaemonDevVersionDoesNotWarn(t *testing.T) {
 }
 
 func TestPrintStatusDaemonDeadPIDTreatedAsUnknownAndFixable(t *testing.T) {
-	hermetic.NotOnWindows(t, "ENG-1007", "the liveness check is a stub on Windows")
 	env := newDoctorTestEnv(t)
 	env.writeDaemonStatus(t, deadPID(t), "1.2.2")
 

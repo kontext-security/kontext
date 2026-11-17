@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
@@ -589,14 +588,7 @@ func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return daemonAlive(pid)
 }
 
 func comparableVersion(version string) bool {
