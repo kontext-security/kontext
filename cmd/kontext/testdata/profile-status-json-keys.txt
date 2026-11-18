@@ -1,5 +1,6 @@
 active
 cloud_url
+environment
 error
 install_token_ref
 installation_id

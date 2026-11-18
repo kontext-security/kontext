@@ -15,6 +15,7 @@ ignored_system_config
 install_token_readable
 installation_id
 installed_version
+inventory
 legacy_install
 local_hooks_healthy
 managed_hooks_healthy

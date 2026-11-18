@@ -10,6 +10,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/managedobserve"
+	"github.com/kontext-security/kontext/internal/managedstream"
 	"github.com/kontext-security/kontext/internal/setup"
 )
 
@@ -109,6 +110,7 @@ func fullyPopulatedReport() managedobserve.Report {
 		Agents:               &agentinventory.Inventory{Agents: []agentinventory.Agent{}, ReportedAt: "2026-09-09T08:20:00Z"},
 		HeartbeatAgeSeconds:  &age,
 		ExportPending:        &pending,
+		Inventory:            &managedstream.InventoryHealth{LastAttemptAt: "2026-09-09T08:20:00Z"},
 		Warnings:             []string{"example warning"},
 	}
 }
@@ -138,6 +140,7 @@ func TestProfileStatusJSONContract(t *testing.T) {
 		CloudURL:         "https://api.staging.kontext.security",
 		Mode:             "remote",
 		Workspace:        "Acme Corp (org_1)",
+		Environment:      "staging",
 		OrganizationName: "Acme Corp",
 		OrganizationID:   "org_1",
 		InstallTokenRef:  "keychain:kontext-install-token.staging",
