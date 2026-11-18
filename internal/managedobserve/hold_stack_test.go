@@ -27,7 +27,7 @@ const stackTestSchema = `namespace Kontext {
   };
 }`
 
-const stackTestToolCatalogDigest = "b28108efc334761c791b00953e51e682568faa911be4c5c9c14bab48e987b13d"
+const stackTestToolCatalogDigest = "93d1db7882a99f7241d15605b9be6ad00a460f7ada0b3ec57589e0e7b2ec7a9f"
 
 // writeBlockDeployment allows everything except the Write tool.
 func writeBlockDeployment(t *testing.T) cedarpolicy.Deployment {
