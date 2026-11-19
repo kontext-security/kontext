@@ -105,11 +105,12 @@ type ToolCall struct {
 
 // Response is the server's answer. Text is set when Decision is "replace".
 type Response struct {
-	Decision      string  `json:"decision"`
-	EventID       string  `json:"eventId"`
-	Text          *string `json:"text"`
-	RemovedBytes  *int64  `json:"removedBytes"`
-	RemovedTokens *int64  `json:"removedTokens"`
+	Decision          string  `json:"decision"`
+	EventID           string  `json:"eventId"`
+	Text              *string `json:"text"`
+	RemovedBytes      *int64  `json:"removedBytes"`
+	RemovedTokens     *int64  `json:"removedTokens"`
+	ReadBackTokenEnds []int   `json:"readBackTokenEnds,omitempty"`
 }
 
 func (r Response) validate() error {
@@ -134,6 +135,8 @@ type ReadBack struct {
 	SessionID string `json:"sessionId"`
 	EventID   string `json:"eventId"`
 	ToolUseID string `json:"toolUseId"`
+	// Half-open offsets into the cut's estimated removed tokens. Omitted on unmeasured reads.
+	TokenRange *[2]int `json:"tokenRange,omitempty"`
 }
 
 // TokenSource resolves the install token, as for the configuration call.
