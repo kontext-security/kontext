@@ -360,6 +360,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	policyReady := make(chan struct{})
 	authorityAvailable := make(chan struct{}, 1)
 	authorityResend := make(chan struct{}, 1)
+	hookAvailable := make(chan struct{}, 1)
 	policyRefreshNow := make(chan struct{}, 1)
 	enrolment := &enrolmentRefresh{cache: cedarCache, now: policyRefreshNow, left: maxEnrolmentRefreshes}
 	cedarRefresher := cedarpolicy.Refresher{
@@ -401,6 +402,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot))
 			codexRouting.follow(snapshot)
+			// The hook scan follows the switch now, not at the next hour.
+			select {
+			case hookAvailable <- struct{}{}:
+			default:
+			}
 		},
 	}
 	background.Add(1)
@@ -427,9 +433,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	inventoryStore := managedstream.OpenInventoryStore(managedstream.InventoryStatePath(streamStatePath), installationState.InstallationID)
 	inventoryHolder := &agentInventoryHolder{scope: loadedConfig.Scope, store: inventoryStore, rescan: make(chan struct{}, 1), afterRescan: func() {
-		select {
-		case authorityAvailable <- struct{}{}:
-		default:
+		for _, signal := range []chan struct{}{authorityAvailable, hookAvailable} {
+			select {
+			case signal <- struct{}{}:
+			default:
+			}
 		}
 	}}
 	inventoryReady := make(chan struct{})
@@ -452,6 +460,33 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		}
 	}
 	server.SetConnectorScan(authorityHolder.Fact)
+	hookHolder := &hookHolder{
+		keys:      newHookKeyBox(),
+		enabled:   func() bool { return endpointConfigCache.Current().Config.HookInventoryEnabled() },
+		available: hookAvailable,
+		beginRead: authorityHolder.scanner.BeginRead,
+		ownBinary: ownBinaryCheck(),
+		record: func(agent agentauthority.HookAgent, result agentauthority.SourceResult) {
+			if err := inventoryStore.RecordHooks(agent, result); err != nil {
+				opts.Diagnostic.Printf("hook inventory: record scan: %v\n", err)
+			}
+		},
+		discard: func() {
+			if err := inventoryStore.DiscardHooks(); err != nil {
+				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
+			}
+		},
+	}
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		select {
+		case <-inventoryReady:
+		case <-policyCtx.Done():
+			return
+		}
+		hookHolder.run(policyCtx, inventoryHolder)
+	}()
 	authorityReady := make(chan struct{})
 	background.Add(1)
 	go func() {
@@ -490,7 +525,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 				return
 			}
 		}
-		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder, authorityHolder, enrolment.afterAcceptedPost)
+		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder, authorityHolder, hookHolder, enrolment.afterAcceptedPost)
 	}()
 	defer func() {
 		stopPolicyRefresh()
@@ -849,6 +884,9 @@ type deviceKeySource struct {
 	cloudURL string
 	token    string
 	resolved bool
+	// hooks receives K_dev, derived from the same two inputs (ADR-0011). Nil
+	// derives none.
+	hooks *hookKeyBox
 }
 
 // resolve returns the key for this flush's config identity, deriving it on
@@ -859,45 +897,60 @@ type deviceKeySource struct {
 // under resource pressure — so nothing short of the kill switch disables
 // reporting for the daemon's lifetime.
 func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token, installationID string, client *http.Client, diag diagnostic.Logger) string {
-	if strings.TrimSpace(os.Getenv(envNoDeviceKey)) != "" {
+	// The kill switch stops the device key only; K_dev is never sent, so a
+	// hook scan may still need the derivation.
+	killed := strings.TrimSpace(os.Getenv(envNoDeviceKey)) != ""
+	if killed && s.hooks == nil {
 		return ""
 	}
-	if s.resolved && s.cloudURL == cloudURL && s.token == token {
-		return s.key
+	if !s.resolved || s.cloudURL != cloudURL || s.token != token {
+		s.derive(ctx, cloudURL, token, installationID, client, diag)
 	}
+	if killed {
+		return ""
+	}
+	return s.key
+}
+
+func (s *deviceKeySource) derive(ctx context.Context, cloudURL, token, installationID string, client *http.Client, diag diagnostic.Logger) {
+	s.key, s.resolved = "", false
 	uuid, err := platformUUIDFn(ctx)
 	if err != nil {
 		diag.Printf("device key: %v\n", err)
-		return ""
+		return
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, deviceKeyPingTimeout)
 	defer cancel()
 	ping, err := workspacePingFn(pingCtx, client, cloudURL, token, installationID)
 	if err != nil {
 		diag.Printf("device key: workspace ping: %v\n", err)
-		return ""
+		return
 	}
 	key, err := deviceid.Key(uuid, ping.OrganizationID)
 	if err != nil {
 		diag.Printf("device key: %v\n", err)
-		return ""
+		return
+	}
+	if s.hooks != nil {
+		if hookKey, err := deviceid.HookInventoryKey(uuid, ping.OrganizationID); err == nil {
+			s.hooks.set(hookKey)
+		}
 	}
 	s.key = key
 	s.cloudURL = cloudURL
 	s.token = token
 	s.resolved = true
-	return s.key
 }
 
-func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, afterAcceptedPost func()) error {
+func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, hookHolder *hookHolder, afterAcceptedPost func()) error {
 	interval := opts.StreamInterval
 	if interval == 0 {
 		interval = managedstream.DefaultIntervalFromEnv()
 	}
-	deviceKeys := &deviceKeySource{}
+	deviceKeys := &deviceKeySource{hooks: hookHolder.keys}
 	var consecutiveAuthFailures, consecutiveFlushFailures int
 	flush := func() {
-		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder, authorityHolder, afterAcceptedPost)
+		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder, authorityHolder, hookHolder, afterAcceptedPost)
 		if err == nil {
 			consecutiveAuthFailures = 0
 			consecutiveFlushFailures = 0
@@ -932,7 +985,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	}
 }
 
-func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, afterAcceptedPost func()) error {
+func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, hookHolder *hookHolder, afterAcceptedPost func()) error {
 	loadedConfig, installToken, err := loadManagedConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("managed stream config reload: %w", err)
@@ -961,6 +1014,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		AuthorityFact:               authorityHolder.Fact,
 		AuthorityAvailable:          authorityHolder.resend,
 		AuthorityScanKnown:          authorityHolder.known,
+		HookInventoryEnabled:        hookHolder.enabled,
 		DeviceKey:                   func() string { return deviceKey },
 		HTTPClient:                  opts.StreamHTTPClient,
 		Diagnostic:                  opts.Diagnostic,

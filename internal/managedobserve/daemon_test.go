@@ -1,10 +1,12 @@
 package managedobserve
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/kontext-security/kontext/internal/deviceid"
 	"io"
 	"net"
 	"net/http"
@@ -1419,6 +1421,44 @@ func TestDeviceKeySource(t *testing.T) {
 		source := &deviceKeySource{}
 		if key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); key != "" {
 			t.Fatalf("resolve() = %q, want empty under %s", key, envNoDeviceKey)
+		}
+	})
+
+	t.Run("derives K_dev beside the device key", func(t *testing.T) {
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) { return testUUID, nil },
+			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
+				return ledgerping.Response{OrganizationID: "org_acme"}, nil
+			})
+		source := &deviceKeySource{hooks: newHookKeyBox()}
+		key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet)
+		want, err := deviceid.HookInventoryKey(testUUID, "org_acme")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key == "" || !bytes.Equal(source.hooks.get(), want) {
+			t.Fatalf("device key %q, K_dev %x", key, source.hooks.get())
+		}
+		select {
+		case <-source.hooks.ready:
+		default:
+			t.Fatal("K_dev box not ready")
+		}
+	})
+
+	t.Run("kill switch still derives K_dev, which is never sent", func(t *testing.T) {
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) { return testUUID, nil },
+			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
+				return ledgerping.Response{OrganizationID: "org_acme"}, nil
+			})
+		t.Setenv(envNoDeviceKey, "1")
+		source := &deviceKeySource{hooks: newHookKeyBox()}
+		if key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); key != "" {
+			t.Fatalf("resolve() = %q under the kill switch", key)
+		}
+		if len(source.hooks.get()) == 0 {
+			t.Fatal("no K_dev under the device key kill switch")
 		}
 	})
 }

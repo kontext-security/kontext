@@ -22,6 +22,10 @@ const (
 
 	inventoryStateFile = "inventory-state.json"
 	presenceFamily     = "presence"
+	hooksFamily        = "hooks"
+	// hookBlockBudget bounds the encoded hook inventory inside one upload, so
+	// it never crowds the ledger batch out of MaxPayloadBytes.
+	hookBlockBudget = 96 * 1024
 	// The same per-family bound the authority report applies. With a closed
 	// source list this bounds the pending state as a whole.
 	maxPendingClaims = 64
@@ -62,10 +66,14 @@ type sourceClaims struct {
 	Connectors  []agentauthority.Connector  `json:"connectors,omitempty"`
 	Permissions *agentauthority.Permissions `json:"permissions,omitempty"`
 	Credentials []agentauthority.Credential `json:"credentials,omitempty"`
+	// Hooks is the whole scan of a hook source (ADR-0011): its scopes say
+	// what the cloud may withdraw, so it travels as one block.
+	Hooks *agentauthority.HookAgent `json:"hooks,omitempty"`
 }
 
 func (c sourceClaims) positive() bool {
-	return c.Agent != nil || len(c.MCPServers) > 0 || len(c.Plugins) > 0 || len(c.Connectors) > 0 || c.Permissions != nil || len(c.Credentials) > 0
+	return c.Agent != nil || len(c.MCPServers) > 0 || len(c.Plugins) > 0 || len(c.Connectors) > 0 || c.Permissions != nil || len(c.Credentials) > 0 ||
+		c.Hooks != nil && len(c.Hooks.Hooks) > 0
 }
 
 type pendingSource struct {
@@ -170,6 +178,13 @@ func (s *InventoryStore) RecordAuthority(report agentauthority.Report) error {
 	})
 }
 
+// RecordHooks takes a new revision for a hook scan of one agent.
+func (s *InventoryStore) RecordHooks(agent agentauthority.HookAgent, result agentauthority.SourceResult) error {
+	return s.record([]agentauthority.SourceResult{result}, func(string, string) sourceClaims {
+		return sourceClaims{Hooks: &agent}
+	})
+}
+
 func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf func(agent, family string) sourceClaims) error {
 	if len(results) == 0 {
 		return nil
@@ -181,8 +196,8 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 		s.file.Health.IncompleteSources = map[string]bool{}
 	}
 	// Each batch restates its kind, so a source it no longer reports stops counting.
-	presence := isPresence(results[0].ID)
-	maps.DeleteFunc(s.file.Health.IncompleteSources, func(id string, _ bool) bool { return isPresence(id) == presence })
+	kind := sourceKind(results[0].ID)
+	maps.DeleteFunc(s.file.Health.IncompleteSources, func(id string, _ bool) bool { return sourceKind(id) == kind })
 	for _, result := range results {
 		result.Revision = s.file.Revision
 		agent, family, _ := strings.Cut(result.ID, "/")
@@ -224,6 +239,7 @@ func mergeClaims(older, newer sourceClaims) sourceClaims {
 		Connectors:  mergeByKey(older.Connectors, newer.Connectors, func(c agentauthority.Connector) string { return c.UUID }),
 		Permissions: mergePermissions(older.Permissions, newer.Permissions),
 		Credentials: mergeByKey(older.Credentials, newer.Credentials, credentialKey),
+		Hooks:       mergeHooks(older.Hooks, newer.Hooks),
 	}
 	if merged.Agent == nil {
 		merged.Agent = older.Agent
@@ -247,6 +263,56 @@ func mergeByKey[T any](older, newer []T, key func(T) string) []T {
 		}
 	}
 	return merged
+}
+
+// mergeHooks keeps, for each scope the newer scan could not read completely,
+// what an unacknowledged older scan saw there while it read it completely.
+// The cloud keeps a scope's hooks unless it is listed complete, so this only
+// adds what might never have reached it.
+func mergeHooks(older, newer *agentauthority.HookAgent) *agentauthority.HookAgent {
+	if older == nil {
+		return newer
+	}
+	if newer == nil {
+		return older
+	}
+	merged := *newer
+	merged.Scopes = slices.Clone(newer.Scopes)
+	merged.Hooks = slices.Clone(newer.Hooks)
+	index := map[string]int{}
+	for i, scope := range merged.Scopes {
+		index[scope.ID] = i
+	}
+	for _, scope := range older.Scopes {
+		i, listed := index[scope.ID]
+		if scope.Status != agentauthority.StatusComplete || listed && merged.Scopes[i].Status == agentauthority.StatusComplete {
+			continue
+		}
+		if !listed {
+			if len(merged.Scopes) >= agentauthority.MaxHookScopes {
+				merged.Truncated = true
+				continue
+			}
+			merged.Scopes = append(merged.Scopes, scope)
+			i = len(merged.Scopes) - 1
+			index[scope.ID] = i
+		}
+		// The older scope's state comes along with its hooks, but its time
+		// stays the older one, so freshness is understated, never overstated.
+		merged.Scopes[i] = scope
+		merged.Hooks = slices.DeleteFunc(merged.Hooks, func(r agentauthority.HookRecord) bool { return r.ScopeID == scope.ID })
+		for _, r := range older.Hooks {
+			if r.ScopeID != scope.ID {
+				continue
+			}
+			if len(merged.Hooks) >= agentauthority.MaxHookRecords {
+				merged.Truncated = true
+				break
+			}
+			merged.Hooks = append(merged.Hooks, r)
+		}
+	}
+	return &merged
 }
 
 func text(value *string) string {
@@ -326,7 +392,7 @@ func (s *InventoryStore) hasPendingAuthority() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id := range s.file.Pending {
-		if !isPresence(id) {
+		if sourceKind(id) == kindAuthority {
 			return true
 		}
 	}
@@ -398,10 +464,21 @@ func (s *InventoryStore) acknowledge(acks []InventoryAck, sent []agentauthority.
 func (s *InventoryStore) DiscardAuthority() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	authority := func(id string) bool { return !isPresence(id) }
+	return s.discard(func(id string) bool { return sourceKind(id) == kindAuthority })
+}
+
+// DiscardHooks forgets pending hook results once the deployment's hook
+// inventory switch is off, so turning it on again starts from a fresh scan.
+func (s *InventoryStore) DiscardHooks() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.discard(func(id string) bool { return sourceKind(id) == kindHooks })
+}
+
+func (s *InventoryStore) discard(drop func(string) bool) error {
 	before := len(s.file.Pending) + len(s.file.Health.IncompleteSources)
-	maps.DeleteFunc(s.file.Pending, func(id string, _ pendingSource) bool { return authority(id) })
-	maps.DeleteFunc(s.file.Health.IncompleteSources, func(id string, _ bool) bool { return authority(id) })
+	maps.DeleteFunc(s.file.Pending, func(id string, _ pendingSource) bool { return drop(id) })
+	maps.DeleteFunc(s.file.Health.IncompleteSources, func(id string, _ bool) bool { return drop(id) })
 	if len(s.file.Pending)+len(s.file.Health.IncompleteSources) == before {
 		return nil
 	}
@@ -410,16 +487,38 @@ func (s *InventoryStore) DiscardAuthority() error {
 
 func isPresence(id string) bool { return strings.HasSuffix(id, "/"+presenceFamily) }
 
+const (
+	kindPresence  = "presence"
+	kindHooks     = "hooks"
+	kindAuthority = "authority"
+)
+
+// sourceKind groups sources by the scan that records them. Each kind has its
+// own switch and its own block in the upload.
+func sourceKind(id string) string {
+	switch {
+	case isPresence(id):
+		return kindPresence
+	case strings.HasSuffix(id, "/"+hooksFamily):
+		return kindHooks
+	}
+	return kindAuthority
+}
+
 // addInventory states the pending results. A source travels only when its
 // claims do, because a complete source without them would withdraw them all.
 // The block goes out even when empty: without it the server would read this
 // report as an older CLI's and refresh every claim.
 func addInventory(payload *Payload, opts Options) {
 	device := payload.Device
-	if opts.Inventory == nil || device == nil || device.Agents == nil && device.Authority == nil {
+	if opts.Inventory == nil || device == nil {
 		return
 	}
 	pending := opts.Inventory.snapshot()
+	hooks := opts.HookInventoryEnabled != nil && opts.HookInventoryEnabled() && slices.ContainsFunc(slices.Collect(maps.Keys(pending)), func(id string) bool { return sourceKind(id) == kindHooks })
+	if device.Agents == nil && device.Authority == nil && !hooks {
+		return
+	}
 	ids := make([]string, 0, len(pending))
 	for id := range pending {
 		ids = append(ids, id)
@@ -432,10 +531,24 @@ func addInventory(payload *Payload, opts Options) {
 	if device.Authority != nil {
 		trimmed = overlayAuthority(device, pending, ids)
 	}
+	if hooks {
+		trimmed = append(trimmed, addHookInventory(device, pending, ids)...)
+	}
 	sources := []agentauthority.SourceResult{}
 	for _, id := range ids {
-		if isPresence(id) && device.Agents == nil || !isPresence(id) && device.Authority == nil {
-			continue
+		switch sourceKind(id) {
+		case kindPresence:
+			if device.Agents == nil {
+				continue
+			}
+		case kindHooks:
+			if !hooks {
+				continue
+			}
+		default:
+			if device.Authority == nil {
+				continue
+			}
 		}
 		result := pending[id].Result
 		if slices.Contains(trimmed, id) {
@@ -445,6 +558,45 @@ func addInventory(payload *Payload, opts Options) {
 		sources = append(sources, result)
 	}
 	device.Inventory = &Inventory{Schema: InventorySchema, Sources: sources}
+}
+
+// addHookInventory builds the hook block from the pending hook sources, and
+// returns the ones it had to shorten to stay inside hookBlockBudget. A
+// shortened agent is marked truncated, so the cloud withdraws nothing on it.
+func addHookInventory(device *Device, pending map[string]pendingSource, ids []string) []string {
+	block := &agentauthority.HookInventory{Schema: agentauthority.HookInventorySchema, IDScheme: agentauthority.HookIDScheme, Agents: []agentauthority.HookAgent{}}
+	owners := []string{}
+	for _, id := range ids {
+		if claims := pending[id].Claims.Hooks; sourceKind(id) == kindHooks && claims != nil {
+			block.Agents = append(block.Agents, *claims)
+			owners = append(owners, id)
+		}
+	}
+	var trimmed []string
+	for {
+		data, err := json.Marshal(block)
+		if err != nil || len(data) <= hookBlockBudget {
+			break
+		}
+		// Drop from the largest agent's end, a tenth at a time.
+		largest := 0
+		for i, agent := range block.Agents {
+			if len(agent.Hooks) > len(block.Agents[largest].Hooks) {
+				largest = i
+			}
+		}
+		agent := &block.Agents[largest]
+		if len(agent.Hooks) == 0 {
+			break
+		}
+		agent.Hooks = slices.Clone(agent.Hooks[:len(agent.Hooks)*9/10])
+		agent.Truncated = true
+		if !slices.Contains(trimmed, owners[largest]) {
+			trimmed = append(trimmed, owners[largest])
+		}
+	}
+	device.HookInventory = block
+	return trimmed
 }
 
 // overlayAgents makes each pending source's row the one in its result, so a
@@ -489,7 +641,7 @@ func overlayAuthority(device *Device, pending map[string]pendingSource, ids []st
 	changed := false
 	for _, id := range ids {
 		entry := pending[id]
-		if isPresence(id) {
+		if sourceKind(id) != kindAuthority {
 			continue
 		}
 		if id == agentauthority.HostCredentials {
@@ -531,9 +683,11 @@ func overlayAuthority(device *Device, pending map[string]pendingSource, ids []st
 	return trimmed
 }
 
-// dropAuthority removes the optional report together with its sources.
+// dropAuthority removes the optional report and hook block together with
+// their sources. They stay pending for a later upload.
 func dropAuthority(payload *Payload) {
 	payload.Device.Authority = nil
+	payload.Device.HookInventory = nil
 	if inventory := payload.Device.Inventory; inventory != nil {
 		inventory.Sources = slices.DeleteFunc(inventory.Sources, func(r agentauthority.SourceResult) bool { return !isPresence(r.ID) })
 	}

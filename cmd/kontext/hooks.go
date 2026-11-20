@@ -85,5 +85,6 @@ func hooksCmd() *cobra.Command {
 	}
 	list.Flags().StringVar(&scope, "scope", "system", "Installation scope: user or system")
 	cmd.AddCommand(list)
+	cmd.AddCommand(hooksInventoryCmd())
 	return cmd
 }
