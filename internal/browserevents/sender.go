@@ -42,7 +42,8 @@ type Sender struct {
 	now      func() time.Time
 	lastWarn time.Time
 	// limit is the batch size, MaxRecordsPerBatch until the cloud answers
-	// 413; then it halves, down to one record.
+	// 413; then it halves, down to one record, and doubles back with each
+	// accepted batch.
 	limit int
 }
 
@@ -146,6 +147,8 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 		if err := s.Store.Ack(pending); err != nil {
 			return Sent, err
 		}
+		// After a 413 the batch grows back, doubling with each success.
+		s.limit = min(s.limit*2, MaxRecordsPerBatch)
 		for _, r := range answer.Rejected {
 			s.logf("browser events: the cloud rejected record %d: %s", r.Index, r.Reason)
 		}

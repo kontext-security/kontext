@@ -486,3 +486,18 @@ func TestWithoutAStoreTheHandlerAnswersUnavailable(t *testing.T) {
 		t.Fatalf("answer = %s", answer)
 	}
 }
+
+func TestTheBatchGrowsBackAfterA413(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, []IndexedRecord{visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	sender, _ := newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"accepted":1,"rejected":[]}`)
+	})
+	sender.limit = 1
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
+		t.Fatalf("outcome = %v, err = %v", outcome, err)
+	}
+	if sender.limit != 2 {
+		t.Fatalf("limit = %d after a success, want 2", sender.limit)
+	}
+}
