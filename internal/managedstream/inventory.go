@@ -81,7 +81,7 @@ type sourceClaims struct {
 
 // hookRedactor numbers the redaction rules in pkg/agentauthority
 // hooks_redact.go. Raise it whenever they drop more.
-const hookRedactor = 2
+const hookRedactor = 3
 
 func (c sourceClaims) positive() bool {
 	return c.Agent != nil || len(c.MCPServers) > 0 || len(c.Plugins) > 0 || len(c.Connectors) > 0 || c.Permissions != nil || len(c.Credentials) > 0 ||
@@ -296,6 +296,10 @@ func mergeHooks(older, newer *agentauthority.HookAgent) *agentauthority.HookAgen
 		return older
 	}
 	merged := *newer
+	// A newer scan that couldn't tell keeps the verdict an older one could.
+	if newer.KontextHooks.State == agentauthority.KontextHooksUnknown && older.KontextHooks.State != "" {
+		merged.KontextHooks = older.KontextHooks
+	}
 	merged.Scopes = slices.Clone(newer.Scopes)
 	merged.Hooks = slices.Clone(newer.Hooks)
 	index := map[string]int{}
@@ -310,9 +314,17 @@ func mergeHooks(older, newer *agentauthority.HookAgent) *agentauthority.HookAgen
 		merged.Hooks = append(merged.Hooks, r)
 		return true
 	}
+	// olderIn adds the older records of a scope. One the record cap leaves
+	// out makes the scope partial, so the cloud withdraws none of them.
 	olderIn := func(scope string, skip map[string]bool) {
 		for _, r := range older.Hooks {
 			if r.ScopeID == scope && !skip[r.ID] && !add(r) {
+				if i, ok := index[scope]; ok {
+					cut := merged.Scopes[i]
+					cut.Status = agentauthority.StatusPartial
+					cut.Reasons = slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(cut.Reasons), agentauthority.ReasonSizeLimit))))
+					merged.Scopes[i] = cut
+				}
 				return
 			}
 		}

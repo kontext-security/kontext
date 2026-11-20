@@ -216,14 +216,51 @@ func TestHookSwitchWatchWakesOnChangesOnly(t *testing.T) {
 }
 
 func TestClaudeConfigDirFollowsTheEnvironment(t *testing.T) {
-	t.Setenv("CLAUDE_CONFIG_DIR", "relative/dir")
-	if got := ClaudeConfigDir(); got != "" {
-		t.Fatalf("relative dir used: %q", got)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if got, err := ClaudeConfigDir(); got != "" || err != nil {
+		t.Fatalf("unset: %q %v", got, err)
+	}
+	// A relative value is refused, never read as the default profile.
+	t.Setenv("CLAUDE_CONFIG_DIR", "profiles/work")
+	if got, err := ClaudeConfigDir(); got != "" || !errors.Is(err, ErrClaudeConfigDir) {
+		t.Fatalf("relative dir: %q %v", got, err)
 	}
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir+"/")
-	if got := ClaudeConfigDir(); got != filepath.Clean(dir) {
-		t.Fatalf("got %q", got)
+	if got, err := ClaudeConfigDir(); got != filepath.Clean(dir) || err != nil {
+		t.Fatalf("got %q %v", got, err)
+	}
+}
+
+// An invalid CLAUDE_CONFIG_DIR scans nothing rather than the default profile.
+func TestHookHolderSkipsAnInvalidProfile(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "profiles/work")
+	fake := &fakeHookScan{confirmed: true}
+	on := true
+	keys := newHookKeyBox()
+	keys.set([]byte("k"), "t")
+	fake.holder(&on, keys).refresh(context.Background(), agentinventory.Inventory{})
+	if fake.calls != 0 || fake.recorded != 0 {
+		t.Fatalf("%+v", fake)
+	}
+}
+
+// The switch and its confirmation come from one snapshot: an unconfirmed
+// off read beside a newly confirmed on must not purge.
+func TestHookHolderReadsTheSwitchOnce(t *testing.T) {
+	fake := &fakeHookScan{}
+	on := false
+	h := fake.holder(&on, newHookKeyBox())
+	reads := 0
+	h.switches = func() (bool, bool) {
+		reads++
+		return false, false
+	}
+	h.enabled = func() bool { t.Fatal("enabled read beside switches"); return false }
+	h.confirmed = func() bool { return true }
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	if fake.discards != 0 || reads != 1 {
+		t.Fatalf("discards=%d reads=%d", fake.discards, reads)
 	}
 }
 
@@ -243,5 +280,24 @@ func TestHookHolderRetriesAFailedPurge(t *testing.T) {
 	holder.refresh(context.Background(), agentinventory.Inventory{})
 	if fake.discards != 3 {
 		t.Fatalf("discards after success = %d, want 3", fake.discards)
+	}
+}
+
+func TestSameCloudURL(t *testing.T) {
+	if !sameCloudURL("https://api.kontext.security/", "https://api.kontext.security") || sameCloudURL("https://a.example", "https://b.example") {
+		t.Fatal("sameCloudURL")
+	}
+}
+
+// A server that has since refused v6 can't keep a v6 opt-in in force.
+func TestHookAuthorizedNeedsAServerThatStillServesV6(t *testing.T) {
+	yes := true
+	snapshot := endpointconfig.Snapshot{Confirmed: true, Config: endpointconfig.Config{HookInventory: &yes}, Owner: endpointconfig.Owner("t")}
+	if !hookAuthorized(snapshot, "t") {
+		t.Fatal("confirmed opt-in refused")
+	}
+	snapshot.Status.V6Unsupported = true
+	if hookAuthorized(snapshot, "t") {
+		t.Fatal("opt-in kept after a v6 refusal")
 	}
 }

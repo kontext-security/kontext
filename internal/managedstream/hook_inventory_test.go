@@ -3,6 +3,7 @@ package managedstream
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -357,5 +358,38 @@ func TestHookResultsFromAnOlderRedactorStayHome(t *testing.T) {
 	}
 	if got := hookIDs(pendingOf(t, store, hookSource).Claims.Hooks); !slices.Equal(got, []string{"hk_b"}) {
 		t.Fatalf("hooks %v", got)
+	}
+}
+
+// An older scope the record cap leaves out goes up partial, so the cloud
+// withdraws none of its hooks.
+func TestHookMergeCapMarksTheCutScopePartial(t *testing.T) {
+	older, _ := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete", "sc_b": "complete"}, "sc_b:old")
+	names := []string{}
+	for i := range agentauthority.MaxHookRecords {
+		names = append(names, fmt.Sprintf("sc_a:n%03d", i))
+	}
+	// The newer scan fills every slot from sc_a and doesn't list sc_b.
+	newer, _ := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "complete"}, names...)
+	merged := mergeHooks(&older, &newer)
+	var cut *agentauthority.HookScope
+	for i := range merged.Scopes {
+		if merged.Scopes[i].ID == "sc_b" {
+			cut = &merged.Scopes[i]
+		}
+	}
+	if cut == nil || cut.Status != agentauthority.StatusPartial || !slices.Contains(cut.Reasons, agentauthority.ReasonSizeLimit) {
+		t.Fatalf("cut scope %+v", cut)
+	}
+}
+
+// A newer scan that couldn't tell keeps the older Kontext verdict.
+func TestHookMergeKeepsAKnownKontextVerdict(t *testing.T) {
+	older, _ := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a")
+	older.KontextHooks = agentauthority.KontextHookSet{State: "needs_update", MissingEvents: []string{"PreToolUse"}}
+	newer, _ := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "partial"})
+	newer.KontextHooks = agentauthority.KontextHookSet{State: agentauthority.KontextHooksUnknown, MissingEvents: []string{}}
+	if got := mergeHooks(&older, &newer).KontextHooks; got.State != "needs_update" {
+		t.Fatalf("verdict %+v", got)
 	}
 }

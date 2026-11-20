@@ -274,10 +274,18 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err != nil {
 		return fmt.Errorf("configure endpoint configuration client: %w", err)
 	}
+	startupCloudURL := loadedConfig.Config.CloudURL
 	installTokenSource := func(refreshCtx context.Context) (string, error) {
 		loaded, err := managedconfig.Load()
 		if err != nil {
 			return "", err
+		}
+		// Every client here talks to the startup URL. A token from an
+		// enrolment at another cloud never goes to it: that cloud's answer
+		// couldn't confirm the new workspace, and the old one would receive
+		// the new credential. A restart picks up the new URL.
+		if !sameCloudURL(loaded.Config.CloudURL, startupCloudURL) {
+			return "", errCloudURLChanged
 		}
 		return managedconfig.ResolveInstallToken(refreshCtx, loaded.Config.Credentials.InstallTokenRef)
 	}
@@ -412,7 +420,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot))
 			codexRouting.follow(snapshot)
 			// The hook scan follows the switch now, not at the next hour.
-			if hookWatch.config(snapshot.Config.HookInventoryEnabled(), snapshot.Confirmed) {
+			if hookWatch.config(snapshot.HookInventoryEnabled(), snapshot.Confirmed) {
 				wakeHooks()
 			}
 		},
@@ -474,9 +482,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	server.SetConnectorScan(authorityHolder.Fact)
 	hookHolder := &hookHolder{
-		keys:      hookKeys,
-		enabled:   func() bool { return endpointConfigCache.Current().Config.HookInventoryEnabled() },
-		confirmed: func() bool { return endpointConfigCache.Current().Confirmed },
+		keys: hookKeys,
+		switches: func() (bool, bool) {
+			snapshot := endpointConfigCache.Current()
+			return snapshot.HookInventoryEnabled(), snapshot.Confirmed
+		},
 		// One snapshot says both that the switch is on and that the current
 		// enrolment's own refresh confirmed it: after a re-enrolment the cache
 		// can still hold the previous workspace's opt-in.
@@ -688,6 +698,14 @@ func rewriteAnnotationTimes(ctx context.Context, dbPath string) (int, error) {
 	}
 	defer store.Close()
 	return store.RewriteAnnotationCreatedAt(ctx)
+}
+
+// errCloudURLChanged: the installation was enrolled at another cloud since
+// the daemon started.
+var errCloudURLChanged = errors.New("the Kontext cloud URL changed since the daemon started; it uses the new one after a restart")
+
+func sameCloudURL(a, b string) bool {
+	return strings.TrimRight(strings.TrimSpace(a), "/") == strings.TrimRight(strings.TrimSpace(b), "/")
 }
 
 func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.RuntimeConfiguration {

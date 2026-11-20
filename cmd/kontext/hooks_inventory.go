@@ -47,7 +47,11 @@ func hooksInventoryCmd() *cobra.Command {
 			if self, err := os.Executable(); err == nil {
 				own = agentauthority.SameFileAs(self)
 			}
-			agent, source, err := agentauthority.ScanHooks(cmd.Context(), agentauthority.HookScanOptions{Home: home, ConfigDir: managedobserve.ClaudeConfigDir(), Key: key, OwnBinary: own, Now: time.Now()})
+			configDir, err := managedobserve.ClaudeConfigDir()
+			if err != nil {
+				return fmt.Errorf("%w; Claude Code won't load a profile from it either", err)
+			}
+			agent, source, err := agentauthority.ScanHooks(cmd.Context(), agentauthority.HookScanOptions{Home: home, ConfigDir: configDir, Key: key, OwnBinary: own, Now: time.Now()})
 			if err != nil {
 				return err
 			}
@@ -58,7 +62,7 @@ func hooksInventoryCmd() *cobra.Command {
 				return enc.Encode(output)
 			}
 			printHookInventory(cmd.OutOrStdout(), output)
-			if dir := managedobserve.ClaudeConfigDir(); dir != "" {
+			if dir := configDir; dir != "" {
 				// The daemon reads the profile its own environment names,
 				// which a shell's CLAUDE_CONFIG_DIR doesn't reach.
 				fmt.Fprintf(cmd.OutOrStdout(), "\nRead the Claude Code profile in %s (CLAUDE_CONFIG_DIR). The Kontext daemon reports the profile set in its own environment, which may differ.\n", printable(dir))
@@ -102,6 +106,9 @@ func printHookInventory(out io.Writer, o hookInventoryOutput) {
 		fmt.Fprintln(out, "Kontext hooks: all events configured")
 	case "needs_update":
 		fmt.Fprintf(out, "Kontext hooks: missing %s; run kontext setup to repair\n", strings.Join(o.Agent.KontextHooks.MissingEvents, ", "))
+	case agentauthority.KontextHooksUnknown:
+		// A setting that decides it went unread: neither missing nor there.
+		fmt.Fprintln(out, "Kontext hooks: could not check, because a setting that decides it could not be read (see below)")
 	default:
 		fmt.Fprintln(out, "Kontext hooks: not configured")
 	}

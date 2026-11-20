@@ -90,7 +90,7 @@ func (b *hookKeyBox) enrolment() string {
 // settings arrive.
 func hookAuthorized(snapshot endpointconfig.Snapshot, enrolment string) bool {
 	owner := endpointconfig.Owner(enrolment)
-	return snapshot.Config.HookInventoryEnabled() && owner != "" && snapshot.Owner == owner
+	return snapshot.HookInventoryEnabled() && owner != "" && snapshot.Owner == owner
 }
 
 func (b *hookKeyBox) get() []byte {
@@ -121,6 +121,9 @@ type hookHolder struct {
 	ownBinary func(string) bool
 	// record stores a scan with the tag of the key it was read under.
 	record func(agentauthority.HookAgent, agentauthority.SourceResult, string)
+	// switches reads the switch and its confirmation from one snapshot; it
+	// replaces enabled and confirmed when set.
+	switches func() (on, confirmed bool)
 	// discard drops pending results; on an error the next tick tries again.
 	discard func() error
 	scan    func(context.Context, agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error)
@@ -134,14 +137,27 @@ type hookHolder struct {
 // uploading reports whether pending hook results may be sent now: the switch
 // is on and the key for the current workspace is known.
 func (h *hookHolder) uploading() bool {
-	return h.enabled != nil && h.enabled() && h.isAuthorized() && len(h.keys.get()) > 0
+	on, _ := h.switchState()
+	return on && h.isAuthorized() && len(h.keys.get()) > 0
 }
 
 func (h *hookHolder) isAuthorized() bool { return h.authorized == nil || h.authorized() }
 
+// switchState reads the switch and whether a confirmed config says it, from
+// one snapshot where the daemon supplies one: two reads could pair an
+// unconfirmed off with a newly confirmed on and purge pending results.
+func (h *hookHolder) switchState() (on, confirmed bool) {
+	if h.switches != nil {
+		return h.switches()
+	}
+	on = h.enabled != nil && h.enabled()
+	confirmed = h.confirmed == nil || h.confirmed()
+	return on, confirmed
+}
+
 func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) {
-	if h.enabled == nil || !h.enabled() {
-		if !h.discarded && (h.confirmed == nil || h.confirmed()) {
+	if on, confirmed := h.switchState(); !on {
+		if !h.discarded && confirmed {
 			h.discarded = h.discard == nil || h.discard() == nil
 		}
 		return
@@ -166,17 +182,22 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	if scan == nil {
 		scan = agentauthority.ScanHooks
 	}
+	configDir, err := ClaudeConfigDir()
+	if err != nil {
+		// Reading another profile would report hooks Claude Code doesn't load.
+		return
+	}
 	scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	agent, result, err := scan(scanCtx, agentauthority.HookScanOptions{
-		Home: home, ConfigDir: ClaudeConfigDir(), Key: key, AgentVersion: agentVersionOf(inv, "claude_code"), OwnBinary: h.ownBinary, Now: time.Now(), BeginRead: h.beginRead,
+		Home: home, ConfigDir: configDir, Key: key, AgentVersion: agentVersionOf(inv, "claude_code"), OwnBinary: h.ownBinary, Now: time.Now(), BeginRead: h.beginRead,
 	})
 	if errors.Is(err, agentauthority.ErrNoHookKey) || err != nil || ctx.Err() != nil {
 		return
 	}
 	// The switch may have gone off, or the workspace changed, while the
 	// scan ran.
-	if !h.enabled() || !h.isAuthorized() || !bytes.Equal(h.keys.get(), key) {
+	if on, _ := h.switchState(); !on || !h.isAuthorized() || !bytes.Equal(h.keys.get(), key) {
 		return
 	}
 	if h.record != nil {
@@ -293,12 +314,21 @@ func (w *hookSwitchWatch) enrolment(token string) bool {
 	return changed
 }
 
-// ClaudeConfigDir is CLAUDE_CONFIG_DIR when it names an absolute folder, the
-// profile Claude Code runs with; empty means the default ~/.claude.
-func ClaudeConfigDir() string {
+// ErrClaudeConfigDir is a CLAUDE_CONFIG_DIR that names no absolute folder.
+// Claude Code's own resolver refuses it rather than fall back to another
+// profile, and so does the scan.
+var ErrClaudeConfigDir = errors.New("CLAUDE_CONFIG_DIR is not an absolute path")
+
+// ClaudeConfigDir is CLAUDE_CONFIG_DIR, the profile Claude Code runs with;
+// empty means the default ~/.claude. A value that is set but not absolute is
+// an error, never the default profile.
+func ClaudeConfigDir() (string, error) {
 	dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
-	if !filepath.IsAbs(dir) {
-		return ""
+	if dir == "" {
+		return "", nil
 	}
-	return filepath.Clean(dir)
+	if !filepath.IsAbs(dir) {
+		return "", ErrClaudeConfigDir
+	}
+	return filepath.Clean(dir), nil
 }
