@@ -422,7 +422,12 @@ func (s *hookScan) pluginScopes(base string) {
 			enabled, set := s.plugins.lookup(key, filepath.Clean(entry.ProjectPath))
 			hooks := s.pluginHooks(h, installed, manifest.Hooks)
 			disabled := set && !enabled
+			// A project install runs under that project's settings.
+			if entry.ProjectPath != "" {
+				s.project = filepath.Clean(entry.ProjectPath)
+			}
 			s.records(id, HookScopePlugin, hooks, &pluginRef{plugin: plugin, key: key, disabled: disabled}, -1)
+			s.project = ""
 			s.closeScope(h, id, HookScopePlugin)
 		}
 	}
@@ -593,7 +598,17 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 			anchor = "cmd:" + filepath.Base(program)
 			r.Summary = pointer(hookSummary(program, fields[1:]))
 			alias, known := claudemanaged.AliasForEvent(hook.HookName(event))
-			call := known && len(fields) == 3 && agenthooks.IsKontextBinary(program) && fields[1] == "hook" && fields[2] == alias
+			// Ownership needs one literal command: a newline or an operator
+			// makes the shell run something else than the words it splits to.
+			literal, single := fields, ok
+			if h.Args == nil {
+				literal, single = agenthooks.SplitLiteralCommand(h.Command)
+			}
+			call := known && single && len(literal) == 3 && agenthooks.IsKontextBinary(literal[0]) && literal[1] == "hook" && literal[2] == alias
+			if call {
+				// Its arguments are Kontext's own, so they read in full.
+				r.Summary = pointer(hookSummary(program, nil) + " hook " + alias)
+			}
 			r.ClaimsKontext = call || agenthooks.IsKontextBinary(program)
 			// Verified by metadata only, and never inside a privacy-guarded
 			// folder: the check must not prompt the user.
