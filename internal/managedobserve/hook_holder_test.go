@@ -231,11 +231,12 @@ func TestClaudeConfigDirFollowsTheEnvironment(t *testing.T) {
 	if got, err := ClaudeConfigDir(); got != "" || !errors.Is(err, ErrClaudeConfigDir) {
 		t.Fatalf("blank dir: %q %v", got, err)
 	}
-	t.Setenv("CLAUDE_CONFIG_DIR", "/Users/x/work ")
-	if got, err := ClaudeConfigDir(); got != "/Users/x/work " || err != nil {
+	dir := t.TempDir()
+	spaced := dir + string(filepath.Separator) + "work "
+	t.Setenv("CLAUDE_CONFIG_DIR", spaced)
+	if got, err := ClaudeConfigDir(); got != filepath.Clean(spaced) || got[len(got)-1] != ' ' || err != nil {
 		t.Fatalf("trailing space: %q %v", got, err)
 	}
-	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir+"/")
 	if got, err := ClaudeConfigDir(); got != filepath.Clean(dir) || err != nil {
 		t.Fatalf("got %q %v", got, err)
