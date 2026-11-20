@@ -1,6 +1,7 @@
 package localruntime
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -31,6 +32,9 @@ type EvaluateRequest struct {
 	// CodexProxy is a CodexProxyRequestType request's question, as the Codex
 	// proxy encodes it.
 	CodexProxy json.RawMessage `json:"codex_proxy,omitempty"`
+	// Browser is a BrowserRequestType request's message from the browser
+	// extension, as `kontext browser-host` relays it (browser/contract).
+	Browser json.RawMessage `json:"browser,omitempty"`
 	// Capabilities names what the hook understands beyond one request and
 	// one answer, such as HoldCapability. A daemon uses a capability only
 	// when the request names it, so a hook that predates one is never sent
@@ -95,6 +99,17 @@ type CodexProxyResult struct {
 	Answer json.RawMessage `json:"answer,omitempty"`
 }
 
+// BrowserRequestType marks a message from the browser extension, relayed by
+// `kontext browser-host`, instead of a hook's. The answer is a BrowserResult.
+const BrowserRequestType = "browser"
+
+// BrowserResult answers a BrowserRequestType request with the daemon's answer
+// to the extension, which the host writes back unchanged.
+type BrowserResult struct {
+	Type   string          `json:"type"`
+	Answer json.RawMessage `json:"answer,omitempty"`
+}
+
 // CompactResult answers a CompactRequestType request: the tool response the
 // agent should see instead, or none to leave the output unchanged.
 type CompactResult struct {
@@ -102,11 +117,17 @@ type CompactResult struct {
 	UpdatedToolOutput json.RawMessage `json:"updated_tool_output,omitempty"`
 }
 
+// WriteMessage writes v as one frame. It does not HTML-escape, which
+// json.Marshal does even inside a json.RawMessage: a relayed browser message
+// keeps its bytes, and so its size against the contract's limit.
 func WriteMessage(conn net.Conn, v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
+	data := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 
 	length := uint32(len(data))
 	if err := binary.Write(conn, binary.BigEndian, length); err != nil {

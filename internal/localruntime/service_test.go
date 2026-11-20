@@ -402,6 +402,7 @@ func newTestServiceWithOptions(t *testing.T, opts Options) *Service {
 		CompactToolOutput: opts.CompactToolOutput,
 		OffersCompaction:  opts.OffersCompaction,
 		CodexProxy:        opts.CodexProxy,
+		Browser:           opts.Browser,
 		Observe:           opts.Observe,
 		HoldFor:           opts.HoldFor,
 		Diagnostic:        opts.Diagnostic,
@@ -735,5 +736,48 @@ func TestServiceAnswersHooksWhileACodexProxyQuestionWaits(t *testing.T) {
 	}
 	if elapsed := time.Since(begun); elapsed > 250*time.Millisecond {
 		t.Fatalf("PreToolUse took %v behind a Codex proxy question", elapsed)
+	}
+}
+
+// A message from the browser extension reaches the Browser handler unchanged,
+// and its answer comes back unchanged; it never becomes a hook event.
+func TestServiceRelaysBrowserMessages(t *testing.T) {
+	t.Parallel()
+
+	core, err := runtimecore.New(&stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got json.RawMessage
+	service := newTestServiceWithOptions(t, Options{Core: core, AsyncIngest: true,
+		Browser: func(_ context.Context, message json.RawMessage) json.RawMessage {
+			got = message
+			return json.RawMessage(`{"type":"settings"}`)
+		}})
+	answer, err := NewClient(service.SocketPath()).Browser(context.Background(), json.RawMessage(`{"type":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"type":"hello"}` || string(answer) != `{"type":"settings"}` {
+		t.Fatalf("handler got %s, client got %s", got, answer)
+	}
+}
+
+// Without a Browser handler the answer is empty, which the host turns into
+// an "unavailable" error for the extension.
+func TestServiceWithoutABrowserHandlerAnswersEmpty(t *testing.T) {
+	t.Parallel()
+
+	core, err := runtimecore.New(&stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newTestServiceWithOptions(t, Options{Core: core, AsyncIngest: true})
+	answer, err := NewClient(service.SocketPath()).Browser(context.Background(), json.RawMessage(`{"type":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(answer) != 0 {
+		t.Fatalf("answer = %s, want none", answer)
 	}
 }

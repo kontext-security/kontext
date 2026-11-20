@@ -31,6 +31,7 @@ type Service struct {
 	compact       func(context.Context, hook.Event) map[string]any
 	offers        func(hook.Event) bool
 	codexProxy    func(context.Context, json.RawMessage) json.RawMessage
+	browser       func(context.Context, json.RawMessage) json.RawMessage
 	observe       func(context.Context, hook.Event)
 	holdFor       func(hook.Event) time.Duration
 	diagnostic    diagnostic.Logger
@@ -62,6 +63,9 @@ type Options struct {
 	// CodexProxy answers CodexProxyRequestType requests; without it they get
 	// no answer, which keeps everything as it is.
 	CodexProxy func(context.Context, json.RawMessage) json.RawMessage
+	// Browser answers BrowserRequestType requests, messages from the browser
+	// extension; without it they get an empty answer.
+	Browser func(context.Context, json.RawMessage) json.RawMessage
 	// Observe sees every evaluated event once its response is written and
 	// its ingest is done, so it never delays a hook.
 	Observe func(context.Context, hook.Event)
@@ -90,6 +94,7 @@ func NewService(opts Options) (*Service, error) {
 		compact:     opts.CompactToolOutput,
 		offers:      opts.OffersCompaction,
 		codexProxy:  opts.CodexProxy,
+		browser:     opts.Browser,
 		observe:     opts.Observe,
 		holdFor:     opts.HoldFor,
 		diagnostic:  opts.Diagnostic,
@@ -227,6 +232,15 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 		result := CodexProxyResult{Type: "codex_proxy_result"}
 		if s.codexProxy != nil {
 			result.Answer = s.codexProxy(ctx, req.CodexProxy)
+		}
+		if err := WriteMessage(conn, result); err != nil {
+			s.diagnostic.Printf("local runtime write: %v\n", err)
+		}
+		return
+	case BrowserRequestType:
+		result := BrowserResult{Type: "browser_result"}
+		if s.browser != nil {
+			result.Answer = s.browser(ctx, req.Browser)
 		}
 		if err := WriteMessage(conn, result); err != nil {
 			s.diagnostic.Printf("local runtime write: %v\n", err)
