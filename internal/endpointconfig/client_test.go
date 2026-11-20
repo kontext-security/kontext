@@ -385,3 +385,104 @@ func TestHookInventoryEnabledReadsTheSwitch(t *testing.T) {
 		})
 	}
 }
+
+// A rollback past both versions drops the directive but keeps a prompt
+// opt-out as a veto, through a restart, and never an opt-in.
+func TestNoCommonVersionKeepsThePromptOptOut(t *testing.T) {
+	rollback := func(t *testing.T, cache *Cache) {
+		t.Helper()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4]}`))
+		}))
+		defer server.Close()
+		client, err := NewClient(server.URL, server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token", nil }}
+		if err := refresher.Refresh(context.Background()); !errors.Is(err, ErrNoCommonVersion) {
+			t.Fatalf("Refresh() = %v", err)
+		}
+	}
+	for _, test := range []struct {
+		name string
+		mode payloadcapture.Mode
+		veto bool
+	}{{"omitted", payloadcapture.ModeOmitted, true}, {"summary", payloadcapture.ModeSummary, true}, {"full", payloadcapture.ModeFull, false}} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cache := NewCache(filepath.Join(dir, "endpoint-config.json"))
+			response := testResponse(t, test.mode)
+			if err := cache.Apply(FetchResult{Response: &response}, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			rollback(t, cache)
+			if got := cache.Current().Status.PromptVeto; got != test.veto {
+				t.Fatalf("veto = %v, want %v", got, test.veto)
+			}
+			// An offline restart still knows why the cache was dropped.
+			restarted := NewCache(filepath.Join(dir, "endpoint-config.json"))
+			if err := restarted.Load(); !errors.Is(err, ErrCacheInvalidated) {
+				t.Fatalf("Load() = %v", err)
+			}
+			status := restarted.Current().Status
+			if status.PromptVeto != test.veto || !status.NoCommonVersion {
+				t.Fatalf("restarted status %+v", status)
+			}
+			// A second rollback keeps the veto though nothing is confirmed.
+			rollback(t, restarted)
+			if restarted.Current().Status.PromptVeto != test.veto {
+				t.Fatal("veto lost on a second rollback")
+			}
+			// A confirmed config lifts it.
+			if err := restarted.Apply(FetchResult{Response: &response}, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			if restarted.Current().Status.PromptVeto {
+				t.Fatal("veto kept after a confirmed config")
+			}
+		})
+	}
+}
+
+// A server that refuses v6 and then fails the v5 retry leaves no v6-only
+// switch on.
+func TestV6RefusalTurnsHookInventoryOff(t *testing.T) {
+	cache := NewCache("")
+	on := testResponse(t, payloadcapture.ModeSummary)
+	yes := true
+	on.Config.HookInventory = &yes
+	identity, err := ComputeIdentity(on.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	on.ConfigIdentity = identity
+	if err := cache.Apply(FetchResult{Response: &on}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.Current().HookInventoryEnabled() {
+		t.Fatal("confirmed switch reads off")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("response_version") == "6" {
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5]}`))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token", nil }}
+	if err := refresher.Refresh(context.Background()); !errors.Is(err, ErrV6Unsupported) {
+		t.Fatalf("Refresh() = %v", err)
+	}
+	snapshot := cache.Current()
+	if snapshot.HookInventoryEnabled() || !snapshot.Confirmed {
+		t.Fatalf("after v6 refusal: enabled=%v confirmed=%v", snapshot.HookInventoryEnabled(), snapshot.Confirmed)
+	}
+}
