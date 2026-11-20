@@ -25,7 +25,7 @@ func TestClientFetchAndConditionalRefresh(t *testing.T) {
 			t.Fatalf("path = %q", request.URL.Path)
 		}
 		query := request.URL.Query()
-		if len(query) != 1 || query.Get("response_version") != "5" {
+		if len(query) != 1 || query.Get("response_version") != "6" {
 			t.Fatalf("query = %v", query)
 		}
 		if request.Header.Get("Authorization") != "Bearer token" {
@@ -235,19 +235,19 @@ func TestRefresherLogsFailureTransitions(t *testing.T) {
 	}
 }
 
-// A server that predates v5 refuses it with 406 unsupported_version: the
-// client asks it for v4 instead, whose configuration has no Codex proxy
-// switch, which reads as on, and goes on asking for v4 alone for an hour.
+// A server that predates v6 refuses it with 406 unsupported_version: the
+// client asks it for v5 instead, whose configuration has no hook inventory
+// switch, which reads as off, and goes on asking for v5 alone for an hour.
 // Conditional refreshes work as before.
-func TestClientFallsBackForAServerThatPredatesV5(t *testing.T) {
+func TestClientFallsBackForAServerThatPredatesV6(t *testing.T) {
 	configuration := fallbackResponse(t, payloadcapture.ModeFull, true)
 	var asked []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		version := request.URL.Query().Get("response_version")
 		asked = append(asked, version)
-		if version != "4" {
+		if version != "5" {
 			w.WriteHeader(http.StatusNotAcceptable)
-			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4]}`))
+			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5]}`))
 			return
 		}
 		w.Header().Set("ETag", `"`+configuration.ConfigIdentity+`"`)
@@ -268,8 +268,8 @@ func TestClientFallsBackForAServerThatPredatesV5(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Response == nil || result.Response.ResponseVersion != FallbackResponseVersion || result.Response.Config.CodexProxy != nil ||
-		!result.Response.Config.CodexProxyEnabled() || !result.Response.Config.ToolOutputCompactionEnabled() {
+	if result.Response == nil || result.Response.ResponseVersion != FallbackResponseVersion || result.Response.Config.HookInventory != nil ||
+		result.Response.Config.HookInventoryEnabled() || !result.Response.Config.CodexProxyEnabled() || !result.Response.Config.ToolOutputCompactionEnabled() {
 		t.Fatalf("Fetch() = %#v", result.Response)
 	}
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
@@ -290,12 +290,12 @@ func TestClientFallsBackForAServerThatPredatesV5(t *testing.T) {
 	if _, err := client.Fetch(context.Background(), "token", testInstallationID, cache.ConditionalIdentity()); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(asked, " "); got != "5 4 4 5 4" {
+	if got := strings.Join(asked, " "); got != "6 5 5 6 5" {
 		t.Fatalf("versions asked = %s", got)
 	}
 }
 
-// Only unsupported_version says the server predates v5. Any other 406, and
+// Only unsupported_version says the server predates v6. Any other 406, and
 // one for the fallback itself, fails the fetch.
 func TestClientFailsOnOtherRefusals(t *testing.T) {
 	for name, refusal := range map[string]struct {
@@ -303,14 +303,14 @@ func TestClientFailsOnOtherRefusals(t *testing.T) {
 		refuses string
 		asked   string
 	}{
-		"another code":          {body: `{"code":"unauthorized"}`, refuses: "5", asked: "5"},
-		"no body":               {refuses: "5", asked: "5"},
-		"the fallback too":      {body: `{"code":"unsupported_version","supportedResponseVersions":[1,2,3]}`, refuses: "5 4", asked: "5 4"},
-		"a response of another": {body: `{"code":"unsupported_version"}`, refuses: "5", asked: "5 4"},
+		"another code":          {body: `{"code":"unauthorized"}`, refuses: "6", asked: "6"},
+		"no body":               {refuses: "6", asked: "6"},
+		"the fallback too":      {body: `{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4]}`, refuses: "6 5", asked: "6 5"},
+		"a response of another": {body: `{"code":"unsupported_version"}`, refuses: "6", asked: "6 5"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var asked []string
-			v5 := testResponse(t, payloadcapture.ModeFull)
+			v6 := testResponse(t, payloadcapture.ModeFull)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 				version := request.URL.Query().Get("response_version")
 				asked = append(asked, version)
@@ -319,9 +319,9 @@ func TestClientFailsOnOtherRefusals(t *testing.T) {
 					_, _ = w.Write([]byte(refusal.body))
 					return
 				}
-				// Asked for v4, a server must not answer v5.
-				w.Header().Set("ETag", `"`+v5.ConfigIdentity+`"`)
-				_ = json.NewEncoder(w).Encode(v5)
+				// Asked for v5, a server must not answer v6.
+				w.Header().Set("ETag", `"`+v6.ConfigIdentity+`"`)
+				_ = json.NewEncoder(w).Encode(v6)
 			}))
 			defer server.Close()
 			client, err := NewClient(server.URL, server.Client())
