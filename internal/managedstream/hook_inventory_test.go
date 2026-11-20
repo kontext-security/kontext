@@ -3,6 +3,8 @@ package managedstream
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -172,8 +174,13 @@ func TestHookBlockStaysInsideTheBudget(t *testing.T) {
 	if source.Status != agentauthority.StatusPartial || !slices.Contains(source.Reasons, agentauthority.ReasonSizeLimit) {
 		t.Fatalf("source %+v", source)
 	}
+	// The scope that lost records goes partial, so a cut record isn't
+	// withdrawn from it.
+	if scope := block.Agents[0].Scopes[0]; scope.Status != agentauthority.StatusPartial || !slices.Contains(scope.Reasons, agentauthority.ReasonSizeLimit) {
+		t.Fatalf("trimmed scope %+v", scope)
+	}
 	// The stored result is untouched: a later upload may fit.
-	if pending := pendingOf(t, store, hookSource); len(pending.Claims.Hooks.Hooks) != agentauthority.MaxHookRecords || pending.Claims.Hooks.Truncated {
+	if pending := pendingOf(t, store, hookSource); len(pending.Claims.Hooks.Hooks) != agentauthority.MaxHookRecords || pending.Claims.Hooks.Truncated || pending.Claims.Hooks.Scopes[0].Status != agentauthority.StatusComplete {
 		t.Fatal("trimming changed the stored scan")
 	}
 }
@@ -267,5 +274,88 @@ func TestHookMergeKeepsNewRecordsInAPartialScope(t *testing.T) {
 	}
 	if merged.Scopes[0].Status != "partial" {
 		t.Fatalf("scope %+v", merged.Scopes[0])
+	}
+	// More incomplete scans before an upload keep every older record.
+	third, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "partial"}, "sc_a:c")
+	if err := store.RecordHooks(third, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	failed, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "failed"})
+	if err := store.RecordHooks(failed, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	merged = pendingOf(t, store, hookSource).Claims.Hooks
+	if got := hookIDs(merged); !slices.Equal(got, []string{"hk_a", "hk_b", "hk_c"}) {
+		t.Fatalf("hooks after more partial scans %v", got)
+	}
+	if merged.Scopes[0].Status != "failed" {
+		t.Fatalf("scope %+v", merged.Scopes[0])
+	}
+}
+
+// A purge whose write failed writes again next time, even though memory
+// already dropped the results.
+func TestDiscardHooksWritesAgainAfterAFailedWrite(t *testing.T) {
+	store, path := openTestStore(t)
+	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a")
+	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty directory where the file goes refuses the write, for root
+	// too.
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, "busy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if store.DiscardHooks() == nil {
+		t.Fatal("DiscardHooks() wrote over a directory")
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, saved, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DiscardHooks(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "hk_a") {
+		t.Fatalf("purged hook still on disk: %s", data)
+	}
+}
+
+// A result an older build stored travels only once this build has rescanned:
+// its summaries may hold what the current redaction drops.
+func TestHookResultsFromAnOlderRedactorStayHome(t *testing.T) {
+	store, _ := openTestStore(t)
+	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a")
+	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	entry := store.file.Pending[hookSource]
+	entry.Claims.Redactor = hookRedactor - 1
+	store.file.Pending[hookSource] = entry
+	store.mu.Unlock()
+	if block := heartbeatWith(store, true).Device.HookInventory; block != nil && len(block.Agents) > 0 {
+		t.Fatalf("older redactor's result sent: %+v", block)
+	}
+	// A partial rescan doesn't merge it in either.
+	newer, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "partial"}, "sc_a:b")
+	if err := store.RecordHooks(newer, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	if got := hookIDs(pendingOf(t, store, hookSource).Claims.Hooks); !slices.Equal(got, []string{"hk_b"}) {
+		t.Fatalf("hooks %v", got)
 	}
 }

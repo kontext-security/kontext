@@ -73,7 +73,15 @@ type sourceClaims struct {
 	// it. Hook ids are only meaningful to the workspace whose key made them,
 	// so a result travels only while its tag is the current key's.
 	KeyTag string `json:"key_tag,omitempty"`
+	// Redactor is the hookRedactor that wrote Hooks. A result an older
+	// build stored may hold what this build's redaction would drop, so it
+	// never travels or merges; the next scan replaces it.
+	Redactor int `json:"redactor,omitempty"`
 }
+
+// hookRedactor numbers the redaction rules in pkg/agentauthority
+// hooks_redact.go. Raise it whenever they drop more.
+const hookRedactor = 2
 
 func (c sourceClaims) positive() bool {
 	return c.Agent != nil || len(c.MCPServers) > 0 || len(c.Plugins) > 0 || len(c.Connectors) > 0 || c.Permissions != nil || len(c.Credentials) > 0 ||
@@ -98,6 +106,9 @@ type InventoryStore struct {
 	mu   sync.Mutex
 	path string
 	file inventoryFile
+	// unsaved: the last write failed, so the file may still hold what
+	// memory dropped, and the next discard writes again.
+	unsaved bool
 }
 
 // InventoryStatePath is the store's place beside the stream's own state.
@@ -134,10 +145,11 @@ func LoadInventoryHealth(path string) (InventoryHealth, bool) {
 
 func (s *InventoryStore) save() error {
 	data, err := json.Marshal(s.file)
-	if err != nil {
-		return err
+	if err == nil {
+		err = writeFileAtomic(s.path, append(data, '\n'), ".inventory-state-*.tmp")
 	}
-	return writeFileAtomic(s.path, append(data, '\n'), ".inventory-state-*.tmp")
+	s.unsaved = err != nil
+	return err
 }
 
 // RecordAgents takes a new revision for a presence scan.
@@ -185,7 +197,7 @@ func (s *InventoryStore) RecordAuthority(report agentauthority.Report) error {
 // RecordHooks takes a new revision for a hook scan of one agent.
 func (s *InventoryStore) RecordHooks(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) error {
 	return s.record([]agentauthority.SourceResult{result}, func(string, string) sourceClaims {
-		return sourceClaims{Hooks: &agent, KeyTag: keyTag}
+		return sourceClaims{Hooks: &agent, KeyTag: keyTag, Redactor: hookRedactor}
 	})
 }
 
@@ -207,7 +219,7 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 		agent, family, _ := strings.Cut(result.ID, "/")
 		entry := pendingSource{Result: result, Claims: claimsOf(agent, family)}
 		// A result keyed for another workspace is never merged into this one.
-		if prior, ok := s.file.Pending[result.ID]; ok && result.Status != agentauthority.StatusComplete && prior.Claims.KeyTag == entry.Claims.KeyTag {
+		if prior, ok := s.file.Pending[result.ID]; ok && result.Status != agentauthority.StatusComplete && prior.Claims.KeyTag == entry.Claims.KeyTag && prior.Claims.Redactor == entry.Claims.Redactor {
 			entry = mergePending(prior, entry)
 		}
 		s.file.Pending[result.ID] = entry
@@ -246,6 +258,7 @@ func mergeClaims(older, newer sourceClaims) sourceClaims {
 		Credentials: mergeByKey(older.Credentials, newer.Credentials, credentialKey),
 		Hooks:       mergeHooks(older.Hooks, newer.Hooks),
 		KeyTag:      newer.KeyTag,
+		Redactor:    newer.Redactor,
 	}
 	if merged.Agent == nil {
 		merged.Agent = older.Agent
@@ -289,53 +302,53 @@ func mergeHooks(older, newer *agentauthority.HookAgent) *agentauthority.HookAgen
 	for i, scope := range merged.Scopes {
 		index[scope.ID] = i
 	}
+	add := func(r agentauthority.HookRecord) bool {
+		if len(merged.Hooks) >= agentauthority.MaxHookRecords {
+			merged.Truncated = true
+			return false
+		}
+		merged.Hooks = append(merged.Hooks, r)
+		return true
+	}
+	olderIn := func(scope string, skip map[string]bool) {
+		for _, r := range older.Hooks {
+			if r.ScopeID == scope && !skip[r.ID] && !add(r) {
+				return
+			}
+		}
+	}
 	for _, scope := range older.Scopes {
 		i, listed := index[scope.ID]
-		if scope.Status != agentauthority.StatusComplete || listed && merged.Scopes[i].Status == agentauthority.StatusComplete {
-			continue
-		}
-		if !listed {
+		switch {
+		case listed && merged.Scopes[i].Status == agentauthority.StatusComplete:
+			// The newer scan read this scope whole: it alone says what is there.
+		case !listed:
+			// Not read this time: what was pending for it, complete or not,
+			// still travels.
 			if len(merged.Scopes) >= agentauthority.MaxHookScopes {
 				merged.Truncated = true
 				continue
 			}
 			merged.Scopes = append(merged.Scopes, scope)
-			i = len(merged.Scopes) - 1
-			index[scope.ID] = i
-		}
-		if listed && slices.ContainsFunc(newer.Hooks, func(r agentauthority.HookRecord) bool { return r.ScopeID == scope.ID }) {
-			// The newer scan saw part of this scope: keep what it saw beside
-			// the older records, and its incomplete status, so the cloud adds
-			// both and withdraws nothing there.
+			index[scope.ID] = len(merged.Scopes) - 1
+			olderIn(scope.ID, nil)
+		case scope.Status == agentauthority.StatusComplete && !slices.ContainsFunc(newer.Hooks, func(r agentauthority.HookRecord) bool { return r.ScopeID == scope.ID }):
+			// The newer scan saw nothing of a scope the older one read whole:
+			// the older scope's state comes along with its hooks, but its time
+			// stays the older one, so freshness is understated, never
+			// overstated.
+			merged.Scopes[i] = scope
+			olderIn(scope.ID, nil)
+		default:
+			// The newer scan read this scope in part: keep what it saw beside
+			// every older record, and its incomplete status, so the cloud adds
+			// them all and withdraws nothing there. Older records survive any
+			// number of incomplete scans this way.
 			seen := map[string]bool{}
 			for _, r := range merged.Hooks {
 				seen[r.ID] = true
 			}
-			for _, r := range older.Hooks {
-				if r.ScopeID != scope.ID || seen[r.ID] {
-					continue
-				}
-				if len(merged.Hooks) >= agentauthority.MaxHookRecords {
-					merged.Truncated = true
-					break
-				}
-				merged.Hooks = append(merged.Hooks, r)
-			}
-			continue
-		}
-		// The older scope's state comes along with its hooks, but its time
-		// stays the older one, so freshness is understated, never overstated.
-		merged.Scopes[i] = scope
-		merged.Hooks = slices.DeleteFunc(merged.Hooks, func(r agentauthority.HookRecord) bool { return r.ScopeID == scope.ID })
-		for _, r := range older.Hooks {
-			if r.ScopeID != scope.ID {
-				continue
-			}
-			if len(merged.Hooks) >= agentauthority.MaxHookRecords {
-				merged.Truncated = true
-				break
-			}
-			merged.Hooks = append(merged.Hooks, r)
+			olderIn(scope.ID, seen)
 		}
 	}
 	return &merged
@@ -505,7 +518,7 @@ func (s *InventoryStore) discard(drop func(string) bool) error {
 	before := len(s.file.Pending) + len(s.file.Health.IncompleteSources)
 	maps.DeleteFunc(s.file.Pending, func(id string, _ pendingSource) bool { return drop(id) })
 	maps.DeleteFunc(s.file.Health.IncompleteSources, func(id string, _ bool) bool { return drop(id) })
-	if len(s.file.Pending)+len(s.file.Health.IncompleteSources) == before {
+	if len(s.file.Pending)+len(s.file.Health.IncompleteSources) == before && !s.unsaved {
 		return nil
 	}
 	return s.save()
@@ -547,7 +560,7 @@ func addInventory(payload *Payload, opts Options) {
 		current = opts.HookKeyTag()
 	}
 	maps.DeleteFunc(pending, func(id string, entry pendingSource) bool {
-		return sourceKind(id) == kindHooks && (current == "" || entry.Claims.KeyTag != current)
+		return sourceKind(id) == kindHooks && (current == "" || entry.Claims.KeyTag != current || entry.Claims.Redactor != hookRedactor)
 	})
 	hooks := opts.HookInventoryEnabled != nil && opts.HookInventoryEnabled() && slices.ContainsFunc(slices.Collect(maps.Keys(pending)), func(id string) bool { return sourceKind(id) == kindHooks })
 	if device.Agents == nil && device.Authority == nil && !hooks {
@@ -623,7 +636,26 @@ func addHookInventory(device *Device, pending map[string]pendingSource, ids []st
 		if len(agent.Hooks) == 0 {
 			break
 		}
-		agent.Hooks = slices.Clone(agent.Hooks[:len(agent.Hooks)*9/10])
+		keep := len(agent.Hooks) * 9 / 10
+		// A scope that lost records is no longer reported whole, so the
+		// cloud withdraws nothing from it. The scopes are the pending
+		// scan's, so they are copied.
+		cut := map[string]bool{}
+		for _, r := range agent.Hooks[keep:] {
+			cut[r.ScopeID] = true
+		}
+		agent.Scopes = slices.Clone(agent.Scopes)
+		for i, scope := range agent.Scopes {
+			if !cut[scope.ID] || scope.Status == agentauthority.StatusFailed {
+				continue
+			}
+			scope.Status = agentauthority.StatusPartial
+			if !slices.Contains(scope.Reasons, agentauthority.ReasonSizeLimit) {
+				scope.Reasons = append(slices.Clone(scope.Reasons), agentauthority.ReasonSizeLimit)
+			}
+			agent.Scopes[i] = scope
+		}
+		agent.Hooks = slices.Clone(agent.Hooks[:keep])
 		agent.Truncated = true
 		if !slices.Contains(trimmed, owners[largest]) {
 			trimmed = append(trimmed, owners[largest])

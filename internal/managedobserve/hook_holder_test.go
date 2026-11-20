@@ -2,6 +2,7 @@ package managedobserve
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +14,8 @@ type fakeHookScan struct {
 	calls    int
 	recorded int
 	discards int
+	// discardErr is what the purge returns.
+	discardErr error
 	// confirmed is whether the switch comes from a confirmed config.
 	confirmed bool
 	tag       string
@@ -31,7 +34,7 @@ func (f *fakeHookScan) holder(on *bool, keys *hookKeyBox) *hookHolder {
 			return agentauthority.HookAgent{ID: "claude_code"}, agentauthority.SourceResult{ID: "claude_code/hooks", Status: agentauthority.StatusComplete}, nil
 		},
 		record:  func(_ agentauthority.HookAgent, _ agentauthority.SourceResult, tag string) { f.recorded++; f.tag = tag },
-		discard: func() { f.discards++ },
+		discard: func() error { f.discards++; return f.discardErr },
 	}
 }
 
@@ -177,5 +180,24 @@ func TestClaudeConfigDirFollowsTheEnvironment(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", dir+"/")
 	if got := ClaudeConfigDir(); got != filepath.Clean(dir) {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// A purge that could not write tries again on the next tick, and only until
+// it succeeds.
+func TestHookHolderRetriesAFailedPurge(t *testing.T) {
+	fake := &fakeHookScan{confirmed: true, discardErr: errors.New("disk full")}
+	on := false
+	holder := fake.holder(&on, newHookKeyBox())
+	holder.refresh(context.Background(), agentinventory.Inventory{})
+	holder.refresh(context.Background(), agentinventory.Inventory{})
+	if fake.discards != 2 {
+		t.Fatalf("discards after failures = %d, want 2", fake.discards)
+	}
+	fake.discardErr = nil
+	holder.refresh(context.Background(), agentinventory.Inventory{})
+	holder.refresh(context.Background(), agentinventory.Inventory{})
+	if fake.discards != 3 {
+		t.Fatalf("discards after success = %d, want 3", fake.discards)
 	}
 }

@@ -131,7 +131,8 @@ type hookHolder struct {
 	ownBinary func(string) bool
 	// record stores a scan with the tag of the key it was read under.
 	record  func(agentauthority.HookAgent, agentauthority.SourceResult, string)
-	discard func()
+	// discard drops pending results; on an error the next tick tries again.
+	discard func() error
 	scan    func(context.Context, agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error)
 	home    func() (string, error)
 	// discarded remembers that results were dropped for this off period, so
@@ -151,10 +152,7 @@ func (h *hookHolder) isAuthorized() bool { return h.authorized == nil || h.autho
 func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) {
 	if h.enabled == nil || !h.enabled() {
 		if !h.discarded && (h.confirmed == nil || h.confirmed()) {
-			if h.discard != nil {
-				h.discard()
-			}
-			h.discarded = true
+			h.discarded = h.discard == nil || h.discard() == nil
 		}
 		return
 	}

@@ -488,13 +488,15 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 				opts.Diagnostic.Printf("hook inventory: record scan: %v\n", err)
 			}
 		},
-		discard: func() {
-			if err := inventoryStore.DiscardHooks(); err != nil {
+		discard: func() error {
+			err := inventoryStore.DiscardHooks()
+			if err != nil {
 				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
 			}
+			return err
 		},
 	}
-	hookHolder.keys.changed = hookHolder.discard
+	hookHolder.keys.changed = func() { _ = hookHolder.discard() }
 	background.Add(1)
 	go func() {
 		defer background.Done()
