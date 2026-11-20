@@ -556,7 +556,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 				return
 			}
 		}
-		streamErr <- runManagedStream(streamCtx, opts, dbPath, installationState.InstallationID, inventoryHolder, authorityHolder, hookHolder, enrolment.afterAcceptedPost)
+		streamErr <- runManagedStream(streamCtx, opts, dbPath, startupCloudURL, installationState.InstallationID, inventoryHolder, authorityHolder, hookHolder, enrolment.afterAcceptedPost)
 	}()
 	defer func() {
 		stopPolicyRefresh()
@@ -987,7 +987,7 @@ func (s *deviceKeySource) derive(ctx context.Context, cloudURL, token, installat
 	s.resolved = true
 }
 
-func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, hookHolder *hookHolder, afterAcceptedPost func()) error {
+func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startupCloudURL, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, hookHolder *hookHolder, afterAcceptedPost func()) error {
 	interval := opts.StreamInterval
 	if interval == 0 {
 		interval = managedstream.DefaultIntervalFromEnv()
@@ -995,7 +995,7 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	deviceKeys := &deviceKeySource{hooks: hookHolder.keys}
 	var consecutiveAuthFailures, consecutiveFlushFailures int
 	flush := func() {
-		err := flushManagedStream(ctx, opts, dbPath, installationID, deviceKeys, inventoryHolder, authorityHolder, hookHolder, afterAcceptedPost)
+		err := flushManagedStream(ctx, opts, dbPath, startupCloudURL, installationID, deviceKeys, inventoryHolder, authorityHolder, hookHolder, afterAcceptedPost)
 		if err == nil {
 			consecutiveAuthFailures = 0
 			consecutiveFlushFailures = 0
@@ -1030,10 +1030,16 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installat
 	}
 }
 
-func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, hookHolder *hookHolder, afterAcceptedPost func()) error {
+func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startupCloudURL, installationID string, deviceKeys *deviceKeySource, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, hookHolder *hookHolder, afterAcceptedPost func()) error {
 	loadedConfig, installToken, err := loadManagedConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("managed stream config reload: %w", err)
+	}
+	// The capture settings in force were confirmed by the startup cloud.
+	// Another cloud's workspace never receives uploads under them: they wait
+	// in the local store until a restart confirms that cloud's own settings.
+	if !sameCloudURL(loadedConfig.Config.CloudURL, startupCloudURL) {
+		return errCloudURLChanged
 	}
 	// Resolved once per flush, not per payload: a Flush drains the backlog in
 	// pages and builds a payload for each, and a hung ping retried per page

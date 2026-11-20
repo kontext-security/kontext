@@ -301,3 +301,23 @@ func TestHookAuthorizedNeedsAServerThatStillServesV6(t *testing.T) {
 		t.Fatal("opt-in kept after a v6 refusal")
 	}
 }
+
+// Capture settings confirmed by the startup cloud never authorize uploads to
+// another cloud the installation was enrolled at since: nothing is sent
+// until a restart confirms that cloud's own settings.
+func TestUploadsWaitForRestartAfterCloudURLChange(t *testing.T) {
+	dir := t.TempDir()
+	writeTestManagedConfigWithCloudURL(t, filepath.Join(dir, "managed.json"), "https://new.example")
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("sent %s to the new cloud", r.URL)
+		return nil, errors.New("unreachable")
+	})}
+	err := flushManagedStream(context.Background(), DaemonOptions{StreamHTTPClient: client}, filepath.Join(dir, "guard.db"), "https://old.example", "ins_0123456789abcdefghijklmnopqrstuv", &deviceKeySource{}, nil, nil, nil, nil)
+	if !errors.Is(err, errCloudURLChanged) {
+		t.Fatalf("flush = %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
