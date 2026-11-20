@@ -397,15 +397,50 @@ func TestReadingASavedOutputBackIsNeverCompacted(t *testing.T) {
 	}
 }
 
+// The source and reader may reuse the same tool use ID in different sessions.
+func TestFileReadOfSavedOutputFromAnotherSession(t *testing.T) {
+	c := newTestCompactor(t, func(Request) (int, any) {
+		return http.StatusOK, map[string]any{"decision": "replace", "eventId": "evt_source", "text": "short", "readBackTokenEnds": []int{0, 45, 90}}
+	})
+	if c.Compact(context.Background(), c.bash("make test", bigText(80))) == nil {
+		t.Fatal("source output was not compacted")
+	}
+	path := filepath.Join(c.dir, testSession, testToolUseID+".txt")
+	restarted := New(Options{Client: c.client, Enabled: c.on.Load, Dir: c.dir, Home: c.home})
+	read := c.read(path, "one line", 2)
+	read.ToolUseID = testToolUseID
+	for _, session := range []string{"reader-a", "reader-b"} {
+		read.SessionID = session
+		restarted.Observe(context.Background(), read)
+		restarted.Observe(context.Background(), read)
+		select {
+		case got := <-restarted.readBacks:
+			want := ReadBack{SessionID: testSession, ReaderSessionID: session, ToolUseID: testToolUseID, EventID: "evt_source", TokenRange: &[2]int{0, 45}}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %+v, want %+v", got, want)
+			}
+		default:
+			t.Fatal("missing cross-session read")
+		}
+		if len(restarted.readBacks) != 0 {
+			t.Fatal("duplicate read")
+		}
+	}
+}
+
 func TestReadBacksAreReportedOncePerCall(t *testing.T) {
 	content := bigText(60)
 	lines := strings.Split(content, "\n")
 	replaced := strings.Join(lines[:20], "\n") + "\n[omitted]" + strings.Repeat("\n", 20) + strings.Join(lines[40:], "\n")
+	ends := make([]int, 60)
+	for i := range ends {
+		ends[i] = min(20, max(0, i-19)) * 10
+	}
 	c := newTestCompactor(t, func(request Request) (int, any) {
 		if request.Output.Kind == KindFileLines {
-			return http.StatusOK, map[string]any{"decision": "replace", "eventId": "evt_read", "text": replaced}
+			return http.StatusOK, map[string]any{"decision": "replace", "eventId": "evt_read", "text": replaced, "readBackTokenEnds": ends}
 		}
-		return http.StatusOK, map[string]any{"decision": "replace", "eventId": "evt_bash", "text": "short"}
+		return http.StatusOK, map[string]any{"decision": "replace", "eventId": "evt_bash", "text": "short", "readBackTokenEnds": ends}
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -416,7 +451,7 @@ func TestReadBacksAreReportedOncePerCall(t *testing.T) {
 		t.Fatal("bash not compacted")
 	}
 	path := filepath.Join(c.cwd, "main.go")
-	readEvent := c.read(path, content, 1)
+	readEvent := c.read(path, content, 11)
 	readEvent.ToolUseID = "toolu_read"
 	if c.Compact(context.Background(), readEvent) == nil {
 		t.Fatal("read not compacted")
@@ -429,21 +464,41 @@ func TestReadBacksAreReportedOncePerCall(t *testing.T) {
 	catBack.HookName = hook.HookPostToolUse
 	c.Observe(context.Background(), catBack)
 	readBack := hook.Event{SessionID: testSession, Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Read", ToolUseID: "toolu_reread",
-		CWD: c.cwd, ToolInput: map[string]any{"file_path": path, "offset": json.Number("25"), "limit": json.Number("10")}}
+		CWD: c.cwd, ToolInput: map[string]any{"file_path": path, "offset": json.Number("35"), "limit": json.Number("10")}}
 	c.Observe(context.Background(), readBack)
 	elsewhere := hook.Event{SessionID: testSession, Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Read", ToolUseID: "toolu_elsewhere",
-		CWD: c.cwd, ToolInput: map[string]any{"file_path": path, "offset": json.Number("45")}}
+		CWD: c.cwd, ToolInput: map[string]any{"file_path": path, "offset": json.Number("55")}}
 	c.Observe(context.Background(), elsewhere)
 	whole := hook.Event{SessionID: testSession, Agent: "claude", HookName: hook.HookPreToolUse, ToolName: "Read", ToolUseID: "toolu_whole",
 		CWD: c.cwd, ToolInput: map[string]any{"file_path": path}}
 	c.Observe(context.Background(), whole)
+	// Only two requested lines came back; each represents ten removed tokens.
+	actual := c.read(path, strings.Join(lines[24:26], "\n"), 35)
+	actual.ToolUseID, actual.ToolInput = readBack.ToolUseID, readBack.ToolInput
+	c.Observe(context.Background(), actual)
+	c.Observe(context.Background(), actual)
+	actual = c.read(path, content, 1)
+	actual.ToolUseID = whole.ToolUseID
+	c.Observe(context.Background(), actual)
 
-	// A Read of the whole file covers the omitted lines too; one from line 45
+	// The Read tool can also open a shell output's recovery file. A failed
+	// read and a successful read of an already-kept line restore nothing.
+	actual = c.read(saved, lines[24], 25)
+	actual.ToolUseID, actual.Error = "toolu_failed", "read failed"
+	c.Observe(context.Background(), actual)
+	actual.Error, actual.ToolUseID = "", "toolu_saved_read"
+	c.Observe(context.Background(), actual)
+	actual = c.read(saved, lines[0], 1)
+	actual.ToolUseID = "toolu_kept"
+	c.Observe(context.Background(), actual)
+
+	// A Read of the whole file covers the omitted lines too; one from line 55
 	// on does not.
 	want := []ReadBack{
 		{SessionID: testSession, EventID: "evt_bash", ToolUseID: "toolu_cat"},
-		{SessionID: testSession, EventID: "evt_read", ToolUseID: "toolu_reread"},
-		{SessionID: testSession, EventID: "evt_read", ToolUseID: "toolu_whole"},
+		{SessionID: testSession, EventID: "evt_read", ToolUseID: "toolu_reread", TokenRange: &[2]int{40, 60}},
+		{SessionID: testSession, EventID: "evt_read", ToolUseID: "toolu_whole", TokenRange: &[2]int{0, 200}},
+		{SessionID: testSession, EventID: "evt_bash", ToolUseID: "toolu_saved_read", TokenRange: &[2]int{40, 50}},
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -458,9 +513,9 @@ func TestReadBacksAreReportedOncePerCall(t *testing.T) {
 	}
 
 	// The read-back is not compacted itself.
-	reread := c.read(path, content, 25)
+	reread := c.read(path, content, 35)
 	reread.ToolUseID = "toolu_reread"
-	reread.ToolInput = map[string]any{"file_path": path, "offset": json.Number("25"), "limit": json.Number("10")}
+	reread.ToolInput = map[string]any{"file_path": path, "offset": json.Number("35"), "limit": json.Number("10")}
 	if got := c.Compact(context.Background(), reread); got != nil {
 		t.Fatal("a read-back was compacted")
 	}

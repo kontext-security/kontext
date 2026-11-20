@@ -115,8 +115,10 @@ type record struct {
 	Kind string `json:"kind"`
 	// FilePath and Omitted (file line ranges, both ends included) describe a
 	// compacted Read.
-	FilePath string   `json:"filePath,omitempty"`
-	Omitted  [][2]int `json:"omitted,omitempty"`
+	FilePath          string   `json:"filePath,omitempty"`
+	Omitted           [][2]int `json:"omitted,omitempty"`
+	FirstLine         int      `json:"firstLine,omitempty"`
+	ReadBackTokenEnds []int    `json:"readBackTokenEnds,omitempty"`
 	// At orders a session's records, newest last, across a restart.
 	At time.Time `json:"at"`
 }
@@ -209,7 +211,10 @@ func (c *Compactor) Compact(ctx context.Context, event hook.Event) map[string]an
 		c.diagnostic.Printf("tool output compaction: shortened output too long for the agent; output left as is\n")
 		return nil
 	}
-	compaction := record{EventID: response.EventID, ToolUseID: event.ToolUseID, Kind: out.kind, At: c.now()}
+	compaction := record{
+		EventID: response.EventID, ToolUseID: event.ToolUseID, Kind: out.kind, At: c.now(),
+		FirstLine: max(1, out.startLine), ReadBackTokenEnds: response.ReadBackTokenEnds,
+	}
 	if out.kind == KindText {
 		// The full output must be readable before the agent is told where.
 		if err := writePrivate(c.dir, saved, []byte(out.text)); err != nil {
@@ -408,6 +413,10 @@ func (c *Compactor) eachPath(input any, cwd string, maxPaths, maxBytes int, visi
 // reportReadBacks queues a read-back for each compaction a call reads back,
 // once per call and compaction.
 func (c *Compactor) reportReadBacks(event hook.Event) {
+	if event.Agent == "claude" && event.ToolName == "Read" {
+		c.reportFileRead(event)
+		return
+	}
 	var found []record
 	// Unlike the scan that decides on compaction, this one reads every word a
 	// hook message can carry, so a reference late in a long input counts.
@@ -427,14 +436,88 @@ func (c *Compactor) reportReadBacks(event hook.Event) {
 		refer(filepath.ToSlash(path))
 		return true
 	})
-	if compaction, ok := c.omittedReadBack(event); ok {
-		found = append(found, compaction)
-	}
 	for _, compaction := range found {
 		if compaction.ToolUseID != event.ToolUseID {
 			c.queueReadBack(ReadBack{SessionID: event.SessionID, EventID: compaction.EventID, ToolUseID: event.ToolUseID})
 		}
 	}
+}
+
+// A requested window can be truncated, fail, or return an already-read notice.
+// Measure the text in the completed hook, including Reads too short to compact.
+func (c *Compactor) reportFileRead(event hook.Event) {
+	if event.HookName != hook.HookPostToolUse || event.ToolResponse["type"] != "text" || event.Error != "" || event.IsInterrupt != nil && *event.IsInterrupt {
+		return
+	}
+	file, _ := event.ToolResponse["file"].(map[string]any)
+	path, _ := file["filePath"].(string)
+	content, _ := file["content"].(string)
+	first, ok := lineNumber(file["startLine"])
+	if !ok || path == "" || content == "" {
+		return
+	}
+	count := strings.Count(strings.TrimSuffix(content, "\n"), "\n") + 1
+	if value, present := file["numLines"]; present {
+		reported, ok := lineNumber(value)
+		if !ok {
+			return
+		}
+		count = min(count, reported)
+	}
+	last := first + min(count-1, math.MaxInt-first)
+	path = filepath.Clean(path)
+	// Saved outputs identify their source session in the path. Look up its
+	// persisted record even when the reader is in a fresh session.
+	dir := filepath.Dir(path)
+	if filepath.Dir(dir) == filepath.Clean(c.dir) && filepath.Ext(path) == ".txt" {
+		source := filepath.Base(dir)
+		name := strings.TrimSuffix(filepath.Base(path), ".txt")
+		if cut, ok := c.saved(source, name); ok {
+			c.reportFileRange(event, source, cut, first, last)
+			return
+		}
+	}
+	c.mu.Lock()
+	records := c.session(event.SessionID).records
+	c.mu.Unlock()
+	for _, cut := range records {
+		if cut.coversOmittedLines(path, first, last) {
+			c.reportFileRange(event, event.SessionID, cut, first, last)
+		}
+	}
+}
+
+func (c *Compactor) reportFileRange(event hook.Event, source string, cut record, first, last int) {
+	read := ReadBack{SessionID: source, EventID: cut.EventID, ToolUseID: event.ToolUseID}
+	if source != event.SessionID {
+		read.ReaderSessionID = event.SessionID
+	} else if cut.ToolUseID == event.ToolUseID {
+		return
+	}
+	if len(cut.ReadBackTokenEnds) > 0 {
+		lo := cut.tokensThrough(first - cut.FirstLine)
+		hi := cut.tokensThrough(last - cut.FirstLine + 1)
+		if lo >= hi {
+			return
+		}
+		read.TokenRange = &[2]int{lo, hi}
+	}
+	c.queueReadBack(read)
+}
+
+// tokensThrough returns the cumulative removed tokens in the first n lines.
+func (r record) tokensThrough(n int) int {
+	n = min(n, len(r.ReadBackTokenEnds))
+	if n <= 0 {
+		return 0
+	}
+	return r.ReadBackTokenEnds[n-1]
+}
+
+func (r record) coversOmittedLines(path string, first, last int) bool {
+	return r.Kind == KindFileLines && r.FilePath == path && slices.ContainsFunc(r.Omitted, func(lines [2]int) bool {
+		return first <= lines[1] && last >= lines[0]
+	})
 }
 
 // queueReadBack queues a read-back unless it already was. It counts as
@@ -443,7 +526,11 @@ func (c *Compactor) reportReadBacks(event hook.Event) {
 func (c *Compactor) queueReadBack(readBack ReadBack) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	reported := c.session(readBack.SessionID).reported
+	reader := readBack.ReaderSessionID
+	if reader == "" {
+		reader = readBack.SessionID
+	}
+	reported := c.session(reader).reported
 	key := [2]string{readBack.ToolUseID, readBack.EventID}
 	if reported[key] {
 		return
@@ -491,13 +578,8 @@ func (c *Compactor) omittedReadBack(event hook.Event) (record, bool) {
 	defer c.mu.Unlock()
 	records := c.session(event.SessionID).records
 	for _, compaction := range slices.Backward(records) {
-		if compaction.Kind != KindFileLines || compaction.FilePath != path {
-			continue
-		}
-		for _, lines := range compaction.Omitted {
-			if first <= lines[1] && last >= lines[0] {
-				return compaction, true
-			}
+		if compaction.coversOmittedLines(path, first, last) {
+			return compaction, true
 		}
 	}
 	return record{}, false
