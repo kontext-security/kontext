@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 // Ways the hook scan can fail, written down before the tests:
@@ -35,6 +37,8 @@ var testHookKey = []byte("0123456789abcdef0123456789abcdef")
 type hookHome struct {
 	t                   *testing.T
 	home, managed, base string
+	// mdm stands in for an MDM profile forcing Claude Code's managed tier.
+	mdm bool
 }
 
 func newHookHome(t *testing.T) *hookHome {
@@ -70,7 +74,7 @@ func (h *hookHome) write(path string, value any) string {
 
 func (h *hookHome) scan(own ...string) (HookAgent, SourceResult) {
 	h.t.Helper()
-	opts := HookScanOptions{Home: h.home, Key: testHookKey, AgentVersion: "2.1.329", Now: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), managed: h.managed}
+	opts := HookScanOptions{Home: h.home, Key: testHookKey, AgentVersion: "2.1.329", Now: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), managed: h.managed, mdmPolicy: func() bool { return h.mdm }}
 	if len(own) > 0 {
 		opts.OwnBinary = func(path string) bool { return slices.Contains(own, path) }
 	}
@@ -525,5 +529,196 @@ func TestHookScanOutputNeverNullsAList(t *testing.T) {
 	check("", out)
 	if len(lists) < 4 {
 		t.Fatalf("fixture lists %v", lists)
+	}
+}
+
+// A credential can sit in any argument, not only behind a flag the scanner
+// knows: summaries keep plain words and flag names, nothing else.
+func TestHookSummaryKeepsOnlySafeWords(t *testing.T) {
+	h := newHookHome(t)
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": map[string]any{
+		"Stop":       []any{map[string]any{"hooks": []any{command("curl -u alice:example-password https://bob:pw@hooks.example.test/x?token=abc")}}},
+		"PreToolUse": []any{map[string]any{"matcher": "Bash|/Users/dana/private/tool", "hooks": []any{command("deploy-check --password hunter2 --mode=strict run")}}},
+	}})
+	agent, _ := h.scan()
+	data, _ := json.Marshal(agent)
+	for _, leaked := range []string{"alice", "example-password", "bob", "hunter2", "strict", "token", "/Users/dana"} {
+		if strings.Contains(string(data), leaked) {
+			t.Fatalf("%q reached the report: %s", leaked, data)
+		}
+	}
+	if got := *byEvent(agent, "Stop")[0].Summary; got != "curl -u <redacted>" {
+		t.Fatalf("stop summary %q", got)
+	}
+	pre := byEvent(agent, "PreToolUse")[0]
+	if got := *pre.Summary; got != "deploy-check --password <redacted> --mode <redacted> run" {
+		t.Fatalf("pre summary %q", got)
+	}
+	if *pre.Matcher != "Bash|<redacted>" {
+		t.Fatalf("matcher %q", *pre.Matcher)
+	}
+}
+
+// The privacy guard sees through another spelling of a guarded folder, and
+// verifying a Kontext binary never touches one.
+func TestHookScanRespectsPrivacyFoldersBySpelling(t *testing.T) {
+	previous := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = previous })
+	h := newHookHome(t)
+	project := filepath.Join(h.home, "documents", "repo")
+	h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("say done"))})
+	h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{}}})
+	guardedBin := filepath.Join(h.home, "Documents", "tools", "kontext")
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("PreToolUse", "", command(guardedBin+" hook pre-tool-use"))})
+	opts := HookScanOptions{Home: h.home, Key: testHookKey, Now: time.Now(), managed: h.managed, mdmPolicy: func() bool { return false },
+		OwnBinary: func(path string) bool { t.Fatalf("verified %s inside a guarded folder", path); return false }}
+	agent, result, err := scanHooks(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byEvent(agent, "Stop")) != 0 || result.Status == StatusComplete || !slices.Contains(result.Reasons, ReasonPermissionDenied) {
+		t.Fatalf("guarded project read: %+v %+v", agent.Hooks, result)
+	}
+}
+
+// One plugin installed twice is two scopes with distinct ids, or one scope
+// when the same install is listed twice; hooks from hooks/hooks.json and
+// from the manifest (a file list and an inline object) all load.
+func TestPluginScopesAreUniqueAndLoadEveryDeclaration(t *testing.T) {
+	h := newHookHome(t)
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), map[string]any{"name": "formatter", "version": "1.4.0",
+		"hooks": []any{"./extra/more.json", map[string]any{"SessionEnd": []any{map[string]any{"hooks": []any{command("echo bye")}}}}}})
+	h.write(filepath.Join(dir, "hooks/hooks.json"), map[string]any{"hooks": hooksOf("Stop", "", command("echo stop"))})
+	h.write(filepath.Join(dir, "extra/more.json"), map[string]any{"hooks": hooksOf("PreToolUse", "Edit", command("echo pre"))})
+	install := map[string]any{"installPath": dir}
+	project := map[string]any{"installPath": dir, "projectPath": filepath.Join(h.home, "src", "app")}
+	h.write(filepath.Join(h.base, "plugins/installed_plugins.json"), map[string]any{"plugins": map[string]any{"formatter@acme": []any{install, install, project}}})
+	agent, _ := h.scan()
+	ids := map[string]bool{}
+	for _, scope := range agent.Scopes {
+		if ids[scope.ID] {
+			t.Fatalf("duplicate scope %s", scope.ID)
+		}
+		ids[scope.ID] = true
+	}
+	plugins := 0
+	for _, scope := range agent.Scopes {
+		if scope.Kind == HookScopePlugin {
+			plugins++
+		}
+	}
+	if plugins != 2 {
+		t.Fatalf("%d plugin scopes", plugins)
+	}
+	for _, event := range []string{"Stop", "PreToolUse", "SessionEnd"} {
+		if got := len(byEvent(agent, event)); got != 2 {
+			t.Fatalf("%s: %d hooks", event, got)
+		}
+	}
+}
+
+// Kontext's set counts only handlers that run for every call everywhere: not
+// a project's, not one narrowed by a matcher the summary hides, not one with
+// a handler-level if, and not a managed file an MDM profile replaces.
+func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
+	setup := func(t *testing.T) (*hookHome, string, func(string) map[string]any) {
+		h := newHookHome(t)
+		bin := h.write(filepath.Join(h.home, "bin", "kontext"), []byte("#!/bin/sh\n"))
+		call := func(alias string) map[string]any { return command(agenthooks.ShellQuote(bin) + " hook " + alias) }
+		return h, bin, call
+	}
+	all := func(call func(string) map[string]any, matcher string, extra map[string]any) map[string]any {
+		hooks := map[string]any{}
+		for _, event := range claudemanaged.SupportedEvents {
+			handler := call(event.Alias)
+			for k, v := range extra {
+				handler[k] = v
+			}
+			hooks[event.Name.String()] = hooksOf(event.Name.String(), matcher, handler)[event.Name.String()]
+		}
+		return hooks
+	}
+	t.Run("user settings complete", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "complete" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("trusted project only", func(t *testing.T) {
+		h, bin, call := setup(t)
+		project := filepath.Join(h.home, "src", "app")
+		h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{"hasTrustDialogAccepted": true}}})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "missing" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("matcher hidden from the summary", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "/opt/tool", nil)})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "missing" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("handler-level if", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "*", map[string]any{"if": "Bash(git *)"})})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "missing" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("managed file shadowed by MDM", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.mdm = true
+		h.write(filepath.Join(h.managed, "managed-settings.d", "20-kontext.json"), map[string]any{"hooks": all(call, "", nil)})
+		agent, _ := h.scan(bin)
+		if agent.KontextHooks.State != "missing" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+		if r := agent.Hooks[0]; r.Enablement.State != hookUnresolved || !slices.Contains(r.Enablement.Reasons, HookReasonManagedTierShadowed) {
+			t.Fatalf("%+v", r.Enablement)
+		}
+	})
+}
+
+// enabledPlugins follows Claude Code's precedence: managed settings win over
+// the user's, and a project's own settings decide for a plugin installed for
+// that project.
+func TestPluginEnablementPrecedence(t *testing.T) {
+	h := newHookHome(t)
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	h.write(filepath.Join(dir, "hooks/hooks.json"), map[string]any{"hooks": hooksOf("Stop", "", command("echo stop"))})
+	other := filepath.Join(h.base, "plugins/cache", "linter", "2.0.0")
+	h.write(filepath.Join(other, "hooks/hooks.json"), map[string]any{"hooks": hooksOf("PreToolUse", "", command("echo lint"))})
+	project := filepath.Join(h.home, "src", "app")
+	h.write(filepath.Join(h.base, "plugins/installed_plugins.json"), map[string]any{"plugins": map[string]any{
+		"formatter@acme": []any{map[string]any{"installPath": dir}},
+		"linter@acme":    []any{map[string]any{"installPath": other, "projectPath": project}},
+	}})
+	h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"enabledPlugins": map[string]any{"formatter@acme": false}})
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"enabledPlugins": map[string]any{"formatter@acme": true, "linter@acme": true}})
+	h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"enabledPlugins": map[string]any{"linter@acme": false}})
+	h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{"hasTrustDialogAccepted": true}}})
+	agent, _ := h.scan()
+	for _, event := range []string{"Stop", "PreToolUse"} {
+		r := byEvent(agent, event)[0]
+		if r.Enablement.State != hookDisabled || !slices.Contains(r.Enablement.Reasons, HookReasonPluginDisabled) {
+			t.Fatalf("%s: %+v", event, r.Enablement)
+		}
+	}
+}
+
+// "args": [] is exec form: Claude Code runs the whole command string as the
+// executable's name, so it is never Kontext's call.
+func TestEmptyArgsIsExecForm(t *testing.T) {
+	h := newHookHome(t)
+	bin := h.write(filepath.Join(h.home, "bin", "kontext"), []byte("#!/bin/sh\n"))
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("PreToolUse", "", map[string]any{"type": "command", "command": bin + " hook pre-tool-use", "args": []any{}})})
+	agent, _ := h.scan(bin)
+	if r := agent.Hooks[0]; r.Origin == HookOriginKontext {
+		t.Fatalf("empty args verified as Kontext's call: %+v", r)
 	}
 }

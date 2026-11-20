@@ -25,7 +25,9 @@ type HookGroup struct {
 }
 
 // HookHandler is the part of one handler the inventory reports. Fields an
-// agent version adds later are kept in the raw entry, never dropped.
+// agent version adds later are kept in the raw entry, never dropped. Args is
+// nil when absent and empty, not nil, for "args": [] (exec form with no
+// arguments).
 type HookHandler struct {
 	Type    string   `json:"type"`
 	Command string   `json:"command"`
@@ -34,6 +36,9 @@ type HookHandler struct {
 	Server  string   `json:"server"`
 	Tool    string   `json:"tool"`
 	Timeout *float64 `json:"timeout"`
+	// If narrows the handler to matching calls (Claude Code's handler-level
+	// `if`, a permission rule such as "Bash(git *)").
+	If string `json:"if"`
 }
 
 var errHooksShape = errors.New("hooks is not an object of matcher groups")

@@ -12,10 +12,10 @@ import (
 )
 
 // Enablement reason codes (ADR-0011). Each rule below names the Claude Code
-// behaviour it follows and has a test in hooks_enablement_test.go, run
-// against the documented settings and against the Claude Code binary the lab
-// fixture pins. A setting whose effect isn't established here leaves the
-// hook unresolved instead of guessing.
+// behaviour it follows; hooks_test.go tests each one by example. The
+// per-rule matrix pinned to a Claude Code version comes with ENG-1092. A
+// setting whose effect isn't established here leaves the hook unresolved
+// instead of guessing.
 const (
 	HookReasonDisableAllHooks         = "disable_all_hooks"
 	HookReasonManagedOnly             = "managed_only"
@@ -173,6 +173,12 @@ func evaluateEnablement(s *hookScan) {
 		}
 		if r.Type == "command" && programMissing(s.opts.Home, info.program) {
 			disabled = append(disabled, HookReasonBinaryMissing)
+		}
+		// Claude Code uses one managed source: an MDM profile replaces the
+		// files, whose hooks then may not run. The profile itself can't be
+		// read here, so those hooks stay unresolved rather than enabled.
+		if s.shadowed && managedKind(kind) {
+			unresolved = append(unresolved, HookReasonManagedTierShadowed)
 		}
 		if s.unlisted {
 			unresolved = append(unresolved, HookReasonDropInUnlistable)
