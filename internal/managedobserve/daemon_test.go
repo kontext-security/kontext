@@ -1461,6 +1461,38 @@ func TestDeviceKeySource(t *testing.T) {
 			t.Fatal("no K_dev under the device key kill switch")
 		}
 	})
+
+	// A config rewritten to another workspace withholds K_dev until that
+	// workspace's key is derived, and drops results read under the old one.
+	t.Run("workspace change withholds and replaces K_dev", func(t *testing.T) {
+		org, pingErr := "org_acme", error(nil)
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) { return testUUID, nil },
+			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
+				return ledgerping.Response{OrganizationID: org}, pingErr
+			})
+		box := newHookKeyBox()
+		discards := 0
+		box.changed = func() { discards++ }
+		source := &deviceKeySource{hooks: box}
+		source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet)
+		acme := box.get()
+		// Same workspace, rotated token: same key, nothing dropped.
+		source.resolve(context.Background(), "https://api.test", "token-2", "ins_test", nil, quiet)
+		if !bytes.Equal(box.get(), acme) || discards != 0 {
+			t.Fatalf("token rotation: key changed=%v discards=%d", !bytes.Equal(box.get(), acme), discards)
+		}
+		org, pingErr = "org_other", errors.New("offline")
+		source.resolve(context.Background(), "https://api.test", "token-other", "ins_test", nil, quiet)
+		if len(box.get()) != 0 {
+			t.Fatal("kept the previous workspace's K_dev while the new one is unknown")
+		}
+		pingErr = nil
+		source.resolve(context.Background(), "https://api.test", "token-other", "ins_test", nil, quiet)
+		if len(box.get()) == 0 || bytes.Equal(box.get(), acme) || discards != 1 {
+			t.Fatalf("new workspace: key %x discards=%d", box.get(), discards)
+		}
+	})
 }
 
 func TestBoundElsewhereAlertMessage(t *testing.T) {

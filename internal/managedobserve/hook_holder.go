@@ -1,9 +1,9 @@
 package managedobserve
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -16,11 +16,18 @@ import (
 
 // hookKeyBox hands K_dev (ADR-0011) from the stream goroutine, which derives
 // it beside the device key, to the hook scan. The key never leaves the Mac.
+//
+// K_dev is per workspace, so a hook id read under one workspace's key must
+// never reach another. The box is emptied while a new config identity is
+// being resolved, and a key that differs from the last one calls changed,
+// which drops the results read under the old key.
 type hookKeyBox struct {
-	mu    sync.Mutex
-	key   []byte
-	ready chan struct{}
-	once  sync.Once
+	mu      sync.Mutex
+	key     []byte
+	last    []byte
+	ready   chan struct{}
+	once    sync.Once
+	changed func()
 }
 
 func newHookKeyBox() *hookKeyBox { return &hookKeyBox{ready: make(chan struct{})} }
@@ -30,9 +37,25 @@ func (b *hookKeyBox) set(key []byte) {
 		return
 	}
 	b.mu.Lock()
-	b.key = key
+	replaced := len(b.last) > 0 && !bytes.Equal(b.last, key)
+	b.key, b.last = key, key
+	changed := b.changed
 	b.mu.Unlock()
+	if replaced && changed != nil {
+		changed()
+	}
 	b.once.Do(func() { close(b.ready) })
+}
+
+// clear withholds the key until the next set: no scan runs and nothing is
+// uploaded until the current identity's key is known.
+func (b *hookKeyBox) clear() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.key = nil
+	b.mu.Unlock()
 }
 
 func (b *hookKeyBox) get() []byte {
@@ -48,8 +71,11 @@ func (b *hookKeyBox) get() []byte {
 // turns hook inventory on, at the authority scan's times, and records each
 // scan for upload.
 type hookHolder struct {
-	keys      *hookKeyBox
-	enabled   func() bool
+	keys    *hookKeyBox
+	enabled func() bool
+	// confirmed reports whether enabled reads a config the cloud confirmed.
+	// Nil counts as confirmed.
+	confirmed func() bool
 	available <-chan struct{}
 	beginRead func() func()
 	// ownBinary verifies a handler's program is this Kontext binary.
@@ -58,20 +84,29 @@ type hookHolder struct {
 	discard   func()
 	scan      func(context.Context, agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error)
 	home      func() (string, error)
-	// wasOn remembers the switch, so the results are discarded once per
-	// turn-off rather than on every tick.
-	wasOn bool
+	// discarded remembers that results were dropped for this off period, so
+	// it happens once rather than on every tick. It starts false: results a
+	// previous run stored are dropped too once a confirmed config says off.
+	discarded bool
+}
+
+// uploading reports whether pending hook results may be sent now: the switch
+// is on and the key for the current workspace is known.
+func (h *hookHolder) uploading() bool {
+	return h.enabled != nil && h.enabled() && len(h.keys.get()) > 0
 }
 
 func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) {
 	if h.enabled == nil || !h.enabled() {
-		if h.wasOn && h.discard != nil {
-			h.discard()
+		if !h.discarded && (h.confirmed == nil || h.confirmed()) {
+			if h.discard != nil {
+				h.discard()
+			}
+			h.discarded = true
 		}
-		h.wasOn = false
 		return
 	}
-	h.wasOn = true
+	h.discarded = false
 	key := h.keys.get()
 	if len(key) == 0 {
 		return
@@ -96,8 +131,9 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	if errors.Is(err, agentauthority.ErrNoHookKey) || err != nil || ctx.Err() != nil {
 		return
 	}
-	// The switch may have gone off while the scan ran.
-	if !h.enabled() {
+	// The switch may have gone off, or the workspace changed, while the
+	// scan ran.
+	if !h.enabled() || !bytes.Equal(h.keys.get(), key) {
 		return
 	}
 	if h.record != nil {
@@ -169,7 +205,7 @@ func LocalHookKey(ctx context.Context) ([]byte, string, error) {
 		pingCtx, cancel := context.WithTimeout(ctx, deviceKeyPingTimeout)
 		defer cancel()
 		if stateErr == nil {
-			if ping, err := workspacePingFn(pingCtx, http.DefaultClient, loaded.Config.CloudURL, token, state.InstallationID); err == nil {
+			if ping, err := workspacePingFn(pingCtx, nil, loaded.Config.CloudURL, token, state.InstallationID); err == nil {
 				key, err := deviceid.HookInventoryKey(uuid, ping.OrganizationID)
 				return key, HookKeyWorkspace, err
 			}

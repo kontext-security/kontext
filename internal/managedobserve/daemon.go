@@ -463,6 +463,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	hookHolder := &hookHolder{
 		keys:      newHookKeyBox(),
 		enabled:   func() bool { return endpointConfigCache.Current().Config.HookInventoryEnabled() },
+		confirmed: func() bool { return endpointConfigCache.Current().Confirmed },
 		available: hookAvailable,
 		beginRead: authorityHolder.scanner.BeginRead,
 		ownBinary: ownBinaryCheck(),
@@ -477,6 +478,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			}
 		},
 	}
+	hookHolder.keys.changed = hookHolder.discard
 	background.Add(1)
 	go func() {
 		defer background.Done()
@@ -904,6 +906,11 @@ func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token, installa
 		return ""
 	}
 	if !s.resolved || s.cloudURL != cloudURL || s.token != token {
+		if s.resolved {
+			// A new identity may be another workspace: no hook scan or
+			// upload until its own K_dev is known.
+			s.hooks.clear()
+		}
 		s.derive(ctx, cloudURL, token, installationID, client, diag)
 	}
 	if killed {
@@ -1014,7 +1021,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		AuthorityFact:               authorityHolder.Fact,
 		AuthorityAvailable:          authorityHolder.resend,
 		AuthorityScanKnown:          authorityHolder.known,
-		HookInventoryEnabled:        hookHolder.enabled,
+		HookInventoryEnabled:        hookHolder.uploading,
 		DeviceKey:                   func() string { return deviceKey },
 		HTTPClient:                  opts.StreamHTTPClient,
 		Diagnostic:                  opts.Diagnostic,
