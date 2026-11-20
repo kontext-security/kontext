@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kontext.security/schemas/browser-contract-v1.json",
+  "title": "Kontext browser event contract v1",
+  "anyOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/records" },
+    { "$ref": "#/$defs/settings" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/cloudBatch" },
+    { "$ref": "#/$defs/cloudResponse" }
+  ],
+  "$defs": {
+    "contract": { "const": 1 },
+    "time": { "type": "string", "format": "date-time", "maxLength": 40 },
+    "day": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "browser": { "enum": ["chrome", "edge", "chromium"] },
+    "profile": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "appId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+    "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "host": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+      "maxLength": 253
+    },
+    "extension": {
+      "type": "object",
+      "required": ["version", "browser", "profile"],
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "browser": { "$ref": "#/$defs/browser" },
+        "profile": { "$ref": "#/$defs/profile" }
+      }
+    },
+    "health": {
+      "type": "object",
+      "required": ["kind", "connected_since", "observed_at"],
+      "properties": {
+        "kind": { "const": "health" },
+        "connected_since": { "$ref": "#/$defs/time" },
+        "observed_at": { "$ref": "#/$defs/time" }
+      }
+    },
+    "visit": {
+      "type": "object",
+      "required": [
+        "kind", "day", "app", "app_name", "provider", "surface", "host",
+        "first_seen", "last_seen", "requests"
+      ],
+      "properties": {
+        "kind": { "const": "visit" },
+        "day": { "$ref": "#/$defs/day" },
+        "app": { "$ref": "#/$defs/appId" },
+        "app_name": { "$ref": "#/$defs/label" },
+        "provider": { "$ref": "#/$defs/label" },
+        "surface": { "const": "web" },
+        "host": { "$ref": "#/$defs/host" },
+        "first_seen": { "$ref": "#/$defs/time" },
+        "last_seen": { "$ref": "#/$defs/time" },
+        "requests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "Page loads plus POST requests to the app's hosts that UTC day, so far."
+        }
+      }
+    },
+    "record": { "oneOf": [{ "$ref": "#/$defs/health" }, { "$ref": "#/$defs/visit" }] },
+    "hello": {
+      "type": "object",
+      "required": ["contract", "type", "extension"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "type": { "const": "hello" },
+        "extension": { "$ref": "#/$defs/extension" }
+      }
+    },
+    "records": {
+      "type": "object",
+      "required": ["contract", "type", "extension", "records"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "type": { "const": "records" },
+        "extension": { "$ref": "#/$defs/extension" },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/record" }
+        }
+      }
+    },
+    "rejection": {
+      "type": "object",
+      "required": ["index", "reason"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "reason": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "required": [
+        "contract", "type", "capture_mode", "corporate_domains", "paused",
+        "accepted", "rejected"
+      ],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "type": { "const": "settings" },
+        "capture_mode": { "enum": ["commands", "full", "prompts"] },
+        "corporate_domains": {
+          "type": "array",
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/host" }
+        },
+        "paused": { "type": "boolean" },
+        "accepted": { "type": "integer", "minimum": 0 },
+        "rejected": { "type": "array", "items": { "$ref": "#/$defs/rejection" } }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["contract", "type", "error"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/contract" },
+        "type": { "const": "error" },
+        "error": { "enum": ["unsupported_contract", "invalid_message", "unavailable"] }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["browser", "profile", "extension_version"],
+      "properties": {
+        "browser": { "$ref": "#/$defs/browser" },
+        "profile": { "$ref": "#/$defs/profile" },
+        "extension_version": { "$ref": "#/$defs/version" }
+      }
+    },
+    "cloudRecord": {
+      "allOf": [{ "$ref": "#/$defs/source" }, { "$ref": "#/$defs/record" }]
+    },
+    "cloudBatch": {
+      "type": "object",
+      "required": ["schema", "installation_id", "sent_at", "records"],
+      "properties": {
+        "schema": { "const": "browser-activity-v1" },
+        "installation_id": { "type": "string", "pattern": "^ins_[A-Za-z0-9_-]{32}$" },
+        "sent_at": { "$ref": "#/$defs/time" },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/cloudRecord" }
+        }
+      }
+    },
+    "cloudResponse": {
+      "type": "object",
+      "required": ["accepted", "rejected"],
+      "properties": {
+        "accepted": { "type": "integer", "minimum": 0 },
+        "rejected": { "type": "array", "items": { "$ref": "#/$defs/rejection" } }
+      }
+    }
+  }
+}
