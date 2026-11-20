@@ -489,11 +489,26 @@ func TestWithoutAStoreTheHandlerAnswersUnavailable(t *testing.T) {
 
 func TestTheBatchGrowsBackAfterA413(t *testing.T) {
 	s := openTestStore(t)
-	_, _ = s.Apply(testExtension, []IndexedRecord{visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	for _, app := range []string{"chatgpt", "claude"} {
+		r := visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")
+		r.Record.App = app
+		_, _ = s.Apply(testExtension, []IndexedRecord{r})
+	}
+	calls := 0
 	sender, _ := newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
 		_, _ = io.WriteString(w, `{"accepted":1,"rejected":[]}`)
 	})
-	sender.limit = 1
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Retry {
+		t.Fatalf("after a 413: outcome = %v, want Retry", outcome)
+	}
+	if sender.limit != 1 {
+		t.Fatalf("limit = %d after a 413 on 2 rows, want 1", sender.limit)
+	}
 	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
 		t.Fatalf("outcome = %v, err = %v", outcome, err)
 	}
