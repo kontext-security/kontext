@@ -61,6 +61,13 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 // response version asked for.
 var errUnsupportedVersion = errors.New("endpoint configuration: response version not supported by the server")
 
+// ErrNoCommonVersion is a server's 406 unsupported_version for the fallback
+// too: it serves no version this build implements, so nothing it last sent
+// can be confirmed any more. The refresher fails closed on it, as it does on
+// a rejected authority, so a server rolled back past both versions cannot
+// leave the last directive (full capture, say) in force.
+var ErrNoCommonVersion = errors.New("endpoint configuration: the server supports no response version this build implements")
+
 // Fetch gets the configuration as ResponseVersion has it, or as
 // FallbackResponseVersion has it from a server that predates
 // ResponseVersion. The conditional value may be either version's:
@@ -126,12 +133,15 @@ func (c *Client) fetch(ctx context.Context, version int, installToken, installat
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1))
 		return FetchResult{NotModified: true, ETag: etag}, nil
 	}
-	if response.StatusCode == http.StatusNotAcceptable && version != FallbackResponseVersion {
+	if response.StatusCode == http.StatusNotAcceptable {
 		var refused struct {
 			Code string `json:"code"`
 		}
 		data, _ := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
 		if json.Unmarshal(data, &refused) == nil && refused.Code == "unsupported_version" {
+			if version == FallbackResponseVersion {
+				return FetchResult{}, ErrNoCommonVersion
+			}
 			return FetchResult{}, errUnsupportedVersion
 		}
 		return FetchResult{}, fmt.Errorf("endpoint configuration fetch: unexpected status %d", response.StatusCode)

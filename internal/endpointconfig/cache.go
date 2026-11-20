@@ -424,7 +424,7 @@ func (r *Refresher) Run(ctx context.Context) {
 
 func (r *Refresher) fail(err error) error {
 	if r.Cache != nil {
-		if errors.Is(err, ErrAuthorityRejected) {
+		if errors.Is(err, ErrAuthorityRejected) || errors.Is(err, ErrNoCommonVersion) {
 			err = errors.Join(err, r.Cache.rejectAuthority(err, r.now()))
 		} else {
 			r.Cache.MarkFailed(err, r.now())
