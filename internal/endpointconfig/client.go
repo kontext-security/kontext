@@ -158,6 +158,19 @@ func (c *Client) fetch(ctx context.Context, version int, installToken, installat
 		}
 		return FetchResult{}, fmt.Errorf("endpoint configuration fetch: unexpected status %d", response.StatusCode)
 	}
+	if response.StatusCode == http.StatusNotFound {
+		// The cloud's own answer that this installation isn't the token's
+		// (another workspace's token): the directive is no longer this
+		// workspace's. A proxy's plain 404 stays a transient failure.
+		var missing struct {
+			Code string `json:"code"`
+		}
+		data, _ := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
+		if json.Unmarshal(data, &missing) == nil && missing.Code == "installation_not_found" {
+			return FetchResult{}, fmt.Errorf("%w: installation_not_found", ErrAuthorityRejected)
+		}
+		return FetchResult{}, fmt.Errorf("endpoint configuration fetch: unexpected status %d", response.StatusCode)
+	}
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, MaxResponseBytes+1))
 		return FetchResult{}, fmt.Errorf("endpoint configuration fetch: unexpected status %d", response.StatusCode)

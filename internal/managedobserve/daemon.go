@@ -266,6 +266,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		endpointConfigCachePath = endpointconfig.DefaultCachePathForDB(dbPath)
 	}
 	endpointConfigCache := endpointconfig.NewCacheForDB(endpointConfigCachePath, dbPath)
+	// A directive another cloud confirmed never applies after re-enrolment.
+	endpointConfigCache.BindCloudURL(loadedConfig.Config.CloudURL)
 	if err := endpointConfigCache.Load(); err != nil {
 		endpointConfigCache.MarkInvalid(err)
 		opts.Diagnostic.Printf("endpoint configuration cache load: %v\n", err)
