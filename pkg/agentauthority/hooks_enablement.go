@@ -208,6 +208,11 @@ func evaluateEnablement(s *hookScan) {
 		if s.unlisted {
 			unresolved = append(unresolved, HookReasonDropInUnlistable)
 		}
+		// A managed file past the scope cap was not read, and its switches
+		// could turn off any hook.
+		if s.managedCut {
+			unresolved = append(unresolved, HookReasonUnresolved)
+		}
 		if sw.unreadable {
 			unresolved = append(unresolved, HookReasonUnresolved)
 		}

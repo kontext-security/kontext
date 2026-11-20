@@ -769,8 +769,18 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 		for i := range MaxHookScopes {
 			h.write(filepath.Join(h.managed, "managed-settings.d", fmt.Sprintf("%03d.json", i)), map[string]any{})
 		}
-		if agent, _ := h.scan(bin); agent.KontextHooks.State != KontextHooksUnknown {
+		agent, _ := h.scan(bin)
+		if agent.KontextHooks.State != KontextHooksUnknown {
 			t.Fatalf("%+v", agent.KontextHooks)
+		}
+		// The unread file could disable every hook, so none reads as enabled.
+		for _, r := range agent.Hooks {
+			if r.Enablement.State != hookUnresolved || r.Evidence.ConfigCheckedAt != nil {
+				t.Fatalf("%+v %+v", r.Enablement, r.Evidence)
+			}
+		}
+		if len(agent.Hooks) == 0 {
+			t.Fatal("no hooks")
 		}
 	})
 	t.Run("a later managed file adds to plugin-only customization", func(t *testing.T) {
