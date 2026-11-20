@@ -58,6 +58,11 @@ func hooksInventoryCmd() *cobra.Command {
 				return enc.Encode(output)
 			}
 			printHookInventory(cmd.OutOrStdout(), output)
+			if dir := managedobserve.ClaudeConfigDir(); dir != "" {
+				// The daemon reads the profile its own environment names,
+				// which a shell's CLAUDE_CONFIG_DIR doesn't reach.
+				fmt.Fprintf(cmd.OutOrStdout(), "\nRead the Claude Code profile in %s (CLAUDE_CONFIG_DIR). The Kontext daemon reports the profile set in its own environment, which may differ.\n", printable(dir))
+			}
 			return nil
 		},
 	}
