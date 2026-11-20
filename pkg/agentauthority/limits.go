@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/platform"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 const maxFiles = 500
@@ -111,6 +112,14 @@ func (g *guard) access(path, mode string) fileResult {
 			g.fail(ReasonPermissionDenied)
 			return fileResult{err: os.ErrPermission}
 		}
+	}
+	// The lexical check above misses another spelling of the same folder:
+	// ~/documents on a case-insensitive volume, the data-volume alias
+	// (/System/Volumes/Data/Users/...), or a symlink into one.
+	if privacyfolder.Guarded(g.home, path) {
+		g.skip()
+		g.fail(ReasonPermissionDenied)
+		return fileResult{err: os.ErrPermission}
 	}
 	readCtx, cancel := context.WithTimeout(g.ctx, time.Second)
 	defer cancel()

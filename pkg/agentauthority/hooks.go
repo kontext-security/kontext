@@ -15,6 +15,7 @@ import (
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
@@ -155,6 +156,9 @@ type HookScanOptions struct {
 	// BeginRead applies the daemon's disk policy to each read.
 	BeginRead func() func()
 	managed   string
+	// mdmPolicy reports a Claude Code policy from an MDM profile; nil checks
+	// this Mac's managed preferences.
+	mdmPolicy func() bool
 }
 
 // HookSourceID is the inventory source the scan's result reports under.
@@ -182,7 +186,7 @@ type hookScan struct {
 	buckets map[string]int
 	// settings in Claude's precedence order, for enablement.
 	layers   []hookLayer
-	plugins  map[string]bool
+	plugins  pluginSwitches
 	unlisted bool
 	// raw holds what enablement needs per record, beside agent.Hooks.
 	raw []hookRaw
@@ -191,11 +195,19 @@ type hookScan struct {
 	// signedIn is the claude.ai organization ~/.claude.json names, if any.
 	signedIn bool
 	project  string
+	// shadowed: an MDM profile supplies Claude Code's managed tier, so the
+	// managed-settings files on disk are not the policy in force.
+	shadowed bool
 }
 
 type hookRaw struct {
 	url     string
 	program string
+	// matcher is the group's matcher as written; conditional is a
+	// handler-level `if`. Coverage reads these, never the redacted copy.
+	matcher     string
+	conditional bool
+	kind        string
 	// layer indexes layers; -1 for a plugin.
 	layer          int
 	project        string
@@ -226,8 +238,12 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	}
 	report := &Report{Coverage: Coverage{UnknownFormat: []string{}, Errors: []string{}}}
 	g := &guard{ctx: ctx, home: home, managed: opts.managed, roots: []string{opts.managed, base, filepath.Join(home, ".claude.json")}, report: report, beginRead: opts.BeginRead, seen: map[string]bool{}}
-	s := &hookScan{g: g, opts: opts, source: NewSourceHealth(HookSourceID(agentID), opts.Now), buckets: map[string]int{}, plugins: map[string]bool{}, trust: map[string]*bool{}}
+	s := &hookScan{g: g, opts: opts, source: NewSourceHealth(HookSourceID(agentID), opts.Now), buckets: map[string]int{}, plugins: pluginSwitches{managed: map[string]bool{}, user: map[string]bool{}, project: map[string]map[string]bool{}}, trust: map[string]*bool{}}
 	s.agent = HookAgent{ID: agentID, Scopes: []HookScope{}, Hooks: []HookRecord{}}
+	if opts.mdmPolicy == nil {
+		opts.mdmPolicy = claudeMDMPolicy
+	}
+	s.shadowed = opts.mdmPolicy()
 	if version := safe(opts.AgentVersion, 64); version != "" {
 		s.agent.AgentVersion = &version
 	}
@@ -321,8 +337,17 @@ func (s *hookScan) settingsScope(kind, path string, listed bool) {
 	s.layers = append(s.layers, hookLayer{kind: kind, scope: id, settings: settings, ok: ok, project: s.project})
 	if ok {
 		for key, value := range settings.EnabledPlugins {
-			if kind != HookScopeProject && kind != HookScopeProjectLocal {
-				s.plugins[key] = value
+			switch {
+			case managedKind(kind):
+				s.plugins.managed[key] = value
+			case projectKind(kind):
+				// Read shared before local, so local wins.
+				if s.plugins.project[s.project] == nil {
+					s.plugins.project[s.project] = map[string]bool{}
+				}
+				s.plugins.project[s.project][key] = value
+			default:
+				s.plugins.user[key] = value
 			}
 		}
 		s.records(id, kind, settings.Hooks, nil, len(s.layers)-1)
@@ -330,13 +355,15 @@ func (s *hookScan) settingsScope(kind, path string, listed bool) {
 	s.closeScope(h, id, kind)
 }
 
-// pluginScopes reads each installed plugin's hooks: hooks/hooks.json, or the
-// file or object its manifest names instead.
+// pluginScopes reads each installed plugin's hooks. Claude Code loads the
+// default hooks/hooks.json and, beside it, whatever the manifest's hooks
+// field adds: a file, an inline object, or a list of either.
 func (s *hookScan) pluginScopes(base string) {
 	type pluginIndex struct {
 		Plugins map[string][]struct {
 			InstallPath string `json:"installPath"`
 			Version     string `json:"version"`
+			ProjectPath string `json:"projectPath"`
 		} `json:"plugins"`
 	}
 	type pluginManifest struct {
@@ -350,6 +377,7 @@ func (s *hookScan) pluginScopes(base string) {
 		return
 	}
 	cache := filepath.Join(base, "plugins/cache")
+	seen := map[string]bool{}
 	for _, key := range keys(index.Plugins) {
 		for _, entry := range index.Plugins[key] {
 			installed := filepath.Clean(entry.InstallPath)
@@ -358,8 +386,18 @@ func (s *hookScan) pluginScopes(base string) {
 				continue
 			}
 			// Keyed by name and marketplace, so an update to a new cache
-			// folder keeps the scope.
-			h, id := s.scope(HookScopePlugin, "plugin|"+key)
+			// folder keeps the scope; an install for one project is its own
+			// scope. The same install listed twice is read once, so no two
+			// scopes share an id.
+			canonical := "plugin|" + key
+			if entry.ProjectPath != "" {
+				canonical += "|" + filepath.Clean(entry.ProjectPath)
+			}
+			if seen[canonical] {
+				continue
+			}
+			seen[canonical] = true
+			h, id := s.scope(HookScopePlugin, canonical)
 			if h == nil {
 				return
 			}
@@ -376,39 +414,103 @@ func (s *hookScan) pluginScopes(base string) {
 			if plugin.Name == "" {
 				plugin.Name = "<redacted>"
 			}
-			enabled, set := s.plugins[key]
-			var hooks map[string][]readers.HookGroup
-			switch trimmed := strings.TrimSpace(string(manifest.Hooks)); {
-			case strings.HasPrefix(trimmed, "{"):
-				if parsed, err := readers.Hooks([]byte(`{"hooks":` + trimmed + `}`)); err == nil {
-					hooks = parsed.Hooks
-				} else {
-					h.Fail(ReasonMalformed)
-					s.source.Fail(ReasonMalformed)
-				}
-			case strings.HasPrefix(trimmed, `"`):
-				var rel string
-				_ = json.Unmarshal(manifest.Hooks, &rel)
-				path := filepath.Join(installed, rel)
-				if !within(installed, path) {
-					h.Fail(ReasonPermissionDenied)
-					s.source.Fail(ReasonPermissionDenied)
-					break
-				}
-				s.g.roots = append(s.g.roots, path)
-				if parsed, ok := readConfig(s.g, s.agent.ID, path, readers.Hooks); ok {
-					hooks = parsed.Hooks
-				}
-			default:
-				if parsed, ok := readConfig(s.g, s.agent.ID, filepath.Join(installed, "hooks/hooks.json"), readers.Hooks); ok {
-					hooks = parsed.Hooks
-				}
-			}
+			enabled, set := s.plugins.lookup(key, filepath.Clean(entry.ProjectPath))
+			hooks := s.pluginHooks(h, installed, manifest.Hooks)
 			disabled := set && !enabled
 			s.records(id, HookScopePlugin, hooks, &pluginRef{plugin: plugin, key: key, disabled: disabled}, -1)
 			s.closeScope(h, id, HookScopePlugin)
 		}
 	}
+}
+
+// pluginHooks gathers a plugin's hooks from hooks/hooks.json and the
+// manifest's hooks field, in that order.
+func (s *hookScan) pluginHooks(h *SourceHealth, installed string, declared json.RawMessage) map[string][]readers.HookGroup {
+	hooks := map[string][]readers.HookGroup{}
+	add := func(more map[string][]readers.HookGroup) {
+		for _, event := range keys(more) {
+			hooks[event] = append(hooks[event], more[event]...)
+		}
+	}
+	malformed := func() {
+		h.Fail(ReasonMalformed)
+		s.source.Fail(ReasonMalformed)
+	}
+	defaultFile := filepath.Join(installed, "hooks", "hooks.json")
+	read := map[string]bool{}
+	file := func(path string) {
+		path = filepath.Clean(path)
+		if read[path] {
+			return
+		}
+		read[path] = true
+		if !within(installed, path) {
+			h.Fail(ReasonPermissionDenied)
+			s.source.Fail(ReasonPermissionDenied)
+			return
+		}
+		s.g.roots = append(s.g.roots, path)
+		if parsed, ok := readConfig(s.g, s.agent.ID, path, readers.Hooks); ok {
+			add(parsed.Hooks)
+		}
+	}
+	inline := func(raw json.RawMessage) {
+		if parsed, err := readers.Hooks([]byte(`{"hooks":` + string(raw) + `}`)); err == nil {
+			add(parsed.Hooks)
+		} else {
+			malformed()
+		}
+	}
+	file(defaultFile)
+	var entry func(raw json.RawMessage, nested bool)
+	entry = func(raw json.RawMessage, nested bool) {
+		switch trimmed := strings.TrimSpace(string(raw)); {
+		case trimmed == "" || trimmed == "null":
+		case strings.HasPrefix(trimmed, "{"):
+			inline(raw)
+		case strings.HasPrefix(trimmed, `"`):
+			var rel string
+			if json.Unmarshal(raw, &rel) != nil {
+				malformed()
+				return
+			}
+			file(filepath.Join(installed, rel))
+		case strings.HasPrefix(trimmed, "[") && !nested:
+			var list []json.RawMessage
+			if json.Unmarshal(raw, &list) != nil {
+				malformed()
+				return
+			}
+			for _, item := range list {
+				entry(item, true)
+			}
+		default:
+			malformed()
+		}
+	}
+	entry(declared, false)
+	return hooks
+}
+
+// pluginSwitches holds enabledPlugins by layer. Claude Code's precedence:
+// managed settings, then the plugin's own project (local over shared), then
+// the user's settings.
+type pluginSwitches struct {
+	managed, user map[string]bool
+	project       map[string]map[string]bool
+}
+
+func (p pluginSwitches) lookup(key, project string) (enabled, set bool) {
+	if v, ok := p.managed[key]; ok {
+		return v, true
+	}
+	if project != "." && project != "" {
+		if v, ok := p.project[project][key]; ok {
+			return v, true
+		}
+	}
+	v, ok := p.user[key]
+	return v, ok
 }
 
 type pluginRef struct {
@@ -436,7 +538,7 @@ func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGr
 					return
 				}
 				record, info := s.record(scope, kind, event, matcher, raw, plugin)
-				info.layer, info.project = layer, s.project
+				info.layer, info.project, info.kind = layer, s.project, kind
 				info.pluginDisabled = plugin != nil && plugin.disabled
 				s.agent.Hooks = append(s.agent.Hooks, record)
 				s.raw = append(s.raw, info)
@@ -454,8 +556,9 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 	if !slices.Contains(knownHookTypes, kind_) {
 		kind_ = "unknown"
 	}
+	info.matcher, info.conditional = matcher, strings.TrimSpace(h.If) != ""
 	r := HookRecord{ScopeID: scope, Event: event, Type: kind_, Origin: HookOriginSettings, Enablement: HookEnablement{State: "unresolved", Reasons: []string{"unresolved"}}}
-	if m := safe(matcher, 256); m != "" {
+	if m := safeMatcher(matcher); m != "" {
 		r.Matcher = &m
 	}
 	if h.Timeout != nil && *h.Timeout >= 0 && *h.Timeout <= 86400 {
@@ -468,11 +571,13 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 	}
 	switch kind_ {
 	case "command":
+		// Exec form whenever args is present, even empty: Claude Code then runs
+		// command as the executable's name, never splits it.
 		fields, ok := agenthooks.SplitCommand(h.Command)
-		if len(h.Args) > 0 {
+		if h.Args != nil {
 			fields, ok = append([]string{h.Command}, h.Args...), h.Command != ""
 		}
-		if len(h.Args) == 0 {
+		if h.Args == nil {
 			// `NAME=value cmd` sets a variable for cmd: the value can be a
 			// secret and is never the program.
 			fields = withoutAssignments(fields)
@@ -481,12 +586,13 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 			program := fields[0]
 			info.program = program
 			anchor = "cmd:" + filepath.Base(program)
-			words := append([]string{safe(filepath.Base(program), 64)}, safeArgs(fields[1:])...)
-			r.Summary = pointer(safe(strings.Join(words, " "), 256))
+			r.Summary = pointer(hookSummary(program, fields[1:]))
 			alias, known := claudemanaged.AliasForEvent(hook.HookName(event))
 			call := known && len(fields) == 3 && agenthooks.IsKontextBinary(program) && fields[1] == "hook" && fields[2] == alias
 			r.ClaimsKontext = call || agenthooks.IsKontextBinary(program)
-			if call && s.opts.OwnBinary != nil && s.opts.OwnBinary(program) {
+			// Verified by metadata only, and never inside a privacy-guarded
+			// folder: the check must not prompt the user.
+			if call && s.opts.OwnBinary != nil && filepath.IsAbs(program) && !privacyfolder.Guarded(s.opts.Home, program) && s.opts.OwnBinary(program) {
 				r.Origin = HookOriginKontext
 			}
 		} else {
@@ -534,18 +640,24 @@ func (s *hookScan) finish() {
 		}
 	}
 	evaluateEnablement(s)
-	s.agent.KontextHooks = kontextHookSet(s.agent.Hooks)
+	s.agent.KontextHooks = kontextHookSet(s.agent.Hooks, s.raw)
 }
 
 // kontextHookSet compares Kontext's verified, enabled handlers with the
-// events it installs.
-func kontextHookSet(records []HookRecord) KontextHookSet {
+// events it installs. Only a handler that runs for every call of its event,
+// everywhere on the Mac, covers it: one in managed or user settings, with no
+// narrowing matcher and no handler-level `if`. A project's hooks run in that
+// project alone, so they never cover the device.
+func kontextHookSet(records []HookRecord, raw []hookRaw) KontextHookSet {
 	covered := map[string]bool{}
-	for _, r := range records {
-		// Only a handler that runs for every call of its event covers it: a
-		// narrowed matcher or a hook still waiting on project trust does not.
-		allCalls := r.Matcher == nil || strings.TrimSpace(*r.Matcher) == "" || strings.TrimSpace(*r.Matcher) == "*"
-		if r.Origin == HookOriginKontext && r.Enablement.State == hookEnabled && allCalls {
+	for i, r := range records {
+		if i >= len(raw) || r.Origin != HookOriginKontext || r.Enablement.State != hookEnabled {
+			continue
+		}
+		info := raw[i]
+		deviceWide := info.kind == HookScopeManaged || info.kind == HookScopeManagedDropIn || info.kind == HookScopeUser
+		matcher := strings.TrimSpace(info.matcher)
+		if deviceWide && !info.conditional && (matcher == "" || matcher == "*") {
 			covered[r.Event] = true
 		}
 	}
