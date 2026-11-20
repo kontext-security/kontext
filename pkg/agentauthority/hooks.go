@@ -206,6 +206,9 @@ type hookScan struct {
 	// mdmMerged: an MDM profile adds settings beside the files, which this
 	// build can't read, so every hook's state stays unresolved.
 	mdmMerged bool
+	// projectsUnread: ~/.claude.json exists but could not be read, so the
+	// projects it lists, and their switches, are unknown.
+	projectsUnread bool
 }
 
 type hookRaw struct {
@@ -284,7 +287,13 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	s.settingsScope(HookScopeUser, filepath.Join(base, "settings.json"), false)
 
 	s.only()
-	root, _ := readConfig(g, agentID, rootConfig, readers.Claude)
+	// The guard already marks the source for a failed read; coverage needs
+	// to know too, since the projects it lists went unseen.
+	root, err := readParsed(g, rootConfig, readers.Claude)
+	if errors.Is(err, errParse) {
+		g.parseError(agentID, filepath.Base(rootConfig))
+	}
+	s.projectsUnread = err != nil && !errors.Is(err, os.ErrNotExist)
 	s.signedIn = root.OAuthAccount.OrganizationUUID != ""
 	projects := keys(root.Projects)
 	if len(projects) > maxHookProjects {
@@ -651,7 +660,9 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 			// folder: the check must not prompt the user.
 			// The path must be canonical: the guard reads it cleaned, while
 			// a symlink followed by ".." resolves elsewhere for the OS.
-			if call && s.opts.OwnBinary != nil && filepath.IsAbs(program) && program == filepath.Clean(program) && !privacyfolder.Guarded(s.opts.Home, program) && s.opts.OwnBinary(program) {
+			if call && s.opts.OwnBinary != nil && filepath.IsAbs(program) && program == filepath.Clean(program) && settledWithin(s.g.ctx, func() bool {
+				return !privacyfolder.Guarded(s.opts.Home, program) && s.opts.OwnBinary(program)
+			}) {
 				r.Origin = HookOriginKontext
 			}
 		} else {
@@ -722,7 +733,9 @@ func (s *hookScan) projectDisablesHooks() bool {
 // coverage was read: managed settings and drop-ins, user settings, and each
 // listed project's, whose disableAllHooks stops user hooks there.
 func (s *hookScan) coverageReadable() bool {
-	if s.agent.Truncated || s.unlisted {
+	// An MDM profile or an unread project list can hold a setting, or a
+	// Kontext handler, that no record shows.
+	if s.agent.Truncated || s.unlisted || s.shadowed || s.mdmMerged || s.projectsUnread {
 		return false
 	}
 	for _, scope := range s.agent.Scopes {

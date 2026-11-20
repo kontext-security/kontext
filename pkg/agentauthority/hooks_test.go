@@ -763,6 +763,49 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 			t.Fatalf("%+v", r.Enablement)
 		}
 	})
+	t.Run("an MDM profile with no handler on disk is unknown, not missing", func(t *testing.T) {
+		h, bin, _ := setup(t)
+		h.mdm = true
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != KontextHooksUnknown {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("an unreadable project list can't prove the set", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		h.write(filepath.Join(h.home, ".claude.json"), []byte("{"))
+		agent, result := h.scan(bin)
+		if agent.KontextHooks.State != KontextHooksUnknown {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+		// Its projects went unseen, so the cloud withdraws none of them.
+		if result.Status == StatusComplete || !slices.Contains(result.Reasons, ReasonMalformed) {
+			t.Fatalf("%+v", result)
+		}
+	})
+}
+
+// An ownership check on a stalled filesystem can't hold the scan: the hook
+// stays unverified.
+func TestStalledOwnershipCheckLeavesTheHookUnverified(t *testing.T) {
+	h := newHookHome(t)
+	bin := h.write(filepath.Join(h.home, "bin", "kontext"), []byte("#!/bin/sh\n"))
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("PreToolUse", "", command(agenthooks.ShellQuote(bin)+" hook pre-tool-use"))})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	opts := HookScanOptions{Home: h.home, Key: testHookKey, Now: time.Now(), managed: h.managed, mdmPolicy: func() bool { return false },
+		OwnBinary: func(string) bool { <-release; return true }}
+	start := time.Now()
+	agent, _, err := scanHooks(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*programStatTimeout {
+		t.Fatalf("scan waited %v on a stalled check", elapsed)
+	}
+	if len(agent.Hooks) != 1 || agent.Hooks[0].Origin == HookOriginKontext {
+		t.Fatalf("%+v", agent.Hooks)
+	}
 }
 
 // enabledPlugins follows Claude Code's precedence: managed settings win over
