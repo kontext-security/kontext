@@ -1,0 +1,86 @@
+package readers
+
+import (
+	"encoding/json"
+	"errors"
+)
+
+// HookSettings is what a Claude Code settings file, a managed drop-in or a
+// plugin's hooks/hooks.json says about hooks. Handlers stay raw: the scanner
+// fingerprints them as written and reads only the fields it reports.
+type HookSettings struct {
+	Hooks map[string][]HookGroup `json:"hooks"`
+	// Present only in settings files; a plugin's hooks.json has none of them.
+	DisableAllHooks               *bool           `json:"-"`
+	DisableAllHooksSet            bool            `json:"-"`
+	AllowManagedHooksOnly         *bool           `json:"allowManagedHooksOnly"`
+	AllowedHTTPHookURLs           *[]string       `json:"allowedHttpHookUrls"`
+	StrictPluginOnlyCustomization json.RawMessage `json:"strictPluginOnlyCustomization"`
+	EnabledPlugins                map[string]bool `json:"enabledPlugins"`
+}
+
+type HookGroup struct {
+	Matcher *string           `json:"matcher"`
+	Hooks   []json.RawMessage `json:"hooks"`
+}
+
+// HookHandler is the part of one handler the inventory reports. Fields an
+// agent version adds later are kept in the raw entry, never dropped.
+type HookHandler struct {
+	Type    string   `json:"type"`
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+	URL     string   `json:"url"`
+	Server  string   `json:"server"`
+	Tool    string   `json:"tool"`
+	Timeout *float64 `json:"timeout"`
+}
+
+var errHooksShape = errors.New("hooks is not an object of matcher groups")
+
+// Hooks parses one hook source. disableAllHooks follows Claude's merge rule:
+// a Boolean sets it, null clears an earlier value, anything else changes
+// nothing, so it is read apart from the struct.
+func Hooks(data []byte) (HookSettings, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return HookSettings{}, err
+	}
+	var s HookSettings
+	if raw, ok := top["hooks"]; ok && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &s.Hooks); err != nil {
+			return HookSettings{}, errHooksShape
+		}
+	}
+	if raw, ok := top["disableAllHooks"]; ok {
+		var value *bool
+		if json.Unmarshal(raw, &value) == nil {
+			s.DisableAllHooks, s.DisableAllHooksSet = value, true
+		}
+	}
+	for key, target := range map[string]any{
+		"allowManagedHooksOnly":         &s.AllowManagedHooksOnly,
+		"allowedHttpHookUrls":           &s.AllowedHTTPHookURLs,
+		"strictPluginOnlyCustomization": &s.StrictPluginOnlyCustomization,
+		"enabledPlugins":                &s.EnabledPlugins,
+	} {
+		if raw, ok := top[key]; ok {
+			// A wrong type in one switch must not hide the file's hooks.
+			_ = json.Unmarshal(raw, target)
+		}
+	}
+	return s, nil
+}
+
+// Handler reads the reported fields of one raw handler. A handler that is not
+// an object is reported with an empty type, which the scanner calls unknown.
+func Handler(raw json.RawMessage) HookHandler {
+	var h HookHandler
+	if json.Unmarshal(raw, &h) != nil {
+		var loose map[string]json.RawMessage
+		if json.Unmarshal(raw, &loose) == nil {
+			_ = json.Unmarshal(loose["type"], &h.Type)
+		}
+	}
+	return h
+}

@@ -1,0 +1,565 @@
+package agentauthority
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/kontext-security/kontext/internal/agenthooks"
+	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/hook"
+	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
+)
+
+// Hook inventory (ADR-0011): one record per hook entry an agent loads, with
+// health per scope, sent as device.hook_inventory beside the <agent>/hooks
+// inventory source. The cloud side is kontext-cloud
+// packages/shared/src/features/enterprise-dashboard/hook-inventory.ts, and
+// both pin testdata/hook-inventory-v1.json.
+const (
+	HookInventorySchema = "hook-inventory-v1"
+	HookIDScheme        = 1
+	// Per agent. Past them the agent is truncated and its source partial.
+	MaxHookRecords = 512
+	MaxHookScopes  = 128
+	// Projects Claude Code lists in ~/.claude.json, as the authority scan.
+	maxHookProjects = 32
+)
+
+// Scope kinds.
+const (
+	HookScopeManaged       = "managed"
+	HookScopeManagedDropIn = "managed_dropin"
+	HookScopeUser          = "user"
+	HookScopeProject       = "project"
+	HookScopeProjectLocal  = "project_local"
+	HookScopePlugin        = "plugin"
+)
+
+// Origins.
+const (
+	HookOriginKontext  = "kontext"
+	HookOriginPlugin   = "plugin"
+	HookOriginSettings = "settings"
+	HookOriginUnknown  = "unknown"
+)
+
+// Evidence levels.
+const (
+	HookEvidenceDiscovered          = "discovered"
+	HookEvidenceConfigChecked       = "config_checked"
+	HookEvidenceInvocationObserved  = "invocation_observed"
+	HookEvidencePolicyEvaluated     = "policy_evaluated"
+	HookEvidenceEnforcementVerified = "enforcement_verified"
+)
+
+// ErrNoHookKey means the per-Mac key could not be derived. The endpoint then
+// sends no hook inventory rather than weaker ids.
+var ErrNoHookKey = errors.New("hook inventory needs the per-Mac key")
+
+type HookInventory struct {
+	Schema   string      `json:"schema"`
+	IDScheme int         `json:"id_scheme"`
+	Agents   []HookAgent `json:"agents"`
+}
+
+type HookAgent struct {
+	ID           string         `json:"id"`
+	AgentVersion *string        `json:"agent_version"`
+	Truncated    bool           `json:"truncated"`
+	KontextHooks KontextHookSet `json:"kontext_hooks"`
+	Scopes       []HookScope    `json:"scopes"`
+	Hooks        []HookRecord   `json:"hooks"`
+}
+
+// KontextHookSet says whether Kontext's own handlers cover every event it
+// installs: complete, needs_update (some missing, ENG-694) or missing.
+type KontextHookSet struct {
+	State         string   `json:"state"`
+	MissingEvents []string `json:"missing_events"`
+}
+
+type HookScope struct {
+	ID        string   `json:"id"`
+	Kind      string   `json:"kind"`
+	Status    string   `json:"status"`
+	Reasons   []string `json:"reasons"`
+	CheckedAt string   `json:"checked_at"`
+}
+
+type HookRecord struct {
+	ID            string         `json:"id"`
+	ScopeID       string         `json:"scope_id"`
+	PreviousID    string         `json:"previous_id,omitempty"`
+	Event         string         `json:"event"`
+	Matcher       *string        `json:"matcher"`
+	Type          string         `json:"type"`
+	Summary       *string        `json:"summary"`
+	TimeoutS      *int           `json:"timeout_s"`
+	Plugin        *HookPlugin    `json:"plugin"`
+	Origin        string         `json:"origin"`
+	ClaimsKontext bool           `json:"claims_kontext"`
+	ContentFP     string         `json:"content_fp"`
+	Match         string         `json:"match"`
+	Enablement    HookEnablement `json:"enablement"`
+	Evidence      HookEvidence   `json:"evidence"`
+}
+
+type HookPlugin struct {
+	Name        string  `json:"name"`
+	Marketplace *string `json:"marketplace"`
+	Version     *string `json:"version"`
+}
+
+type HookEnablement struct {
+	State   string   `json:"state"`
+	Reasons []string `json:"reasons"`
+}
+
+type HookEvidence struct {
+	Level             string            `json:"level"`
+	DiscoveredAt      string            `json:"discovered_at"`
+	ConfigCheckedAt   *string           `json:"config_checked_at"`
+	InvocationAt      *string           `json:"invocation_at"`
+	PolicyEvaluatedAt *string           `json:"policy_evaluated_at"`
+	PolicyDecision    *string           `json:"policy_decision"`
+	VerifiedAt        *string           `json:"verified_at"`
+	Verification      *HookVerification `json:"verification"`
+}
+
+type HookVerification struct {
+	AgentVersion   *string `json:"agent_version"`
+	ContentFP      string  `json:"content_fp"`
+	PolicyRevision *string `json:"policy_revision"`
+}
+
+// HookScanOptions are the inputs of one Claude Code hook scan.
+type HookScanOptions struct {
+	Home string
+	// ConfigDir is Claude Code's user folder; empty means ~/.claude.
+	ConfigDir string
+	// Key is the per-Mac secret from deviceid.HookInventoryKey.
+	Key          []byte
+	AgentVersion string
+	// OwnBinary reports whether path is the installed Kontext binary, the
+	// same file and not only the same name. Nil verifies nothing.
+	OwnBinary func(path string) bool
+	Now       time.Time
+	// BeginRead applies the daemon's disk policy to each read.
+	BeginRead func() func()
+	managed   string
+}
+
+// HookSourceID is the inventory source the scan's result reports under.
+func HookSourceID(agent string) string { return agent + "/hooks" }
+
+// ScanHooks reads Claude Code's hook sources: machine-wide managed settings
+// and drop-ins, the user's settings, the two settings files of each project
+// Claude Code lists, and each installed plugin's hooks. It reads only those
+// fixed files, under the same guard as the authority scan.
+func ScanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResult, error) {
+	if opts.managed == "" {
+		opts.managed = managedRoot
+	}
+	return scanHooks(ctx, opts)
+}
+
+var hookEventName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
+
+type hookScan struct {
+	g      *guard
+	opts   HookScanOptions
+	source *SourceHealth
+	agent  HookAgent
+	// buckets count identical entries for the ordinal; see hookID.
+	buckets map[string]int
+	// settings in Claude's precedence order, for enablement.
+	layers   []hookLayer
+	plugins  map[string]bool
+	unlisted bool
+	// raw holds what enablement needs per record, beside agent.Hooks.
+	raw []hookRaw
+	// trust is each listed project's trust dialog answer, by folder.
+	trust map[string]*bool
+	// signedIn is the claude.ai organization ~/.claude.json names, if any.
+	signedIn bool
+	project  string
+}
+
+type hookRaw struct {
+	url     string
+	program string
+	// layer indexes layers; -1 for a plugin.
+	layer          int
+	project        string
+	pluginDisabled bool
+}
+
+// hookLayer is one settings file that took part in the scan.
+type hookLayer struct {
+	kind     string
+	scope    string
+	settings readers.HookSettings
+	ok       bool
+	project  string
+}
+
+func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResult, error) {
+	agentID := "claude_code"
+	if len(opts.Key) == 0 {
+		return HookAgent{}, SourceResult{}, ErrNoHookKey
+	}
+	if opts.Now.IsZero() {
+		opts.Now = time.Now()
+	}
+	home := filepath.Clean(opts.Home)
+	base := opts.ConfigDir
+	if base == "" {
+		base = filepath.Join(home, ".claude")
+	}
+	report := &Report{Coverage: Coverage{UnknownFormat: []string{}, Errors: []string{}}}
+	g := &guard{ctx: ctx, home: home, managed: opts.managed, roots: []string{opts.managed, base, filepath.Join(home, ".claude.json")}, report: report, beginRead: opts.BeginRead, seen: map[string]bool{}}
+	s := &hookScan{g: g, opts: opts, source: NewSourceHealth(HookSourceID(agentID), opts.Now), buckets: map[string]int{}, plugins: map[string]bool{}, trust: map[string]*bool{}}
+	s.agent = HookAgent{ID: agentID, Scopes: []HookScope{}, Hooks: []HookRecord{}}
+	if version := safe(opts.AgentVersion, 64); version != "" {
+		s.agent.AgentVersion = &version
+	}
+
+	// Machine-wide first, in Claude's merge order, then the user, projects
+	// and plugins. Later layers never outrank managed settings.
+	s.settingsScope(HookScopeManaged, filepath.Join(opts.managed, "managed-settings.json"), false)
+	dropins := filepath.Join(opts.managed, "managed-settings.d")
+	s.only()
+	before := len(s.source.reasons)
+	entries := g.entries(dropins)
+	s.unlisted = len(s.source.reasons) > before
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		s.settingsScope(HookScopeManagedDropIn, filepath.Join(dropins, name), true)
+	}
+	s.settingsScope(HookScopeUser, filepath.Join(base, "settings.json"), false)
+
+	s.only()
+	root, _ := readConfig(g, agentID, filepath.Join(home, ".claude.json"), readers.Claude)
+	s.signedIn = root.OAuthAccount.OrganizationUUID != ""
+	projects := keys(root.Projects)
+	if len(projects) > maxHookProjects {
+		s.source.Fail(ReasonWalkLimit)
+		projects = projects[:maxHookProjects]
+	}
+	for _, project := range projects {
+		dir := filepath.Clean(project)
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		// Only these two files, never a walk: the one place a path found in
+		// configuration is read (ADR-0011).
+		shared, local := filepath.Join(dir, ".claude", "settings.json"), filepath.Join(dir, ".claude", "settings.local.json")
+		g.roots = append(g.roots, shared, local)
+		s.trust[dir] = root.Projects[project].HasTrustDialogAccepted
+		s.project = dir
+		s.settingsScope(HookScopeProject, shared, false)
+		s.settingsScope(HookScopeProjectLocal, local, false)
+	}
+	s.project = ""
+	s.pluginScopes(base)
+	s.finish()
+	s.only()
+	result := s.source.Result(time.Now())
+	if s.agent.Truncated && result.Status == StatusComplete {
+		result.Status = StatusPartial
+		result.Reasons = []string{ReasonSizeLimit}
+	}
+	return s.agent, result, nil
+}
+
+// only makes the following reads count for the source alone.
+func (s *hookScan) only() { s.g.active = []*SourceHealth{s.source} }
+
+// scope opens a scope and makes the following reads count for it too. It
+// returns nil past the scope cap.
+func (s *hookScan) scope(kind, canonical string) (*SourceHealth, string) {
+	if len(s.agent.Scopes) >= MaxHookScopes {
+		s.agent.Truncated = true
+		s.source.Fail(ReasonSizeLimit)
+		return nil, ""
+	}
+	h := NewSourceHealth(kind, s.opts.Now)
+	s.g.active = []*SourceHealth{s.source, h}
+	return h, scopeID(s.opts.Key, kind, canonical)
+}
+
+func (s *hookScan) closeScope(h *SourceHealth, id, kind string) {
+	result := h.Result(s.opts.Now)
+	s.agent.Scopes = append(s.agent.Scopes, HookScope{ID: id, Kind: kind, Status: result.Status, Reasons: append([]string{}, result.Reasons...), CheckedAt: result.FinishedAt})
+	s.only()
+}
+
+func (s *hookScan) settingsScope(kind, path string, listed bool) {
+	h, id := s.scope(kind, filepath.Clean(path))
+	if h == nil {
+		return
+	}
+	var settings readers.HookSettings
+	var ok bool
+	if listed {
+		settings, ok = readListed(s.g, s.agent.ID, path, readers.Hooks)
+	} else {
+		settings, ok = readConfig(s.g, s.agent.ID, path, readers.Hooks)
+	}
+	s.layers = append(s.layers, hookLayer{kind: kind, scope: id, settings: settings, ok: ok, project: s.project})
+	if ok {
+		for key, value := range settings.EnabledPlugins {
+			if kind != HookScopeProject && kind != HookScopeProjectLocal {
+				s.plugins[key] = value
+			}
+		}
+		s.records(id, kind, settings.Hooks, nil, len(s.layers)-1)
+	}
+	s.closeScope(h, id, kind)
+}
+
+// pluginScopes reads each installed plugin's hooks: hooks/hooks.json, or the
+// file or object its manifest names instead.
+func (s *hookScan) pluginScopes(base string) {
+	type pluginIndex struct {
+		Plugins map[string][]struct {
+			InstallPath string `json:"installPath"`
+			Version     string `json:"version"`
+		} `json:"plugins"`
+	}
+	type pluginManifest struct {
+		Name    string          `json:"name"`
+		Version string          `json:"version"`
+		Hooks   json.RawMessage `json:"hooks"`
+	}
+	s.only()
+	index, ok := readConfig(s.g, s.agent.ID, filepath.Join(base, "plugins/installed_plugins.json"), parseJSON[pluginIndex])
+	if !ok {
+		return
+	}
+	cache := filepath.Join(base, "plugins/cache")
+	for _, key := range keys(index.Plugins) {
+		for _, entry := range index.Plugins[key] {
+			installed := filepath.Clean(entry.InstallPath)
+			if !within(cache, installed) {
+				s.source.Fail(ReasonPermissionDenied)
+				continue
+			}
+			// Keyed by name and marketplace, so an update to a new cache
+			// folder keeps the scope.
+			h, id := s.scope(HookScopePlugin, "plugin|"+key)
+			if h == nil {
+				return
+			}
+			manifest, _ := readConfig(s.g, s.agent.ID, filepath.Join(installed, ".claude-plugin/plugin.json"), parseJSON[pluginManifest])
+			name, market, _ := strings.Cut(key, "@")
+			if manifest.Name != "" {
+				name = manifest.Name
+			}
+			version := manifest.Version
+			if version == "" {
+				version = entry.Version
+			}
+			plugin := &HookPlugin{Name: safe(name, 128), Marketplace: pointer(safe(market, 128)), Version: pointer(safe(version, 64))}
+			if plugin.Name == "" {
+				plugin.Name = "<redacted>"
+			}
+			enabled, set := s.plugins[key]
+			var hooks map[string][]readers.HookGroup
+			switch trimmed := strings.TrimSpace(string(manifest.Hooks)); {
+			case strings.HasPrefix(trimmed, "{"):
+				if parsed, err := readers.Hooks([]byte(`{"hooks":` + trimmed + `}`)); err == nil {
+					hooks = parsed.Hooks
+				} else {
+					h.Fail(ReasonMalformed)
+					s.source.Fail(ReasonMalformed)
+				}
+			case strings.HasPrefix(trimmed, `"`):
+				var rel string
+				_ = json.Unmarshal(manifest.Hooks, &rel)
+				path := filepath.Join(installed, rel)
+				if !within(installed, path) {
+					h.Fail(ReasonPermissionDenied)
+					s.source.Fail(ReasonPermissionDenied)
+					break
+				}
+				s.g.roots = append(s.g.roots, path)
+				if parsed, ok := readConfig(s.g, s.agent.ID, path, readers.Hooks); ok {
+					hooks = parsed.Hooks
+				}
+			default:
+				if parsed, ok := readConfig(s.g, s.agent.ID, filepath.Join(installed, "hooks/hooks.json"), readers.Hooks); ok {
+					hooks = parsed.Hooks
+				}
+			}
+			disabled := set && !enabled
+			s.records(id, HookScopePlugin, hooks, &pluginRef{plugin: plugin, key: key, disabled: disabled}, -1)
+			s.closeScope(h, id, HookScopePlugin)
+		}
+	}
+}
+
+type pluginRef struct {
+	plugin   *HookPlugin
+	key      string
+	disabled bool
+}
+
+// records adds one record per handler, in declaration order within each event.
+func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGroup, plugin *pluginRef, layer int) {
+	for _, event := range keys(hooks) {
+		if !hookEventName.MatchString(event) {
+			s.g.fail(ReasonUnsupportedFormat)
+			continue
+		}
+		for _, group := range hooks[event] {
+			matcher := ""
+			if group.Matcher != nil {
+				matcher = *group.Matcher
+			}
+			for _, raw := range group.Hooks {
+				if len(s.agent.Hooks) >= MaxHookRecords {
+					s.agent.Truncated = true
+					s.g.fail(ReasonSizeLimit)
+					return
+				}
+				record, info := s.record(scope, kind, event, matcher, raw, plugin)
+				info.layer, info.project = layer, s.project
+				info.pluginDisabled = plugin != nil && plugin.disabled
+				s.agent.Hooks = append(s.agent.Hooks, record)
+				s.raw = append(s.raw, info)
+			}
+		}
+	}
+}
+
+var knownHookTypes = []string{"command", "http", "mcp_tool", "prompt", "agent"}
+
+func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessage, plugin *pluginRef) (HookRecord, hookRaw) {
+	h := readers.Handler(raw)
+	info := hookRaw{url: h.URL}
+	kind_ := h.Type
+	if !slices.Contains(knownHookTypes, kind_) {
+		kind_ = "unknown"
+	}
+	r := HookRecord{ScopeID: scope, Event: event, Type: kind_, Origin: HookOriginSettings, Enablement: HookEnablement{State: "unresolved", Reasons: []string{"unresolved"}}}
+	if m := safe(matcher, 256); m != "" {
+		r.Matcher = &m
+	}
+	if h.Timeout != nil && *h.Timeout >= 0 && *h.Timeout <= 86400 {
+		seconds := int(*h.Timeout)
+		r.TimeoutS = &seconds
+	}
+	anchor := kind_
+	if kind_ == "unknown" {
+		anchor = "unknown:" + safe(h.Type, 64)
+	}
+	switch kind_ {
+	case "command":
+		fields, ok := agenthooks.SplitCommand(h.Command)
+		if len(h.Args) > 0 {
+			fields, ok = append([]string{h.Command}, h.Args...), h.Command != ""
+		}
+		if ok && len(fields) > 0 {
+			program := fields[0]
+			info.program = program
+			anchor = "cmd:" + filepath.Base(program)
+			words := append([]string{safe(filepath.Base(program), 64)}, safeArgs(fields[1:])...)
+			r.Summary = pointer(safe(strings.Join(words, " "), 256))
+			alias, known := claudemanaged.AliasForEvent(hook.HookName(event))
+			call := known && len(fields) == 3 && agenthooks.IsKontextBinary(program) && fields[1] == "hook" && fields[2] == alias
+			r.ClaimsKontext = call || agenthooks.IsKontextBinary(program)
+			if call && s.opts.OwnBinary != nil && s.opts.OwnBinary(program) {
+				r.Origin = HookOriginKontext
+			}
+		} else {
+			anchor = "cmd:"
+		}
+	case "http":
+		if u, err := url.Parse(h.URL); err == nil && u.Scheme != "" && u.Hostname() != "" {
+			anchor = "http:" + strings.ToLower(u.Hostname())
+			r.Summary = pointer(safe(u.Scheme+"://"+u.Host, 256))
+		}
+	case "mcp_tool":
+		name := safe(h.Server, 128) + "/" + safe(h.Tool, 128)
+		anchor = "mcp:" + name
+		r.Summary = pointer(safe(name, 256))
+	}
+	if plugin != nil {
+		r.Plugin = plugin.plugin
+		if r.Origin != HookOriginKontext {
+			r.Origin = HookOriginPlugin
+		}
+	}
+	pluginKey := ""
+	if plugin != nil {
+		pluginKey = plugin.key
+	}
+	bucket := strings.Join([]string{s.agent.ID, scope, pluginKey, event, matcher, kind_, anchor}, "\x00")
+	ordinal := s.buckets[bucket]
+	s.buckets[bucket] = ordinal + 1
+	r.ID = hookID(s.opts.Key, bucket, ordinal)
+	r.ContentFP = contentFP(s.opts.Key, event, matcher, raw)
+	r.Match = bucket // resolved in finish, once every entry is counted
+	r.Evidence = HookEvidence{Level: HookEvidenceDiscovered, DiscoveredAt: s.opts.Now.UTC().Format(time.RFC3339Nano)}
+	return r, info
+}
+
+// finish resolves what needs every entry: whether an id is unique by anchor,
+// enablement, and Kontext's own set.
+func (s *hookScan) finish() {
+	for i := range s.agent.Hooks {
+		r := &s.agent.Hooks[i]
+		if s.buckets[r.Match] > 1 {
+			r.Match = "positional"
+		} else {
+			r.Match = "anchor"
+		}
+	}
+	evaluateEnablement(s)
+	s.agent.KontextHooks = kontextHookSet(s.agent.Hooks)
+}
+
+// kontextHookSet compares Kontext's verified, enabled handlers with the
+// events it installs.
+func kontextHookSet(records []HookRecord) KontextHookSet {
+	covered := map[string]bool{}
+	for _, r := range records {
+		if r.Origin == HookOriginKontext && r.Enablement.State != "disabled" {
+			covered[r.Event] = true
+		}
+	}
+	set := KontextHookSet{State: "complete", MissingEvents: []string{}}
+	for _, event := range claudemanaged.SupportedEvents {
+		if !covered[event.Name.String()] {
+			set.MissingEvents = append(set.MissingEvents, event.Name.String())
+		}
+	}
+	switch {
+	case len(set.MissingEvents) == len(claudemanaged.SupportedEvents):
+		set.State = "missing"
+	case len(set.MissingEvents) > 0:
+		set.State = "needs_update"
+	}
+	return set
+}
+
+// SameFileAs is the OwnBinary check against one installed binary.
+func SameFileAs(installed string) func(string) bool {
+	return func(path string) bool {
+		a, errA := os.Stat(path)
+		b, errB := os.Stat(installed)
+		return errA == nil && errB == nil && os.SameFile(a, b)
+	}
+}
