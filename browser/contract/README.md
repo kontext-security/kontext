@@ -57,6 +57,18 @@ accepts the dev ID that the extension's dev builds carry.
 
 ## Rules for both sides
 
-- Unknown fields are ignored. An unknown record kind is rejected.
+- Read `contract` first. A message of another version gets
+  `unsupported_contract` whatever the rest looks like; a message without one is
+  invalid.
+- Keys match exactly: `Type` is an unknown field, not `type`.
+- Unknown fields are ignored, whatever their type, and so are fields that
+  belong to the other record kind. An unknown record kind is rejected.
+- A visit's `first_seen` and `last_seen` fall on its `day` in UTC, in order.
+- Empty lists are `[]`, never `null`.
+- The cloud batch is stricter than an extension's message: a record there
+  carries only its own kind's fields.
+- The cloud's answer accounts for every record of the batch once: `accepted`
+  plus the distinct indexes in `rejected`. Any other answer is an error and the
+  batch is sent again.
 - `fixtures/valid` must decode on both sides; `fixtures/invalid` must be
   rejected. `schema.json` describes the same shapes.

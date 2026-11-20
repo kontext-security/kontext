@@ -120,6 +120,19 @@ type Settings struct {
 	Rejected         []Rejection `json:"rejected"`
 }
 
+// MarshalJSON writes empty lists as [], as the schema wants arrays, never
+// null.
+func (s Settings) MarshalJSON() ([]byte, error) {
+	type plain Settings
+	if s.CorporateDomains == nil {
+		s.CorporateDomains = []string{}
+	}
+	if s.Rejected == nil {
+		s.Rejected = []Rejection{}
+	}
+	return json.Marshal(plain(s))
+}
+
 // ErrorAnswer is the daemon's answer to a message it cannot take at all.
 type ErrorAnswer struct {
 	Contract int    `json:"contract"`
@@ -160,22 +173,39 @@ type CloudResponse struct {
 // version.
 var ErrUnsupportedContract = errors.New("browser events: unsupported contract version")
 
-// DecodeMessage reads one message from the extension. Unknown fields are
-// ignored. It returns ErrUnsupportedContract for another version, and an
-// error for a message that is not a valid hello or records message. Records
-// are checked one by one with DecodeRecords, so one bad record does not
-// refuse the others.
+// DecodeMessage reads one message from the extension. It reads the contract
+// version before anything else, so a message of another version gets
+// ErrUnsupportedContract whatever shape the rest of it has. Unknown fields
+// are ignored, whatever their type, and keys match exactly: encoding/json
+// would let "Type" overwrite "type". Records are checked one by one with
+// DecodeRecords, so one bad record does not refuse the others.
 func DecodeMessage(data []byte) (Message, error) {
 	if len(data) > MaxMessageBytes {
 		return Message{}, fmt.Errorf("browser events: message exceeds %d bytes", MaxMessageBytes)
 	}
-	var msg Message
-	if err := json.Unmarshal(data, &msg); err != nil {
+	fields, err := readObject(data)
+	if err != nil {
 		return Message{}, fmt.Errorf("browser events: decode message: %w", err)
 	}
-	if msg.Contract != Contract {
+	if _, ok := fields["contract"]; !ok {
+		return Message{}, errors.New("browser events: message without contract")
+	}
+	version, ok := fields.integer("contract")
+	if !ok {
+		return Message{}, errors.New("browser events: contract must be an integer")
+	}
+	if version != Contract {
 		return Message{}, ErrUnsupportedContract
 	}
+	msg := Message{Contract: version}
+	msg.Type, _ = fields.text("type")
+	extension, err := readObject(fields["extension"])
+	if err != nil {
+		return Message{}, errors.New("browser events: message without extension")
+	}
+	msg.Extension.Version, _ = extension.text("version")
+	msg.Extension.Browser, _ = extension.text("browser")
+	msg.Extension.Profile, _ = extension.text("profile")
 	if err := msg.Extension.validate(); err != nil {
 		return Message{}, err
 	}
@@ -183,6 +213,7 @@ func DecodeMessage(data []byte) (Message, error) {
 	case TypeHello:
 		return msg, nil
 	case TypeRecords:
+		msg.Records = fields["records"]
 		if len(bytes.TrimSpace(msg.Records)) == 0 {
 			return Message{}, errors.New("browser events: records message without records")
 		}
@@ -204,15 +235,14 @@ func DecodeRecords(raw json.RawMessage) ([]IndexedRecord, []Rejection, error) {
 	if len(items) == 0 || len(items) > MaxRecordsPerMessage {
 		return nil, nil, fmt.Errorf("browser events: %d records, want 1 to %d", len(items), MaxRecordsPerMessage)
 	}
-	var valid []IndexedRecord
-	var rejected []Rejection
+	valid := []IndexedRecord{}
+	rejected := []Rejection{}
 	for i, item := range items {
-		var record Record
-		if err := json.Unmarshal(item, &record); err != nil {
+		record, err := decodeRecord(item)
+		if err != nil {
 			rejected = append(rejected, Rejection{Index: i, Reason: "not a record"})
 			continue
 		}
-		record = record.own()
 		if err := record.Validate(); err != nil {
 			rejected = append(rejected, Rejection{Index: i, Reason: err.Error()})
 			continue
@@ -220,6 +250,119 @@ func DecodeRecords(raw json.RawMessage) ([]IndexedRecord, []Rejection, error) {
 		valid = append(valid, IndexedRecord{Index: i, Record: record})
 	}
 	return valid, rejected, nil
+}
+
+// decodeRecord reads the kind, then only that kind's fields, so a field the
+// schema does not name for the kind is ignored whatever its type. A field of
+// the wrong type reads as missing, and Validate names it.
+func decodeRecord(data []byte) (Record, error) {
+	fields, err := readObject(data)
+	if err != nil {
+		return Record{}, err
+	}
+	record := Record{}
+	record.Kind, _ = fields.text("kind")
+	switch record.Kind {
+	case KindHealth:
+		record.ConnectedSince, _ = fields.text("connected_since")
+		record.ObservedAt, _ = fields.text("observed_at")
+	case KindVisit:
+		record.Day, _ = fields.text("day")
+		record.App, _ = fields.text("app")
+		record.AppName, _ = fields.text("app_name")
+		record.Provider, _ = fields.text("provider")
+		record.Surface, _ = fields.text("surface")
+		record.Host, _ = fields.text("host")
+		record.FirstSeen, _ = fields.text("first_seen")
+		record.LastSeen, _ = fields.text("last_seen")
+		record.Requests, _ = fields.integer("requests")
+	}
+	return record, nil
+}
+
+// DecodeCloudResponse reads the cloud's answer to a batch of sent records.
+// The answer must account for every record exactly once: accepted plus the
+// rejected, whose indexes are distinct and inside the batch. Anything else,
+// such as {} or null from a proxy, is an error, and the batch is not marked
+// sent.
+func DecodeCloudResponse(data []byte, sent int) (CloudResponse, error) {
+	fields, err := readObject(data)
+	if err != nil {
+		return CloudResponse{}, fmt.Errorf("browser events: cloud answer is not an object: %w", err)
+	}
+	accepted, ok := fields.integer("accepted")
+	if !ok || accepted < 0 {
+		return CloudResponse{}, errors.New("browser events: cloud answer without accepted")
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(fields["rejected"], &items); err != nil || items == nil {
+		return CloudResponse{}, errors.New("browser events: cloud answer without rejected")
+	}
+	response := CloudResponse{Accepted: accepted, Rejected: make([]Rejection, 0, len(items))}
+	seen := map[int]bool{}
+	for _, item := range items {
+		rejection, err := readObject(item)
+		if err != nil {
+			return CloudResponse{}, errors.New("browser events: cloud rejection is not an object")
+		}
+		index, ok := rejection.integer("index")
+		if !ok || index < 0 || index >= sent || seen[index] {
+			return CloudResponse{}, errors.New("browser events: cloud rejection index is out of range or repeated")
+		}
+		seen[index] = true
+		reason, _ := rejection.text("reason")
+		response.Rejected = append(response.Rejected, Rejection{Index: index, Reason: reason})
+	}
+	if accepted+len(response.Rejected) != sent {
+		return CloudResponse{}, fmt.Errorf("browser events: cloud answer accounts for %d of %d records",
+			accepted+len(response.Rejected), sent)
+	}
+	return response, nil
+}
+
+// object is a JSON object with its keys exactly as sent.
+type object map[string]json.RawMessage
+
+func readObject(data []byte) (object, error) {
+	var fields object
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	if fields == nil {
+		return nil, errors.New("not an object")
+	}
+	return fields, nil
+}
+
+// text is the string at key, and whether there is one. JSON null into a Go
+// value is no error, so it is caught here.
+func (o object) text(key string) (string, bool) {
+	var value string
+	if o.null(key) {
+		return "", false
+	}
+	if err := json.Unmarshal(o[key], &value); err != nil {
+		return "", false
+	}
+	return value, true
+}
+
+// integer is the integer at key, and whether there is one.
+func (o object) integer(key string) (int, bool) {
+	var value int
+	if o.null(key) {
+		return 0, false
+	}
+	if err := json.Unmarshal(o[key], &value); err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+// null reports whether key is missing or null.
+func (o object) null(key string) bool {
+	value := bytes.TrimSpace(o[key])
+	return len(value) == 0 || bytes.Equal(value, []byte("null"))
 }
 
 // IndexedRecord is a valid record and its index in the message.
@@ -243,9 +386,9 @@ func (e Extension) validate() error {
 	return nil
 }
 
-// own keeps only the fields of the record's kind. The schema ignores fields
-// it does not name, so a health record may carry a visit's fields; those are
-// never checked, and must not travel on to the store or the cloud.
+// own keeps only the fields of the record's kind. decodeRecord reads no
+// others; Validate uses it to refuse a record built any other way that
+// carries them, so they never travel on to the store or the cloud.
 func (r Record) own() Record {
 	switch r.Kind {
 	case KindHealth:
@@ -291,6 +434,9 @@ func (r Record) Validate() error {
 		}
 		if !isTime(r.FirstSeen) || !isTime(r.LastSeen) {
 			return errors.New("visit needs first_seen and last_seen")
+		}
+		if !insideDay(r.Day, r.FirstSeen, r.LastSeen) {
+			return errors.New("visit times outside its day")
 		}
 		if r.Requests < 1 || r.Requests > MaxRequestsPerDay {
 			return errors.New("visit requests out of range")
@@ -341,6 +487,16 @@ func isDay(value string) bool {
 	}
 	_, err := time.Parse(time.DateOnly, value)
 	return err == nil
+}
+
+// insideDay reports whether first and last fall on day in UTC, in order.
+func insideDay(day, first, last string) bool {
+	from, errFrom := time.Parse(time.RFC3339, first)
+	to, errTo := time.Parse(time.RFC3339, last)
+	if errFrom != nil || errTo != nil || to.Before(from) {
+		return false
+	}
+	return from.UTC().Format(time.DateOnly) == day && to.UTC().Format(time.DateOnly) == day
 }
 
 // isLabel counts characters, as the schema's maxLength does, not bytes.
