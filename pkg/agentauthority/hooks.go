@@ -207,7 +207,9 @@ type hookRaw struct {
 	// handler-level `if`. Coverage reads these, never the redacted copy.
 	matcher     string
 	conditional bool
-	kind        string
+	// async: the agent doesn't wait for the handler, so it can't block.
+	async bool
+	kind  string
 	// layer indexes layers; -1 for a plugin.
 	layer          int
 	project        string
@@ -274,11 +276,15 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		s.agent.Truncated = true
 		projects = projects[:maxHookProjects]
 	}
+	listed := map[string]bool{}
 	for _, project := range projects {
 		dir := filepath.Clean(project)
-		if !filepath.IsAbs(dir) {
+		// Two spellings of one directory (a trailing slash) are one project,
+		// and one scope.
+		if !filepath.IsAbs(dir) || listed[dir] {
 			continue
 		}
+		listed[dir] = true
 		// Only these two files, never a walk: the one place a path found in
 		// configuration is read (ADR-0011).
 		shared, local := filepath.Join(dir, ".claude", "settings.json"), filepath.Join(dir, ".claude", "settings.local.json")
@@ -370,6 +376,9 @@ func (s *hookScan) pluginScopes(base string) {
 		Name    string          `json:"name"`
 		Version string          `json:"version"`
 		Hooks   json.RawMessage `json:"hooks"`
+		// DefaultEnabled false leaves the plugin off until a setting turns
+		// it on.
+		DefaultEnabled *bool `json:"defaultEnabled"`
 	}
 	s.only()
 	index, ok := readConfig(s.g, s.agent.ID, filepath.Join(base, "plugins/installed_plugins.json"), parseJSON[pluginIndex])
@@ -416,7 +425,7 @@ func (s *hookScan) pluginScopes(base string) {
 			}
 			enabled, set := s.plugins.lookup(key, filepath.Clean(entry.ProjectPath))
 			hooks := s.pluginHooks(h, installed, manifest.Hooks)
-			disabled := set && !enabled
+			disabled := set && !enabled || !set && manifest.DefaultEnabled != nil && !*manifest.DefaultEnabled
 			// A project install runs under that project's settings.
 			if entry.ProjectPath != "" {
 				s.project = filepath.Clean(entry.ProjectPath)
@@ -443,7 +452,7 @@ func (s *hookScan) pluginHooks(h *SourceHealth, installed string, declared json.
 	}
 	defaultFile := filepath.Join(installed, "hooks", "hooks.json")
 	read := map[string]bool{}
-	file := func(path string) {
+	file := func(path string, declared bool) {
 		path = filepath.Clean(path)
 		if read[path] {
 			return
@@ -457,6 +466,11 @@ func (s *hookScan) pluginHooks(h *SourceHealth, installed string, declared json.
 		s.g.roots = append(s.g.roots, path)
 		if parsed, ok := readConfig(s.g, s.agent.ID, path, readers.Hooks); ok {
 			add(parsed.Hooks)
+		} else if declared {
+			// The manifest names it, so its absence is no empty file: hooks
+			// it holds may exist, and nothing of the scope is withdrawn.
+			h.Fail(ReasonReadError)
+			s.source.Fail(ReasonReadError)
 		}
 	}
 	inline := func(raw json.RawMessage) {
@@ -466,7 +480,7 @@ func (s *hookScan) pluginHooks(h *SourceHealth, installed string, declared json.
 			malformed()
 		}
 	}
-	file(defaultFile)
+	file(defaultFile, false)
 	var entry func(raw json.RawMessage, nested bool)
 	entry = func(raw json.RawMessage, nested bool) {
 		switch trimmed := strings.TrimSpace(string(raw)); {
@@ -479,7 +493,7 @@ func (s *hookScan) pluginHooks(h *SourceHealth, installed string, declared json.
 				malformed()
 				return
 			}
-			file(filepath.Join(installed, rel))
+			file(filepath.Join(installed, rel), true)
 		case strings.HasPrefix(trimmed, "[") && !nested:
 			var list []json.RawMessage
 			if json.Unmarshal(raw, &list) != nil {
@@ -527,7 +541,9 @@ type pluginRef struct {
 // records adds one record per handler, in declaration order within each event.
 func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGroup, plugin *pluginRef, layer int) {
 	for _, event := range keys(hooks) {
-		if !hookEventName.MatchString(event) {
+		// An event is a name in the agent's vocabulary; one that reads as a
+		// secret is a generator's mistake and never reported.
+		if !hookEventName.MatchString(event) || secret(event, "args") {
 			s.g.fail(ReasonUnsupportedFormat)
 			continue
 		}
@@ -561,7 +577,7 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 	if !slices.Contains(knownHookTypes, kind_) {
 		kind_ = "unknown"
 	}
-	info.matcher, info.conditional = matcher, strings.TrimSpace(h.If) != ""
+	info.matcher, info.conditional, info.async = matcher, strings.TrimSpace(h.If) != "", h.Async
 	r := HookRecord{ScopeID: scope, Event: event, Type: kind_, Origin: HookOriginSettings, Enablement: HookEnablement{State: "unresolved", Reasons: []string{"unresolved"}}}
 	if m := safeMatcher(matcher); m != "" {
 		r.Matcher = &m
@@ -607,7 +623,9 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 			r.ClaimsKontext = call || agenthooks.IsKontextBinary(program)
 			// Verified by metadata only, and never inside a privacy-guarded
 			// folder: the check must not prompt the user.
-			if call && s.opts.OwnBinary != nil && filepath.IsAbs(program) && !privacyfolder.Guarded(s.opts.Home, program) && s.opts.OwnBinary(program) {
+			// The path must be canonical: the guard reads it cleaned, while
+			// a symlink followed by ".." resolves elsewhere for the OS.
+			if call && s.opts.OwnBinary != nil && filepath.IsAbs(program) && program == filepath.Clean(program) && !privacyfolder.Guarded(s.opts.Home, program) && s.opts.OwnBinary(program) {
 				r.Origin = HookOriginKontext
 			}
 		} else {
@@ -655,7 +673,18 @@ func (s *hookScan) finish() {
 		}
 	}
 	evaluateEnablement(s)
-	s.agent.KontextHooks = kontextHookSet(s.agent.Hooks, s.raw)
+	s.agent.KontextHooks = kontextHookSet(s.agent.Hooks, s.raw, s.projectDisablesHooks())
+}
+
+// projectDisablesHooks reports whether a listed project's own settings turn
+// off its non-managed hooks: user-scope handlers then don't run there.
+func (s *hookScan) projectDisablesHooks() bool {
+	for _, layer := range s.layers {
+		if projectKind(layer.kind) && layer.ok && layer.settings.DisableAllHooksSet && layer.settings.DisableAllHooks != nil && *layer.settings.DisableAllHooks {
+			return true
+		}
+	}
+	return false
 }
 
 // kontextHookSet compares Kontext's verified, enabled handlers with the
@@ -663,16 +692,18 @@ func (s *hookScan) finish() {
 // everywhere on the Mac, covers it: one in managed or user settings, with no
 // narrowing matcher and no handler-level `if`. A project's hooks run in that
 // project alone, so they never cover the device.
-func kontextHookSet(records []HookRecord, raw []hookRaw) KontextHookSet {
+func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables bool) KontextHookSet {
 	covered := map[string]bool{}
 	for i, r := range records {
 		if i >= len(raw) || r.Origin != HookOriginKontext || r.Enablement.State != hookEnabled {
 			continue
 		}
 		info := raw[i]
-		deviceWide := info.kind == HookScopeManaged || info.kind == HookScopeManagedDropIn || info.kind == HookScopeUser
+		// A user handler is device-wide only while no project turns user
+		// hooks off; disableAllHooks there leaves managed ones running.
+		deviceWide := info.kind == HookScopeManaged || info.kind == HookScopeManagedDropIn || info.kind == HookScopeUser && !projectDisables
 		matcher := strings.TrimSpace(info.matcher)
-		if deviceWide && !info.conditional && (matcher == "" || matcher == "*") {
+		if deviceWide && !info.conditional && !info.async && (matcher == "" || matcher == "*") {
 			covered[r.Event] = true
 		}
 	}

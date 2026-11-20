@@ -39,6 +39,9 @@ type HookHandler struct {
 	// If narrows the handler to matching calls (Claude Code's handler-level
 	// `if`, a permission rule such as "Bash(git *)").
 	If string `json:"if"`
+	// Async runs the handler without waiting for it: its decision is
+	// ignored.
+	Async bool `json:"async"`
 }
 
 var errHooksShape = errors.New("hooks is not an object of matcher groups")

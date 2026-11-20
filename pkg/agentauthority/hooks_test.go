@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -672,6 +673,28 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 			t.Fatalf("%+v", agent.KontextHooks)
 		}
 	})
+	t.Run("async handler", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", map[string]any{"async": true})})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "missing" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("a project turns user hooks off", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		project := filepath.Join(h.home, "src", "app")
+		h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"disableAllHooks": true})
+		h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{"hasTrustDialogAccepted": true}}})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "missing" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+		// Managed handlers keep running there.
+		h.write(filepath.Join(h.managed, "managed-settings.d", "20-kontext.json"), map[string]any{"hooks": all(call, "", nil)})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "complete" {
+			t.Fatalf("managed %+v", agent.KontextHooks)
+		}
+	})
 	t.Run("managed file shadowed by MDM", func(t *testing.T) {
 		h, bin, call := setup(t)
 		h.mdm = true
@@ -788,4 +811,169 @@ func TestKontextCallNeedsOneLiteralCommand(t *testing.T) {
 	if r := byEvent(agent, "Stop")[0]; r.Origin != HookOriginKontext || *r.Summary != "kontext hook stop" {
 		t.Fatalf("literal call %+v", r)
 	}
+}
+
+// An attached short-flag value is a value: -pSECRET never reads as a flag.
+func TestHookSummaryDropsAttachedFlagValues(t *testing.T) {
+	got := hookSummary("mysql", []string{"-pExamplePass123", "-u", "root", "--host=db"})
+	if got != "mysql <redacted> -u <redacted> --host <redacted>" {
+		t.Fatalf("summary %q", got)
+	}
+}
+
+// Ownership needs the canonical path: a symlink followed by ".." can resolve
+// into a folder the cleaned spelling avoids.
+func TestKontextCallNeedsACanonicalPath(t *testing.T) {
+	h := newHookHome(t)
+	bin := filepath.Join(h.home, "bin", "kontext")
+	odd := filepath.Join(h.home, "bin") + string(filepath.Separator) + "link" + string(filepath.Separator) + ".." + string(filepath.Separator) + "kontext"
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command(agenthooks.ShellQuote(odd)+" hook stop"))})
+	agent, _ := h.scan(bin, odd)
+	if r := agent.Hooks[0]; r.Origin == HookOriginKontext {
+		t.Fatalf("non-canonical path verified: %+v", r)
+	}
+}
+
+// An event key that reads as a secret is never reported.
+func TestSecretEventNamesAreDropped(t *testing.T) {
+	h := newHookHome(t)
+	token := "ghp_" + strings.Repeat("a1", 18)
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": map[string]any{
+		token:  []any{map[string]any{"hooks": []any{command("notify.sh")}}},
+		"Stop": []any{map[string]any{"hooks": []any{command("notify.sh")}}},
+	}})
+	agent, result := h.scan()
+	data, _ := json.Marshal(agent)
+	if strings.Contains(string(data), token) || len(agent.Hooks) != 1 || result.Status == StatusComplete {
+		t.Fatalf("result %+v agent %s", result, data)
+	}
+}
+
+// A plugin whose manifest says defaultEnabled false is off until a setting
+// turns it on.
+func TestDefaultOffPluginIsDisabled(t *testing.T) {
+	h := newHookHome(t)
+	h.installPlugin("formatter@acme", nil, hooksOf("Stop", "", command("format.sh")))
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), map[string]any{"name": "formatter", "version": "1.4.0", "defaultEnabled": false})
+	agent, _ := h.scan()
+	if r := agent.Hooks[0]; r.Enablement.State != "disabled" || !slices.Contains(r.Enablement.Reasons, HookReasonPluginDisabled) {
+		t.Fatalf("%+v", r.Enablement)
+	}
+	on := true
+	h.installPlugin("formatter@acme", &on, hooksOf("Stop", "", command("format.sh")))
+	h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), map[string]any{"name": "formatter", "version": "1.4.0", "defaultEnabled": false})
+	agent, _ = h.scan()
+	if r := agent.Hooks[0]; slices.Contains(r.Enablement.Reasons, HookReasonPluginDisabled) {
+		t.Fatalf("turned on: %+v", r.Enablement)
+	}
+}
+
+// Two spellings of one project are one scope, so the block stays valid.
+func TestEquivalentProjectKeysShareAScope(t *testing.T) {
+	h := newHookHome(t)
+	project := filepath.Join(h.home, "src", "app")
+	h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("notify.sh"))})
+	h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{}, project + string(filepath.Separator): map[string]any{}}})
+	agent, _ := h.scan()
+	ids := map[string]bool{}
+	for _, scope := range agent.Scopes {
+		if ids[scope.ID] {
+			t.Fatalf("duplicate scope %s", scope.ID)
+		}
+		ids[scope.ID] = true
+	}
+	if len(agent.Hooks) != 1 {
+		t.Fatalf("hooks %+v", agent.Hooks)
+	}
+}
+
+// A hooks file the manifest names but that isn't there leaves its scope
+// partial: what it holds may exist.
+func TestMissingDeclaredPluginFileIsPartial(t *testing.T) {
+	h := newHookHome(t)
+	h.installPlugin("formatter@acme", nil, hooksOf("Stop", "", command("format.sh")))
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), map[string]any{"name": "formatter", "version": "1.4.0", "hooks": "./extra-hooks.json"})
+	agent, result := h.scan()
+	scope := scopeOf(agent, agent.Hooks[0].ScopeID)
+	if scope.Status == StatusComplete || result.Status == StatusComplete {
+		t.Fatalf("scope %+v result %+v", scope, result)
+	}
+}
+
+// An MDM profile with only managedSourcesBehavior supplies no policy.
+func TestMDMProfileNeedsPolicyKeys(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, data []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	xmlPlist := func(keys ...string) []byte {
+		var b strings.Builder
+		b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>`)
+		for _, key := range keys {
+			b.WriteString("<key>" + key + "</key><dict><key>nested</key><true/></dict>")
+		}
+		b.WriteString("</dict></plist>")
+		return []byte(b.String())
+	}
+	for name, test := range map[string]struct {
+		data []byte
+		want bool
+	}{
+		"xml behavior only":    {xmlPlist(mdmBehaviorKey), false},
+		"xml with policy":      {xmlPlist(mdmBehaviorKey, "hooks"), true},
+		"binary behavior only": {binaryPlist(mdmBehaviorKey), false},
+		"binary with policy":   {binaryPlist(mdmBehaviorKey, "disableAllHooks"), true},
+		"unreadable":           {[]byte("bplist00garbage"), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := mdmPlistSuppliesPolicy(write(strings.ReplaceAll(name, " ", "-")+".plist", test.data)); got != test.want {
+				t.Fatalf("policy = %v, want %v", got, test.want)
+			}
+		})
+	}
+	if mdmPlistSuppliesPolicy(filepath.Join(dir, "absent.plist")) {
+		t.Fatal("an absent profile supplies policy")
+	}
+}
+
+// binaryPlist encodes a dictionary of the keys, each mapped to true, as
+// bplist00 with one-byte offsets and references.
+func binaryPlist(keys ...string) []byte {
+	var body bytes.Buffer
+	body.WriteString("bplist00")
+	offsets := []int{}
+	object := func(b []byte) { offsets = append(offsets, body.Len()); body.Write(b) }
+	n := len(keys)
+	dict := []byte{0xD0 | byte(n)}
+	for i := range keys {
+		dict = append(dict, byte(1+i))
+	}
+	for range keys {
+		dict = append(dict, byte(1+n))
+	}
+	object(dict)
+	for _, key := range keys {
+		marker := []byte{0x50 | byte(len(key))}
+		if len(key) >= 15 {
+			marker = []byte{0x5F, 0x10, byte(len(key))}
+		}
+		object(append(marker, key...))
+	}
+	object([]byte{0x09})
+	table := body.Len()
+	for _, at := range offsets {
+		body.WriteByte(byte(at))
+	}
+	trailer := make([]byte, 32)
+	trailer[6], trailer[7] = 1, 1
+	binary.BigEndian.PutUint64(trailer[8:], uint64(len(offsets)))
+	binary.BigEndian.PutUint64(trailer[24:], uint64(table))
+	body.Write(trailer)
+	return body.Bytes()
 }
