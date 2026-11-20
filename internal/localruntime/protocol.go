@@ -1,6 +1,7 @@
 package localruntime
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -116,11 +117,17 @@ type CompactResult struct {
 	UpdatedToolOutput json.RawMessage `json:"updated_tool_output,omitempty"`
 }
 
+// WriteMessage writes v as one frame. It does not HTML-escape, which
+// json.Marshal does even inside a json.RawMessage: a relayed browser message
+// keeps its bytes, and so its size against the contract's limit.
 func WriteMessage(conn net.Conn, v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
+	data := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 
 	length := uint32(len(data))
 	if err := binary.Write(conn, binary.BigEndian, length); err != nil {
