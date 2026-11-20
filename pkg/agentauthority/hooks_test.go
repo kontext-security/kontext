@@ -173,12 +173,14 @@ func jsonEqual(a, b any) bool {
 // script and a plugin's post-tool hook all appear with event, origin and scope.
 func TestScanHooksThreeHooksFromThreeSources(t *testing.T) {
 	h := newHookHome(t)
-	h.write(filepath.Join(h.managed, "managed-settings.d", "20-kontext.json"), map[string]any{"hooks": hooksOf("PreToolUse", "*", command("/usr/local/bin/kontext hook pre-tool-use"))})
+	// An absolute path on every OS: ownership is checked only for one.
+	bin := filepath.Join(h.home, "bin", "kontext")
+	h.write(filepath.Join(h.managed, "managed-settings.d", "20-kontext.json"), map[string]any{"hooks": hooksOf("PreToolUse", "*", command(agenthooks.ShellQuote(bin)+" hook pre-tool-use"))})
 	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("PreToolUse", "Bash", command("bash /Users/dana/bin/check-secrets.sh --strict"))})
 	enabled := true
 	h.installPlugin("formatter@acme-tools", &enabled, hooksOf("PostToolUse", "Edit|Write", map[string]any{"type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/format.js", "timeout": 10}))
 
-	agent, result := h.scan("/usr/local/bin/kontext")
+	agent, result := h.scan(bin)
 	if result.ID != "claude_code/hooks" || result.Status != StatusComplete {
 		t.Fatalf("result %+v", result)
 	}
