@@ -31,7 +31,11 @@ type row struct {
 }
 
 type storeFile struct {
-	Rows map[string]*row `json:"rows"`
+	// Binding names the enrollment the rows were recorded under: a hash of
+	// the cloud, installation and install token. Rows never leave under
+	// another one.
+	Binding string          `json:"binding,omitempty"`
+	Rows    map[string]*row `json:"rows"`
 }
 
 // Store keeps the extension's records as snapshots until the cloud has them,
@@ -41,8 +45,9 @@ type Store struct {
 	path string
 	now  func() time.Time
 
-	mu   sync.Mutex
-	rows map[string]*row
+	mu      sync.Mutex
+	rows    map[string]*row
+	binding string
 	// dirty is set while the file is behind the rows, such as after a failed
 	// save, so the next call saves again rather than report success.
 	dirty bool
@@ -67,6 +72,7 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	var file storeFile
 	if json.Unmarshal(data, &file) == nil && file.Rows != nil {
 		s.rows = file.Rows
+		s.binding = file.Binding
 	}
 	if s.pruneLocked() {
 		// Days past KeepDays leave the disk now, not at the next message.
@@ -228,6 +234,24 @@ func (s *Store) Ack(p Pending) error {
 	return s.saveLocked()
 }
 
+// Bind ties the store to the enrollment it sends under. The first binding is
+// kept; another one drops every row, since they were recorded for an
+// enrollment that may belong to another workspace, and reports it.
+func (s *Store) Bind(binding string) (dropped int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch s.binding {
+	case binding:
+		return 0, nil
+	case "":
+	default:
+		dropped = len(s.rows)
+		s.rows = map[string]*row{}
+	}
+	s.binding = binding
+	return dropped, s.saveLocked()
+}
+
 // Len is the number of rows.
 func (s *Store) Len() int {
 	s.mu.Lock()
@@ -238,7 +262,7 @@ func (s *Store) Len() int {
 // saveLocked writes the rows. Until a write succeeds the store stays dirty.
 func (s *Store) saveLocked() error {
 	s.dirty = true
-	data, err := json.Marshal(storeFile{Rows: s.rows})
+	data, err := json.Marshal(storeFile{Binding: s.binding, Rows: s.rows})
 	if err != nil {
 		return err
 	}

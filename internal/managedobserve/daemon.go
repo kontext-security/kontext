@@ -441,6 +441,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Tokens:         sameCloudTokenSource(loadedConfig.Config.CloudURL),
 		HTTP:           cloudhttp.NewClient(30 * time.Second),
 		Logf:           browserHandler.Logf,
+		Warnf:          func(format string, args ...any) { diagnostic.LogAlways(opts.Diagnostic, format+"\n", args...) },
 	}
 	background.Add(1)
 	go func() {

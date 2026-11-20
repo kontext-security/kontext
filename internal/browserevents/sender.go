@@ -3,6 +3,8 @@ package browserevents
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,7 +34,22 @@ type Sender struct {
 	Tokens         func(context.Context) (string, error)
 	HTTP           *http.Client
 	Logf           func(format string, args ...any)
-	now            func() time.Time
+	// Warnf reports failures that stop uploads, in the daemon's normal log:
+	// the first of a run of failures, then at most once per WarnEvery. A 404
+	// stays quiet.
+	Warnf    func(format string, args ...any)
+	now      func() time.Time
+	lastWarn time.Time
+}
+
+// WarnEvery spaces out the warnings of a run of failed sends.
+const WarnEvery = time.Hour
+
+// Binding names an enrollment: the cloud, installation and install token. A
+// new token, even at the same address, may belong to another workspace.
+func Binding(baseURL, installationID, token string) string {
+	sum := sha256.Sum256([]byte(strings.TrimRight(strings.TrimSpace(baseURL), "/") + "\n" + installationID + "\n" + strings.TrimSpace(token)))
+	return hex.EncodeToString(sum[:16])
 }
 
 // Outcome of one send.
@@ -54,6 +71,21 @@ const (
 
 // SendOnce sends up to one batch of pending rows.
 func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
+	if len(s.Store.Pending(1).Records) == 0 {
+		return Nothing, nil
+	}
+	token, err := s.Tokens(ctx)
+	if err != nil || strings.TrimSpace(token) == "" {
+		return Retry, fmt.Errorf("browser events: install token: %v", err)
+	}
+	// Rows recorded under another enrollment never leave with this token.
+	dropped, err := s.Store.Bind(Binding(s.BaseURL, s.InstallationID, token))
+	if err != nil {
+		return Retry, err
+	}
+	if dropped > 0 {
+		s.logf("browser events: the enrollment changed; dropped %d rows recorded under the previous one", dropped)
+	}
 	pending := s.Store.Pending(MaxRecordsPerBatch)
 	if len(pending.Records) == 0 {
 		return Nothing, nil
@@ -73,10 +105,6 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	endpoint, err := url.JoinPath(strings.TrimRight(strings.TrimSpace(s.BaseURL), "/"), IngestPath)
 	if err != nil {
 		return Refused, err
-	}
-	token, err := s.Tokens(ctx)
-	if err != nil || strings.TrimSpace(token) == "" {
-		return Retry, fmt.Errorf("browser events: install token: %v", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -137,6 +165,7 @@ func (s *Sender) Run(ctx context.Context, changed <-chan struct{}) {
 			s.logf("%v", err)
 		case outcome == Retry || outcome == Refused:
 			s.logf("browser events: send failed (%d in a row): %v", plan.failures, err)
+			s.warn(plan.failures, now(), err)
 		}
 		timer.Reset(max(plan.due.Sub(now()), 0))
 	}
@@ -185,6 +214,15 @@ func backoff(failures int) time.Duration {
 		wait *= 2
 	}
 	return min(wait, MaxBackoff)
+}
+
+// warn reports the first failure of a run, then at most once per WarnEvery.
+func (s *Sender) warn(failures int, now time.Time, err error) {
+	if s.Warnf == nil || (failures > 1 && now.Sub(s.lastWarn) < WarnEvery) {
+		return
+	}
+	s.lastWarn = now
+	s.Warnf("browser activity upload failed (%d in a row): %v", failures, err)
 }
 
 func (s *Sender) clock() func() time.Time {

@@ -291,3 +291,54 @@ func TestChangesDoNotCutA404OrFailureWait(t *testing.T) {
 		t.Fatalf("a sent batch kept the wait: %+v", plan)
 	}
 }
+
+func TestRowsNeverLeaveUnderAnotherEnrollment(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.Apply(testExtension, []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T09:00:00Z")}); err != nil {
+		t.Fatal(err)
+	}
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, r.Header.Get("Authorization")+" "+string(data))
+		_, _ = w.Write([]byte(`{"accepted":1,"rejected":[]}`))
+	}))
+	defer server.Close()
+	token := "workspace-a"
+	sender := &Sender{Store: s, BaseURL: server.URL, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		Tokens: func(context.Context) (string, error) { return token, nil }, HTTP: server.Client(), now: testNow}
+	// The first token binds the store; its rows go.
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
+		t.Fatalf("first send = %v, %v", outcome, err)
+	}
+	if _, err := s.Apply(testExtension, []IndexedRecord{visit(5, "2026-11-20T08:00:00Z", "2026-11-20T10:00:00Z")}); err != nil {
+		t.Fatal(err)
+	}
+	// Another workspace's token at the same address: the pending row is dropped, not sent.
+	token = "workspace-b"
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Nothing {
+		t.Fatalf("send under a new enrollment = %v, want Nothing", outcome)
+	}
+	if len(bodies) != 1 || !strings.HasPrefix(bodies[0], "Bearer workspace-a ") {
+		t.Fatalf("requests = %q", bodies)
+	}
+	again, err := openStore(s.path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Len() != 0 {
+		t.Fatalf("rows of the old enrollment are still on disk: %d", again.Len())
+	}
+}
+
+func TestFailedUploadsWarnFirstThenHourly(t *testing.T) {
+	var warnings int
+	sender := &Sender{Warnf: func(string, ...any) { warnings++ }}
+	start := testNow()
+	for i, at := range []time.Duration{0, time.Minute, 30 * time.Minute, WarnEvery, WarnEvery + time.Minute} {
+		sender.warn(i+1, start.Add(at), io.EOF)
+	}
+	if warnings != 2 {
+		t.Fatalf("warnings = %d, want the first and one an hour later", warnings)
+	}
+}
