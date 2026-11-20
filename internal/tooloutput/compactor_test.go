@@ -397,6 +397,37 @@ func TestReadingASavedOutputBackIsNeverCompacted(t *testing.T) {
 	}
 }
 
+// The source and reader may reuse the same tool use ID in different sessions.
+func TestFileReadOfSavedOutputFromAnotherSession(t *testing.T) {
+	c := newTestCompactor(t, func(Request) (int, any) {
+		return http.StatusOK, map[string]any{"decision": "replace", "eventId": "evt_source", "text": "short", "readBackTokenEnds": []int{0, 45, 90}}
+	})
+	if c.Compact(context.Background(), c.bash("make test", bigText(80))) == nil {
+		t.Fatal("source output was not compacted")
+	}
+	path := filepath.Join(c.dir, testSession, testToolUseID+".txt")
+	restarted := New(Options{Client: c.client, Enabled: c.on.Load, Dir: c.dir, Home: c.home})
+	read := c.read(path, "one line", 2)
+	read.ToolUseID = testToolUseID
+	for _, session := range []string{"reader-a", "reader-b"} {
+		read.SessionID = session
+		restarted.Observe(context.Background(), read)
+		restarted.Observe(context.Background(), read)
+		select {
+		case got := <-restarted.readBacks:
+			want := ReadBack{SessionID: testSession, ReaderSessionID: session, ToolUseID: testToolUseID, EventID: "evt_source", TokenRange: &[2]int{0, 45}}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %+v, want %+v", got, want)
+			}
+		default:
+			t.Fatal("missing cross-session read")
+		}
+		if len(restarted.readBacks) != 0 {
+			t.Fatal("duplicate read")
+		}
+	}
+}
+
 func TestReadBacksAreReportedOncePerCall(t *testing.T) {
 	content := bigText(60)
 	lines := strings.Split(content, "\n")

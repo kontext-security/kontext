@@ -132,9 +132,10 @@ func (r Response) validate() error {
 // ReadBack is the body of POST .../tool-output-compaction/read-backs: a later
 // call read back what a compaction left out.
 type ReadBack struct {
-	SessionID string `json:"sessionId"`
-	EventID   string `json:"eventId"`
-	ToolUseID string `json:"toolUseId"`
+	SessionID       string `json:"sessionId"`
+	ReaderSessionID string `json:"readerSessionId,omitempty"`
+	EventID         string `json:"eventId"`
+	ToolUseID       string `json:"toolUseId"`
 	// Half-open offsets into the cut's estimated removed tokens. Omitted on unmeasured reads.
 	TokenRange *[2]int `json:"tokenRange,omitempty"`
 }

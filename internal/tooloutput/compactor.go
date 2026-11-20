@@ -466,29 +466,43 @@ func (c *Compactor) reportFileRead(event hook.Event) {
 	}
 	last := first + min(count-1, math.MaxInt-first)
 	path = filepath.Clean(path)
+	// Saved outputs identify their source session in the path. Look up its
+	// persisted record even when the reader is in a fresh session.
+	dir := filepath.Dir(path)
+	if filepath.Dir(dir) == filepath.Clean(c.dir) && filepath.Ext(path) == ".txt" {
+		source := filepath.Base(dir)
+		name := strings.TrimSuffix(filepath.Base(path), ".txt")
+		if cut, ok := c.saved(source, name); ok {
+			c.reportFileRange(event, source, cut, first, last)
+			return
+		}
+	}
 	c.mu.Lock()
-	// Records are immutable after appending. Take a slice header under the lock.
 	records := c.session(event.SessionID).records
 	c.mu.Unlock()
 	for _, cut := range records {
-		if cut.ToolUseID == event.ToolUseID {
-			continue
+		if cut.coversOmittedLines(path, first, last) {
+			c.reportFileRange(event, event.SessionID, cut, first, last)
 		}
-		savedOutput := cut.Kind == KindText && filepath.Join(c.dir, event.SessionID, cut.name()+".txt") == path
-		if !savedOutput && !cut.coversOmittedLines(path, first, last) {
-			continue
-		}
-		read := ReadBack{SessionID: event.SessionID, EventID: cut.EventID, ToolUseID: event.ToolUseID}
-		if len(cut.ReadBackTokenEnds) > 0 {
-			lo := cut.tokensThrough(first - cut.FirstLine)
-			hi := cut.tokensThrough(last - cut.FirstLine + 1)
-			if lo >= hi {
-				continue
-			}
-			read.TokenRange = &[2]int{lo, hi}
-		}
-		c.queueReadBack(read)
 	}
+}
+
+func (c *Compactor) reportFileRange(event hook.Event, source string, cut record, first, last int) {
+	read := ReadBack{SessionID: source, EventID: cut.EventID, ToolUseID: event.ToolUseID}
+	if source != event.SessionID {
+		read.ReaderSessionID = event.SessionID
+	} else if cut.ToolUseID == event.ToolUseID {
+		return
+	}
+	if len(cut.ReadBackTokenEnds) > 0 {
+		lo := cut.tokensThrough(first - cut.FirstLine)
+		hi := cut.tokensThrough(last - cut.FirstLine + 1)
+		if lo >= hi {
+			return
+		}
+		read.TokenRange = &[2]int{lo, hi}
+	}
+	c.queueReadBack(read)
 }
 
 // tokensThrough returns the cumulative removed tokens in the first n lines.
@@ -512,7 +526,11 @@ func (r record) coversOmittedLines(path string, first, last int) bool {
 func (c *Compactor) queueReadBack(readBack ReadBack) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	reported := c.session(readBack.SessionID).reported
+	reader := readBack.ReaderSessionID
+	if reader == "" {
+		reader = readBack.SessionID
+	}
+	reported := c.session(reader).reported
 	key := [2]string{readBack.ToolUseID, readBack.EventID}
 	if reported[key] {
 		return
