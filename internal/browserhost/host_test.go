@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -118,5 +119,16 @@ func TestCallerOriginSkipsTheWindowsParentFlag(t *testing.T) {
 	}
 	if CallerOrigin([]string{"--parent-window=0"}) != "" {
 		t.Fatal("found an origin where there is none")
+	}
+}
+
+func TestAFrameCutAfterItsHeaderIsNotACleanEnd(t *testing.T) {
+	withAllowed(t, "abcdefghijklmnopabcdefghijklmnop")
+	var in bytes.Buffer
+	_ = binary.Write(&in, binary.LittleEndian, uint32(12))
+	relay := func(context.Context, json.RawMessage) (json.RawMessage, error) { return nil, nil }
+	err := Serve(context.Background(), "chrome-extension://abcdefghijklmnopabcdefghijklmnop/", &in, &bytes.Buffer{}, relay)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("err = %v, want io.ErrUnexpectedEOF", err)
 	}
 }

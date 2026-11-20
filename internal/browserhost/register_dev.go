@@ -65,14 +65,10 @@ func RegisterDev(reg DevRegistration) (string, error) {
 	return path, nil
 }
 
+// manifestDir is the browser's user data folder plus NativeMessagingHosts.
+// The platform is checked first: Windows finds native hosts in the registry,
+// so a manifest written to a folder there would never be read.
 func manifestDir(reg DevRegistration) (string, error) {
-	if reg.UserDataDir != "" {
-		return filepath.Join(reg.UserDataDir, "NativeMessagingHosts"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
 	folders := map[string]map[string]string{
 		"darwin": {
 			"chrome":   "Library/Application Support/Google/Chrome",
@@ -93,13 +89,40 @@ func manifestDir(reg DevRegistration) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("browser host: unknown browser %q", reg.Browser)
 	}
-	base := home
+	if reg.UserDataDir != "" {
+		return filepath.Join(reg.UserDataDir, "NativeMessagingHosts"), nil
+	}
 	if runtime.GOOS == "linux" {
-		// Chromium reads its config folder from XDG_CONFIG_HOME when set.
-		base = os.Getenv("XDG_CONFIG_HOME")
-		if base == "" || !filepath.IsAbs(base) {
+		// Chromium-based browsers on Linux take their user data folder from
+		// CHROME_USER_DATA_DIR, then the config root from CHROME_CONFIG_HOME,
+		// then XDG_CONFIG_HOME, each only when it is an absolute path.
+		if dir := absoluteEnv("CHROME_USER_DATA_DIR"); dir != "" {
+			return filepath.Join(dir, "NativeMessagingHosts"), nil
+		}
+		base := absoluteEnv("CHROME_CONFIG_HOME")
+		if base == "" {
+			base = absoluteEnv("XDG_CONFIG_HOME")
+		}
+		if base == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
 			base = filepath.Join(home, ".config")
 		}
+		return filepath.Join(base, folder, "NativeMessagingHosts"), nil
 	}
-	return filepath.Join(base, folder, "NativeMessagingHosts"), nil
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, folder, "NativeMessagingHosts"), nil
+}
+
+func absoluteEnv(name string) string {
+	value := os.Getenv(name)
+	if !filepath.IsAbs(value) {
+		return ""
+	}
+	return value
 }

@@ -107,6 +107,11 @@ func ReadFrame(in io.Reader) (json.RawMessage, error) {
 	}
 	data := make([]byte, length)
 	if _, err := io.ReadFull(in, data); err != nil {
+		if errors.Is(err, io.EOF) {
+			// The header promised bytes that never came: a cut message,
+			// not a clean end.
+			err = io.ErrUnexpectedEOF
+		}
 		return nil, fmt.Errorf("browser host: read frame: %w", err)
 	}
 	return data, nil
