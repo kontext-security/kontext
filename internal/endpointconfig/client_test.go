@@ -487,6 +487,53 @@ func TestNoCommonVersionKeepsThePromptOptOut(t *testing.T) {
 	}
 }
 
+// An expired or revoked token drops the directive like a rollback, and
+// keeps a prompt opt-out the same way: it never clears a veto already held.
+func TestAuthorityRejectionKeepsThePromptOptOut(t *testing.T) {
+	reject := func(t *testing.T, cache *Cache, status int) {
+		t.Helper()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+		defer server.Close()
+		client, err := NewClient(server.URL, server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token", nil }}
+		if err := refresher.Refresh(context.Background()); !errors.Is(err, ErrAuthorityRejected) {
+			t.Fatalf("Refresh() = %v", err)
+		}
+	}
+	for _, test := range []struct {
+		name string
+		mode payloadcapture.Mode
+		veto bool
+	}{{"omitted", payloadcapture.ModeOmitted, true}, {"full", payloadcapture.ModeFull, false}} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cache := NewCache(filepath.Join(dir, "endpoint-config.json"))
+			response := testResponse(t, test.mode)
+			if err := cache.Apply(FetchResult{Response: &response}, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			reject(t, cache, http.StatusUnauthorized)
+			if got := cache.Current().Status.PromptVeto; got != test.veto {
+				t.Fatalf("veto after 401 = %v, want %v", got, test.veto)
+			}
+			restarted := NewCache(filepath.Join(dir, "endpoint-config.json"))
+			if err := restarted.Load(); !errors.Is(err, ErrCacheInvalidated) {
+				t.Fatalf("Load() = %v", err)
+			}
+			// A later 403, with nothing confirmed, keeps what the 401 kept.
+			reject(t, restarted, http.StatusForbidden)
+			if got := restarted.Current().Status.PromptVeto; got != test.veto {
+				t.Fatalf("veto after restart and 403 = %v, want %v", got, test.veto)
+			}
+		})
+	}
+}
+
 // A server that refuses v6 and then fails the v5 retry leaves no v6-only
 // switch on.
 func TestV6RefusalTurnsHookInventoryOff(t *testing.T) {

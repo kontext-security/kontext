@@ -39,7 +39,7 @@ type Status struct {
 	// implements, so the defaults are in force, not a confirmed config
 	// that may come back.
 	NoCommonVersion bool
-	// PromptVeto: the last confirmed config before a rollback let no prompt
+	// PromptVeto: the last confirmed config before a rejection let no prompt
 	// leave the endpoint. Until a config is confirmed again, prompts are
 	// recorded as omitted, so a later opt-in can't recover them.
 	PromptVeto bool
@@ -523,13 +523,11 @@ func markerHas(marker []byte, flag string) bool {
 func (c *Cache) rejectAuthority(err error, at time.Time) error {
 	noCommon := errors.Is(err, ErrNoCommonVersion)
 	c.mu.Lock()
-	// A rollback drops the directive but not a prompt opt-out: the last
-	// confirmed config let no prompt leave, and an unconfirmed record would
-	// be recovered by a later opt-in. Never an opt-in kept.
-	veto := false
-	if noCommon {
-		veto = c.status.PromptVeto || c.active != nil && !promptsAllowed(c.active.Config) || c.active == nil && c.lastGood != nil && !promptsAllowed(c.lastGood.Config)
-	}
+	// A rejection (a rollback, an expired or revoked token) drops the
+	// directive but not a prompt opt-out: the last confirmed config let no
+	// prompt leave, and an unconfirmed record would be recovered by a later
+	// opt-in. The veto lasts until a config is confirmed. Never an opt-in kept.
+	veto := c.status.PromptVeto || c.active != nil && !promptsAllowed(c.active.Config) || c.active == nil && c.lastGood != nil && !promptsAllowed(c.lastGood.Config)
 	c.active = nil
 	c.owner = ""
 	c.lastGood = nil
