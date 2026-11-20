@@ -11,8 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/browserevents"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/cloudhttp"
 	"github.com/kontext-security/kontext/internal/deviceid"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/endpointconfig"
@@ -298,6 +300,24 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Diagnostic: opts.Diagnostic,
 	})
 
+	// The browser extension's records wait here until the cloud has them.
+	browserStore, err := browserevents.OpenStore(browserevents.DefaultStorePath(dbPath))
+	if err != nil {
+		return fmt.Errorf("open browser activity store: %w", err)
+	}
+	browserChanged := make(chan struct{}, 1)
+	browserHandler := &browserevents.Handler{
+		Store:       browserStore,
+		CaptureMode: func() string { return browserCaptureMode(endpointConfigCache.Current()) },
+		Changed: func() {
+			select {
+			case browserChanged <- struct{}{}:
+			default:
+			}
+		},
+		Logf: func(format string, args ...any) { opts.Diagnostic.Printf(format+"\n", args...) },
+	}
+
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          managedconfig.Agent,
 		DBPath:             dbPath,
@@ -327,6 +347,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		CompactToolOutput:      compactor.Compact,
 		OffersCompaction:       compactor.Offers,
 		CodexProxy:             codexProxyAnswer(compactor),
+		Browser:                browserHandler.Answer,
 		ObserveEvent:           compactor.Observe,
 		HoldFor:                enrolmentHold(started, enrolmentWait(opts.Diagnostic), cedarEnforcement, cedarCache),
 	})
@@ -412,6 +433,19 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	go func() {
 		defer background.Done()
 		compactor.Run(policyCtx)
+	}()
+	browserSender := &browserevents.Sender{
+		Store:          browserStore,
+		BaseURL:        loadedConfig.Config.CloudURL,
+		InstallationID: installationState.InstallationID,
+		Tokens:         installTokenSource,
+		HTTP:           cloudhttp.NewClient(30 * time.Second),
+		Logf:           browserHandler.Logf,
+	}
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		browserSender.Run(policyCtx, browserChanged)
 	}()
 	background.Add(1)
 	go func() {
