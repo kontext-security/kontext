@@ -492,10 +492,15 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// One snapshot says both that the switch is on and that the current
 		// enrolment's own refresh confirmed it: after a re-enrolment the cache
 		// can still hold the previous workspace's opt-in.
-		authorized: func() bool { return hookAuthorized(endpointConfigCache.Current(), hookKeys.enrolment()) },
-		available:  hookAvailable,
-		beginRead:  authorityHolder.scanner.BeginRead,
-		ownBinary:  ownBinaryCheck(),
+		// While uploads are held for a cloud change, no scan runs either: a
+		// scan now would record the new enrolment's hooks under the old
+		// workspace's key and opt-in.
+		authorized: func() bool {
+			return enrolledAtStartupCloud(startupCloudURL) && hookAuthorized(endpointConfigCache.Current(), hookKeys.enrolment())
+		},
+		available: hookAvailable,
+		beginRead: authorityHolder.scanner.BeginRead,
+		ownBinary: ownBinaryCheck(),
 		record: func(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) {
 			if err := inventoryStore.RecordHooks(agent, result, keyTag); err != nil {
 				opts.Diagnostic.Printf("hook inventory: record scan: %v\n", err)
@@ -705,6 +710,13 @@ func rewriteAnnotationTimes(ctx context.Context, dbPath string) (int, error) {
 // errCloudURLChanged: the installation was enrolled at another cloud since
 // the daemon started.
 var errCloudURLChanged = errors.New("the Kontext cloud URL changed since the daemon started; it uses the new one after a restart")
+
+// enrolledAtStartupCloud reports whether the managed config still names the
+// cloud the daemon started with. A config that can't be read is no answer.
+func enrolledAtStartupCloud(startupCloudURL string) bool {
+	loaded, err := managedconfig.Load()
+	return err == nil && sameCloudURL(loaded.Config.CloudURL, startupCloudURL)
+}
 
 func sameCloudURL(a, b string) bool {
 	return strings.TrimRight(strings.TrimSpace(a), "/") == strings.TrimRight(strings.TrimSpace(b), "/")

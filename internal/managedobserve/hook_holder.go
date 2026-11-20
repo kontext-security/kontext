@@ -323,11 +323,13 @@ var ErrClaudeConfigDir = errors.New("CLAUDE_CONFIG_DIR is not an absolute path")
 // empty means the default ~/.claude. A value that is set but not absolute is
 // an error, never the default profile.
 func ClaudeConfigDir() (string, error) {
-	dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
+	// Read as written: a trimmed path can name a neighbouring profile, and
+	// a whitespace-only value is no profile at all, not ~/.claude.
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
 	if dir == "" {
 		return "", nil
 	}
-	if !filepath.IsAbs(dir) {
+	if strings.TrimSpace(dir) == "" || !filepath.IsAbs(dir) {
 		return "", ErrClaudeConfigDir
 	}
 	return filepath.Clean(dir), nil

@@ -225,6 +225,16 @@ func TestClaudeConfigDirFollowsTheEnvironment(t *testing.T) {
 	if got, err := ClaudeConfigDir(); got != "" || !errors.Is(err, ErrClaudeConfigDir) {
 		t.Fatalf("relative dir: %q %v", got, err)
 	}
+	// Whitespace alone is no profile; a path is read as written, as Claude
+	// reads it.
+	t.Setenv("CLAUDE_CONFIG_DIR", "  ")
+	if got, err := ClaudeConfigDir(); got != "" || !errors.Is(err, ErrClaudeConfigDir) {
+		t.Fatalf("blank dir: %q %v", got, err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "/Users/x/work ")
+	if got, err := ClaudeConfigDir(); got != "/Users/x/work " || err != nil {
+		t.Fatalf("trailing space: %q %v", got, err)
+	}
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir+"/")
 	if got, err := ClaudeConfigDir(); got != filepath.Clean(dir) || err != nil {
@@ -321,3 +331,14 @@ func TestUploadsWaitForRestartAfterCloudURLChange(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// A cloud change holds hook scans too, not only uploads.
+func TestHookScansWaitForRestartAfterCloudURLChange(t *testing.T) {
+	writeTestManagedConfigWithCloudURL(t, filepath.Join(t.TempDir(), "managed.json"), "https://new.example")
+	if enrolledAtStartupCloud("https://old.example") {
+		t.Fatal("a scan is authorized at another cloud")
+	}
+	if !enrolledAtStartupCloud("https://new.example/") {
+		t.Fatal("the startup cloud is refused")
+	}
+}
