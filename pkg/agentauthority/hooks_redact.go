@@ -15,7 +15,9 @@ var (
 	// positional word can be a password (`redis-cli AUTH hunter2`), so it is
 	// never kept.
 	scriptName  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.(sh|bash|zsh|fish|py|js|mjs|cjs|ts|rb|pl|php|ps1|cmd|bat)$`)
-	summaryFlag = regexp.MustCompile(`^--?[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+	// A long flag's name, or a single-letter short one: `-pSECRET` carries
+	// its value attached, so a longer short flag is never kept.
+	summaryFlag = regexp.MustCompile(`^(--[A-Za-z0-9][A-Za-z0-9_-]{0,63}|-[A-Za-z0-9])$`)
 	programName = regexp.MustCompile(`^[A-Za-z0-9._+-]{1,64}$`)
 )
 
@@ -42,7 +44,7 @@ func hookSummary(program string, args []string) string {
 		switch {
 		case strings.HasPrefix(arg, "-"):
 			flag, _, hasValue := strings.Cut(arg, "=")
-			if !summaryFlag.MatchString(flag) {
+			if !summaryFlag.MatchString(flag) || secret(flag, "args") {
 				add(redacted)
 				afterFlag = false
 				continue
