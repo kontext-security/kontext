@@ -378,3 +378,111 @@ func TestTheSenderBindsAnUnboundStore(t *testing.T) {
 		t.Fatal("the store is still unbound")
 	}
 }
+
+func TestAnAnswerThatDoesNotAccountForTheBatchMarksNothingSent(t *testing.T) {
+	for _, answer := range []string{`{}`, `null`, `{"accepted":0,"rejected":[]}`, `{"accepted":1,"rejected":[{"index":0,"reason":"x"}]}`} {
+		s := openTestStore(t)
+		_, _ = s.Apply(testExtension, []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+		sender, _ := newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, answer) })
+		if outcome, err := sender.SendOnce(context.Background()); outcome != Retry || err == nil {
+			t.Errorf("%s: outcome = %v, err = %v, want Retry", answer, outcome, err)
+		}
+		if len(s.Pending(10).Records) != 1 {
+			t.Errorf("%s: the row was marked sent", answer)
+		}
+	}
+}
+
+func TestATooLargeBatchIsHalvedAndATooLargeRowDropped(t *testing.T) {
+	s := openTestStore(t)
+	for _, app := range []string{"chatgpt", "claude", "gemini", "perplexity"} {
+		r := visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")
+		r.Record.App = app
+		_, _ = s.Apply(testExtension, []IndexedRecord{r})
+	}
+	sender, batches := newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	})
+	var sizes []int
+	for range 3 {
+		before := len(*batches)
+		outcome, _ := sender.SendOnce(context.Background())
+		sizes = append(sizes, len((*batches)[before].Records))
+		if len(sizes) < 3 && outcome != Retry {
+			t.Fatalf("send %d: outcome = %v, want Retry", len(sizes), outcome)
+		}
+		if len(sizes) == 3 && outcome != Sent {
+			t.Fatalf("a single oversized row: outcome = %v, want Sent", outcome)
+		}
+	}
+	if sizes[0] != 4 || sizes[1] != 2 || sizes[2] != 1 {
+		t.Fatalf("batch sizes = %v, want 4, 2, 1", sizes)
+	}
+	if left := len(s.Pending(10).Records); left != 3 {
+		t.Fatalf("%d rows left, want the 3 behind the dropped one", left)
+	}
+}
+
+func TestAPruneWithNothingToSendStillLeavesTheDisk(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, []IndexedRecord{visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	sender, _ := newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"accepted":1,"rejected":[]}`)
+	})
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
+		t.Fatalf("outcome = %v, err = %v", outcome, err)
+	}
+	s.now = func() time.Time { return testNow().Add(KeepDays * 24 * time.Hour) }
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Nothing || err != nil {
+		t.Fatalf("outcome = %v, err = %v, want Nothing", outcome, err)
+	}
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "chatgpt") {
+		t.Fatalf("an expired, already sent day is still on disk: %s", data)
+	}
+}
+
+func TestADamagedStoreWithNullRowsOpens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "browser-activity.json")
+	if err := os.WriteFile(path, []byte(`{"binding":"b","rows":{"x":null}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := openStore(path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 0 {
+		t.Fatalf("rows = %d", s.Len())
+	}
+}
+
+func TestAnOlderSnapshotKeepsTheNewerMetadata(t *testing.T) {
+	s := openTestStore(t)
+	upgraded := Extension{Version: "0.2.0", Browser: testExtension.Browser, Profile: testExtension.Profile}
+	newer := visit(5, "2026-11-20T08:00:00Z", "2026-11-20T10:00:00Z")
+	newer.Record.Host = "chat.openai.com"
+	health := func(observed string) IndexedRecord {
+		return IndexedRecord{Record: Record{Kind: KindHealth, ConnectedSince: "2026-11-20T07:00:00Z", ObservedAt: observed}}
+	}
+	_, _ = s.Apply(upgraded, []IndexedRecord{newer, health("2026-11-20T10:00:00Z")})
+	older := visit(3, "2026-11-20T08:00:00Z", "2026-11-20T09:00:00Z")
+	_, _ = s.Apply(testExtension, []IndexedRecord{older, health("2026-11-20T09:00:00Z")})
+	for _, r := range s.Pending(10).Records {
+		if r.ExtensionVersion != "0.2.0" {
+			t.Errorf("%s: version = %s, want the newer 0.2.0", r.Kind, r.ExtensionVersion)
+		}
+		if r.Kind == KindVisit && r.Host != "chat.openai.com" {
+			t.Errorf("visit host = %s, want the newer snapshot's", r.Host)
+		}
+	}
+}
+
+func TestWithoutAStoreTheHandlerAnswersUnavailable(t *testing.T) {
+	answer := (&Handler{}).Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`))
+	if !strings.Contains(string(answer), `"error":"unavailable"`) {
+		t.Fatalf("answer = %s", answer)
+	}
+}

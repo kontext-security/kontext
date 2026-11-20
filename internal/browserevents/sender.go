@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,6 +41,9 @@ type Sender struct {
 	Warnf    func(format string, args ...any)
 	now      func() time.Time
 	lastWarn time.Time
+	// limit is the batch size, MaxRecordsPerBatch until the cloud answers
+	// 413; then it halves, down to one record.
+	limit int
 }
 
 // WarnEvery spaces out the warnings of a run of failed sends.
@@ -65,7 +69,8 @@ const (
 	// NotFound: the cloud has no browser endpoint, such as one that predates
 	// it; ask again much later and say nothing.
 	NotFound
-	// Refused: the cloud refused the batch as a whole (401, 403, 400, 413).
+	// Refused: the cloud refused the batch as a whole (401, 403, 400). A 413
+	// halves the batch instead.
 	Refused
 )
 
@@ -74,6 +79,10 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	// An unbound store takes no records, so it is bound even with nothing
 	// to send.
 	if s.Store.Bound() && len(s.Store.Pending(1).Records) == 0 {
+		// Days that aged out leave the disk even when nothing is sent.
+		if err := s.Store.Flush(); err != nil {
+			return Retry, err
+		}
 		return Nothing, nil
 	}
 	token, err := s.Tokens(ctx)
@@ -88,8 +97,14 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	if dropped > 0 {
 		s.logf("browser events: the enrollment changed; dropped %d rows recorded under the previous one", dropped)
 	}
-	pending := s.Store.Pending(MaxRecordsPerBatch)
+	if s.limit <= 0 || s.limit > MaxRecordsPerBatch {
+		s.limit = MaxRecordsPerBatch
+	}
+	pending := s.Store.Pending(s.limit)
 	if len(pending.Records) == 0 {
+		if err := s.Store.Flush(); err != nil {
+			return Retry, err
+		}
 		return Nothing, nil
 	}
 	now := s.clock()
@@ -122,9 +137,11 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	data, _ := io.ReadAll(io.LimitReader(response.Body, 256<<10))
 	switch {
 	case response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated:
-		var answer CloudResponse
-		if err := json.Unmarshal(data, &answer); err != nil {
-			return Retry, fmt.Errorf("browser events: unreadable answer: %w", err)
+		// Rows are marked sent only when the answer accounts for each of
+		// them; {} from a proxy would otherwise mark them all.
+		answer, err := DecodeCloudResponse(data, len(pending.Records))
+		if err != nil {
+			return Retry, err
 		}
 		if err := s.Store.Ack(pending); err != nil {
 			return Sent, err
@@ -135,6 +152,18 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 		return Sent, nil
 	case response.StatusCode == http.StatusNotFound:
 		return NotFound, nil
+	case response.StatusCode == http.StatusRequestEntityTooLarge:
+		if len(pending.Records) > 1 {
+			// Smaller batches next time; the same oldest rows would
+			// otherwise block every later one.
+			s.limit = len(pending.Records) / 2
+			return Retry, fmt.Errorf("browser events: batch of %d records too large, sending %d next", len(pending.Records), s.limit)
+		}
+		// One record the cloud will never take: drop it so the rest move.
+		if err := s.Store.Ack(pending); err != nil {
+			return Retry, err
+		}
+		return Sent, errors.New("browser events: dropped a record the cloud found too large")
 	case response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500:
 		return Retry, fmt.Errorf("browser events: status %d", response.StatusCode)
 	default:

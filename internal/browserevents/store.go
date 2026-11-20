@@ -71,6 +71,12 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	}
 	var file storeFile
 	if json.Unmarshal(data, &file) == nil && file.Rows != nil {
+		// A damaged file can hold null rows; they are dropped, not read.
+		for key, r := range file.Rows {
+			if r == nil {
+				delete(file.Rows, key)
+			}
+		}
 		s.rows = file.Rows
 		s.binding = file.Binding
 	}
@@ -141,19 +147,25 @@ func (s *Store) Apply(ext Extension, records []IndexedRecord) ([]Rejection, erro
 
 // merge keeps the widest view of a day: the earliest first sight, the latest
 // last sight and the highest count, so replays and out-of-order messages
-// cannot lower it. Health keeps the newest observation.
+// cannot lower it. Health keeps the newest observation. The extension
+// version, and a visit's name, provider and host, come with the newest
+// snapshot, so an older one replayed after an upgrade changes none of them.
 func merge(current, next CloudRecord) (CloudRecord, bool) {
 	merged := current
-	merged.ExtensionVersion = next.ExtensionVersion
 	switch current.Kind {
 	case KindHealth:
 		if later(next.ObservedAt, current.ObservedAt) {
 			merged.ObservedAt = next.ObservedAt
 			merged.ConnectedSince = next.ConnectedSince
+			merged.ExtensionVersion = next.ExtensionVersion
 		}
 	case KindVisit:
 		if later(current.FirstSeen, next.FirstSeen) {
 			merged.FirstSeen = next.FirstSeen
+		}
+		if !later(current.LastSeen, next.LastSeen) {
+			merged.AppName, merged.Provider, merged.Host = next.AppName, next.Provider, next.Host
+			merged.ExtensionVersion = next.ExtensionVersion
 		}
 		if later(next.LastSeen, current.LastSeen) {
 			merged.LastSeen = next.LastSeen
@@ -161,7 +173,6 @@ func merge(current, next CloudRecord) (CloudRecord, bool) {
 		if next.Requests > current.Requests {
 			merged.Requests = next.Requests
 		}
-		merged.AppName, merged.Provider, merged.Host = next.AppName, next.Provider, next.Host
 	}
 	return merged, merged != current
 }
@@ -258,6 +269,20 @@ func (s *Store) Bind(binding string) (dropped int, err error) {
 	}
 	s.binding = binding
 	return dropped, s.saveLocked()
+}
+
+// Flush writes the store if the file is behind it, such as after a prune
+// with nothing to send or a failed save.
+func (s *Store) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pruneLocked() {
+		s.dirty = true
+	}
+	if !s.dirty {
+		return nil
+	}
+	return s.saveLocked()
 }
 
 // Bound says whether the store knows its enrollment.

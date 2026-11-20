@@ -301,18 +301,19 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	})
 
 	// The browser extension's records wait here until the cloud has them.
+	// A store that cannot be read leaves the browser extension unanswered
+	// ("unavailable"), never the rest of the daemon: hooks and policy run on.
 	browserStore, err := browserevents.OpenStore(browserevents.DefaultStorePath(dbPath))
 	if err != nil {
-		return fmt.Errorf("open browser activity store: %w", err)
+		diagnostic.LogAlways(opts.Diagnostic, "browser activity: store unavailable, the browser extension is not recorded: %v\n", err)
+		browserStore = nil
 	}
 	// Bound to the enrollment before it takes any record, so no record can
 	// later leave under another workspace's token. If the token cannot be read
 	// now, the store takes nothing until the sender binds it.
 	browserTokens := sameCloudTokenSource(loadedConfig.Config.CloudURL)
-	if token, err := browserTokens(ctx); err != nil {
-		diagnostic.LogAlways(opts.Diagnostic, "browser activity: install token: %v\n", err)
-	} else if _, err := browserStore.Bind(browserevents.Binding(loadedConfig.Config.CloudURL, installationState.InstallationID, token)); err != nil {
-		diagnostic.LogAlways(opts.Diagnostic, "browser activity: bind store: %v\n", err)
+	if browserStore != nil {
+		bindBrowserStore(ctx, browserStore, browserTokens, loadedConfig.Config.CloudURL, installationState.InstallationID, opts.Diagnostic)
 	}
 	browserChanged := make(chan struct{}, 1)
 	browserHandler := &browserevents.Handler{
@@ -452,11 +453,13 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Logf:           browserHandler.Logf,
 		Warnf:          func(format string, args ...any) { diagnostic.LogAlways(opts.Diagnostic, format+"\n", args...) },
 	}
-	background.Add(1)
-	go func() {
-		defer background.Done()
-		browserSender.Run(policyCtx, browserChanged)
-	}()
+	if browserStore != nil {
+		background.Add(1)
+		go func() {
+			defer background.Done()
+			browserSender.Run(policyCtx, browserChanged)
+		}()
+	}
 	background.Add(1)
 	go func() {
 		defer background.Done()
@@ -1205,5 +1208,18 @@ func sameCloudTokenSource(cloudURL string) func(context.Context) (string, error)
 			return "", errors.New("the managed configuration names another cloud; waiting for the daemon to restart")
 		}
 		return managedconfig.ResolveInstallToken(ctx, loaded.Config.Credentials.InstallTokenRef)
+	}
+}
+
+// bindBrowserStore binds the store to the enrollment at startup. A token
+// that cannot be read now leaves it to the sender.
+func bindBrowserStore(ctx context.Context, store *browserevents.Store, tokens func(context.Context) (string, error), cloudURL, installationID string, logs diagnostic.Logger) {
+	token, err := tokens(ctx)
+	if err != nil {
+		diagnostic.LogAlways(logs, "browser activity: install token: %v\n", err)
+		return
+	}
+	if _, err := store.Bind(browserevents.Binding(cloudURL, installationID, token)); err != nil {
+		diagnostic.LogAlways(logs, "browser activity: bind store: %v\n", err)
 	}
 }

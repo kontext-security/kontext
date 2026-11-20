@@ -8,6 +8,8 @@ import (
 
 // Handler answers the extension's messages for the daemon.
 type Handler struct {
+	// Store is nil when it could not be opened; every message is then
+	// answered "unavailable".
 	Store *Store
 	// CaptureMode is the Data collection step to send the extension
 	// (CaptureCommands, CaptureFull or CapturePrompts). Nil reads as
@@ -29,6 +31,9 @@ func (h *Handler) Answer(_ context.Context, raw json.RawMessage) json.RawMessage
 	if err != nil {
 		h.logf("browser events: refused a message: %v", err)
 		return encode(NewError(ErrorInvalidMessage))
+	}
+	if h.Store == nil {
+		return encode(NewError(ErrorUnavailable))
 	}
 	settings := h.settings()
 	if msg.Type == TypeHello {
