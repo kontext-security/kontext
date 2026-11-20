@@ -3,6 +3,7 @@ package endpointconfig
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -333,6 +334,53 @@ func TestClientFailsOnOtherRefusals(t *testing.T) {
 			}
 			if got := strings.Join(asked, " "); got != refusal.asked {
 				t.Fatalf("versions asked = %s, want %s", got, refusal.asked)
+			}
+		})
+	}
+}
+
+// A server rolled back past both versions answers each with 406
+// unsupported_version. Nothing it last sent can be confirmed, so the refresh
+// fails closed to the defaults instead of keeping full capture in force.
+func TestRefresherFailsClosedWhenNoVersionIsServed(t *testing.T) {
+	cache := NewCache("")
+	full := testResponse(t, payloadcapture.ModeFull)
+	if err := cache.Apply(FetchResult{Response: &full}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotAcceptable)
+		_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4]}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresher := Refresher{
+		Client:         client,
+		Cache:          cache,
+		InstallationID: testInstallationID,
+		TokenSource:    func(context.Context) (string, error) { return "token", nil },
+	}
+	if err := refresher.Refresh(context.Background()); !errors.Is(err, ErrNoCommonVersion) {
+		t.Fatalf("Refresh() error = %v, want ErrNoCommonVersion", err)
+	}
+	snapshot := cache.Current()
+	if snapshot.Confirmed || snapshot.Config.PayloadCaptureMode != payloadcapture.ModeSummary {
+		t.Fatalf("snapshot after no common version = %#v", snapshot)
+	}
+}
+
+func TestHookInventoryEnabledReadsTheSwitch(t *testing.T) {
+	on, off := true, false
+	for name, test := range map[string]struct {
+		value *bool
+		want  bool
+	}{"absent": {nil, false}, "off": {&off, false}, "on": {&on, true}} {
+		t.Run(name, func(t *testing.T) {
+			if got := (Config{HookInventory: test.value}).HookInventoryEnabled(); got != test.want {
+				t.Fatalf("HookInventoryEnabled() = %v, want %v", got, test.want)
 			}
 		})
 	}
