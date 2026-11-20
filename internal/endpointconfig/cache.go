@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,20 @@ type Status struct {
 	// implements, so the defaults are in force, not a confirmed config
 	// that may come back.
 	NoCommonVersion bool
+	// PromptVeto: the last confirmed config before a rollback let no prompt
+	// leave the endpoint. Until a config is confirmed again, prompts are
+	// recorded as omitted, so a later opt-in can't recover them.
+	PromptVeto bool
+	// V6Unsupported: the server refused this build's response version and
+	// the older one could not be confirmed, so a v6-only switch is off.
+	V6Unsupported bool
+}
+
+// HookInventoryEnabled is the hook inventory switch as far as this snapshot
+// can confirm it: a confirmed v6 config that says on, from a server that
+// hasn't since refused v6.
+func (s Snapshot) HookInventoryEnabled() bool {
+	return s.Confirmed && !s.Status.V6Unsupported && s.Config.HookInventoryEnabled()
 }
 
 type Snapshot struct {
@@ -95,7 +110,12 @@ func (c *Cache) Load() error {
 	if c.path == "" {
 		return nil
 	}
-	if _, err := os.Stat(c.rejectedPath); err == nil {
+	if marker, err := os.ReadFile(c.rejectedPath); err == nil {
+		// The marker keeps why the cache was dropped, so an offline restart
+		// finishes what the rejection started.
+		c.mu.Lock()
+		c.status = Status{Stale: true, Invalid: true, LastError: ErrCacheInvalidated.Error(), NoCommonVersion: markerHas(marker, markerNoCommonVersion), PromptVeto: markerHas(marker, markerPromptVeto)}
+		c.mu.Unlock()
 		return ErrCacheInvalidated
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("endpoint configuration cache: revocation journal: %w", err)
@@ -229,6 +249,14 @@ func (c *Cache) markFailedLocked(err error, attemptedAt time.Time) {
 	if err != nil {
 		c.status.LastError = err.Error()
 	}
+}
+
+// markV6Unsupported turns the v6-only switches off until a config is
+// confirmed again.
+func (c *Cache) markV6Unsupported() {
+	c.mu.Lock()
+	c.status.V6Unsupported = true
+	c.mu.Unlock()
 }
 
 func (c *Cache) MarkInvalid(err error) {
@@ -432,6 +460,9 @@ func (r *Refresher) fail(err error) error {
 			err = errors.Join(err, r.Cache.rejectAuthority(err, r.now()))
 		} else {
 			r.Cache.MarkFailed(err, r.now())
+			if errors.Is(err, ErrV6Unsupported) {
+				r.Cache.markV6Unsupported()
+			}
 		}
 		r.notify()
 	}
@@ -444,21 +475,52 @@ func (r *Refresher) fail(err error) error {
 	return err
 }
 
+const (
+	markerNoCommonVersion = "no-common-version"
+	markerPromptVeto      = "prompt-veto"
+)
+
+func markerHas(marker []byte, flag string) bool {
+	return slices.Contains(strings.Fields(string(marker)), flag)
+}
+
 func (c *Cache) rejectAuthority(err error, at time.Time) error {
+	noCommon := errors.Is(err, ErrNoCommonVersion)
 	c.mu.Lock()
+	// A rollback drops the directive but not a prompt opt-out: the last
+	// confirmed config let no prompt leave, and an unconfirmed record would
+	// be recovered by a later opt-in. Never an opt-in kept.
+	veto := false
+	if noCommon {
+		veto = c.status.PromptVeto || c.active != nil && !promptsAllowed(c.active.Config) || c.active == nil && c.lastGood != nil && !promptsAllowed(c.lastGood.Config)
+	}
 	c.active = nil
 	c.lastGood = nil
-	c.status = Status{FetchedAt: c.fetched, LastAttemptAt: at, Stale: true, Invalid: true, LastError: err.Error(), NoCommonVersion: errors.Is(err, ErrNoCommonVersion)}
+	c.status = Status{FetchedAt: c.fetched, LastAttemptAt: at, Stale: true, Invalid: true, LastError: err.Error(), NoCommonVersion: noCommon, PromptVeto: veto}
 	c.mu.Unlock()
 	return c.invalidatePersisted()
+}
+
+// promptsAllowed is payloadcapture.PromptsAllowed for a confirmed config.
+func promptsAllowed(config Config) bool {
+	return config.PayloadCaptureMode == payloadcapture.ModeFull && config.WorkTypeClassificationEnabled()
 }
 
 func (c *Cache) invalidatePersisted() error {
 	if c.path == "" {
 		return nil
 	}
+	c.mu.RLock()
+	marker := "refresh required\n"
+	if c.status.NoCommonVersion {
+		marker += markerNoCommonVersion + "\n"
+	}
+	if c.status.PromptVeto {
+		marker += markerPromptVeto + "\n"
+	}
+	c.mu.RUnlock()
 	if err := os.MkdirAll(filepath.Dir(c.rejectedPath), 0700); err == nil {
-		if err := os.WriteFile(c.rejectedPath, []byte("refresh required\n"), 0600); err == nil {
+		if err := os.WriteFile(c.rejectedPath, []byte(marker), 0600); err == nil {
 			return nil
 		}
 	}
