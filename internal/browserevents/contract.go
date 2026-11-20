@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"time"
+	"unicode/utf8"
 )
 
 // Contract is the version of the browser event contract this build speaks.
@@ -211,6 +212,7 @@ func DecodeRecords(raw json.RawMessage) ([]IndexedRecord, []Rejection, error) {
 			rejected = append(rejected, Rejection{Index: i, Reason: "not a record"})
 			continue
 		}
+		record = record.own()
 		if err := record.Validate(); err != nil {
 			rejected = append(rejected, Rejection{Index: i, Reason: err.Error()})
 			continue
@@ -241,9 +243,30 @@ func (e Extension) validate() error {
 	return nil
 }
 
+// own keeps only the fields of the record's kind. The schema ignores fields
+// it does not name, so a health record may carry a visit's fields; those are
+// never checked, and must not travel on to the store or the cloud.
+func (r Record) own() Record {
+	switch r.Kind {
+	case KindHealth:
+		return Record{Kind: r.Kind, ConnectedSince: r.ConnectedSince, ObservedAt: r.ObservedAt}
+	case KindVisit:
+		visit := r
+		visit.ConnectedSince, visit.ObservedAt = "", ""
+		return visit
+	default:
+		return Record{Kind: r.Kind}
+	}
+}
+
 // Validate checks a record against the contract. The reasons are short and
-// name no values, as they travel back to the extension and into logs.
+// name no values, as they travel back to the extension and into logs. A
+// record that carries the other kind's fields is refused, so a batch built
+// from anything but DecodeRecords is held to the same rule.
 func (r Record) Validate() error {
+	if r != r.own() {
+		return errors.New("record carries fields of another kind")
+	}
 	switch r.Kind {
 	case KindHealth:
 		if !isTime(r.ConnectedSince) || !isTime(r.ObservedAt) {
@@ -320,6 +343,7 @@ func isDay(value string) bool {
 	return err == nil
 }
 
+// isLabel counts characters, as the schema's maxLength does, not bytes.
 func isLabel(value string) bool {
-	return value != "" && len(value) <= 80
+	return value != "" && utf8.ValidString(value) && utf8.RuneCountInString(value) <= 80
 }

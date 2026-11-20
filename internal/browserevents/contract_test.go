@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -135,5 +136,33 @@ func TestCloudRecordFlattensItsRecord(t *testing.T) {
 	want := `{"browser":"chrome","profile":"p7Hq2vXkLm9s","extension_version":"0.1.0","kind":"health","connected_since":"2026-11-20T08:00:00Z","observed_at":"2026-11-20T09:00:00Z"}`
 	if string(encoded) != want {
 		t.Fatalf("encoded\n%s\nwant\n%s", encoded, want)
+	}
+}
+
+func TestHealthRecordKeepsOnlyItsOwnFields(t *testing.T) {
+	raw := json.RawMessage(`[{"kind":"health","connected_since":"2026-11-20T08:00:00Z","observed_at":"2026-11-20T09:00:00Z","host":"chatgpt.com/c/123?token=secret","app_name":"private text"}]`)
+	valid, rejected, err := DecodeRecords(raw)
+	if err != nil || len(rejected) != 0 || len(valid) != 1 {
+		t.Fatalf("valid = %+v, rejected = %+v, err = %v", valid, rejected, err)
+	}
+	if got := valid[0].Record; got.Host != "" || got.AppName != "" {
+		t.Fatalf("health record kept a visit's fields: %+v", got)
+	}
+	mixed := Record{Kind: KindHealth, ConnectedSince: "2026-11-20T08:00:00Z", ObservedAt: "2026-11-20T09:00:00Z", Host: "chatgpt.com/c/123"}
+	if err := mixed.Validate(); err == nil {
+		t.Fatal("Validate took a health record with a host")
+	}
+}
+
+func TestLabelsCountCharactersNotBytes(t *testing.T) {
+	name := strings.Repeat("智", 80) // 240 bytes, 80 characters
+	visit := Record{Kind: KindVisit, Day: "2026-11-20", App: "qwen", AppName: name, Provider: name, Surface: "web",
+		Host: "chat.qwen.ai", FirstSeen: "2026-11-20T08:00:00Z", LastSeen: "2026-11-20T09:00:00Z", Requests: 1}
+	if err := visit.Validate(); err != nil {
+		t.Fatalf("80 characters refused: %v", err)
+	}
+	visit.AppName += "智"
+	if err := visit.Validate(); err == nil {
+		t.Fatal("81 characters taken")
 	}
 }

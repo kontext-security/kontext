@@ -80,9 +80,9 @@ func manifestDir(reg DevRegistration) (string, error) {
 			"chromium": "Library/Application Support/Chromium",
 		},
 		"linux": {
-			"chrome":   ".config/google-chrome",
-			"edge":     ".config/microsoft-edge",
-			"chromium": ".config/chromium",
+			"chrome":   "google-chrome",
+			"edge":     "microsoft-edge",
+			"chromium": "chromium",
 		},
 	}
 	byBrowser, ok := folders[runtime.GOOS]
@@ -93,5 +93,13 @@ func manifestDir(reg DevRegistration) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("browser host: unknown browser %q", reg.Browser)
 	}
-	return filepath.Join(home, folder, "NativeMessagingHosts"), nil
+	base := home
+	if runtime.GOOS == "linux" {
+		// Chromium reads its config folder from XDG_CONFIG_HOME when set.
+		base = os.Getenv("XDG_CONFIG_HOME")
+		if base == "" || !filepath.IsAbs(base) {
+			base = filepath.Join(home, ".config")
+		}
+	}
+	return filepath.Join(base, folder, "NativeMessagingHosts"), nil
 }
