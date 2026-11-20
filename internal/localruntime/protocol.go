@@ -31,6 +31,9 @@ type EvaluateRequest struct {
 	// CodexProxy is a CodexProxyRequestType request's question, as the Codex
 	// proxy encodes it.
 	CodexProxy json.RawMessage `json:"codex_proxy,omitempty"`
+	// Browser is a BrowserRequestType request's message from the browser
+	// extension, as `kontext browser-host` relays it (browser/contract).
+	Browser json.RawMessage `json:"browser,omitempty"`
 	// Capabilities names what the hook understands beyond one request and
 	// one answer, such as HoldCapability. A daemon uses a capability only
 	// when the request names it, so a hook that predates one is never sent
@@ -91,6 +94,17 @@ const CodexProxyRequestType = "codex_proxy"
 
 // CodexProxyResult answers a CodexProxyRequestType request.
 type CodexProxyResult struct {
+	Type   string          `json:"type"`
+	Answer json.RawMessage `json:"answer,omitempty"`
+}
+
+// BrowserRequestType marks a message from the browser extension, relayed by
+// `kontext browser-host`, instead of a hook's. The answer is a BrowserResult.
+const BrowserRequestType = "browser"
+
+// BrowserResult answers a BrowserRequestType request with the daemon's answer
+// to the extension, which the host writes back unchanged.
+type BrowserResult struct {
 	Type   string          `json:"type"`
 	Answer json.RawMessage `json:"answer,omitempty"`
 }

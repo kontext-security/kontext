@@ -48,6 +48,13 @@ func main() {
 		_ = redirectDaemonLog()
 		startedByTheShell()
 	}
+	if startedByBrowser(os.Args) {
+		if err := runBrowserHost(os.Args[1:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	root := newRootCmd()
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -85,6 +92,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(stepSafetyCmd())
 	root.AddCommand(claudeCmd())
 	root.AddCommand(guardCmd())
+	root.AddCommand(browserHostCmd())
 	return root
 }
 

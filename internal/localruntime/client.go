@@ -118,6 +118,27 @@ func (c Client) CompactToolOutput(ctx context.Context, event hook.Event) (map[st
 // returns the daemon's answer, nil when it has none. The context's deadline
 // bounds the whole exchange, not only the dial.
 func (c Client) CodexProxy(ctx context.Context, question json.RawMessage) (json.RawMessage, error) {
+	var result CodexProxyResult
+	if err := c.exchange(ctx, EvaluateRequest{Type: CodexProxyRequestType, CodexProxy: question}, &result); err != nil {
+		return nil, err
+	}
+	return result.Answer, nil
+}
+
+// Browser relays a message from the browser extension and returns the
+// daemon's answer to it, nil when the daemon has none. The context's deadline
+// bounds the whole exchange, not only the dial.
+func (c Client) Browser(ctx context.Context, message json.RawMessage) (json.RawMessage, error) {
+	var result BrowserResult
+	if err := c.exchange(ctx, EvaluateRequest{Type: BrowserRequestType, Browser: message}, &result); err != nil {
+		return nil, err
+	}
+	return result.Answer, nil
+}
+
+// exchange sends one request and reads one answer, all within the client's
+// timeout or the context's deadline, whichever comes first.
+func (c Client) exchange(ctx context.Context, req EvaluateRequest, result any) error {
 	timeout := c.Timeout
 	if timeout == 0 {
 		timeout = 10 * time.Second
@@ -129,20 +150,16 @@ func (c Client) CodexProxy(ctx context.Context, question json.RawMessage) (json.
 	dialer := net.Dialer{Deadline: deadline}
 	conn, err := dialer.DialContext(ctx, "unix", c.SocketPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer conn.Close()
 	if err := conn.SetDeadline(deadline); err != nil {
-		return nil, err
+		return err
 	}
-	if err := WriteMessage(conn, EvaluateRequest{Type: CodexProxyRequestType, CodexProxy: question}); err != nil {
-		return nil, err
+	if err := WriteMessage(conn, req); err != nil {
+		return err
 	}
-	var result CodexProxyResult
-	if err := ReadMessage(conn, &result); err != nil {
-		return nil, err
-	}
-	return result.Answer, nil
+	return ReadMessage(conn, result)
 }
 
 func (c Client) roundTrip(ctx context.Context, req EvaluateRequest, result any) error {
