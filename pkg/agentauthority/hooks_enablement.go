@@ -67,6 +67,10 @@ func (s *hookScan) switchesFor(project string) switches {
 		}
 	}
 	for _, layer := range s.layers {
+		if projectKind(layer.kind) && layer.project != project {
+			// Another project's settings never apply here, read or not.
+			continue
+		}
 		if !layer.ok {
 			// A failed read can hide a switch, but an absent file has none.
 			if s.scopeStatus(layer.scope) != StatusComplete {

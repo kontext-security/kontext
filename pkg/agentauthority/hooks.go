@@ -255,6 +255,7 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	projects := keys(root.Projects)
 	if len(projects) > maxHookProjects {
 		s.source.Fail(ReasonWalkLimit)
+		s.agent.Truncated = true
 		projects = projects[:maxHookProjects]
 	}
 	for _, project := range projects {
@@ -471,6 +472,11 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 		if len(h.Args) > 0 {
 			fields, ok = append([]string{h.Command}, h.Args...), h.Command != ""
 		}
+		if len(h.Args) == 0 {
+			// `NAME=value cmd` sets a variable for cmd: the value can be a
+			// secret and is never the program.
+			fields = withoutAssignments(fields)
+		}
 		if ok && len(fields) > 0 {
 			program := fields[0]
 			info.program = program
@@ -536,7 +542,10 @@ func (s *hookScan) finish() {
 func kontextHookSet(records []HookRecord) KontextHookSet {
 	covered := map[string]bool{}
 	for _, r := range records {
-		if r.Origin == HookOriginKontext && r.Enablement.State != "disabled" {
+		// Only a handler that runs for every call of its event covers it: a
+		// narrowed matcher or a hook still waiting on project trust does not.
+		allCalls := r.Matcher == nil || strings.TrimSpace(*r.Matcher) == "" || strings.TrimSpace(*r.Matcher) == "*"
+		if r.Origin == HookOriginKontext && r.Enablement.State == hookEnabled && allCalls {
 			covered[r.Event] = true
 		}
 	}
@@ -553,6 +562,27 @@ func kontextHookSet(records []HookRecord) KontextHookSet {
 		set.State = "needs_update"
 	}
 	return set
+}
+
+// withoutAssignments drops the leading NAME=value words of a shell command.
+func withoutAssignments(fields []string) []string {
+	for len(fields) > 0 && isAssignment(fields[0]) {
+		fields = fields[1:]
+	}
+	return fields
+}
+
+func isAssignment(word string) bool {
+	name, _, found := strings.Cut(word, "=")
+	if !found || name == "" {
+		return false
+	}
+	for i, c := range name {
+		if c != '_' && (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (i == 0 || c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // SameFileAs is the OwnBinary check against one installed binary.
