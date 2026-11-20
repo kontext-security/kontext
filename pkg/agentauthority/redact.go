@@ -9,7 +9,7 @@ import (
 )
 
 // Keep identical to AUTHORITY_SECRET_PATTERN in the cloud contract.
-var secretPattern = regexp.MustCompile(`(?i)ghp_|gho_|ghu_|github_pat_|\bsk-[A-Za-z0-9]|xox[abp]-|\bAKIA[0-9A-Z]{16}|AIza|Bearer |-----BEGIN|(password|passwd|secret|token|api[-_]?key)=`)
+var secretPattern = regexp.MustCompile(`(?i)gh[pousr]_|github_pat_|\bsk-[A-Za-z0-9]|xox[abp]-|\bAKIA[0-9A-Z]{16}|AIza|Bearer |Basic [A-Za-z0-9+/]{12,}|-----BEGIN|(password|passwd|secret|token|api[-_]?key)=`)
 
 var secretArgName = regexp.MustCompile(`(?i)(password|passwd|secret|token|api[-_]?key)`)
 
