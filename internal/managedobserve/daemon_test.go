@@ -1621,3 +1621,16 @@ func TestManagedSettingsDefaultsFollowClaudeManaged(t *testing.T) {
 		t.Errorf("managedSettingsFilePath = %q, want %q", got, want)
 	}
 }
+
+func TestBrowserTokensStopWhenTheCloudMoves(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed.json")
+	writeTestManagedConfigWithCloudURL(t, path, "https://app.kontext.dev")
+	tokens := sameCloudTokenSource("https://app.kontext.dev/")
+	if token, err := tokens(context.Background()); err != nil || token != "test-install-token" {
+		t.Fatalf("token = %q, err = %v", token, err)
+	}
+	writeTestManagedConfigWithCloudURL(t, path, "https://eu.kontext.dev")
+	if token, err := tokens(context.Background()); err == nil || token != "" {
+		t.Fatalf("a token for another cloud was handed out: %q", token)
+	}
+}

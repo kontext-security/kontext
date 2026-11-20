@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/fsperm"
 )
 
 // Store limits. Days older than KeepDays are pruned, and the store holds at
@@ -41,13 +43,20 @@ type Store struct {
 
 	mu   sync.Mutex
 	rows map[string]*row
+	// dirty is set while the file is behind the rows, such as after a failed
+	// save, so the next call saves again rather than report success.
+	dirty bool
 }
 
 // OpenStore reads the store at path; a missing file is an empty store and an
 // unreadable one starts over, since its rows are snapshots the extension
 // sends again.
 func OpenStore(path string) (*Store, error) {
-	s := &Store{path: path, now: time.Now, rows: map[string]*row{}}
+	return openStore(path, time.Now)
+}
+
+func openStore(path string, now func() time.Time) (*Store, error) {
+	s := &Store{path: path, now: now, rows: map[string]*row{}}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -58,6 +67,12 @@ func OpenStore(path string) (*Store, error) {
 	var file storeFile
 	if json.Unmarshal(data, &file) == nil && file.Rows != nil {
 		s.rows = file.Rows
+	}
+	if s.pruneLocked() {
+		// Days past KeepDays leave the disk now, not at the next message.
+		if err := s.saveLocked(); err != nil {
+			s.dirty = true
+		}
 	}
 	return s, nil
 }
@@ -79,9 +94,8 @@ func rowKey(r CloudRecord) string {
 func (s *Store) Apply(ext Extension, records []IndexedRecord) ([]Rejection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pruneLocked()
+	changed := s.pruneLocked()
 	var rejected []Rejection
-	changed := false
 	for _, indexed := range records {
 		record := CloudRecord{Browser: ext.Browser, Profile: ext.Profile, ExtensionVersion: ext.Version, Record: indexed.Record}
 		if record.Kind == KindVisit && !s.recentDay(record.Day) {
@@ -105,7 +119,7 @@ func (s *Store) Apply(ext Extension, records []IndexedRecord) ([]Rejection, erro
 			changed = true
 		}
 	}
-	if !changed {
+	if !changed && !s.dirty {
 		return rejected, nil
 	}
 	return rejected, s.saveLocked()
@@ -153,12 +167,16 @@ func (s *Store) recentDay(day string) bool {
 	return !d.After(today.Add(24*time.Hour)) && today.Sub(d) < KeepDays*24*time.Hour
 }
 
-func (s *Store) pruneLocked() {
+// pruneLocked drops days past KeepDays and says whether it dropped any.
+func (s *Store) pruneLocked() bool {
+	pruned := false
 	for key, r := range s.rows {
 		if r.Record.Kind == KindVisit && !s.recentDay(r.Record.Day) {
 			delete(s.rows, key)
+			pruned = true
 		}
 	}
+	return pruned
 }
 
 // Pending is a batch to send: the rows that changed since the cloud last had
@@ -173,6 +191,9 @@ type Pending struct {
 func (s *Store) Pending(max int) Pending {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.pruneLocked() {
+		s.dirty = true
+	}
 	var keys []string
 	for key, r := range s.rows {
 		if r.Version != r.Sent {
@@ -214,7 +235,9 @@ func (s *Store) Len() int {
 	return len(s.rows)
 }
 
+// saveLocked writes the rows. Until a write succeeds the store stays dirty.
 func (s *Store) saveLocked() error {
+	s.dirty = true
 	data, err := json.Marshal(storeFile{Rows: s.rows})
 	if err != nil {
 		return err
@@ -228,7 +251,8 @@ func (s *Store) saveLocked() error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(0o600); err != nil {
+	// Owner-only on every OS: mode bits on Unix, a protected DACL on Windows.
+	if err := fsperm.RestrictFile(tmp); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -242,5 +266,6 @@ func (s *Store) saveLocked() error {
 	if err := os.Rename(tmp.Name(), s.path); err != nil {
 		return fmt.Errorf("browser events: save store: %w", err)
 	}
+	s.dirty = false
 	return nil
 }

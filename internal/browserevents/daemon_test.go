@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/fsperm"
 )
 
 var testExtension = Extension{Version: "0.1.0", Browser: "chrome", Profile: "p7Hq2vXkLm9s"}
@@ -22,13 +24,14 @@ func visit(requests int, first, last string) IndexedRecord {
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := OpenStore(filepath.Join(t.TempDir(), "browser-activity.json"))
+	s, err := openStore(filepath.Join(t.TempDir(), "browser-activity.json"), testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.now = func() time.Time { return time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC) }
 	return s
 }
+
+func testNow() time.Time { return time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC) }
 
 func TestReplaysAndOutOfOrderSnapshotsNeverLowerADay(t *testing.T) {
 	s := openTestStore(t)
@@ -104,14 +107,13 @@ func TestTheStoreFileIsTheUsersOnlyAndSurvivesARestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
+	if private, err := fsperm.PrivateFile(s.path, info); err != nil || !private {
+		t.Fatalf("store file is not private to its owner (mode %v, err %v)", info.Mode().Perm(), err)
 	}
-	again, err := OpenStore(s.path)
+	again, err := openStore(s.path, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again.now = s.now
 	if p := again.Pending(10); len(p.Records) != 1 || p.Records[0].Requests != 4 {
 		t.Fatalf("after restart = %+v", p.Records)
 	}
@@ -212,5 +214,80 @@ func TestBackoffGrowsToItsCap(t *testing.T) {
 	}
 	if !strings.Contains(IngestPath, "browser-activity") {
 		t.Fatal("ingest path")
+	}
+}
+
+func TestASnapshotWhoseSaveFailedIsSavedOnItsRetry(t *testing.T) {
+	s := openTestStore(t)
+	path := s.path
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.path = filepath.Join(blocker, "browser-activity.json")
+	snapshot := []IndexedRecord{visit(3, "2026-11-20T08:00:00Z", "2026-11-20T09:00:00Z")}
+	if _, err := s.Apply(testExtension, snapshot); err == nil {
+		t.Fatal("save into a file succeeded")
+	}
+	s.path = path
+	if _, err := s.Apply(testExtension, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	again, err := openStore(path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Len() != 1 {
+		t.Fatalf("the retried snapshot is not on disk: %d rows", again.Len())
+	}
+}
+
+func TestExpiredDaysLeaveTheDiskWhenTheStoreOpens(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.Apply(testExtension, []IndexedRecord{visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")}); err != nil {
+		t.Fatal(err)
+	}
+	later := func() time.Time { return testNow().Add(KeepDays * 24 * time.Hour) }
+	if _, err := openStore(s.path, later); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "chatgpt") {
+		t.Fatalf("an expired day is still on disk: %s", data)
+	}
+}
+
+func TestMessagesCannotPostponeASend(t *testing.T) {
+	start := testNow()
+	plan := sendPlan{due: start.Add(SendDelay)}
+	for i := 1; i <= 10; i++ {
+		plan.changed(start.Add(time.Duration(i) * 10 * time.Second))
+	}
+	if want := start.Add(SendDelay); !plan.due.Equal(want) {
+		t.Fatalf("due = %v, want %v", plan.due, want)
+	}
+	plan.after(Nothing, start)
+	if !plan.changed(start.Add(time.Minute)) || !plan.due.Equal(start.Add(time.Minute+SendDelay)) {
+		t.Fatalf("a change after an idle send did not bring it forward: %v", plan.due)
+	}
+}
+
+func TestChangesDoNotCutA404OrFailureWait(t *testing.T) {
+	start := testNow()
+	plan := sendPlan{}
+	plan.after(NotFound, start)
+	if plan.changed(start.Add(time.Minute)) || !plan.due.Equal(start.Add(NotFoundBackoff)) {
+		t.Fatalf("a change cut the 404 wait: %v", plan.due)
+	}
+	plan.after(Retry, start)
+	if plan.changed(start.Add(time.Second)) || !plan.due.Equal(start.Add(backoff(1))) {
+		t.Fatalf("a change cut the failure wait: %v", plan.due)
+	}
+	plan.after(Sent, start)
+	if plan.holding || plan.failures != 0 {
+		t.Fatalf("a sent batch kept the wait: %+v", plan)
 	}
 }

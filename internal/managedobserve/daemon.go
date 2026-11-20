@@ -438,7 +438,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Store:          browserStore,
 		BaseURL:        loadedConfig.Config.CloudURL,
 		InstallationID: installationState.InstallationID,
-		Tokens:         installTokenSource,
+		Tokens:         sameCloudTokenSource(loadedConfig.Config.CloudURL),
 		HTTP:           cloudhttp.NewClient(30 * time.Second),
 		Logf:           browserHandler.Logf,
 	}
@@ -1177,5 +1177,23 @@ func (e *enrolmentRefresh) afterAcceptedPost() {
 	case e.now <- struct{}{}:
 		e.left--
 	default:
+	}
+}
+
+// sameCloudTokenSource reads the current install token, but only while the
+// managed configuration still names cloudURL, the address the caller sends
+// to. After a re-enrollment to another cloud it refuses, so a new token never
+// reaches the old address; the daemon's restart picks up the new one.
+func sameCloudTokenSource(cloudURL string) func(context.Context) (string, error) {
+	want := strings.TrimRight(strings.TrimSpace(cloudURL), "/")
+	return func(ctx context.Context) (string, error) {
+		loaded, err := managedconfig.Load()
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimRight(strings.TrimSpace(loaded.Config.CloudURL), "/") != want {
+			return "", errors.New("the managed configuration names another cloud; waiting for the daemon to restart")
+		}
+		return managedconfig.ResolveInstallToken(ctx, loaded.Config.Credentials.InstallTokenRef)
 	}
 }

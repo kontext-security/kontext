@@ -58,10 +58,7 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	if len(pending.Records) == 0 {
 		return Nothing, nil
 	}
-	now := time.Now
-	if s.now != nil {
-		now = s.now
-	}
+	now := s.clock()
 	batch := CloudBatch{Schema: CloudSchema, InstallationID: s.InstallationID, SentAt: now().UTC().Format(time.RFC3339), Records: pending.Records}
 	if err := batch.Validate(); err != nil {
 		// A row the store kept that the contract no longer allows: drop the
@@ -118,41 +115,67 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 // Run sends whenever changed fires, after SendDelay, and backs off on
 // failure, until ctx ends.
 func (s *Sender) Run(ctx context.Context, changed <-chan struct{}) {
-	wait := SendDelay
-	failures := 0
-	timer := time.NewTimer(wait)
+	now := s.clock()
+	plan := sendPlan{due: now().Add(SendDelay)}
+	timer := time.NewTimer(SendDelay)
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-changed:
-			if failures == 0 {
-				timer.Reset(SendDelay)
+			if plan.changed(now()) {
+				timer.Reset(max(plan.due.Sub(now()), 0))
 			}
 			continue
 		case <-timer.C:
 		}
 		outcome, err := s.SendOnce(ctx)
-		switch outcome {
-		case Sent:
-			failures = 0
-			wait = time.Second
-			if err != nil {
-				s.logf("%v", err)
-			}
-		case Nothing:
-			failures = 0
-			wait = time.Hour
-		case NotFound:
-			failures = 0
-			wait = NotFoundBackoff
-		default:
-			failures++
-			wait = backoff(failures)
-			s.logf("browser events: send failed (%d in a row): %v", failures, err)
+		plan.after(outcome, now())
+		switch {
+		case outcome == Sent && err != nil:
+			s.logf("%v", err)
+		case outcome == Retry || outcome == Refused:
+			s.logf("browser events: send failed (%d in a row): %v", plan.failures, err)
 		}
-		timer.Reset(wait)
+		timer.Reset(max(plan.due.Sub(now()), 0))
+	}
+}
+
+// sendPlan says when the next send is due. A change brings it forward to
+// SendDelay from now at most, and never moves a send that is due sooner, so
+// a steady stream of messages cannot postpone it. While the sender backs off
+// after a failure or a 404, changes leave it alone.
+type sendPlan struct {
+	due      time.Time
+	holding  bool
+	failures int
+}
+
+func (p *sendPlan) changed(now time.Time) bool {
+	soon := now.Add(SendDelay)
+	if p.holding || !p.due.After(soon) {
+		return false
+	}
+	p.due = soon
+	return true
+}
+
+func (p *sendPlan) after(outcome Outcome, now time.Time) {
+	switch outcome {
+	case Sent:
+		p.failures, p.holding = 0, false
+		p.due = now.Add(time.Second)
+	case Nothing:
+		p.failures, p.holding = 0, false
+		p.due = now.Add(time.Hour)
+	case NotFound:
+		p.failures, p.holding = 0, true
+		p.due = now.Add(NotFoundBackoff)
+	default:
+		p.failures++
+		p.holding = true
+		p.due = now.Add(backoff(p.failures))
 	}
 }
 
@@ -162,6 +185,13 @@ func backoff(failures int) time.Duration {
 		wait *= 2
 	}
 	return min(wait, MaxBackoff)
+}
+
+func (s *Sender) clock() func() time.Time {
+	if s.now != nil {
+		return s.now
+	}
+	return time.Now
 }
 
 func (s *Sender) logf(format string, args ...any) {
