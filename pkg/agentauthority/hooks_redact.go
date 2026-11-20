@@ -13,8 +13,10 @@ import (
 
 var (
 	// A script's file name tells an administrator what runs. It is kept only
-	// as an interpreter's first argument (`bash check.sh`): anywhere else a
-	// word with a script's suffix can be a password (`redis-cli AUTH x.sh`).
+	// as an interpreter's first argument, before any flag (`bash check.sh`):
+	// anywhere else a word with a script's suffix can be a password
+	// (`redis-cli AUTH x.sh`), and a flag can take the script's place
+	// (`python -m mod x.py`, `python -c code x.py` pass x.py as data).
 	scriptName  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.(sh|bash|zsh|fish|py|js|mjs|cjs|ts|rb|pl|php|ps1|cmd|bat)$`)
 	interpreter = regexp.MustCompile(`^(sh|bash|zsh|dash|ksh|fish|python[0-9.]*|node|nodejs|bun|deno|tsx|ts-node|ruby|perl|php|pwsh|powershell|cmd|osascript)(\.exe)?$`)
 	// A long flag's name, or a single-letter short one: `-pSECRET` carries
@@ -68,7 +70,7 @@ func hookSummary(program string, args []string) string {
 			flag, _, hasValue := strings.Cut(arg, "=")
 			if !summaryFlag.MatchString(flag) || hookSecret(flag) {
 				add(redacted)
-				afterFlag = false
+				afterFlag, scriptSlot = false, false
 				continue
 			}
 			add(flag)
@@ -76,6 +78,7 @@ func hookSummary(program string, args []string) string {
 				add(redacted)
 			}
 			afterFlag = !hasValue
+			scriptSlot = false
 		case strings.Contains(arg, "://"):
 			add(summaryURL(arg))
 			afterFlag, scriptSlot = false, false
@@ -95,24 +98,52 @@ func hookSummary(program string, args []string) string {
 }
 
 // summaryURL keeps a URL's scheme and host, and only when it carries no user.
+// A host label that reads as an id is hidden: a webhook's host can be the
+// whole credential (`eo1a2b3c4d5e6f7.m.pipedream.net`).
 func summaryURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.User != nil || u.Scheme == "" || u.Hostname() == "" {
 		return redacted
 	}
-	return safe(u.Scheme+"://"+u.Host, 64)
+	labels := strings.Split(u.Host, ".")
+	for i, label := range labels {
+		if hostLabelSecret(label) {
+			labels[i] = redacted
+		}
+	}
+	return safe(u.Scheme+"://"+strings.Join(labels, "."), 64)
+}
+
+// hostLabelSecret: a DNS label of ten or more characters that mixes letters
+// and digits, or any label of 24 or more, or one that reads as a secret.
+// Keep identical to hostLabelUnsafe in kontext-cloud's hook-inventory.ts.
+func hostLabelSecret(label string) bool {
+	label, _, _ = strings.Cut(label, ":")
+	digits := strings.ContainsAny(label, "0123456789")
+	letters := strings.IndexFunc(label, func(r rune) bool { return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' }) >= 0
+	return len(label) >= 24 || len(label) >= 10 && digits && letters || hookSecret(label)
+}
+
+// hookField is safe for a readable name the user didn't write as a summary
+// (a plugin's name or version, an MCP server): a secret-shaped value is
+// hidden whole.
+func hookField(value string, limit int) string {
+	if hookSecret(value) {
+		return redacted
+	}
+	return safe(value, limit)
 }
 
 // fileEvents match on a file's name, which can be private (a watched
 // `acquisition-targets.csv`): only a bare extension or `*` stays readable.
 var (
 	fileEvents      = []string{"FileChanged"}
-	fileMatcherPart = regexp.MustCompile(`^(\*|\*?\.[A-Za-z0-9]{1,16})$`)
+	fileMatcherPart = regexp.MustCompile(`^(\*|\*\.[A-Za-z0-9]{1,16})$`)
 )
 
 // safeEventMatcher is safeMatcher, with file events' names hidden too.
 func safeEventMatcher(event, matcher string) string {
-	if !slices.Contains(fileEvents, event) {
+	if !slices.Contains(fileEvents, event) || matcher == "" {
 		return safeMatcher(matcher)
 	}
 	parts := strings.Split(matcher, "|")

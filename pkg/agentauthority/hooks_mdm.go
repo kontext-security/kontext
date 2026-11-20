@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"unicode/utf16"
 )
 
@@ -21,6 +22,17 @@ const claudePreferenceDomain = "com.anthropic.claudecode"
 // mdmBehaviorKey says where Claude Code takes managed settings from; alone it
 // supplies no policy, and Claude Code falls through to the managed files.
 const mdmBehaviorKey = "managedSourcesBehavior"
+
+// mdmControlKeys configure how a profile applies, not what it enforces:
+// Claude Code doesn't count them as policy.
+var mdmControlKeys = []string{mdmBehaviorKey, "wslInheritsWindowsSettings"}
+
+// maxPlistKey bounds a decoded key; a longer one reads as tooLong, which is
+// policy like any key that isn't a control key.
+const (
+	maxPlistKey = 256
+	tooLong     = "\x00too-long"
+)
 
 // maxMDMPlistBytes bounds the read; a larger profile is taken as policy.
 const maxMDMPlistBytes = 1 << 20
@@ -89,6 +101,8 @@ func mdmPlistMode(path string) mdmMode {
 	for _, entry := range entries {
 		if entry.key == mdmBehaviorKey {
 			merge = entry.str != nil && *entry.str == mdmMergeBehavior
+		}
+		if slices.Contains(mdmControlKeys, entry.key) {
 			continue
 		}
 		policy = true
@@ -220,7 +234,10 @@ func binaryPlistTopEntries(data []byte) ([]plistEntry, bool) {
 		}
 		return int(count), at + 2 + size, true
 	}
-	str := func(ref uint64) (string, bool) {
+	// str decodes a string object of at most limit characters; a longer one
+	// reads as tooLong. Objects can be shared, so an unbounded decode per
+	// reference could expand far past the file's size.
+	str := func(ref uint64, limit int) (string, bool) {
 		at, ok := offset(ref)
 		if !ok {
 			return "", false
@@ -228,6 +245,9 @@ func binaryPlistTopEntries(data []byte) ([]plistEntry, bool) {
 		size, body, ok := length(at)
 		if !ok {
 			return "", false
+		}
+		if size > limit {
+			return tooLong, true
 		}
 		switch data[at] >> 4 {
 		case 0x5: // ASCII
@@ -257,14 +277,17 @@ func binaryPlistTopEntries(data []byte) ([]plistEntry, bool) {
 	}
 	entries := make([]plistEntry, 0, n)
 	for i := range n {
-		key, ok := str(uint(data[refs+i*refSize : refs+(i+1)*refSize]))
+		key, ok := str(uint(data[refs+i*refSize:refs+(i+1)*refSize]), maxPlistKey)
 		if !ok {
 			return nil, false
 		}
 		entry := plistEntry{key: key}
-		valueAt := refs + (n+i)*refSize
-		if value, ok := str(uint(data[valueAt : valueAt+refSize])); ok {
-			entry.str = &value
+		// Only the behavior's value is read.
+		if key == mdmBehaviorKey {
+			valueAt := refs + (n+i)*refSize
+			if value, ok := str(uint(data[valueAt:valueAt+refSize]), 64); ok {
+				entry.str = &value
+			}
 		}
 		entries = append(entries, entry)
 	}

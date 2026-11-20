@@ -49,7 +49,9 @@ func TestNullSettingsAreMalformed(t *testing.T) {
 func TestFileEventMatchersHideFileNames(t *testing.T) {
 	for matcher, want := range map[string]string{
 		"Acme-acquisition-targets.csv": "<redacted>",
-		"*.ts|.envrc":                  "*.ts|.envrc",
+		"*.ts|.envrc":                  "*.ts|<redacted>",
+		".AcmeBuyout":                  "<redacted>",
+		"":                             "",
 		"*":                            "*",
 	} {
 		if got := safeEventMatcher("FileChanged", matcher); got != want {
@@ -70,5 +72,27 @@ func TestTokenShapedEventIsSkipped(t *testing.T) {
 	agent, _ := h.scan()
 	if len(agent.Hooks) != 0 {
 		t.Fatalf("reported %+v", agent.Hooks)
+	}
+}
+
+// A webhook's host can be its credential, and a plugin's metadata or an MCP
+// server's name can hold a token by mistake: each is hidden.
+func TestHookIdentityFieldsHideTokens(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://hooks.example.com/x":                "https://hooks.example.com",
+		"https://eo1a2b3c4d5e6f7.m.pipedream.net/":   "https://<redacted>.m.pipedream.net",
+		"https://abcdefghijklmnopqrstuvwxyz.example": "https://<redacted>.example",
+		"https://api2.example.com:8443":              "https://api2.example.com:8443",
+	} {
+		if got := summaryURL(raw); got != want {
+			t.Errorf("summaryURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+	token := "npm_" + strings.Repeat("a1B2", 9)
+	if got := hookField(token, 64); got != redacted {
+		t.Fatalf("hookField(npm token) = %q", got)
+	}
+	if got := hookField("1.4.0", 64); got != "1.4.0" {
+		t.Fatalf("hookField(version) = %q", got)
 	}
 }

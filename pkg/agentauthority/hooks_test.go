@@ -763,6 +763,44 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 			t.Fatalf("%+v", r.Enablement)
 		}
 	})
+	t.Run("a managed file past the scope cap can't prove the set", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		for i := range MaxHookScopes {
+			h.write(filepath.Join(h.managed, "managed-settings.d", fmt.Sprintf("%03d.json", i)), map[string]any{})
+		}
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != KontextHooksUnknown {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("a later managed file adds to plugin-only customization", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"strictPluginOnlyCustomization": []string{"hooks"}})
+		h.write(filepath.Join(h.managed, "managed-settings.d", "20-skills.json"), map[string]any{"strictPluginOnlyCustomization": []string{"skills"}})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "missing" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("a switch of the wrong type leaves the set unknown", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"allowManagedHooksOnly": "true"})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != KontextHooksUnknown {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("keys in another case are not Claude's", func(t *testing.T) {
+		h, bin, _ := setup(t)
+		hooks := map[string]any{}
+		for _, event := range claudemanaged.SupportedEvents {
+			hooks[event.Name.String()] = []any{map[string]any{"hooks": []any{map[string]any{"Type": "command", "Command": agenthooks.ShellQuote(bin) + " hook " + event.Alias}}}}
+		}
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooks})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State == "complete" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
 	t.Run("an MDM profile with no handler on disk is unknown, not missing", func(t *testing.T) {
 		h, bin, _ := setup(t)
 		h.mdm = true
@@ -805,6 +843,45 @@ func TestStalledOwnershipCheckLeavesTheHookUnverified(t *testing.T) {
 	}
 	if len(agent.Hooks) != 1 || agent.Hooks[0].Origin == HookOriginKontext {
 		t.Fatalf("%+v", agent.Hooks)
+	}
+	// Unverified is not "not Kontext's": the set can't be called incomplete.
+	if agent.KontextHooks.State != KontextHooksUnknown {
+		t.Fatalf("%+v", agent.KontextHooks)
+	}
+}
+
+// A null project or plugin registry is no registry: read as empty, it would
+// withdraw every project and plugin hook it lists.
+func TestNullRegistriesAreNotEmpty(t *testing.T) {
+	for _, file := range []string{".claude.json", "plugins/installed_plugins.json"} {
+		t.Run(file, func(t *testing.T) {
+			h := newHookHome(t)
+			path := filepath.Join(h.base, file)
+			if file == ".claude.json" {
+				path = filepath.Join(h.home, file)
+			}
+			h.write(path, []byte("null"))
+			if _, result := h.scan(); result.Status == StatusComplete || !slices.Contains(result.Reasons, ReasonMalformed) {
+				t.Fatalf("%+v", result)
+			}
+		})
+	}
+}
+
+// Only the behavior key's value is decoded, so a profile whose entries share
+// one large string can't expand past its own size; a control-only profile is
+// no policy.
+func TestMDMProfileDecodingIsBounded(t *testing.T) {
+	if entries, ok := binaryPlistTopEntries(binaryPlistStrings("hooks", strings.Repeat("x", 200))); !ok || entries[0].key != "hooks" || entries[0].str != nil {
+		t.Fatalf("%v %+v", ok, entries)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "control.plist")
+	if err := os.WriteFile(path, binaryPlistStrings("wslInheritsWindowsSettings", "x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if mode := mdmPlistMode(path); mode != mdmNone {
+		t.Fatalf("control-only profile = %v", mode)
 	}
 }
 
@@ -882,7 +959,11 @@ func TestHookSummaryDropsPositionalWords(t *testing.T) {
 		{"bash", "check-secrets.sh --strict", "bash check-secrets.sh --strict"},
 		{"bash", "-e check.sh", "bash -e <redacted>"},
 		{"python3", "run.py Winter2026.py", "python3 run.py <redacted>"},
-		{"node", "--token x format.js", "node --token <redacted> format.js"},
+		{"node", "--token x format.js", "node --token <redacted>"},
+		// A flag can take the script's place: what follows is data.
+		{"python3", "-m audit Winter2026.py", "python3 -m <redacted>"},
+		{"python", "-c code winter.py", "python -c <redacted>"},
+		{"bash", "check.sh", "bash check.sh"},
 		{"/opt/hooks/check.sh", "spring.sh", "check.sh <redacted>"},
 	} {
 		if got := hookSummary(c.program, strings.Fields(c.args)); got != c.want {
@@ -1220,4 +1301,18 @@ func binaryPlist(keys ...string) []byte {
 	binary.BigEndian.PutUint64(trailer[24:], uint64(table))
 	body.Write(trailer)
 	return body.Bytes()
+}
+
+// A token a generated manifest put in a plugin's version never leaves.
+func TestPluginMetadataHidesTokens(t *testing.T) {
+	h := newHookHome(t)
+	on := true
+	h.installPlugin("formatter@acme", &on, hooksOf("Stop", "", command("echo stop")))
+	token := "npm_" + strings.Repeat("a1B2", 9)
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), map[string]any{"name": "formatter", "version": token})
+	agent, _ := h.scan()
+	if len(agent.Hooks) != 1 || agent.Hooks[0].Plugin == nil || *agent.Hooks[0].Plugin.Version != redacted {
+		t.Fatalf("%+v", agent.Hooks)
+	}
 }
