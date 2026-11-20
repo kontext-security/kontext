@@ -69,6 +69,10 @@ type sourceClaims struct {
 	// Hooks is the whole scan of a hook source (ADR-0011): its scopes say
 	// what the cloud may withdraw, so it travels as one block.
 	Hooks *agentauthority.HookAgent `json:"hooks,omitempty"`
+	// KeyTag names the K_dev a hook scan was keyed with, without revealing
+	// it. Hook ids are only meaningful to the workspace whose key made them,
+	// so a result travels only while its tag is the current key's.
+	KeyTag string `json:"key_tag,omitempty"`
 }
 
 func (c sourceClaims) positive() bool {
@@ -179,9 +183,9 @@ func (s *InventoryStore) RecordAuthority(report agentauthority.Report) error {
 }
 
 // RecordHooks takes a new revision for a hook scan of one agent.
-func (s *InventoryStore) RecordHooks(agent agentauthority.HookAgent, result agentauthority.SourceResult) error {
+func (s *InventoryStore) RecordHooks(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) error {
 	return s.record([]agentauthority.SourceResult{result}, func(string, string) sourceClaims {
-		return sourceClaims{Hooks: &agent}
+		return sourceClaims{Hooks: &agent, KeyTag: keyTag}
 	})
 }
 
@@ -202,7 +206,8 @@ func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf 
 		result.Revision = s.file.Revision
 		agent, family, _ := strings.Cut(result.ID, "/")
 		entry := pendingSource{Result: result, Claims: claimsOf(agent, family)}
-		if prior, ok := s.file.Pending[result.ID]; ok && result.Status != agentauthority.StatusComplete {
+		// A result keyed for another workspace is never merged into this one.
+		if prior, ok := s.file.Pending[result.ID]; ok && result.Status != agentauthority.StatusComplete && prior.Claims.KeyTag == entry.Claims.KeyTag {
 			entry = mergePending(prior, entry)
 		}
 		s.file.Pending[result.ID] = entry
@@ -240,6 +245,7 @@ func mergeClaims(older, newer sourceClaims) sourceClaims {
 		Permissions: mergePermissions(older.Permissions, newer.Permissions),
 		Credentials: mergeByKey(older.Credentials, newer.Credentials, credentialKey),
 		Hooks:       mergeHooks(older.Hooks, newer.Hooks),
+		KeyTag:      newer.KeyTag,
 	}
 	if merged.Agent == nil {
 		merged.Agent = older.Agent
@@ -515,6 +521,12 @@ func addInventory(payload *Payload, opts Options) {
 		return
 	}
 	pending := opts.Inventory.snapshot()
+	if opts.HookKeyTag != nil {
+		current := opts.HookKeyTag()
+		maps.DeleteFunc(pending, func(id string, entry pendingSource) bool {
+			return sourceKind(id) == kindHooks && (current == "" || entry.Claims.KeyTag != current)
+		})
+	}
 	hooks := opts.HookInventoryEnabled != nil && opts.HookInventoryEnabled() && slices.ContainsFunc(slices.Collect(maps.Keys(pending)), func(id string) bool { return sourceKind(id) == kindHooks })
 	if device.Agents == nil && device.Authority == nil && !hooks {
 		return

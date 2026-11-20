@@ -55,7 +55,7 @@ func heartbeatWith(store *InventoryStore, hooksOn bool) Payload {
 func TestHookInventoryFollowsTheSwitch(t *testing.T) {
 	store, _ := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:one")
-	if err := store.RecordHooks(agent, res); err != nil {
+	if err := store.RecordHooks(agent, res, "tag"); err != nil {
 		t.Fatal(err)
 	}
 	if off := heartbeatWith(store, false); off.Device.HookInventory != nil || off.Device.Inventory != nil {
@@ -83,7 +83,7 @@ func TestHookInventoryFollowsTheSwitch(t *testing.T) {
 func TestHookAndAuthorityDiscardsAreSeparate(t *testing.T) {
 	store, _ := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:one")
-	if err := store.RecordHooks(agent, res); err != nil {
+	if err := store.RecordHooks(agent, res, "tag"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.RecordAuthority(mcpScan(agentauthority.StatusComplete, "github")); err != nil {
@@ -117,11 +117,11 @@ func TestHookAndAuthorityDiscardsAreSeparate(t *testing.T) {
 func TestHookMergeKeepsCompleteScopes(t *testing.T) {
 	store, _ := openTestStore(t)
 	older, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete", "sc_b": "complete"}, "sc_a:a1", "sc_b:b1")
-	if err := store.RecordHooks(older, res); err != nil {
+	if err := store.RecordHooks(older, res, "tag"); err != nil {
 		t.Fatal(err)
 	}
 	newer, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "failed", "sc_b": "complete"}, "sc_b:b2")
-	if err := store.RecordHooks(newer, res); err != nil {
+	if err := store.RecordHooks(newer, res, "tag"); err != nil {
 		t.Fatal(err)
 	}
 	merged := pendingOf(t, store, hookSource)
@@ -138,7 +138,7 @@ func TestHookMergeKeepsCompleteScopes(t *testing.T) {
 	}
 	// A failed source with nothing in it keeps the older scan whole.
 	failed := agentauthority.HookAgent{ID: "claude_code", Scopes: []agentauthority.HookScope{}, Hooks: []agentauthority.HookRecord{}}
-	if err := store.RecordHooks(failed, result(hookSource, agentauthority.StatusFailed, agentauthority.ReasonMalformed)); err != nil {
+	if err := store.RecordHooks(failed, result(hookSource, agentauthority.StatusFailed, agentauthority.ReasonMalformed), "tag"); err != nil {
 		t.Fatal(err)
 	}
 	if got := hookIDs(pendingOf(t, store, hookSource).Claims.Hooks); !slices.Equal(got, []string{"hk_a1", "hk_b2"}) {
@@ -159,7 +159,7 @@ func TestHookBlockStaysInsideTheBudget(t *testing.T) {
 	for i := range agent.Hooks {
 		agent.Hooks[i].Summary = &long
 	}
-	if err := store.RecordHooks(agent, res); err != nil {
+	if err := store.RecordHooks(agent, res, "tag"); err != nil {
 		t.Fatal(err)
 	}
 	payload := heartbeatWith(store, true)
@@ -182,7 +182,7 @@ func TestHookBlockStaysInsideTheBudget(t *testing.T) {
 func TestFlushAcknowledgesHookSource(t *testing.T) {
 	store, _ := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:one")
-	if err := store.RecordHooks(agent, res); err != nil {
+	if err := store.RecordHooks(agent, res, "tag"); err != nil {
 		t.Fatal(err)
 	}
 	scan := presenceScan(agentauthority.StatusComplete, "cursor")
@@ -198,5 +198,37 @@ func TestFlushAcknowledgesHookSource(t *testing.T) {
 	}
 	if _, ok := store.pendingFor(hookSource); ok {
 		t.Fatal("applied hook source still pending")
+	}
+}
+
+// Hook ids are keyed per workspace: a result recorded under another key, or
+// while no key is known, never travels, and a newer partial scan under a new
+// key inherits nothing from the old one.
+func TestHookResultsTravelOnlyUnderTheirKey(t *testing.T) {
+	store, _ := openTestStore(t)
+	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:old")
+	if err := store.RecordHooks(agent, res, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	send := func(tag string) Payload {
+		opts := Options{Inventory: store, CLIVersion: "test", HookInventoryEnabled: func() bool { return true }, HookKeyTag: func() string { return tag }}
+		payload := newPayload(opts, nil, nil, nil, nil, nil, time.Now())
+		addInventory(&payload, opts)
+		return payload
+	}
+	for _, tag := range []string{"", "other"} {
+		if p := send(tag); p.Device.HookInventory != nil || p.Device.Inventory != nil {
+			t.Fatalf("tag %q sent %+v", tag, p.Device.HookInventory)
+		}
+	}
+	if p := send("acme"); p.Device.HookInventory == nil {
+		t.Fatal("own key's result not sent")
+	}
+	newer, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_b": "complete"}, "sc_b:new")
+	if err := store.RecordHooks(newer, res, "other"); err != nil {
+		t.Fatal(err)
+	}
+	if got := hookIDs(pendingOf(t, store, hookSource).Claims.Hooks); !slices.Equal(got, []string{"hk_new"}) {
+		t.Fatalf("merged across keys: %v", got)
 	}
 }

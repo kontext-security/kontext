@@ -467,8 +467,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		available: hookAvailable,
 		beginRead: authorityHolder.scanner.BeginRead,
 		ownBinary: ownBinaryCheck(),
-		record: func(agent agentauthority.HookAgent, result agentauthority.SourceResult) {
-			if err := inventoryStore.RecordHooks(agent, result); err != nil {
+		record: func(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) {
+			if err := inventoryStore.RecordHooks(agent, result, keyTag); err != nil {
 				opts.Diagnostic.Printf("hook inventory: record scan: %v\n", err)
 			}
 		},
@@ -1022,6 +1022,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, install
 		AuthorityAvailable:          authorityHolder.resend,
 		AuthorityScanKnown:          authorityHolder.known,
 		HookInventoryEnabled:        hookHolder.uploading,
+		HookKeyTag:                  hookHolder.currentKeyTag,
 		DeviceKey:                   func() string { return deviceKey },
 		HTTPClient:                  opts.StreamHTTPClient,
 		Diagnostic:                  opts.Diagnostic,

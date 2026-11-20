@@ -3,6 +3,9 @@ package managedobserve
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"sync"
@@ -80,10 +83,11 @@ type hookHolder struct {
 	beginRead func() func()
 	// ownBinary verifies a handler's program is this Kontext binary.
 	ownBinary func(string) bool
-	record    func(agentauthority.HookAgent, agentauthority.SourceResult)
-	discard   func()
-	scan      func(context.Context, agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error)
-	home      func() (string, error)
+	// record stores a scan with the tag of the key it was read under.
+	record  func(agentauthority.HookAgent, agentauthority.SourceResult, string)
+	discard func()
+	scan    func(context.Context, agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error)
+	home    func() (string, error)
 	// discarded remembers that results were dropped for this off period, so
 	// it happens once rather than on every tick. It starts false: results a
 	// previous run stored are dropped too once a confirmed config says off.
@@ -137,9 +141,23 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 		return
 	}
 	if h.record != nil {
-		h.record(agent, result)
+		h.record(agent, result, hookKeyTag(key))
 	}
 }
+
+// hookKeyTag names a K_dev without revealing it, so a stored hook result can
+// say which workspace's key made its ids. Empty for no key.
+func hookKeyTag(key []byte) string {
+	if len(key) == 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("kontext/hook-inventory/key-tag/v1"))
+	return hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
+// currentKeyTag is the tag pending hook results must carry to be sent.
+func (h *hookHolder) currentKeyTag() string { return hookKeyTag(h.keys.get()) }
 
 // ownBinaryCheck verifies a hook's program against the running binary, the
 // same file and not only the same name.
@@ -160,24 +178,25 @@ func agentVersionOf(inv agentinventory.Inventory, id string) string {
 	return ""
 }
 
-// run scans once the key is known, then hourly and on each rescan signal.
+// run checks the switch at once, scans once the key is known, then hourly
+// and on each rescan signal. It does not wait for the key first: a confirmed
+// off must drop stored results even while no key can be derived.
 func (h *hookHolder) run(ctx context.Context, inv *agentInventoryHolder) {
-	select {
-	case <-ctx.Done():
-		return
-	case <-h.keys.ready:
-	}
 	scan := func() {
 		current, _ := inv.Fact()
 		h.refresh(ctx, current)
 	}
 	scan()
+	ready := h.keys.ready
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ready:
+			ready = nil
+			scan()
 		case <-h.available:
 			scan()
 		case <-ticker.C:

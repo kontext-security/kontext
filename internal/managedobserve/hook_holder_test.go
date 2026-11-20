@@ -14,6 +14,7 @@ type fakeHookScan struct {
 	discards int
 	// confirmed is whether the switch comes from a confirmed config.
 	confirmed bool
+	tag       string
 	opts      agentauthority.HookScanOptions
 }
 
@@ -28,7 +29,7 @@ func (f *fakeHookScan) holder(on *bool, keys *hookKeyBox) *hookHolder {
 			f.opts = opts
 			return agentauthority.HookAgent{ID: "claude_code"}, agentauthority.SourceResult{ID: "claude_code/hooks", Status: agentauthority.StatusComplete}, nil
 		},
-		record:  func(agentauthority.HookAgent, agentauthority.SourceResult) { f.recorded++ },
+		record:  func(_ agentauthority.HookAgent, _ agentauthority.SourceResult, tag string) { f.recorded++; f.tag = tag },
 		discard: func() { f.discards++ },
 	}
 }
@@ -63,6 +64,9 @@ func TestHookHolderFollowsSwitchAndKey(t *testing.T) {
 	}
 	keys.set([]byte("k"))
 	h.refresh(context.Background(), inv)
+	if fake.tag == "" || fake.tag != hookKeyTag([]byte("k")) || fake.tag == hookKeyTag([]byte("k2")) {
+		t.Fatalf("key tag %q", fake.tag)
+	}
 	if fake.calls != 1 || fake.recorded != 1 || string(fake.opts.Key) != "k" || fake.opts.AgentVersion != version || fake.opts.Home != "/Users/dana" {
 		t.Fatalf("switch on: %+v", fake)
 	}
@@ -108,5 +112,19 @@ func TestHookHolderDropsAScanUnderAnOldKey(t *testing.T) {
 	h.refresh(context.Background(), agentinventory.Inventory{})
 	if fake.calls != 1 || fake.recorded != 0 || h.uploading() {
 		t.Fatalf("%+v uploading=%v", fake, h.uploading())
+	}
+}
+
+// A confirmed off drops stored results at start even when no key can be
+// derived: run checks the switch before it waits for the key.
+func TestHookHolderRunDiscardsBeforeTheKey(t *testing.T) {
+	fake := &fakeHookScan{confirmed: true}
+	on := false
+	h := fake.holder(&on, newHookKeyBox())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h.run(ctx, &agentInventoryHolder{})
+	if fake.discards != 1 || fake.calls != 0 {
+		t.Fatalf("%+v", fake)
 	}
 }
