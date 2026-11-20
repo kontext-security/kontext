@@ -65,13 +65,18 @@ func newCodexRouting(dbPath, socketPath string, diag diagnostic.Logger, send fun
 }
 
 func (c *codexRouting) follow(snapshot endpointconfig.Snapshot) {
-	if c == nil || !snapshot.Confirmed {
+	// A server that serves no version this build reads can't confirm
+	// anything again, so the defaults hold: compaction off, and Codex no
+	// longer routed. An ordinary outage keeps the route.
+	if c == nil || !snapshot.Confirmed && !snapshot.Status.NoCommonVersion {
 		return
 	}
 	// With both switches off, compaction's is the reason: the Codex proxy
 	// has no use without it.
 	off := ""
 	switch {
+	case !snapshot.Confirmed:
+		off = codexroute.ReasonCompactionOff
 	case !snapshot.Config.ToolOutputCompactionEnabled():
 		off = codexroute.ReasonCompactionOff
 	case !snapshot.Config.CodexProxyEnabled():
