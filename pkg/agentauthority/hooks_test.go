@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
@@ -676,8 +678,61 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 	t.Run("async handler", func(t *testing.T) {
 		h, bin, call := setup(t)
 		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", map[string]any{"async": true})})
-		if agent, _ := h.scan(bin); agent.KontextHooks.State != "missing" {
+		// Only the events Kontext installs to run in the background stay
+		// covered: a background PreToolUse can't block.
+		agent, _ := h.scan(bin)
+		if agent.KontextHooks.State != "needs_update" || !slices.Equal(agent.KontextHooks.MissingEvents, []string{"PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit"}) {
 			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("the installer's own shape", func(t *testing.T) {
+		h, bin, _ := setup(t)
+		settings := claudemanaged.Template(bin)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": settings.Hooks})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "complete" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("asyncRewake runs in the background", func(t *testing.T) {
+		h, bin, call := setup(t)
+		hooks := all(call, "", nil)
+		hooks["PreToolUse"] = hooksOf("PreToolUse", "", func() map[string]any {
+			handler := call("pre-tool-use")
+			handler["asyncRewake"] = true
+			return handler
+		}())["PreToolUse"]
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooks})
+		if agent, _ := h.scan(bin); !slices.Equal(agent.KontextHooks.MissingEvents, []string{"PreToolUse"}) {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("a local project file turns the shared switch back on", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		project := filepath.Join(h.home, "src", "app")
+		h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"disableAllHooks": true})
+		h.write(filepath.Join(project, ".claude", "settings.local.json"), map[string]any{"disableAllHooks": false})
+		h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{"hasTrustDialogAccepted": true}}})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "complete" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("an unread project can't prove the set", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		projects := map[string]any{}
+		for i := range maxHookProjects + 1 {
+			projects[filepath.Join(h.home, "src", fmt.Sprintf("app%02d", i))] = map[string]any{}
+		}
+		h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": projects})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != KontextHooksUnknown {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+		// Proven coverage still reads as complete without the user's
+		// handlers: managed ones run in every project.
+		h.write(filepath.Join(h.managed, "managed-settings.d", "20-kontext.json"), map[string]any{"hooks": all(call, "", nil)})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "complete" {
+			t.Fatalf("managed %+v", agent.KontextHooks)
 		}
 	})
 	t.Run("a project turns user hooks off", func(t *testing.T) {
@@ -699,8 +754,9 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 		h, bin, call := setup(t)
 		h.mdm = true
 		h.write(filepath.Join(h.managed, "managed-settings.d", "20-kontext.json"), map[string]any{"hooks": all(call, "", nil)})
+		// The profile may still run them: unknown, never missing.
 		agent, _ := h.scan(bin)
-		if agent.KontextHooks.State != "missing" {
+		if agent.KontextHooks.State != KontextHooksUnknown {
 			t.Fatalf("%+v", agent.KontextHooks)
 		}
 		if r := agent.Hooks[0]; r.Enablement.State != hookUnresolved || !slices.Contains(r.Enablement.Reasons, HookReasonManagedTierShadowed) {
@@ -748,16 +804,73 @@ func TestEmptyArgsIsExecForm(t *testing.T) {
 	}
 }
 
-// A positional word can be a password, so only script names stay readable.
+// With CLAUDE_CONFIG_DIR, Claude Code reads that profile's settings,
+// plugins and .claude.json, never the default profile's.
+func TestScanHooksReadsTheActiveProfile(t *testing.T) {
+	h := newHookHome(t)
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("personal.sh"))})
+	work := filepath.Join(h.home, "profiles", "work")
+	h.write(filepath.Join(work, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("work.sh"))})
+	project := filepath.Join(h.home, "src", "work-app")
+	h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"hooks": hooksOf("SessionEnd", "", command("project.sh"))})
+	h.write(filepath.Join(work, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{}}})
+	agent, _, err := scanHooks(context.Background(), HookScanOptions{Home: h.home, ConfigDir: work, Key: testHookKey, Now: time.Now(), managed: h.managed, mdmPolicy: func() bool { return false }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries := []string{}
+	for _, r := range agent.Hooks {
+		summaries = append(summaries, *r.Summary)
+	}
+	slices.Sort(summaries)
+	if !slices.Equal(summaries, []string{"project.sh", "work.sh"}) {
+		t.Fatalf("summaries %v", summaries)
+	}
+}
+
+// A positional word can be a password, so only an interpreter's script
+// stays readable: a script suffix elsewhere proves nothing.
 func TestHookSummaryDropsPositionalWords(t *testing.T) {
-	for args, want := range map[string]string{
-		"AUTH hunter2":              "redis-cli <redacted>",
-		"check-secrets.sh --strict": "redis-cli check-secrets.sh --strict",
-		"--verbose":                 "redis-cli --verbose",
+	for _, c := range []struct{ program, args, want string }{
+		{"/usr/bin/redis-cli", "AUTH hunter2", "redis-cli <redacted>"},
+		{"/usr/bin/redis-cli", "AUTH winterblue.sh", "redis-cli <redacted>"},
+		{"/usr/bin/redis-cli", "check-secrets.sh --strict", "redis-cli <redacted> --strict"},
+		{"/usr/bin/redis-cli", "--verbose", "redis-cli --verbose"},
+		{"bash", "check-secrets.sh --strict", "bash check-secrets.sh --strict"},
+		{"bash", "-e check.sh", "bash -e <redacted>"},
+		{"python3", "run.py Winter2026.py", "python3 run.py <redacted>"},
+		{"node", "--token x format.js", "node --token <redacted> format.js"},
+		{"/opt/hooks/check.sh", "spring.sh", "check.sh <redacted>"},
 	} {
-		if got := hookSummary("/usr/bin/redis-cli", strings.Fields(args)); got != want {
-			t.Errorf("hookSummary(%q) = %q, want %q", args, got, want)
+		if got := hookSummary(c.program, strings.Fields(c.args)); got != c.want {
+			t.Errorf("hookSummary(%q, %q) = %q, want %q", c.program, c.args, got, c.want)
 		}
+	}
+}
+
+// Hook fields use the cloud's token class, where _ and - join a token.
+func TestHookSecretMatchesTheCloudsTokens(t *testing.T) {
+	for _, value := range []string{"npm_" + strings.Repeat("a1", 16), "Stop_" + strings.Repeat("x9", 16), "abc_def-0123456789abcdefghijklmnopqrstuv"} {
+		if !hookSecret(value) {
+			t.Errorf("%q not flagged", value)
+		}
+	}
+	for _, value := range []string{"PreToolUse", "check-secrets.sh", strings.Repeat("a", 40)} {
+		if hookSecret(value) {
+			t.Errorf("%q flagged", value)
+		}
+	}
+}
+
+// Fields are cut to the cloud's UTF-16 length, at a whole rune.
+func TestSafeCountsUTF16Units(t *testing.T) {
+	value := strings.Repeat("\U0001F600", 130)
+	got := safe(value, 256)
+	if n := len(utf16.Encode([]rune(got))); n != 256 || !utf8.ValidString(got) {
+		t.Fatalf("cut to %d units, valid=%v", n, utf8.ValidString(got))
+	}
+	if safe("abc", 256) != "abc" {
+		t.Fatal("short value changed")
 	}
 }
 
@@ -902,6 +1015,37 @@ func TestMissingDeclaredPluginFileIsPartial(t *testing.T) {
 	}
 }
 
+// A manifest naming the default file explicitly still needs it: the default
+// read finding it absent doesn't make the scope complete.
+func TestExplicitDefaultPluginFileMustExist(t *testing.T) {
+	h := newHookHome(t)
+	h.installPlugin("formatter@acme", nil, hooksOf("Stop", "", command("format.sh")))
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	if err := os.Remove(filepath.Join(dir, "hooks/hooks.json")); err != nil {
+		t.Fatal(err)
+	}
+	h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), map[string]any{"name": "formatter", "version": "1.4.0", "hooks": "./hooks/hooks.json"})
+	agent, _ := h.scan()
+	for _, scope := range agent.Scopes {
+		if scope.Kind == HookScopePlugin && scope.Status == StatusComplete {
+			t.Fatalf("plugin scope %+v", scope)
+		}
+	}
+}
+
+// Managed files an MDM profile replaced don't switch plugins off either.
+func TestShadowedManagedPluginSwitchIsNotInForce(t *testing.T) {
+	h := newHookHome(t)
+	h.mdm = true
+	h.installPlugin("formatter@acme", nil, hooksOf("Stop", "", command("format.sh")))
+	h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"enabledPlugins": map[string]any{"formatter@acme": false}})
+	agent, _ := h.scan()
+	r := byEvent(agent, "Stop")[0]
+	if r.Enablement.State != hookUnresolved || slices.Contains(r.Enablement.Reasons, HookReasonPluginDisabled) {
+		t.Fatalf("%+v", r.Enablement)
+	}
+}
+
 // An MDM profile with only managedSourcesBehavior supplies no policy.
 func TestMDMProfileNeedsPolicyKeys(t *testing.T) {
 	dir := t.TempDir()
@@ -930,6 +1074,10 @@ func TestMDMProfileNeedsPolicyKeys(t *testing.T) {
 		"binary behavior only": {binaryPlist(mdmBehaviorKey), false},
 		"binary with policy":   {binaryPlist(mdmBehaviorKey, "disableAllHooks"), true},
 		"unreadable":           {[]byte("bplist00garbage"), true},
+		"xml merge":            {[]byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>` + mdmBehaviorKey + `</key><string>merge</string><key>hooks</key><dict/></dict></plist>`), false},
+		"binary merge":         {binaryPlistStrings(mdmBehaviorKey, "merge", "disableAllHooks", "x"), false},
+		"binary replace":       {binaryPlistStrings(mdmBehaviorKey, "replace", "disableAllHooks", "x"), true},
+		"overflowing count":    {overflowingPlist(), true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := mdmPlistSuppliesPolicy(write(strings.ReplaceAll(name, " ", "-")+".plist", test.data)); got != test.want {
@@ -940,6 +1088,59 @@ func TestMDMProfileNeedsPolicyKeys(t *testing.T) {
 	if mdmPlistSuppliesPolicy(filepath.Join(dir, "absent.plist")) {
 		t.Fatal("an absent profile supplies policy")
 	}
+	// Merge keeps the files in force beside the profile.
+	if mode := mdmPlistMode(write("merge.plist", binaryPlistStrings(mdmBehaviorKey, "merge", "hooks", "x"))); mode != mdmMerge {
+		t.Fatalf("merge mode = %v", mode)
+	}
+}
+
+// binaryPlistStrings encodes a dictionary of key, value string pairs.
+func binaryPlistStrings(pairs ...string) []byte {
+	var body bytes.Buffer
+	body.WriteString("bplist00")
+	offsets := []int{}
+	object := func(b []byte) { offsets = append(offsets, body.Len()); body.Write(b) }
+	n := len(pairs) / 2
+	dict := []byte{0xD0 | byte(n)}
+	for i := range n {
+		dict = append(dict, byte(1+2*i))
+	}
+	for i := range n {
+		dict = append(dict, byte(2+2*i))
+	}
+	object(dict)
+	for _, str := range pairs {
+		marker := []byte{0x50 | byte(len(str))}
+		if len(str) >= 15 {
+			marker = []byte{0x5F, 0x10, byte(len(str))}
+		}
+		object(append(marker, str...))
+	}
+	table := body.Len()
+	for _, at := range offsets {
+		body.WriteByte(byte(at))
+	}
+	trailer := make([]byte, 32)
+	trailer[6], trailer[7] = 1, 1
+	binary.BigEndian.PutUint64(trailer[8:], uint64(len(offsets)))
+	binary.BigEndian.PutUint64(trailer[24:], uint64(table))
+	body.Write(trailer)
+	return body.Bytes()
+}
+
+// overflowingPlist's top dictionary claims 2^64-1 entries.
+func overflowingPlist() []byte {
+	var body bytes.Buffer
+	body.WriteString("bplist00")
+	body.Write([]byte{0xDF, 0x13, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF})
+	table := body.Len()
+	body.WriteByte(8)
+	trailer := make([]byte, 32)
+	trailer[6], trailer[7] = 1, 1
+	binary.BigEndian.PutUint64(trailer[8:], 1)
+	binary.BigEndian.PutUint64(trailer[24:], uint64(table))
+	body.Write(trailer)
+	return body.Bytes()
 }
 
 // binaryPlist encodes a dictionary of the keys, each mapped to true, as

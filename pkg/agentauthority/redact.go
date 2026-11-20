@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -40,13 +41,23 @@ func secret(value, key string) bool {
 	return false
 }
 
+// safe drops a value that reads as a secret and cuts the rest to limit
+// UTF-16 code units, the length the cloud's schema counts, at a whole rune.
 func safe(value string, limit int) string {
 	if secretPattern.MatchString(value) {
 		return ""
 	}
-	runes := []rune(value)
-	if len(runes) > limit {
-		return string(runes[:limit])
+	units := 0
+	for i, r := range value {
+		// Invalid bytes travel as U+FFFD, one unit.
+		if n := utf16.RuneLen(r); n > 0 {
+			units += n
+		} else {
+			units++
+		}
+		if units > limit {
+			return value[:i]
+		}
 	}
 	return value
 }

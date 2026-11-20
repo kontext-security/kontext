@@ -3,6 +3,7 @@ package agentauthority
 import (
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -11,10 +12,11 @@ import (
 // argument (curl -u user:pass), not only behind a flag the scanner knows.
 
 var (
-	// A script's file name tells an administrator what runs. Any other
-	// positional word can be a password (`redis-cli AUTH hunter2`), so it is
-	// never kept.
-	scriptName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.(sh|bash|zsh|fish|py|js|mjs|cjs|ts|rb|pl|php|ps1|cmd|bat)$`)
+	// A script's file name tells an administrator what runs. It is kept only
+	// as an interpreter's first argument (`bash check.sh`): anywhere else a
+	// word with a script's suffix can be a password (`redis-cli AUTH x.sh`).
+	scriptName  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.(sh|bash|zsh|fish|py|js|mjs|cjs|ts|rb|pl|php|ps1|cmd|bat)$`)
+	interpreter = regexp.MustCompile(`^(sh|bash|zsh|dash|ksh|fish|python[0-9.]*|node|nodejs|bun|deno|tsx|ts-node|ruby|perl|php|pwsh|powershell|cmd|osascript)(\.exe)?$`)
 	// A long flag's name, or a single-letter short one: `-pSECRET` carries
 	// its value attached, so a longer short flag is never kept.
 	summaryFlag = regexp.MustCompile(`^(--[A-Za-z0-9][A-Za-z0-9_-]{0,63}|-[A-Za-z0-9])$`)
@@ -23,12 +25,30 @@ var (
 
 const redacted = "<redacted>"
 
+// hookToken is the cloud's long-token class for hook fields: `_` and `-` sit
+// inside a token, so an npm_ or a dashed key is one word.
+var hookToken = regexp.MustCompile(`[A-Za-z0-9_+/=-]{32,}`)
+
+// hookSecret is secret plus the cloud's hook check for long mixed tokens
+// (hookTextUnsafe in kontext-cloud's hook-inventory.ts). Keep them identical.
+func hookSecret(value string) bool {
+	if secret(value, "args") {
+		return true
+	}
+	for _, token := range hookToken.FindAllString(value, -1) {
+		if strings.ContainsAny(token, "0123456789") && strings.IndexFunc(token, func(r rune) bool { return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' }) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // hookSummary is the program's file name, flag names and script file names.
 // A flag's value, a path, a URL's user, path and query, and every other
 // argument are replaced.
 func hookSummary(program string, args []string) string {
 	name := program[strings.LastIndexAny(program, `/\`)+1:]
-	if !programName.MatchString(name) || secret(name, "args") {
+	if !programName.MatchString(name) || hookSecret(name) {
 		name = redacted
 	}
 	words := []string{name}
@@ -39,12 +59,14 @@ func hookSummary(program string, args []string) string {
 		words = append(words, word)
 	}
 	afterFlag := false
+	// Only the interpreter's first positional argument can be its script.
+	scriptSlot := interpreter.MatchString(strings.ToLower(name))
 	for _, raw := range args {
 		arg := strings.Trim(raw, `"'`)
 		switch {
 		case strings.HasPrefix(arg, "-"):
 			flag, _, hasValue := strings.Cut(arg, "=")
-			if !summaryFlag.MatchString(flag) || secret(flag, "args") {
+			if !summaryFlag.MatchString(flag) || hookSecret(flag) {
 				add(redacted)
 				afterFlag = false
 				continue
@@ -56,15 +78,17 @@ func hookSummary(program string, args []string) string {
 			afterFlag = !hasValue
 		case strings.Contains(arg, "://"):
 			add(summaryURL(arg))
-			afterFlag = false
+			afterFlag, scriptSlot = false, false
 		case afterFlag:
 			// The value of a flag: a user, a password, a key file.
 			add(redacted)
 			afterFlag = false
-		case scriptName.MatchString(arg) && !secret(arg, "args"):
+		case scriptSlot && scriptName.MatchString(arg) && !hookSecret(arg):
 			add(arg)
+			scriptSlot = false
 		default:
 			add(redacted)
+			scriptSlot = false
 		}
 	}
 	return safe(strings.Join(words, " "), 256)
@@ -79,13 +103,35 @@ func summaryURL(raw string) string {
 	return safe(u.Scheme+"://"+u.Host, 64)
 }
 
+// fileEvents match on a file's name, which can be private (a watched
+// `acquisition-targets.csv`): only a bare extension or `*` stays readable.
+var (
+	fileEvents      = []string{"FileChanged"}
+	fileMatcherPart = regexp.MustCompile(`^(\*|\*?\.[A-Za-z0-9]{1,16})$`)
+)
+
+// safeEventMatcher is safeMatcher, with file events' names hidden too.
+func safeEventMatcher(event, matcher string) string {
+	if !slices.Contains(fileEvents, event) {
+		return safeMatcher(matcher)
+	}
+	parts := strings.Split(matcher, "|")
+	for i, part := range parts {
+		if !fileMatcherPart.MatchString(strings.TrimSpace(part)) {
+			parts[i] = redacted
+		}
+	}
+	return safeMatcher(strings.Join(parts, "|"))
+}
+
 // safeMatcher keeps a matcher's tool names and patterns, which tell an
 // administrator what a hook watches, and replaces any alternative that holds
 // a path or reads as a secret.
 func safeMatcher(matcher string) string {
 	parts := strings.Split(matcher, "|")
 	for i, part := range parts {
-		if strings.ContainsAny(part, `/\`) || windowsPath.MatchString(part) || secret(part, "matcher") {
+		control := strings.ContainsFunc(part, func(r rune) bool { return r < 0x20 || r == 0x7f })
+		if control || strings.ContainsAny(part, `/\`) || windowsPath.MatchString(part) || hookSecret(part) {
 			parts[i] = redacted
 		}
 	}
