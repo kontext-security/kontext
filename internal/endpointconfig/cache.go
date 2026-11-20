@@ -32,6 +32,10 @@ type Status struct {
 	Stale         bool
 	LastError     string
 	Invalid       bool
+	// NoCommonVersion: the server serves no response version this build
+	// implements, so the defaults are in force, not a confirmed config
+	// that may come back.
+	NoCommonVersion bool
 }
 
 type Snapshot struct {
@@ -444,7 +448,7 @@ func (c *Cache) rejectAuthority(err error, at time.Time) error {
 	c.mu.Lock()
 	c.active = nil
 	c.lastGood = nil
-	c.status = Status{FetchedAt: c.fetched, LastAttemptAt: at, Stale: true, Invalid: true, LastError: err.Error()}
+	c.status = Status{FetchedAt: c.fetched, LastAttemptAt: at, Stale: true, Invalid: true, LastError: err.Error(), NoCommonVersion: errors.Is(err, ErrNoCommonVersion)}
 	c.mu.Unlock()
 	return c.invalidatePersisted()
 }

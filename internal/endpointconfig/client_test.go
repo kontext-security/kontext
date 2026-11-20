@@ -367,7 +367,7 @@ func TestRefresherFailsClosedWhenNoVersionIsServed(t *testing.T) {
 		t.Fatalf("Refresh() error = %v, want ErrNoCommonVersion", err)
 	}
 	snapshot := cache.Current()
-	if snapshot.Confirmed || snapshot.Config.PayloadCaptureMode != payloadcapture.ModeSummary {
+	if snapshot.Confirmed || snapshot.Config.PayloadCaptureMode != payloadcapture.ModeSummary || !snapshot.Status.NoCommonVersion {
 		t.Fatalf("snapshot after no common version = %#v", snapshot)
 	}
 }
