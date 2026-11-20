@@ -385,3 +385,44 @@ func TestHookInventoryEnabledReadsTheSwitch(t *testing.T) {
 		})
 	}
 }
+
+// A snapshot names the enrolment whose refresh confirmed it, and forgets it
+// when that authority is rejected or the config comes from disk.
+func TestSnapshotNamesTheConfirmingEnrolment(t *testing.T) {
+	full := testResponse(t, payloadcapture.ModeFull)
+	status := http.StatusOK
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("ETag", `"`+full.ConfigIdentity+`"`)
+		_ = json.NewEncoder(w).Encode(full)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	cache := NewCache(path)
+	refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token-a", nil }}
+	if err := refresher.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.Current().Owner; got == "" || got != Owner("token-a") || got == Owner("token-b") {
+		t.Fatalf("owner %q", got)
+	}
+	reloaded := NewCache(path)
+	if err := reloaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := reloaded.Current(); !snapshot.Confirmed || snapshot.Owner != "" {
+		t.Fatalf("reloaded snapshot %+v", snapshot)
+	}
+	status = http.StatusUnauthorized
+	_ = refresher.Refresh(context.Background())
+	if got := cache.Current().Owner; got != "" {
+		t.Fatalf("owner after rejection %q", got)
+	}
+}

@@ -369,7 +369,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	hookKeys := newHookKeyBox()
 	hookKeys.wake = wakeHooks
-	configEnrolment := &enrolmentGate{}
 	var hookWatch hookSwitchWatch
 	policyRefreshNow := make(chan struct{}, 1)
 	enrolment := &enrolmentRefresh{cache: cedarCache, now: policyRefreshNow, left: maxEnrolmentRefreshes}
@@ -418,7 +417,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			}
 		},
 		OnApplied: func(token string) {
-			configEnrolment.set(token)
 			if hookWatch.enrolment(token) {
 				wakeHooks()
 			}
@@ -476,10 +474,13 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	server.SetConnectorScan(authorityHolder.Fact)
 	hookHolder := &hookHolder{
-		keys:       hookKeys,
-		enabled:    func() bool { return endpointConfigCache.Current().Config.HookInventoryEnabled() },
-		confirmed:  func() bool { return endpointConfigCache.Current().Confirmed },
-		authorized: func() bool { return configEnrolment.matches(hookKeys.enrolment()) },
+		keys:      hookKeys,
+		enabled:   func() bool { return endpointConfigCache.Current().Config.HookInventoryEnabled() },
+		confirmed: func() bool { return endpointConfigCache.Current().Confirmed },
+		// One snapshot says both that the switch is on and that the current
+		// enrolment's own refresh confirmed it: after a re-enrolment the cache
+		// can still hold the previous workspace's opt-in.
+		authorized: func() bool { return hookAuthorized(endpointConfigCache.Current(), hookKeys.enrolment()) },
 		available:  hookAvailable,
 		beginRead:  authorityHolder.scanner.BeginRead,
 		ownBinary:  ownBinaryCheck(),

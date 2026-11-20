@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,25 +84,13 @@ func (b *hookKeyBox) enrolment() string {
 	return b.token
 }
 
-// enrolmentGate holds the install token of the endpoint configuration the
-// cache last took. Hook inventory follows a switch only while that is the
-// enrolment K_dev belongs to: after a re-enrolment the cache still holds
-// the previous workspace's opt-in until the new one's settings arrive.
-type enrolmentGate struct {
-	mu    sync.Mutex
-	token string
-}
-
-func (g *enrolmentGate) set(token string) {
-	g.mu.Lock()
-	g.token = token
-	g.mu.Unlock()
-}
-
-func (g *enrolmentGate) matches(token string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return token != "" && g.token == token
+// hookAuthorized reports, from one snapshot, that the switch is on and that
+// the enrolment K_dev belongs to confirmed it. After a re-enrolment the cache
+// can still hold the previous workspace's opt-in until the new one's
+// settings arrive.
+func hookAuthorized(snapshot endpointconfig.Snapshot, enrolment string) bool {
+	owner := endpointconfig.Owner(enrolment)
+	return snapshot.Config.HookInventoryEnabled() && owner != "" && snapshot.Owner == owner
 }
 
 func (b *hookKeyBox) get() []byte {
@@ -122,15 +111,16 @@ type hookHolder struct {
 	// confirmed reports whether enabled reads a config the cloud confirmed.
 	// Nil counts as confirmed.
 	confirmed func() bool
-	// authorized reports whether that config is the current enrolment's,
-	// the one K_dev was derived under. Nil counts as authorized.
+	// authorized reports whether the switch is on in a config the current
+	// enrolment, the one K_dev was derived under, confirmed, read from one
+	// snapshot. Nil counts as authorized.
 	authorized func() bool
 	available  <-chan struct{}
 	beginRead  func() func()
 	// ownBinary verifies a handler's program is this Kontext binary.
 	ownBinary func(string) bool
 	// record stores a scan with the tag of the key it was read under.
-	record  func(agentauthority.HookAgent, agentauthority.SourceResult, string)
+	record func(agentauthority.HookAgent, agentauthority.SourceResult, string)
 	// discard drops pending results; on an error the next tick tries again.
 	discard func() error
 	scan    func(context.Context, agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error)

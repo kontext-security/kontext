@@ -2,6 +2,8 @@ package endpointconfig
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +41,11 @@ type Snapshot struct {
 	Configured     Config
 	ConfigIdentity string
 	Confirmed      bool
+	// Owner names the install token whose refresh confirmed Config (see
+	// Owner()), empty until a refresh in this process confirms it. A caller
+	// that must act only on its own enrolment's settings compares it, in the
+	// same snapshot as Config.
+	Owner          string
 	FallbackReason string
 	LastKnownGood  *Response
 	Status         Status
@@ -67,6 +74,18 @@ type Cache struct {
 	active   *Response
 	lastGood *Response
 	status   Status
+	owner    string
+}
+
+// Owner names an install token without holding it: two enrolments never
+// share one.
+func Owner(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("kontext/endpoint-config/owner/v1|" + token))
+	return hex.EncodeToString(sum[:])
 }
 
 func NewCache(path string) *Cache {
@@ -153,6 +172,11 @@ func (c *Cache) discardOlderVersion() {
 }
 
 func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
+	return c.apply(result, fetchedAt, "")
+}
+
+// apply takes a result the owner's install token fetched.
+func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) error {
 	if fetchedAt.IsZero() {
 		fetchedAt = c.now().UTC()
 	}
@@ -186,6 +210,7 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	c.fetched = fetchedAt
 	c.active = cloneResponse(confirmed)
 	c.lastGood = cloneResponse(confirmed)
+	c.owner = owner
 	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt, Stale: true}
 	c.mu.Unlock()
 	if err := c.persist(file); err != nil {
@@ -203,6 +228,7 @@ func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
 	c.fetched = fetchedAt
 	c.active = cloneResponse(confirmed)
 	c.lastGood = cloneResponse(confirmed)
+	c.owner = owner
 	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt}
 	c.mu.Unlock()
 	return nil
@@ -231,6 +257,7 @@ func (c *Cache) MarkInvalid(err error) {
 	attemptedAt := c.now().UTC()
 	c.mu.Lock()
 	c.active = nil
+	c.owner = ""
 	c.markFailedLocked(err, attemptedAt)
 	c.status.Invalid = true
 	c.mu.Unlock()
@@ -241,6 +268,7 @@ func (c *Cache) Current() Snapshot {
 	active := cloneResponse(c.active)
 	lastGood := cloneResponse(c.lastGood)
 	status := c.status
+	owner := c.owner
 	c.mu.RUnlock()
 	if active == nil {
 		configured := defaultConfig
@@ -271,6 +299,7 @@ func (c *Cache) Current() Snapshot {
 		Configured:     active.Config,
 		ConfigIdentity: active.ConfigIdentity,
 		Confirmed:      true,
+		Owner:          owner,
 		LastKnownGood:  lastGood,
 		Status:         status,
 	}
@@ -381,7 +410,7 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	if err != nil {
 		return r.fail(err)
 	}
-	if err := r.Cache.Apply(result, r.now()); err != nil {
+	if err := r.Cache.apply(result, r.now(), Owner(token)); err != nil {
 		return r.fail(err)
 	}
 	if r.OnApplied != nil {
@@ -450,6 +479,7 @@ func (r *Refresher) fail(err error) error {
 func (c *Cache) rejectAuthority(err error, at time.Time) error {
 	c.mu.Lock()
 	c.active = nil
+	c.owner = ""
 	c.lastGood = nil
 	c.status = Status{FetchedAt: c.fetched, LastAttemptAt: at, Stale: true, Invalid: true, LastError: err.Error()}
 	c.mu.Unlock()

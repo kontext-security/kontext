@@ -2,7 +2,12 @@ package managedobserve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/kontext-security/kontext/internal/endpointconfig"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -137,19 +142,58 @@ func TestHookHolderRunDiscardsBeforeTheKey(t *testing.T) {
 // until the new workspace's settings arrive: nothing is scanned or sent under
 // the new key until then.
 func TestHookHolderWaitsForTheNewEnrolmentsSettings(t *testing.T) {
+	// The server answers each enrolment with its own workspace's switch: A
+	// has opted in, B has not yet.
+	optedIn := map[string]bool{"Bearer token-a": true}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		on, mode, yes, no := optedIn[r.Header.Get("Authorization")], payloadcapture.ModeSummary, true, false
+		config := endpointconfig.Config{PayloadCaptureMode: mode, WorkTypeClassification: &yes, ToolOutputCompaction: &no, CodexProxy: &yes, HookInventory: &on}
+		identity, err := endpointconfig.ComputeIdentity(config)
+		if err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("ETag", `"`+identity+`"`)
+		_ = json.NewEncoder(w).Encode(endpointconfig.Response{ResponseVersion: endpointconfig.ResponseVersion, Config: config, ConfigIdentity: identity})
+	}))
+	defer server.Close()
+	client, err := endpointconfig.NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := endpointconfig.NewCache("")
+	token := "token-a"
+	refresher := endpointconfig.Refresher{Client: client, Cache: cache, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		TokenSource: func(context.Context) (string, error) { return token, nil }}
+	if err := refresher.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-enrolled into B: the cache still holds A's opt-in.
 	fake := &fakeHookScan{confirmed: true}
-	on := true
 	keys := newHookKeyBox()
-	gate := &enrolmentGate{}
-	gate.set("token-a")
 	keys.set([]byte("k-b"), "token-b")
+	on := true
 	h := fake.holder(&on, keys)
-	h.authorized = func() bool { return gate.matches(keys.enrolment()) }
+	h.enabled = func() bool { return cache.Current().Config.HookInventoryEnabled() }
+	h.authorized = func() bool { return hookAuthorized(cache.Current(), keys.enrolment()) }
 	h.refresh(context.Background(), agentinventory.Inventory{})
 	if fake.calls != 0 || h.uploading() {
 		t.Fatalf("scanned under A's opt-in: %+v uploading=%v", fake, h.uploading())
 	}
-	gate.set("token-b")
+	// B's own settings arrive off: still nothing.
+	token = "token-b"
+	if err := refresher.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	if fake.calls != 0 || h.uploading() {
+		t.Fatalf("scanned with B off: %+v", fake)
+	}
+	// B opts in.
+	optedIn["Bearer token-b"] = true
+	if err := refresher.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	h.refresh(context.Background(), agentinventory.Inventory{})
 	if fake.calls != 1 || fake.recorded != 1 || !h.uploading() {
 		t.Fatalf("B's settings arrived: %+v", fake)
