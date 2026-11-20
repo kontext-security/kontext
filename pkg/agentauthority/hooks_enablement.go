@@ -249,20 +249,26 @@ func programMissing(ctx context.Context, home, program string) bool {
 	if !filepath.IsAbs(program) || program != filepath.Clean(program) {
 		return false
 	}
-	done := make(chan bool, 1)
-	go func() {
+	return settledWithin(ctx, func() bool {
 		if privacyfolder.Guarded(home, program) {
-			done <- false
-			return
+			return false
 		}
 		_, err := os.Stat(program)
-		done <- os.IsNotExist(err)
-	}()
+		return os.IsNotExist(err)
+	})
+}
+
+// settledWithin runs a metadata check that may touch a stalled filesystem
+// within programStatTimeout. A check that doesn't finish in time, or once the
+// scan is cancelled, answers false: unverified, never assumed.
+func settledWithin(ctx context.Context, check func() bool) bool {
+	done := make(chan bool, 1)
+	go func() { done <- check() }()
 	timer := time.NewTimer(programStatTimeout)
 	defer timer.Stop()
 	select {
-	case missing := <-done:
-		return missing
+	case ok := <-done:
+		return ok
 	case <-timer.C:
 	case <-ctx.Done():
 	}
