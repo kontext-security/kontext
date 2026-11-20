@@ -79,11 +79,15 @@ type cacheFile struct {
 	Version   int       `json:"version"`
 	FetchedAt string    `json:"fetchedAt"`
 	Response  *Response `json:"response"`
+	// CloudURL is the cloud that confirmed Response. A directive belongs to
+	// it: another cloud's workspace never runs under it.
+	CloudURL string `json:"cloudUrl,omitempty"`
 	// Retained only to decode existing cache files with the strict decoder.
 	GuardrailLLMDirective *bool `json:"guardrailLlmDirective,omitempty"`
 }
 
 type Cache struct {
+	cloudURL     string
 	path         string
 	rejectedPath string
 	now          func() time.Time
@@ -111,6 +115,19 @@ func NewCache(path string) *Cache {
 	return &Cache{path: path, rejectedPath: path + ".rejected", now: time.Now}
 }
 
+// BindCloudURL names the cloud this process talks to. Load then restores
+// only a directive that cloud confirmed, and Apply records it. Unbound, a
+// cache takes any directive, as before.
+func (c *Cache) BindCloudURL(cloudURL string) {
+	c.mu.Lock()
+	c.cloudURL = normalCloudURL(cloudURL)
+	c.mu.Unlock()
+}
+
+func normalCloudURL(cloudURL string) string {
+	return strings.TrimRight(strings.TrimSpace(cloudURL), "/")
+}
+
 // Keep revocation in the installation's writable state directory, independently
 // of a custom cache location whose directory may prevent deletion or replacement.
 func NewCacheForDB(path, dbPath string) *Cache {
@@ -133,7 +150,10 @@ func (c *Cache) Load() error {
 		// The marker keeps why the cache was dropped, so an offline restart
 		// finishes what the rejection started.
 		c.mu.Lock()
-		c.status = Status{Stale: true, Invalid: true, LastError: ErrCacheInvalidated.Error(), NoCommonVersion: markerHas(marker, markerNoCommonVersion), PromptVeto: markerHas(marker, markerPromptVeto)}
+		// A marker from a build before the veto never says whether the
+		// dropped directive let prompts leave, so it holds the opt-out.
+		veto := markerHas(marker, markerPromptVeto) || !markerHas(marker, markerVersioned)
+		c.status = Status{Stale: true, Invalid: true, LastError: ErrCacheInvalidated.Error(), NoCommonVersion: markerHas(marker, markerNoCommonVersion), PromptVeto: veto}
 		c.mu.Unlock()
 		return ErrCacheInvalidated
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -181,17 +201,29 @@ func (c *Cache) Load() error {
 		return fmt.Errorf("endpoint configuration cache: invalid fetchedAt: %w", err)
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	// A file from a build that didn't record its cloud is taken as this
+	// one's, so an upgrade keeps its directive; the next Apply records it.
+	if c.cloudURL != "" && file.CloudURL != "" && normalCloudURL(file.CloudURL) != c.cloudURL {
+		// Confirmed by another cloud: it doesn't apply here, and whether it
+		// let prompts leave isn't this workspace's answer, so the opt-out
+		// holds.
+		c.status = Status{Stale: true, LastError: "persisted configuration was confirmed by another cloud", PromptVeto: true}
+		return nil
+	}
 	c.fetched = fetchedAt
 	c.active = cloneResponse(file.Response)
 	c.lastGood = cloneResponse(file.Response)
 	c.status = Status{FetchedAt: fetchedAt, Stale: true}
-	c.mu.Unlock()
 	return nil
 }
 
 func (c *Cache) discardOlderVersion() {
 	c.mu.Lock()
-	c.status = Status{Stale: true, LastError: "persisted configuration predates the current response version"}
+	// Its opt-out, if it held one, can't be read under this contract, and
+	// unconfirmed prompts would be recoverable after a later opt-in: the
+	// opt-out holds until a config is confirmed.
+	c.status = Status{Stale: true, LastError: "persisted configuration predates the current response version", PromptVeto: true}
 	c.mu.Unlock()
 }
 
@@ -226,6 +258,7 @@ func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) err
 		Version:   cacheFileVersion,
 		FetchedAt: fetchedAt.UTC().Format(time.RFC3339Nano),
 		Response:  cloneResponse(confirmed),
+		CloudURL:  c.boundCloudURL(),
 	}
 	// A verified directive is authoritative even if the local disk fails.
 	// In particular, retaining an older Full directive after a valid opt-out
@@ -514,7 +547,15 @@ func (r *Refresher) fail(err error) error {
 const (
 	markerNoCommonVersion = "no-common-version"
 	markerPromptVeto      = "prompt-veto"
+	// markerVersioned: the marker says whether a veto holds.
+	markerVersioned = "v2"
 )
+
+func (c *Cache) boundCloudURL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cloudURL
+}
 
 func markerHas(marker []byte, flag string) bool {
 	return slices.Contains(strings.Fields(string(marker)), flag)
@@ -546,7 +587,7 @@ func (c *Cache) invalidatePersisted() error {
 		return nil
 	}
 	c.mu.RLock()
-	marker := "refresh required\n"
+	marker := "refresh required\n" + markerVersioned + "\n"
 	if c.status.NoCommonVersion {
 		marker += markerNoCommonVersion + "\n"
 	}

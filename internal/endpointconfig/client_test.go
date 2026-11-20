@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -534,6 +535,35 @@ func TestAuthorityRejectionKeepsThePromptOptOut(t *testing.T) {
 	}
 }
 
+// The cloud's installation_not_found drops the directive like a 401; a bare
+// 404 from a proxy doesn't.
+func TestInstallationNotFoundRejectsTheDirective(t *testing.T) {
+	for _, test := range []struct {
+		body     string
+		rejected bool
+	}{{`{"code":"installation_not_found"}`, true}, {`not found`, false}} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(test.body))
+		}))
+		client, err := NewClient(server.URL, server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+		response := testResponse(t, payloadcapture.ModeFull)
+		if err := cache.Apply(FetchResult{Response: &response}, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token", nil }}
+		err = refresher.Refresh(context.Background())
+		server.Close()
+		if errors.Is(err, ErrAuthorityRejected) != test.rejected || cache.Current().Confirmed == test.rejected {
+			t.Fatalf("%s: err %v, confirmed %v", test.body, err, cache.Current().Confirmed)
+		}
+	}
+}
+
 // A server that refuses v6 and then fails the v5 retry leaves no v6-only
 // switch on.
 func TestV6RefusalTurnsHookInventoryOff(t *testing.T) {
@@ -572,5 +602,48 @@ func TestV6RefusalTurnsHookInventoryOff(t *testing.T) {
 	snapshot := cache.Current()
 	if snapshot.HookInventoryEnabled() || !snapshot.Confirmed {
 		t.Fatalf("after v6 refusal: enabled=%v confirmed=%v", snapshot.HookInventoryEnabled(), snapshot.Confirmed)
+	}
+}
+
+// A directive belongs to the cloud that confirmed it: after re-enrolment at
+// another cloud it isn't restored, and the opt-out holds until that cloud
+// confirms its own. An older-version cache and a legacy rejection marker
+// hold the opt-out too.
+func TestCachedDirectiveBelongsToItsCloud(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "endpoint-config.json")
+	first := NewCache(path)
+	first.BindCloudURL("https://a.example/")
+	response := testResponse(t, payloadcapture.ModeFull)
+	if err := first.Apply(FetchResult{Response: &response}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	same := NewCache(path)
+	same.BindCloudURL("https://a.example")
+	if err := same.Load(); err != nil || !same.Current().Confirmed {
+		t.Fatalf("same cloud: %v %+v", err, same.Current().Status)
+	}
+	other := NewCache(path)
+	other.BindCloudURL("https://b.example")
+	if err := other.Load(); err != nil || other.Current().Confirmed || !other.Current().Status.PromptVeto {
+		t.Fatalf("other cloud: %v confirmed=%v %+v", err, other.Current().Confirmed, other.Current().Status)
+	}
+
+	legacy := filepath.Join(t.TempDir(), "endpoint-config.json")
+	marked := NewCache(legacy)
+	if err := os.WriteFile(marked.rejectedPath, []byte("refresh required\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := marked.Load(); !errors.Is(err, ErrCacheInvalidated) || !marked.Current().Status.PromptVeto {
+		t.Fatalf("legacy marker: %v %+v", err, marked.Current().Status)
+	}
+
+	older := filepath.Join(t.TempDir(), "endpoint-config.json")
+	if err := os.WriteFile(older, []byte(`{"version":1,"fetchedAt":"2026-01-01T00:00:00Z","response":{"responseVersion":4}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := NewCache(older)
+	if err := upgraded.Load(); err != nil || !upgraded.Current().Status.PromptVeto {
+		t.Fatalf("older version: %v %+v", err, upgraded.Current().Status)
 	}
 }

@@ -209,6 +209,9 @@ type hookScan struct {
 	// projectsUnread: ~/.claude.json exists but could not be read, so the
 	// projects it lists, and their switches, are unknown.
 	projectsUnread bool
+	// managedCut: a managed file went past the scope cap, so a managed
+	// switch that turns hooks off may be unread.
+	managedCut bool
 }
 
 type hookRaw struct {
@@ -225,6 +228,9 @@ type hookRaw struct {
 	layer          int
 	project        string
 	pluginDisabled bool
+	// ownerUnknown: the check of a Kontext call's binary didn't finish, so
+	// whether it is Kontext's own is unknown, not "no".
+	ownerUnknown bool
 }
 
 // hookLayer is one settings file that took part in the scan.
@@ -262,7 +268,9 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	if opts.mdmPolicy != nil {
 		s.shadowed = opts.mdmPolicy()
 	} else {
-		mode := claudeMDM()
+		// A profile on a stalled mount can't hold the scan: unread, it
+		// replaces the files, so every hook stays unresolved.
+		mode := settled(ctx, mdmReplace, claudeMDM)
 		s.shadowed, s.mdmMerged = mode == mdmReplace, mode == mdmMerge
 	}
 	if version := safe(opts.AgentVersion, 64); version != "" {
@@ -289,7 +297,7 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	s.only()
 	// The guard already marks the source for a failed read; coverage needs
 	// to know too, since the projects it lists went unseen.
-	root, err := readParsed(g, rootConfig, readers.Claude)
+	root, err := readParsed(g, rootConfig, notNull(readers.Claude))
 	if errors.Is(err, errParse) {
 		g.parseError(agentID, filepath.Base(rootConfig))
 	}
@@ -331,6 +339,18 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	return s.agent, result, nil
 }
 
+// notNull refuses the literal null: read as an empty registry, it would
+// withdraw every project or plugin the file lists.
+func notNull[T any](parse func([]byte) (T, error)) func([]byte) (T, error) {
+	return func(data []byte) (T, error) {
+		if strings.TrimSpace(string(data)) == "null" {
+			var zero T
+			return zero, errors.New("registry is null")
+		}
+		return parse(data)
+	}
+}
+
 // only makes the following reads count for the source alone.
 func (s *hookScan) only() { s.g.active = []*SourceHealth{s.source} }
 
@@ -356,6 +376,9 @@ func (s *hookScan) closeScope(h *SourceHealth, id, kind string) {
 func (s *hookScan) settingsScope(kind, path string, listed bool) {
 	h, id := s.scope(kind, filepath.Clean(path))
 	if h == nil {
+		if managedKind(kind) {
+			s.managedCut = true
+		}
 		return
 	}
 	var settings readers.HookSettings
@@ -409,7 +432,7 @@ func (s *hookScan) pluginScopes(base string) {
 		DefaultEnabled *bool `json:"defaultEnabled"`
 	}
 	s.only()
-	index, ok := readConfig(s.g, s.agent.ID, filepath.Join(base, "plugins/installed_plugins.json"), parseJSON[pluginIndex])
+	index, ok := readConfig(s.g, s.agent.ID, filepath.Join(base, "plugins/installed_plugins.json"), notNull(parseJSON[pluginIndex]))
 	if !ok {
 		return
 	}
@@ -447,7 +470,7 @@ func (s *hookScan) pluginScopes(base string) {
 			if version == "" {
 				version = entry.Version
 			}
-			plugin := &HookPlugin{Name: safe(name, 128), Marketplace: pointer(safe(market, 128)), Version: pointer(safe(version, 64))}
+			plugin := &HookPlugin{Name: hookField(name, 128), Marketplace: pointer(hookField(market, 128)), Version: pointer(hookField(version, 64))}
 			if plugin.Name == "" {
 				plugin.Name = "<redacted>"
 			}
@@ -660,10 +683,19 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 			// folder: the check must not prompt the user.
 			// The path must be canonical: the guard reads it cleaned, while
 			// a symlink followed by ".." resolves elsewhere for the OS.
-			if call && s.opts.OwnBinary != nil && filepath.IsAbs(program) && program == filepath.Clean(program) && settledWithin(s.g.ctx, func() bool {
-				return !privacyfolder.Guarded(s.opts.Home, program) && s.opts.OwnBinary(program)
-			}) {
-				r.Origin = HookOriginKontext
+			if call && s.opts.OwnBinary != nil && filepath.IsAbs(program) && program == filepath.Clean(program) {
+				const unknown, no, yes = 0, 1, 2
+				switch settled(s.g.ctx, unknown, func() int {
+					if !privacyfolder.Guarded(s.opts.Home, program) && s.opts.OwnBinary(program) {
+						return yes
+					}
+					return no
+				}) {
+				case yes:
+					r.Origin = HookOriginKontext
+				case unknown:
+					info.ownerUnknown = true
+				}
 			}
 		} else {
 			anchor = "cmd:"
@@ -671,12 +703,13 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 	case "http":
 		if u, err := url.Parse(h.URL); err == nil && u.Scheme != "" && u.Hostname() != "" {
 			anchor = "http:" + strings.ToLower(u.Hostname())
-			r.Summary = pointer(safe(u.Scheme+"://"+u.Host, 256))
+			// The user is a credential: it is dropped, and the host shown.
+			u.User = nil
+			r.Summary = pointer(summaryURL(u.String()))
 		}
 	case "mcp_tool":
-		name := safe(h.Server, 128) + "/" + safe(h.Tool, 128)
-		anchor = "mcp:" + name
-		r.Summary = pointer(safe(name, 256))
+		anchor = "mcp:" + safe(h.Server, 128) + "/" + safe(h.Tool, 128)
+		r.Summary = pointer(safe(hookField(h.Server, 128)+"/"+hookField(h.Tool, 128), 256))
 	}
 	if plugin != nil {
 		r.Plugin = plugin.plugin
@@ -710,7 +743,7 @@ func (s *hookScan) finish() {
 		}
 	}
 	evaluateEnablement(s)
-	s.agent.KontextHooks = kontextHookSet(s.agent.Hooks, s.raw, s.projectDisablesHooks(), s.coverageReadable())
+	s.agent.KontextHooks = kontextHookSet(s.agent.Hooks, s.raw, s.projectDisablesHooks(), s.managedReadable(), s.coverageReadable())
 }
 
 // projectDisablesHooks reports whether a listed project's merged settings
@@ -732,6 +765,20 @@ func (s *hookScan) projectDisablesHooks() bool {
 // coverageReadable reports whether every setting that decides Kontext's
 // coverage was read: managed settings and drop-ins, user settings, and each
 // listed project's, whose disableAllHooks stops user hooks there.
+// managedReadable: every managed file was read, so no managed switch went
+// unseen.
+func (s *hookScan) managedReadable() bool {
+	if s.unlisted || s.managedCut || s.shadowed || s.mdmMerged {
+		return false
+	}
+	for _, scope := range s.agent.Scopes {
+		if managedKind(scope.Kind) && scope.Status != StatusComplete {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *hookScan) coverageReadable() bool {
 	// An MDM profile or an unread project list can hold a setting, or a
 	// Kontext handler, that no record shows.
@@ -754,14 +801,14 @@ func (s *hookScan) coverageReadable() bool {
 // run in that project alone, so they never cover the device. When the set
 // isn't complete and a setting that decides it went unread, or a Kontext
 // handler's state is unresolved, the verdict is unknown.
-func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables, readable bool) KontextHookSet {
+func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables, managedReadable, readable bool) KontextHookSet {
 	covered := map[string]bool{}
 	uncertain := !readable
 	for i, r := range records {
 		if i >= len(raw) {
 			continue
 		}
-		if r.ClaimsKontext && r.Enablement.State == hookUnresolved {
+		if r.ClaimsKontext && (r.Enablement.State == hookUnresolved || raw[i].ownerUnknown) {
 			uncertain = true
 		}
 		if r.Origin != HookOriginKontext || r.Enablement.State != hookEnabled {
@@ -771,7 +818,9 @@ func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables, readab
 		// A user handler is device-wide only while no project turns user
 		// hooks off, which an unread project could; disableAllHooks there
 		// leaves managed ones running.
-		deviceWide := info.kind == HookScopeManaged || info.kind == HookScopeManagedDropIn || info.kind == HookScopeUser && !projectDisables && readable
+		// A managed one needs every managed file read: one past the cap or
+		// unlisted can turn all hooks off.
+		deviceWide := managedKind(info.kind) && managedReadable || info.kind == HookScopeUser && !projectDisables && readable
 		matcher := strings.TrimSpace(info.matcher)
 		if deviceWide && !info.conditional && (!info.async || installedAsync(r.Event)) && (matcher == "" || matcher == "*") {
 			covered[r.Event] = true

@@ -57,8 +57,10 @@ type switches struct {
 	managedOnly       bool
 	pluginOnly        bool
 	pluginOnlyUnclear bool
-	httpAllow         *[]string
-	unreadable        bool
+	// httpAllow holds allowedHttpHookUrls compiled once per project, not
+	// once per hook.
+	httpAllow  *[]*regexp.Regexp
+	unreadable bool
 }
 
 func (s *hookScan) switchesFor(project string) switches {
@@ -80,6 +82,9 @@ func (s *hookScan) switchesFor(project string) switches {
 			}
 			continue
 		}
+		if layer.settings.SwitchInvalid && !(managedKind(layer.kind) && s.shadowed) {
+			sw.unreadable = true
+		}
 		switch {
 		case managedKind(layer.kind) && s.shadowed:
 			// An MDM profile replaced these files: their switches aren't in
@@ -89,11 +94,22 @@ func (s *hookScan) switchesFor(project string) switches {
 			if v := layer.settings.AllowManagedHooksOnly; v != nil {
 				sw.managedOnly = *v
 			}
+			// Managed files combine their lists: a later drop-in adds
+			// surfaces and URLs, it never lifts an earlier restriction.
 			if raw := layer.settings.StrictPluginOnlyCustomization; len(raw) > 0 {
-				sw.pluginOnly, sw.pluginOnlyUnclear = pluginOnlyCoversHooks(raw)
+				covers, unclear := pluginOnlyCoversHooks(raw)
+				sw.pluginOnly = sw.pluginOnly || covers
+				sw.pluginOnlyUnclear = sw.pluginOnlyUnclear || unclear
 			}
-			if layer.settings.AllowedHTTPHookURLs != nil {
-				sw.httpAllow = layer.settings.AllowedHTTPHookURLs
+			if allow := layer.settings.AllowedHTTPHookURLs; allow != nil {
+				merged := []*regexp.Regexp{}
+				if sw.httpAllow != nil {
+					merged = append(merged, *sw.httpAllow...)
+				}
+				for _, pattern := range *allow {
+					merged = append(merged, urlPattern(pattern))
+				}
+				sw.httpAllow = &merged
 			}
 		case layer.kind == HookScopeUser:
 			merge(&sw.otherDisableAll, layer)
@@ -224,12 +240,15 @@ func evaluateEnablement(s *hookScan) {
 	}
 }
 
-// urlAllowed follows allowedHttpHookUrls: each entry is a URL pattern where *
-// matches any run of characters.
-func urlAllowed(raw string, patterns []string) bool {
+// urlPattern follows allowedHttpHookUrls: each entry is a URL pattern where
+// * matches any run of characters.
+func urlPattern(pattern string) *regexp.Regexp {
+	return regexp.MustCompile("^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$")
+}
+
+func urlAllowed(raw string, patterns []*regexp.Regexp) bool {
 	for _, pattern := range patterns {
-		expr := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$"
-		if matched, _ := regexp.MatchString(expr, raw); matched {
+		if pattern.MatchString(raw) {
 			return true
 		}
 	}
@@ -262,15 +281,21 @@ func programMissing(ctx context.Context, home, program string) bool {
 // within programStatTimeout. A check that doesn't finish in time, or once the
 // scan is cancelled, answers false: unverified, never assumed.
 func settledWithin(ctx context.Context, check func() bool) bool {
-	done := make(chan bool, 1)
-	go func() { done <- check() }()
+	return settled(ctx, false, check)
+}
+
+// settled is fn's answer if it comes within programStatTimeout and before
+// ctx ends, else fallback. A late answer is dropped.
+func settled[T any](ctx context.Context, fallback T, fn func() T) T {
+	done := make(chan T, 1)
+	go func() { done <- fn() }()
 	timer := time.NewTimer(programStatTimeout)
 	defer timer.Stop()
 	select {
-	case ok := <-done:
-		return ok
+	case value := <-done:
+		return value
 	case <-timer.C:
 	case <-ctx.Done():
 	}
-	return false
+	return fallback
 }

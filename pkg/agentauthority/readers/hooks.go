@@ -17,11 +17,35 @@ type HookSettings struct {
 	AllowedHTTPHookURLs           *[]string       `json:"allowedHttpHookUrls"`
 	StrictPluginOnlyCustomization json.RawMessage `json:"strictPluginOnlyCustomization"`
 	EnabledPlugins                map[string]bool `json:"enabledPlugins"`
+	// SwitchInvalid: a switch held a value of the wrong type. Its effect
+	// depends on the agent's version, so the scanner doesn't guess it.
+	SwitchInvalid bool `json:"-"`
 }
 
 type HookGroup struct {
 	Matcher *string           `json:"matcher"`
 	Hooks   []json.RawMessage `json:"hooks"`
+}
+
+// UnmarshalJSON reads a group by its exact keys: Claude Code ignores a
+// `Matcher` or `Hooks` spelled in another case, so the inventory does too.
+func (g *HookGroup) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*g = HookGroup{}
+	if raw, ok := fields["matcher"]; ok {
+		if err := json.Unmarshal(raw, &g.Matcher); err != nil {
+			return err
+		}
+	}
+	if raw, ok := fields["hooks"]; ok {
+		if err := json.Unmarshal(raw, &g.Hooks); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // HookHandler is the part of one handler the inventory reports. Fields an
@@ -82,21 +106,43 @@ func Hooks(data []byte) (HookSettings, error) {
 		"enabledPlugins":                &s.EnabledPlugins,
 	} {
 		if raw, ok := top[key]; ok {
-			// A wrong type in one switch must not hide the file's hooks.
-			_ = json.Unmarshal(raw, target)
+			// A wrong type in one switch must not hide the file's hooks,
+			// nor read as a value it doesn't hold.
+			if err := json.Unmarshal(raw, target); err != nil {
+				s.SwitchInvalid = true
+				switch t := target.(type) {
+				case **bool:
+					*t = nil
+				case **[]string:
+					*t = nil
+				case *json.RawMessage:
+					*t = nil
+				case *map[string]bool:
+					*t = nil
+				}
+			}
 		}
 	}
 	return s, nil
 }
 
-// Handler reads the reported fields of one raw handler. A handler that is not
-// an object is reported with an empty type, which the scanner calls unknown.
+// Handler reads the reported fields of one raw handler, by their exact keys:
+// Claude Code doesn't read `Type` or `Command` as `type` or `command`. A
+// handler that is not an object is reported with an empty type, which the
+// scanner calls unknown; a field of the wrong type is left empty.
 func Handler(raw json.RawMessage) HookHandler {
+	var fields map[string]json.RawMessage
 	var h HookHandler
-	if json.Unmarshal(raw, &h) != nil {
-		var loose map[string]json.RawMessage
-		if json.Unmarshal(raw, &loose) == nil {
-			_ = json.Unmarshal(loose["type"], &h.Type)
+	if json.Unmarshal(raw, &fields) != nil {
+		return h
+	}
+	for key, target := range map[string]any{
+		"type": &h.Type, "command": &h.Command, "args": &h.Args, "url": &h.URL,
+		"server": &h.Server, "tool": &h.Tool, "timeout": &h.Timeout, "if": &h.If,
+		"async": &h.Async, "asyncRewake": &h.AsyncRewake,
+	} {
+		if value, ok := fields[key]; ok {
+			_ = json.Unmarshal(value, target)
 		}
 	}
 	return h
