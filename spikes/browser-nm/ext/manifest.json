@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "Kontext NM Spike",
+  "version": "0.0.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3cl5ZccmCnmO8Yv4xs5ZlOF0q71Al/U6h5mEtQjYwhrZ2xFHbKa289XnlSPKWNywQx8O0eGAeUP3e3Lg1Q+5C2RdXgc335NnEP0WSHm9+QNenNL15mLS+OSMGmCA9ar/KIEeLMszqjSaqG7o255sZnflcNxWMlHqqJ/ewR/TTKCbXDiw8Y7agPqTp4X722GsPaOlL9SS1bquKMTPmdnT63nhFG4tazdhjOk94+9fGKz6ujUCamVdYTQns2c0m8BiXD8tpQYDzbcvGY8utACKjCEc7at/IJ2jvNun6YhNSPHIi/1WZtBJPxM46bCL4pDcoE3et6AkMjIjX2WqoJ0vwQIDAQAB",
+  "background": {"service_worker": "sw.js"},
+  "permissions": ["nativeMessaging", "management", "storage", "tabs", "webNavigation", "webRequest"],
+  "host_permissions": ["https://*/*"]
+}

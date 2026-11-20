@@ -1,0 +1,81 @@
+# Throwaway spike (browser extension native messaging on Windows). Not for main.
+name: spike-nm-windows
+on:
+  push:
+    branches: [claude/project-thread-t043k2]
+    paths: [spikes/browser-nm/**, .github/workflows/spike-nm-windows.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: spikes/browser-nm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22' }
+      - name: Build unsigned host
+        run: |
+          New-Item -ItemType Directory -Force C:\kx | Out-Null
+          Push-Location host; go build -o C:\kx\kontext-nm-host.exe .; Pop-Location
+          Get-AuthenticodeSignature C:\kx\kontext-nm-host.exe | Format-List Status,StatusMessage
+      - name: Register host under HKLM for Chrome and Edge
+        run: |
+          $id = (Get-Content id.txt).Trim()
+          $m = @{ name='com.kontext.spike'; description='spike'; path='C:\kx\kontext-nm-host.exe'; type='stdio'; allowed_origins=@("chrome-extension://$id/") } | ConvertTo-Json
+          Set-Content -Path C:\kx\com.kontext.spike.json -Value $m -Encoding ascii
+          foreach ($k in 'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts\com.kontext.spike','HKLM:\SOFTWARE\Microsoft\Edge\NativeMessagingHosts\com.kontext.spike') {
+            New-Item -Path $k -Force | Out-Null; Set-ItemProperty -Path $k -Name '(default)' -Value 'C:\kx\com.kontext.spike.json' }
+          Get-Content C:\kx\com.kontext.spike.json
+      - name: Machine state
+        run: |
+          dsregcmd /status | Select-String 'AzureAdJoined|DomainJoined|EnterpriseJoined|WorkplaceJoined'
+          Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue | Select-Object EnableLUA
+          (Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object AMServiceEnabled, RealTimeProtectionEnabled) | Format-List
+          Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -ErrorAction SilentlyContinue | Select-Object VerifiedAndReputablePolicyState
+      - name: Find browsers
+        id: b
+        run: |
+          $chrome = (Get-Item 'C:\Program Files\Google\Chrome\Application\chrome.exe').FullName
+          $edge = (Get-Item 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe').FullName
+          (Get-Item $chrome).VersionInfo.ProductVersion; (Get-Item $edge).VersionInfo.ProductVersion
+          "chrome=$chrome" >> $env:GITHUB_OUTPUT; "edge=$edge" >> $env:GITHUB_OUTPUT
+          npm init -y | Out-Null; npm i playwright-core@1.48.2 | Out-Null
+          npx --yes @puppeteer/browsers install chrome@stable --path C:\cft | Tee-Object -Variable cft
+          $cftExe = (Get-ChildItem C:\cft -Recurse -Filter chrome.exe | Select-Object -First 1).FullName
+          "cft=$cftExe" >> $env:GITHUB_OUTPUT
+      - name: Test load-extension (Chrome for Testing, Chrome, Edge)
+        continue-on-error: true
+        run: |
+          node run.mjs cft-load "${{ steps.b.outputs.cft }}" load C:\kx\p-cft
+          node run.mjs chrome-load "${{ steps.b.outputs.chrome }}" load C:\kx\p-chrome
+          node run.mjs edge-load "${{ steps.b.outputs.edge }}" load C:\kx\p-edge
+          Get-Content C:\kx\host.log -ErrorAction SilentlyContinue
+      - name: Test off-store force install via HKLM policy (machine not domain or MDM joined)
+        continue-on-error: true
+        run: |
+          $id = (Get-Content id.txt).Trim()
+          New-Item -ItemType Directory -Force C:\kx\srv | Out-Null
+          Copy-Item spike.crx C:\kx\srv\spike.crx
+          "<?xml version='1.0' encoding='UTF-8'?><gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'><app appid='$id'><updatecheck codebase='http://127.0.0.1:8099/spike.crx' version='0.0.1' /></app></gupdate>" | Set-Content C:\kx\srv\updates.xml -Encoding ascii
+          Start-Process python -ArgumentList '-m','http.server','8099','--bind','127.0.0.1','--directory','C:\kx\srv' -RedirectStandardError C:\kx\http.log
+          foreach ($k in 'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist','HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist') {
+            New-Item -Path $k -Force | Out-Null; Set-ItemProperty -Path $k -Name '1' -Value "$id;http://127.0.0.1:8099/updates.xml" }
+          Remove-Item C:\kx\host.log -ErrorAction SilentlyContinue
+          node run.mjs chrome-policy "${{ steps.b.outputs.chrome }}" policy C:\kx\pp-chrome
+          node run.mjs edge-policy "${{ steps.b.outputs.edge }}" policy C:\kx\pp-edge
+          Get-Content C:\kx\http.log -ErrorAction SilentlyContinue
+          Get-Content C:\kx\host.log -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-results
+          path: |
+            spikes/browser-nm/result-*.json
+            C:\kx\host.log
+            C:\kx\http.log
