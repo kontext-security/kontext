@@ -1,12 +1,14 @@
 package agentauthority
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
@@ -174,7 +176,7 @@ func evaluateEnablement(s *hookScan) {
 				conditional = append(conditional, HookReasonAwaitingTrust)
 			}
 		}
-		if r.Type == "command" && programMissing(s.opts.Home, info.program) {
+		if r.Type == "command" && programMissing(s.g.ctx, s.opts.Home, info.program) {
 			disabled = append(disabled, HookReasonBinaryMissing)
 		}
 		// Claude Code uses one managed source: an MDM profile replaces the
@@ -183,6 +185,9 @@ func evaluateEnablement(s *hookScan) {
 		// stays unresolved rather than enabled.
 		if s.shadowed {
 			unresolved = append(unresolved, HookReasonManagedTierShadowed)
+		}
+		if s.mdmMerged {
+			unresolved = append(unresolved, HookReasonUnresolved)
 		}
 		if s.unlisted {
 			unresolved = append(unresolved, HookReasonDropInUnlistable)
@@ -231,12 +236,35 @@ func urlAllowed(raw string, patterns []string) bool {
 	return false
 }
 
-// programMissing checks a command's program only where that is safe: an
-// absolute path outside privacy-guarded folders, by metadata alone.
-func programMissing(home, program string) bool {
-	if !filepath.IsAbs(program) || privacyfolder.Guarded(home, program) {
+// programStatTimeout bounds one binary check: a stalled network path must
+// not hold the scan past its deadline.
+const programStatTimeout = 250 * time.Millisecond
+
+// programMissing checks a command's program only where that is safe: a
+// canonical absolute path outside privacy-guarded folders, by metadata
+// alone, within a short deadline. A symlink followed by ".." resolves
+// elsewhere for the OS than the cleaned path the guard checks, so another
+// spelling is never checked. Anything it can't settle in time is not missing.
+func programMissing(ctx context.Context, home, program string) bool {
+	if !filepath.IsAbs(program) || program != filepath.Clean(program) {
 		return false
 	}
-	_, err := os.Stat(program)
-	return os.IsNotExist(err)
+	done := make(chan bool, 1)
+	go func() {
+		if privacyfolder.Guarded(home, program) {
+			done <- false
+			return
+		}
+		_, err := os.Stat(program)
+		done <- os.IsNotExist(err)
+	}()
+	timer := time.NewTimer(programStatTimeout)
+	defer timer.Stop()
+	select {
+	case missing := <-done:
+		return missing
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	return false
 }

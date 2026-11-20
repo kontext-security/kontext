@@ -25,65 +25,108 @@ const mdmBehaviorKey = "managedSourcesBehavior"
 // maxMDMPlistBytes bounds the read; a larger profile is taken as policy.
 const maxMDMPlistBytes = 1 << 20
 
-// claudeMDMPolicy reports whether an MDM profile forces Claude Code settings
-// on this Mac: a profile with any key besides managedSourcesBehavior, or one
-// this build can't read.
-func claudeMDMPolicy() bool {
+// mdmMode is how an MDM profile takes part in Claude Code's managed settings.
+type mdmMode int
+
+const (
+	// mdmNone: no profile, or one that only names the default behavior.
+	mdmNone mdmMode = iota
+	// mdmMerge: the profile adds settings on top of the managed files.
+	mdmMerge
+	// mdmReplace: the profile replaces the files, or can't be read.
+	mdmReplace
+)
+
+// mdmMergeBehavior is the managedSourcesBehavior value that keeps the files
+// in force beside the profile.
+const mdmMergeBehavior = "merge"
+
+// claudeMDMPolicy reports whether an MDM profile replaces Claude Code's
+// managed files on this Mac.
+func claudeMDMPolicy() bool { return claudeMDM() == mdmReplace }
+
+// claudeMDM reads the Mac's and the user's profiles; the stronger mode wins.
+func claudeMDM() mdmMode {
 	if runtime.GOOS != "darwin" {
-		return false
+		return mdmNone
 	}
 	paths := []string{filepath.Join(managedPreferences, claudePreferenceDomain+".plist")}
 	if current, err := user.Current(); err == nil {
 		paths = append(paths, filepath.Join(managedPreferences, current.Username, claudePreferenceDomain+".plist"))
 	}
+	mode := mdmNone
 	for _, path := range paths {
-		if mdmPlistSuppliesPolicy(path) {
-			return true
-		}
+		mode = max(mode, mdmPlistMode(path))
 	}
-	return false
+	return mode
 }
 
-func mdmPlistSuppliesPolicy(path string) bool {
+// mdmPlistSuppliesPolicy reports whether the profile at path replaces the
+// managed files.
+func mdmPlistSuppliesPolicy(path string) bool { return mdmPlistMode(path) == mdmReplace }
+
+// mdmPlistMode reads one profile: any key besides managedSourcesBehavior is
+// policy, which replaces the files unless the behavior says merge. A profile
+// this build can't read replaces them.
+func mdmPlistMode(path string) mdmMode {
 	f, err := os.Open(path)
 	if err != nil {
-		return !os.IsNotExist(err)
+		if os.IsNotExist(err) {
+			return mdmNone
+		}
+		return mdmReplace
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxMDMPlistBytes+1))
 	if err != nil || len(data) > maxMDMPlistBytes {
-		return true
+		return mdmReplace
 	}
-	keys, ok := plistTopKeys(data)
+	entries, ok := plistTopEntries(data)
 	if !ok {
-		return true
+		return mdmReplace
 	}
-	for _, key := range keys {
-		if key != mdmBehaviorKey {
-			return true
+	policy, merge := false, false
+	for _, entry := range entries {
+		if entry.key == mdmBehaviorKey {
+			merge = entry.str != nil && *entry.str == mdmMergeBehavior
+			continue
 		}
+		policy = true
 	}
-	return false
+	switch {
+	case !policy:
+		return mdmNone
+	case merge:
+		return mdmMerge
+	}
+	return mdmReplace
 }
 
-// plistTopKeys lists the keys of a property list whose top object is a
+// plistEntry is one top-level key, with its value when that is a string.
+type plistEntry struct {
+	key string
+	str *string
+}
+
+// plistTopEntries lists the entries of a property list whose top object is a
 // dictionary, binary or XML. False means it couldn't be read as one.
-func plistTopKeys(data []byte) ([]string, bool) {
+func plistTopEntries(data []byte) ([]plistEntry, bool) {
 	if bytes.HasPrefix(data, []byte("bplist00")) {
-		return binaryPlistTopKeys(data)
+		return binaryPlistTopEntries(data)
 	}
-	return xmlPlistTopKeys(data)
+	return xmlPlistTopEntries(data)
 }
 
-func xmlPlistTopKeys(data []byte) ([]string, bool) {
+func xmlPlistTopEntries(data []byte) ([]plistEntry, bool) {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	decoder.Strict = false
 	depth, inDict := 0, false
-	keys := []string{}
+	entries := []plistEntry{}
+	value := false
 	for {
 		token, err := decoder.Token()
 		if err == io.EOF {
-			return keys, inDict
+			return entries, inDict
 		}
 		if err != nil {
 			return nil, false
@@ -98,21 +141,38 @@ func xmlPlistTopKeys(data []byte) ([]string, bool) {
 				}
 				inDict = true
 			}
-			if depth == 3 && t.Name.Local == "key" {
+			if depth != 3 {
+				continue
+			}
+			switch {
+			case t.Name.Local == "key":
 				var key string
 				if err := decoder.DecodeElement(&key, &t); err != nil {
 					return nil, false
 				}
-				keys = append(keys, key)
-				depth--
+				entries = append(entries, plistEntry{key: key})
+				value = true
+			case value && t.Name.Local == "string":
+				var str string
+				if err := decoder.DecodeElement(&str, &t); err != nil {
+					return nil, false
+				}
+				entries[len(entries)-1].str = &str
+				value = false
+			default:
+				if err := decoder.Skip(); err != nil {
+					return nil, false
+				}
+				value = false
 			}
+			depth--
 		case xml.EndElement:
 			depth--
 		}
 	}
 }
 
-func binaryPlistTopKeys(data []byte) ([]string, bool) {
+func binaryPlistTopEntries(data []byte) ([]plistEntry, bool) {
 	if len(data) < 8+32 {
 		return nil, false
 	}
@@ -140,7 +200,8 @@ func binaryPlistTopKeys(data []byte) ([]string, bool) {
 		return int(at), at < uint64(len(data))-32
 	}
 	// length reads an object's count: the low nibble, or an int object after
-	// the marker when the nibble is 0xF.
+	// the marker when the nibble is 0xF. A count is checked against the data
+	// before it becomes an int, so an overflowing one is refused.
 	length := func(at int) (n, body int, ok bool) {
 		info := int(data[at] & 0x0F)
 		if info != 0x0F {
@@ -153,45 +214,59 @@ func binaryPlistTopKeys(data []byte) ([]string, bool) {
 		if size > 8 || at+2+size > len(data) {
 			return 0, 0, false
 		}
-		return int(uint(data[at+2 : at+2+size])), at + 2 + size, true
+		count := uint(data[at+2 : at+2+size])
+		if count > uint64(len(data)) {
+			return 0, 0, false
+		}
+		return int(count), at + 2 + size, true
+	}
+	str := func(ref uint64) (string, bool) {
+		at, ok := offset(ref)
+		if !ok {
+			return "", false
+		}
+		size, body, ok := length(at)
+		if !ok {
+			return "", false
+		}
+		switch data[at] >> 4 {
+		case 0x5: // ASCII
+			if body+size > len(data) {
+				return "", false
+			}
+			return string(data[body : body+size]), true
+		case 0x6: // UTF-16BE
+			if size > len(data)/2 || body+2*size > len(data) {
+				return "", false
+			}
+			units := make([]uint16, size)
+			for j := range units {
+				units[j] = binary.BigEndian.Uint16(data[body+2*j:])
+			}
+			return string(utf16.Decode(units)), true
+		}
+		return "", false
 	}
 	at, ok := offset(top)
 	if !ok || data[at]>>4 != 0xD {
 		return nil, false
 	}
 	n, refs, ok := length(at)
-	if !ok || refs+n*refSize > len(data) {
+	if !ok || n > len(data)/(2*refSize) || refs+2*n*refSize > len(data) {
 		return nil, false
 	}
-	keys := make([]string, 0, n)
+	entries := make([]plistEntry, 0, n)
 	for i := range n {
-		ref := uint(data[refs+i*refSize : refs+(i+1)*refSize])
-		keyAt, ok := offset(ref)
+		key, ok := str(uint(data[refs+i*refSize : refs+(i+1)*refSize]))
 		if !ok {
 			return nil, false
 		}
-		size, body, ok := length(keyAt)
-		if !ok {
-			return nil, false
+		entry := plistEntry{key: key}
+		valueAt := refs + (n+i)*refSize
+		if value, ok := str(uint(data[valueAt : valueAt+refSize])); ok {
+			entry.str = &value
 		}
-		switch data[keyAt] >> 4 {
-		case 0x5: // ASCII
-			if body+size > len(data) {
-				return nil, false
-			}
-			keys = append(keys, string(data[body:body+size]))
-		case 0x6: // UTF-16BE
-			if body+2*size > len(data) {
-				return nil, false
-			}
-			units := make([]uint16, size)
-			for j := range units {
-				units[j] = binary.BigEndian.Uint16(data[body+2*j:])
-			}
-			keys = append(keys, string(utf16.Decode(units)))
-		default:
-			return nil, false
-		}
+		entries = append(entries, entry)
 	}
-	return keys, true
+	return entries, true
 }

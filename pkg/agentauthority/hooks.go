@@ -82,6 +82,10 @@ type HookAgent struct {
 
 // KontextHookSet says whether Kontext's own handlers cover every event it
 // installs: complete, needs_update (some missing, ENG-694) or missing.
+// KontextHooksUnknown is the set's state when a setting that decides it
+// could not be read: the cloud keeps its last verdict.
+const KontextHooksUnknown = "unknown"
+
 type KontextHookSet struct {
 	State         string   `json:"state"`
 	MissingEvents []string `json:"missing_events"`
@@ -199,6 +203,9 @@ type hookScan struct {
 	// shadowed: an MDM profile supplies Claude Code's managed tier, so the
 	// managed-settings files on disk are not the policy in force.
 	shadowed bool
+	// mdmMerged: an MDM profile adds settings beside the files, which this
+	// build can't read, so every hook's state stays unresolved.
+	mdmMerged bool
 }
 
 type hookRaw struct {
@@ -247,10 +254,14 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	g := &guard{ctx: ctx, home: home, managed: opts.managed, roots: []string{opts.managed, base, rootConfig}, report: report, beginRead: opts.BeginRead, seen: map[string]bool{}}
 	s := &hookScan{g: g, opts: opts, source: NewSourceHealth(HookSourceID(agentID), opts.Now), buckets: map[string]int{}, plugins: pluginSwitches{managed: map[string]bool{}, user: map[string]bool{}, project: map[string]map[string]bool{}}, trust: map[string]*bool{}}
 	s.agent = HookAgent{ID: agentID, Scopes: []HookScope{}, Hooks: []HookRecord{}}
-	if opts.mdmPolicy == nil {
-		opts.mdmPolicy = claudeMDMPolicy
+	// A test supplies the replace switch alone; the Mac's profiles give the
+	// mode.
+	if opts.mdmPolicy != nil {
+		s.shadowed = opts.mdmPolicy()
+	} else {
+		mode := claudeMDM()
+		s.shadowed, s.mdmMerged = mode == mdmReplace, mode == mdmMerge
 	}
-	s.shadowed = opts.mdmPolicy()
 	if version := safe(opts.AgentVersion, 64); version != "" {
 		s.agent.AgentVersion = &version
 	}
@@ -349,6 +360,9 @@ func (s *hookScan) settingsScope(kind, path string, listed bool) {
 	if ok {
 		for key, value := range settings.EnabledPlugins {
 			switch {
+			case managedKind(kind) && s.shadowed:
+				// An MDM profile replaced these files: their switches
+				// aren't in force.
 			case managedKind(kind):
 				s.plugins.managed[key] = value
 			case projectKind(kind):
@@ -456,13 +470,19 @@ func (s *hookScan) pluginHooks(h *SourceHealth, installed string, declared json.
 		s.source.Fail(ReasonMalformed)
 	}
 	defaultFile := filepath.Join(installed, "hooks", "hooks.json")
+	// read holds each file's outcome: a declared file the default read
+	// found absent still fails the scope.
 	read := map[string]bool{}
 	file := func(path string, declared bool) {
 		path = filepath.Clean(path)
-		if read[path] {
+		if ok, done := read[path]; done {
+			if declared && !ok {
+				h.Fail(ReasonReadError)
+				s.source.Fail(ReasonReadError)
+			}
 			return
 		}
-		read[path] = true
+		read[path] = false
 		if !within(installed, path) {
 			h.Fail(ReasonPermissionDenied)
 			s.source.Fail(ReasonPermissionDenied)
@@ -470,6 +490,7 @@ func (s *hookScan) pluginHooks(h *SourceHealth, installed string, declared json.
 		}
 		s.g.roots = append(s.g.roots, path)
 		if parsed, ok := readConfig(s.g, s.agent.ID, path, readers.Hooks); ok {
+			read[path] = true
 			add(parsed.Hooks)
 		} else if declared {
 			// The manifest names it, so its absence is no empty file: hooks
@@ -548,7 +569,7 @@ func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGr
 	for _, event := range keys(hooks) {
 		// An event is a name in the agent's vocabulary; one that reads as a
 		// secret is a generator's mistake and never reported.
-		if !hookEventName.MatchString(event) || secret(event, "args") {
+		if !hookEventName.MatchString(event) || hookSecret(event) {
 			s.g.fail(ReasonUnsupportedFormat)
 			continue
 		}
@@ -582,9 +603,9 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 	if !slices.Contains(knownHookTypes, kind_) {
 		kind_ = "unknown"
 	}
-	info.matcher, info.conditional, info.async = matcher, strings.TrimSpace(h.If) != "", h.Async
+	info.matcher, info.conditional, info.async = matcher, strings.TrimSpace(h.If) != "", h.Async || h.AsyncRewake
 	r := HookRecord{ScopeID: scope, Event: event, Type: kind_, Origin: HookOriginSettings, Enablement: HookEnablement{State: "unresolved", Reasons: []string{"unresolved"}}}
-	if m := safeMatcher(matcher); m != "" {
+	if m := safeEventMatcher(event, matcher); m != "" {
 		r.Matcher = &m
 	}
 	if h.Timeout != nil && *h.Timeout >= 0 && *h.Timeout <= 86400 {
@@ -678,37 +699,68 @@ func (s *hookScan) finish() {
 		}
 	}
 	evaluateEnablement(s)
-	s.agent.KontextHooks = kontextHookSet(s.agent.Hooks, s.raw, s.projectDisablesHooks())
+	s.agent.KontextHooks = kontextHookSet(s.agent.Hooks, s.raw, s.projectDisablesHooks(), s.coverageReadable())
 }
 
-// projectDisablesHooks reports whether a listed project's own settings turn
-// off its non-managed hooks: user-scope handlers then don't run there.
+// projectDisablesHooks reports whether a listed project's merged settings
+// (shared, then local) turn off its non-managed hooks: user-scope handlers
+// then don't run there.
 func (s *hookScan) projectDisablesHooks() bool {
+	projects := map[string]bool{}
 	for _, layer := range s.layers {
-		if projectKind(layer.kind) && layer.ok && layer.settings.DisableAllHooksSet && layer.settings.DisableAllHooks != nil && *layer.settings.DisableAllHooks {
-			return true
+		if projectKind(layer.kind) && !projects[layer.project] {
+			projects[layer.project] = true
+			if s.switchesFor(layer.project).otherDisableAll {
+				return true
+			}
 		}
 	}
 	return false
 }
 
+// coverageReadable reports whether every setting that decides Kontext's
+// coverage was read: managed settings and drop-ins, user settings, and each
+// listed project's, whose disableAllHooks stops user hooks there.
+func (s *hookScan) coverageReadable() bool {
+	if s.agent.Truncated || s.unlisted {
+		return false
+	}
+	for _, scope := range s.agent.Scopes {
+		if scope.Kind != HookScopePlugin && scope.Status != StatusComplete {
+			return false
+		}
+	}
+	return true
+}
+
 // kontextHookSet compares Kontext's verified, enabled handlers with the
 // events it installs. Only a handler that runs for every call of its event,
 // everywhere on the Mac, covers it: one in managed or user settings, with no
-// narrowing matcher and no handler-level `if`. A project's hooks run in that
-// project alone, so they never cover the device.
-func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables bool) KontextHookSet {
+// narrowing matcher and no handler-level `if`, and synchronous unless
+// Kontext installs that event to run in the background. A project's hooks
+// run in that project alone, so they never cover the device. When the set
+// isn't complete and a setting that decides it went unread, or a Kontext
+// handler's state is unresolved, the verdict is unknown.
+func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables, readable bool) KontextHookSet {
 	covered := map[string]bool{}
+	uncertain := !readable
 	for i, r := range records {
-		if i >= len(raw) || r.Origin != HookOriginKontext || r.Enablement.State != hookEnabled {
+		if i >= len(raw) {
+			continue
+		}
+		if r.ClaimsKontext && r.Enablement.State == hookUnresolved {
+			uncertain = true
+		}
+		if r.Origin != HookOriginKontext || r.Enablement.State != hookEnabled {
 			continue
 		}
 		info := raw[i]
 		// A user handler is device-wide only while no project turns user
-		// hooks off; disableAllHooks there leaves managed ones running.
-		deviceWide := info.kind == HookScopeManaged || info.kind == HookScopeManagedDropIn || info.kind == HookScopeUser && !projectDisables
+		// hooks off, which an unread project could; disableAllHooks there
+		// leaves managed ones running.
+		deviceWide := info.kind == HookScopeManaged || info.kind == HookScopeManagedDropIn || info.kind == HookScopeUser && !projectDisables && readable
 		matcher := strings.TrimSpace(info.matcher)
-		if deviceWide && !info.conditional && !info.async && (matcher == "" || matcher == "*") {
+		if deviceWide && !info.conditional && (!info.async || installedAsync(r.Event)) && (matcher == "" || matcher == "*") {
 			covered[r.Event] = true
 		}
 	}
@@ -719,12 +771,26 @@ func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables bool) K
 		}
 	}
 	switch {
+	case len(set.MissingEvents) == 0:
+	case uncertain:
+		set = KontextHookSet{State: KontextHooksUnknown, MissingEvents: []string{}}
 	case len(set.MissingEvents) == len(claudemanaged.SupportedEvents):
 		set.State = "missing"
-	case len(set.MissingEvents) > 0:
+	default:
 		set.State = "needs_update"
 	}
 	return set
+}
+
+// installedAsync reports whether Kontext installs its handler for event to
+// run in the background, where async is the expected shape.
+func installedAsync(event string) bool {
+	for _, e := range claudemanaged.SupportedEvents {
+		if e.Name.String() == event {
+			return e.Async
+		}
+	}
+	return false
 }
 
 // withoutAssignments drops the leading NAME=value words of a shell command.

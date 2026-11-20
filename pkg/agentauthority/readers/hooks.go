@@ -42,9 +42,13 @@ type HookHandler struct {
 	// Async runs the handler without waiting for it: its decision is
 	// ignored.
 	Async bool `json:"async"`
+	// AsyncRewake runs it in the background too, waking the agent later.
+	AsyncRewake bool `json:"asyncRewake"`
 }
 
 var errHooksShape = errors.New("hooks is not an object of matcher groups")
+
+var errSettingsShape = errors.New("settings is not an object")
 
 // Hooks parses one hook source. disableAllHooks follows Claude's merge rule:
 // a Boolean sets it, null clears an earlier value, anything else changes
@@ -53,6 +57,11 @@ func Hooks(data []byte) (HookSettings, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
 		return HookSettings{}, err
+	}
+	// The literal null is no settings object: reading it as empty would
+	// withdraw every hook the file held.
+	if top == nil {
+		return HookSettings{}, errSettingsShape
 	}
 	var s HookSettings
 	if raw, ok := top["hooks"]; ok && string(raw) != "null" {

@@ -700,6 +700,7 @@ func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.Runti
 		// Off until a directive is confirmed: SafeRuntimeConfiguration also
 		// clears it for an unconfirmed snapshot.
 		WorkTypeClassification: snapshot.Config.WorkTypeClassificationEnabled(),
+		PromptVeto:             snapshot.Status.PromptVeto,
 	})
 }
 
