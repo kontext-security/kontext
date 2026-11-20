@@ -2,6 +2,7 @@ package managedobserve
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
@@ -62,7 +63,7 @@ func TestHookHolderFollowsSwitchAndKey(t *testing.T) {
 	if fake.calls != 0 {
 		t.Fatal("scanned without K_dev")
 	}
-	keys.set([]byte("k"))
+	keys.set([]byte("k"), "t")
 	h.refresh(context.Background(), inv)
 	if fake.tag == "" || fake.tag != hookKeyTag([]byte("k")) || fake.tag == hookKeyTag([]byte("k2")) {
 		t.Fatalf("key tag %q", fake.tag)
@@ -83,7 +84,7 @@ func TestHookHolderDropsAScanFinishedAfterTurnOff(t *testing.T) {
 	fake := &fakeHookScan{}
 	on := true
 	keys := newHookKeyBox()
-	keys.set([]byte("k"))
+	keys.set([]byte("k"), "t")
 	h := fake.holder(&on, keys)
 	scan := h.scan
 	h.scan = func(ctx context.Context, opts agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error) {
@@ -102,7 +103,7 @@ func TestHookHolderDropsAScanUnderAnOldKey(t *testing.T) {
 	fake := &fakeHookScan{}
 	on := true
 	keys := newHookKeyBox()
-	keys.set([]byte("k"))
+	keys.set([]byte("k"), "t")
 	h := fake.holder(&on, keys)
 	scan := h.scan
 	h.scan = func(ctx context.Context, opts agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error) {
@@ -126,5 +127,55 @@ func TestHookHolderRunDiscardsBeforeTheKey(t *testing.T) {
 	h.run(ctx, &agentInventoryHolder{})
 	if fake.discards != 1 || fake.calls != 0 {
 		t.Fatalf("%+v", fake)
+	}
+}
+
+// After a re-enrolment the cache still holds the previous workspace's opt-in
+// until the new workspace's settings arrive: nothing is scanned or sent under
+// the new key until then.
+func TestHookHolderWaitsForTheNewEnrolmentsSettings(t *testing.T) {
+	fake := &fakeHookScan{confirmed: true}
+	on := true
+	keys := newHookKeyBox()
+	gate := &enrolmentGate{}
+	gate.set("token-a")
+	keys.set([]byte("k-b"), "token-b")
+	h := fake.holder(&on, keys)
+	h.authorized = func() bool { return gate.matches(keys.enrolment()) }
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	if fake.calls != 0 || h.uploading() {
+		t.Fatalf("scanned under A's opt-in: %+v uploading=%v", fake, h.uploading())
+	}
+	gate.set("token-b")
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	if fake.calls != 1 || fake.recorded != 1 || !h.uploading() {
+		t.Fatalf("B's settings arrived: %+v", fake)
+	}
+}
+
+func TestHookSwitchWatchWakesOnChangesOnly(t *testing.T) {
+	var w hookSwitchWatch
+	steps := []struct {
+		on, confirmed, want bool
+	}{{false, true, true}, {false, true, false}, {false, true, false}, {true, true, true}, {true, true, false}}
+	for i, step := range steps {
+		if got := w.config(step.on, step.confirmed); got != step.want {
+			t.Fatalf("step %d: woke=%v", i, got)
+		}
+	}
+	if !w.enrolment("a") || w.enrolment("a") || !w.enrolment("b") {
+		t.Fatal("enrolment changes")
+	}
+}
+
+func TestClaudeConfigDirFollowsTheEnvironment(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "relative/dir")
+	if got := ClaudeConfigDir(); got != "" {
+		t.Fatalf("relative dir used: %q", got)
+	}
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir+"/")
+	if got := ClaudeConfigDir(); got != filepath.Clean(dir) {
+		t.Fatalf("got %q", got)
 	}
 }

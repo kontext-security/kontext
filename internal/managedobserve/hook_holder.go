@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,27 +27,36 @@ import (
 // being resolved, and a key that differs from the last one calls changed,
 // which drops the results read under the old key.
 type hookKeyBox struct {
-	mu      sync.Mutex
-	key     []byte
+	mu  sync.Mutex
+	key []byte
+	// token is the install token K_dev was derived under: the enrolment
+	// the key belongs to.
+	token   string
 	last    []byte
 	ready   chan struct{}
 	once    sync.Once
 	changed func()
+	// wake runs when the key's enrolment changes, so the scan follows it.
+	wake func()
 }
 
 func newHookKeyBox() *hookKeyBox { return &hookKeyBox{ready: make(chan struct{})} }
 
-func (b *hookKeyBox) set(key []byte) {
+func (b *hookKeyBox) set(key []byte, token string) {
 	if b == nil || len(key) == 0 {
 		return
 	}
 	b.mu.Lock()
 	replaced := len(b.last) > 0 && !bytes.Equal(b.last, key)
-	b.key, b.last = key, key
-	changed := b.changed
+	moved := b.token != token
+	b.key, b.last, b.token = key, key, token
+	changed, wake := b.changed, b.wake
 	b.mu.Unlock()
 	if replaced && changed != nil {
 		changed()
+	}
+	if moved && wake != nil {
+		wake()
 	}
 	b.once.Do(func() { close(b.ready) })
 }
@@ -57,8 +68,40 @@ func (b *hookKeyBox) clear() {
 		return
 	}
 	b.mu.Lock()
-	b.key = nil
+	b.key, b.token = nil, ""
 	b.mu.Unlock()
+}
+
+// enrolment is the install token the current key was derived under; empty
+// while no key is known.
+func (b *hookKeyBox) enrolment() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.token
+}
+
+// enrolmentGate holds the install token of the endpoint configuration the
+// cache last took. Hook inventory follows a switch only while that is the
+// enrolment K_dev belongs to: after a re-enrolment the cache still holds
+// the previous workspace's opt-in until the new one's settings arrive.
+type enrolmentGate struct {
+	mu    sync.Mutex
+	token string
+}
+
+func (g *enrolmentGate) set(token string) {
+	g.mu.Lock()
+	g.token = token
+	g.mu.Unlock()
+}
+
+func (g *enrolmentGate) matches(token string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return token != "" && g.token == token
 }
 
 func (b *hookKeyBox) get() []byte {
@@ -79,8 +122,11 @@ type hookHolder struct {
 	// confirmed reports whether enabled reads a config the cloud confirmed.
 	// Nil counts as confirmed.
 	confirmed func() bool
-	available <-chan struct{}
-	beginRead func() func()
+	// authorized reports whether that config is the current enrolment's,
+	// the one K_dev was derived under. Nil counts as authorized.
+	authorized func() bool
+	available  <-chan struct{}
+	beginRead  func() func()
 	// ownBinary verifies a handler's program is this Kontext binary.
 	ownBinary func(string) bool
 	// record stores a scan with the tag of the key it was read under.
@@ -97,8 +143,10 @@ type hookHolder struct {
 // uploading reports whether pending hook results may be sent now: the switch
 // is on and the key for the current workspace is known.
 func (h *hookHolder) uploading() bool {
-	return h.enabled != nil && h.enabled() && len(h.keys.get()) > 0
+	return h.enabled != nil && h.enabled() && h.isAuthorized() && len(h.keys.get()) > 0
 }
+
+func (h *hookHolder) isAuthorized() bool { return h.authorized == nil || h.authorized() }
 
 func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) {
 	if h.enabled == nil || !h.enabled() {
@@ -111,6 +159,9 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 		return
 	}
 	h.discarded = false
+	if !h.isAuthorized() {
+		return
+	}
 	key := h.keys.get()
 	if len(key) == 0 {
 		return
@@ -130,14 +181,14 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	agent, result, err := scan(scanCtx, agentauthority.HookScanOptions{
-		Home: home, Key: key, AgentVersion: agentVersionOf(inv, "claude_code"), OwnBinary: h.ownBinary, Now: time.Now(), BeginRead: h.beginRead,
+		Home: home, ConfigDir: ClaudeConfigDir(), Key: key, AgentVersion: agentVersionOf(inv, "claude_code"), OwnBinary: h.ownBinary, Now: time.Now(), BeginRead: h.beginRead,
 	})
 	if errors.Is(err, agentauthority.ErrNoHookKey) || err != nil || ctx.Err() != nil {
 		return
 	}
 	// The switch may have gone off, or the workspace changed, while the
 	// scan ran.
-	if !h.enabled() || !bytes.Equal(h.keys.get(), key) {
+	if !h.enabled() || !h.isAuthorized() || !bytes.Equal(h.keys.get(), key) {
 		return
 	}
 	if h.record != nil {
@@ -232,4 +283,34 @@ func LocalHookKey(ctx context.Context) ([]byte, string, error) {
 	}
 	key, err := deviceid.HookInventoryKey(uuid, HookKeyLocal)
 	return key, HookKeyLocal, err
+}
+
+// hookSwitchWatch tells the hook scan to wake when its switch, the config's
+// confirmation or the enrolment changes, not on every refresh: an unchanged
+// configuration (a 304) also reaches OnChanged, every minute.
+type hookSwitchWatch struct {
+	seen, on, confirmed bool
+	token               string
+}
+
+func (w *hookSwitchWatch) config(on, confirmed bool) bool {
+	changed := !w.seen || w.on != on || w.confirmed != confirmed
+	w.seen, w.on, w.confirmed = true, on, confirmed
+	return changed
+}
+
+func (w *hookSwitchWatch) enrolment(token string) bool {
+	changed := w.token != token
+	w.token = token
+	return changed
+}
+
+// ClaudeConfigDir is CLAUDE_CONFIG_DIR when it names an absolute folder, the
+// profile Claude Code runs with; empty means the default ~/.claude.
+func ClaudeConfigDir() string {
+	dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
+	if !filepath.IsAbs(dir) {
+		return ""
+	}
+	return filepath.Clean(dir)
 }

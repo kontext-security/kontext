@@ -80,7 +80,8 @@ func summaryURL(raw string) string {
 func safeMatcher(matcher string) string {
 	parts := strings.Split(matcher, "|")
 	for i, part := range parts {
-		if strings.ContainsAny(part, `/\`) || windowsPath.MatchString(part) || secret(part, "matcher") {
+		control := strings.ContainsFunc(part, func(r rune) bool { return r < 0x20 || r == 0x7f })
+		if control || strings.ContainsAny(part, `/\`) || windowsPath.MatchString(part) || secret(part, "matcher") {
 			parts[i] = redacted
 		}
 	}

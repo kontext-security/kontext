@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -45,7 +47,7 @@ func hooksInventoryCmd() *cobra.Command {
 			if self, err := os.Executable(); err == nil {
 				own = agentauthority.SameFileAs(self)
 			}
-			agent, source, err := agentauthority.ScanHooks(cmd.Context(), agentauthority.HookScanOptions{Home: home, Key: key, OwnBinary: own, Now: time.Now()})
+			agent, source, err := agentauthority.ScanHooks(cmd.Context(), agentauthority.HookScanOptions{Home: home, ConfigDir: managedobserve.ClaudeConfigDir(), Key: key, OwnBinary: own, Now: time.Now()})
 			if err != nil {
 				return err
 			}
@@ -114,7 +116,7 @@ func printHookInventory(out io.Writer, o hookInventoryOutput) {
 		if r.Plugin != nil {
 			where = "plugin " + r.Plugin.Name
 		}
-		fmt.Fprintf(out, "\n%s [%s] %s\n  from %s, %s", r.Event, matcher, summary, where, hookStateWording(r))
+		fmt.Fprintf(out, "\n%s [%s] %s\n  from %s, %s", printable(r.Event), printable(matcher), printable(summary), printable(where), hookStateWording(r))
 		if len(r.Enablement.Reasons) > 0 {
 			fmt.Fprintf(out, " (%s)", strings.Join(r.Enablement.Reasons, ", "))
 		}
@@ -125,4 +127,14 @@ func printHookInventory(out io.Writer, o hookInventoryOutput) {
 			fmt.Fprintf(out, "\nCould not fully read a %s source: %s\n", s.Kind, strings.Join(s.Reasons, ", "))
 		}
 	}
+}
+
+// printable shows text that settings files supply with its control
+// characters escaped, so a matcher can't forge or hide a line of the listing.
+func printable(text string) string {
+	if !strings.ContainsFunc(text, func(r rune) bool { return !unicode.IsPrint(r) && r != ' ' }) {
+		return text
+	}
+	quoted := strconv.QuoteToGraphic(text)
+	return quoted[1 : len(quoted)-1]
 }

@@ -361,6 +361,16 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	authorityAvailable := make(chan struct{}, 1)
 	authorityResend := make(chan struct{}, 1)
 	hookAvailable := make(chan struct{}, 1)
+	wakeHooks := func() {
+		select {
+		case hookAvailable <- struct{}{}:
+		default:
+		}
+	}
+	hookKeys := newHookKeyBox()
+	hookKeys.wake = wakeHooks
+	configEnrolment := &enrolmentGate{}
+	var hookWatch hookSwitchWatch
 	policyRefreshNow := make(chan struct{}, 1)
 	enrolment := &enrolmentRefresh{cache: cedarCache, now: policyRefreshNow, left: maxEnrolmentRefreshes}
 	cedarRefresher := cedarpolicy.Refresher{
@@ -403,9 +413,14 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot))
 			codexRouting.follow(snapshot)
 			// The hook scan follows the switch now, not at the next hour.
-			select {
-			case hookAvailable <- struct{}{}:
-			default:
+			if hookWatch.config(snapshot.Config.HookInventoryEnabled(), snapshot.Confirmed) {
+				wakeHooks()
+			}
+		},
+		OnApplied: func(token string) {
+			configEnrolment.set(token)
+			if hookWatch.enrolment(token) {
+				wakeHooks()
 			}
 		},
 	}
@@ -461,12 +476,13 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	server.SetConnectorScan(authorityHolder.Fact)
 	hookHolder := &hookHolder{
-		keys:      newHookKeyBox(),
-		enabled:   func() bool { return endpointConfigCache.Current().Config.HookInventoryEnabled() },
-		confirmed: func() bool { return endpointConfigCache.Current().Confirmed },
-		available: hookAvailable,
-		beginRead: authorityHolder.scanner.BeginRead,
-		ownBinary: ownBinaryCheck(),
+		keys:       hookKeys,
+		enabled:    func() bool { return endpointConfigCache.Current().Config.HookInventoryEnabled() },
+		confirmed:  func() bool { return endpointConfigCache.Current().Confirmed },
+		authorized: func() bool { return configEnrolment.matches(hookKeys.enrolment()) },
+		available:  hookAvailable,
+		beginRead:  authorityHolder.scanner.BeginRead,
+		ownBinary:  ownBinaryCheck(),
 		record: func(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) {
 			if err := inventoryStore.RecordHooks(agent, result, keyTag); err != nil {
 				opts.Diagnostic.Printf("hook inventory: record scan: %v\n", err)
@@ -940,7 +956,7 @@ func (s *deviceKeySource) derive(ctx context.Context, cloudURL, token, installat
 	}
 	if s.hooks != nil {
 		if hookKey, err := deviceid.HookInventoryKey(uuid, ping.OrganizationID); err == nil {
-			s.hooks.set(hookKey)
+			s.hooks.set(hookKey, token)
 		}
 	}
 	s.key = key

@@ -303,6 +303,26 @@ func mergeHooks(older, newer *agentauthority.HookAgent) *agentauthority.HookAgen
 			i = len(merged.Scopes) - 1
 			index[scope.ID] = i
 		}
+		if listed && slices.ContainsFunc(newer.Hooks, func(r agentauthority.HookRecord) bool { return r.ScopeID == scope.ID }) {
+			// The newer scan saw part of this scope: keep what it saw beside
+			// the older records, and its incomplete status, so the cloud adds
+			// both and withdraws nothing there.
+			seen := map[string]bool{}
+			for _, r := range merged.Hooks {
+				seen[r.ID] = true
+			}
+			for _, r := range older.Hooks {
+				if r.ScopeID != scope.ID || seen[r.ID] {
+					continue
+				}
+				if len(merged.Hooks) >= agentauthority.MaxHookRecords {
+					merged.Truncated = true
+					break
+				}
+				merged.Hooks = append(merged.Hooks, r)
+			}
+			continue
+		}
 		// The older scope's state comes along with its hooks, but its time
 		// stays the older one, so freshness is understated, never overstated.
 		merged.Scopes[i] = scope
@@ -521,12 +541,14 @@ func addInventory(payload *Payload, opts Options) {
 		return
 	}
 	pending := opts.Inventory.snapshot()
+	// Without a key tag the current key is unknown, so no hook result goes.
+	current := ""
 	if opts.HookKeyTag != nil {
-		current := opts.HookKeyTag()
-		maps.DeleteFunc(pending, func(id string, entry pendingSource) bool {
-			return sourceKind(id) == kindHooks && (current == "" || entry.Claims.KeyTag != current)
-		})
+		current = opts.HookKeyTag()
 	}
+	maps.DeleteFunc(pending, func(id string, entry pendingSource) bool {
+		return sourceKind(id) == kindHooks && (current == "" || entry.Claims.KeyTag != current)
+	})
 	hooks := opts.HookInventoryEnabled != nil && opts.HookInventoryEnabled() && slices.ContainsFunc(slices.Collect(maps.Keys(pending)), func(id string) bool { return sourceKind(id) == kindHooks })
 	if device.Agents == nil && device.Authority == nil && !hooks {
 		return

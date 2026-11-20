@@ -88,8 +88,8 @@ type Options struct {
 	// HookInventoryEnabled is the endpoint config switch for hook inventory.
 	// Nil or false sends no hook block and no hook source.
 	HookInventoryEnabled func() bool
-	// HookKeyTag names the current K_dev. When set, a pending hook result
-	// recorded under another key, or while none is known, is not sent.
+	// HookKeyTag names the current K_dev. A pending hook result recorded
+	// under another key is not sent, and none is while this is nil or empty.
 	HookKeyTag func() string
 	// AuthorityScanKnown reports whether the server has ever answered the
 	// authority-scan flag. A server that never did (an older release) has a

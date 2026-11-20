@@ -357,6 +357,10 @@ type Refresher struct {
 	Now            func() time.Time
 	Jitter         func(time.Duration) time.Duration
 	OnChanged      func(Snapshot)
+	// OnApplied receives the install token of each refresh the cache took,
+	// a 304 included, so a caller can tell which enrolment the current
+	// settings belong to.
+	OnApplied func(token string)
 	// Diagnostic surfaces refresh state transitions in the daemon log. A
 	// refresh loop that fails silently leaves payload capture degraded with
 	// no operator-visible signal, so failures must not be log-invisible.
@@ -379,6 +383,9 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	}
 	if err := r.Cache.Apply(result, r.now()); err != nil {
 		return r.fail(err)
+	}
+	if r.OnApplied != nil {
+		r.OnApplied(token)
 	}
 	r.recovered()
 	r.notify()

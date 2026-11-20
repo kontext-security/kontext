@@ -144,7 +144,8 @@ type HookVerification struct {
 // HookScanOptions are the inputs of one Claude Code hook scan.
 type HookScanOptions struct {
 	Home string
-	// ConfigDir is Claude Code's user folder; empty means ~/.claude.
+	// ConfigDir is Claude Code's user folder, CLAUDE_CONFIG_DIR; empty means
+	// ~/.claude. With it set, Claude Code keeps .claude.json there too.
 	ConfigDir string
 	// Key is the per-Mac secret from deviceid.HookInventoryKey.
 	Key          []byte
@@ -237,7 +238,11 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		base = filepath.Join(home, ".claude")
 	}
 	report := &Report{Coverage: Coverage{UnknownFormat: []string{}, Errors: []string{}}}
-	g := &guard{ctx: ctx, home: home, managed: opts.managed, roots: []string{opts.managed, base, filepath.Join(home, ".claude.json")}, report: report, beginRead: opts.BeginRead, seen: map[string]bool{}}
+	rootConfig := filepath.Join(home, ".claude.json")
+	if opts.ConfigDir != "" {
+		rootConfig = filepath.Join(base, ".claude.json")
+	}
+	g := &guard{ctx: ctx, home: home, managed: opts.managed, roots: []string{opts.managed, base, rootConfig}, report: report, beginRead: opts.BeginRead, seen: map[string]bool{}}
 	s := &hookScan{g: g, opts: opts, source: NewSourceHealth(HookSourceID(agentID), opts.Now), buckets: map[string]int{}, plugins: pluginSwitches{managed: map[string]bool{}, user: map[string]bool{}, project: map[string]map[string]bool{}}, trust: map[string]*bool{}}
 	s.agent = HookAgent{ID: agentID, Scopes: []HookScope{}, Hooks: []HookRecord{}}
 	if opts.mdmPolicy == nil {
@@ -266,7 +271,7 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	s.settingsScope(HookScopeUser, filepath.Join(base, "settings.json"), false)
 
 	s.only()
-	root, _ := readConfig(g, agentID, filepath.Join(home, ".claude.json"), readers.Claude)
+	root, _ := readConfig(g, agentID, rootConfig, readers.Claude)
 	s.signedIn = root.OAuthAccount.OrganizationUUID != ""
 	projects := keys(root.Projects)
 	if len(projects) > maxHookProjects {

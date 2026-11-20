@@ -43,7 +43,7 @@ func hookIDs(agent *agentauthority.HookAgent) []string {
 }
 
 func heartbeatWith(store *InventoryStore, hooksOn bool) Payload {
-	opts := Options{Inventory: store, CLIVersion: "test", HookInventoryEnabled: func() bool { return hooksOn }}
+	opts := Options{Inventory: store, CLIVersion: "test", HookInventoryEnabled: func() bool { return hooksOn }, HookKeyTag: func() string { return "tag" }}
 	payload := newPayload(opts, nil, nil, nil, nil, nil, time.Now())
 	addInventory(&payload, opts)
 	return payload
@@ -188,6 +188,7 @@ func TestFlushAcknowledgesHookSource(t *testing.T) {
 	scan := presenceScan(agentauthority.StatusComplete, "cursor")
 	opts, fixture := flushOptions(t, store, scan)
 	opts.HookInventoryEnabled = func() bool { return true }
+	opts.HookKeyTag = func() string { return "tag" }
 	fixture.responses <- acknowledgeAll(t, "applied")
 	if err := Flush(context.Background(), opts); err != nil {
 		t.Fatal(err)
@@ -230,5 +231,41 @@ func TestHookResultsTravelOnlyUnderTheirKey(t *testing.T) {
 	}
 	if got := hookIDs(pendingOf(t, store, hookSource).Claims.Hooks); !slices.Equal(got, []string{"hk_new"}) {
 		t.Fatalf("merged across keys: %v", got)
+	}
+}
+
+// A flush that can't name the current key sends no hook result.
+func TestHookResultsNeedAKeyTagCallback(t *testing.T) {
+	store, _ := openTestStore(t)
+	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:one")
+	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Inventory: store, CLIVersion: "test", HookInventoryEnabled: func() bool { return true }}
+	payload := newPayload(opts, nil, nil, nil, nil, nil, time.Now())
+	addInventory(&payload, opts)
+	if payload.Device.HookInventory != nil || payload.Device.Inventory != nil {
+		t.Fatalf("sent without a key tag: %+v", payload.Device.HookInventory)
+	}
+}
+
+// A partial scope that holds new records keeps them beside the older
+// complete scan's, and stays partial, so nothing is withdrawn there.
+func TestHookMergeKeepsNewRecordsInAPartialScope(t *testing.T) {
+	store, _ := openTestStore(t)
+	older, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a")
+	if err := store.RecordHooks(older, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	newer, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "partial"}, "sc_a:b")
+	if err := store.RecordHooks(newer, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	merged := pendingOf(t, store, hookSource).Claims.Hooks
+	if got := hookIDs(merged); !slices.Equal(got, []string{"hk_a", "hk_b"}) {
+		t.Fatalf("hooks %v", got)
+	}
+	if merged.Scopes[0].Status != "partial" {
+		t.Fatalf("scope %+v", merged.Scopes[0])
 	}
 }

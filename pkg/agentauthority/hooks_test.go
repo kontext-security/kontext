@@ -722,3 +722,27 @@ func TestEmptyArgsIsExecForm(t *testing.T) {
 		t.Fatalf("empty args verified as Kontext's call: %+v", r)
 	}
 }
+
+// With CLAUDE_CONFIG_DIR, Claude Code reads that profile's settings,
+// plugins and .claude.json, never the default profile's.
+func TestScanHooksReadsTheActiveProfile(t *testing.T) {
+	h := newHookHome(t)
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("echo personal"))})
+	work := filepath.Join(h.home, "profiles", "work")
+	h.write(filepath.Join(work, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("echo work"))})
+	project := filepath.Join(h.home, "src", "work-app")
+	h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"hooks": hooksOf("SessionEnd", "", command("echo project"))})
+	h.write(filepath.Join(work, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{}}})
+	agent, _, err := scanHooks(context.Background(), HookScanOptions{Home: h.home, ConfigDir: work, Key: testHookKey, Now: time.Now(), managed: h.managed, mdmPolicy: func() bool { return false }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries := []string{}
+	for _, r := range agent.Hooks {
+		summaries = append(summaries, *r.Summary)
+	}
+	slices.Sort(summaries)
+	if !slices.Equal(summaries, []string{"echo project", "echo work"}) {
+		t.Fatalf("summaries %v", summaries)
+	}
+}
