@@ -102,6 +102,14 @@ func (s *Store) Apply(ext Extension, records []IndexedRecord) ([]Rejection, erro
 	defer s.mu.Unlock()
 	changed := s.pruneLocked()
 	var rejected []Rejection
+	if s.binding == "" {
+		// Until the store knows its enrollment, a record could later leave
+		// under another workspace's token, so none is taken.
+		for _, indexed := range records {
+			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: "daemon is not enrolled yet"})
+		}
+		return rejected, nil
+	}
 	for _, indexed := range records {
 		record := CloudRecord{Browser: ext.Browser, Profile: ext.Profile, ExtensionVersion: ext.Version, Record: indexed.Record}
 		if record.Kind == KindVisit && !s.recentDay(record.Day) {
@@ -250,6 +258,13 @@ func (s *Store) Bind(binding string) (dropped int, err error) {
 	}
 	s.binding = binding
 	return dropped, s.saveLocked()
+}
+
+// Bound says whether the store knows its enrollment.
+func (s *Store) Bound() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.binding != ""
 }
 
 // Len is the number of rows.

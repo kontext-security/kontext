@@ -28,6 +28,9 @@ func openTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.Bind(Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-a")); err != nil {
+		t.Fatal(err)
+	}
 	return s
 }
 
@@ -170,6 +173,8 @@ func newTestSender(t *testing.T, s *Store, handler http.HandlerFunc) (*Sender, *
 		handler(w, r)
 	}))
 	t.Cleanup(server.Close)
+	// The rows were recorded under this sender's enrollment.
+	s.binding = Binding(server.URL, "ins_AbCdEfGhIjKlMnOpQrStUvWxYz012345", "tok")
 	return &Sender{Store: s, BaseURL: server.URL, InstallationID: "ins_AbCdEfGhIjKlMnOpQrStUvWxYz012345",
 		Tokens: func(context.Context) (string, error) { return "tok", nil }, HTTP: server.Client()}, &batches
 }
@@ -307,7 +312,9 @@ func TestRowsNeverLeaveUnderAnotherEnrollment(t *testing.T) {
 	token := "workspace-a"
 	sender := &Sender{Store: s, BaseURL: server.URL, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
 		Tokens: func(context.Context) (string, error) { return token, nil }, HTTP: server.Client(), now: testNow}
-	// The first token binds the store; its rows go.
+	// The first row was recorded under workspace A's enrollment.
+	s.binding = Binding(server.URL, sender.InstallationID, token)
+	// Workspace A's rows go with workspace A's token.
 	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
 		t.Fatalf("first send = %v, %v", outcome, err)
 	}
@@ -340,5 +347,34 @@ func TestFailedUploadsWarnFirstThenHourly(t *testing.T) {
 	}
 	if warnings != 2 {
 		t.Fatalf("warnings = %d, want the first and one an hour later", warnings)
+	}
+}
+
+func TestAnUnboundStoreTakesNoRecords(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "browser-activity.json"), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := s.Apply(testExtension, []IndexedRecord{visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	if err != nil || len(rejected) != 1 || s.Len() != 0 {
+		t.Fatalf("rejected = %+v, rows = %d, err = %v", rejected, s.Len(), err)
+	}
+	if rejected[0].Reason != "daemon is not enrolled yet" {
+		t.Fatalf("reason = %q", rejected[0].Reason)
+	}
+}
+
+func TestTheSenderBindsAnUnboundStore(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "browser-activity.json"), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := &Sender{Store: s, BaseURL: "https://app.kontext.dev", InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		Tokens: func(context.Context) (string, error) { return "tok", nil }}
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Nothing || err != nil {
+		t.Fatalf("outcome = %v, err = %v", outcome, err)
+	}
+	if !s.Bound() {
+		t.Fatal("the store is still unbound")
 	}
 }

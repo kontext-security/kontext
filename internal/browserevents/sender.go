@@ -71,7 +71,9 @@ const (
 
 // SendOnce sends up to one batch of pending rows.
 func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
-	if len(s.Store.Pending(1).Records) == 0 {
+	// An unbound store takes no records, so it is bound even with nothing
+	// to send.
+	if s.Store.Bound() && len(s.Store.Pending(1).Records) == 0 {
 		return Nothing, nil
 	}
 	token, err := s.Tokens(ctx)

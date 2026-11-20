@@ -305,6 +305,15 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err != nil {
 		return fmt.Errorf("open browser activity store: %w", err)
 	}
+	// Bound to the enrollment before it takes any record, so no record can
+	// later leave under another workspace's token. If the token cannot be read
+	// now, the store takes nothing until the sender binds it.
+	browserTokens := sameCloudTokenSource(loadedConfig.Config.CloudURL)
+	if token, err := browserTokens(ctx); err != nil {
+		diagnostic.LogAlways(opts.Diagnostic, "browser activity: install token: %v\n", err)
+	} else if _, err := browserStore.Bind(browserevents.Binding(loadedConfig.Config.CloudURL, installationState.InstallationID, token)); err != nil {
+		diagnostic.LogAlways(opts.Diagnostic, "browser activity: bind store: %v\n", err)
+	}
 	browserChanged := make(chan struct{}, 1)
 	browserHandler := &browserevents.Handler{
 		Store:       browserStore,
@@ -438,7 +447,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Store:          browserStore,
 		BaseURL:        loadedConfig.Config.CloudURL,
 		InstallationID: installationState.InstallationID,
-		Tokens:         sameCloudTokenSource(loadedConfig.Config.CloudURL),
+		Tokens:         browserTokens,
 		HTTP:           cloudhttp.NewClient(30 * time.Second),
 		Logf:           browserHandler.Logf,
 		Warnf:          func(format string, args ...any) { diagnostic.LogAlways(opts.Diagnostic, format+"\n", args...) },
