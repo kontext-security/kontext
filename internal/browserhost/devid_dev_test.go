@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func devIDForTest() string { return DevExtensionID }
 
 func TestRegisterDevWritesTheManifestIntoAProfile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows finds native hosts in the registry")
+	}
 	dir := t.TempDir()
 	path, err := RegisterDev(DevRegistration{Browser: "chromium", UserDataDir: dir, Executable: "/usr/local/bin/kontext"})
 	if err != nil {
