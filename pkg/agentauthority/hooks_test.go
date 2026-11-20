@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/agenthooks"
 )
 
 // Ways the hook scan can fail, written down before the tests:
@@ -398,14 +400,67 @@ func TestScanHooksNeedsTheKey(t *testing.T) {
 func TestKontextHookSet(t *testing.T) {
 	h := newHookHome(t)
 	bin := h.write(filepath.Join(h.home, "bin", "kontext"), []byte("#!/bin/sh\n"))
-	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("PreToolUse", "*", command(bin+" hook pre-tool-use"))})
+	// Written the way Kontext installs it, so a Windows path keeps its
+	// backslashes.
+	call := func(alias string) map[string]any { return command(agenthooks.ShellQuote(bin) + " hook " + alias) }
+	project := filepath.Join(h.home, "src", "app")
+	h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"hooks": hooksOf("SessionStart", "", call("session-start"))})
+	h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{}}})
+	user := hooksOf("PreToolUse", "*", call("pre-tool-use"))
+	// A narrowed matcher runs for some calls only, so it covers nothing.
+	user["PostToolUse"] = hooksOf("PostToolUse", "Bash", call("post-tool-use"))["PostToolUse"]
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": user})
 	agent, _ := h.scan(bin)
-	if agent.KontextHooks.State != "needs_update" || slices.Contains(agent.KontextHooks.MissingEvents, "PreToolUse") || !slices.Contains(agent.KontextHooks.MissingEvents, "SessionStart") {
+	missing := agent.KontextHooks.MissingEvents
+	if agent.KontextHooks.State != "needs_update" || slices.Contains(missing, "PreToolUse") || !slices.Contains(missing, "PostToolUse") || !slices.Contains(missing, "SessionStart") {
 		t.Fatalf("%+v", agent.KontextHooks)
 	}
 	empty := newHookHome(t)
 	if agent, _ := empty.scan(); agent.KontextHooks.State != "missing" {
 		t.Fatalf("%+v", agent.KontextHooks)
+	}
+}
+
+// `NAME=value cmd` runs cmd: the assignment, which can hold a secret, is not
+// the program and never reaches the summary.
+func TestScanHooksSkipsVariableAssignments(t *testing.T) {
+	h := newHookHome(t)
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("AUTH_HEADER='Basic c2VjcmV0' DEBUG=1 curl -s https://hooks.example.com"))})
+	agent, _ := h.scan()
+	data, _ := json.Marshal(agent)
+	if strings.Contains(string(data), "c2VjcmV0") || strings.Contains(string(data), "AUTH_HEADER") {
+		t.Fatalf("assignment reached the report: %s", data)
+	}
+	if summary := *agent.Hooks[0].Summary; !strings.HasPrefix(summary, "curl") {
+		t.Fatalf("summary %q", summary)
+	}
+}
+
+// A project Claude Code cannot read hides switches for that project only.
+func TestScanHooksOtherProjectsFailuresStayThere(t *testing.T) {
+	h := newHookHome(t)
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("say done"))})
+	guarded := filepath.Join(h.home, "Documents", "secret-project")
+	h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{guarded: map[string]any{}}})
+	agent, result := h.scan()
+	if result.Status != StatusPartial {
+		t.Fatalf("result %+v", result)
+	}
+	if state := byEvent(agent, "Stop")[0].Enablement.State; state != hookEnabled {
+		t.Fatalf("user hook %s", state)
+	}
+}
+
+func TestScanHooksProjectCapMarksTruncated(t *testing.T) {
+	h := newHookHome(t)
+	projects := map[string]any{}
+	for i := range maxHookProjects + 1 {
+		projects[filepath.Join(h.home, "src", fmt.Sprint("p", i))] = map[string]any{}
+	}
+	h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": projects})
+	agent, result := h.scan()
+	if !agent.Truncated || result.Status == StatusComplete || !slices.Contains(result.Reasons, ReasonWalkLimit) {
+		t.Fatalf("truncated=%v %+v", agent.Truncated, result)
 	}
 }
 
