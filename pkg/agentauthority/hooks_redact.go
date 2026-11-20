@@ -11,16 +11,19 @@ import (
 // argument (curl -u user:pass), not only behind a flag the scanner knows.
 
 var (
-	summaryWord = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,63}$`)
+	// A script's file name tells an administrator what runs. Any other
+	// positional word can be a password (`redis-cli AUTH hunter2`), so it is
+	// never kept.
+	scriptName  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.(sh|bash|zsh|fish|py|js|mjs|cjs|ts|rb|pl|php|ps1|cmd|bat)$`)
 	summaryFlag = regexp.MustCompile(`^--?[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 	programName = regexp.MustCompile(`^[A-Za-z0-9._+-]{1,64}$`)
 )
 
 const redacted = "<redacted>"
 
-// hookSummary is the program's file name and the arguments that read as
-// plain words or flag names. A flag's value, a path, a URL's user, path and
-// query, and anything else are replaced.
+// hookSummary is the program's file name, flag names and script file names.
+// A flag's value, a path, a URL's user, path and query, and every other
+// argument are replaced.
 func hookSummary(program string, args []string) string {
 	name := program[strings.LastIndexAny(program, `/\`)+1:]
 	if !programName.MatchString(name) || secret(name, "args") {
@@ -56,7 +59,7 @@ func hookSummary(program string, args []string) string {
 			// The value of a flag: a user, a password, a key file.
 			add(redacted)
 			afterFlag = false
-		case summaryWord.MatchString(arg) && !secret(arg, "args"):
+		case scriptName.MatchString(arg) && !secret(arg, "args"):
 			add(arg)
 		default:
 			add(redacted)

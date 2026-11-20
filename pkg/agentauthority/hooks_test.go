@@ -553,7 +553,7 @@ func TestHookSummaryKeepsOnlySafeWords(t *testing.T) {
 		t.Fatalf("stop summary %q", got)
 	}
 	pre := byEvent(agent, "PreToolUse")[0]
-	if got := *pre.Summary; got != "deploy-check --password <redacted> --mode <redacted> run" {
+	if got := *pre.Summary; got != "deploy-check --password <redacted> --mode <redacted>" {
 		t.Fatalf("pre summary %q", got)
 	}
 	if *pre.Matcher != "Bash|<redacted>" {
@@ -722,5 +722,70 @@ func TestEmptyArgsIsExecForm(t *testing.T) {
 	agent, _ := h.scan(bin)
 	if r := agent.Hooks[0]; r.Origin == HookOriginKontext {
 		t.Fatalf("empty args verified as Kontext's call: %+v", r)
+	}
+}
+
+// A positional word can be a password, so only script names stay readable.
+func TestHookSummaryDropsPositionalWords(t *testing.T) {
+	for args, want := range map[string]string{
+		"AUTH hunter2":              "redis-cli <redacted>",
+		"check-secrets.sh --strict": "redis-cli check-secrets.sh --strict",
+		"--verbose":                 "redis-cli --verbose",
+	} {
+		if got := hookSummary("/usr/bin/redis-cli", strings.Fields(args)); got != want {
+			t.Errorf("hookSummary(%q) = %q, want %q", args, got, want)
+		}
+	}
+}
+
+// A plugin installed for a project runs under that project's settings.
+func TestProjectPluginFollowsItsProjectsSwitches(t *testing.T) {
+	h := newHookHome(t)
+	project := filepath.Join(h.home, "src", "app")
+	h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"disableAllHooks": true})
+	h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{"hasTrustDialogAccepted": true}}})
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	h.write(filepath.Join(dir, "hooks/hooks.json"), map[string]any{"hooks": hooksOf("Stop", "", command("echo stop"))})
+	h.write(filepath.Join(h.base, "plugins/installed_plugins.json"), map[string]any{"plugins": map[string]any{
+		"formatter@acme": []any{map[string]any{"installPath": dir, "scope": "project", "projectPath": project}},
+	}})
+	agent, _ := h.scan()
+	if len(agent.Hooks) != 1 {
+		t.Fatalf("hooks %+v", agent.Hooks)
+	}
+	if r := agent.Hooks[0]; r.Enablement.State != "disabled" || !slices.Contains(r.Enablement.Reasons, HookReasonDisableAllHooks) {
+		t.Fatalf("%+v", r.Enablement)
+	}
+}
+
+// Managed files an MDM profile replaced don't switch other hooks off, but the
+// unreadable profile leaves them unresolved.
+func TestShadowedManagedFilesDoNotDisable(t *testing.T) {
+	h := newHookHome(t)
+	h.mdm = true
+	h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"disableAllHooks": true})
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("echo stop"))})
+	agent, _ := h.scan()
+	if r := agent.Hooks[0]; r.Enablement.State != hookUnresolved || slices.Contains(r.Enablement.Reasons, HookReasonDisableAllHooks) || !slices.Contains(r.Enablement.Reasons, HookReasonManagedTierShadowed) {
+		t.Fatalf("%+v", r.Enablement)
+	}
+}
+
+// A newline splits one command into two for the shell, so it is no Kontext
+// call even when its words name the installed binary.
+func TestKontextCallNeedsOneLiteralCommand(t *testing.T) {
+	h := newHookHome(t)
+	bin := h.write(filepath.Join(h.home, "bin", "kontext"), []byte("#!/bin/sh\n"))
+	quoted := agenthooks.ShellQuote(bin)
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": map[string]any{
+		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{command(quoted + "\nhook pre-tool-use")}}},
+		"Stop":       []any{map[string]any{"hooks": []any{command(quoted + " hook stop")}}},
+	}})
+	agent, _ := h.scan(bin)
+	if r := byEvent(agent, "PreToolUse")[0]; r.Origin == HookOriginKontext {
+		t.Fatalf("split command verified as Kontext's: %+v", r)
+	}
+	if r := byEvent(agent, "Stop")[0]; r.Origin != HookOriginKontext || *r.Summary != "kontext hook stop" {
+		t.Fatalf("literal call %+v", r)
 	}
 }

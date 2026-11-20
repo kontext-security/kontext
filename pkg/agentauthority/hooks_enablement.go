@@ -79,6 +79,9 @@ func (s *hookScan) switchesFor(project string) switches {
 			continue
 		}
 		switch {
+		case managedKind(layer.kind) && s.shadowed:
+			// An MDM profile replaced these files: their switches aren't in
+			// force.
 		case managedKind(layer.kind):
 			merge(&sw.managedDisableAll, layer)
 			if v := layer.settings.AllowManagedHooksOnly; v != nil {
@@ -176,8 +179,9 @@ func evaluateEnablement(s *hookScan) {
 		}
 		// Claude Code uses one managed source: an MDM profile replaces the
 		// files, whose hooks then may not run. The profile itself can't be
-		// read here, so those hooks stay unresolved rather than enabled.
-		if s.shadowed && managedKind(kind) {
+		// read here, and its switches could turn off any hook, so every hook
+		// stays unresolved rather than enabled.
+		if s.shadowed {
 			unresolved = append(unresolved, HookReasonManagedTierShadowed)
 		}
 		if s.unlisted {
