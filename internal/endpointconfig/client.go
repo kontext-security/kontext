@@ -61,6 +61,18 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 // response version asked for.
 var errUnsupportedVersion = errors.New("endpoint configuration: response version not supported by the server")
 
+// ErrNoCommonVersion is a server's 406 unsupported_version for the fallback
+// too: it serves no version this build implements, so nothing it last sent
+// can be confirmed any more. The refresher fails closed on it, as it does on
+// a rejected authority, so a server rolled back past both versions cannot
+// leave the last directive (full capture, say) in force.
+var ErrNoCommonVersion = errors.New("endpoint configuration: the server supports no response version this build implements")
+
+// ErrV6Unsupported joins a failed fetch of the older version after the
+// server refused ResponseVersion: whatever v6 last confirmed is no longer the
+// server's word.
+var ErrV6Unsupported = errors.New("endpoint configuration: the server refused response version 6")
+
 // Fetch gets the configuration as ResponseVersion has it, or as
 // FallbackResponseVersion has it from a server that predates
 // ResponseVersion. The conditional value may be either version's:
@@ -70,15 +82,22 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, config
 	c.mu.Lock()
 	fallingBack := c.now().Before(c.fallbackUntil)
 	c.mu.Unlock()
+	fallback := func() (FetchResult, error) {
+		result, err := c.fetch(ctx, FallbackResponseVersion, installToken, installationID, configIdentity)
+		if err != nil && !errors.Is(err, ErrNoCommonVersion) && !errors.Is(err, ErrAuthorityRejected) {
+			err = errors.Join(ErrV6Unsupported, err)
+		}
+		return result, err
+	}
 	if fallingBack {
-		return c.fetch(ctx, FallbackResponseVersion, installToken, installationID, configIdentity)
+		return fallback()
 	}
 	result, err := c.fetch(ctx, ResponseVersion, installToken, installationID, configIdentity)
 	if errors.Is(err, errUnsupportedVersion) {
 		c.mu.Lock()
 		c.fallbackUntil = c.now().Add(fallbackFor)
 		c.mu.Unlock()
-		return c.fetch(ctx, FallbackResponseVersion, installToken, installationID, configIdentity)
+		return fallback()
 	}
 	return result, err
 }
@@ -126,13 +145,29 @@ func (c *Client) fetch(ctx context.Context, version int, installToken, installat
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1))
 		return FetchResult{NotModified: true, ETag: etag}, nil
 	}
-	if response.StatusCode == http.StatusNotAcceptable && version != FallbackResponseVersion {
+	if response.StatusCode == http.StatusNotAcceptable {
 		var refused struct {
 			Code string `json:"code"`
 		}
 		data, _ := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
 		if json.Unmarshal(data, &refused) == nil && refused.Code == "unsupported_version" {
+			if version == FallbackResponseVersion {
+				return FetchResult{}, ErrNoCommonVersion
+			}
 			return FetchResult{}, errUnsupportedVersion
+		}
+		return FetchResult{}, fmt.Errorf("endpoint configuration fetch: unexpected status %d", response.StatusCode)
+	}
+	if response.StatusCode == http.StatusNotFound {
+		// The cloud's own answer that this installation isn't the token's
+		// (another workspace's token): the directive is no longer this
+		// workspace's. A proxy's plain 404 stays a transient failure.
+		var missing struct {
+			Code string `json:"code"`
+		}
+		data, _ := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
+		if json.Unmarshal(data, &missing) == nil && missing.Code == "installation_not_found" {
+			return FetchResult{}, fmt.Errorf("%w: installation_not_found", ErrAuthorityRejected)
 		}
 		return FetchResult{}, fmt.Errorf("endpoint configuration fetch: unexpected status %d", response.StatusCode)
 	}
