@@ -712,7 +712,11 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 		}
 		if ok && len(fields) > 0 {
 			program := fields[0]
-			info.program = program
+			// Only a program the shell runs as written can settle a hook as
+			// missing: `a || b`, `a; b` or `$HOME/x` may still run.
+			if h.Args != nil || literalProgram(h.Command, program) {
+				info.program = program
+			}
 			anchor = "cmd:" + filepath.Base(program)
 			r.Summary = pointer(hookSummary(program, fields[1:]))
 			alias, known := claudemanaged.AliasForEvent(hook.HookName(event))
@@ -942,4 +946,16 @@ func SameFileAs(installed string) func(string) bool {
 		a, errA := os.Stat(path)
 		return errA == nil && errB == nil && os.SameFile(a, b)
 	}
+}
+
+// literalProgram reports a shell command that is one command of literal
+// words whose program is program: no expansion, redirection or second
+// command can change what runs.
+func literalProgram(command, program string) bool {
+	fields, ok := agenthooks.SplitLiteralCommand(command)
+	if !ok {
+		return false
+	}
+	fields = withoutAssignments(fields)
+	return len(fields) > 0 && fields[0] == program
 }
