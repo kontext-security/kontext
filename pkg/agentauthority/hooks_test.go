@@ -757,9 +757,12 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 	t.Run("a missing program settles only a literal command", func(t *testing.T) {
 		h, bin, _ := setup(t)
 		gone := filepath.Join(h.base, "gone")
+		// A shell string reads `\\` as an escape, so a Windows path in one
+		// is never settled.
+		literal := runtime.GOOS != "windows"
 		for cmd, disabled := range map[string]bool{
-			gone:                   true,
-			gone + " --check":      true,
+			gone:                   literal,
+			gone + " --check":      literal,
 			gone + " || /bin/true": false,
 			gone + "; /bin/true":   false,
 			gone + " $HOME":        false,
