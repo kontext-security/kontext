@@ -1462,6 +1462,23 @@ func TestDeviceKeySource(t *testing.T) {
 		}
 	})
 
+	t.Run("kill switch with hook inventory off derives nothing", func(t *testing.T) {
+		stubDeviceKeyResolution(t,
+			func(context.Context) (string, error) {
+				t.Fatal("platform UUID read with nothing to derive for")
+				return "", nil
+			},
+			func(context.Context, *http.Client, string, string, string) (ledgerping.Response, error) {
+				t.Fatal("workspace pinged with nothing to derive for")
+				return ledgerping.Response{}, nil
+			})
+		t.Setenv(envNoDeviceKey, "1")
+		source := &deviceKeySource{hooks: newHookKeyBox(), hooksWanted: func() bool { return false }}
+		if key := source.resolve(context.Background(), "https://api.test", "token", "ins_test", nil, quiet); key != "" {
+			t.Fatalf("resolve() = %q", key)
+		}
+	})
+
 	// A config rewritten to another workspace withholds K_dev until that
 	// workspace's key is derived, and drops results read under the old one.
 	t.Run("workspace change withholds and replaces K_dev", func(t *testing.T) {

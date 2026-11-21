@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,21 +26,34 @@ func hookScan(status string, scopes map[string]string, hooks ...string) (agentau
 	}
 	slices.Sort(ids)
 	for _, id := range ids {
-		agent.Scopes = append(agent.Scopes, agentauthority.HookScope{ID: id, Kind: "user", Status: scopes[id], Reasons: []string{}, CheckedAt: "2026-11-08T12:00:01Z"})
+		agent.Scopes = append(agent.Scopes, agentauthority.HookScope{ID: wireID(id), Kind: "user", Status: scopes[id], Reasons: []string{}, CheckedAt: "2026-11-08T12:00:01Z"})
 	}
 	// Each hook is "scope:name".
 	for _, hook := range hooks {
 		scope, name, _ := strings.Cut(hook, ":")
-		agent.Hooks = append(agent.Hooks, agentauthority.HookRecord{ID: "hk_" + name, ScopeID: scope, Event: "PreToolUse", Type: "command", Origin: "user", ContentFP: "fp_" + name, Match: "anchor",
+		agent.Hooks = append(agent.Hooks, agentauthority.HookRecord{ID: wireID("hk_" + name), ScopeID: wireID(scope), Event: "PreToolUse", Type: "command", Origin: "settings", ContentFP: wireID("fp_" + name), Match: "anchor",
 			Enablement: agentauthority.HookEnablement{State: "enabled", Reasons: []string{}}, Evidence: agentauthority.HookEvidence{Level: "discovered", DiscoveredAt: "2026-11-08T12:00:01Z"}})
 	}
 	return agent, result(hookSource, status)
 }
 
+// wireID pads a short test id ("hk_one") to the cloud's shape, a prefix and
+// 22 base64url characters, so the blocks here are ones ingest accepts.
+func wireID(short string) string {
+	prefix, name, _ := strings.Cut(short, "_")
+	return prefix + "_" + name + strings.Repeat("_", max(0, 22-len(name)))
+}
+
+// shortID undoes wireID.
+func shortID(id string) string {
+	prefix, name, _ := strings.Cut(id, "_")
+	return prefix + "_" + strings.TrimRight(name, "_")
+}
+
 func hookIDs(agent *agentauthority.HookAgent) []string {
 	ids := []string{}
 	for _, r := range agent.Hooks {
-		ids = append(ids, r.ID)
+		ids = append(ids, shortID(r.ID))
 	}
 	slices.Sort(ids)
 	return ids
@@ -69,7 +83,7 @@ func TestHookInventoryFollowsTheSwitch(t *testing.T) {
 		t.Fatalf("switch on sent nothing: %+v", on.Device)
 	}
 	block := on.Device.HookInventory
-	if block.Schema != "hook-inventory-v1" || block.IDScheme != 1 || len(block.Agents) != 1 || block.Agents[0].Hooks[0].ID != "hk_one" {
+	if block.Schema != "hook-inventory-v1" || block.IDScheme != 1 || len(block.Agents) != 1 || block.Agents[0].Hooks[0].ID != wireID("hk_one") {
 		t.Fatalf("block %+v", block)
 	}
 	if sources := on.Device.Inventory.Sources; len(sources) != 1 || sources[0].ID != hookSource || sources[0].Status != agentauthority.StatusComplete {
@@ -158,6 +172,8 @@ func TestHookBlockStaysInsideTheBudget(t *testing.T) {
 		hooks = append(hooks, "sc_a:"+strconv.Itoa(i))
 	}
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, hooks...)
+	// Already partial for a size limit elsewhere in the scan.
+	res = result(hookSource, agentauthority.StatusPartial, agentauthority.ReasonSizeLimit)
 	long := strings.Repeat("x", 240)
 	for i := range agent.Hooks {
 		agent.Hooks[i].Summary = &long
@@ -174,6 +190,10 @@ func TestHookBlockStaysInsideTheBudget(t *testing.T) {
 	source := payload.Device.Inventory.Sources[0]
 	if source.Status != agentauthority.StatusPartial || !slices.Contains(source.Reasons, agentauthority.ReasonSizeLimit) {
 		t.Fatalf("source %+v", source)
+	}
+	// Its reasons stay a set: a repeat makes the cloud refuse the source.
+	if len(slices.Compact(slices.Sorted(slices.Values(source.Reasons)))) != len(source.Reasons) {
+		t.Fatalf("repeated reason %+v", source.Reasons)
 	}
 	// The scope that lost records goes partial, so a cut record isn't
 	// withdrawn from it.
@@ -374,7 +394,7 @@ func TestHookMergeCapMarksTheCutScopePartial(t *testing.T) {
 	merged := mergeHooks(&older, &newer)
 	var cut *agentauthority.HookScope
 	for i := range merged.Scopes {
-		if merged.Scopes[i].ID == "sc_b" {
+		if merged.Scopes[i].ID == wireID("sc_b") {
 			cut = &merged.Scopes[i]
 		}
 	}
@@ -391,5 +411,22 @@ func TestHookMergeKeepsAKnownKontextVerdict(t *testing.T) {
 	newer.KontextHooks = agentauthority.KontextHookSet{State: agentauthority.KontextHooksUnknown, MissingEvents: []string{}}
 	if got := mergeHooks(&older, &newer).KontextHooks; got.State != "needs_update" {
 		t.Fatalf("verdict %+v", got)
+	}
+}
+
+// The test blocks have the shape the cloud's schema accepts: ids of a
+// prefix and 22 base64url characters, and a known origin.
+func TestTestBlocksMatchTheCloudShape(t *testing.T) {
+	agent, _ := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:one")
+	id := regexp.MustCompile(`^(hk|sc|fp)_[A-Za-z0-9_-]{22}$`)
+	for _, scope := range agent.Scopes {
+		if !id.MatchString(scope.ID) {
+			t.Errorf("scope id %q", scope.ID)
+		}
+	}
+	for _, hook := range agent.Hooks {
+		if !id.MatchString(hook.ID) || !id.MatchString(hook.ScopeID) || !id.MatchString(hook.ContentFP) || !slices.Contains([]string{"kontext", "plugin", "settings"}, hook.Origin) {
+			t.Errorf("hook %+v", hook)
+		}
 	}
 }

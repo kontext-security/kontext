@@ -33,7 +33,9 @@ import (
 )
 
 type DaemonOptions struct {
-	streamCaptureConfiguration func() payloadcapture.RuntimeConfiguration
+	// streamCaptureConfiguration is the capture directive for a flush made
+	// with the named enrolment's token.
+	streamCaptureConfiguration func(owner string) payloadcapture.RuntimeConfiguration
 	SocketPath                 string
 	DBPath                     string
 	// NoCodexRoute keeps the daemon from routing Codex through its proxy,
@@ -278,6 +280,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		return fmt.Errorf("configure endpoint configuration client: %w", err)
 	}
 	startupCloudURL := loadedConfig.Config.CloudURL
+	// liveOwner follows the install token the config names now: a
+	// re-enrolment on the same cloud (MDM rewrites the config under a
+	// running daemon) changes it without a restart.
+	liveOwner := &liveEnrolment{owner: endpointconfig.Owner(startupToken)}
 	installTokenSource := func(refreshCtx context.Context) (string, error) {
 		loaded, err := managedconfig.Load()
 		if err != nil {
@@ -290,7 +296,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		if !sameCloudURL(loaded.Config.CloudURL, startupCloudURL) {
 			return "", errCloudURLChanged
 		}
-		return managedconfig.ResolveInstallToken(refreshCtx, loaded.Config.Credentials.InstallTokenRef)
+		token, err := managedconfig.ResolveInstallToken(refreshCtx, loaded.Config.Credentials.InstallTokenRef)
+		if err == nil {
+			liveOwner.set(endpointconfig.Owner(token))
+		}
+		return token, err
 	}
 	// Tool output compaction stays off until a confirmed configuration turns
 	// it on: an unreachable, invalid or older configuration reads as off.
@@ -363,8 +373,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// at the privacy-safe default until this process receives a confirming 200
 	// or matching 304 from the independent configuration endpoint.
 	opts.EndpointConfigCachePath = endpointConfigCachePath
-	opts.streamCaptureConfiguration = func() payloadcapture.RuntimeConfiguration { return captureConfiguration(endpointConfigCache.Current()) }
-	host.SetPayloadCaptureConfiguration(captureConfiguration(endpointConfigCache.Current()))
+	opts.streamCaptureConfiguration = func(owner string) payloadcapture.RuntimeConfiguration {
+		return captureConfiguration(endpointConfigCache.Current(), owner)
+	}
+	host.SetPayloadCaptureConfiguration(captureConfiguration(endpointConfigCache.Current(), liveOwner.get()))
 
 	policyCtx, stopPolicyRefresh := context.WithCancel(ctx)
 	var background sync.WaitGroup
@@ -380,6 +392,14 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	hookKeys := newHookKeyBox()
 	hookKeys.wake = wakeHooks
+	// A re-enrolment on the same cloud holds prompts until the new
+	// enrolment's own settings are confirmed, and moves the hook scan.
+	liveOwner.mu.Lock()
+	liveOwner.onChange = func() {
+		host.SetPayloadCaptureConfiguration(captureConfiguration(endpointConfigCache.Current(), liveOwner.get()))
+		wakeHooks()
+	}
+	liveOwner.mu.Unlock()
 	var hookWatch hookSwitchWatch
 	policyRefreshNow := make(chan struct{}, 1)
 	enrolment := &enrolmentRefresh{cache: cedarCache, now: policyRefreshNow, left: maxEnrolmentRefreshes}
@@ -420,7 +440,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		InstallationID: installationState.InstallationID,
 		Interval:       opts.EndpointConfigRefreshInterval,
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
-			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot))
+			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot, liveOwner.get()))
 			codexRouting.follow(snapshot)
 			// The hook scan follows the switch now, not at the next hour.
 			if hookWatch.config(snapshot.HookInventoryEnabled(), snapshot.Confirmed) {
@@ -497,7 +517,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// scan now would record the new enrolment's hooks under the old
 		// workspace's key and opt-in.
 		authorized: func() bool {
-			return enrolledAtStartupCloud(startupCloudURL) && hookAuthorized(endpointConfigCache.Current(), hookKeys.enrolment())
+			return enrolledAtStartupCloud(startupCloudURL) && endpointconfig.Owner(hookKeys.enrolment()) == liveOwner.get() && hookAuthorized(endpointConfigCache.Current(), hookKeys.enrolment())
 		},
 		available: hookAvailable,
 		beginRead: authorityHolder.scanner.BeginRead,
@@ -723,7 +743,16 @@ func sameCloudURL(a, b string) bool {
 	return strings.TrimRight(strings.TrimSpace(a), "/") == strings.TrimRight(strings.TrimSpace(b), "/")
 }
 
-func captureConfiguration(snapshot endpointconfig.Snapshot) payloadcapture.RuntimeConfiguration {
+// captureConfiguration is the snapshot's directive for the enrolment named
+// by owner. Another enrolment's confirmed directive, the previous
+// workspace's after a re-enrolment, is not this one's answer: until its own
+// refresh confirms one, prompts are held as opted out.
+func captureConfiguration(snapshot endpointconfig.Snapshot, owner string) payloadcapture.RuntimeConfiguration {
+	if snapshot.Confirmed && owner != "" && snapshot.Owner != owner {
+		fallback := payloadcapture.DefaultRuntimeConfiguration()
+		fallback.PromptVeto = true
+		return payloadcapture.SafeRuntimeConfiguration(fallback)
+	}
 	return payloadcapture.SafeRuntimeConfiguration(payloadcapture.RuntimeConfiguration{
 		ConfiguredMode: snapshot.Configured.PayloadCaptureMode,
 		EffectiveMode:  snapshot.Config.PayloadCaptureMode,
@@ -942,6 +971,8 @@ type deviceKeySource struct {
 	// hooks receives K_dev, derived from the same two inputs (ADR-0011). Nil
 	// derives none.
 	hooks *hookKeyBox
+	// hooksWanted reports whether hook inventory is on. Nil counts as on.
+	hooksWanted func() bool
 }
 
 // resolve returns the key for this flush's config identity, deriving it on
@@ -955,7 +986,9 @@ func (s *deviceKeySource) resolve(ctx context.Context, cloudURL, token, installa
 	// The kill switch stops the device key only; K_dev is never sent, so a
 	// hook scan may still need the derivation.
 	killed := strings.TrimSpace(os.Getenv(envNoDeviceKey)) != ""
-	if killed && s.hooks == nil {
+	// With the device key switched off and hook inventory off, nothing
+	// needs the derivation, nor its ping's delay on every flush.
+	if killed && (s.hooks == nil || s.hooksWanted != nil && !s.hooksWanted()) {
 		return ""
 	}
 	if !s.resolved || s.cloudURL != cloudURL || s.token != token {
@@ -1007,7 +1040,10 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startupCl
 	if interval == 0 {
 		interval = managedstream.DefaultIntervalFromEnv()
 	}
-	deviceKeys := &deviceKeySource{hooks: hookHolder.keys}
+	deviceKeys := &deviceKeySource{hooks: hookHolder.keys, hooksWanted: func() bool {
+		on, _ := hookHolder.switchState()
+		return on
+	}}
 	var consecutiveAuthFailures, consecutiveFlushFailures int
 	flush := func() {
 		err := flushManagedStream(ctx, opts, dbPath, startupCloudURL, installationID, deviceKeys, inventoryHolder, authorityHolder, hookHolder, afterAcceptedPost)
@@ -1064,7 +1100,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startup
 	err = managedstream.Flush(ctx, managedstream.Options{
 		AllowHistoricalTurnRecovery: loadedConfig.Config.RecoverHistoricalTurnPrompts,
 		EndpointConfigCachePath:     opts.EndpointConfigCachePath,
-		CaptureConfiguration:        opts.streamCaptureConfiguration,
+		CaptureConfiguration:        flushCapture(opts.streamCaptureConfiguration, endpointconfig.Owner(installToken)),
 		DBPath:                      dbPath,
 		StatePath:                   opts.StreamStatePath,
 		CloudURL:                    loadedConfig.Config.CloudURL,
@@ -1080,11 +1116,13 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startup
 		AuthorityFact:               authorityHolder.Fact,
 		AuthorityAvailable:          authorityHolder.resend,
 		AuthorityScanKnown:          authorityHolder.known,
-		HookInventoryEnabled:        hookHolder.uploading,
-		HookKeyTag:                  hookHolder.currentKeyTag,
-		DeviceKey:                   func() string { return deviceKey },
-		HTTPClient:                  opts.StreamHTTPClient,
-		Diagnostic:                  opts.Diagnostic,
+		// Hook results go out only with the token of the enrolment whose key
+		// made their ids.
+		HookInventoryEnabled: func() bool { return hookHolder.uploading() && hookHolder.keys.enrolment() == installToken },
+		HookKeyTag:           hookHolder.currentKeyTag,
+		DeviceKey:            func() string { return deviceKey },
+		HTTPClient:           opts.StreamHTTPClient,
+		Diagnostic:           opts.Diagnostic,
 		OnFlushSuccess: func() {
 			// Once per flush, on the first accepted post: a flush can make several,
 			// and draining a backlog shouldn't hold the policy back.
@@ -1265,4 +1303,40 @@ func (e *enrolmentRefresh) afterAcceptedPost() {
 		e.left--
 	default:
 	}
+}
+
+// liveEnrolment names the enrolment whose install token the config holds
+// now, as of the last token read. onChange runs when it moves.
+type liveEnrolment struct {
+	mu       sync.Mutex
+	owner    string
+	onChange func()
+}
+
+func (e *liveEnrolment) get() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.owner
+}
+
+func (e *liveEnrolment) set(owner string) {
+	e.mu.Lock()
+	moved := owner != "" && owner != e.owner
+	if moved {
+		e.owner = owner
+	}
+	onChange := e.onChange
+	e.mu.Unlock()
+	if moved && onChange != nil {
+		onChange()
+	}
+}
+
+// flushCapture is the capture directive for one flush, made with owner's
+// token.
+func flushCapture(capture func(owner string) payloadcapture.RuntimeConfiguration, owner string) func() payloadcapture.RuntimeConfiguration {
+	if capture == nil {
+		return nil
+	}
+	return func() payloadcapture.RuntimeConfiguration { return capture(owner) }
 }

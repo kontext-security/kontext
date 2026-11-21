@@ -623,6 +623,10 @@ func TestCachedDirectiveBelongsToItsCloud(t *testing.T) {
 	if err := same.Load(); err != nil || !same.Current().Confirmed {
 		t.Fatalf("same cloud: %v %+v", err, same.Current().Status)
 	}
+	// Restored, the directive still names the enrolment that confirmed it.
+	if owner := same.Current().Owner; owner != Owner("token-a") {
+		t.Fatalf("restored owner %q", owner)
+	}
 	other := NewCache(path)
 	other.Bind("https://b.example", "token-a")
 	if err := other.Load(); err != nil || other.Current().Confirmed || !other.Current().Status.PromptVeto {

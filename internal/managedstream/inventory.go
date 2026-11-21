@@ -81,7 +81,7 @@ type sourceClaims struct {
 
 // hookRedactor numbers the redaction rules in pkg/agentauthority
 // hooks_redact.go. Raise it whenever they drop more.
-const hookRedactor = 3
+const hookRedactor = 4
 
 func (c sourceClaims) positive() bool {
 	return c.Agent != nil || len(c.MCPServers) > 0 || len(c.Plugins) > 0 || len(c.Connectors) > 0 || c.Permissions != nil || len(c.Credentials) > 0 ||
@@ -612,7 +612,10 @@ func addInventory(payload *Payload, opts Options) {
 		result := pending[id].Result
 		if slices.Contains(trimmed, id) {
 			result.Status = agentauthority.StatusPartial
-			result.Reasons = append(slices.Clone(result.Reasons), agentauthority.ReasonSizeLimit)
+			// Once: a repeated reason makes the cloud refuse the source.
+			if !slices.Contains(result.Reasons, agentauthority.ReasonSizeLimit) {
+				result.Reasons = append(slices.Clone(result.Reasons), agentauthority.ReasonSizeLimit)
+			}
 		}
 		sources = append(sources, result)
 	}
