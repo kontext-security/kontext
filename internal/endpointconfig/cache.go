@@ -61,6 +61,11 @@ type Snapshot struct {
 	Configured     Config
 	ConfigIdentity string
 	Confirmed      bool
+	// Owner names the install token whose refresh confirmed Config (see
+	// Owner()), empty until a refresh in this process confirms it. A caller
+	// that must act only on its own enrolment's settings compares it, in the
+	// same snapshot as Config.
+	Owner          string
 	FallbackReason string
 	LastKnownGood  *Response
 	Status         Status
@@ -101,6 +106,7 @@ type Cache struct {
 	active   *Response
 	lastGood *Response
 	status   Status
+	owner    string
 	// cloudURL and boundOwner are what Bind named.
 	boundOwner string
 }
@@ -243,6 +249,8 @@ func (c *Cache) Load() error {
 	c.fetched = fetchedAt
 	c.active = cloneResponse(file.Response)
 	c.lastGood = cloneResponse(file.Response)
+	// Bound, the file names this enrolment, which confirmed it.
+	c.owner = c.boundOwner
 	c.status = Status{FetchedAt: fetchedAt, Stale: true, V6Unsupported: file.V6Refused}
 	return nil
 }
@@ -305,6 +313,7 @@ func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) err
 	c.fetched = fetchedAt
 	c.active = cloneResponse(confirmed)
 	c.lastGood = cloneResponse(confirmed)
+	c.owner = owner
 	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt, Stale: true}
 	c.mu.Unlock()
 	// A journal left from an earlier rejection is read before the cache on
@@ -342,6 +351,7 @@ func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) err
 	c.fetched = fetchedAt
 	c.active = cloneResponse(confirmed)
 	c.lastGood = cloneResponse(confirmed)
+	c.owner = owner
 	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt}
 	c.mu.Unlock()
 	return nil
@@ -400,6 +410,7 @@ func (c *Cache) MarkInvalid(err error) {
 	attemptedAt := c.now().UTC()
 	c.mu.Lock()
 	c.active = nil
+	c.owner = ""
 	c.markFailedLocked(err, attemptedAt)
 	c.status.Invalid = true
 	c.mu.Unlock()
@@ -410,6 +421,7 @@ func (c *Cache) Current() Snapshot {
 	active := cloneResponse(c.active)
 	lastGood := cloneResponse(c.lastGood)
 	status := c.status
+	owner := c.owner
 	c.mu.RUnlock()
 	if active == nil {
 		configured := defaultConfig
@@ -440,6 +452,7 @@ func (c *Cache) Current() Snapshot {
 		Configured:     active.Config,
 		ConfigIdentity: active.ConfigIdentity,
 		Confirmed:      true,
+		Owner:          owner,
 		LastKnownGood:  lastGood,
 		Status:         status,
 	}
@@ -526,6 +539,10 @@ type Refresher struct {
 	Now            func() time.Time
 	Jitter         func(time.Duration) time.Duration
 	OnChanged      func(Snapshot)
+	// OnApplied receives the install token of each refresh the cache took,
+	// a 304 included, so a caller can tell which enrolment the current
+	// settings belong to.
+	OnApplied func(token string)
 	// Diagnostic surfaces refresh state transitions in the daemon log. A
 	// refresh loop that fails silently leaves payload capture degraded with
 	// no operator-visible signal, so failures must not be log-invisible.
@@ -548,6 +565,9 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	}
 	if err := r.Cache.apply(result, r.now(), Owner(token)); err != nil {
 		return r.fail(err)
+	}
+	if r.OnApplied != nil {
+		r.OnApplied(token)
 	}
 	r.recovered()
 	r.notify()
@@ -654,6 +674,7 @@ func (c *Cache) rejectAuthority(err error, at time.Time) error {
 	// opt-in. The veto lasts until a config is confirmed. Never an opt-in kept.
 	veto := c.status.PromptVeto || c.active != nil && !promptsAllowed(c.active.Config) || c.active == nil && c.lastGood != nil && !promptsAllowed(c.lastGood.Config)
 	c.active = nil
+	c.owner = ""
 	c.lastGood = nil
 	c.status = Status{FetchedAt: c.fetched, LastAttemptAt: at, Stale: true, Invalid: true, LastError: err.Error(), NoCommonVersion: noCommon, PromptVeto: veto}
 	c.mu.Unlock()
