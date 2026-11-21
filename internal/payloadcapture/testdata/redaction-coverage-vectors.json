@@ -265,6 +265,483 @@
       "input": "GET /login?passwd=query-passwd-secret-FAKE&next=1",
       "mustNotSurvive": ["query-passwd-secret-FAKE"],
       "expected": "GET /login?passwd=[REDACTED_SECRET]&next=1"
+    },
+    {
+      "name": "mysql-glued-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -u root -pmysql-secret-FAKE -h 10.0.0.5",
+      "mustNotSurvive": ["mysql-secret-FAKE"],
+      "expected": "mysql -u root -p[REDACTED_SECRET] -h 10.0.0.5"
+    },
+    {
+      "name": "mysqldump-quoted-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqldump -uroot -p'quoted secret-FAKE' appdb",
+      "mustNotSurvive": ["quoted secret-FAKE", "secret-FAKE"],
+      "expected": "mysqldump -uroot -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mariadb-dump-double-quoted-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mariadb-dump -p\"dq \\\" secret-FAKE\" appdb",
+      "mustNotSurvive": ["secret-FAKE"],
+      "expected": "mariadb-dump -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-escaped-space-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pescaped\\ space-secret-FAKE appdb",
+      "mustNotSurvive": ["space-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-path-and-wrapper",
+      "ruleId": "mysql-password-flag",
+      "input": "kubectl exec db -- /usr/bin/mysql -pkube-secret-FAKE",
+      "mustNotSurvive": ["kube-secret-FAKE"],
+      "expected": "kubectl exec db -- /usr/bin/mysql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-password-after-quoted-argument",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -e \"select 1\" -pafter-secret-FAKE appdb",
+      "mustNotSurvive": ["after-secret-FAKE"],
+      "expected": "mysql -e \"select 1\" -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-continuation-lines",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -h db \\\n  -u root \\\n  -pcont-secret-FAKE",
+      "mustNotSurvive": ["cont-secret-FAKE"],
+      "expected": "mysql -h db \\\n  -u root \\\n  -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "sshpass-spaced-password-keeps-ssh-port",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -p ssh-secret-FAKE ssh -p 2222 deploy@10.0.0.6",
+      "mustNotSurvive": ["ssh-secret-FAKE"],
+      "expected": "sshpass -p [REDACTED_SECRET] ssh -p 2222 deploy@10.0.0.6"
+    },
+    {
+      "name": "sshpass-glued-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -pglued-secret-FAKE ssh host",
+      "mustNotSurvive": ["glued-secret-FAKE"],
+      "expected": "sshpass -p[REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-dash-leading-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -v -p -dash-secret-FAKE ssh host",
+      "mustNotSurvive": ["dash-secret-FAKE"],
+      "expected": "sshpass -v -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "redis-cli-auth-password",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -h cache -a redis-secret-FAKE --no-auth-warning ping",
+      "mustNotSurvive": ["redis-secret-FAKE"],
+      "expected": "redis-cli -h cache -a [REDACTED_SECRET] --no-auth-warning ping"
+    },
+    {
+      "name": "psql-pgpassword-env",
+      "ruleId": "sensitive-assignment",
+      "input": "PGPASSWORD=pg-secret-FAKE psql -h db -U app",
+      "mustNotSurvive": ["pg-secret-FAKE"],
+      "expected": "PGPASSWORD=[REDACTED_SECRET] psql -h db -U app"
+    },
+    {
+      "name": "psql-conninfo-password",
+      "ruleId": "sensitive-assignment",
+      "input": "psql \"host=db user=app password=conninfo-secret-FAKE dbname=app\"",
+      "mustNotSurvive": ["conninfo-secret-FAKE"]
+    },
+    {
+      "name": "mysql-long-password-flag",
+      "ruleId": "sensitive-cli-flag",
+      "input": "mysql --user=root --password=long-secret-FAKE appdb",
+      "mustNotSurvive": ["long-secret-FAKE"],
+      "expected": "mysql --user=root --password=[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-auth-env",
+      "ruleId": "redis-cli-auth-env",
+      "input": "REDISCLI_AUTH=rediscli-secret-FAKE redis-cli -h cache ping",
+      "mustNotSurvive": ["rediscli-secret-FAKE"],
+      "expected": "REDISCLI_AUTH=[REDACTED_SECRET] redis-cli -h cache ping"
+    },
+    {
+      "name": "mysql-pwd-env",
+      "ruleId": "sensitive-assignment",
+      "input": "MYSQL_PWD=mysqlpwd-secret-FAKE mysql -u root appdb",
+      "mustNotSurvive": ["mysqlpwd-secret-FAKE"],
+      "expected": "MYSQL_PWD=[REDACTED_SECRET] mysql -u root appdb"
+    },
+    {
+      "name": "mysql-repeated-password-flag",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pfirst-secret-FAKE -h db -psecond-secret-FAKE appdb",
+      "mustNotSurvive": ["first-secret-FAKE", "second-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-repeated-password-flag",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -a first-secret-FAKE -a second-secret-FAKE ping",
+      "mustNotSurvive": ["first-secret-FAKE", "second-secret-FAKE"],
+      "expected": "redis-cli -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "sshpass-prompt-option-before-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -P \"Enter PIN:\" -p prompt-secret-FAKE ssh host",
+      "mustNotSurvive": ["prompt-secret-FAKE"],
+      "expected": "sshpass -P \"Enter PIN:\" -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-grouped-verbose-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -vpgrouped-secret-FAKE ssh host",
+      "mustNotSurvive": ["grouped-secret-FAKE"],
+      "expected": "sshpass -vp[REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "mysql-backslash-newline-inside-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -phead\\\ntail-secret-FAKE appdb",
+      "mustNotSurvive": ["tail-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-quoted-backslash-newline-password",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -a \"head\\\ntail-secret-FAKE\" ping",
+      "mustNotSurvive": ["tail-secret-FAKE"],
+      "expected": "redis-cli -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "mysql-non-ascii-space-inside-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -phead tail-secret-FAKE appdb",
+      "mustNotSurvive": ["tail-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-password-after-quoted-pager-flag",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql --pager=\"less -pERROR\" -ppager-secret-FAKE appdb",
+      "mustNotSurvive": ["pager-secret-FAKE"]
+    },
+    {
+      "name": "sshpass-grouped-prompt-option",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -vP \"Enter PIN:\" -p grouped-prompt-secret-FAKE ssh host",
+      "mustNotSurvive": ["grouped-prompt-secret-FAKE"],
+      "expected": "sshpass -vP \"Enter PIN:\" -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-escaped-prompt-argument",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -P Enter\\ PIN: -p escaped-prompt-secret-FAKE ssh host",
+      "mustNotSurvive": ["escaped-prompt-secret-FAKE"],
+      "expected": "sshpass -P Enter\\ PIN: -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-concatenated-prompt-argument",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -P \"Enter \"PIN: -p concat-prompt-secret-FAKE ssh host",
+      "mustNotSurvive": ["concat-prompt-secret-FAKE"],
+      "expected": "sshpass -P \"Enter \"PIN: -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "mysql-grouped-option-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -vpgrouped-secret-FAKE appdb",
+      "mustNotSurvive": ["grouped-secret-FAKE"],
+      "expected": "mysql -vp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-repeated-grouped-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pfirst-secret-FAKE -vpsecond-secret-FAKE appdb",
+      "mustNotSurvive": ["first-secret-FAKE", "second-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysqlslap-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqlslap -uroot -pslap-secret-FAKE --auto-generate-sql",
+      "mustNotSurvive": ["slap-secret-FAKE"],
+      "expected": "mysqlslap -uroot -p[REDACTED_SECRET] --auto-generate-sql"
+    },
+    {
+      "name": "sshpass-prompt-text-names-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -P password: -p prompt-text-secret-FAKE ssh host",
+      "mustNotSurvive": ["prompt-text-secret-FAKE"]
+    },
+    {
+      "name": "mysqldump-grouped-routines-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqldump -Rproutines-secret-FAKE appdb",
+      "mustNotSurvive": ["routines-secret-FAKE"],
+      "expected": "mysqldump -Rp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysqldump-grouped-quote-names-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqldump -Qpquote-secret-FAKE appdb",
+      "mustNotSurvive": ["quote-secret-FAKE"],
+      "expected": "mysqldump -Qp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-single-quoted-flag-token",
+      "ruleId": "mysql-quoted-password-flag",
+      "input": "mysql '-pMy pass 123-FAKE!' appdb",
+      "mustNotSurvive": ["pass 123-FAKE", "123-FAKE"],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-double-quoted-flag-token",
+      "ruleId": "sshpass-quoted-password-flag",
+      "input": "sshpass \"-pMy pass 123-FAKE!\" ssh host",
+      "mustNotSurvive": ["pass 123-FAKE", "123-FAKE"],
+      "expected": "sshpass [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "rediscli-auth-single-quoted-assignment",
+      "ruleId": "redis-cli-quoted-auth-env",
+      "input": "env 'REDISCLI_AUTH=My pass 123-FAKE!' redis-cli ping",
+      "mustNotSurvive": ["pass 123-FAKE", "123-FAKE"],
+      "expected": "env [REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "rediscli-auth-double-quoted-assignment",
+      "ruleId": "redis-cli-quoted-auth-env",
+      "input": "env \"REDISCLI_AUTH=dq pass \\\" 123-FAKE\" redis-cli ping",
+      "mustNotSurvive": ["pass", "123-FAKE"],
+      "expected": "env [REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "mysql-repeated-quoted-tokens",
+      "ruleId": "mysql-quoted-password-flag",
+      "input": "mysql '-pfirst secret-FAKE' '-psecond secret-FAKE' appdb",
+      "mustNotSurvive": [
+        "first secret-FAKE",
+        "second secret-FAKE",
+        "secret-FAKE"
+      ],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-concatenated-quoted-token",
+      "ruleId": "mysql-quoted-password-flag",
+      "input": "mysql '-pmy pa'\"'\"'ss-FAKE' appdb",
+      "mustNotSurvive": ["my pa", "ss-FAKE"],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-unquoted-then-quoted-repeat",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pfirst-secret-FAKE '-psecond secret-FAKE' appdb",
+      "mustNotSurvive": ["first-secret-FAKE", "second secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-quoted-standalone-flag",
+      "ruleId": "sshpass-quoted-password-flag",
+      "input": "sshpass \"-p\" \"quoted-flag-secret-FAKE\" ssh user@host",
+      "mustNotSurvive": ["quoted-flag-secret-FAKE"],
+      "expected": "sshpass [REDACTED_SECRET] ssh user@host"
+    },
+    {
+      "name": "redis-cli-quoted-standalone-flag",
+      "ruleId": "redis-cli-quoted-password-flag",
+      "input": "redis-cli \"-a\" \"quoted-flag-secret-FAKE\" PING",
+      "mustNotSurvive": ["quoted-flag-secret-FAKE"],
+      "expected": "redis-cli [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "mysql-quoted-executable",
+      "ruleId": "mysql-password-flag",
+      "input": "\"/usr/bin/mysql\" -pquoted-exe-secret-FAKE appdb",
+      "mustNotSurvive": ["quoted-exe-secret-FAKE"],
+      "expected": "\"/usr/bin/mysql\" -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-quoted-executable",
+      "ruleId": "sshpass-password-flag",
+      "input": "'sshpass' -p quoted-exe-secret-FAKE ssh host",
+      "mustNotSurvive": ["quoted-exe-secret-FAKE"],
+      "expected": "'sshpass' -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "redis-cli-quoted-executable",
+      "ruleId": "redis-cli-password-flag",
+      "input": "\"redis-cli\" -a quoted-exe-secret-FAKE PING",
+      "mustNotSurvive": ["quoted-exe-secret-FAKE"],
+      "expected": "\"redis-cli\" -a [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "sshpass-quoted-prompt-option",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass \"-P\" \"Enter PIN:\" -p quoted-opt-secret-FAKE ssh host",
+      "mustNotSurvive": ["quoted-opt-secret-FAKE"],
+      "expected": "sshpass \"-P\" \"Enter PIN:\" -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-quoted-flag-after-quoted-option",
+      "ruleId": "sshpass-quoted-password-flag",
+      "input": "sshpass \"-v\" \"-p\" \"quoted-both-secret-FAKE\" ssh host",
+      "mustNotSurvive": ["quoted-both-secret-FAKE"],
+      "expected": "sshpass \"-v\" [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-ansi-c-quoted-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -p $'can\\'t guess-FAKE me' ssh deploy@host",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "sshpass -p [REDACTED_SECRET] ssh deploy@host"
+    },
+    {
+      "name": "mysql-ansi-c-quoted-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -p$'it\\'s ansi-FAKE' appdb",
+      "mustNotSurvive": ["ansi-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-ansi-c-quoted-password",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -a $'it\\'s ansi-FAKE' ping",
+      "mustNotSurvive": ["ansi-FAKE"],
+      "expected": "redis-cli -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "rediscli-auth-ansi-c-quoted",
+      "ruleId": "redis-cli-auth-env",
+      "input": "REDISCLI_AUTH=$'it\\'s ansi-FAKE' redis-cli ping",
+      "mustNotSurvive": ["ansi-FAKE"],
+      "expected": "REDISCLI_AUTH=[REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "mysql-ansi-c-concatenated-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -phead$'can\\'t guess-FAKE me' appdb",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-ansi-c-whole-argument",
+      "ruleId": "mysql-quoted-password-flag",
+      "input": "mysql $'-pcan\\'t guess-FAKE me' appdb",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-ansi-c-whole-argument",
+      "ruleId": "sshpass-quoted-password-flag",
+      "input": "sshpass $'-pcan\\'t guess-FAKE me' ssh host",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "sshpass [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "rediscli-auth-ansi-c-whole-argument",
+      "ruleId": "redis-cli-quoted-auth-env",
+      "input": "env $'REDISCLI_AUTH=can\\'t guess-FAKE me' redis-cli ping",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "env [REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "mysql-password-ending-in-dollar",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pPassw0rd-FAKE$$ appdb",
+      "mustNotSurvive": ["Passw0rd-FAKE", "$$"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "gitlab-pat",
+      "ruleId": "gitlab-token",
+      "input": "git clone https://ci:glpat-FAKE0123456789abcdefFAKE@gitlab.example/x",
+      "mustNotSurvive": ["glpat-FAKE0123456789abcdefFAKE"]
+    },
+    {
+      "name": "gitlab-token-glued",
+      "ruleId": "gitlab-token",
+      "input": "token ciglpat-FAKE0123456789abcdefFAKE used",
+      "mustNotSurvive": ["ciglpat-FAKE0123456789abcdefFAKE"]
+    },
+    {
+      "name": "pypi-token",
+      "ruleId": "pypi-token",
+      "input": "twine upload -p pypi-FAKE0123456789abcdefFAKE dist/*",
+      "mustNotSurvive": ["pypi-FAKE0123456789abcdefFAKE"]
+    },
+    {
+      "name": "slack-app-token",
+      "ruleId": "slack-app-token",
+      "input": "SLACK_APP_TOKEN xapp-1-FAKE0123456789-abcdef",
+      "mustNotSurvive": ["xapp-1-FAKE0123456789-abcdef"]
+    },
+    {
+      "name": "slack-token-glued",
+      "ruleId": "slack-token",
+      "input": "hook_xoxb-FAKE123456-FAKEabcdefghij",
+      "mustNotSurvive": ["xoxb-FAKE123456-FAKEabcdefghij"]
+    },
+    {
+      "name": "npm-token-glued",
+      "ruleId": "npm-token",
+      "input": "ci_npm_FAKEabcdefghijklmnop12 set",
+      "mustNotSurvive": ["npm_FAKEabcdefghijklmnop12"]
+    },
+    {
+      "name": "stripe-secret-key",
+      "ruleId": "stripe-key",
+      "input": "STRIPE sk_live_FAKE0123456789abcd here",
+      "mustNotSurvive": ["sk_live_FAKE0123456789abcd"]
+    },
+    {
+      "name": "stripe-restricted-key",
+      "ruleId": "stripe-key",
+      "input": "rk_test_FAKE0123456789abcd",
+      "mustNotSurvive": ["rk_test_FAKE0123456789abcd"]
+    },
+    {
+      "name": "shopify-token",
+      "ruleId": "shopify-token",
+      "input": "X-Shopify-Access-Token shpat_FAKE0123456789abcdef",
+      "mustNotSurvive": ["shpat_FAKE0123456789abcdef"]
+    },
+    {
+      "name": "digitalocean-token",
+      "ruleId": "digitalocean-token",
+      "input": "doctl auth init -t dop_v1_FAKE0123456789abcdef",
+      "mustNotSurvive": ["dop_v1_FAKE0123456789abcdef"]
+    },
+    {
+      "name": "huggingface-token",
+      "ruleId": "huggingface-token",
+      "input": "HF hf_FAKE0123456789abcdef login",
+      "mustNotSurvive": ["hf_FAKE0123456789abcdef"]
+    },
+    {
+      "name": "sendgrid-key",
+      "ruleId": "sendgrid-key",
+      "input": "key SG.FAKE0123456789abcd.FAKEefghijklmnopqrst end",
+      "mustNotSurvive": ["SG.FAKE0123456789abcd"]
+    },
+    {
+      "name": "jwt-short-claims",
+      "ruleId": "jwt",
+      "input": "Authorization-less eyJhbGciOiJIUzI1NiJ9.e30.FAKEsig here",
+      "mustNotSurvive": ["eyJhbGciOiJIUzI1NiJ9.e30.FAKEsig"]
+    },
+    {
+      "name": "jwt-unsigned",
+      "ruleId": "jwt",
+      "input": "token eyJhbGciOiJub25lIn0.eyJzdWIiOjF9. end",
+      "mustNotSurvive": ["eyJhbGciOiJub25lIn0.eyJzdWIiOjF9"]
     }
   ],
   "keyVectors": [

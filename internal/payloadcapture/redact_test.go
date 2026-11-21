@@ -134,8 +134,19 @@ func TestRedactionCoverageIsOrderIndependent(t *testing.T) {
 		reversed[len(reversed)-1-index] = rule
 	}
 
+	// rules/4: a program's password-flag rules run before
+	// sensitive-assignment by contract, which would otherwise read a prompt
+	// text such as `sshpass -P password:` as a key and swallow the -p after
+	// it. Their vectors hold in the ruleset's order only.
+	ordered := func(ruleID string) bool {
+		return strings.HasPrefix(ruleID, "mysql-") || strings.HasPrefix(ruleID, "sshpass-") || strings.HasPrefix(ruleID, "redis-cli-")
+	}
 	for _, vector := range vectors.ValueVectors {
-		for _, order := range [][]compiledRule{compiledValueRules, reversed} {
+		orders := [][]compiledRule{compiledValueRules, reversed}
+		if ordered(vector.RuleID) {
+			orders = orders[:1]
+		}
+		for _, order := range orders {
 			redacted := apply(order, vector.Input)
 			for _, secret := range vector.MustNotSurvive {
 				if strings.Contains(redacted, secret) {
@@ -163,5 +174,25 @@ func TestRedactJSONDoesNotMutateInput(t *testing.T) {
 	}
 	if redacted["apiKey"] != RedactedPlaceholder {
 		t.Fatalf("sensitive key not replaced: %v", redacted["apiKey"])
+	}
+}
+
+func TestHasSecretTokenReadsTokenShapesOnly(t *testing.T) {
+	t.Parallel()
+	for _, token := range []string{
+		"glpat-FAKE0123456789abcdefgh",
+		"ciglpat-FAKE0123456789abcdefgh",
+		"ghp_FAKE0123456789abcdefFAKE",
+		"sk_live_FAKE012345",
+		"SG.FAKE0123456789abcd",
+	} {
+		if !HasSecretToken(token) {
+			t.Fatalf("%q is not a token", token)
+		}
+	}
+	for _, plain := range []string{"--password hunter2", "token=abc", "deploy-check", "1.4.0"} {
+		if HasSecretToken(plain) {
+			t.Fatalf("%q read as a token", plain)
+		}
 	}
 }

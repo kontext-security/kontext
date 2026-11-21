@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 // A hook's readable fields go to the workspace's dashboard, so they keep only
@@ -31,22 +33,17 @@ const redacted = "<redacted>"
 // inside a token, so an npm_ or a dashed key is one word.
 var hookToken = regexp.MustCompile(`[A-Za-z0-9_+/=-]{32,}`)
 
-// hookTokenPrefix names vendor tokens short enough to pass the long-token
-// check (a GitLab PAT is glpat- and 20 characters). A prefix counts
-// anywhere in a word: a generator can glue a token to a name (`ciglpat-…`).
-// Keep identical to
-// HOOK_TOKEN_PREFIX in kontext-cloud's hook-inventory.ts.
-var hookTokenPrefix = regexp.MustCompile(`(glpat|gldt|glrt|glptt|glsoat|glcbt|gloas)-|npm_[A-Za-z0-9]{8}|pypi-[A-Za-z0-9_-]{8}|xox[aboprse]-|xapp-|[sr]k_(live|test)_|shp(at|ss|ca|pa)_|dop_v1_|hf_[A-Za-z0-9]{8}|SG\.[A-Za-z0-9_-]{8}|ASIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.`)
-
 // pluginVersion is the shape a plugin version is kept in: a release number
 // or a commit hash. Anything else can be a substituted secret. Keep
 // identical to PLUGIN_VERSION in kontext-cloud's hook-inventory.ts.
 var pluginVersion = regexp.MustCompile(`^(v?[0-9]{1,6}(\.[0-9]{1,6}){0,3}(-[0-9A-Za-z.]{1,24})?(\+[0-9A-Za-z.]{1,24})?|[0-9a-f]{7,40})$`)
 
-// hookSecret is secret plus the cloud's hook check for long mixed tokens
-// (hookTextUnsafe in kontext-cloud's hook-inventory.ts). Keep them identical.
+// hookSecret is secret, the shared redaction ruleset's token shapes (vendor
+// tokens short enough to pass the long-token check, such as a GitLab PAT),
+// and the cloud's hook check for long mixed tokens (hookTextUnsafe in
+// kontext-cloud's hook-inventory.ts). Keep them identical.
 func hookSecret(value string) bool {
-	if secret(value, "args") || hookTokenPrefix.MatchString(value) {
+	if secret(value, "args") || payloadcapture.HasSecretToken(value) {
 		return true
 	}
 	for _, token := range hookToken.FindAllString(value, -1) {
@@ -192,7 +189,7 @@ func hookVersion(value string) string {
 	// A version's shape is checked instead of the long-token rule, which
 	// would hide every full commit hash; a vendor token or other secret
 	// shape is still hidden.
-	if !pluginVersion.MatchString(value) || secretPattern.MatchString(value) || hookTokenPrefix.MatchString(value) {
+	if !pluginVersion.MatchString(value) || secretPattern.MatchString(value) || payloadcapture.HasSecretToken(value) {
 		return redacted
 	}
 	return safe(value, 64)

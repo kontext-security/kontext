@@ -58,7 +58,10 @@ var (
 
 	compiledKeyRules   []compiledRule
 	compiledValueRules []compiledRule
-	camelBoundary      = regexp.MustCompile(`([a-z])([A-Z])`)
+	// tokenRules are the value rules that read a token's own shape; the
+	// structural ones read its context.
+	tokenRules    []*regexp.Regexp
+	camelBoundary = regexp.MustCompile(`([a-z])([A-Z])`)
 )
 
 func init() {
@@ -76,6 +79,26 @@ func init() {
 	RedactorVersion = ruleset.Version
 	compiledKeyRules = compileRules(ruleset.KeyPatterns)
 	compiledValueRules = compileRules(ruleset.ValuePatterns)
+	for index, rule := range ruleset.ValuePatterns {
+		if rule.Provenance != "structural" {
+			tokenRules = append(tokenRules, compiledValueRules[index].re)
+		}
+	}
+}
+
+// HasSecretToken reports a value that holds a known secret token shape (a
+// vendor key, a JWT, a private key): the ruleset's value patterns that aren't
+// structural. The structural ones read a value's context (`--password x`,
+// `token=x`), which a caller that keeps only some words of a command line
+// checks itself. Matches hasSecretToken in kontext-cloud's
+// redaction-ruleset.ts.
+func HasSecretToken(value string) bool {
+	for _, re := range tokenRules {
+		if re.MatchString(value) {
+			return true
+		}
+	}
+	return false
 }
 
 func compileRules(rules []redactionRule) []compiledRule {
