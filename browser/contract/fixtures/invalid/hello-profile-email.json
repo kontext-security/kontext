@@ -1,0 +1,5 @@
+{
+  "contract": 1,
+  "type": "hello",
+  "extension": { "version": "0.1.0", "browser": "chrome", "profile": "anna@example.com" }
+}
