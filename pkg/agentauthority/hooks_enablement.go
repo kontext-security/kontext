@@ -258,11 +258,17 @@ func evaluateEnablement(s *hookScan) {
 			// read here, so they are named without changing the state.
 			reasons = append(reasons, HookReasonRemoteManagedUnverified)
 		}
+		// A user or project switch can be lifted by a file that went unread
+		// (`disableAllHooks` or `enabledPlugins` in a local file); a managed
+		// one can't, and a missing binary is missing whatever the files say.
+		byManaged := sw.managedDisableAll || slices.ContainsFunc(disabled, func(reason string) bool {
+			return reason == HookReasonManagedOnly || reason == HookReasonPluginOnly || reason == HookReasonHTTPURLNotAllowed
+		})
+		settledOff := slices.Contains(disabled, HookReasonBinaryMissing) ||
+			managedSettled && !info.projectUnread && (!sw.unreadable || byManaged)
 		state := hookEnabled
 		switch {
-		// An unread project can turn a disabled plugin back on, so only a
-		// missing binary settles disabled there.
-		case len(disabled) > 0 && (managedSettled && !info.projectUnread || slices.Contains(disabled, HookReasonBinaryMissing)):
+		case len(disabled) > 0 && settledOff:
 			state = hookDisabled
 		case len(disabled) > 0 || len(unresolved) > 0:
 			state = hookUnresolved
