@@ -19,6 +19,8 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
+
 	"github.com/kontext-security/kontext/internal/agenthooks"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
@@ -201,7 +203,7 @@ func TestScanHooksThreeHooksFromThreeSources(t *testing.T) {
 	for _, r := range pre {
 		origins[*r.Summary] = r.Origin
 	}
-	if origins["kontext hook pre-tool-use"] != HookOriginKontext || origins["bash <redacted> --strict"] != HookOriginSettings {
+	if origins["kontext hook pre-tool-use"] != HookOriginKontext || origins["bash <redacted>"] != HookOriginSettings {
 		t.Fatalf("origins %v", origins)
 	}
 	post := byEvent(agent, "PostToolUse")[0]
@@ -562,7 +564,7 @@ func TestHookSummaryKeepsOnlySafeWords(t *testing.T) {
 		t.Fatalf("stop summary %q", got)
 	}
 	pre := byEvent(agent, "PreToolUse")[0]
-	if got := *pre.Summary; got != "deploy-check --password <redacted> --mode <redacted>" {
+	if got := *pre.Summary; got != "deploy-check --password <redacted>" {
 		t.Fatalf("pre summary %q", got)
 	}
 	if *pre.Matcher != "Bash|<redacted>" {
@@ -1130,7 +1132,7 @@ func TestHookSummaryDropsPositionalWords(t *testing.T) {
 	for _, c := range []struct{ program, args, want string }{
 		{"/usr/bin/redis-cli", "AUTH hunter2", "redis-cli <redacted>"},
 		{"/usr/bin/redis-cli", "AUTH winterblue.sh", "redis-cli <redacted>"},
-		{"/usr/bin/redis-cli", "check-secrets.sh --strict", "redis-cli <redacted> --strict"},
+		{"/usr/bin/redis-cli", "check-secrets.sh --strict", "redis-cli <redacted>"},
 		{"/usr/bin/redis-cli", "--verbose", "redis-cli --verbose"},
 		{"bash", "check-secrets.sh --strict", "bash check-secrets.sh --strict"},
 		{"bash", "-e check.sh", "bash -e <redacted>"},
@@ -1147,7 +1149,7 @@ func TestHookSummaryDropsPositionalWords(t *testing.T) {
 		// A hidden flag-shaped value can take the next word too.
 		{"/usr/bin/sshpass", "-v -p --winter-2026 ssh host", "sshpass -v <redacted>"},
 		{"tool", "-ab --winter-2026", "tool <redacted>"},
-		{"curl", "-H X -X POST", "curl -H <redacted> -X <redacted>"},
+		{"curl", "-H X -X POST", "curl -H <redacted>"},
 		{"curl", "--url https://hooks.example.com/x", "curl --url https://hooks.example.com"},
 	} {
 		if got := hookSummary(c.program, strings.Fields(c.args)); got != c.want {
@@ -1235,11 +1237,11 @@ func TestKontextCallNeedsOneLiteralCommand(t *testing.T) {
 }
 
 // An attached short-flag value is a value: -pSECRET never reads as a flag.
-// It could also be a cluster ending in a flag that takes the next word, so
-// that word is hidden too.
+// It could also be a cluster ending in a flag that takes the next word, and
+// nothing after a hidden word is shown: it may be the secret itself.
 func TestHookSummaryDropsAttachedFlagValues(t *testing.T) {
 	got := hookSummary("mysql", []string{"-pExamplePass123", "-u", "root", "--host=db"})
-	if got != "mysql <redacted> --host <redacted>" {
+	if got != "mysql <redacted>" {
 		t.Fatalf("summary %q", got)
 	}
 }
@@ -1577,5 +1579,67 @@ func TestShortVendorTokensAreHidden(t *testing.T) {
 	}
 	if got := hookField("https://github.com/acme/plugins", 128); got != "https://github.com/acme/plugins" {
 		t.Errorf("plain URL became %q", got)
+	}
+}
+
+// Round 7: a value spelled like a flag after a hidden word, a token glued to
+// a prefix and a signed plugin URL never reach the report.
+func TestHookRedactionRound7Leaks(t *testing.T) {
+	for _, c := range []struct {
+		program string
+		args    []string
+		secret  string
+	}{
+		{"redis-cli", []string{"AUTH", "--Winter2026"}, "Winter2026"},
+		{"zip", []string{"-rq", "-9P", "--Winter2026", "archive.zip", "file"}, "Winter2026"},
+	} {
+		if got := hookSummary(c.program, c.args); strings.Contains(got, c.secret) {
+			t.Fatalf("hookSummary(%q, %q) = %q", c.program, c.args, got)
+		}
+	}
+	if !hookSecret("ci" + "glpat-" + strings.Repeat("a1B2", 5)) {
+		t.Fatal("a glued token prefix was not read as a secret")
+	}
+	if got := hookField("https://hooks.example/run?sig=Q7hf8pZ2mLK9Wt4a", 256); strings.Contains(got, "Q7hf8pZ2mLK9Wt4a") {
+		t.Fatalf("signed URL kept: %q", got)
+	}
+	if got := hookField("team-token=abc", 256); got != redacted {
+		t.Fatalf("a credential assignment kept: %q", got)
+	}
+}
+
+// A release with both a prerelease and a build suffix is a version.
+func TestHookVersionKeepsPrereleaseAndBuild(t *testing.T) {
+	for _, v := range []string{"1.4.0-beta.1+build.7", "1.4.0+build.7", "1.4.0-rc.2", "v2.0"} {
+		if got := hookVersion(v); got != v {
+			t.Fatalf("hookVersion(%q) = %q", v, got)
+		}
+	}
+	if got := hookVersion("1.4.0+-beta"); got != redacted {
+		t.Fatalf("odd suffix kept: %q", got)
+	}
+}
+
+// A prompt or agent handler without a prompt doesn't run: it is unknown.
+func TestHookPromptHandlerWithoutPromptIsUnknown(t *testing.T) {
+	for _, raw := range []string{`{"type":"prompt"}`, `{"type":"agent","prompt":"  "}`} {
+		if got := readers.Handler(json.RawMessage(raw)); got.Type != "" {
+			t.Fatalf("Handler(%s) = %+v", raw, got)
+		}
+	}
+	if got := readers.Handler(json.RawMessage(`{"type":"agent","prompt":"check it"}`)); got.Type != "agent" {
+		t.Fatalf("agent handler %+v", got)
+	}
+}
+
+// PermissionDenied is about one tool call, like PermissionRequest.
+func TestToolEventIncludesPermissionDenied(t *testing.T) {
+	for _, e := range []string{"PreToolUse", "PostToolUseFailure", "PermissionRequest", "PermissionDenied"} {
+		if !toolEvent(e) {
+			t.Fatalf("%s is not a tool event", e)
+		}
+	}
+	if toolEvent("Stop") {
+		t.Fatal("Stop is a tool event")
 	}
 }

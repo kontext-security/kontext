@@ -368,5 +368,5 @@ func settled[T any](ctx context.Context, fallback T, fn func() T) T {
 // toolEvent is an event about one tool call, where a handler's `if` rule is
 // evaluated.
 func toolEvent(event string) bool {
-	return strings.Contains(event, "ToolUse") || event == "PermissionRequest"
+	return strings.Contains(event, "ToolUse") || event == "PermissionRequest" || event == "PermissionDenied"
 }

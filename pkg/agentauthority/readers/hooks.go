@@ -73,6 +73,9 @@ type HookHandler struct {
 	Async bool `json:"async"`
 	// AsyncRewake runs it in the background too, waking the agent later.
 	AsyncRewake bool `json:"asyncRewake"`
+	// prompt is what a prompt or agent handler asks; it is only checked for
+	// presence, never reported.
+	prompt string
 }
 
 var errHooksShape = errors.New("hooks is not an object of matcher groups")
@@ -153,7 +156,7 @@ func Handler(raw json.RawMessage) HookHandler {
 	for key, target := range map[string]any{
 		"type": &h.Type, "command": &h.Command, "args": &h.Args, "url": &h.URL,
 		"server": &h.Server, "tool": &h.Tool, "timeout": &h.Timeout, "if": &h.If,
-		"async": &h.Async, "asyncRewake": &h.AsyncRewake,
+		"async": &h.Async, "asyncRewake": &h.AsyncRewake, "prompt": &h.prompt,
 	} {
 		if value, ok := fields[key]; ok && json.Unmarshal(value, target) != nil {
 			malformed = true
@@ -165,6 +168,7 @@ func Handler(raw json.RawMessage) HookHandler {
 		// handler without a command): it is unknown, never verified as ours.
 		return HookHandler{}
 	}
+	h.prompt = ""
 	return h
 }
 
@@ -177,6 +181,8 @@ func missingRequired(h HookHandler) bool {
 		return strings.TrimSpace(h.URL) == ""
 	case "mcp_tool":
 		return h.Server == "" || h.Tool == ""
+	case "prompt", "agent":
+		return strings.TrimSpace(h.prompt) == ""
 	}
 	return false
 }

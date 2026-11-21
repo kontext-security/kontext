@@ -32,16 +32,16 @@ const redacted = "<redacted>"
 var hookToken = regexp.MustCompile(`[A-Za-z0-9_+/=-]{32,}`)
 
 // hookTokenPrefix names vendor tokens short enough to pass the long-token
-// check (a GitLab PAT is glpat- and 20 characters). A prefix counts after
-// any non-alphanumeric character, `_` included: a generator can glue a token
-// to a name (`hook_glpat-…`). Keep identical to
+// check (a GitLab PAT is glpat- and 20 characters). A prefix counts
+// anywhere in a word: a generator can glue a token to a name (`ciglpat-…`).
+// Keep identical to
 // HOOK_TOKEN_PREFIX in kontext-cloud's hook-inventory.ts.
-var hookTokenPrefix = regexp.MustCompile(`(?:^|[^A-Za-z0-9])(?:(glpat|gldt|glrt|glptt|glsoat|glcbt|gloas)-|npm_[A-Za-z0-9]{8}|pypi-[A-Za-z0-9_-]{8}|xox[aboprse]-|xapp-|[sr]k_(live|test)_|shp(at|ss|ca|pa)_|dop_v1_|hf_[A-Za-z0-9]{8}|SG\.[A-Za-z0-9_-]{8}|ASIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.)`)
+var hookTokenPrefix = regexp.MustCompile(`(glpat|gldt|glrt|glptt|glsoat|glcbt|gloas)-|npm_[A-Za-z0-9]{8}|pypi-[A-Za-z0-9_-]{8}|xox[aboprse]-|xapp-|[sr]k_(live|test)_|shp(at|ss|ca|pa)_|dop_v1_|hf_[A-Za-z0-9]{8}|SG\.[A-Za-z0-9_-]{8}|ASIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.`)
 
 // pluginVersion is the shape a plugin version is kept in: a release number
 // or a commit hash. Anything else can be a substituted secret. Keep
 // identical to PLUGIN_VERSION in kontext-cloud's hook-inventory.ts.
-var pluginVersion = regexp.MustCompile(`^(v?[0-9]{1,6}(\.[0-9]{1,6}){0,3}([-+][0-9A-Za-z.]{1,24})?|[0-9a-f]{7,40})$`)
+var pluginVersion = regexp.MustCompile(`^(v?[0-9]{1,6}(\.[0-9]{1,6}){0,3}(-[0-9A-Za-z.]{1,24})?(\+[0-9A-Za-z.]{1,24})?|[0-9a-f]{7,40})$`)
 
 // hookSecret is secret plus the cloud's hook check for long mixed tokens
 // (hookTextUnsafe in kontext-cloud's hook-inventory.ts). Keep them identical.
@@ -66,9 +66,16 @@ func hookSummary(program string, args []string) string {
 		name = redacted
 	}
 	words := []string{name}
+	// hidden: a word was hidden. It may have been an option that takes the
+	// next word (`zip -9P '--pw'`) or a command whose argument is a secret
+	// (`redis-cli AUTH '--pw'`), so no later word is kept as a flag.
+	hidden := name == redacted
 	add := func(word string) {
-		if word == redacted && words[len(words)-1] == redacted {
-			return
+		if word == redacted {
+			hidden = true
+			if words[len(words)-1] == redacted {
+				return
+			}
 		}
 		words = append(words, word)
 	}
@@ -93,7 +100,7 @@ func hookSummary(program string, args []string) string {
 			afterFlag, scriptSlot = takesValue(arg), false
 		case strings.HasPrefix(arg, "-"):
 			flag, _, hasValue := strings.Cut(arg, "=")
-			if !summaryFlag.MatchString(flag) || hookSecret(flag) {
+			if hidden || !summaryFlag.MatchString(flag) || hookSecret(flag) {
 				// A hidden flag can still take the next word as its value,
 				// and a short cluster (`-ab`) can end in a flag that does.
 				add(redacted)
@@ -164,15 +171,16 @@ func hookField(value string, limit int) string {
 	return safe(value, limit)
 }
 
-// urlCredential reports a URL that carries a user or password
-// (`https://build:pass@repo.example`): a generated manifest can hold one.
+// urlCredential reports a URL that can carry a credential: a user or
+// password (`https://build:pass@repo.example`), or a query or fragment
+// (`?sig=…`). A generated manifest can hold one; a plain URL stays.
 func urlCredential(value string) bool {
 	_, rest, ok := strings.Cut(value, "://")
 	if !ok {
 		return false
 	}
 	host, _, _ := strings.Cut(rest, "/")
-	return strings.Contains(host, "@")
+	return strings.Contains(host, "@") || strings.ContainsAny(rest, "?#")
 }
 
 // hookVersion keeps a plugin version only in a version's shape; empty and
