@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -248,6 +247,11 @@ func evaluateEnablement(s *hookScan) {
 		if r.Type == "unknown" {
 			unresolved = append(unresolved, HookReasonUnresolved)
 		}
+		// Claude evaluates `if` against a tool call, so on an event without
+		// one the handler may never run: not shown as expected to run.
+		if info.conditional && !toolEvent(r.Event) {
+			unresolved = append(unresolved, HookReasonUnresolved)
+		}
 		reasons := slices.Concat(disabled, unresolved, conditional)
 		if s.signedIn {
 			// Server-managed settings for a claude.ai organization can't be
@@ -256,7 +260,9 @@ func evaluateEnablement(s *hookScan) {
 		}
 		state := hookEnabled
 		switch {
-		case len(disabled) > 0 && (managedSettled || slices.Contains(disabled, HookReasonBinaryMissing)):
+		// An unread project can turn a disabled plugin back on, so only a
+		// missing binary settles disabled there.
+		case len(disabled) > 0 && (managedSettled && !info.projectUnread || slices.Contains(disabled, HookReasonBinaryMissing)):
 			state = hookDisabled
 		case len(disabled) > 0 || len(unresolved) > 0:
 			state = hookUnresolved
@@ -320,8 +326,8 @@ func programMissing(ctx context.Context, home, program string) bool {
 			return os.IsNotExist(err)
 		}
 		// A program that can't be launched is as good as missing: a
-		// folder, or a file without execute bits outside Windows.
-		return info.IsDir() || runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0
+		// folder, or a file the user can't execute.
+		return info.IsDir() || !launchable(home, info)
 	})
 }
 
@@ -351,4 +357,10 @@ func settled[T any](ctx context.Context, fallback T, fn func() T) T {
 	case <-ctx.Done():
 	}
 	return fallback
+}
+
+// toolEvent is an event about one tool call, where a handler's `if` rule is
+// evaluated.
+func toolEvent(event string) bool {
+	return strings.Contains(event, "ToolUse") || event == "PermissionRequest"
 }
