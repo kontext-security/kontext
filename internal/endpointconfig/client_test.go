@@ -526,7 +526,7 @@ func TestInstallationNotFoundRejectsTheDirective(t *testing.T) {
 // A server that refuses v6 and then fails the v5 retry leaves no v6-only
 // switch on.
 func TestV6RefusalTurnsHookInventoryOff(t *testing.T) {
-	cache := NewCache("")
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
 	on := testResponse(t, payloadcapture.ModeSummary)
 	yes := true
 	on.Config.HookInventory = &yes
@@ -561,6 +561,14 @@ func TestV6RefusalTurnsHookInventoryOff(t *testing.T) {
 	snapshot := cache.Current()
 	if snapshot.HookInventoryEnabled() || !snapshot.Confirmed {
 		t.Fatalf("after v6 refusal: enabled=%v confirmed=%v", snapshot.HookInventoryEnabled(), snapshot.Confirmed)
+	}
+	// A restart while configuration is still unavailable keeps it off.
+	restarted := NewCache(cache.path)
+	if err := restarted.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.Current().HookInventoryEnabled() {
+		t.Fatal("restart turned the refused switch back on")
 	}
 }
 
@@ -721,4 +729,74 @@ func TestNullSwitchesAreRefused(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"payloadCaptureMode":"summary","workTypeClassification":false,"toolOutputCompaction":false,"codexProxy":true,"extra":1}`), &config); err == nil {
 		t.Fatal("unknown field accepted")
 	}
+	// Keys are matched exactly, as the cloud's schema matches them.
+	for _, body := range []string{
+		`{"payloadCaptureMode":"summary","workTypeClassification":false,"toolOutputCompaction":false,"codexProxy":true,"HookInventory":true}`,
+		`{"payloadCaptureMode":"summary","workTypeClassification":false,"toolOutputCompaction":false,"codexProxy":true,"HookInventory":null}`,
+	} {
+		var config Config
+		if err := json.Unmarshal([]byte(body), &config); err == nil {
+			t.Fatalf("accepted %s", body)
+		}
+	}
+}
+
+// A journal left by an earlier rejection takes a newer opt-out before the
+// cache is replaced: if its removal fails, a restart still holds the veto.
+func TestAStaleJournalCantOverrideANewerOptOut(t *testing.T) {
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	full := testResponse(t, payloadcapture.ModeFull)
+	if err := cache.Apply(FetchResult{Response: &full}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.rejectAuthority(ErrAuthorityRejected, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if markerHas(mustRead(t, cache.rejectedPath), markerPromptVeto) {
+		t.Fatal("full capture journaled a veto")
+	}
+	// A crash between the cache replace and the journal's removal leaves
+	// the journal as it was just before the replace.
+	var left []byte
+	beforeReplace = func() { left = mustRead(t, cache.rejectedPath) }
+	defer func() { beforeReplace = func() {} }()
+	optOut := testResponse(t, payloadcapture.ModeOmitted)
+	if err := cache.Apply(FetchResult{Response: &optOut}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cache.rejectedPath, left, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewCache(cache.path)
+	_ = restarted.Load()
+	if !restarted.Current().Status.PromptVeto {
+		t.Fatalf("stale journal restored prompts: %+v", restarted.Current().Status)
+	}
+}
+
+// With the journal unreadable, the marker that took the cache's place still
+// keeps a route removal owed.
+func TestAnUnreadableJournalKeepsTheMarkersRouteRemoval(t *testing.T) {
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	if err := os.WriteFile(cache.path, []byte(markerHeader+"\n"+markerVersioned+"\n"+markerNoCommonVersion+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(cache.rejectedPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Load(); err == nil {
+		t.Fatal("unreadable journal loaded")
+	}
+	if status := cache.Current().Status; !status.PromptVeto || !status.NoCommonVersion {
+		t.Fatalf("%+v", status)
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
