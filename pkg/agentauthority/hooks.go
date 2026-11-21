@@ -212,6 +212,11 @@ type hookScan struct {
 	// managedCut: a managed file went past the scope cap, so a managed
 	// switch that turns hooks off may be unread.
 	managedCut bool
+	// policyHelper: a managed file names a policy helper, whose output
+	// replaces the managed settings and isn't read without running it.
+	policyHelper bool
+	// urlPatterns holds each allowedHttpHookUrls pattern compiled.
+	urlPatterns map[string]*regexp.Regexp
 }
 
 type hookRaw struct {
@@ -228,6 +233,9 @@ type hookRaw struct {
 	layer          int
 	project        string
 	pluginDisabled bool
+	// projectUnread: a plugin installed for a project whose settings went
+	// unread.
+	projectUnread bool
 	// ownerUnknown: the check of a Kontext call's binary didn't finish, so
 	// whether it is Kontext's own is unknown, not "no".
 	ownerUnknown bool
@@ -329,6 +337,12 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	}
 	s.project = ""
 	s.pluginScopes(base)
+	// A policy the scan can't read (an MDM profile, a policy helper) may
+	// decide what the files say, so the scan is partial: the cloud keeps
+	// what it knew rather than withdraw hooks on an unread policy's word.
+	if s.shadowed || s.mdmMerged || s.policyHelper {
+		s.source.Fail(ReasonUnsupportedFormat)
+	}
 	s.finish()
 	s.only()
 	result := s.source.Result(time.Now())
@@ -389,6 +403,9 @@ func (s *hookScan) settingsScope(kind, path string, listed bool) {
 		settings, ok = readConfig(s.g, s.agent.ID, path, readers.Hooks)
 	}
 	s.layers = append(s.layers, hookLayer{kind: kind, scope: id, settings: settings, ok: ok, project: s.project})
+	if ok && managedKind(kind) && settings.PolicyHelper {
+		s.policyHelper = true
+	}
 	if ok {
 		for key, value := range settings.EnabledPlugins {
 			switch {
@@ -461,7 +478,17 @@ func (s *hookScan) pluginScopes(base string) {
 			if h == nil {
 				return
 			}
-			manifest, _ := readConfig(s.g, s.agent.ID, filepath.Join(installed, ".claude-plugin/plugin.json"), parseJSON[pluginManifest])
+			manifestPath := filepath.Join(installed, ".claude-plugin/plugin.json")
+			manifest, manifestRead := readConfig(s.g, s.agent.ID, manifestPath, notNull(parseJSON[pluginManifest]))
+			if !manifestRead {
+				if _, err := os.Lstat(manifestPath); errors.Is(err, os.ErrNotExist) {
+					// Without a manifest the marketplace entry is the
+					// plugin's manifest, and its hooks aren't read here:
+					// the scope can't show every hook.
+					h.Fail(ReasonUnsupportedFormat)
+					s.source.Fail(ReasonUnsupportedFormat)
+				}
+			}
 			name, market, _ := strings.Cut(key, "@")
 			if manifest.Name != "" {
 				name = manifest.Name
@@ -470,7 +497,7 @@ func (s *hookScan) pluginScopes(base string) {
 			if version == "" {
 				version = entry.Version
 			}
-			plugin := &HookPlugin{Name: hookField(name, 128), Marketplace: pointer(hookField(market, 128)), Version: pointer(hookField(version, 64))}
+			plugin := &HookPlugin{Name: hookField(name, 128), Marketplace: pointer(hookField(market, 128)), Version: pointer(hookVersion(version))}
 			if plugin.Name == "" {
 				plugin.Name = "<redacted>"
 			}
@@ -481,7 +508,11 @@ func (s *hookScan) pluginScopes(base string) {
 			if entry.ProjectPath != "" {
 				s.project = filepath.Clean(entry.ProjectPath)
 			}
-			s.records(id, HookScopePlugin, hooks, &pluginRef{plugin: plugin, key: key, disabled: disabled}, -1)
+			// A project install whose project's settings weren't read (past
+			// the project cap, or not listed) can be turned off there.
+			_, projectRead := s.trust[filepath.Clean(entry.ProjectPath)]
+			projectUnread := entry.ProjectPath != "" && !projectRead
+			s.records(id, HookScopePlugin, hooks, &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread}, -1)
 			s.project = ""
 			s.closeScope(h, id, HookScopePlugin)
 		}
@@ -590,10 +621,14 @@ func (p pluginSwitches) lookup(key, project string) (enabled, set bool) {
 	return v, ok
 }
 
+// matcherlessEvents take no matcher: one written there is ignored.
+var matcherlessEvents = []string{"UserPromptSubmit", "Stop"}
+
 type pluginRef struct {
-	plugin   *HookPlugin
-	key      string
-	disabled bool
+	plugin        *HookPlugin
+	key           string
+	disabled      bool
+	projectUnread bool
 }
 
 // records adds one record per handler, in declaration order within each event.
@@ -619,6 +654,7 @@ func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGr
 				record, info := s.record(scope, kind, event, matcher, raw, plugin)
 				info.layer, info.project, info.kind = layer, s.project, kind
 				info.pluginDisabled = plugin != nil && plugin.disabled
+				info.projectUnread = plugin != nil && plugin.projectUnread
 				s.agent.Hooks = append(s.agent.Hooks, record)
 				s.raw = append(s.raw, info)
 			}
@@ -768,7 +804,7 @@ func (s *hookScan) projectDisablesHooks() bool {
 // managedReadable: every managed file was read, so no managed switch went
 // unseen.
 func (s *hookScan) managedReadable() bool {
-	if s.unlisted || s.managedCut || s.shadowed || s.mdmMerged {
+	if s.unlisted || s.managedCut || s.shadowed || s.mdmMerged || s.policyHelper {
 		return false
 	}
 	for _, scope := range s.agent.Scopes {
@@ -782,7 +818,7 @@ func (s *hookScan) managedReadable() bool {
 func (s *hookScan) coverageReadable() bool {
 	// An MDM profile or an unread project list can hold a setting, or a
 	// Kontext handler, that no record shows.
-	if s.agent.Truncated || s.unlisted || s.shadowed || s.mdmMerged || s.projectsUnread {
+	if s.agent.Truncated || s.unlisted || s.shadowed || s.mdmMerged || s.policyHelper || s.projectsUnread {
 		return false
 	}
 	for _, scope := range s.agent.Scopes {
@@ -822,6 +858,11 @@ func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables, manage
 		// unlisted can turn all hooks off.
 		deviceWide := managedKind(info.kind) && managedReadable || info.kind == HookScopeUser && !projectDisables && readable
 		matcher := strings.TrimSpace(info.matcher)
+		if slices.Contains(matcherlessEvents, r.Event) {
+			// Claude ignores a matcher on these events: the handler runs
+			// for every call.
+			matcher = ""
+		}
 		if deviceWide && !info.conditional && (!info.async || installedAsync(r.Event)) && (matcher == "" || matcher == "*") {
 			covered[r.Event] = true
 		}
@@ -878,9 +919,11 @@ func isAssignment(word string) bool {
 
 // SameFileAs is the OwnBinary check against one installed binary.
 func SameFileAs(installed string) func(string) bool {
+	// The reference is the file at installed now, the running binary: a
+	// later file put at that path is not it.
+	b, errB := os.Stat(installed)
 	return func(path string) bool {
 		a, errA := os.Stat(path)
-		b, errB := os.Stat(installed)
 		return errA == nil && errB == nil && os.SameFile(a, b)
 	}
 }

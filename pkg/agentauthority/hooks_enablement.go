@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -95,11 +96,17 @@ func (s *hookScan) switchesFor(project string) switches {
 				sw.managedOnly = *v
 			}
 			// Managed files combine their lists: a later drop-in adds
-			// surfaces and URLs, it never lifts an earlier restriction.
+			// surfaces and URLs, it never lifts an earlier restriction. A
+			// Boolean is a scalar, and a later one replaces it.
 			if raw := layer.settings.StrictPluginOnlyCustomization; len(raw) > 0 {
-				covers, unclear := pluginOnlyCoversHooks(raw)
-				sw.pluginOnly = sw.pluginOnly || covers
-				sw.pluginOnlyUnclear = sw.pluginOnlyUnclear || unclear
+				var all bool
+				if json.Unmarshal(raw, &all) == nil {
+					sw.pluginOnly, sw.pluginOnlyUnclear = all, false
+				} else {
+					covers, unclear := pluginOnlyCoversHooks(raw)
+					sw.pluginOnly = sw.pluginOnly || covers
+					sw.pluginOnlyUnclear = sw.pluginOnlyUnclear || unclear
+				}
 			}
 			if allow := layer.settings.AllowedHTTPHookURLs; allow != nil {
 				merged := []*regexp.Regexp{}
@@ -107,7 +114,7 @@ func (s *hookScan) switchesFor(project string) switches {
 					merged = append(merged, *sw.httpAllow...)
 				}
 				for _, pattern := range *allow {
-					merged = append(merged, urlPattern(pattern))
+					merged = append(merged, s.urlPattern(pattern))
 				}
 				sw.httpAllow = &merged
 			}
@@ -143,9 +150,28 @@ func (s *hookScan) scopeStatus(id string) string {
 	return StatusComplete
 }
 
+// trusted reports whether Claude trusts dir: its own acceptance, or one a
+// parent folder recorded, which Claude applies to the folders below it.
+func (s *hookScan) trusted(dir string) bool {
+	for dir != "" {
+		if trusted := s.trust[dir]; trusted != nil && *trusted {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return false
+}
+
 // evaluateEnablement sets each record's state and reasons.
 func evaluateEnablement(s *hookScan) {
 	cache := map[string]switches{}
+	// With a managed setting unread, a later managed file can lift a switch
+	// that turned a hook off, so only a missing program still settles it.
+	managedSettled := s.managedReadable()
 	for i := range s.agent.Hooks {
 		r, info := &s.agent.Hooks[i], s.raw[i]
 		kind := HookScopePlugin
@@ -184,11 +210,14 @@ func evaluateEnablement(s *hookScan) {
 		if info.pluginDisabled {
 			disabled = append(disabled, HookReasonPluginDisabled)
 		}
+		if info.projectUnread {
+			unresolved = append(unresolved, HookReasonUnresolved)
+		}
 		if r.Type == "http" && sw.httpAllow != nil && !urlAllowed(info.url, *sw.httpAllow) {
 			disabled = append(disabled, HookReasonHTTPURLNotAllowed)
 		}
 		if projectKind(kind) {
-			if trusted := s.trust[info.project]; trusted == nil || !*trusted {
+			if !s.trusted(info.project) {
 				conditional = append(conditional, HookReasonAwaitingTrust)
 			}
 		}
@@ -202,7 +231,7 @@ func evaluateEnablement(s *hookScan) {
 		if s.shadowed {
 			unresolved = append(unresolved, HookReasonManagedTierShadowed)
 		}
-		if s.mdmMerged {
+		if s.mdmMerged || s.policyHelper {
 			unresolved = append(unresolved, HookReasonUnresolved)
 		}
 		if s.unlisted {
@@ -227,9 +256,9 @@ func evaluateEnablement(s *hookScan) {
 		}
 		state := hookEnabled
 		switch {
-		case len(disabled) > 0:
+		case len(disabled) > 0 && (managedSettled || slices.Contains(disabled, HookReasonBinaryMissing)):
 			state = hookDisabled
-		case len(unresolved) > 0:
+		case len(disabled) > 0 || len(unresolved) > 0:
 			state = hookUnresolved
 		case len(conditional) > 0:
 			state = hookConditional
@@ -246,9 +275,18 @@ func evaluateEnablement(s *hookScan) {
 }
 
 // urlPattern follows allowedHttpHookUrls: each entry is a URL pattern where
-// * matches any run of characters.
-func urlPattern(pattern string) *regexp.Regexp {
-	return regexp.MustCompile("^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$")
+// * matches any run of characters. A pattern is compiled once per scan, not
+// once per project.
+func (s *hookScan) urlPattern(pattern string) *regexp.Regexp {
+	if compiled, ok := s.urlPatterns[pattern]; ok {
+		return compiled
+	}
+	compiled := regexp.MustCompile("^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$")
+	if s.urlPatterns == nil {
+		s.urlPatterns = map[string]*regexp.Regexp{}
+	}
+	s.urlPatterns[pattern] = compiled
+	return compiled
 }
 
 func urlAllowed(raw string, patterns []*regexp.Regexp) bool {
@@ -277,8 +315,13 @@ func programMissing(ctx context.Context, home, program string) bool {
 		if privacyfolder.Guarded(home, program) {
 			return false
 		}
-		_, err := os.Stat(program)
-		return os.IsNotExist(err)
+		info, err := os.Stat(program)
+		if err != nil {
+			return os.IsNotExist(err)
+		}
+		// A program that can't be launched is as good as missing: a
+		// folder, or a file without execute bits outside Windows.
+		return info.IsDir() || runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0
 	})
 }
 
@@ -292,6 +335,11 @@ func settledWithin(ctx context.Context, check func() bool) bool {
 // settled is fn's answer if it comes within programStatTimeout and before
 // ctx ends, else fallback. A late answer is dropped.
 func settled[T any](ctx context.Context, fallback T, fn func() T) T {
+	// A cancelled scan starts no more checks: one blocked on a stalled
+	// mount would stay blocked after the scan returns.
+	if ctx.Err() != nil {
+		return fallback
+	}
 	done := make(chan T, 1)
 	go func() { done <- fn() }()
 	timer := time.NewTimer(programStatTimeout)

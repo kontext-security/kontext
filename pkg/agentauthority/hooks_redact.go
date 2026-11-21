@@ -31,10 +31,20 @@ const redacted = "<redacted>"
 // inside a token, so an npm_ or a dashed key is one word.
 var hookToken = regexp.MustCompile(`[A-Za-z0-9_+/=-]{32,}`)
 
+// hookTokenPrefix names vendor tokens short enough to pass the long-token
+// check (a GitLab PAT is glpat- and 20 characters). Keep identical to
+// HOOK_TOKEN_PREFIX in kontext-cloud's hook-inventory.ts.
+var hookTokenPrefix = regexp.MustCompile(`\b(glpat|gldt|glrt|glptt|glsoat|glcbt|gloas)-|\bnpm_[A-Za-z0-9]{8}|\bpypi-[A-Za-z0-9_-]{8}|\bxox[aboprse]-|\bxapp-|\b[sr]k_(live|test)_|\bshp(at|ss|ca|pa)_|\bdop_v1_|\bhf_[A-Za-z0-9]{8}|\bSG\.[A-Za-z0-9_-]{8}|\bASIA[0-9A-Z]{16}|\beyJ[A-Za-z0-9_-]{8,}\.`)
+
+// pluginVersion is the shape a plugin version is kept in: a release number
+// or a commit hash. Anything else can be a substituted secret. Keep
+// identical to PLUGIN_VERSION in kontext-cloud's hook-inventory.ts.
+var pluginVersion = regexp.MustCompile(`^(v?[0-9]{1,6}(\.[0-9]{1,6}){0,3}([-+][0-9A-Za-z.]{1,24})?|[0-9a-f]{7,40})$`)
+
 // hookSecret is secret plus the cloud's hook check for long mixed tokens
 // (hookTextUnsafe in kontext-cloud's hook-inventory.ts). Keep them identical.
 func hookSecret(value string) bool {
-	if secret(value, "args") {
+	if secret(value, "args") || hookTokenPrefix.MatchString(value) {
 		return true
 	}
 	for _, token := range hookToken.FindAllString(value, -1) {
@@ -66,6 +76,17 @@ func hookSummary(program string, args []string) string {
 	for _, raw := range args {
 		arg := strings.Trim(raw, `"'`)
 		switch {
+		case strings.Contains(arg, "://"):
+			// A URL keeps only its scheme and host, also as a flag's value.
+			add(summaryURL(arg))
+			afterFlag, scriptSlot = false, false
+		case afterFlag:
+			// The value of a flag: a user, a password, a key file. It can
+			// look like a flag itself (`sshpass -p '--winter-2026'`), so a
+			// flag right after a flag is hidden too, and the summary never
+			// shows two flags in a row.
+			add(redacted)
+			afterFlag, scriptSlot = false, false
 		case strings.HasPrefix(arg, "-"):
 			flag, _, hasValue := strings.Cut(arg, "=")
 			if !summaryFlag.MatchString(flag) || hookSecret(flag) {
@@ -79,13 +100,6 @@ func hookSummary(program string, args []string) string {
 			}
 			afterFlag = !hasValue
 			scriptSlot = false
-		case strings.Contains(arg, "://"):
-			add(summaryURL(arg))
-			afterFlag, scriptSlot = false, false
-		case afterFlag:
-			// The value of a flag: a user, a password, a key file.
-			add(redacted)
-			afterFlag = false
 		case scriptSlot && scriptName.MatchString(arg) && !hookSecret(arg):
 			add(arg)
 			scriptSlot = false
@@ -132,6 +146,15 @@ func hookField(value string, limit int) string {
 		return redacted
 	}
 	return safe(value, limit)
+}
+
+// hookVersion keeps a plugin version only in a version's shape; empty and
+// Claude's "unknown" stay as they are.
+func hookVersion(value string) string {
+	if value != "" && value != "unknown" && !pluginVersion.MatchString(value) {
+		return redacted
+	}
+	return hookField(value, 64)
 }
 
 // fileEvents match on a file's name, which can be private (a watched
