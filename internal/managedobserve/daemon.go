@@ -197,7 +197,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		dbPath = DefaultDBPath()
 	}
 
-	_, err = managedconfig.ResolveInstallToken(ctx, loadedConfig.Config.Credentials.InstallTokenRef)
+	startupToken, err := managedconfig.ResolveInstallToken(ctx, loadedConfig.Config.Credentials.InstallTokenRef)
 	if err != nil {
 		// Leave a breadcrumb: under launchd this exit is otherwise invisible
 		// (doctor would only see "daemon: not running" with no cause). A
@@ -266,8 +266,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		endpointConfigCachePath = endpointconfig.DefaultCachePathForDB(dbPath)
 	}
 	endpointConfigCache := endpointconfig.NewCacheForDB(endpointConfigCachePath, dbPath)
-	// A directive another cloud confirmed never applies after re-enrolment.
-	endpointConfigCache.BindCloudURL(loadedConfig.Config.CloudURL)
+	// A directive another enrolment or cloud confirmed never applies after
+	// re-enrolment.
+	endpointConfigCache.Bind(loadedConfig.Config.CloudURL, startupToken)
 	if err := endpointConfigCache.Load(); err != nil {
 		endpointConfigCache.MarkInvalid(err)
 		opts.Diagnostic.Printf("endpoint configuration cache load: %v\n", err)

@@ -1,6 +1,7 @@
 package endpointconfig
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -82,6 +83,10 @@ type cacheFile struct {
 	// CloudURL is the cloud that confirmed Response. A directive belongs to
 	// it: another cloud's workspace never runs under it.
 	CloudURL string `json:"cloudUrl,omitempty"`
+	// Owner names the enrolment (see Owner) whose token confirmed Response:
+	// re-enrolling into another workspace on the same cloud doesn't inherit
+	// it.
+	Owner string `json:"owner,omitempty"`
 	// Retained only to decode existing cache files with the strict decoder.
 	GuardrailLLMDirective *bool `json:"guardrailLlmDirective,omitempty"`
 }
@@ -98,6 +103,22 @@ type Cache struct {
 	lastGood *Response
 	status   Status
 	owner    string
+	// cloudURL and boundOwner are what Bind named.
+	boundOwner string
+}
+
+func NewCache(path string) *Cache {
+	return &Cache{path: path, rejectedPath: path + ".rejected", now: time.Now}
+}
+
+// Bind names the cloud and the enrolment this process runs under. Load then
+// restores only a directive that this enrolment confirmed on that cloud, and
+// Apply records both. Unbound, a cache takes any directive.
+func (c *Cache) Bind(cloudURL, installToken string) {
+	c.mu.Lock()
+	c.cloudURL = normalCloudURL(cloudURL)
+	c.boundOwner = Owner(installToken)
+	c.mu.Unlock()
 }
 
 // Owner names an install token without holding it: two enrolments never
@@ -109,19 +130,6 @@ func Owner(token string) string {
 	}
 	sum := sha256.Sum256([]byte("kontext/endpoint-config/owner/v1|" + token))
 	return hex.EncodeToString(sum[:])
-}
-
-func NewCache(path string) *Cache {
-	return &Cache{path: path, rejectedPath: path + ".rejected", now: time.Now}
-}
-
-// BindCloudURL names the cloud this process talks to. Load then restores
-// only a directive that cloud confirmed, and Apply records it. Unbound, a
-// cache takes any directive, as before.
-func (c *Cache) BindCloudURL(cloudURL string) {
-	c.mu.Lock()
-	c.cloudURL = normalCloudURL(cloudURL)
-	c.mu.Unlock()
 }
 
 func normalCloudURL(cloudURL string) string {
@@ -157,6 +165,7 @@ func (c *Cache) Load() error {
 		c.mu.Unlock()
 		return ErrCacheInvalidated
 	} else if !errors.Is(err, os.ErrNotExist) {
+		c.holdVeto()
 		return fmt.Errorf("endpoint configuration cache: revocation journal: %w", err)
 	}
 	data, err := os.ReadFile(c.path)
@@ -164,7 +173,16 @@ func (c *Cache) Load() error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
+		c.holdVeto()
 		return fmt.Errorf("endpoint configuration cache: read: %w", err)
+	}
+	if bytes.HasPrefix(data, []byte(markerHeader)) {
+		// The journal couldn't be written, so the marker took the cache's
+		// place.
+		c.mu.Lock()
+		c.status = Status{Stale: true, Invalid: true, LastError: ErrCacheInvalidated.Error(), NoCommonVersion: markerHas(data, markerNoCommonVersion), PromptVeto: markerHas(data, markerPromptVeto) || !markerHas(data, markerVersioned)}
+		c.mu.Unlock()
+		return ErrCacheInvalidated
 	}
 	// A response persisted by a build that negotiated another version has a
 	// different config shape, which the strict decoder below rejects. Read
@@ -180,9 +198,13 @@ func (c *Cache) Load() error {
 	}
 	var file cacheFile
 	if err := decodeStrict(strings.NewReader(string(data)), &file); err != nil {
+		// An unreadable cache, a truncated one included, may have held an
+		// opt-out: it holds until a config is confirmed.
+		c.holdVeto()
 		return fmt.Errorf("endpoint configuration cache: %w", err)
 	}
 	if file.Version < 1 || file.Version > cacheFileVersion || file.Response == nil {
+		c.holdVeto()
 		return errors.New("endpoint configuration cache: invalid cache shape")
 	}
 	if err := file.Response.Validate(); err != nil {
@@ -194,26 +216,30 @@ func (c *Cache) Load() error {
 			c.discardOlderVersion()
 			return nil
 		}
+		c.holdVeto()
 		return fmt.Errorf("endpoint configuration cache: %w", err)
 	}
 	fetchedAt, err := time.Parse(time.RFC3339Nano, file.FetchedAt)
 	if err != nil {
+		c.holdVeto()
 		return fmt.Errorf("endpoint configuration cache: invalid fetchedAt: %w", err)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// A file from a build that didn't record its cloud is taken as this
-	// one's, so an upgrade keeps its directive; the next Apply records it.
-	if c.cloudURL != "" && file.CloudURL != "" && normalCloudURL(file.CloudURL) != c.cloudURL {
-		// Confirmed by another cloud: it doesn't apply here, and whether it
-		// let prompts leave isn't this workspace's answer, so the opt-out
-		// holds.
-		c.status = Status{Stale: true, LastError: "persisted configuration was confirmed by another cloud", PromptVeto: true}
+	// A bound cache restores only what this enrolment confirmed on this
+	// cloud. A file that doesn't name them, from an older build, can't show
+	// it: the next refresh replaces it.
+	if c.cloudURL != "" && normalCloudURL(file.CloudURL) != c.cloudURL || c.boundOwner != "" && file.Owner != c.boundOwner {
+		// Whether it let prompts leave isn't this enrolment's answer, so the
+		// opt-out holds.
+		c.status = Status{Stale: true, LastError: "persisted configuration was confirmed by another enrolment or cloud", PromptVeto: true}
 		return nil
 	}
 	c.fetched = fetchedAt
 	c.active = cloneResponse(file.Response)
 	c.lastGood = cloneResponse(file.Response)
+	// Bound, the file names this enrolment, which confirmed it.
+	c.owner = c.boundOwner
 	c.status = Status{FetchedAt: fetchedAt, Stale: true}
 	return nil
 }
@@ -228,10 +254,11 @@ func (c *Cache) discardOlderVersion() {
 }
 
 func (c *Cache) Apply(result FetchResult, fetchedAt time.Time) error {
-	return c.apply(result, fetchedAt, "")
+	return c.apply(result, fetchedAt, c.boundOwnerName())
 }
 
-// apply takes a result the owner's install token fetched.
+// apply takes a result the owner's install token fetched, and records the
+// owner with it.
 func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) error {
 	if fetchedAt.IsZero() {
 		fetchedAt = c.now().UTC()
@@ -259,6 +286,7 @@ func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) err
 		FetchedAt: fetchedAt.UTC().Format(time.RFC3339Nano),
 		Response:  cloneResponse(confirmed),
 		CloudURL:  c.boundCloudURL(),
+		Owner:     owner,
 	}
 	// A verified directive is authoritative even if the local disk fails.
 	// In particular, retaining an older Full directive after a valid opt-out
@@ -271,6 +299,10 @@ func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) err
 	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt, Stale: true}
 	c.mu.Unlock()
 	if err := c.persist(file); err != nil {
+		// The journal that replaces the file must keep a confirmed opt-out.
+		c.mu.Lock()
+		c.status.PromptVeto = !promptsAllowed(confirmed.Config)
+		c.mu.Unlock()
 		err = errors.Join(err, c.invalidatePersisted())
 		c.MarkFailed(err, fetchedAt)
 		return err
@@ -545,11 +577,25 @@ func (r *Refresher) fail(err error) error {
 }
 
 const (
+	markerHeader          = "refresh required"
 	markerNoCommonVersion = "no-common-version"
 	markerPromptVeto      = "prompt-veto"
 	// markerVersioned: the marker says whether a veto holds.
 	markerVersioned = "v2"
 )
+
+func (c *Cache) boundOwnerName() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.boundOwner
+}
+
+// holdVeto keeps the prompt opt-out after a cache that couldn't be read.
+func (c *Cache) holdVeto() {
+	c.mu.Lock()
+	c.status.PromptVeto = true
+	c.mu.Unlock()
+}
 
 func (c *Cache) boundCloudURL() string {
 	c.mu.RLock()
@@ -562,8 +608,10 @@ func markerHas(marker []byte, flag string) bool {
 }
 
 func (c *Cache) rejectAuthority(err error, at time.Time) error {
-	noCommon := errors.Is(err, ErrNoCommonVersion)
 	c.mu.Lock()
+	// A Codex route removal still owed survives a later rejection, a 401
+	// included: no config has re-enabled the route.
+	noCommon := errors.Is(err, ErrNoCommonVersion) || c.status.NoCommonVersion
 	// A rejection (a rollback, an expired or revoked token) drops the
 	// directive but not a prompt opt-out: the last confirmed config let no
 	// prompt leave, and an unconfirmed record would be recovered by a later
@@ -587,7 +635,7 @@ func (c *Cache) invalidatePersisted() error {
 		return nil
 	}
 	c.mu.RLock()
-	marker := "refresh required\n" + markerVersioned + "\n"
+	marker := markerHeader + "\n" + markerVersioned + "\n"
 	if c.status.NoCommonVersion {
 		marker += markerNoCommonVersion + "\n"
 	}
@@ -600,8 +648,13 @@ func (c *Cache) invalidatePersisted() error {
 			return nil
 		}
 	}
-	// A directory can deny deletion while its existing file remains writable.
-	// Truncation is fail-closed even if interrupted; Load rejects the empty file.
+	// A directory can deny deletion while its existing file remains writable:
+	// the marker then replaces the cache, so the veto and a route removal
+	// still owed survive a restart. Truncation is the last resort; Load
+	// holds the veto for an empty file too.
+	if err := os.WriteFile(c.path, []byte(marker), 0600); err == nil {
+		return nil
+	}
 	writeErr := os.WriteFile(c.path, nil, 0600)
 	if writeErr == nil {
 		return nil

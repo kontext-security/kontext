@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -69,7 +70,12 @@ func (h *hookHome) write(path string, value any) string {
 			h.t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	mode := os.FileMode(0o644)
+	if bytes.HasPrefix(data, []byte("#!")) {
+		// A script stands in for a program, which can be launched.
+		mode = 0o755
+	}
+	if err := os.WriteFile(path, data, mode); err != nil {
 		h.t.Fatal(err)
 	}
 	return path
@@ -664,8 +670,56 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 	t.Run("matcher hidden from the summary", func(t *testing.T) {
 		h, bin, call := setup(t)
 		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "/opt/tool", nil)})
-		if agent, _ := h.scan(bin); agent.KontextHooks.State != "missing" {
+		// Claude ignores a matcher on Stop and UserPromptSubmit, so only
+		// those two still run for every call.
+		agent, _ := h.scan(bin)
+		missing := agent.KontextHooks.MissingEvents
+		if agent.KontextHooks.State != "needs_update" || slices.Contains(missing, "Stop") || slices.Contains(missing, "UserPromptSubmit") || !slices.Contains(missing, "PreToolUse") {
 			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("a policy helper can replace the managed files", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"policyHelper": map[string]any{"command": "/opt/policy"}, "hooks": all(call, "", nil)})
+		agent, result := h.scan(bin)
+		if agent.KontextHooks.State != KontextHooksUnknown || result.Status != StatusPartial {
+			t.Fatalf("%+v %+v", agent.KontextHooks, result)
+		}
+		if r := agent.Hooks[0]; r.Enablement.State != hookUnresolved {
+			t.Fatalf("%+v", r.Enablement)
+		}
+	})
+	t.Run("an MDM profile leaves the scan partial", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.mdm = true
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		if _, result := h.scan(bin); result.Status != StatusPartial {
+			t.Fatalf("%+v", result)
+		}
+	})
+	t.Run("args of the wrong type are not Kontext's", func(t *testing.T) {
+		h, bin, _ := setup(t)
+		hooks := map[string]any{}
+		for _, event := range claudemanaged.SupportedEvents {
+			hooks[event.Name.String()] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": agenthooks.ShellQuote(bin) + " hook " + event.Alias, "args": "hook"}}}}
+		}
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooks})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State == "complete" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("a program without execute bits can't run", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("no execute bits")
+		}
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		if err := os.Chmod(bin, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		agent, _ := h.scan(bin)
+		if agent.KontextHooks.State == "complete" || agent.Hooks[0].Enablement.State != hookDisabled {
+			t.Fatalf("%+v %+v", agent.KontextHooks, agent.Hooks[0].Enablement)
 		}
 	})
 	t.Run("handler-level if", func(t *testing.T) {
@@ -781,6 +835,48 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 		}
 		if len(agent.Hooks) == 0 {
 			t.Fatal("no hooks")
+		}
+	})
+	t.Run("a cut managed tier leaves a switch-disabled hook unresolved", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"disableAllHooks": true})
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		for i := range MaxHookScopes {
+			h.write(filepath.Join(h.managed, "managed-settings.d", fmt.Sprintf("%03d.json", i)), map[string]any{})
+		}
+		agent, _ := h.scan(bin)
+		for _, r := range agent.Hooks {
+			if r.Enablement.State != hookUnresolved {
+				t.Fatalf("%+v", r.Enablement)
+			}
+		}
+	})
+	t.Run("an emptied managed file holds no hooks", func(t *testing.T) {
+		h, bin, _ := setup(t)
+		h.write(filepath.Join(h.managed, "managed-settings.json"), []byte(""))
+		agent, result := h.scan(bin)
+		if result.Status != StatusComplete || len(agent.Hooks) != 0 {
+			t.Fatalf("%+v %+v", result, agent.Hooks)
+		}
+	})
+	t.Run("a parent folder's trust covers a project", func(t *testing.T) {
+		h, bin, call := setup(t)
+		parent := filepath.Join(h.home, "src")
+		project := filepath.Join(parent, "app")
+		h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", call("stop"))})
+		h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{parent: map[string]any{"hasTrustDialogAccepted": true}, project: map[string]any{}}})
+		agent, _ := h.scan(bin)
+		if len(agent.Hooks) != 1 || agent.Hooks[0].Enablement.State != hookEnabled {
+			t.Fatalf("%+v", agent.Hooks)
+		}
+	})
+	t.Run("a later managed Boolean replaces plugin-only customization", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"strictPluginOnlyCustomization": true})
+		h.write(filepath.Join(h.managed, "managed-settings.d", "20-lift.json"), map[string]any{"strictPluginOnlyCustomization": false})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "complete" {
+			t.Fatalf("%+v", agent.KontextHooks)
 		}
 	})
 	t.Run("a later managed file adds to plugin-only customization", func(t *testing.T) {
@@ -975,6 +1071,10 @@ func TestHookSummaryDropsPositionalWords(t *testing.T) {
 		{"python", "-c code winter.py", "python -c <redacted>"},
 		{"bash", "check.sh", "bash check.sh"},
 		{"/opt/hooks/check.sh", "spring.sh", "check.sh <redacted>"},
+		// A flag's value can look like a flag.
+		{"/usr/bin/sshpass", "-p --winter-2026 ssh host", "sshpass -p <redacted>"},
+		{"tool", "--password --ExampleOnly", "tool --password <redacted>"},
+		{"curl", "--url https://hooks.example.com/x", "curl --url https://hooks.example.com"},
 	} {
 		if got := hookSummary(c.program, strings.Fields(c.args)); got != c.want {
 			t.Errorf("hookSummary(%q, %q) = %q, want %q", c.program, c.args, got, c.want)
@@ -1324,5 +1424,59 @@ func TestPluginMetadataHidesTokens(t *testing.T) {
 	agent, _ := h.scan()
 	if len(agent.Hooks) != 1 || agent.Hooks[0].Plugin == nil || *agent.Hooks[0].Plugin.Version != redacted {
 		t.Fatalf("%+v", agent.Hooks)
+	}
+}
+
+// A plugin without a manifest takes its hooks from the marketplace entry,
+// which the scan doesn't read; a null manifest is no manifest; a project
+// install whose project wasn't read can be turned off there.
+func TestPluginScopesThatCantBeProven(t *testing.T) {
+	h := newHookHome(t)
+	on := true
+	h.installPlugin("formatter@acme", &on, hooksOf("Stop", "", command("echo stop")))
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	if err := os.Remove(filepath.Join(dir, ".claude-plugin/plugin.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, result := h.scan(); result.Status != StatusPartial {
+		t.Fatalf("no manifest: %+v", result)
+	}
+	h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), []byte("null"))
+	if _, result := h.scan(); result.Status != StatusPartial {
+		t.Fatalf("null manifest: %+v", result)
+	}
+	h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), map[string]any{"name": "formatter", "version": "1.4.0"})
+	h.write(filepath.Join(h.base, "plugins/installed_plugins.json"), map[string]any{"plugins": map[string]any{"formatter@acme": []any{map[string]any{"installPath": dir, "projectPath": filepath.Join(h.home, "src", "unlisted")}}}})
+	agent, _ := h.scan()
+	if len(agent.Hooks) != 1 || agent.Hooks[0].Enablement.State != hookUnresolved {
+		t.Fatalf("unread project: %+v", agent.Hooks)
+	}
+}
+
+// A short vendor token passes the long-token check but not its prefix, and a
+// version keeps only a version's shape.
+func TestShortVendorTokensAreHidden(t *testing.T) {
+	for _, value := range []string{"glpat-" + strings.Repeat("x", 20), "xoxe-1-abc", "sk_live_abc", "pypi-AgEIcHlwaS5vcmc", "eyJhbGciOiJIUzI1NiJ9.e30.sig"} {
+		if !hookSecret(value) {
+			t.Errorf("%q not flagged", value)
+		}
+		if got := hookVersion(value); got != redacted {
+			t.Errorf("version %q kept as %q", value, got)
+		}
+	}
+	for _, version := range []string{"1.4.0", "v2.0.1-beta.1", "0.3.0+build.7", "a1b2c3d4e5f6", "", "unknown"} {
+		if got := hookVersion(version); got != version {
+			t.Errorf("version %q became %q", version, got)
+		}
+	}
+	for _, value := range []string{"winter-2026", "release-candidate", "PreToolUse"} {
+		if got := hookVersion(value); got != redacted {
+			t.Errorf("version %q kept", value)
+		}
+	}
+	for _, value := range []string{"formatter", "acme-tools", "shelf_x", "npm_run"} {
+		if hookSecret(value) {
+			t.Errorf("%q flagged", value)
+		}
 	}
 }

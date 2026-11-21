@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 )
@@ -20,6 +21,9 @@ type HookSettings struct {
 	// SwitchInvalid: a switch held a value of the wrong type. Its effect
 	// depends on the agent's version, so the scanner doesn't guess it.
 	SwitchInvalid bool `json:"-"`
+	// PolicyHelper: the file names a policy helper, a program whose output
+	// replaces the managed settings and can't be read without running it.
+	PolicyHelper bool `json:"-"`
 }
 
 type HookGroup struct {
@@ -78,6 +82,11 @@ var errSettingsShape = errors.New("settings is not an object")
 // a Boolean sets it, null clears an earlier value, anything else changes
 // nothing, so it is read apart from the struct.
 func Hooks(data []byte) (HookSettings, error) {
+	// Claude reads an empty settings file as {}: emptying it removes its
+	// hooks.
+	if len(bytes.TrimSpace(data)) == 0 {
+		return HookSettings{}, nil
+	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
 		return HookSettings{}, err
@@ -92,6 +101,9 @@ func Hooks(data []byte) (HookSettings, error) {
 		if err := json.Unmarshal(raw, &s.Hooks); err != nil {
 			return HookSettings{}, errHooksShape
 		}
+	}
+	if raw, ok := top["policyHelper"]; ok && string(raw) != "null" {
+		s.PolicyHelper = true
 	}
 	if raw, ok := top["disableAllHooks"]; ok {
 		var value *bool
@@ -136,14 +148,20 @@ func Handler(raw json.RawMessage) HookHandler {
 	if json.Unmarshal(raw, &fields) != nil {
 		return h
 	}
+	malformed := false
 	for key, target := range map[string]any{
 		"type": &h.Type, "command": &h.Command, "args": &h.Args, "url": &h.URL,
 		"server": &h.Server, "tool": &h.Tool, "timeout": &h.Timeout, "if": &h.If,
 		"async": &h.Async, "asyncRewake": &h.AsyncRewake,
 	} {
-		if value, ok := fields[key]; ok {
-			_ = json.Unmarshal(value, target)
+		if value, ok := fields[key]; ok && json.Unmarshal(value, target) != nil {
+			malformed = true
 		}
+	}
+	if malformed {
+		// Claude doesn't run a handler whose fields don't fit its shape
+		// (`args` as a string): it is unknown, never verified as ours.
+		return HookHandler{}
 	}
 	return h
 }
