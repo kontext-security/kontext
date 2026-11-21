@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.25.0](https://github.com/kontext-security/kontext/compare/v1.24.1...v1.25.0) (2026-11-21)
+
+
+### Features
+
+* **agentauthority:** scan every Claude Code hook and whether it can run ([#797](https://github.com/kontext-security/kontext/issues/797)) ([da468f3](https://github.com/kontext-security/kontext/commit/da468f32252a4e8599617a4553d0f1e578904525))
+* **compaction:** report partial read-backs for file Reads ([#792](https://github.com/kontext-security/kontext/issues/792)) ([93921aa](https://github.com/kontext-security/kontext/commit/93921aae125382ed922b1c2e420e7c86476db262))
+* **endpointconfig:** negotiate response version 6 and read the hook inventory switch ([#796](https://github.com/kontext-security/kontext/issues/796)) ([69b69b2](https://github.com/kontext-security/kontext/commit/69b69b26c8575b618b8b5737d9d85a0f9f0f7367))
+* **managedobserve:** report hook inventory while endpoint config turns it on ([#798](https://github.com/kontext-security/kontext/issues/798)) ([e0d7735](https://github.com/kontext-security/kontext/commit/e0d77350ebc15768e20758397e047a7c7f76dcf9))
+
+
+### Bug Fixes
+
+* **doctor:** include the unsupported-mode warning in doctor --json ([#790](https://github.com/kontext-security/kontext/issues/790)) ([a0c3114](https://github.com/kontext-security/kontext/commit/a0c3114c5a58d1dbba502f52942cd17616b662a4))
+* **doctor:** one process liveness check on Windows, for doctor and the profile claim ([#791](https://github.com/kontext-security/kontext/issues/791)) ([65c61dd](https://github.com/kontext-security/kontext/commit/65c61dd400e03b8ea7cd5dc8893b1beb251468b9))
+* **guard:** record the same provider every time for a command that names two ([#789](https://github.com/kontext-security/kontext/issues/789)) ([488867e](https://github.com/kontext-security/kontext/commit/488867e86aa750ff9722fab8b021c4176d933a74))
+* **runtimehost:** make no session folder for a host with a named socket ([#785](https://github.com/kontext-security/kontext/issues/785)) ([1a02dc0](https://github.com/kontext-security/kontext/commit/1a02dc023fdc2d2af51d62d8a408aeb0d913ee50))
+* **setup:** catch a dangling Codex hooks link before setup writes anything ([#788](https://github.com/kontext-security/kontext/issues/788)) ([73463b2](https://github.com/kontext-security/kontext/commit/73463b21c2f84fe801b0fb5b64afcf71d192b709))
+
 ## [1.24.1](https://github.com/kontext-security/kontext/compare/v1.24.0...v1.24.1) (2026-11-14)
 
 
