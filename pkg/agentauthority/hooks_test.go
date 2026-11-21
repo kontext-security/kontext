@@ -774,6 +774,24 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 			t.Fatalf("%+v", agent.KontextHooks)
 		}
 	})
+	t.Run("an unread local file can lift a project switch", func(t *testing.T) {
+		h, bin, call := setup(t)
+		project := filepath.Join(h.home, "src", "app")
+		h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{"hasTrustDialogAccepted": true}}})
+		h.write(filepath.Join(project, ".claude", "settings.json"), map[string]any{"disableAllHooks": true, "hooks": hooksOf("Stop", "", call("stop"))})
+		if agent, _ := h.scan(bin); agent.Hooks[0].Enablement.State != hookDisabled {
+			t.Fatalf("all read: %+v", agent.Hooks[0].Enablement)
+		}
+		h.write(filepath.Join(project, ".claude", "settings.local.json"), []byte("{not json"))
+		if agent, _ := h.scan(bin); agent.Hooks[0].Enablement.State != hookUnresolved {
+			t.Fatalf("local unread: %+v", agent.Hooks[0].Enablement)
+		}
+		// A managed switch holds whatever a local file says.
+		h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"disableAllHooks": true})
+		if agent, _ := h.scan(bin); agent.Hooks[0].Enablement.State != hookDisabled {
+			t.Fatalf("managed off: %+v", agent.Hooks[0].Enablement)
+		}
+	})
 	t.Run("handler-level if", func(t *testing.T) {
 		h, bin, call := setup(t)
 		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "*", map[string]any{"if": "Bash(git *)"})})
