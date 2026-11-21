@@ -766,6 +766,18 @@
       "ruleId": "redis-cli-password-flag",
       "input": "redis-cli --eval 'a;b' -a FAKEredispass get k",
       "mustNotSurvive": ["FAKEredispass"]
+    },
+    {
+      "name": "mysql-password-after-ansi-c-quote",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -e $'SELECT \\'x\\'' -pFAKEmysqlansi appdb",
+      "mustNotSurvive": ["FAKEmysqlansi"]
+    },
+    {
+      "name": "redis-cli-password-after-ansi-c-quote",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -h $'can\\'t' -a FAKEredisansi ping",
+      "mustNotSurvive": ["FAKEredisansi"]
     }
   ],
   "keyVectors": [
