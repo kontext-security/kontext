@@ -1664,3 +1664,24 @@ func TestToolEventIncludesPermissionDenied(t *testing.T) {
 		t.Fatal("Stop is a tool event")
 	}
 }
+
+// An unread manifest may hold defaultEnabled: false, so its plugin's hooks
+// are unresolved unless a setting turns the plugin on or off.
+func TestUnreadPluginManifestLeavesHooksUnresolved(t *testing.T) {
+	on, off := true, false
+	for _, c := range []struct {
+		enabled *bool
+		want    string
+	}{{nil, hookUnresolved}, {&on, hookEnabled}, {&off, hookDisabled}} {
+		h := newHookHome(t)
+		h.installPlugin("formatter@acme", c.enabled, hooksOf("Stop", "", command("format.sh")))
+		dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+		if err := os.WriteFile(filepath.Join(dir, ".claude-plugin/plugin.json"), []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		agent, _ := h.scan()
+		if len(agent.Hooks) != 1 || agent.Hooks[0].Enablement.State != c.want {
+			t.Fatalf("enabled %v: %+v", c.enabled, agent.Hooks)
+		}
+	}
+}

@@ -236,6 +236,9 @@ type hookRaw struct {
 	// projectUnread: a plugin installed for a project whose settings went
 	// unread.
 	projectUnread bool
+	// manifestUnread: no setting names the plugin and its manifest went
+	// unread, so a defaultEnabled: false there may keep it off.
+	manifestUnread bool
 	// ownerUnknown: the check of a Kontext call's binary didn't finish, so
 	// whether it is Kontext's own is unknown, not "no".
 	ownerUnknown bool
@@ -525,7 +528,7 @@ func (s *hookScan) pluginScopes(base string) {
 			// the project cap, or not listed) can be turned off there.
 			_, projectRead := s.trust[filepath.Clean(entry.ProjectPath)]
 			projectUnread := entry.ProjectPath != "" && !projectRead
-			s.records(id, HookScopePlugin, hooks, &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread}, -1)
+			s.records(id, HookScopePlugin, hooks, &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread, manifestUnread: !manifestRead && !set}, -1)
 			s.project = ""
 			s.closeScope(h, id, HookScopePlugin)
 		}
@@ -638,10 +641,11 @@ func (p pluginSwitches) lookup(key, project string) (enabled, set bool) {
 var matcherlessEvents = []string{"UserPromptSubmit", "Stop"}
 
 type pluginRef struct {
-	plugin        *HookPlugin
-	key           string
-	disabled      bool
-	projectUnread bool
+	plugin         *HookPlugin
+	key            string
+	disabled       bool
+	projectUnread  bool
+	manifestUnread bool
 }
 
 // records adds one record per handler, in declaration order within each event.
@@ -668,6 +672,7 @@ func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGr
 				info.layer, info.project, info.kind = layer, s.project, kind
 				info.pluginDisabled = plugin != nil && plugin.disabled
 				info.projectUnread = plugin != nil && plugin.projectUnread
+				info.manifestUnread = plugin != nil && plugin.manifestUnread
 				s.agent.Hooks = append(s.agent.Hooks, record)
 				s.raw = append(s.raw, info)
 			}
