@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/platform"
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 const maxFiles = 500
@@ -81,6 +82,10 @@ type fileResult struct {
 
 // One per-file budget includes metadata, ancestor checks, open, and read.
 // A timed-out worker finishes and closes its own file without blocking later reads.
+// errPrivacyGuarded is a path in a privacy-guarded folder, found by the
+// timed worker.
+var errPrivacyGuarded = errors.New("privacy-guarded folder")
+
 func (g *guard) access(path, mode string) fileResult {
 	if g.ctx.Err() != nil || g.opened >= maxFiles {
 		g.report.Truncated = true
@@ -132,7 +137,16 @@ func (g *guard) access(path, mode string) fileResult {
 	}
 	cached, hasCache := g.cache[path]
 	beginRead := g.beginRead
+	home := g.home
 	go func() {
+		// The lexical check above misses another spelling of the same
+		// folder: ~/documents on a case-insensitive volume, the data-volume
+		// alias (/System/Volumes/Data/Users/...), or a symlink into one. It
+		// reads metadata, so it runs inside the deadline.
+		if privacyfolder.Guarded(home, path) {
+			done <- fileResult{err: errPrivacyGuarded}
+			return
+		}
 		if beginRead != nil {
 			defer beginRead()()
 		}
@@ -177,6 +191,11 @@ func (g *guard) access(path, mode string) fileResult {
 	defer timer.Stop()
 	select {
 	case result := <-done:
+		if errors.Is(result.err, errPrivacyGuarded) {
+			g.skip()
+			g.fail(ReasonPermissionDenied)
+			return fileResult{err: os.ErrPermission}
+		}
 		if result.opened {
 			g.opened++
 		}
