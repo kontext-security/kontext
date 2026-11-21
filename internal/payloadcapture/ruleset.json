@@ -66,7 +66,7 @@
     {
       "id": "aws-access-key-id",
       "description": "AWS access key identifiers.",
-      "pattern": "\\b(?:AKIA|ASIA)[A-Z0-9]{16}\\b",
+      "pattern": "(?:AKIA|ASIA)[A-Z0-9]{16}\\b",
       "caseInsensitive": false,
       "provenance": "gitleaks:aws-access-token"
     },
@@ -136,7 +136,7 @@
     {
       "id": "sendgrid-key",
       "description": "SendGrid API keys.",
-      "pattern": "\\bSG\\.[A-Za-z0-9_-]{16,}",
+      "pattern": "SG\\.[A-Za-z0-9_-]{16,}(?:\\.[A-Za-z0-9_-]+)?",
       "caseInsensitive": false,
       "provenance": "gitleaks:sendgrid-api-token"
     },
@@ -150,7 +150,7 @@
     {
       "id": "jwt",
       "description": "JSON Web Tokens, also with short claims or no signature (`eyJ….e30.`).",
-      "pattern": "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{2,}\\.[A-Za-z0-9_-]*",
+      "pattern": "eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{2,}\\.[A-Za-z0-9_-]*",
       "caseInsensitive": false,
       "provenance": "gitleaks:jwt"
     },

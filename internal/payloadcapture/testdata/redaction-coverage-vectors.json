@@ -729,7 +729,7 @@
       "name": "sendgrid-key",
       "ruleId": "sendgrid-key",
       "input": "key SG.FAKE0123456789abcd.FAKEefghijklmnopqrst end",
-      "mustNotSurvive": ["SG.FAKE0123456789abcd"]
+      "mustNotSurvive": ["SG.FAKE0123456789abcd", "FAKEefghijklmnopqrst"]
     },
     {
       "name": "jwt-short-claims",
@@ -742,6 +742,18 @@
       "ruleId": "jwt",
       "input": "token eyJhbGciOiJub25lIn0.eyJzdWIiOjF9. end",
       "mustNotSurvive": ["eyJhbGciOiJub25lIn0.eyJzdWIiOjF9"]
+    },
+    {
+      "name": "jwt-glued",
+      "ruleId": "jwt",
+      "input": "notify ci_eyJhbGciOiJub25lIn0.eyJzdWIiOiJhbGljZSJ9. end",
+      "mustNotSurvive": ["eyJhbGciOiJub25lIn0.eyJzdWIiOiJhbGljZSJ9"]
+    },
+    {
+      "name": "aws-access-key-glued",
+      "ruleId": "aws-access-key-id",
+      "input": "creds key_ASIAFAKE0123456789AB end",
+      "mustNotSurvive": ["ASIAFAKE0123456789AB"]
     }
   ],
   "keyVectors": [
