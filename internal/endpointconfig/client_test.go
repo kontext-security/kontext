@@ -572,18 +572,18 @@ func TestCachedDirectiveBelongsToItsCloud(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "endpoint-config.json")
 	first := NewCache(path)
-	first.BindCloudURL("https://a.example/")
+	first.Bind("https://a.example/", "token-a")
 	response := testResponse(t, payloadcapture.ModeFull)
 	if err := first.Apply(FetchResult{Response: &response}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	same := NewCache(path)
-	same.BindCloudURL("https://a.example")
+	same.Bind("https://a.example", "token-a")
 	if err := same.Load(); err != nil || !same.Current().Confirmed {
 		t.Fatalf("same cloud: %v %+v", err, same.Current().Status)
 	}
 	other := NewCache(path)
-	other.BindCloudURL("https://b.example")
+	other.Bind("https://b.example", "token-a")
 	if err := other.Load(); err != nil || other.Current().Confirmed || !other.Current().Status.PromptVeto {
 		t.Fatalf("other cloud: %v confirmed=%v %+v", err, other.Current().Confirmed, other.Current().Status)
 	}
@@ -604,5 +604,121 @@ func TestCachedDirectiveBelongsToItsCloud(t *testing.T) {
 	upgraded := NewCache(older)
 	if err := upgraded.Load(); err != nil || !upgraded.Current().Status.PromptVeto {
 		t.Fatalf("older version: %v %+v", err, upgraded.Current().Status)
+	}
+}
+
+// Re-enrolling into another workspace on the same cloud doesn't restore the
+// previous enrolment's directive, and a file that names no enrolment, from
+// an older build, isn't restored by a bound cache either.
+func TestCachedDirectiveBelongsToItsEnrolment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "endpoint-config.json")
+	first := NewCache(path)
+	first.Bind("https://a.example", "token-a")
+	response := testResponse(t, payloadcapture.ModeFull)
+	if err := first.Apply(FetchResult{Response: &response}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	other := NewCache(path)
+	other.Bind("https://a.example", "token-b")
+	if err := other.Load(); err != nil || other.Current().Confirmed || !other.Current().Status.PromptVeto {
+		t.Fatalf("other enrolment: %v %+v", err, other.Current().Status)
+	}
+	legacyPath := filepath.Join(t.TempDir(), "endpoint-config.json")
+	unbound := NewCache(legacyPath)
+	if err := unbound.Apply(FetchResult{Response: &response}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	legacy := NewCache(legacyPath)
+	legacy.Bind("https://a.example", "token-a")
+	if err := legacy.Load(); err != nil || legacy.Current().Confirmed || !legacy.Current().Status.PromptVeto {
+		t.Fatalf("legacy file: %v %+v", err, legacy.Current().Status)
+	}
+}
+
+// A confirmed opt-out whose cache file can't be replaced is journaled with
+// the veto, and a journal that can't be written takes the cache's place, so
+// an offline restart keeps both the veto and an owed route removal.
+func TestTheVetoSurvivesAFailedWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "endpoint-config.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cache := NewCache(path)
+	optOut := testResponse(t, payloadcapture.ModeOmitted)
+	if err := cache.Apply(FetchResult{Response: &optOut}, time.Now().UTC()); err == nil {
+		t.Fatal("replacing a directory succeeded")
+	}
+	restarted := NewCache(path)
+	if err := restarted.Load(); !errors.Is(err, ErrCacheInvalidated) || !restarted.Current().Status.PromptVeto {
+		t.Fatalf("failed replace: %v %+v", err, restarted.Current().Status)
+	}
+
+	path = filepath.Join(t.TempDir(), "endpoint-config.json")
+	cache = NewCache(path)
+	if err := cache.Apply(FetchResult{Response: &optOut}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(cache.rejectedPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.rejectAuthority(ErrNoCommonVersion, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(cache.rejectedPath); err != nil {
+		t.Fatal(err)
+	}
+	restarted = NewCache(path)
+	err := restarted.Load()
+	status := restarted.Current().Status
+	if !errors.Is(err, ErrCacheInvalidated) || !status.PromptVeto || !status.NoCommonVersion {
+		t.Fatalf("unwritable journal: %v %+v", err, status)
+	}
+
+	// An unreadable journal holds the veto as well.
+	blocked := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	if err := os.Mkdir(blocked.rejectedPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := blocked.Load(); err == nil || !blocked.Current().Status.PromptVeto {
+		t.Fatalf("unreadable journal: %v %+v", err, blocked.Current().Status)
+	}
+}
+
+// A 401 after a rollback doesn't cancel the Codex route removal still owed.
+func TestARejectionKeepsAnOwedRouteRemoval(t *testing.T) {
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	if err := cache.rejectAuthority(ErrNoCommonVersion, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.rejectAuthority(ErrAuthorityRejected, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.Current().Status.NoCommonVersion {
+		t.Fatalf("%+v", cache.Current().Status)
+	}
+	restarted := NewCache(cache.path)
+	if err := restarted.Load(); !errors.Is(err, ErrCacheInvalidated) || !restarted.Current().Status.NoCommonVersion {
+		t.Fatalf("%v %+v", err, restarted.Current().Status)
+	}
+}
+
+// v5 never carries hookInventory, null included; v4 never carries codexProxy.
+func TestNullSwitchesAreRefused(t *testing.T) {
+	for _, body := range []string{
+		`{"payloadCaptureMode":"summary","workTypeClassification":false,"toolOutputCompaction":false,"codexProxy":true,"hookInventory":null}`,
+		`{"payloadCaptureMode":"summary","workTypeClassification":false,"toolOutputCompaction":false,"codexProxy":null}`,
+	} {
+		var config Config
+		if err := json.Unmarshal([]byte(body), &config); err != nil {
+			t.Fatal(err)
+		}
+		if err := config.validate(5); err == nil {
+			t.Fatalf("accepted %s", body)
+		}
+	}
+	var config Config
+	if err := json.Unmarshal([]byte(`{"payloadCaptureMode":"summary","workTypeClassification":false,"toolOutputCompaction":false,"codexProxy":true,"extra":1}`), &config); err == nil {
+		t.Fatal("unknown field accepted")
 	}
 }

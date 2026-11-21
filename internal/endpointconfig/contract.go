@@ -55,6 +55,33 @@ type Config struct {
 	// (ADR-0011). Part of the hashed contract from v6, which always emits it;
 	// v5 never does.
 	HookInventory *bool `json:"hookInventory,omitempty"`
+	// nulls names the optional switches the response sent as JSON null,
+	// which a pointer can't tell from absent: a version without the switch
+	// must not carry its key at all.
+	nulls []string
+}
+
+// UnmarshalJSON keeps the strict decoder's unknown-field check and records
+// an optional switch sent as null.
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type plain Config
+	var decoded plain
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return err
+	}
+	*c = Config(decoded)
+	for _, key := range []string{"codexProxy", "hookInventory"} {
+		if raw, ok := keys[key]; ok && string(bytes.TrimSpace(raw)) == "null" {
+			c.nulls = append(c.nulls, key)
+		}
+	}
+	return nil
 }
 
 // WorkTypeClassificationEnabled reports the switch; absent reads as off.
@@ -107,6 +134,9 @@ func (c Config) validate(version int) error {
 	}
 	if version < 5 && c.CodexProxy != nil {
 		return fmt.Errorf("endpoint configuration: codexProxy is not part of version %d", version)
+	}
+	if len(c.nulls) > 0 {
+		return fmt.Errorf("endpoint configuration: %s must not be null", c.nulls[0])
 	}
 	if version >= 6 && c.HookInventory == nil {
 		return errors.New("endpoint configuration: hookInventory is required")
