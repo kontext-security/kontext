@@ -294,6 +294,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// couldn't confirm the new workspace, and the old one would receive
 		// the new credential. A restart picks up the new URL.
 		if !sameCloudURL(loaded.Config.CloudURL, startupCloudURL) {
+			// No enrolment here owns the running directive any more: prompts
+			// are held as opted out from now, not from the restart.
+			liveOwner.set(ownerAtAnotherCloud)
 			return "", errCloudURLChanged
 		}
 		token, err := managedconfig.ResolveInstallToken(refreshCtx, loaded.Config.Credentials.InstallTokenRef)
@@ -432,6 +435,22 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if !opts.NoCodexRoute {
 		codexRouting = newCodexRouting(dbPath, socketPath, opts.Diagnostic, codexReportClient.send)
 	}
+	streamStatePath := opts.StreamStatePath
+	if streamStatePath == "" {
+		streamStatePath = managedstream.DefaultStatePathForDB(dbPath)
+	}
+	inventoryStore := managedstream.OpenInventoryStore(managedstream.InventoryStatePath(streamStatePath), installationState.InstallationID)
+	// A confirmed opt-out drops pending hook results when it is seen, not
+	// when the hook worker next runs: a restart in between could otherwise
+	// confirm an opt-in first and upload results from before the opt-out.
+	purgeHooksIfOff := func(snapshot endpointconfig.Snapshot) {
+		if snapshot.Confirmed && !snapshot.HookInventoryEnabled() {
+			if err := inventoryStore.DiscardHooks(); err != nil {
+				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
+			}
+		}
+	}
+	purgeHooksIfOff(endpointConfigCache.Current())
 	endpointConfigRefresher := endpointconfig.Refresher{
 		Client:         endpointConfigClient,
 		Cache:          endpointConfigCache,
@@ -444,6 +463,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			codexRouting.follow(snapshot)
 			// The hook scan follows the switch now, not at the next hour.
 			if hookWatch.config(snapshot.HookInventoryEnabled(), snapshot.Confirmed) {
+				purgeHooksIfOff(snapshot)
 				wakeHooks()
 			}
 		},
@@ -471,11 +491,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 
 	// A rescan after hook changes refreshes the authority report too, so a
 	// newly hooked agent does not wait for the hourly authority scan.
-	streamStatePath := opts.StreamStatePath
-	if streamStatePath == "" {
-		streamStatePath = managedstream.DefaultStatePathForDB(dbPath)
-	}
-	inventoryStore := managedstream.OpenInventoryStore(managedstream.InventoryStatePath(streamStatePath), installationState.InstallationID)
 	inventoryHolder := &agentInventoryHolder{scope: loadedConfig.Scope, store: inventoryStore, rescan: make(chan struct{}, 1), afterRescan: func() {
 		for _, signal := range []chan struct{}{authorityAvailable, hookAvailable} {
 			select {
@@ -516,8 +531,17 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// While uploads are held for a cloud change, no scan runs either: a
 		// scan now would record the new enrolment's hooks under the old
 		// workspace's key and opt-in.
+		// The enrolment is read from the config now, not from the last
+		// client to fetch a token: MDM can move the Mac to another
+		// workspace on the same cloud between two token reads.
 		authorized: func() bool {
-			return enrolledAtStartupCloud(startupCloudURL) && endpointconfig.Owner(hookKeys.enrolment()) == liveOwner.get() && hookAuthorized(endpointConfigCache.Current(), hookKeys.enrolment())
+			tokenCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			token, err := installTokenSource(tokenCtx)
+			if err != nil || token != hookKeys.enrolment() {
+				return false
+			}
+			return hookAuthorized(endpointConfigCache.Current(), token)
 		},
 		available: hookAvailable,
 		beginRead: authorityHolder.scanner.BeginRead,
@@ -730,6 +754,10 @@ func rewriteAnnotationTimes(ctx context.Context, dbPath string) (int, error) {
 
 // errCloudURLChanged: the installation was enrolled at another cloud since
 // the daemon started.
+// ownerAtAnotherCloud names no enrolment at the startup cloud: the config
+// moved to another cloud, so no confirmed directive here is its answer.
+const ownerAtAnotherCloud = "another-cloud"
+
 var errCloudURLChanged = errors.New("the Kontext cloud URL changed since the daemon started; it uses the new one after a restart")
 
 // enrolledAtStartupCloud reports whether the managed config still names the

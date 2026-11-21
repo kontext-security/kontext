@@ -58,6 +58,10 @@ func TestCaptureConfigurationBelongsToItsEnrolment(t *testing.T) {
 	if got := captureConfiguration(cache.Current(), endpointconfig.Owner("token-b")); got.Confirmed || got.WorkTypeClassification || !got.PromptVeto {
 		t.Fatalf("other enrolment: %+v", got)
 	}
+	// Once the config names another cloud, nothing here owns the directive.
+	if got := captureConfiguration(cache.Current(), ownerAtAnotherCloud); got.Confirmed || !got.PromptVeto {
+		t.Fatalf("another cloud: %+v", got)
+	}
 }
 
 // The enrolment follows the token the config holds, and says when it moves.
