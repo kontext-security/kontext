@@ -845,3 +845,21 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return data
 }
+
+// A v6 refusal that can't be saved with the cache keeps the confirmed
+// opt-out in the marker that replaces it.
+func TestAnUnsavedV6RefusalKeepsTheOptOut(t *testing.T) {
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	optOut := testResponse(t, payloadcapture.ModeOmitted)
+	if err := cache.Apply(FetchResult{Response: &optOut}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	replaceFile = func(string, string) error { return errors.New("disk full") }
+	defer func() { replaceFile = os.Rename }()
+	cache.markV6Unsupported()
+	replaceFile = os.Rename
+	restarted := NewCache(cache.path)
+	if err := restarted.Load(); !errors.Is(err, ErrCacheInvalidated) || !restarted.Current().Status.PromptVeto {
+		t.Fatalf("%v %+v", err, restarted.Current().Status)
+	}
+}

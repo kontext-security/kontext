@@ -255,6 +255,9 @@ func (c *Cache) Load() error {
 	return nil
 }
 
+// replaceFile is os.Rename; a test makes the replace fail with it.
+var replaceFile = os.Rename
+
 // beforeReplace lets a test stop between the journal update and the cache
 // replace, where a crash would leave both.
 var beforeReplace = func() {}
@@ -395,6 +398,10 @@ func (c *Cache) markV6Unsupported() {
 	file.V6Refused = true
 	if c.persist(file) != nil {
 		// Without the flag on disk, the file must not restore the switch.
+		// The marker that replaces it keeps the confirmed opt-out.
+		c.mu.Lock()
+		c.status.PromptVeto = !promptsAllowed(file.Response.Config)
+		c.mu.Unlock()
 		_ = c.invalidatePersisted()
 	}
 }
@@ -498,7 +505,7 @@ func (c *Cache) persist(file cacheFile) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("endpoint configuration cache: close: %w", err)
 	}
-	if err := os.Rename(temporaryPath, c.path); err != nil {
+	if err := replaceFile(temporaryPath, c.path); err != nil {
 		return fmt.Errorf("endpoint configuration cache: replace: %w", err)
 	}
 	cleanup = false
