@@ -212,6 +212,9 @@ func evaluateEnablement(s *hookScan) {
 		if info.projectUnread {
 			unresolved = append(unresolved, HookReasonUnresolved)
 		}
+		if info.manifestUnread {
+			unresolved = append(unresolved, HookReasonUnresolved)
+		}
 		if r.Type == "http" && sw.httpAllow != nil && !urlAllowed(info.url, *sw.httpAllow) {
 			disabled = append(disabled, HookReasonHTTPURLNotAllowed)
 		}
