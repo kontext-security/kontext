@@ -754,6 +754,18 @@
       "ruleId": "aws-access-key-id",
       "input": "creds key_ASIAFAKE0123456789AB end",
       "mustNotSurvive": ["ASIAFAKE0123456789AB"]
+    },
+    {
+      "name": "mysql-password-after-quoted-semicolon",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -e \"SELECT 1;\" -pFAKEmysqlpass appdb",
+      "mustNotSurvive": ["FAKEmysqlpass"]
+    },
+    {
+      "name": "redis-cli-password-after-quoted-semicolon",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli --eval 'a;b' -a FAKEredispass get k",
+      "mustNotSurvive": ["FAKEredispass"]
     }
   ],
   "keyVectors": [
