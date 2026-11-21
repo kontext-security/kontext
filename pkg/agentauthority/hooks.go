@@ -342,6 +342,14 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	// what it knew rather than withdraw hooks on an unread policy's word.
 	if s.shadowed || s.mdmMerged || s.policyHelper {
 		s.source.Fail(ReasonUnsupportedFormat)
+		// The managed files' scopes too: a complete one would withdraw
+		// the hooks it no longer lists, on the unread policy's word.
+		for i, scope := range s.agent.Scopes {
+			if managedKind(scope.Kind) && scope.Status == StatusComplete {
+				s.agent.Scopes[i].Status = StatusPartial
+				s.agent.Scopes[i].Reasons = []string{ReasonUnsupportedFormat}
+			}
+		}
 	}
 	s.finish()
 	s.only()
@@ -481,7 +489,12 @@ func (s *hookScan) pluginScopes(base string) {
 			manifestPath := filepath.Join(installed, ".claude-plugin/plugin.json")
 			manifest, manifestRead := readConfig(s.g, s.agent.ID, manifestPath, notNull(parseJSON[pluginManifest]))
 			if !manifestRead {
-				if _, err := os.Lstat(manifestPath); errors.Is(err, os.ErrNotExist) {
+				// The same deadline as the read: a stalled mount must not
+				// hold the scan here either.
+				if settledWithin(s.g.ctx, func() bool {
+					_, err := os.Lstat(manifestPath)
+					return errors.Is(err, os.ErrNotExist)
+				}) {
 					// Without a manifest the marketplace entry is the
 					// plugin's manifest, and its hooks aren't read here:
 					// the scope can't show every hook.
@@ -844,7 +857,10 @@ func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables, manage
 		if i >= len(raw) {
 			continue
 		}
-		if r.ClaimsKontext && (r.Enablement.State == hookUnresolved || raw[i].ownerUnknown) {
+		// A handler-level `if` off a tool event settles nothing: it never
+		// covers the event either way.
+		neverCovers := raw[i].conditional && !toolEvent(r.Event)
+		if r.ClaimsKontext && !neverCovers && (r.Enablement.State == hookUnresolved || raw[i].ownerUnknown) {
 			uncertain = true
 		}
 		if r.Origin != HookOriginKontext || r.Enablement.State != hookEnabled {
@@ -863,7 +879,7 @@ func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables, manage
 			// for every call.
 			matcher = ""
 		}
-		if deviceWide && !info.conditional && (!info.async || installedAsync(r.Event)) && (matcher == "" || matcher == "*") {
+		if deviceWide && !info.conditional && (!info.async || installedAsync(r.Event)) && (matcher == "" || matcher == "*" || matcher == ".*") {
 			covered[r.Event] = true
 		}
 	}

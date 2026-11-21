@@ -87,6 +87,10 @@ type cacheFile struct {
 	// re-enrolling into another workspace on the same cloud doesn't inherit
 	// it.
 	Owner string `json:"owner,omitempty"`
+	// V6Refused: after Response was confirmed, the server refused v6 and the
+	// older version could not be confirmed. It keeps v6-only switches off
+	// across a restart until a config is confirmed again.
+	V6Refused bool `json:"v6Refused,omitempty"`
 	// Retained only to decode existing cache files with the strict decoder.
 	GuardrailLLMDirective *bool `json:"guardrailLlmDirective,omitempty"`
 }
@@ -166,6 +170,13 @@ func (c *Cache) Load() error {
 		return ErrCacheInvalidated
 	} else if !errors.Is(err, os.ErrNotExist) {
 		c.holdVeto()
+		// The marker may have taken the cache's place when the journal
+		// couldn't be written: a route removal it owes still holds.
+		if data, readErr := os.ReadFile(c.path); readErr == nil && bytes.HasPrefix(data, []byte(markerHeader)) && markerHas(data, markerNoCommonVersion) {
+			c.mu.Lock()
+			c.status.NoCommonVersion = true
+			c.mu.Unlock()
+		}
 		return fmt.Errorf("endpoint configuration cache: revocation journal: %w", err)
 	}
 	data, err := os.ReadFile(c.path)
@@ -240,9 +251,13 @@ func (c *Cache) Load() error {
 	c.lastGood = cloneResponse(file.Response)
 	// Bound, the file names this enrolment, which confirmed it.
 	c.owner = c.boundOwner
-	c.status = Status{FetchedAt: fetchedAt, Stale: true}
+	c.status = Status{FetchedAt: fetchedAt, Stale: true, V6Unsupported: file.V6Refused}
 	return nil
 }
+
+// beforeReplace lets a test stop between the journal update and the cache
+// replace, where a crash would leave both.
+var beforeReplace = func() {}
 
 func (c *Cache) discardOlderVersion() {
 	c.mu.Lock()
@@ -298,6 +313,22 @@ func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) err
 	c.owner = owner
 	c.status = Status{FetchedAt: fetchedAt, LastAttemptAt: fetchedAt, Stale: true}
 	c.mu.Unlock()
+	// A journal left from an earlier rejection is read before the cache on
+	// restart, so it first takes this config's opt-out: a crash or a failed
+	// unlink below then can't restore an older answer over it.
+	if c.path != "" {
+		if _, err := os.Stat(c.rejectedPath); err == nil {
+			marker := markerHeader + "\n" + markerVersioned + "\n"
+			if !promptsAllowed(confirmed.Config) {
+				marker += markerPromptVeto + "\n"
+			}
+			if err := os.WriteFile(c.rejectedPath, []byte(marker), 0600); err != nil {
+				c.MarkFailed(err, fetchedAt)
+				return fmt.Errorf("endpoint configuration cache: update revocation: %w", err)
+			}
+		}
+	}
+	beforeReplace()
 	if err := c.persist(file); err != nil {
 		// The journal that replaces the file must keep a confirmed opt-out.
 		c.mu.Lock()
@@ -348,6 +379,24 @@ func (c *Cache) markV6Unsupported() {
 	c.mu.Lock()
 	c.status.V6Unsupported = true
 	c.mu.Unlock()
+	// The refusal is kept with the file, so a restart while configuration
+	// is unavailable doesn't turn v6-only switches back on.
+	if c.path == "" {
+		return
+	}
+	data, err := os.ReadFile(c.path)
+	if err != nil {
+		return
+	}
+	var file cacheFile
+	if decodeStrict(strings.NewReader(string(data)), &file) != nil || file.Response == nil || file.V6Refused {
+		return
+	}
+	file.V6Refused = true
+	if c.persist(file) != nil {
+		// Without the flag on disk, the file must not restore the switch.
+		_ = c.invalidatePersisted()
+	}
 }
 
 func (c *Cache) MarkInvalid(err error) {

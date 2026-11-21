@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 // HookSettings is what a Claude Code settings file, a managed drop-in or a
@@ -158,10 +159,24 @@ func Handler(raw json.RawMessage) HookHandler {
 			malformed = true
 		}
 	}
-	if malformed {
+	if malformed || missingRequired(h) {
 		// Claude doesn't run a handler whose fields don't fit its shape
-		// (`args` as a string): it is unknown, never verified as ours.
+		// (`args` as a string) or that lacks what its type needs (a command
+		// handler without a command): it is unknown, never verified as ours.
 		return HookHandler{}
 	}
 	return h
+}
+
+// missingRequired reports a known handler type without the field it runs.
+func missingRequired(h HookHandler) bool {
+	switch h.Type {
+	case "command":
+		return strings.TrimSpace(h.Command) == ""
+	case "http":
+		return strings.TrimSpace(h.URL) == ""
+	case "mcp_tool":
+		return h.Server == "" || h.Tool == ""
+	}
+	return false
 }

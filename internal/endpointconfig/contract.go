@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
@@ -75,6 +78,13 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &keys); err != nil {
 		return err
 	}
+	// Go matches field names without case; the contract doesn't, and the
+	// cloud's schema refuses `HookInventory` for `hookInventory`.
+	for key := range keys {
+		if !slices.Contains(configKeys(), key) {
+			return fmt.Errorf("json: unknown field %q", key)
+		}
+	}
 	*c = Config(decoded)
 	for _, key := range []string{"codexProxy", "hookInventory"} {
 		if raw, ok := keys[key]; ok && string(bytes.TrimSpace(raw)) == "null" {
@@ -82,6 +92,19 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// configKeys are Config's wire keys, spelled exactly.
+func configKeys() []string {
+	t := reflect.TypeOf(Config{})
+	keys := make([]string, 0, t.NumField())
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			keys = append(keys, name)
+		}
+	}
+	return keys
 }
 
 // WorkTypeClassificationEnabled reports the switch; absent reads as off.

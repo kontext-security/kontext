@@ -693,8 +693,16 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 		h, bin, call := setup(t)
 		h.mdm = true
 		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
-		if _, result := h.scan(bin); result.Status != StatusPartial {
+		h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{})
+		agent, result := h.scan(bin)
+		if result.Status != StatusPartial {
 			t.Fatalf("%+v", result)
+		}
+		// The managed file's scope can't say its hooks are gone either.
+		for _, scope := range agent.Scopes {
+			if managedKind(scope.Kind) && scope.Status == StatusComplete {
+				t.Fatalf("managed scope %+v", scope)
+			}
 		}
 	})
 	t.Run("args of the wrong type are not Kontext's", func(t *testing.T) {
@@ -720,6 +728,50 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 		agent, _ := h.scan(bin)
 		if agent.KontextHooks.State == "complete" || agent.Hooks[0].Enablement.State != hookDisabled {
 			t.Fatalf("%+v %+v", agent.KontextHooks, agent.Hooks[0].Enablement)
+		}
+	})
+	t.Run("a universal matcher covers the event", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, ".*", nil)})
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "complete" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
+	t.Run("an owner without the execute bit can't run it", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("no execute bits")
+		}
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		// Group and others may run it; the user who owns it and the home
+		// folder may not.
+		if err := os.Chmod(bin, 0o670); err != nil {
+			t.Fatal(err)
+		}
+		if agent, _ := h.scan(bin); agent.Hooks[0].Enablement.State != hookDisabled {
+			t.Fatalf("%+v", agent.Hooks[0].Enablement)
+		}
+	})
+	t.Run("a handler without its command is unknown", func(t *testing.T) {
+		h, bin, _ := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", map[string]any{"type": "command"})})
+		if agent, _ := h.scan(bin); agent.Hooks[0].Type != "unknown" || agent.Hooks[0].Enablement.State != hookUnresolved {
+			t.Fatalf("%+v", agent.Hooks[0])
+		}
+	})
+	t.Run("an if rule off a tool event isn't expected to run", func(t *testing.T) {
+		h, bin, call := setup(t)
+		hooks := all(call, "", nil)
+		stop := call("stop")
+		stop["if"] = "Bash(git *)"
+		hooks["Stop"] = hooksOf("Stop", "", stop)["Stop"]
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooks})
+		agent, _ := h.scan(bin)
+		if r := byEvent(agent, "Stop")[0]; r.Enablement.State != hookUnresolved {
+			t.Fatalf("%+v", r.Enablement)
+		}
+		if agent.KontextHooks.State != "needs_update" || !slices.Equal(agent.KontextHooks.MissingEvents, []string{"Stop"}) {
+			t.Fatalf("%+v", agent.KontextHooks)
 		}
 	})
 	t.Run("handler-level if", func(t *testing.T) {
@@ -1074,6 +1126,10 @@ func TestHookSummaryDropsPositionalWords(t *testing.T) {
 		// A flag's value can look like a flag.
 		{"/usr/bin/sshpass", "-p --winter-2026 ssh host", "sshpass -p <redacted>"},
 		{"tool", "--password --ExampleOnly", "tool --password <redacted>"},
+		// A hidden flag-shaped value can take the next word too.
+		{"/usr/bin/sshpass", "-v -p --winter-2026 ssh host", "sshpass -v <redacted>"},
+		{"tool", "-ab --winter-2026", "tool <redacted>"},
+		{"curl", "-H X -X POST", "curl -H <redacted> -X <redacted>"},
 		{"curl", "--url https://hooks.example.com/x", "curl --url https://hooks.example.com"},
 	} {
 		if got := hookSummary(c.program, strings.Fields(c.args)); got != c.want {
@@ -1161,9 +1217,11 @@ func TestKontextCallNeedsOneLiteralCommand(t *testing.T) {
 }
 
 // An attached short-flag value is a value: -pSECRET never reads as a flag.
+// It could also be a cluster ending in a flag that takes the next word, so
+// that word is hidden too.
 func TestHookSummaryDropsAttachedFlagValues(t *testing.T) {
 	got := hookSummary("mysql", []string{"-pExamplePass123", "-u", "root", "--host=db"})
-	if got != "mysql <redacted> -u <redacted> --host <redacted>" {
+	if got != "mysql <redacted> --host <redacted>" {
 		t.Fatalf("summary %q", got)
 	}
 }
@@ -1451,6 +1509,13 @@ func TestPluginScopesThatCantBeProven(t *testing.T) {
 	if len(agent.Hooks) != 1 || agent.Hooks[0].Enablement.State != hookUnresolved {
 		t.Fatalf("unread project: %+v", agent.Hooks)
 	}
+	// A user disable doesn't settle it either: the unread project can turn
+	// the plugin back on.
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"enabledPlugins": map[string]any{"formatter@acme": false}})
+	agent, _ = h.scan()
+	if len(agent.Hooks) != 1 || agent.Hooks[0].Enablement.State != hookUnresolved {
+		t.Fatalf("unread project, user disabled: %+v", agent.Hooks)
+	}
 }
 
 // A short vendor token passes the long-token check but not its prefix, and a
@@ -1478,5 +1543,21 @@ func TestShortVendorTokensAreHidden(t *testing.T) {
 		if hookSecret(value) {
 			t.Errorf("%q flagged", value)
 		}
+	}
+	// A prefix glued to a name with `_` is still a token.
+	if !hookSecret("hook_glpat-" + strings.Repeat("x", 20)) {
+		t.Error("glued glpat- not flagged")
+	}
+	// A full commit hash is a version, not a token.
+	sha := "3f2a9c41b7d8e05f6a1c2b3d4e5f60718293a4b5"
+	if got := hookVersion(sha); got != sha {
+		t.Errorf("commit %q became %q", sha, got)
+	}
+	// A URL with a user or password is hidden whole; one without stays.
+	if got := hookField("https://build:pass@repo.example/x", 128); got != redacted {
+		t.Errorf("credential URL kept as %q", got)
+	}
+	if got := hookField("https://github.com/acme/plugins", 128); got != "https://github.com/acme/plugins" {
+		t.Errorf("plain URL became %q", got)
 	}
 }

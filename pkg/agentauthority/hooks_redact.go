@@ -32,9 +32,11 @@ const redacted = "<redacted>"
 var hookToken = regexp.MustCompile(`[A-Za-z0-9_+/=-]{32,}`)
 
 // hookTokenPrefix names vendor tokens short enough to pass the long-token
-// check (a GitLab PAT is glpat- and 20 characters). Keep identical to
+// check (a GitLab PAT is glpat- and 20 characters). A prefix counts after
+// any non-alphanumeric character, `_` included: a generator can glue a token
+// to a name (`hook_glpat-…`). Keep identical to
 // HOOK_TOKEN_PREFIX in kontext-cloud's hook-inventory.ts.
-var hookTokenPrefix = regexp.MustCompile(`\b(glpat|gldt|glrt|glptt|glsoat|glcbt|gloas)-|\bnpm_[A-Za-z0-9]{8}|\bpypi-[A-Za-z0-9_-]{8}|\bxox[aboprse]-|\bxapp-|\b[sr]k_(live|test)_|\bshp(at|ss|ca|pa)_|\bdop_v1_|\bhf_[A-Za-z0-9]{8}|\bSG\.[A-Za-z0-9_-]{8}|\bASIA[0-9A-Z]{16}|\beyJ[A-Za-z0-9_-]{8,}\.`)
+var hookTokenPrefix = regexp.MustCompile(`(?:^|[^A-Za-z0-9])(?:(glpat|gldt|glrt|glptt|glsoat|glcbt|gloas)-|npm_[A-Za-z0-9]{8}|pypi-[A-Za-z0-9_-]{8}|xox[aboprse]-|xapp-|[sr]k_(live|test)_|shp(at|ss|ca|pa)_|dop_v1_|hf_[A-Za-z0-9]{8}|SG\.[A-Za-z0-9_-]{8}|ASIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.)`)
 
 // pluginVersion is the shape a plugin version is kept in: a release number
 // or a commit hash. Anything else can be a substituted secret. Keep
@@ -84,14 +86,18 @@ func hookSummary(program string, args []string) string {
 			// The value of a flag: a user, a password, a key file. It can
 			// look like a flag itself (`sshpass -p '--winter-2026'`), so a
 			// flag right after a flag is hidden too, and the summary never
-			// shows two flags in a row.
+			// shows two flags in a row. A hidden word shaped like a flag may
+			// itself take the next word (`sshpass -v -p '--pw'`), so that word
+			// is hidden as well.
 			add(redacted)
-			afterFlag, scriptSlot = false, false
+			afterFlag, scriptSlot = takesValue(arg), false
 		case strings.HasPrefix(arg, "-"):
 			flag, _, hasValue := strings.Cut(arg, "=")
 			if !summaryFlag.MatchString(flag) || hookSecret(flag) {
+				// A hidden flag can still take the next word as its value,
+				// and a short cluster (`-ab`) can end in a flag that does.
 				add(redacted)
-				afterFlag, scriptSlot = false, false
+				afterFlag, scriptSlot = !hasValue, false
 				continue
 			}
 			add(flag)
@@ -109,6 +115,16 @@ func hookSummary(program string, args []string) string {
 		}
 	}
 	return safe(strings.Join(words, " "), 256)
+}
+
+// takesValue reports a flag-shaped word that may take the next word as its
+// value: not `--name=value`, and not a short flag with its value attached
+// (`-pSECRET`).
+func takesValue(arg string) bool {
+	if !strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+		return false
+	}
+	return strings.HasPrefix(arg, "--") || len(arg) == 2
 }
 
 // summaryURL keeps a URL's scheme and host, and only when it carries no user.
@@ -142,19 +158,36 @@ func hostLabelSecret(label string) bool {
 // (a plugin's name or version, an MCP server): a secret-shaped value is
 // hidden whole.
 func hookField(value string, limit int) string {
-	if hookSecret(value) {
+	if hookSecret(value) || urlCredential(value) {
 		return redacted
 	}
 	return safe(value, limit)
 }
 
+// urlCredential reports a URL that carries a user or password
+// (`https://build:pass@repo.example`): a generated manifest can hold one.
+func urlCredential(value string) bool {
+	_, rest, ok := strings.Cut(value, "://")
+	if !ok {
+		return false
+	}
+	host, _, _ := strings.Cut(rest, "/")
+	return strings.Contains(host, "@")
+}
+
 // hookVersion keeps a plugin version only in a version's shape; empty and
 // Claude's "unknown" stay as they are.
 func hookVersion(value string) string {
-	if value != "" && value != "unknown" && !pluginVersion.MatchString(value) {
+	if value == "" || value == "unknown" {
+		return value
+	}
+	// A version's shape is checked instead of the long-token rule, which
+	// would hide every full commit hash; a vendor token or other secret
+	// shape is still hidden.
+	if !pluginVersion.MatchString(value) || secretPattern.MatchString(value) || hookTokenPrefix.MatchString(value) {
 		return redacted
 	}
-	return hookField(value, 64)
+	return safe(value, 64)
 }
 
 // fileEvents match on a file's name, which can be private (a watched
