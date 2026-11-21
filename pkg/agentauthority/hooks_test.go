@@ -754,6 +754,24 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 			t.Fatalf("%+v", agent.Hooks[0].Enablement)
 		}
 	})
+	t.Run("a missing program settles only a literal command", func(t *testing.T) {
+		h, bin, _ := setup(t)
+		gone := filepath.Join(h.base, "gone")
+		for cmd, disabled := range map[string]bool{
+			gone:                   true,
+			gone + " --check":      true,
+			gone + " || /bin/true": false,
+			gone + "; /bin/true":   false,
+			gone + " $HOME":        false,
+			"$HOME/gone":           false,
+		} {
+			h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command(cmd))})
+			agent, _ := h.scan(bin)
+			if got := agent.Hooks[0].Enablement.State == hookDisabled; got != disabled {
+				t.Fatalf("%q: %+v", cmd, agent.Hooks[0].Enablement)
+			}
+		}
+	})
 	t.Run("a handler without its command is unknown", func(t *testing.T) {
 		h, bin, _ := setup(t)
 		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", map[string]any{"type": "command"})})
