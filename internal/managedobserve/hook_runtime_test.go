@@ -381,3 +381,32 @@ func TestPolicyEvaluated(t *testing.T) {
 		}
 	}
 }
+
+// An event that came while two handlers shared it stays no one's: removing
+// one of them later doesn't hand the event to the other.
+func TestEvidenceStaysWithTheHandlersOfItsTime(t *testing.T) {
+	at := time.Date(2026, 11, 22, 11, 0, 0, 0, time.UTC)
+	r := testRuntime(at)
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{
+		kontextRecord("hk_bash", "PreToolUse", "fp1", agentauthority.HookOriginKontext, "enabled"),
+		kontextRecord("hk_edit", "PreToolUse", "fp2", agentauthority.HookOriginKontext, "enabled"),
+	}}
+	r.now = func() time.Time { return at.Add(-time.Second) }
+	r.apply(&agent)
+	r.now = func() time.Time { return at }
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionAllow}, true)
+	agent.Hooks = agent.Hooks[1:]
+	agent.Hooks[0].Evidence = kontextRecord("", "", "", "", "").Evidence
+	r.now = func() time.Time { return at.Add(time.Second) }
+	r.apply(&agent)
+	if e := agent.Hooks[0].Evidence; e.InvocationAt != nil || e.PolicyEvaluatedAt != nil {
+		t.Fatalf("the surviving handler took an event it may not have run: %+v", e)
+	}
+	// The next event is its own.
+	r.now = func() time.Time { return at.Add(2 * time.Second) }
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionAllow}, true)
+	r.apply(&agent)
+	if e := agent.Hooks[0].Evidence; e.InvocationAt == nil || e.PolicyEvaluatedAt == nil {
+		t.Fatalf("a sole handler's event wasn't credited: %+v", e)
+	}
+}

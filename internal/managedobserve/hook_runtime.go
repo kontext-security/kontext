@@ -82,7 +82,13 @@ type hookRuntime struct {
 	mu          sync.Mutex
 	now         func() time.Time
 	invocations map[string]time.Time
-	decisions   map[string]hookDecision
+	// invokedBy is, for each event's last invocation, its handler as the
+	// scan before it knew it: see handlerOf.
+	invokedBy map[string]string
+	decisions map[string]hookDecision
+	// sole is each event's one enabled Kontext handler in the latest scan,
+	// or "" when it had none or several.
+	sole map[string]string
 	// seen is when each of Kontext's handlers was first in a scan. An event
 	// is evidence for a handler only if the handler was seen before it, so
 	// a handler added later doesn't inherit what another one did.
@@ -111,7 +117,14 @@ type hookRuntime struct {
 type hookDecision struct {
 	at       time.Time
 	decision string
+	by       string
 }
+
+// handlerOf names the handler an event just now came from, as far as the
+// latest scan tells: "" when it had none or several for the event, or no
+// scan ran yet. An event before a handler's first scan never counts for it
+// anyway: the handler wasn't seen before it.
+func (r *hookRuntime) handlerOf(event string) string { return r.sole[event] }
 
 // hookVerification is an acknowledged probe, bound to the Kontext
 // PreToolUse handlers and the agent version of the last scan before it.
@@ -131,6 +144,7 @@ func newHookRuntime() *hookRuntime {
 
 func (r *hookRuntime) clear() {
 	r.invocations, r.decisions, r.seen = map[string]time.Time{}, map[string]hookDecision{}, map[string]time.Time{}
+	r.invokedBy, r.sole = map[string]string{}, map[string]string{}
 	r.last, r.lastVersion, r.scanned = map[string]string{}, nil, false
 	r.probes, r.verify = map[string]hookVerification{}, nil
 }
@@ -214,7 +228,7 @@ func (r *hookRuntime) evaluated(event hook.Event, result hook.Result, policy boo
 	defer r.mu.Unlock()
 	now := r.now()
 	if now.After(r.invocations[name]) {
-		r.invocations[name] = now
+		r.invocations[name], r.invokedBy[name] = now, r.handlerOf(name)
 	}
 	if event.HookName != hook.HookPreToolUse || !policy || result.FailedOpen {
 		return
@@ -228,7 +242,7 @@ func (r *hookRuntime) evaluated(event hook.Event, result hook.Result, policy boo
 	switch decision {
 	case "allow", "deny", "ask", "observe":
 		if now.After(r.decisions[name].at) {
-			r.decisions[name] = hookDecision{at: now, decision: decision}
+			r.decisions[name] = hookDecision{at: now, decision: decision, by: r.handlerOf(name)}
 		}
 	}
 }
@@ -266,7 +280,16 @@ func (r *hookRuntime) apply(agent *agentauthority.HookAgent) {
 			r.last[record.ID] = record.ContentFP
 		}
 	}
+	clear(r.sole)
+	for _, record := range agent.Hooks {
+		if kontextRunning(record) && handlers[record.Event] == 1 {
+			r.sole[record.Event] = record.ID
+		}
+	}
 	maps.DeleteFunc(r.seen, func(id string, _ time.Time) bool { return !present[id] })
+	// An event credits the handler that was the event's only one when it
+	// came, never one that is the only one left after another was removed.
+	ranHere := func(by, id string) bool { return by == id }
 	format := func(t time.Time) *string {
 		s := t.UTC().Format(time.RFC3339Nano)
 		return &s
@@ -279,10 +302,10 @@ func (r *hookRuntime) apply(agent *agentauthority.HookAgent) {
 		since := r.seen[record.ID]
 		evidence := &record.Evidence
 		if handlers[record.Event] == 1 {
-			if at, ok := r.invocations[record.Event]; ok && !at.Before(since) {
+			if at, ok := r.invocations[record.Event]; ok && !at.Before(since) && ranHere(r.invokedBy[record.Event], record.ID) {
 				evidence.InvocationAt = format(at)
 			}
-			if d, ok := r.decisions[record.Event]; ok && !d.at.Before(since) {
+			if d, ok := r.decisions[record.Event]; ok && !d.at.Before(since) && ranHere(d.by, record.ID) {
 				evidence.PolicyEvaluatedAt, evidence.PolicyDecision = format(d.at), &d.decision
 			}
 		}

@@ -66,7 +66,7 @@ func hooksVerifyCmd() *cobra.Command {
 			}
 			// Ask the daemon the hook talks to: an older one would take the probe for ordinary activity and
 			// keep it in its ledger: ask first.
-			capabilities, err := localruntime.NewClient(resolveHookSocketPath("")).Capabilities(cmd.Context())
+			capabilities, err := localruntime.NewClient(hookDaemonSocketPath()).Capabilities(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("the Kontext daemon isn't answering: %w", err)
 			}
@@ -182,4 +182,14 @@ func readProbeAnswer(stdout []byte, exitCode int, stderr []byte) string {
 		return output.HookSpecificOutput.PermissionDecisionReason
 	}
 	return probeAnswerMissing
+}
+
+// hookDaemonSocketPath is the socket `kontext hook` talks to when Claude Code
+// runs it with no flags: the managed daemon's on an enrolled Mac, else the
+// local sidecar's.
+func hookDaemonSocketPath() string {
+	if shouldUseManagedObserve(false, false) {
+		return managedobserve.DefaultSocketPath()
+	}
+	return resolveHookSocketPath("")
 }
