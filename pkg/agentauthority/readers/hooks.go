@@ -22,6 +22,9 @@ type HookSettings struct {
 	// SwitchInvalid: a switch held a value of the wrong type. Its effect
 	// depends on the agent's version, so the scanner doesn't guess it.
 	SwitchInvalid bool `json:"-"`
+	// EnabledPluginsInvalid: enabledPlugins in particular held the wrong
+	// type, so no plugin's switch in it is known.
+	EnabledPluginsInvalid bool `json:"-"`
 	// PolicyHelper: the file names a policy helper, a program whose output
 	// replaces the managed settings and can't be read without running it.
 	PolicyHelper bool `json:"-"`
@@ -135,6 +138,7 @@ func Hooks(data []byte) (HookSettings, error) {
 					*t = nil
 				case *map[string]bool:
 					*t = nil
+					s.EnabledPluginsInvalid = true
 				}
 			}
 		}

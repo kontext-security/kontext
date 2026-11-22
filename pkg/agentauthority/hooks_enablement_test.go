@@ -1,6 +1,7 @@
 package agentauthority
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -165,7 +166,7 @@ func enablementMatrix() []enablementRule {
 			state: hookDisabled, reasons: []string{HookReasonHTTPURLNotAllowed},
 		},
 		{
-			name: "a user allowlist applies to a managed hook", follows: "the HTTP hook allowlists apply to hooks from every source",
+			name: "a user allowlist alone leaves a managed hook unsettled", follows: "the HTTP hook allowlists apply to hooks from every source",
 			setup: func(h *hookHome) string {
 				managed(h, map[string]any{"hooks": hooksOf("Stop", "", http("https://other.example.com/x"))})
 				h.write(filepath.Join(h.base, "settings.json"), map[string]any{"allowedHttpHookUrls": []string{"https://hooks.example.com/*"}})
@@ -208,6 +209,60 @@ func enablementMatrix() []enablementRule {
 				return "Stop"
 			},
 			state: hookEnabled, reasons: []string{},
+		},
+		{
+			name: "a managed entry still allows a project hook beside the project's own", follows: "the merged allowlist adds, never replaces",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"allowedHttpHookUrls": []string{"https://hooks.example.com/*"}})
+				project(h, true, map[string]any{"allowedHttpHookUrls": []string{"https://other.example.com/*"}, "hooks": hooksOf("Stop", "", http("https://hooks.example.com/x"))})
+				return "Stop"
+			},
+			state: hookEnabled, reasons: []string{},
+		},
+		{
+			name: "a project's own empty allowlist blocks a user hook there", follows: "a user hook runs in every project, under that project's merged allowlist",
+			setup: func(h *hookHome) string {
+				userHook(h, "Stop", http("https://hooks.example.com/x"), nil)
+				project(h, true, map[string]any{"allowedHttpHookUrls": []string{}})
+				return "Stop"
+			},
+			state: hookConditional, reasons: []string{HookReasonHTTPURLNotAllowed},
+		},
+		{
+			name: "a project that allows the URL but turns hooks off runs nothing", follows: "disableAllHooks in any settings file",
+			setup: func(h *hookHome) string {
+				userHook(h, "Stop", http("https://other.example.com/x"), map[string]any{"allowedHttpHookUrls": []string{"https://hooks.example.com/*"}})
+				project(h, true, map[string]any{"allowedHttpHookUrls": []string{"https://other.example.com/*"}, "disableAllHooks": true})
+				return "Stop"
+			},
+			state: hookDisabled, reasons: []string{HookReasonHTTPURLNotAllowed},
+		},
+		{
+			name: "an unread project file leaves a blocked user hook unsettled", follows: "any settings file may add the URL",
+			setup: func(h *hookHome) string {
+				userHook(h, "Stop", http("https://other.example.com/x"), map[string]any{"allowedHttpHookUrls": []string{}})
+				dir := project(h, true, map[string]any{})
+				h.write(filepath.Join(dir, ".claude", "settings.local.json"), []byte(`{"allowedHttpHookUrls": [`))
+				return "Stop"
+			},
+			state: hookUnresolved, reasons: []string{HookReasonHTTPURLNotAllowed},
+		},
+		{
+			name: "user information keeps its case", follows: "allowedHttpHookUrls matches the URL's normalized host",
+			setup: func(h *hookHome) string {
+				userHook(h, "Stop", http("https://bot:abc@hooks.example.com/x"), map[string]any{"allowedHttpHookUrls": []string{"https://bot:ABC@hooks.example.com/x"}})
+				return "Stop"
+			},
+			state: hookDisabled, reasons: []string{HookReasonHTTPURLNotAllowed},
+		},
+		{
+			name: "an unreadable managed enabledPlugins leaves a plugin hook unsettled", follows: "hooks of plugins force-enabled in managed enabledPlugins are exempt",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"allowManagedHooksOnly": true, "enabledPlugins": map[string]any{"formatter@acme": true, "other@acme": "yes"}})
+				h.installPlugin("formatter@acme", nil, hooksOf("Stop", "", command("echo stop")))
+				return "Stop"
+			},
+			state: hookUnresolved, reasons: []string{HookReasonManagedOnly, HookReasonUnresolved},
 		},
 		{
 			name: "an empty allowlist blocks every URL", follows: "allowedHttpHookUrls when defined",
@@ -338,5 +393,46 @@ func TestAllowlistPastTheBudgetIsUnsettled(t *testing.T) {
 	agent, _ := h.scan()
 	if r := byEvent(agent, "Stop"); len(r) != 1 || r[0].Enablement.State != hookUnresolved {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// The force-enabled plugin exemption from allowManagedHooksOnly came with
+// Claude Code 2.1.229.
+func TestManagedOnlyExemptionFollowsTheVersion(t *testing.T) {
+	for version, want := range map[string]int{
+		"2.1.229": versionAtOrAfter, "2.1.329 (Claude Code)": versionAtOrAfter, "2.2.0": versionAtOrAfter, "3.0.0-beta": versionAtOrAfter,
+		"2.1.228": versionBefore, "1.9.999": versionBefore,
+		"": versionUnknown, "dev": versionUnknown, "2.1": versionUnknown,
+	} {
+		if got := managedOnlyExempt(version); got != want {
+			t.Errorf("%q: %d, want %d", version, got, want)
+		}
+	}
+}
+
+// A pattern repeated in the list is tried once, and the scan's matches are
+// bounded: many HTTP hooks under a long list end unsettled, not slow.
+func TestAllowlistMatchesAreBounded(t *testing.T) {
+	h := newHookHome(t)
+	repeated := make([]string, 10000)
+	for i := range repeated {
+		repeated[i] = "https://hooks.example.com/*"
+	}
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"allowedHttpHookUrls": repeated, "hooks": hooksOf("Stop", "", map[string]any{"type": "http", "url": "https://other.example.com/x"})})
+	agent, _ := h.scan()
+	if r := byEvent(agent, "Stop"); len(r) != 1 || r[0].Enablement.State != hookDisabled {
+		t.Fatalf("%+v", r)
+	}
+
+	s := &hookScan{g: &guard{ctx: context.Background()}}
+	patterns := make([]string, maxURLPatterns)
+	for i := range patterns {
+		patterns[i] = fmt.Sprintf("https://h%d.example.com/*", i)
+	}
+	for range maxURLMatches/maxURLPatterns + 1 {
+		s.urlAllowed("https://other.example.com/x", patterns, nil)
+	}
+	if _, known := s.urlAllowed("https://other.example.com/x", patterns, nil); known {
+		t.Fatal("matching past the budget settled the URL")
 	}
 }

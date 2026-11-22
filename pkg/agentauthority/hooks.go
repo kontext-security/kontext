@@ -217,6 +217,10 @@ type hookScan struct {
 	policyHelper bool
 	// urlPatterns holds each allowedHttpHookUrls pattern compiled.
 	urlPatterns map[string]*regexp.Regexp
+	// urlMatches counts the allowlist matches tried, against maxURLMatches.
+	urlMatches int
+	// projectsCut: the project list went past maxHookProjects.
+	projectsCut bool
 }
 
 type hookRaw struct {
@@ -320,6 +324,7 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	if len(projects) > maxHookProjects {
 		s.source.Fail(ReasonWalkLimit)
 		s.agent.Truncated = true
+		s.projectsCut = true
 		projects = projects[:maxHookProjects]
 	}
 	listed := map[string]bool{}
@@ -418,6 +423,9 @@ func (s *hookScan) settingsScope(kind, path string, listed bool) {
 	s.layers = append(s.layers, hookLayer{kind: kind, scope: id, settings: settings, ok: ok, project: s.project})
 	if ok && managedKind(kind) && settings.PolicyHelper {
 		s.policyHelper = true
+	}
+	if ok && managedKind(kind) && !s.shadowed && settings.EnabledPluginsInvalid {
+		s.plugins.managedUnknown = true
 	}
 	if ok {
 		for key, value := range settings.EnabledPlugins {
@@ -624,6 +632,9 @@ func (s *hookScan) pluginHooks(h *SourceHealth, installed string, declared json.
 type pluginSwitches struct {
 	managed, user map[string]bool
 	project       map[string]map[string]bool
+	// managedUnknown: a managed file's enabledPlugins couldn't be read, so
+	// whether managed settings force-enable a plugin is unknown.
+	managedUnknown bool
 }
 
 func (p pluginSwitches) lookup(key, project string) (enabled, set bool) {
