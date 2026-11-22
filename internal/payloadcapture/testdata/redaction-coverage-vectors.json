@@ -1,6 +1,82 @@
 {
   "valueVectors": [
     {
+      "name": "mysql-mixed-case-no-exe",
+      "ruleId": "mysql-password-flag",
+      "input": "cmd /c MySQL -pFAKEhunter2 appdb",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "sshpass-upper-no-exe",
+      "ruleId": "sshpass-password-flag",
+      "input": "SSHPASS -p FAKEhunter2 ssh build",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "redis-cli-upper-no-exe",
+      "ruleId": "redis-cli-password-flag",
+      "input": "cmd /c REDIS-CLI -a FAKEhunter2 PING",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "jwt-tab-payload",
+      "ruleId": "jwt",
+      "input": "eyJhbGciOiJIUzI1NiJ9.CQl7fQ.FAKEsignatureFAKE",
+      "mustNotSurvive": ["CQl7fQ", "FAKEsignatureFAKE"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-after-encoded-tab",
+      "ruleId": "jwt",
+      "input": "Bearer%09eyJhbGciOiJIUzI1NiJ9.e30.FAKEsignatureFAKE",
+      "mustNotSurvive": ["eyJhbGciOiJIUzI1NiJ9", "FAKEsignatureFAKE"]
+    },
+    {
+      "name": "jwt-after-encoded-at",
+      "ruleId": "jwt",
+      "input": "archive=%40eyJhbGciOiJIUzI1NiJ9.e30.FAKEsignatureFAKE",
+      "mustNotSurvive": ["eyJhbGciOiJIUzI1NiJ9", "FAKEsignatureFAKE"]
+    },
+    {
+      "name": "jwt-before-signed-value",
+      "ruleId": "jwt",
+      "input": "eyJ4IjoxfQ.v1.eyJ1c2VyIjo0Mn0.KtbIIGZb5B0",
+      "mustNotSurvive": ["eyJ1c2VyIjo0Mn0", "KtbIIGZb5B0"]
+    },
+    {
+      "name": "slack-encoded-hyphen",
+      "ruleId": "slack-token",
+      "input": "xoxb-FAKE123456%2DFAKE123456-FAKEabcdefghijklmnop",
+      "mustNotSurvive": ["FAKEabcdefghijklmnop"]
+    },
+    {
+      "name": "slack-double-encoded-cookie",
+      "ruleId": "slack-token",
+      "input": "d=xoxd-abc%252F1PzkFAKEenfSsgX2ov7%252BOey7J3Ss%253D",
+      "mustNotSurvive": ["1PzkFAKEenfSsgX2ov7", "Oey7J3Ss"]
+    },
+    {
+      "name": "gitlab-trailer-then-shopify",
+      "ruleId": "gitlab-token",
+      "input": "glrt-0123456789abcdefghijklmnopq.01.0a1234567shpat_0123456789abcdef0123456789abcdef",
+      "mustNotSurvive": [
+        "0123456789abcdefghijklmnopq",
+        "0123456789abcdef0123456789abcdef"
+      ]
+    },
+    {
+      "name": "gitlab-trailer-then-gitlab",
+      "ruleId": "gitlab-token",
+      "input": "glrt-0123456789abcdefghijklmnopq.de.glagent-0123456789abcdefghij",
+      "mustNotSurvive": ["0123456789abcdefghijklmnopq", "0123456789abcdefghij"]
+    },
+    {
+      "name": "stripe-bare-org-key",
+      "ruleId": "stripe-key",
+      "input": "key sk_org_0123456789abcdefghijklmn",
+      "mustNotSurvive": ["0123456789abcdefghijklmn"]
+    },
+    {
       "name": "jwt-whitespace-payload",
       "ruleId": "jwt",
       "input": "token eyJhbGciOiJIUzI1NiJ9.IHt9.FAKEsignatureFAKEsignatureFAKE done",
