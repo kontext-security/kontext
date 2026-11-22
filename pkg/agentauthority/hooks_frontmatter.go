@@ -59,6 +59,11 @@ func (s *hookScan) frontmatterScopes(dir, from string, plugin *pluginRef) {
 			continue
 		}
 		if !entry.IsDir() {
+			if name == "SKILL.md" {
+				// A skill at the folder's top, which Claude Code also
+				// loads: not read, so the scan isn't complete.
+				s.source.Fail(ReasonUnsupportedFormat)
+			}
 			continue
 		}
 		if read >= maxFrontmatterFiles {
@@ -152,7 +157,12 @@ func (s *hookScan) frontmatterScope(kind, path, canonical string, listed bool, p
 	}
 	if result := h.Result(s.opts.Now); len(s.agent.Hooks) == before && result.Status == StatusComplete {
 		// Read and empty: listed after every scope with hooks, so a skill
-		// whose last hook was removed is seen without it.
+		// whose last hook was removed is seen without it. A folder with no
+		// such file isn't a skill and lists nothing.
+		if !ok {
+			s.only()
+			return
+		}
 		s.emptyFrontmatter = append(s.emptyFrontmatter, HookScope{ID: id, Kind: kind, Status: result.Status, Reasons: []string{}, CheckedAt: result.FinishedAt})
 		s.only()
 		return

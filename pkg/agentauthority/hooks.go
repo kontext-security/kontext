@@ -202,6 +202,14 @@ type hookScan struct {
 	// frontmatterFrom, while skills and subagents are read, is the kind of
 	// the folder that holds them.
 	frontmatterFrom string
+	// settingsCut: a bound cut the scan before a settings or plugin hooks
+	// file was read. A cut among skills and subagents alone leaves the
+	// coverage verdict standing, since they never hold a device-wide
+	// handler.
+	settingsCut bool
+	// pluginSkills holds each plugin install's skills, read after every
+	// plugin's own hooks so they can't crowd those out.
+	pluginSkills []pluginSkillDir
 	project         string
 	// shadowed: an MDM profile supplies Claude Code's managed tier, so the
 	// managed-settings files on disk are not the policy in force.
@@ -258,6 +266,13 @@ type hookRaw struct {
 	// own kind, or for a skill or subagent the kind of the folder that holds
 	// it.
 	rules string
+}
+
+// pluginSkillDir is a plugin install whose skills are still to read.
+type pluginSkillDir struct {
+	dir     string
+	ref     *pluginRef
+	project string
 }
 
 // hookLayer is one settings file that took part in the scan.
@@ -334,6 +349,7 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	if len(projects) > maxHookProjects {
 		s.source.Fail(ReasonWalkLimit)
 		s.agent.Truncated = true
+		s.settingsCut = true
 		s.projectsCut = true
 		projects = projects[:maxHookProjects]
 	}
@@ -367,8 +383,18 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	s.frontmatterScopes(filepath.Join(opts.managed, ".claude"), HookScopeManaged, nil)
 	s.frontmatterScopes(base, HookScopeUser, nil)
 	for _, dir := range read {
+		if filepath.Join(dir, ".claude") == base {
+			// A project at the home folder: its skills and subagents are
+			// the user's, already read.
+			continue
+		}
 		s.project = dir
 		s.frontmatterScopes(filepath.Join(dir, ".claude"), HookScopeProject, nil)
+	}
+	for _, plugin := range s.pluginSkills {
+		// The plugin's skills follow the plugin's switches.
+		s.project = plugin.project
+		s.frontmatterScopes(plugin.dir, HookScopePlugin, plugin.ref)
 	}
 	s.project = ""
 	s.listEmptyFrontmatter()
@@ -416,6 +442,7 @@ func (s *hookScan) only() { s.g.active = []*SourceHealth{s.source} }
 func (s *hookScan) scope(kind, canonical string) (*SourceHealth, string) {
 	if len(s.agent.Scopes) >= MaxHookScopes {
 		s.agent.Truncated = true
+		s.settingsCut = s.settingsCut || s.frontmatterFrom == ""
 		s.source.Fail(ReasonSizeLimit)
 		return nil, ""
 	}
@@ -569,10 +596,10 @@ func (s *hookScan) pluginScopes(base string) {
 			ref := &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread, manifestUnread: !manifestRead && !set, canonical: canonical}
 			s.records(id, HookScopePlugin, hooks, ref, -1)
 			s.closeScope(h, id, HookScopePlugin)
-			// The plugin's skills follow the plugin's switches. Skill
-			// folders its manifest names elsewhere aren't read, so the scan
-			// says it is incomplete.
-			s.frontmatterScopes(installed, HookScopePlugin, ref)
+			// The plugin's skills are read once every plugin's hooks are.
+			// Skill folders its manifest names elsewhere aren't read, so the
+			// scan says it is incomplete.
+			s.pluginSkills = append(s.pluginSkills, pluginSkillDir{dir: installed, ref: ref, project: s.project})
 			if len(manifest.Skills) > 0 && string(manifest.Skills) != "null" {
 				s.source.Fail(ReasonUnsupportedFormat)
 			}
@@ -717,6 +744,7 @@ func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGr
 			for _, raw := range group.Hooks {
 				if len(s.agent.Hooks) >= MaxHookRecords {
 					s.agent.Truncated = true
+					s.settingsCut = s.settingsCut || s.frontmatterFrom == ""
 					s.g.fail(ReasonSizeLimit)
 					return
 				}
@@ -898,7 +926,7 @@ func (s *hookScan) managedReadable() bool {
 func (s *hookScan) coverageReadable() bool {
 	// An MDM profile or an unread project list can hold a setting, or a
 	// Kontext handler, that no record shows.
-	if s.agent.Truncated || s.unlisted || s.shadowed || s.mdmMerged || s.policyHelper || s.projectsUnread {
+	if s.settingsCut || s.unlisted || s.shadowed || s.mdmMerged || s.policyHelper || s.projectsUnread {
 		return false
 	}
 	for _, scope := range s.agent.Scopes {

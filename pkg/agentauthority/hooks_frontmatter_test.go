@@ -36,11 +36,10 @@ func TestFrontmatterHooksAreScopes(t *testing.T) {
 			}
 		}
 	}
-	if withHooks[HookScopeSkill] != 1 || withHooks[HookScopeSubagent] != 1 {
-		t.Fatalf("scopes with hooks %+v", agent.Scopes)
-	}
-	if listed[HookScopeSkill] < 2 || listed[HookScopeSubagent] < 2 {
-		t.Fatalf("empty scopes not listed %+v", agent.Scopes)
+	// deploy and notes are skills, the README folder isn't; reviewer and
+	// plain are subagents.
+	if withHooks[HookScopeSkill] != 1 || withHooks[HookScopeSubagent] != 1 || listed[HookScopeSkill] != 2 || listed[HookScopeSubagent] != 2 {
+		t.Fatalf("scopes %+v", agent.Scopes)
 	}
 	pre := byEvent(agent, "PreToolUse")
 	if len(pre) != 1 || pre[0].Matcher == nil || *pre[0].Matcher != "Bash" || scopeOf(agent, pre[0].ScopeID).Kind != HookScopeSkill {
@@ -201,6 +200,7 @@ func TestFrontmatterReader(t *testing.T) {
 		{"---\n---\n", nil, false},
 		{"---\nhooks: [1, 2]\n---\n", nil, true},
 		{"---\nhooks:\n  1: x\n---\n", nil, true},
+		{"---\n" + wideMapping(maxPairsForTest+1) + "hooks: {}\n---\n", nil, true},
 		{"---\nshared: &h\n  Stop: []\nhooks: *h\n---\n", nil, true},
 		{"---\nhooks:\n  Stop: " + strings.Repeat("[", 40) + strings.Repeat("]", 40) + "\n---\n", nil, true},
 	} {
@@ -274,4 +274,100 @@ func TestFrontmatterComesAfterSettings(t *testing.T) {
 	if len(byEvent(agent, "SessionStart")) != 1 {
 		t.Fatalf("the project's settings were crowded out: %d scopes", len(agent.Scopes))
 	}
+}
+
+// A skill whose last hook is removed keeps its scope, now empty, so the hook
+// is withdrawn instead of kept as unseen.
+func TestEmptiedSkillKeepsItsScope(t *testing.T) {
+	h := newHookHome(t)
+	path := h.write(filepath.Join(h.base, "skills", "deploy", "SKILL.md"), skillFile("PreToolUse", "echo check"))
+	agent, _ := h.scan()
+	pre := byEvent(agent, "PreToolUse")
+	if len(pre) != 1 {
+		t.Fatalf("%+v", agent.Hooks)
+	}
+	scope := pre[0].ScopeID
+	h.write(path, []byte("---\nname: deploy\ndescription: Deploy things\n---\nBody\n"))
+	agent, result := h.scan()
+	if result.Status != StatusComplete || len(agent.Hooks) != 0 || scopeOf(agent, scope).Status != StatusComplete {
+		t.Fatalf("result %+v scopes %+v", result, agent.Scopes)
+	}
+}
+
+// Skill and subagent bounds leave the coverage verdict standing: they never
+// hold a device-wide handler.
+func TestSkillBoundsKeepTheCoverageVerdict(t *testing.T) {
+	h := newHookHome(t)
+	for i := range maxFrontmatterFiles + 1 {
+		h.write(filepath.Join(h.base, "skills", fmt.Sprintf("s%03d", i), "SKILL.md"), []byte("---\nname: s\n---\n"))
+	}
+	agent, _ := h.scan()
+	if !agent.Truncated || agent.KontextHooks.State != "missing" {
+		t.Fatalf("truncated %v coverage %+v", agent.Truncated, agent.KontextHooks)
+	}
+}
+
+// A project at the home folder doesn't read the user's skills twice.
+func TestHomeProjectReadsSkillsOnce(t *testing.T) {
+	h := newHookHome(t)
+	h.write(filepath.Join(h.base, "skills", "deploy", "SKILL.md"), skillFile("PreToolUse", "echo check"))
+	h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{h.home: map[string]any{"hasTrustDialogAccepted": true}}})
+	agent, _ := h.scan()
+	if got := len(byEvent(agent, "PreToolUse")); got != 1 {
+		t.Fatalf("%d records", got)
+	}
+	ids := map[string]bool{}
+	for _, scope := range agent.Scopes {
+		if ids[scope.ID] {
+			t.Fatalf("duplicate scope %s", scope.ID)
+		}
+		ids[scope.ID] = true
+	}
+}
+
+// A SKILL.md at the top of a skills folder isn't read, so the scan says so.
+func TestTopLevelSkillFileLeavesTheScanPartial(t *testing.T) {
+	h := newHookHome(t)
+	h.installPlugin("formatter@acme", nil, map[string]any{})
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	h.write(filepath.Join(dir, "skills", "SKILL.md"), skillFile("Stop", "echo stop"))
+	if _, result := h.scan(); result.Status != StatusPartial || !slices.Contains(result.Reasons, ReasonUnsupportedFormat) {
+		t.Fatalf("%+v", result)
+	}
+}
+
+// Plugin skills are read after every plugin's own hooks, so they can't
+// crowd a later plugin's hooks out of the scope cap.
+func TestPluginSkillsComeAfterPluginHooks(t *testing.T) {
+	h := newHookHome(t)
+	plugins := map[string]any{}
+	for _, name := range []string{"aaa", "bbb", "zzz"} {
+		dir := filepath.Join(h.base, "plugins/cache", name, "1.0.0")
+		h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), map[string]any{"name": name, "version": "1.0.0"})
+		h.write(filepath.Join(dir, "hooks/hooks.json"), map[string]any{"hooks": hooksOf("SessionStart", "", command("echo "+name))})
+		if name != "zzz" {
+			for i := range maxFrontmatterFiles {
+				h.write(filepath.Join(dir, "skills", fmt.Sprintf("s%03d", i), "SKILL.md"), skillFile("Stop", "echo stop"))
+			}
+		}
+		plugins[name+"@acme"] = []any{map[string]any{"installPath": dir}}
+	}
+	h.write(filepath.Join(h.base, "plugins/installed_plugins.json"), map[string]any{"plugins": plugins})
+	agent, _ := h.scan()
+	if !agent.Truncated {
+		t.Fatal("the skills should exceed the scope cap")
+	}
+	if got := len(byEvent(agent, "SessionStart")); got != 3 {
+		t.Fatalf("%d plugin hooks read", got)
+	}
+}
+
+const maxPairsForTest = 256
+
+func wideMapping(n int) string {
+	var b strings.Builder
+	for i := range n {
+		fmt.Fprintf(&b, "k%d: v\n", i)
+	}
+	return b.String()
 }
