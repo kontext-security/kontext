@@ -327,11 +327,12 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// Under a static observe posture the hook turns every deny into an
 	// allow, the probe's too, so nothing is verified.
 	hookEvidence.honoursDeny = mode != guardhookruntime.ModeObserve
-	hookEvidence.policyRevision = func() string {
-		if deployment := cedarCache.Current().Deployment; deployment != nil {
-			return deployment.DeploymentIdentity
-		}
-		return ""
+	hookEvidence.policyRevision = func() string { return policyRevision(cedarCache.Current()) }
+	// Evidence is kept only while the current enrolment's own settings turn
+	// the hook inventory on, and is dropped with the hook results.
+	hookEvidence.enabled = func() bool {
+		snapshot := endpointConfigCache.Current()
+		return snapshot.HookInventoryEnabled() && snapshot.Confirmed
 	}
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          managedconfig.Agent,
@@ -365,6 +366,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		ObserveEvent:           compactor.Observe,
 		HoldFor:                enrolmentHold(started, enrolmentWait(opts.Diagnostic), cedarEnforcement, cedarCache),
 		InterceptEvent:         hookEvidence.intercept,
+		InterceptMarker:        HookVerifyMarker,
 		EvaluatedEvent:         hookEvidence.evaluated,
 	})
 	if err != nil {
@@ -461,6 +463,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// confirm an opt-in first and upload results from before the opt-out.
 	purgeHooksIfOff := func(snapshot endpointconfig.Snapshot) {
 		if snapshot.Confirmed && !snapshot.HookInventoryEnabled() {
+			hookEvidence.reset()
 			if err := inventoryStore.DiscardHooks(); err != nil {
 				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
 			}
@@ -569,6 +572,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			}
 		},
 		discard: func() error {
+			hookEvidence.reset()
 			err := inventoryStore.DiscardHooks()
 			if err != nil {
 				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)

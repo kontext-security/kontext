@@ -1,50 +1,47 @@
 package main
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
-// Only a deny counts: a hook with no decision, an allow or a crash leaves
-// the probe unverified.
+// Only a deny counts, and only its reason is read: a hook with no decision,
+// an allow or a crash is no deny, and stderr only counts with exit code 2.
 func TestReadProbeAnswer(t *testing.T) {
 	for _, tc := range []struct {
 		stdout string
 		exit   int
 		stderr string
-		denied bool
 		reason string
 	}{
-		{`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"x"}}`, 0, "", true, "deny"},
-		{"", 2, "blocked", true, "exit code 2"},
-		{`{"suppressOutput":true}`, 0, "managed policy daemon unavailable\nmore", false, "no decision: managed policy daemon unavailable"},
-		{`{"hookSpecificOutput":{"permissionDecision":"allow"}}`, 0, "", false, "answered allow"},
-		{"not json", 1, "", false, "no decision, exit code 1"},
+		{`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"x"}}`, 0, "", "x"},
+		{"", 2, "blocked\n", "blocked"},
+		{`{"suppressOutput":true}`, 0, "managed policy daemon unavailable at /Users/FAKE", probeAnswerMissing},
+		{`{"hookSpecificOutput":{"permissionDecision":"allow"}}`, 0, "", probeAnswerMissing},
+		{`{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"x"}}`, 1, "", probeAnswerMissing},
+		{"not json", 1, "", probeAnswerMissing},
 	} {
-		denied, reason, err := readProbeAnswer([]byte(tc.stdout), tc.exit, strings.NewReader(tc.stderr))
-		if err != nil || denied != tc.denied || reason != tc.reason {
-			t.Fatalf("%q exit %d: %v %q %v", tc.stdout, tc.exit, denied, reason, err)
+		if got := readProbeAnswer([]byte(tc.stdout), tc.exit, []byte(tc.stderr)); got != tc.reason {
+			t.Fatalf("%q exit %d: %q", tc.stdout, tc.exit, got)
 		}
 	}
 }
 
-func TestVerifyNeedsARunningKontextPreToolUse(t *testing.T) {
-	record := func(event, origin, state string) agentauthority.HookRecord {
-		return agentauthority.HookRecord{Event: event, Origin: origin, Enablement: agentauthority.HookEnablement{State: state}}
-	}
+// The handler must run for every Bash call, as the scan's Kontext hook set
+// counts it: device wide, unconditional, synchronous, matching every tool.
+func TestVerifyNeedsAKontextPreToolUseForEveryCall(t *testing.T) {
 	for _, tc := range []struct {
-		hooks []agentauthority.HookRecord
-		want  bool
+		set  agentauthority.KontextHookSet
+		want bool
 	}{
-		{[]agentauthority.HookRecord{record("PreToolUse", agentauthority.HookOriginKontext, "enabled")}, true},
-		{[]agentauthority.HookRecord{record("PreToolUse", agentauthority.HookOriginKontext, "disabled")}, false},
-		{[]agentauthority.HookRecord{record("PreToolUse", agentauthority.HookOriginSettings, "enabled")}, false},
-		{[]agentauthority.HookRecord{record("Stop", agentauthority.HookOriginKontext, "enabled")}, false},
+		{agentauthority.KontextHookSet{State: "complete", MissingEvents: []string{}}, true},
+		{agentauthority.KontextHookSet{State: "needs_update", MissingEvents: []string{"Stop"}}, true},
+		{agentauthority.KontextHookSet{State: "needs_update", MissingEvents: []string{"PreToolUse"}}, false},
+		{agentauthority.KontextHookSet{State: agentauthority.KontextHooksUnknown, MissingEvents: []string{}}, false},
 	} {
-		if got := runsKontextPreToolUse(agentauthority.HookAgent{Hooks: tc.hooks}); got != tc.want {
-			t.Fatalf("%+v: %v", tc.hooks, got)
+		if got := coversPreToolUse(agentauthority.HookAgent{KontextHooks: tc.set}); got != tc.want {
+			t.Fatalf("%+v: %v", tc.set, got)
 		}
 	}
 }

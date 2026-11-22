@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -405,6 +406,7 @@ func newTestServiceWithOptions(t *testing.T, opts Options) *Service {
 		Observe:           opts.Observe,
 		HoldFor:           opts.HoldFor,
 		Intercept:         opts.Intercept,
+		InterceptMarker:   opts.InterceptMarker,
 		Evaluated:         opts.Evaluated,
 		Diagnostic:        opts.Diagnostic,
 	})
@@ -755,20 +757,25 @@ func TestServiceInterceptsAndReportsEvaluatedEvents(t *testing.T) {
 	service := newTestServiceWithOptions(t, Options{
 		Core: core,
 		Intercept: func(event hook.Event) (hook.Result, bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			evaluated = append(evaluated, "intercept:"+event.ToolName)
 			if event.ToolName != "Probe" {
 				return hook.Result{}, false
 			}
 			return hook.Result{Decision: hook.DecisionDeny, Reason: "probe", Mode: "enforce"}, true
 		},
-		Evaluated: func(event hook.Event, result hook.Result) {
+		InterceptMarker: "FAKEmarker",
+		Evaluated: func(event hook.Event, result hook.Result, policy bool) {
 			mu.Lock()
 			defer mu.Unlock()
-			evaluated = append(evaluated, event.ToolName+":"+string(result.Decision))
+			evaluated = append(evaluated, fmt.Sprintf("%s:%s:%v", event.ToolName, result.Decision, policy))
 		},
 	})
 	client := NewClient(service.SocketPath())
 
-	result, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Probe"})
+	marked := map[string]any{"command": "FAKEmarker"}
+	result, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Probe", ToolInput: marked})
 	if err != nil || result.Decision != hook.DecisionDeny || result.Reason != "probe" || result.Mode != "enforce" {
 		t.Fatalf("probe = %+v, %v", result, err)
 	}
@@ -781,7 +788,8 @@ func TestServiceInterceptsAndReportsEvaluatedEvents(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(evaluated) != 1 || evaluated[0] != "Bash:allow" {
+	// Without the marker the intercept isn't asked.
+	if !slices.Equal(evaluated, []string{"intercept:Probe", "Bash:allow:true"}) {
 		t.Fatalf("evaluated %v", evaluated)
 	}
 }

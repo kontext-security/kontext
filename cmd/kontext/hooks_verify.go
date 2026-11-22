@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,12 +28,14 @@ const hookVerifyTimeout = 30 * time.Second
 func hooksVerifyCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "verify",
-		Short: "Check that Kontext's PreToolUse hook runs and that its deny is honoured",
-		Long: "Run Kontext's PreToolUse hook the way Claude Code runs it, for a Bash call whose command is a\n" +
-			"shell no-op, and check that it answers with a deny. The Kontext daemon always denies that\n" +
-			"no-op, in every rollout mode, and records the verification with the Claude Code version, the\n" +
-			"hook's configuration and the policy revision. A later change to any of them makes the\n" +
-			"verification an older result.",
+		Short: "Self-test Kontext's PreToolUse hook: run it and check that its deny comes back",
+		Long: "Check that a Kontext PreToolUse handler from this binary is set to run in Claude Code for every\n" +
+			"Bash call (synchronously, in every project), then run that handler's command the way Claude Code\n" +
+			"runs it, for a Bash call whose command is a shell no-op, and check that the Kontext daemon's deny\n" +
+			"comes back. The daemon always denies that no-op, in every rollout mode. A second call confirms\n" +
+			"the deny arrived, and only then does the daemon record the verification, with the Claude Code\n" +
+			"version, the hook's configuration and the policy revision. A later change to any of them makes\n" +
+			"the verification an older result. This tests Kontext's side of the hook; it doesn't start Claude Code.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			self, err := os.Executable()
@@ -56,53 +58,83 @@ func hooksVerifyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !runsKontextPreToolUse(agent) {
-				return errors.New("no Kontext PreToolUse hook from this binary is set to run in Claude Code; run kontext hooks inventory to see why")
+			if !coversPreToolUse(agent) {
+				return errors.New("no Kontext PreToolUse hook from this binary runs for every Bash call in Claude Code; run kontext hooks inventory to see why")
 			}
 			nonce := make([]byte, 16)
 			if _, err := rand.Read(nonce); err != nil {
 				return err
 			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), hookVerifyTimeout)
-			defer cancel()
-			denied, reason, err := runHookProbe(ctx, self, home, hex.EncodeToString(nonce))
+			// A neutral directory: no project's settings or policy apply.
+			cwd, err := os.MkdirTemp("", "kontext-hooks-verify-")
 			if err != nil {
 				return err
 			}
-			if !denied {
-				return fmt.Errorf("the hook ran but did not deny the probe (%s); the Kontext daemon may not be running", reason)
+			defer os.RemoveAll(cwd)
+			ctx, cancel := context.WithTimeout(cmd.Context(), hookVerifyTimeout)
+			defer cancel()
+			id := hex.EncodeToString(nonce)
+			reason, err := runHookProbe(ctx, self, cwd, id, managedobserve.HookVerifyCommandPrefix+id)
+			if err != nil {
+				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Verified: Kontext's PreToolUse hook ran and denied the probe. The daemon records the verification, and the dashboard shows it after the next upload.")
+			if reason != managedobserve.HookVerifyReason {
+				return fmt.Errorf("the hook ran but the Kontext daemon did not deny the probe (%s); the daemon may not be running, or may be an older version", describeAnswer(reason))
+			}
+			reason, err = runHookProbe(ctx, self, cwd, id, managedobserve.HookVerifyAckPrefix+id)
+			if err != nil {
+				return err
+			}
+			switch reason {
+			case managedobserve.HookVerifyAckReason:
+			case managedobserve.HookVerifyNotRecordedReason:
+				return errors.New("the hook ran and its deny came back, but the daemon did not record a verification: the hook inventory is off for this Mac, the rollout is observe only, or no hook scan has run yet")
+			default:
+				return fmt.Errorf("the daemon did not confirm the verification (%s)", describeAnswer(reason))
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "Verified: Kontext's PreToolUse hook ran and its deny came back. The daemon recorded the verification, and the dashboard shows it after the next upload.")
 			return nil
 		},
 	}
 }
 
-// runsKontextPreToolUse reports a PreToolUse handler of this binary that
-// Claude Code would run.
-func runsKontextPreToolUse(agent agentauthority.HookAgent) bool {
-	for _, r := range agent.Hooks {
-		if r.Event == "PreToolUse" && r.Origin == agentauthority.HookOriginKontext && r.Enablement.State == "enabled" {
-			return true
-		}
+// coversPreToolUse reports that a Kontext PreToolUse handler of this binary
+// runs for every Bash call: device wide, unconditional, synchronous and
+// matching every tool, as the scan's Kontext hook set counts it.
+func coversPreToolUse(agent agentauthority.HookAgent) bool {
+	set := agent.KontextHooks
+	return set.State != agentauthority.KontextHooksUnknown && !slices.Contains(set.MissingEvents, "PreToolUse")
+}
+
+// probeAnswerMissing stands for an answer with no deny reason.
+const probeAnswerMissing = ""
+
+func describeAnswer(reason string) string {
+	switch reason {
+	case probeAnswerMissing:
+		return "no deny"
+	case managedobserve.HookVerifyReason, managedobserve.HookVerifyAckReason, managedobserve.HookVerifyNotRecordedReason:
+		return "out of order"
 	}
-	return false
+	return "another deny"
 }
 
 // runHookProbe runs `kontext hook pre-tool-use`, which is the command a
-// Kontext handler holds, with the probe as Claude Code would send it.
-func runHookProbe(ctx context.Context, self, cwd, nonce string) (bool, string, error) {
+// Kontext handler holds, with a Bash call as Claude Code would send it, and
+// returns the deny's reason, or "" for no deny. The hook's error output
+// isn't shown: it may name local paths.
+func runHookProbe(ctx context.Context, self, cwd, nonce, command string) (string, error) {
 	input, err := json.Marshal(map[string]any{
 		"session_id":      "kontext-hooks-verify-" + nonce,
 		"hook_event_name": "PreToolUse",
 		"tool_name":       "Bash",
-		"tool_input":      map[string]any{"command": managedobserve.HookVerifyCommandPrefix + nonce},
+		"tool_input":      map[string]any{"command": command},
 		"tool_use_id":     "kontext-hooks-verify-" + nonce,
 		"cwd":             cwd,
 		"permission_mode": "default",
 	})
 	if err != nil {
-		return false, "", err
+		return "", err
 	}
 	var stdout, stderr bytes.Buffer
 	probe := exec.CommandContext(ctx, self, "hook", "pre-tool-use")
@@ -111,35 +143,26 @@ func runHookProbe(ctx context.Context, self, cwd, nonce string) (bool, string, e
 	runErr := probe.Run()
 	var exit *exec.ExitError
 	if runErr != nil && !errors.As(runErr, &exit) {
-		return false, "", fmt.Errorf("run the hook: %w", runErr)
+		return "", fmt.Errorf("run the hook: %w", runErr)
 	}
-	return readProbeAnswer(stdout.Bytes(), probe.ProcessState.ExitCode(), &stderr)
+	return readProbeAnswer(stdout.Bytes(), probe.ProcessState.ExitCode(), stderr.Bytes()), nil
 }
 
-// readProbeAnswer reads a Claude Code hook's answer: a PreToolUse deny in
-// its JSON output, or exit code 2, which Claude Code also reads as a block.
-func readProbeAnswer(stdout []byte, exitCode int, stderr io.Reader) (bool, string, error) {
+// readProbeAnswer reads a Claude Code hook's deny reason: a PreToolUse deny
+// in its JSON output, or exit code 2 with the reason on stderr, which Claude
+// Code also reads as a block. Anything else is no deny.
+func readProbeAnswer(stdout []byte, exitCode int, stderr []byte) string {
 	if exitCode == 2 {
-		return true, "exit code 2", nil
+		return strings.TrimSpace(string(stderr))
 	}
 	var output struct {
 		HookSpecificOutput *struct {
-			PermissionDecision string `json:"permissionDecision"`
+			PermissionDecision       string `json:"permissionDecision"`
+			PermissionDecisionReason string `json:"permissionDecisionReason"`
 		} `json:"hookSpecificOutput"`
 	}
-	if len(bytes.TrimSpace(stdout)) > 0 && json.Unmarshal(stdout, &output) == nil && output.HookSpecificOutput != nil {
-		if output.HookSpecificOutput.PermissionDecision == "deny" {
-			return true, "deny", nil
-		}
-		return false, "answered " + output.HookSpecificOutput.PermissionDecision, nil
+	if exitCode == 0 && json.Unmarshal(bytes.TrimSpace(stdout), &output) == nil && output.HookSpecificOutput != nil && output.HookSpecificOutput.PermissionDecision == "deny" {
+		return output.HookSpecificOutput.PermissionDecisionReason
 	}
-	detail, _ := io.ReadAll(io.LimitReader(stderr, 512))
-	reason := "no decision"
-	if line := strings.TrimSpace(string(detail)); line != "" {
-		reason += ": " + printable(strings.SplitN(line, "\n", 2)[0])
-	}
-	if exitCode != 0 {
-		reason += fmt.Sprintf(", exit code %d", exitCode)
-	}
-	return false, reason, nil
+	return probeAnswerMissing
 }

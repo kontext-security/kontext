@@ -24,8 +24,24 @@ func testRuntime(at time.Time) *hookRuntime {
 	r := newHookRuntime()
 	r.now = func() time.Time { return at }
 	r.honoursDeny = true
+	r.enabled = func() bool { return true }
 	r.policyRevision = func() string { return "dep_1" }
 	return r
+}
+
+// verifyNow runs a probe and its acknowledgement, and returns the second
+// answer's reason.
+func verifyNow(t *testing.T, r *hookRuntime, nonce string) string {
+	t.Helper()
+	probe, ok := r.intercept(probeEvent(HookVerifyCommandPrefix + nonce))
+	if !ok || probe.Reason != HookVerifyReason {
+		t.Fatalf("probe %+v %v", probe, ok)
+	}
+	ack, ok := r.intercept(probeEvent(HookVerifyAckPrefix + nonce))
+	if !ok || ack.Decision != hook.DecisionDeny {
+		t.Fatalf("ack %+v %v", ack, ok)
+	}
+	return ack.Reason
 }
 
 // Only the exact no-op with a nonce is a probe, and only from Claude Code.
@@ -37,6 +53,8 @@ func TestHookVerifyProbeShape(t *testing.T) {
 		probe bool
 	}{
 		{probeEvent(HookVerifyCommandPrefix + nonce), true},
+		{probeEvent(HookVerifyAckPrefix + nonce), true},
+		{probeEvent(HookVerifyAckPrefix + nonce + " "), false},
 		{probeEvent(HookVerifyCommandPrefix + nonce + "; rm -rf x"), false},
 		{probeEvent(HookVerifyCommandPrefix + "short"), false},
 		{probeEvent("echo " + HookVerifyCommandPrefix + nonce), false},
@@ -53,16 +71,14 @@ func TestHookVerifyProbeShape(t *testing.T) {
 	}
 }
 
-// A probe's verification binds to the content and agent version the next
-// scan reads, so a later change makes it an older result.
-func TestHookVerificationBindsToTheNextScan(t *testing.T) {
+// A verification binds to the Kontext PreToolUse handlers and agent version
+// of the last scan before the probe, so a later change makes it an older
+// result. It is recorded only once acknowledged.
+func TestHookVerificationBindsAtTheProbe(t *testing.T) {
 	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
 	r := testRuntime(at)
 	woke := 0
 	r.verified = func() { woke++ }
-	if _, ok := r.intercept(probeEvent(HookVerifyCommandPrefix + strings.Repeat("0", 32))); !ok || woke != 1 {
-		t.Fatalf("intercepted %v, woke %d", ok, woke)
-	}
 	version := "2.1.329"
 	scan := func(content, version string) agentauthority.HookAgent {
 		return agentauthority.HookAgent{AgentVersion: &version, Hooks: []agentauthority.HookRecord{
@@ -70,38 +86,102 @@ func TestHookVerificationBindsToTheNextScan(t *testing.T) {
 			kontextRecord("hk_other", "PreToolUse", "fp_x", agentauthority.HookOriginSettings, "enabled"),
 		}}
 	}
+	// No scan yet: nothing to bind to, so nothing is recorded.
+	if reason := verifyNow(t, r, strings.Repeat("9", 32)); reason != HookVerifyNotRecordedReason || woke != 0 {
+		t.Fatalf("before a scan: %q, woke %d", reason, woke)
+	}
 	first := scan("fp_a", version)
 	r.apply(&first)
-	pre := first.Hooks[0].Evidence
-	if pre.VerifiedAt == nil || pre.Verification == nil || pre.Verification.ContentFP != "fp_a" || *pre.Verification.AgentVersion != version || *pre.Verification.PolicyRevision != "dep_1" || pre.Level != agentauthority.HookEvidenceEnforcementVerified {
-		t.Fatalf("verified %+v %+v", pre, pre.Verification)
+	// A probe that is never acknowledged records nothing.
+	r.intercept(probeEvent(HookVerifyCommandPrefix + strings.Repeat("8", 32)))
+	again := scan("fp_a", version)
+	r.apply(&again)
+	if again.Hooks[0].Evidence.VerifiedAt != nil || woke != 0 {
+		t.Fatalf("an unacknowledged probe verified %+v", again.Hooks[0].Evidence)
 	}
-	if first.Hooks[1].Evidence.VerifiedAt != nil {
-		t.Fatal("a hook that isn't Kontext's own was verified")
-	}
-
+	nonce := strings.Repeat("0", 32)
+	r.intercept(probeEvent(HookVerifyCommandPrefix + nonce))
+	// The configuration changes between the probe and the next scan: the
+	// verification stays with what the probe ran through.
 	changed := scan("fp_b", version)
+	if reason, _ := r.intercept(probeEvent(HookVerifyAckPrefix + nonce)); reason.Reason != HookVerifyAckReason || woke != 1 {
+		t.Fatalf("ack %+v, woke %d", reason, woke)
+	}
 	r.apply(&changed)
 	if e := changed.Hooks[0].Evidence; e.Verification == nil || e.Verification.ContentFP != "fp_a" || e.Level == agentauthority.HookEvidenceEnforcementVerified {
 		t.Fatalf("changed content kept the verification current: %+v", e)
+	}
+	back := scan("fp_a", version)
+	r.apply(&back)
+	pre := back.Hooks[0].Evidence
+	if pre.VerifiedAt == nil || *pre.Verification.AgentVersion != version || *pre.Verification.PolicyRevision != "dep_1" || pre.Level != agentauthority.HookEvidenceEnforcementVerified {
+		t.Fatalf("verified %+v %+v", pre, pre.Verification)
+	}
+	if back.Hooks[1].Evidence.VerifiedAt != nil {
+		t.Fatal("a hook that isn't Kontext's own was verified")
 	}
 	upgraded := scan("fp_a", "2.2.0")
 	r.apply(&upgraded)
 	if e := upgraded.Hooks[0].Evidence; e.Level == agentauthority.HookEvidenceEnforcementVerified {
 		t.Fatalf("an agent upgrade kept the verification current: %+v", e)
 	}
+	// An acknowledgement is good once.
+	if reason, _ := r.intercept(probeEvent(HookVerifyAckPrefix + nonce)); reason.Reason != HookVerifyNotRecordedReason {
+		t.Fatalf("replayed ack %+v", reason)
+	}
+}
+
+// A probe expires if its acknowledgement comes too late.
+func TestHookProbeExpires(t *testing.T) {
+	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	r := testRuntime(at)
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
+	r.apply(&agent)
+	nonce := strings.Repeat("7", 32)
+	r.intercept(probeEvent(HookVerifyCommandPrefix + nonce))
+	r.now = func() time.Time { return at.Add(hookProbeTTL + time.Second) }
+	if reason, _ := r.intercept(probeEvent(HookVerifyAckPrefix + nonce)); reason.Reason != HookVerifyNotRecordedReason {
+		t.Fatalf("late ack %+v", reason)
+	}
 }
 
 // Under a static observe posture the probe's deny never reaches the agent,
-// so nothing is verified.
-func TestObservePostureVerifiesNothing(t *testing.T) {
-	r := testRuntime(time.Now())
-	r.honoursDeny = false
-	r.intercept(probeEvent(HookVerifyCommandPrefix + strings.Repeat("1", 32)))
+// and with the hook inventory off nothing is kept, so nothing is verified.
+func TestObservePostureOrInventoryOffVerifiesNothing(t *testing.T) {
+	for _, off := range []func(*hookRuntime){
+		func(r *hookRuntime) { r.honoursDeny = false },
+		func(r *hookRuntime) { r.enabled = func() bool { return false } },
+	} {
+		r := testRuntime(time.Now())
+		agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
+		r.apply(&agent)
+		off(r)
+		if reason := verifyNow(t, r, strings.Repeat("1", 32)); reason != HookVerifyNotRecordedReason {
+			t.Fatalf("recorded: %q", reason)
+		}
+		r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionAllow}, true)
+		agent.Hooks[0].Evidence = kontextRecord("", "", "", "", "").Evidence
+		r.apply(&agent)
+		if e := agent.Hooks[0].Evidence; e.VerifiedAt != nil || r.enabled() == false && e.InvocationAt != nil {
+			t.Fatalf("%+v", e)
+		}
+	}
+}
+
+// A reset drops all evidence: nothing from before an opt-out or another
+// workspace counts after it.
+func TestHookRuntimeReset(t *testing.T) {
+	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	r := testRuntime(at)
 	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
 	r.apply(&agent)
-	if agent.Hooks[0].Evidence.VerifiedAt != nil {
-		t.Fatalf("%+v", agent.Hooks[0].Evidence)
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionAllow}, true)
+	verifyNow(t, r, strings.Repeat("2", 32))
+	r.reset()
+	agent.Hooks[0].Evidence = kontextRecord("", "", "", "", "").Evidence
+	r.apply(&agent)
+	if e := agent.Hooks[0].Evidence; e.VerifiedAt != nil || e.InvocationAt != nil || e.PolicyEvaluatedAt != nil {
+		t.Fatalf("evidence survived a reset: %+v", e)
 	}
 }
 
@@ -110,9 +190,6 @@ func TestObservePostureVerifiesNothing(t *testing.T) {
 func TestHookRuntimeEvidence(t *testing.T) {
 	at := time.Date(2026, 11, 22, 11, 0, 0, 0, time.UTC)
 	r := testRuntime(at)
-	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookSessionStart}, hook.Result{Decision: hook.DecisionAllow})
-	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionDeny, Mode: "observe"})
-	r.evaluated(hook.Event{Agent: "codex", HookName: hook.HookStop}, hook.Result{Decision: hook.DecisionAllow})
 	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{
 		kontextRecord("hk_start", "SessionStart", "fp1", agentauthority.HookOriginKontext, "enabled"),
 		kontextRecord("hk_pre", "PreToolUse", "fp2", agentauthority.HookOriginKontext, "enabled"),
@@ -120,7 +197,26 @@ func TestHookRuntimeEvidence(t *testing.T) {
 		kontextRecord("hk_user", "SessionStart", "fp4", agentauthority.HookOriginSettings, "enabled"),
 		kontextRecord("hk_stop", "Stop", "fp5", agentauthority.HookOriginKontext, "enabled"),
 	}}
+	// Events before a handler is first seen aren't its evidence.
+	r.now = func() time.Time { return at.Add(-2 * time.Second) }
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookStop}, hook.Result{Decision: hook.DecisionAllow}, true)
+	r.now = func() time.Time { return at.Add(-time.Second) }
 	r.apply(&agent)
+	r.now = func() time.Time { return at }
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookSessionStart}, hook.Result{Decision: hook.DecisionAllow}, true)
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionDeny, Mode: "observe"}, true)
+	r.evaluated(hook.Event{Agent: "codex", HookName: hook.HookStop}, hook.Result{Decision: hook.DecisionAllow}, true)
+	late := kontextRecord("hk_late", "SessionStart", "fp6", agentauthority.HookOriginKontext, "enabled")
+	agent.Hooks = append(agent.Hooks, late)
+	r.now = func() time.Time { return at.Add(time.Second) }
+	for i := range agent.Hooks {
+		agent.Hooks[i].Evidence = kontextRecord("", "", "", "", "").Evidence
+	}
+	r.apply(&agent)
+	if e := agent.Hooks[5].Evidence; e.InvocationAt != nil {
+		t.Fatalf("a handler added after the event got its evidence: %+v", e)
+	}
+	agent.Hooks = agent.Hooks[:5]
 	want := at.Format(time.RFC3339Nano)
 	start, pre := agent.Hooks[0].Evidence, agent.Hooks[1].Evidence
 	if start.InvocationAt == nil || *start.InvocationAt != want || start.PolicyEvaluatedAt != nil || start.Level != agentauthority.HookEvidenceInvocationObserved {
@@ -135,10 +231,15 @@ func TestHookRuntimeEvidence(t *testing.T) {
 		}
 	}
 
-	// A failed-open answer is an invocation without a policy decision.
+	// A failed-open answer, or a fallback after a failure, is an
+	// invocation without a policy decision.
 	later := at.Add(time.Minute)
 	r.now = func() time.Time { return later }
-	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.FailOpen("daemon away"))
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.FailOpen("daemon away"), true)
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionDeny}, false)
+	// Times never move back.
+	r.now = func() time.Time { return at }
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionAllow}, true)
 	agent.Hooks[1].Evidence = kontextRecord("", "", "", "", "").Evidence
 	r.apply(&agent)
 	if e := agent.Hooks[1].Evidence; *e.InvocationAt != later.Format(time.RFC3339Nano) || *e.PolicyEvaluatedAt != want {
