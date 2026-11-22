@@ -443,6 +443,8 @@ func (s *hookScan) scope(kind, canonical string) (*SourceHealth, string) {
 	if len(s.agent.Scopes) >= MaxHookScopes {
 		s.agent.Truncated = true
 		s.settingsCut = s.settingsCut || s.frontmatterFrom == ""
+		// A project's settings left unread may lift or set any switch.
+		s.projectsCut = s.projectsCut || s.project != "" && projectKind(kind)
 		s.source.Fail(ReasonSizeLimit)
 		return nil, ""
 	}
