@@ -1079,6 +1079,66 @@
       "ruleId": "jwt",
       "input": "name eyJ1c2VyIjo0Mn0.FAKEsignatureFAKEabc",
       "mustNotSurvive": ["eyJ1c2VyIjo0Mn0", "FAKEsignatureFAKEabc"]
+    },
+    {
+      "name": "slack-then-shopify-double-encoded-slash",
+      "ruleId": "slack-token",
+      "input": "/xoxb-export-archive%252Fshpat_FAKE0123456789abcdef0123456789ab",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "slack-all-hyphens-encoded",
+      "ruleId": "slack-token",
+      "input": "xoxb%2D123456789012%2D123456789012%2DFAKEabcdefghijklmnopqrst",
+      "mustNotSurvive": ["FAKEabcdefghijklmnopqrst", "123456789012"]
+    },
+    {
+      "name": "slack-app-encoded-hyphen",
+      "ruleId": "slack-app-token",
+      "input": "xapp-1-AFAKE0123%2D0123456789-xxxxxxxxxxxxxxxxxxxxxxxx",
+      "mustNotSurvive": ["xxxxxxxxxxxxxxxxxxxxxxxx", "0123456789"]
+    },
+    {
+      "name": "jwt-then-jwe-after-encoded-at",
+      "ruleId": "jwt",
+      "input": "%40eyJ4IjoxfQ.v1.eyJhbGciOiJSU0EtT0FFUCJ9.FAKEkey.FAKEiv.FAKEcipher.FAKEtag",
+      "mustNotSurvive": ["FAKEkey", "FAKEiv", "FAKEcipher", "FAKEtag"],
+      "expected": "%40[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-double-newline-header",
+      "ruleId": "jwt",
+      "input": "ewoKImFsZyI6IkhTMjU2In0.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-crlf-header",
+      "ruleId": "jwt",
+      "input": "ew0KICAiYWxnIjoiSFMyNTYiDQp9.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-tab-header",
+      "ruleId": "jwt",
+      "input": "ewkiYWxnIjoiSFMyNTYifQ.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-value-base64-mac",
+      "ruleId": "jwt",
+      "input": "eyJ1c2VyIjoiRkFLRSJ9./FAKE+mac/FAKEsignature+FAKE",
+      "mustNotSurvive": ["FAKE+mac/FAKEsignature+FAKE"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-cookie",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=deadbeefFAKEdeadbeefdeadbeefdead",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"],
+      "expected": "Cookie: _gitlab_session=[REDACTED_SECRET]"
     }
   ],
   "keyVectors": [

@@ -184,8 +184,8 @@
     },
     {
       "id": "slack-token",
-      "description": "Slack bot/app/user tokens, also glued to a name (`ci_xoxb-...`).",
-      "pattern": "(?:xox[abcdeoprs]|xwfp)-(?:[A-Za-z0-9-]|%(?:25)?(?:2[BbDdFf]|3[Dd])){16,}",
+      "description": "Slack bot/app/user tokens, also glued to a name (`ci_xoxb-...`), with URL-encoded hyphens and, in a `d=xoxd-` cookie, encoded `+/=`. The body also takes `_` and `.`, so a token glued to the next one (`%2Fshpat_…`) masks both rather than leave the second without its prefix.",
+      "pattern": "(?:xox[abcdeoprs]|xwfp)(?:-|%(?:25)?2[Dd])(?:[A-Za-z0-9._-]|%(?:25)?(?:2[BbDdFf]|3[Dd])){16,}",
       "caseInsensitive": false,
       "provenance": "gitleaks:slack-bot-token"
     },
@@ -198,8 +198,8 @@
     },
     {
       "id": "slack-app-token",
-      "description": "Slack app-level tokens (`xapp-1-A…-123…-abc…`).",
-      "pattern": "xapp-\\d-[A-Z0-9]+-\\d+-[a-z0-9]{16,}",
+      "description": "Slack app-level tokens (`xapp-1-A…-123…-abc…`), also with URL-encoded hyphens.",
+      "pattern": "xapp(?:-|%(?:25)?2[Dd])\\d(?:-|%(?:25)?2[Dd])[A-Z0-9]+(?:-|%(?:25)?2[Dd])\\d+(?:-|%(?:25)?2[Dd])[a-z0-9]{16,}",
       "caseInsensitive": false,
       "provenance": "gitleaks:slack-app-token"
     },
@@ -209,6 +209,14 @@
       "pattern": "(?:glpat|gldt|glrtr|glrt|glptt|glsoat|gloas|glft|glwt|glagent|glffct|glimt)-[A-Za-z0-9_-]{20,}(?:\\.[0-9]{2}\\.[a-z0-9]{9})?|glcbt-[A-Za-z0-9_-]{20,}(?:\\.[A-Za-z0-9_-]*){0,2}",
       "caseInsensitive": false,
       "provenance": "gitleaks:gitlab-pat"
+    },
+    {
+      "id": "gitlab-session-cookie",
+      "description": "GitLab's session cookie (`_gitlab_session=…`), listed with GitLab's token prefixes; the cookie name is kept.",
+      "pattern": "(_gitlab_session=)[A-Za-z0-9]{20,}",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "gitlab:session-cookie"
     },
     {
       "id": "pypi-token",
@@ -261,8 +269,8 @@
     },
     {
       "id": "jwt",
-      "description": "JSON Web Tokens and other signed values: the header (`eyJ`, `eyAi…` with a space, `ewo…` with a newline) and up to four dotted parts, whatever they hold. Glued after `_`, `-` or a URL-encoded byte, never inside a word (`keyJson…`).",
-      "pattern": "(^|[^A-Za-z0-9]|%[0-9A-Fa-f]{2})(?:eyJ|eyAi|ewo[gJi])[A-Za-z0-9_-]{6,}(?:\\.[A-Za-z0-9_-]*){1,4}",
+      "description": "JSON Web Tokens and other signed values: the header (`eyJ`, `eyA…` with a space, `ewo…`/`ew0…`/`ewk…` with a newline, carriage return or tab) and every dotted part after it, whatever they hold, in base64url or standard Base64 (a cookie-signature MAC). Glued after `_`, `-` or a URL-encoded byte, never inside a word (`keyJson…`).",
+      "pattern": "(^|[^A-Za-z0-9]|%[0-9A-Fa-f]{2})(?:eyJ|eyA|ew[ok0])[A-Za-z0-9_+/=-]{6,}(?:\\.[A-Za-z0-9_+/=-]*)+",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": false,
       "provenance": "gitleaks:jwt"
