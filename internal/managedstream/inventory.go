@@ -98,7 +98,24 @@ type inventoryFile struct {
 	Revision       int64                    `json:"revision"`
 	Pending        map[string]pendingSource `json:"pending"`
 	Health         InventoryHealth          `json:"health"`
+	// HookBaselines is what change detection keeps of the last hook scan,
+	// by source. Acknowledged results leave Pending; the baseline stays.
+	HookBaselines map[string]hookBaseline `json:"hook_baselines,omitempty"`
+	// HookChanges is the latest transitions, newest last, at most
+	// maxHookChanges.
+	HookChanges []agentauthority.HookChange `json:"hook_changes,omitempty"`
 }
+
+// hookBaseline is a source's last scan under one key: ids from another
+// workspace's key never compare with this one's.
+type hookBaseline struct {
+	KeyTag   string                      `json:"key_tag"`
+	Redactor int                         `json:"redactor"`
+	Baseline agentauthority.HookBaseline `json:"baseline"`
+}
+
+// maxHookChanges bounds the change log kept on disk.
+const maxHookChanges = 256
 
 // InventoryStore holds the revision counter and every result the cloud has not
 // acknowledged. Scan loops and the stream writer share it.
@@ -109,6 +126,9 @@ type InventoryStore struct {
 	// unsaved: the last write failed, so the file may still hold what
 	// memory dropped, and the next discard writes again.
 	unsaved bool
+	// HookChanged, when set, receives each hook scan's transitions after
+	// they are stored. It runs under no lock.
+	HookChanged func([]agentauthority.HookChange)
 }
 
 // InventoryStatePath is the store's place beside the stream's own state.
@@ -194,11 +214,45 @@ func (s *InventoryStore) RecordAuthority(report agentauthority.Report) error {
 	})
 }
 
-// RecordHooks takes a new revision for a hook scan of one agent.
+// RecordHooks takes a new revision for a hook scan of one agent, and records
+// what changed since the last scan under the same key.
 func (s *InventoryStore) RecordHooks(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) error {
-	return s.record([]agentauthority.SourceResult{result}, func(string, string) sourceClaims {
+	var changes []agentauthority.HookChange
+	err := s.record([]agentauthority.SourceResult{result}, func(string, string) sourceClaims {
+		changes = s.hookChangesLocked(agent, result, keyTag)
 		return sourceClaims{Hooks: &agent, KeyTag: keyTag, Redactor: hookRedactor}
 	})
+	if err == nil && len(changes) > 0 && s.HookChanged != nil {
+		s.HookChanged(changes)
+	}
+	return err
+}
+
+// hookChangesLocked compares a scan with its source's baseline and moves the
+// baseline on. A new key or redactor starts a new baseline and reports
+// nothing: its ids don't compare with the old ones.
+func (s *InventoryStore) hookChangesLocked(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) []agentauthority.HookChange {
+	if s.file.HookBaselines == nil {
+		s.file.HookBaselines = map[string]hookBaseline{}
+	}
+	var base *agentauthority.HookBaseline
+	if prior, ok := s.file.HookBaselines[result.ID]; ok && prior.KeyTag == keyTag && prior.Redactor == hookRedactor {
+		base = &prior.Baseline
+	}
+	changes, next := agentauthority.HookChanges(base, agent, result)
+	s.file.HookBaselines[result.ID] = hookBaseline{KeyTag: keyTag, Redactor: hookRedactor, Baseline: next}
+	s.file.HookChanges = append(s.file.HookChanges, changes...)
+	if extra := len(s.file.HookChanges) - maxHookChanges; extra > 0 {
+		s.file.HookChanges = slices.Clone(s.file.HookChanges[extra:])
+	}
+	return changes
+}
+
+// HookChanges returns the stored hook transitions, oldest first.
+func (s *InventoryStore) HookChanges() []agentauthority.HookChange {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.file.HookChanges)
 }
 
 func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf func(agent, family string) sourceClaims) error {
@@ -523,6 +577,12 @@ func (s *InventoryStore) DiscardAuthority() error {
 func (s *InventoryStore) DiscardHooks() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Change detection starts over too: the next scan may be under another
+	// workspace's key, or after the deployment turned hooks back on.
+	if len(s.file.HookBaselines)+len(s.file.HookChanges) > 0 {
+		s.file.HookBaselines, s.file.HookChanges = nil, nil
+		s.unsaved = true
+	}
 	return s.discard(func(id string) bool { return sourceKind(id) == kindHooks })
 }
 

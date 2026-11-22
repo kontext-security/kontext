@@ -334,3 +334,16 @@ func ClaudeConfigDir() (string, error) {
 	}
 	return filepath.Clean(dir), nil
 }
+
+// describeHookChange is one line for the daemon log: the kind and the opaque
+// ids, never a command or a path.
+func describeHookChange(change agentauthority.HookChange) string {
+	line := change.Kind + " scope=" + change.ScopeID
+	if change.HookID != "" {
+		line += " hook=" + change.HookID + " event=" + change.Event
+	}
+	if len(change.Reasons) > 0 {
+		line += " reasons=" + strings.Join(change.Reasons, ",")
+	}
+	return line
+}

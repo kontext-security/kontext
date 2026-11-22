@@ -430,3 +430,73 @@ func TestTestBlocksMatchTheCloudShape(t *testing.T) {
 		}
 	}
 }
+
+// Hook changes are kept across a restart, follow the key the ids were made
+// under, and start over when the deployment turns hooks off.
+func TestHookChangesFollowTheBaseline(t *testing.T) {
+	store, path := openTestStore(t)
+	var seen []agentauthority.HookChange
+	store.HookChanged = func(changes []agentauthority.HookChange) { seen = append(seen, changes...) }
+	first, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a1")
+	if err := store.RecordHooks(first, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.HookChanges()) != 0 || len(seen) != 0 {
+		t.Fatalf("the first scan is the baseline: %+v", store.HookChanges())
+	}
+
+	// The baseline survives a restart, and acknowledged results leaving
+	// Pending don't reset it.
+	store = OpenInventoryStore(path, testInstallation)
+	store.HookChanged = func(changes []agentauthority.HookChange) { seen = append(seen, changes...) }
+	store.file.Pending = map[string]pendingSource{}
+	second, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a2")
+	if err := store.RecordHooks(second, res, "tag"); err != nil {
+		t.Fatal(err)
+	}
+	kinds := func(changes []agentauthority.HookChange) []string {
+		out := []string{}
+		for _, c := range changes {
+			out = append(out, c.Kind+":"+c.HookID)
+		}
+		return out
+	}
+	want := []string{"removed:" + wireID("hk_a1"), "added:" + wireID("hk_a2")}
+	if got := kinds(store.HookChanges()); !slices.Equal(got, want) {
+		t.Fatalf("changes %v, want %v", got, want)
+	}
+	if !slices.Equal(kinds(seen), want) {
+		t.Fatalf("callback %v", kinds(seen))
+	}
+
+	// Ids under another workspace's key don't compare with these.
+	if err := store.RecordHooks(first, res, "other"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.HookChanges()) != 2 {
+		t.Fatalf("a new key reported changes: %v", kinds(store.HookChanges()))
+	}
+
+	if err := store.DiscardHooks(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := OpenInventoryStore(path, testInstallation)
+	if len(reopened.HookChanges()) != 0 || len(reopened.file.HookBaselines) != 0 {
+		t.Fatalf("discard kept change detection: %+v", reopened.file)
+	}
+}
+
+// The change log keeps the newest maxHookChanges.
+func TestHookChangesAreBounded(t *testing.T) {
+	store, _ := openTestStore(t)
+	for i := range maxHookChanges + 10 {
+		agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:"+strconv.Itoa(i))
+		if err := store.RecordHooks(agent, res, "tag"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changes := store.HookChanges()
+	if len(changes) != maxHookChanges || changes[len(changes)-1].HookID != wireID("hk_"+strconv.Itoa(maxHookChanges+9)) {
+		t.Fatalf("%d changes, last %+v", len(changes), changes[len(changes)-1])
+	}
+}

@@ -440,6 +440,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		streamStatePath = managedstream.DefaultStatePathForDB(dbPath)
 	}
 	inventoryStore := managedstream.OpenInventoryStore(managedstream.InventoryStatePath(streamStatePath), installationState.InstallationID)
+	inventoryStore.HookChanged = func(changes []agentauthority.HookChange) {
+		for _, change := range changes {
+			opts.Diagnostic.Printf("hook inventory: %s\n", describeHookChange(change))
+		}
+	}
 	// A confirmed opt-out drops pending hook results when it is seen, not
 	// when the hook worker next runs: a restart in between could otherwise
 	// confirm an opt-in first and upload results from before the opt-out.
