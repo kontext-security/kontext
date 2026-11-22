@@ -1210,6 +1210,72 @@
       "input": "Cookie: d=xoxd%2Dabc/FAKE0123456789abcdef%2BFAKETAILw%3D%3D",
       "mustNotSurvive": ["FAKE0123456789abcdef", "FAKETAILw"],
       "expected": "Cookie: d=[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-json-newline",
+      "ruleId": "gitlab-session-cookie",
+      "input": "cookies={\"_gitlab_session\":\n  \"FAKE0123456789abcdef0123456789ab\"}",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "gitlab-session-escaped-quotes",
+      "ruleId": "gitlab-session-cookie",
+      "input": "headers={\"Cookie\":\"_gitlab_session=\\\"FAKE0123456789abcdef0123456789ab\\\"\"}",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "gitlab-session-spaced-set-cookie",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Set-Cookie: _gitlab_session = FAKE0123456789abcdef0123456789ab; Path=/",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "signed-session-short-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3AFAKE123.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": ["FAKE123", "FAKEmacFAKEmacFAKEmacFAKEmac0"],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-dotted-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3Atenant.FAKE0123456789abcdef.FAKEmacFAKEmac%2BFAKEmacFAKE",
+      "mustNotSurvive": ["tenant.FAKE0123456789abcdef", "FAKEmacFAKEmac"],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-npm-shaped-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3Anpm_FAKE0123456789abcdef01234567.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": [
+        "FAKE0123456789abcdef01234567",
+        "FAKEmacFAKEmacFAKEmacFAKEmac0"
+      ],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-after-encoded-equals",
+      "ruleId": "signed-session-cookie",
+      "input": "cookie=connect.sid%3Ds%3AFAKE0123456789abcdef.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": [
+        "FAKE0123456789abcdef",
+        "FAKEmacFAKEmacFAKEmacFAKEmac0"
+      ],
+      "expected": "cookie=connect.sid%3Ds%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-carriage-return-header",
+      "ruleId": "jwt",
+      "input": "DXsiYWxnIjoiSFMyNTYifQ.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-any-header-before-claims",
+      "ruleId": "jwt",
+      "input": "token ICAgCnsiYWxnIjoiSFMyNTYifQ.eyJzdWIiOjF9.FAKEsignatureFAKEsig end",
+      "mustNotSurvive": ["FAKEsignatureFAKEsig", "eyJzdWIiOjF9"],
+      "expected": "token [REDACTED_SECRET] end"
     }
   ],
   "keyVectors": [
@@ -1232,6 +1298,16 @@
       "key": "tokenizer",
       "sensitive": false
     },
-    { "name": "plain-command", "key": "command", "sensitive": false }
+    { "name": "plain-command", "key": "command", "sensitive": false },
+    {
+      "name": "gitlab-session-key",
+      "key": "_gitlab_session",
+      "sensitive": true
+    },
+    {
+      "name": "gitlab-session-geo-key",
+      "key": "_gitlab_session_geo_0123abcd",
+      "sensitive": true
+    }
   ]
 }

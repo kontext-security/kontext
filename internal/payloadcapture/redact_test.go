@@ -148,10 +148,13 @@ func TestRedactionCoverageIsOrderIndependent(t *testing.T) {
 	// it. rules/5: the vendor token rules run after the property and
 	// assignment rules by contract, so a property or assignment named like a
 	// token (`"glpat-…": "…"`, `glimt-…passwd=…`) loses its value rather than
-	// only its name. Their vectors hold in the ruleset's order only.
+	// only its name. The signed-session-cookie rule runs before the vendor
+	// rules for the same reason (an `s:npm_…` ID goes with its MAC). Their
+	// vectors hold in the ruleset's order only.
 	ordered := func(ruleID, name string) bool {
 		return strings.HasPrefix(ruleID, "mysql-") || strings.HasPrefix(ruleID, "sshpass-") || strings.HasPrefix(ruleID, "redis-cli-") ||
-			name == "gitlab-named-json-property" || name == "gitlab-named-assignment"
+			name == "gitlab-named-json-property" || name == "gitlab-named-assignment" ||
+			name == "signed-session-npm-shaped-id"
 	}
 	for _, vector := range vectors.ValueVectors {
 		orders := [][]compiledRule{compiledValueRules, reversed}

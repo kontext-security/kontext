@@ -5,7 +5,7 @@
     {
       "id": "sensitive-key",
       "description": "Object keys that denote credentials; their values are replaced wholesale.",
-      "pattern": "(^|[_-])(authorization|auth|api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|pwd|pass|credential|private[_-]?key|session[_-]?key)($|[_-])",
+      "pattern": "(^|[_-])(authorization|auth|api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|pwd|pass|credential|private[_-]?key|session[_-]?key|gitlab[_-]session)($|[_-])",
       "caseInsensitive": true,
       "provenance": "structural"
     }
@@ -155,6 +155,14 @@
       "provenance": "structural"
     },
     {
+      "id": "signed-session-cookie",
+      "description": "Signed session cookies (express-session `s:<id>.<mac>`, also URL-encoded as `s%3A…`): the session ID and its MAC, however short or opaque the ID and with dots in it (the MAC follows the last dot), also after an encoded `=` (`connect.sid%3Ds%3A…`). Runs before the vendor token rules, so an ID shaped like a token (`npm_…`) goes with its MAC.",
+      "pattern": "(^|[^A-Za-z0-9]|%[0-9A-Fa-f]{2})(s(?::|%3[Aa]))[A-Za-z0-9_.-]+\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd])){20,}",
+      "replacement": "$1$2[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "express-session:signed-cookie"
+    },
+    {
       "id": "github-token",
       "description": "GitHub classic tokens (ghp/gho/ghu/ghs/ghr).",
       "pattern": "\\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{16,}\\b",
@@ -212,8 +220,8 @@
     },
     {
       "id": "gitlab-session-cookie",
-      "description": "GitLab's session cookie, listed with GitLab's token prefixes: the whole value to the next `;`, quote, comma or space, whatever it holds (`cell-1-…`, a JWT, a quoted value), also under a Geo-suffixed name (`_gitlab_session_geo_…`) and as a JSON property; the cookie name is kept.",
-      "pattern": "(_gitlab_session[A-Za-z0-9_]*(?:=|\"[\\t ]*:[\\t ]*)\"?)[^\\t\\n\\f\\r ;\",]+",
+      "description": "GitLab's session cookie, listed with GitLab's token prefixes: the whole value to the next `;`, quote, comma, backslash or whitespace, whatever it holds (`cell-1-…`, a JWT, a quoted or escaped-quoted value), also under a Geo-suffixed name (`_gitlab_session_geo_…`), with whitespace around `=` (Set-Cookie) and as a JSON property in flat text; the cookie name is kept. A decoded `_gitlab_session` key is a sensitive key.",
+      "pattern": "(_gitlab_session[A-Za-z0-9_]*(?:[\\t\\n\\f\\r ]*=[\\t\\n\\f\\r ]*|\"[\\t\\n\\f\\r ]*:[\\t\\n\\f\\r ]*)(?:\\\\?\"|')?)[^\\t\\n\\f\\r ;\",\\\\]+",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": false,
       "provenance": "gitlab:session-cookie"
@@ -269,19 +277,11 @@
     },
     {
       "id": "jwt",
-      "description": "JSON Web Tokens and other signed values: the header (`eyJ`, `eyA…` with a space, `ewo…`/`ew0…`/`ewk…` with a newline, carriage return or tab after the brace, `Cns`/`CXs`/`IHs`/`DQp7` with one before it) and every dotted part after it, whatever they hold, in base64url or standard Base64, also URL-encoded (a cookie-signature MAC, `.%2F…`). Glued after `_`, `-` or a URL-encoded byte, never inside a word (`keyJson…`).",
-      "pattern": "(^|[^A-Za-z0-9]|%[0-9A-Fa-f]{2})(?:eyJ|eyA|ew[ok0]|Cns|CXs|IHs|DQp7)[A-Za-z0-9_+/=-]{6,}(?:\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd]))*)+",
+      "description": "JSON Web Tokens and other signed values: the header (`eyJ`, `eyA…` with a space, `ewo…`/`ew0…`/`ewk…` with a newline, carriage return or tab after the brace, `Cns`/`CXs`/`DXs`/`IHs`/`DQp7` with one before it, or any header before JSON claims, `.eyJ…`/`.e30`, and a signature) and every dotted part after it, whatever they hold, in base64url or standard Base64, also URL-encoded (a cookie-signature MAC, `.%2F…`). Glued after `_`, `-` or a URL-encoded byte, never inside a word (`keyJson…`).",
+      "pattern": "(^|[^A-Za-z0-9]|%[0-9A-Fa-f]{2})(?:(?:eyJ|eyA|ew[ok0]|Cns|CXs|DXs|IHs|DQp7)[A-Za-z0-9_+/=-]{6,}|[A-Za-z0-9_-]{8,}\\.(?:eyJ|eyA|ew[ok0]|e30)[A-Za-z0-9_+/=-]*)(?:\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd]))*)+",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": false,
       "provenance": "gitleaks:jwt"
-    },
-    {
-      "id": "signed-session-cookie",
-      "description": "Signed session cookies (express-session `s:<id>.<mac>`, also URL-encoded as `s%3A…`): the session ID and its MAC, however opaque the ID.",
-      "pattern": "(^|[^A-Za-z0-9])(s(?::|%3[Aa]))[A-Za-z0-9_-]{16,}\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd])){20,}",
-      "replacement": "$1$2[REDACTED_SECRET]",
-      "caseInsensitive": false,
-      "provenance": "express-session:signed-cookie"
     }
   ]
 }
