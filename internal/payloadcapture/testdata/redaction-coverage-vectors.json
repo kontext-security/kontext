@@ -1139,6 +1139,77 @@
       "input": "Cookie: _gitlab_session=deadbeefFAKEdeadbeefdeadbeefdead",
       "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"],
       "expected": "Cookie: _gitlab_session=[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-jwt",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=eyJhbGciOiJIUzI1NiJ9.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "Cookie: _gitlab_session=[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-cell",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=cell-1-deadbeefFAKEdeadbeefdeadbeefdead; theme=dark",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"],
+      "expected": "Cookie: _gitlab_session=[REDACTED_SECRET]; theme=dark"
+    },
+    {
+      "name": "gitlab-session-geo",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session_geo_0123abcd=deadbeefFAKEdeadbeefdeadbeefdead",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"]
+    },
+    {
+      "name": "gitlab-session-quoted",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=\"deadbeefFAKEdeadbeefdeadbeefdead\"",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"]
+    },
+    {
+      "name": "gitlab-session-json",
+      "ruleId": "gitlab-session-cookie",
+      "input": "{\"_gitlab_session\":\"deadbeefFAKEdeadbeefdeadbeefdead\"}",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"]
+    },
+    {
+      "name": "signed-cookie-encoded-mac",
+      "ruleId": "jwt",
+      "input": "Cookie: sid=s%3AeyJ1c2VyIjoiRkFLRSJ9.%2FFAKEmac%2BFAKEsignature%3D",
+      "mustNotSurvive": ["FAKEmac", "FAKEsignature"],
+      "expected": "Cookie: sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-opaque-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3AFAKE0123456789abcdef.%2FFAKEmac%2BFAKEsignatureFAKE",
+      "mustNotSurvive": [
+        "FAKE0123456789abcdef",
+        "FAKEmac",
+        "FAKEsignatureFAKE"
+      ],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-plain",
+      "ruleId": "signed-session-cookie",
+      "input": "sid=s:FAKE0123456789abcdef.FAKEmac/FAKEsignature+FAKE",
+      "mustNotSurvive": ["FAKE0123456789abcdef", "FAKEmac/FAKEsignature+FAKE"],
+      "expected": "sid=s:[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-leading-newline-header",
+      "ruleId": "jwt",
+      "input": "CnsiYWxnIjoiSFMyNTYifQ.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "slack-cookie-literal-slash",
+      "ruleId": "slack-token",
+      "input": "Cookie: d=xoxd%2Dabc/FAKE0123456789abcdef%2BFAKETAILw%3D%3D",
+      "mustNotSurvive": ["FAKE0123456789abcdef", "FAKETAILw"],
+      "expected": "Cookie: d=[REDACTED_SECRET]"
     }
   ],
   "keyVectors": [

@@ -184,8 +184,8 @@
     },
     {
       "id": "slack-token",
-      "description": "Slack bot/app/user tokens, also glued to a name (`ci_xoxb-...`), with URL-encoded hyphens and, in a `d=xoxd-` cookie, encoded `+/=`. The body also takes `_` and `.`, so a token glued to the next one (`%2Fshpat_…`) masks both rather than leave the second without its prefix.",
-      "pattern": "(?:xox[abcdeoprs]|xwfp)(?:-|%(?:25)?2[Dd])(?:[A-Za-z0-9._-]|%(?:25)?(?:2[BbDdFf]|3[Dd])){16,}",
+      "description": "Slack bot/app/user tokens, also glued to a name (`ci_xoxb-...`), with URL-encoded hyphens and, in a `d=xoxd-` cookie, `+/=` literal or encoded. The body also takes `_` and `.`, so a token glued to the next one (`%2Fshpat_…`) masks both rather than leave the second without its prefix.",
+      "pattern": "(?:xox[abcdeoprs]|xwfp)(?:-|%(?:25)?2[Dd])(?:[A-Za-z0-9._+/=-]|%(?:25)?(?:2[BbDdFf]|3[Dd])){16,}",
       "caseInsensitive": false,
       "provenance": "gitleaks:slack-bot-token"
     },
@@ -212,8 +212,8 @@
     },
     {
       "id": "gitlab-session-cookie",
-      "description": "GitLab's session cookie (`_gitlab_session=…`), listed with GitLab's token prefixes; the cookie name is kept.",
-      "pattern": "(_gitlab_session=)[A-Za-z0-9]{20,}",
+      "description": "GitLab's session cookie, listed with GitLab's token prefixes: the whole value to the next `;`, quote, comma or space, whatever it holds (`cell-1-…`, a JWT, a quoted value), also under a Geo-suffixed name (`_gitlab_session_geo_…`) and as a JSON property; the cookie name is kept.",
+      "pattern": "(_gitlab_session[A-Za-z0-9_]*(?:=|\"[\\t ]*:[\\t ]*)\"?)[^\\t\\n\\f\\r ;\",]+",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": false,
       "provenance": "gitlab:session-cookie"
@@ -269,11 +269,19 @@
     },
     {
       "id": "jwt",
-      "description": "JSON Web Tokens and other signed values: the header (`eyJ`, `eyA…` with a space, `ewo…`/`ew0…`/`ewk…` with a newline, carriage return or tab) and every dotted part after it, whatever they hold, in base64url or standard Base64 (a cookie-signature MAC). Glued after `_`, `-` or a URL-encoded byte, never inside a word (`keyJson…`).",
-      "pattern": "(^|[^A-Za-z0-9]|%[0-9A-Fa-f]{2})(?:eyJ|eyA|ew[ok0])[A-Za-z0-9_+/=-]{6,}(?:\\.[A-Za-z0-9_+/=-]*)+",
+      "description": "JSON Web Tokens and other signed values: the header (`eyJ`, `eyA…` with a space, `ewo…`/`ew0…`/`ewk…` with a newline, carriage return or tab after the brace, `Cns`/`CXs`/`IHs`/`DQp7` with one before it) and every dotted part after it, whatever they hold, in base64url or standard Base64, also URL-encoded (a cookie-signature MAC, `.%2F…`). Glued after `_`, `-` or a URL-encoded byte, never inside a word (`keyJson…`).",
+      "pattern": "(^|[^A-Za-z0-9]|%[0-9A-Fa-f]{2})(?:eyJ|eyA|ew[ok0]|Cns|CXs|IHs|DQp7)[A-Za-z0-9_+/=-]{6,}(?:\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd]))*)+",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": false,
       "provenance": "gitleaks:jwt"
+    },
+    {
+      "id": "signed-session-cookie",
+      "description": "Signed session cookies (express-session `s:<id>.<mac>`, also URL-encoded as `s%3A…`): the session ID and its MAC, however opaque the ID.",
+      "pattern": "(^|[^A-Za-z0-9])(s(?::|%3[Aa]))[A-Za-z0-9_-]{16,}\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd])){20,}",
+      "replacement": "$1$2[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "express-session:signed-cookie"
     }
   ]
 }
