@@ -1,6 +1,20 @@
 {
   "valueVectors": [
     {
+      "name": "jwt-whitespace-payload",
+      "ruleId": "jwt",
+      "input": "token eyJhbGciOiJIUzI1NiJ9.IHt9.FAKEsignatureFAKEsignatureFAKE done",
+      "mustNotSurvive": ["IHt9", "FAKEsignature"],
+      "expected": "token [REDACTED_SECRET] done"
+    },
+    {
+      "name": "jwt-whitespace-payload-unsigned",
+      "ruleId": "jwt",
+      "input": "token eyJhbGciOiJub25lIn0.CnsKfQ. done",
+      "mustNotSurvive": ["CnsKfQ"],
+      "expected": "token [REDACTED_SECRET] done"
+    },
+    {
       "name": "aws-id-glued-to-assignment",
       "ruleId": "aws-access-key-id",
       "input": "AKIAFAKE0123456789ABpwd=orchid-demo",
