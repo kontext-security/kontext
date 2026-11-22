@@ -28,7 +28,8 @@ const (
 	HookReasonHTTPURLNotAllowed       = "http_url_not_allowed"
 	HookReasonAwaitingTrust           = "awaiting_trust"
 	HookReasonBinaryMissing           = "binary_missing"
-	HookReasonUnresolved              = "unresolved"
+	// HookReasonWhileActive is in hooks_frontmatter.go.
+	HookReasonUnresolved = "unresolved"
 )
 
 // HookEnablementReasons is every reason code above, in the cloud
@@ -37,7 +38,7 @@ var HookEnablementReasons = []string{
 	HookReasonDisableAllHooks, HookReasonManagedOnly, HookReasonRemoteManagedUnverified,
 	HookReasonManagedTierShadowed, HookReasonDropInUnlistable, HookReasonPluginDisabled,
 	HookReasonPluginOnly, HookReasonHTTPURLNotAllowed, HookReasonAwaitingTrust,
-	HookReasonBinaryMissing, HookReasonUnresolved,
+	HookReasonBinaryMissing, HookReasonWhileActive, HookReasonUnresolved,
 }
 
 const (
@@ -205,10 +206,8 @@ func evaluateEnablement(s *hookScan) {
 	managedSettled := s.managedReadable()
 	for i := range s.agent.Hooks {
 		r, info := &s.agent.Hooks[i], s.raw[i]
-		kind := HookScopePlugin
-		if info.layer >= 0 {
-			kind = s.layers[info.layer].kind
-		}
+		// A skill or subagent follows the rules of the folder that holds it.
+		kind := info.rules
 		sw := switchesOf(info.project)
 		var disabled, unresolved, conditional []string
 		// disableAllHooks in managed settings turns off every hook; elsewhere
@@ -257,6 +256,10 @@ func evaluateEnablement(s *hookScan) {
 			if !s.trusted(info.project) {
 				conditional = append(conditional, HookReasonAwaitingTrust)
 			}
+		}
+		// A skill's or subagent's hooks run only while it is active.
+		if frontmatterKind(info.kind) {
+			conditional = append(conditional, HookReasonWhileActive)
 		}
 		if r.Type == "command" && programMissing(s.g.ctx, s.opts.Home, info.program) {
 			disabled = append(disabled, HookReasonBinaryMissing)

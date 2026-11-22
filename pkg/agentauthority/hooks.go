@@ -199,7 +199,10 @@ type hookScan struct {
 	trust map[string]*bool
 	// signedIn is the claude.ai organization ~/.claude.json names, if any.
 	signedIn bool
-	project  string
+	// frontmatterFrom, while skills and subagents are read, is the kind of
+	// the folder that holds them.
+	frontmatterFrom string
+	project         string
 	// shadowed: an MDM profile supplies Claude Code's managed tier, so the
 	// managed-settings files on disk are not the policy in force.
 	shadowed bool
@@ -244,6 +247,10 @@ type hookRaw struct {
 	// ownerUnknown: the check of a Kontext call's binary didn't finish, so
 	// whether it is Kontext's own is unknown, not "no".
 	ownerUnknown bool
+	// rules is the scope kind whose settings rules the hook follows: its
+	// own kind, or for a skill or subagent the kind of the folder that holds
+	// it.
+	rules string
 }
 
 // hookLayer is one settings file that took part in the scan.
@@ -305,7 +312,9 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		}
 		s.settingsScope(HookScopeManagedDropIn, filepath.Join(dropins, name), true)
 	}
+	s.frontmatterScopes(filepath.Join(opts.managed, ".claude"), HookScopeManaged, nil)
 	s.settingsScope(HookScopeUser, filepath.Join(base, "settings.json"), false)
+	s.frontmatterScopes(base, HookScopeUser, nil)
 
 	s.only()
 	// The guard already marks the source for a failed read; coverage needs
@@ -334,11 +343,15 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		// Only these two files, never a walk: the one place a path found in
 		// configuration is read (ADR-0011).
 		shared, local := filepath.Join(dir, ".claude", "settings.json"), filepath.Join(dir, ".claude", "settings.local.json")
-		g.roots = append(g.roots, shared, local)
+		// And the project's own skills and subagents folders, listed
+		// within bounds (ENG-1104).
+		skills, agents := filepath.Join(dir, ".claude", "skills"), filepath.Join(dir, ".claude", "agents")
+		g.roots = append(g.roots, shared, local, skills, agents)
 		s.trust[dir] = root.Projects[project].HasTrustDialogAccepted
 		s.project = dir
 		s.settingsScope(HookScopeProject, shared, false)
 		s.settingsScope(HookScopeProjectLocal, local, false)
+		s.frontmatterScopes(filepath.Join(dir, ".claude"), HookScopeProject, nil)
 	}
 	s.project = ""
 	s.pluginScopes(base)
@@ -530,9 +543,12 @@ func (s *hookScan) pluginScopes(base string) {
 			// the project cap, or not listed) can be turned off there.
 			_, projectRead := s.trust[filepath.Clean(entry.ProjectPath)]
 			projectUnread := entry.ProjectPath != "" && !projectRead
-			s.records(id, HookScopePlugin, hooks, &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread, manifestUnread: !manifestRead && !set}, -1)
-			s.project = ""
+			ref := &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread, manifestUnread: !manifestRead && !set}
+			s.records(id, HookScopePlugin, hooks, ref, -1)
 			s.closeScope(h, id, HookScopePlugin)
+			// The plugin's skills follow the plugin's switches.
+			s.frontmatterScopes(installed, HookScopePlugin, ref)
+			s.project = ""
 		}
 	}
 }
@@ -671,7 +687,10 @@ func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGr
 					return
 				}
 				record, info := s.record(scope, kind, event, matcher, raw, plugin)
-				info.layer, info.project, info.kind = layer, s.project, kind
+				info.layer, info.project, info.kind, info.rules = layer, s.project, kind, kind
+				if s.frontmatterFrom != "" {
+					info.rules = s.frontmatterFrom
+				}
 				info.pluginDisabled = plugin != nil && plugin.disabled
 				if plugin != nil {
 					info.pluginKey = plugin.key

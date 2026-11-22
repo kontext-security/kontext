@@ -27,6 +27,12 @@ type enablementRule struct {
 	reasons []string
 }
 
+// skillFile is a SKILL.md, or a subagent file, whose frontmatter declares
+// one command hook.
+func skillFile(event, line string) []byte {
+	return []byte("---\nname: deploy\ndescription: Deploy things\nhooks:\n  " + event + ":\n    - matcher: \"Bash\"\n      hooks:\n        - type: command\n          command: \"" + line + "\"\n---\n\nBody text.\n")
+}
+
 func enablementMatrix() []enablementRule {
 	userHook := func(h *hookHome, event string, handler map[string]any, extra map[string]any) {
 		settings := map[string]any{"hooks": hooksOf(event, "", handler)}
@@ -252,6 +258,41 @@ func enablementMatrix() []enablementRule {
 				return "Stop"
 			},
 			state: hookUnresolved, reasons: []string{HookReasonDropInUnlistable},
+		},
+		{
+			name: "a skill's hooks run while it is active", follows: "skill frontmatter hooks apply once the skill is invoked",
+			setup: func(h *hookHome) string {
+				h.write(filepath.Join(h.base, "skills", "deploy", "SKILL.md"), skillFile("PreToolUse", "echo check"))
+				return "PreToolUse"
+			},
+			state: hookConditional, reasons: []string{HookReasonWhileActive},
+		},
+		{
+			name: "an untrusted project's skill waits for trust too", follows: "project skill hooks follow the workspace trust rule",
+			setup: func(h *hookHome) string {
+				dir := project(h, false, map[string]any{})
+				h.write(filepath.Join(dir, ".claude", "skills", "deploy", "SKILL.md"), skillFile("PreToolUse", "echo check"))
+				return "PreToolUse"
+			},
+			state: hookConditional, reasons: []string{HookReasonAwaitingTrust, HookReasonWhileActive},
+		},
+		{
+			name: "strictPluginOnlyCustomization drops a personal skill's hooks", follows: "a skill keeps frontmatter hooks under the lock only from a plugin or managed settings",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"strictPluginOnlyCustomization": true})
+				h.write(filepath.Join(h.base, "skills", "deploy", "SKILL.md"), skillFile("PreToolUse", "echo check"))
+				return "PreToolUse"
+			},
+			state: hookDisabled, reasons: []string{HookReasonPluginOnly, HookReasonWhileActive},
+		},
+		{
+			name: "strictPluginOnlyCustomization keeps a managed skill's hooks", follows: "a skill keeps frontmatter hooks under the lock only from a plugin or managed settings",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"strictPluginOnlyCustomization": true})
+				h.write(filepath.Join(h.managed, ".claude", "skills", "deploy", "SKILL.md"), skillFile("PreToolUse", "echo check"))
+				return "PreToolUse"
+			},
+			state: hookConditional, reasons: []string{HookReasonWhileActive},
 		},
 		{
 			name: "a claude.ai sign-in is named without changing the state", follows: "server-managed settings apply to signed-in organizations",
