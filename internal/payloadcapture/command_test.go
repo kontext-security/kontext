@@ -238,6 +238,20 @@ func TestCommandSpansAreLinear(t *testing.T) {
 	}
 }
 
+// TestCommandSpansBoundNesting pins that substitutions nested far past
+// maxDepth are masked whole without deep recursion.
+func TestCommandSpansBoundNesting(t *testing.T) {
+	t.Parallel()
+
+	for _, open := range []string{"$(", "`", "\"$("} {
+		input := "echo " + strings.Repeat(open, 20000) + "mysql -pFAKEhunter2 appdb"
+		redacted, _ := RedactText(input)
+		if strings.Contains(redacted, "FAKEhunter2") {
+			t.Errorf("%q nested: secret survived", open)
+		}
+	}
+}
+
 // TestArgvVectors pins argument vectors in decoded JSON: an array of
 // strings, or a {"command", "args"} pair, is read as one command line.
 func TestArgvVectors(t *testing.T) {

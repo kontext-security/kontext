@@ -824,6 +824,62 @@
       "spans": [[22, 33]],
       "mustNotSurvive": ["FAKEhunter2"],
       "expected": "find /var/lib/mysql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-escaped-name",
+      "program": "mysql-client",
+      "input": "m\\ysql -pFAKEhunter2",
+      "spans": [[9, 20]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "m\\ysql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-empty-quotes-in-name",
+      "program": "mysql-client",
+      "input": "my\"\"sql -pFAKEhunter2",
+      "spans": [[10, 21]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "my\"\"sql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-empty-single-quotes-in-name",
+      "program": "mysql-client",
+      "input": "my''sql -pFAKEhunter2",
+      "spans": [[10, 21]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "my''sql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-name-split-by-line-continuation",
+      "program": "mysql-client",
+      "input": "m\\\nysql -pFAKEhunter2",
+      "spans": [[10, 21]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "m\\\nysql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "redis-user-option-before-auth",
+      "program": "redis-cli",
+      "input": "redis-cli --user default AUTH FAKEhunter2",
+      "spans": [[30, 41]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "redis-cli --user default AUTH [REDACTED_SECRET]"
+    },
+    {
+      "name": "valkey-user-option-before-auth",
+      "program": "redis-cli",
+      "input": "valkey-cli --user default AUTH FAKEhunter2",
+      "spans": [[31, 42]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "valkey-cli --user default AUTH [REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-after-brace-pattern",
+      "program": "mysql-client",
+      "input": "echo ${x%{} && mysql -pFAKEhunter2",
+      "spans": [[23, 34]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "echo ${x%{} && mysql -p[REDACTED_SECRET]"
     }
   ],
   "prose": [

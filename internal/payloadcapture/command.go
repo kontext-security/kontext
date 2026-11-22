@@ -94,7 +94,7 @@ func compileCommandRules(rules commandRuleset) {
 // commandSpans returns the byte ranges of text that command rules mask, in
 // order, apart, and none of them only a placeholder already.
 func commandSpans(text string) []Span {
-	if len(commandRules.Programs) == 0 || !containsAny(fold(text), commandNeedles) {
+	if len(commandRules.Programs) == 0 || !namesClient(text) {
 		return nil
 	}
 	spans := lexSpans(text, func(i int) (int, int) { return i, i + 1 })
@@ -120,7 +120,7 @@ func commandSpans(text string) []Span {
 // (["mysql", "-pX"], or a {"command", "args"} pair): each element is one word
 // as it is, and the spans are byte ranges of each element.
 func argvSpans(argv []string) [][]Span {
-	if len(commandRules.Programs) == 0 || !containsAny(fold(strings.Join(argv, " ")), commandNeedles) {
+	if len(commandRules.Programs) == 0 || !namesClient(strings.Join(argv, " ")) {
 		return nil
 	}
 	var src strings.Builder
@@ -137,9 +137,15 @@ func argvSpans(argv []string) [][]Span {
 	}
 	l := &lexer{src: src.String(), limit: src.Len()}
 	l.read(words)
+	// The masks are sorted and apart and the words are in order, so one walk
+	// over both pairs them.
 	out := make([][]Span, len(argv))
+	first := 0
 	for _, m := range mergeCommandSpans(l.masks) {
-		for i := range words {
+		for first < len(words) && words[first].end <= m.Start {
+			first++
+		}
+		for i := first; i < len(words) && words[i].start < m.End; i++ {
 			start, end := max(m.Start, words[i].start), min(m.End, words[i].end)
 			if start < end {
 				out[i] = append(out[i], Span{start - words[i].start, end - words[i].start})
@@ -147,6 +153,29 @@ func argvSpans(argv []string) [][]Span {
 		}
 	}
 	return out
+}
+
+// shellQuoting is what the shell takes out of a word as it reads it, so
+// that m\ysql and my""sql both name mysql.
+const shellQuoting = "\\'\"$\n\r"
+
+// namesClient reports whether text may name a client or a secret variable:
+// as written, or with shellQuoting taken out.
+func namesClient(text string) bool {
+	folded := fold(text)
+	if containsAny(folded, commandNeedles) {
+		return true
+	}
+	if !strings.ContainsAny(folded, shellQuoting) {
+		return false
+	}
+	stripped := strings.Map(func(r rune) rune {
+		if strings.ContainsRune(shellQuoting, r) {
+			return -1
+		}
+		return r
+	}, folded)
+	return containsAny(stripped, commandNeedles)
 }
 
 // lexSpans lexes text and returns its masks, mapped through source (which
@@ -301,6 +330,10 @@ func (l *lexer) child(start, limit int) *lexer {
 	return &lexer{src: l.src, i: start, limit: limit, depth: l.depth + 1, blind: l.blind, words: l.words}
 }
 
+// blindDepth bounds how deep blind lexers recurse to find where a
+// substitution ends, which keeps the stack small on any input.
+const blindDepth = 64
+
 // tooDeep reports a nesting level past the ruleset's limit.
 func (l *lexer) tooDeep() bool {
 	return l.depth+1 > commandRules.MaxDepth
@@ -395,7 +428,7 @@ func (l *lexer) nested(start, end int) {
 		return
 	}
 	if l.tooDeep() {
-		if containsAny(fold(l.src[start:end]), commandNeedles) {
+		if namesClient(l.src[start:end]) {
 			l.mask(start, end)
 		}
 		return
@@ -409,13 +442,19 @@ func (l *lexer) nested(start, end int) {
 // deeper, and returns where it ends.
 func (l *lexer) substitution(term byte) int {
 	start := l.i
+	if l.blind && l.depth >= blindDepth {
+		// Nested past any shell's use: take the rest of the input as the
+		// substitution, which the reading lexer above masks whole when it
+		// names a client, and recurse no further.
+		return l.limit
+	}
 	child := l.child(l.i, l.limit)
 	if l.tooDeep() && !l.blind {
 		// Too deep: find the end without reading, and mask it whole if it
 		// names a client.
 		child.blind = true
 		child.commands(term)
-		if containsAny(fold(l.src[start:child.i]), commandNeedles) {
+		if namesClient(l.src[start:child.i]) {
 			l.mask(start, child.i)
 		}
 		return child.i
@@ -586,7 +625,7 @@ func isNameByte(c byte) bool {
 }
 
 // braceEnd is the end of ${…} whose body starts at i: past the } that
-// closes it, skipping quotes and nested braces, or limit.
+// closes it, skipping quotes and nested ${…}, or limit.
 func braceEnd(src string, i, limit int) int {
 	depth := 1
 	for i < limit {
@@ -599,8 +638,23 @@ func braceEnd(src string, i, limit int) int {
 			} else {
 				return limit
 			}
-		case '{':
-			depth++
+		case '"':
+			// The shell reads quotes in the word after the operator.
+			for i++; i < limit && src[i] != '"'; i++ {
+				if src[i] == '\\' {
+					i++
+				}
+			}
+			if i >= limit {
+				return limit
+			}
+		case '$':
+			// Only a nested ${ nests; a bare { does not (${x%{} ends at the
+			// first }).
+			if i+1 < limit && src[i+1] == '{' {
+				depth++
+				i++
+			}
 		case '}':
 			depth--
 			if depth == 0 {
@@ -685,7 +739,7 @@ func (l *lexer) read(command []word) {
 	for index := range command {
 		w := &command[index]
 		l.secretEnv(w)
-		if w.opaque && containsAny(fold(l.src[w.start:w.end]), commandNeedles) {
+		if w.opaque && namesClient(l.src[w.start:w.end]) {
 			l.mask(w.start, w.end)
 		} else {
 			l.inner(w)
