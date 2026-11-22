@@ -5,6 +5,7 @@ package configwatch
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -140,25 +141,45 @@ func TestEmptySetStopsWatching(t *testing.T) {
 	}
 }
 
-func TestTargetsSkipHomeAndBound(t *testing.T) {
+func TestTargetsSkipHomeAndClimb(t *testing.T) {
 	home := "/Users/someone"
-	got := Targets(home, []string{"/Users/someone/.claude.json", "relative/path", "/Users/someone/.claude/settings.json", "/Users/someone/.claude/settings.json"})
-	want := []string{"/Users/someone/.claude.json", "/Users/someone/.claude/settings.json", "/Users/someone/.claude"}
-	if len(got) != len(want) {
-		t.Fatalf("Targets = %v, want %v", got, want)
+	got := Targets(home, []string{"/Users/someone/.claude.json", "relative/path", "/Users/someone/code/app/.claude/settings.json", "/Users/someone/code/app/.claude/settings.json"})
+	want := []Target{
+		{Path: "/Users/someone/.claude.json"},
+		{Path: "/Users/someone/code/app/.claude/settings.json"},
+		// The settings folder, or the project and its parent while the
+		// folder is missing; never the home folder.
+		{Path: "/Users/someone/code/app/.claude", Fallbacks: []string{"/Users/someone/code/app", "/Users/someone/code"}},
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("Targets = %v, want %v", got, want)
-		}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Targets = %+v, want %+v", got, want)
 	}
-	var many []string
-	for i := range MaxTargets {
-		many = append(many, filepath.Join(home, "p", string(rune('a'+i%26)), "x", "f"+string(rune('a'+i/26))))
+}
+
+// A project with no .claude folder yet is watched at its own folder, so the
+// first settings file created there wakes the scan.
+func TestFirstProjectSettingsWakeTheScan(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, "code", "app")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if n := len(Targets(home, many)); n != MaxTargets {
-		t.Fatalf("Targets kept %d, want the bound %d", n, MaxTargets)
+	settings := filepath.Join(project, ".claude", "settings.json")
+	w, fired := newTestWatcher(t, home)
+	w.Set([]string{settings})
+	settle()
+	if err := os.Mkdir(filepath.Join(project, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
 	}
+	expectFire(t, fired, "settings folder created")
+	drain(fired)
+	// The next scan's set watches the new folder itself.
+	w.Set([]string{settings})
+	settle()
+	if err := os.WriteFile(settings, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expectFire(t, fired, "first settings file")
 }
 
 func TestCloseIsIdempotent(t *testing.T) {

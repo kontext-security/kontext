@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -404,6 +405,9 @@ func newTestServiceWithOptions(t *testing.T, opts Options) *Service {
 		CodexProxy:        opts.CodexProxy,
 		Observe:           opts.Observe,
 		HoldFor:           opts.HoldFor,
+		Intercept:         opts.Intercept,
+		InterceptMarker:   opts.InterceptMarker,
+		Evaluated:         opts.Evaluated,
 		Diagnostic:        opts.Diagnostic,
 	})
 	if err != nil {
@@ -735,5 +739,83 @@ func TestServiceAnswersHooksWhileACodexProxyQuestionWaits(t *testing.T) {
 	}
 	if elapsed := time.Since(begun); elapsed > 250*time.Millisecond {
 		t.Fatalf("PreToolUse took %v behind a Codex proxy question", elapsed)
+	}
+}
+
+// An intercepted event is answered without the runtime, and Evaluated sees
+// only the events the runtime answered.
+func TestServiceInterceptsAndReportsEvaluatedEvents(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow, Reason: "fine"}}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var evaluated []string
+	service := newTestServiceWithOptions(t, Options{
+		Core: core,
+		Intercept: func(event hook.Event) (hook.Result, bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			evaluated = append(evaluated, "intercept:"+event.ToolName)
+			if event.ToolName != "Probe" {
+				return hook.Result{}, false
+			}
+			return hook.Result{Decision: hook.DecisionDeny, Reason: "probe", Mode: "enforce"}, true
+		},
+		InterceptMarker: "FAKEmarker",
+		Evaluated: func(event hook.Event, result hook.Result, policy bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			evaluated = append(evaluated, fmt.Sprintf("%s:%s:%v", event.ToolName, result.Decision, policy))
+		},
+	})
+	client := NewClient(service.SocketPath())
+
+	marked := map[string]any{"command": "FAKEmarker"}
+	result, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Probe", ToolInput: marked})
+	if err != nil || result.Decision != hook.DecisionDeny || result.Reason != "probe" || result.Mode != "enforce" {
+		t.Fatalf("probe = %+v, %v", result, err)
+	}
+	if got := runtime.evaluateCalls.Load(); got != 0 {
+		t.Fatalf("runtime saw the probe: %d calls", got)
+	}
+	result, err = client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Bash"})
+	if err != nil || result.Decision != hook.DecisionAllow {
+		t.Fatalf("bash = %+v, %v", result, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// Without the marker the intercept isn't asked.
+	if !slices.Equal(evaluated, []string{"intercept:Probe", "Bash:allow:true"}) {
+		t.Fatalf("evaluated %v", evaluated)
+	}
+}
+
+// The daemon says whether it answers verification probes itself, without
+// the runtime seeing the question.
+func TestServiceAnswersCapabilities(t *testing.T) {
+	t.Parallel()
+	runtime := &stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow}}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, intercept := range []bool{false, true} {
+		opts := Options{Core: core}
+		if intercept {
+			opts.Intercept = func(hook.Event) (hook.Result, bool) { return hook.Result{}, false }
+			opts.InterceptMarker = "FAKEmarker"
+		}
+		service := newTestServiceWithOptions(t, opts)
+		got, err := NewClient(service.SocketPath()).Capabilities(context.Background())
+		if err != nil || got.HookVerify != intercept {
+			t.Fatalf("intercept %v: %+v %v", intercept, got, err)
+		}
+	}
+	if got := runtime.evaluateCalls.Load(); got != 0 {
+		t.Fatalf("the runtime saw %d calls", got)
 	}
 }

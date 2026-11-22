@@ -1733,3 +1733,41 @@ func TestScanNamesTheFilesToWatch(t *testing.T) {
 		}
 	}
 }
+
+// A Kontext PreToolUse handler guards every Bash call only when Claude Code
+// runs and waits for it on each one: device wide, unconditional,
+// synchronous, with a matcher that covers Bash.
+func TestGuardsEveryBashCall(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		matcher string
+		extra   map[string]any
+		want    bool
+	}{
+		{"every tool", "*", nil, true},
+		{"Bash by name", "Bash", nil, true},
+		{"a pattern with Bash", "Bash|Edit", nil, true},
+		{"another tool only", "Edit|Write", nil, false},
+		{"a prefix of Bash is no match", "Bas", nil, false},
+		{"async", "*", map[string]any{"async": true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHookHome(t)
+			bin := filepath.Join(h.home, "bin", "kontext")
+			h.write(bin, []byte("#!/bin/sh\n"))
+			if err := os.Chmod(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			handler := command(agenthooks.ShellQuote(bin) + " hook pre-tool-use")
+			for k, v := range tc.extra {
+				handler[k] = v
+			}
+			h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("PreToolUse", tc.matcher, handler)})
+			agent, _ := h.scan(bin)
+			pre := byEvent(agent, "PreToolUse")
+			if len(pre) != 1 || pre[0].Origin != HookOriginKontext || pre[0].GuardsEveryBashCall() != tc.want {
+				t.Fatalf("%+v guards %v", pre, len(pre) == 1 && pre[0].GuardsEveryBashCall())
+			}
+		})
+	}
+}

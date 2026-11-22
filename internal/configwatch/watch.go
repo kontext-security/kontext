@@ -9,6 +9,8 @@
 package configwatch
 
 import (
+	"errors"
+	"io/fs"
 	"path/filepath"
 	"sync"
 	"time"
@@ -116,80 +118,125 @@ func (w *Watcher) Set(paths []string) {
 	}
 }
 
-// Close stops the watcher and releases what it holds.
+// closeWait bounds Close: a watcher stuck on an unresponsive disk must not
+// hold the daemon's shutdown. Its goroutine then ends when the disk answers.
+const closeWait = 2 * time.Second
+
+// Close stops the watcher and releases what it holds, waiting at most
+// closeWait.
 func (w *Watcher) Close() {
 	if w == nil {
 		return
 	}
 	w.once.Do(func() { close(w.done) })
-	<-w.stopped
+	select {
+	case <-w.stopped:
+	case <-time.After(closeWait):
+	}
+}
+
+// maxClimb is how many folders above a missing one are tried: a project
+// with no .claude folder yet is watched at the project's own folder, so the
+// first settings file created there shows.
+const maxClimb = 2
+
+// Target is one thing a path set asks to watch: Path, or, while Path is
+// missing, the first of Fallbacks that exists.
+type Target struct {
+	Path      string
+	Fallbacks []string
 }
 
 // Targets is what a path set watches: each path, and the folder that holds
-// it unless that folder is the home folder or the root. Paths in a privacy
-// folder are left out. The result keeps the paths' order, so the first
-// paths win the bound, has no duplicates, and is at most MaxTargets long.
-func Targets(home string, paths []string) []string {
+// it, falling back to the nearest existing folder above when that one is
+// missing. The home folder, the root and privacy folders are never watched.
+// The result keeps the paths' order, so the first paths win the bound, and
+// has no duplicates.
+func Targets(home string, paths []string) []Target {
 	home = filepath.Clean(home)
 	seen := map[string]bool{}
-	var out []string
-	keep := func(path string) {
-		if seen[path] || path == home || path == "/" || path == "." {
-			return
-		}
-		seen[path] = true
-		if privacyfolder.Guarded(home, path) {
-			return
-		}
-		out = append(out, path)
+	allowed := func(path string) bool {
+		return path != home && path != "/" && path != "." && !privacyfolder.Guarded(home, path)
 	}
+	var out []Target
 	for _, path := range paths {
 		if !filepath.IsAbs(path) {
 			continue
 		}
 		path = filepath.Clean(path)
-		keep(path)
-		keep(filepath.Dir(path))
-	}
-	if len(out) > MaxTargets {
-		out = out[:MaxTargets]
+		if !seen[path] && allowed(path) {
+			seen[path] = true
+			out = append(out, Target{Path: path})
+		}
+		dir := filepath.Dir(path)
+		if seen[dir] || !allowed(dir) {
+			continue
+		}
+		seen[dir] = true
+		target := Target{Path: dir}
+		for up, i := filepath.Dir(dir), 0; i < maxClimb && allowed(up); up, i = filepath.Dir(up), i+1 {
+			target.Fallbacks = append(target.Fallbacks, up)
+		}
+		out = append(out, target)
 	}
 	return out
 }
 
 func (w *Watcher) run(b backend) {
 	defer close(w.stopped)
-	defer b.close()
 	watched := map[string]int{}
 	paths := map[int]string{}
-	apply := func(targets []string) {
-		want := map[string]bool{}
+	defer func() {
+		// Each target's own descriptor too, not only the queue's.
+		for _, handle := range watched {
+			b.remove(handle)
+		}
+		_ = b.close()
+	}()
+	// watch watches path, reporting whether it is watched now and whether
+	// it is missing.
+	watch := func(path string) (ok, missing bool) {
+		if _, ok := watched[path]; ok {
+			return true, false
+		}
+		handle, err := b.add(path)
+		if err != nil {
+			return false, errors.Is(err, fs.ErrNotExist)
+		}
+		if _, dup := paths[handle]; dup {
+			// Another spelling of a watched file (inotify keys watches by
+			// inode); the first one covers it.
+			return true, false
+		}
+		watched[path] = handle
+		paths[handle] = path
+		return true, false
+	}
+	apply := func(targets []Target) {
+		chosen := map[string]bool{}
 		for _, target := range targets {
-			want[target] = true
+			if len(chosen) >= MaxTargets {
+				break
+			}
+			for _, path := range append([]string{target.Path}, target.Fallbacks...) {
+				ok, missing := watch(path)
+				if ok {
+					chosen[path] = true
+				}
+				if ok || !missing {
+					break
+				}
+			}
 		}
 		for path, handle := range watched {
-			if !want[path] {
+			if !chosen[path] {
 				b.remove(handle)
 				delete(watched, path)
 				delete(paths, handle)
 			}
 		}
-		for _, target := range targets {
-			if _, ok := watched[target]; ok {
-				continue
-			}
-			if handle, err := b.add(target); err == nil {
-				if _, dup := paths[handle]; dup {
-					// Another spelling of a watched file (inotify keys
-					// watches by inode); the first one covers it.
-					continue
-				}
-				watched[target] = handle
-				paths[handle] = target
-			}
-		}
 	}
-	var last []string
+	var last []Target
 	var due time.Time
 	var fired time.Time
 	for {
