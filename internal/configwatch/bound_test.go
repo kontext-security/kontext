@@ -3,6 +3,7 @@ package configwatch
 import (
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -54,14 +55,16 @@ func TestReplacingASetStaysWithinTheBound(t *testing.T) {
 	saved := waitSlice
 	waitSlice = 5 * time.Millisecond
 	t.Cleanup(func() { waitSlice = saved })
+	// A real folder, so the paths are absolute on every platform.
+	home := t.TempDir()
 	b := &countingBackend{open: map[int]bool{}}
-	w := &Watcher{changed: func() {}, opts: Options{Home: "/home/u", Delay: time.Second, MinGap: time.Second}, next: make(chan []string, 1), done: make(chan struct{}), stopped: make(chan struct{})}
+	w := &Watcher{changed: func() {}, opts: Options{Home: home, Delay: time.Second, MinGap: time.Second}, next: make(chan []string, 1), done: make(chan struct{}), stopped: make(chan struct{})}
 	go w.run(b)
 	t.Cleanup(w.Close)
 	set := func(prefix string) []string {
 		var paths []string
 		for i := range MaxTargets {
-			paths = append(paths, fmt.Sprintf("/home/u/%s%d/.claude/settings.json", prefix, i))
+			paths = append(paths, filepath.Join(home, fmt.Sprintf("%s%d", prefix, i), ".claude", "settings.json"))
 		}
 		return paths
 	}
