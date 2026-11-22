@@ -1,6 +1,7 @@
 package agentauthority
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -102,13 +103,22 @@ func enablementMatrix() []enablementRule {
 			state: hookEnabled, reasons: []string{},
 		},
 		{
-			name: "allowManagedHooksOnly leaves a plugin hook unresolved", follows: "plugin hooks under allowManagedHooksOnly depend on the plugin's source (v2.1.229 and later)",
+			name: "allowManagedHooksOnly blocks a plugin hook", follows: "allowManagedHooksOnly blocks plugin hooks (v2.1.229 and later)",
 			setup: func(h *hookHome) string {
 				managed(h, map[string]any{"allowManagedHooksOnly": true})
 				h.installPlugin("formatter@acme", nil, hooksOf("Stop", "", command("echo stop")))
 				return "Stop"
 			},
-			state: hookUnresolved, reasons: []string{HookReasonManagedOnly},
+			state: hookDisabled, reasons: []string{HookReasonManagedOnly},
+		},
+		{
+			name: "allowManagedHooksOnly keeps a plugin managed settings force-enable", follows: "hooks of plugins force-enabled in managed enabledPlugins are exempt",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"allowManagedHooksOnly": true, "enabledPlugins": map[string]any{"formatter@acme": true}})
+				h.installPlugin("formatter@acme", nil, hooksOf("Stop", "", command("echo stop")))
+				return "Stop"
+			},
+			state: hookEnabled, reasons: []string{},
 		},
 		{
 			name: "strictPluginOnlyCustomization blocks a user hook", follows: "strictPluginOnlyCustomization locks hooks to plugin and managed sources",
@@ -161,7 +171,34 @@ func enablementMatrix() []enablementRule {
 				h.write(filepath.Join(h.base, "settings.json"), map[string]any{"allowedHttpHookUrls": []string{"https://hooks.example.com/*"}})
 				return "Stop"
 			},
+			// Only a user file defines the list: whether it applies to a
+			// managed hook isn't settled.
+			state: hookUnresolved, reasons: []string{HookReasonHTTPURLNotAllowed},
+		},
+		{
+			name: "the host matches in any case and without a trailing dot", follows: "allowedHttpHookUrls matches the URL's normalized host",
+			setup: func(h *hookHome) string {
+				userHook(h, "Stop", http("https://Hooks.Example.COM./Path"), map[string]any{"allowedHttpHookUrls": []string{"https://HOOKS.example.com/Path"}})
+				return "Stop"
+			},
+			state: hookEnabled, reasons: []string{},
+		},
+		{
+			name: "the path keeps its case", follows: "allowedHttpHookUrls matches the URL's normalized host",
+			setup: func(h *hookHome) string {
+				userHook(h, "Stop", http("https://hooks.example.com/path"), map[string]any{"allowedHttpHookUrls": []string{"https://hooks.example.com/Path"}})
+				return "Stop"
+			},
 			state: hookDisabled, reasons: []string{HookReasonHTTPURLNotAllowed},
+		},
+		{
+			name: "a user hook a project's list allows runs in that project", follows: "a user hook runs in every project, under that project's merged allowlist",
+			setup: func(h *hookHome) string {
+				userHook(h, "Stop", http("https://other.example.com/x"), map[string]any{"allowedHttpHookUrls": []string{"https://hooks.example.com/*"}})
+				project(h, true, map[string]any{"allowedHttpHookUrls": []string{"https://other.example.com/*"}})
+				return "Stop"
+			},
+			state: hookConditional, reasons: []string{HookReasonHTTPURLNotAllowed},
 		},
 		{
 			name: "a project allowlist adds to the managed one", follows: "the merged allowlist",
@@ -191,7 +228,9 @@ func enablementMatrix() []enablementRule {
 		{
 			name: "a missing program can't run", follows: "a command hook runs its program",
 			setup: func(h *hookHome) string {
-				userHook(h, "Stop", command(filepath.Join(h.home, "bin", "gone")), nil)
+				// Exec form: the path is the program as written on every
+				// platform, with no shell escapes.
+				userHook(h, "Stop", map[string]any{"type": "command", "command": filepath.Join(h.home, "bin", "gone"), "args": []string{}}, nil)
 				return "Stop"
 			},
 			state: hookDisabled, reasons: []string{HookReasonBinaryMissing},
@@ -253,8 +292,9 @@ func TestEnablementMatrix(t *testing.T) {
 	}
 }
 
-// Every reason code the scanner can set has a row in the matrix, except
-// unresolved, which the scanner sets for cases no setting decides.
+// Every reason code the scanner can set (HookEnablementReasons, the list the
+// cloud contract mirrors) has a row in the matrix, except unresolved, which
+// the scanner sets for cases no setting decides.
 func TestEnablementMatrixCoversEveryReason(t *testing.T) {
 	covered := map[string]bool{HookReasonUnresolved: true}
 	for _, rule := range enablementMatrix() {
@@ -262,12 +302,7 @@ func TestEnablementMatrixCoversEveryReason(t *testing.T) {
 			covered[reason] = true
 		}
 	}
-	for _, reason := range []string{
-		HookReasonDisableAllHooks, HookReasonManagedOnly, HookReasonRemoteManagedUnverified,
-		HookReasonManagedTierShadowed, HookReasonDropInUnlistable, HookReasonPluginDisabled,
-		HookReasonPluginOnly, HookReasonHTTPURLNotAllowed, HookReasonAwaitingTrust,
-		HookReasonBinaryMissing, HookReasonUnresolved,
-	} {
+	for _, reason := range HookEnablementReasons {
 		if !covered[reason] {
 			t.Errorf("no matrix row for %s", reason)
 		}
@@ -289,5 +324,19 @@ func TestUnreadFileLeavesABlockedURLUnresolved(t *testing.T) {
 	records := byEvent(agent, "Stop")
 	if len(records) != 1 || records[0].Enablement.State != hookUnresolved || !slices.Contains(records[0].Enablement.Reasons, HookReasonHTTPURLNotAllowed) {
 		t.Fatalf("%+v", records)
+	}
+}
+
+// A list past the scan's pattern budget can't settle a block.
+func TestAllowlistPastTheBudgetIsUnsettled(t *testing.T) {
+	h := newHookHome(t)
+	patterns := make([]string, maxURLPatterns+1)
+	for i := range patterns {
+		patterns[i] = fmt.Sprintf("https://h%d.example.com/*", i)
+	}
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"allowedHttpHookUrls": patterns, "hooks": hooksOf("Stop", "", map[string]any{"type": "http", "url": "https://other.example.com/x"})})
+	agent, _ := h.scan()
+	if r := byEvent(agent, "Stop"); len(r) != 1 || r[0].Enablement.State != hookUnresolved {
+		t.Fatalf("%+v", r)
 	}
 }

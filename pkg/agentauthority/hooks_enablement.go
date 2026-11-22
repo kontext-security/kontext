@@ -31,6 +31,15 @@ const (
 	HookReasonUnresolved              = "unresolved"
 )
 
+// HookEnablementReasons is every reason code above, in the cloud
+// contract's order (HOOK_ENABLEMENT_REASONS in kontext-cloud).
+var HookEnablementReasons = []string{
+	HookReasonDisableAllHooks, HookReasonManagedOnly, HookReasonRemoteManagedUnverified,
+	HookReasonManagedTierShadowed, HookReasonDropInUnlistable, HookReasonPluginDisabled,
+	HookReasonPluginOnly, HookReasonHTTPURLNotAllowed, HookReasonAwaitingTrust,
+	HookReasonBinaryMissing, HookReasonUnresolved,
+}
+
 const (
 	hookEnabled     = "enabled"
 	hookDisabled    = "disabled"
@@ -56,10 +65,12 @@ type switches struct {
 	managedOnly       bool
 	pluginOnly        bool
 	pluginOnlyUnclear bool
-	// httpAllow holds allowedHttpHookUrls compiled once per project, not
-	// once per hook.
-	httpAllow  *[]*regexp.Regexp
-	unreadable bool
+	// httpAllow holds the allowedHttpHookUrls patterns merged from every
+	// level that defines the key; nil when none does. httpAllowManaged says
+	// a managed file defines it.
+	httpAllow        *[]string
+	httpAllowManaged bool
+	unreadable       bool
 }
 
 func (s *hookScan) switchesFor(project string) switches {
@@ -121,20 +132,22 @@ func (s *hookScan) switchesFor(project string) switches {
 // allowHTTP adds a layer's allowedHttpHookUrls to the allowlist. Claude Code
 // reads the key in any settings file and runs an HTTP hook only if its URL
 // matches the list merged from every level that defines it (hooks reference,
-// "Hook locations"): a later file adds URLs, it never removes one.
+// "Hook locations"): a later file adds URLs, it never removes one. Patterns
+// are compiled only when an HTTP hook is checked against them.
 func (s *hookScan) allowHTTP(sw *switches, layer hookLayer) {
 	allow := layer.settings.AllowedHTTPHookURLs
 	if allow == nil {
 		return
 	}
-	merged := []*regexp.Regexp{}
+	merged := []string{}
 	if sw.httpAllow != nil {
 		merged = append(merged, *sw.httpAllow...)
 	}
-	for _, pattern := range *allow {
-		merged = append(merged, s.urlPattern(pattern))
-	}
+	merged = append(merged, *allow...)
 	sw.httpAllow = &merged
+	if managedKind(layer.kind) {
+		sw.httpAllowManaged = true
+	}
 }
 
 // pluginOnlyCoversHooks reads strictPluginOnlyCustomization: true locks every
@@ -179,6 +192,14 @@ func (s *hookScan) trusted(dir string) bool {
 // evaluateEnablement sets each record's state and reasons.
 func evaluateEnablement(s *hookScan) {
 	cache := map[string]switches{}
+	switchesOf := func(project string) switches {
+		sw, ok := cache[project]
+		if !ok {
+			sw = s.switchesFor(project)
+			cache[project] = sw
+		}
+		return sw
+	}
 	// With a managed setting unread, a later managed file can lift a switch
 	// that turned a hook off, so only a missing program still settles it.
 	managedSettled := s.managedReadable()
@@ -188,11 +209,7 @@ func evaluateEnablement(s *hookScan) {
 		if info.layer >= 0 {
 			kind = s.layers[info.layer].kind
 		}
-		sw, ok := cache[info.project]
-		if !ok {
-			sw = s.switchesFor(info.project)
-			cache[info.project] = sw
-		}
+		sw := switchesOf(info.project)
 		var disabled, unresolved, conditional []string
 		// disableAllHooks in managed settings turns off every hook; elsewhere
 		// it turns off all but managed ones (Claude Code hooks reference,
@@ -200,13 +217,13 @@ func evaluateEnablement(s *hookScan) {
 		if sw.managedDisableAll || sw.otherDisableAll && !managedKind(kind) {
 			disabled = append(disabled, HookReasonDisableAllHooks)
 		}
-		// allowManagedHooksOnly keeps managed hooks and drops user and project
-		// ones. Plugin hooks under it changed between versions, so they stay
-		// unresolved rather than guessed.
+		// allowManagedHooksOnly keeps managed hooks and drops user, project,
+		// local and plugin ones, except the hooks of a plugin managed
+		// enabledPlugins force-enables (hooks reference, Claude Code 2.1.229
+		// and later). Under an MDM profile the managed switches went unread.
 		if sw.managedOnly {
 			switch {
-			case kind == HookScopePlugin:
-				unresolved = append(unresolved, HookReasonManagedOnly)
+			case kind == HookScopePlugin && s.plugins.managed[info.pluginKey]:
 			case !managedKind(kind):
 				disabled = append(disabled, HookReasonManagedOnly)
 			}
@@ -226,8 +243,15 @@ func evaluateEnablement(s *hookScan) {
 		if info.manifestUnread {
 			unresolved = append(unresolved, HookReasonUnresolved)
 		}
-		if r.Type == "http" && sw.httpAllow != nil && !urlAllowed(info.url, *sw.httpAllow) {
-			disabled = append(disabled, HookReasonHTTPURLNotAllowed)
+		if r.Type == "http" {
+			switch s.httpVerdict(info, kind, sw, switchesOf) {
+			case httpBlocked:
+				disabled = append(disabled, HookReasonHTTPURLNotAllowed)
+			case httpUnsettled:
+				unresolved = append(unresolved, HookReasonHTTPURLNotAllowed)
+			case httpSomeProjects:
+				conditional = append(conditional, HookReasonHTTPURLNotAllowed)
+			}
 		}
 		if projectKind(kind) {
 			if !s.trusted(info.project) {
@@ -302,14 +326,66 @@ func evaluateEnablement(s *hookScan) {
 	}
 }
 
+const (
+	httpAllowed = iota
+	httpBlocked
+	// httpUnsettled: blocked by a list that may not apply, or one past the
+	// scan's pattern budget.
+	httpUnsettled
+	// httpSomeProjects: blocked where the hook is declared, allowed in a
+	// listed project that adds its URL.
+	httpSomeProjects
+)
+
+// httpVerdict checks an HTTP hook's URL against the allowlist in force where
+// it runs. A hook outside any project runs in every project, where that
+// project's own list also counts.
+func (s *hookScan) httpVerdict(info hookRaw, kind string, sw switches, switchesOf func(string) switches) int {
+	if sw.httpAllow == nil {
+		return httpAllowed
+	}
+	allowed, known := s.urlAllowed(info.url, *sw.httpAllow)
+	switch {
+	case !known:
+		return httpUnsettled
+	case allowed:
+		return httpAllowed
+	case managedKind(kind) && !sw.httpAllowManaged:
+		// Only user or project files define the list. Whether Claude Code
+		// applies those to a managed hook isn't settled here.
+		return httpUnsettled
+	}
+	if info.project == "" && !projectKind(kind) {
+		for _, project := range keys(s.trust) {
+			if inProject, known := s.urlAllowed(info.url, *switchesOf(project).httpAllow); !known {
+				return httpUnsettled
+			} else if inProject {
+				return httpSomeProjects
+			}
+		}
+	}
+	return httpBlocked
+}
+
+// maxURLPatterns bounds the allowlist patterns one scan compiles. Past it, a
+// URL the compiled ones don't allow is unsettled.
+const maxURLPatterns = 512
+
 // urlPattern follows allowedHttpHookUrls: each entry is a URL pattern where
-// * matches any run of characters. A pattern is compiled once per scan, not
-// once per project.
+// * matches any run of characters. The scheme and host match in any case
+// and without a trailing dot, as Claude Code normalizes them; the path keeps
+// its case. A pattern is compiled once per scan, and nil past the budget.
 func (s *hookScan) urlPattern(pattern string) *regexp.Regexp {
 	if compiled, ok := s.urlPatterns[pattern]; ok {
 		return compiled
 	}
-	compiled := regexp.MustCompile("^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$")
+	if len(s.urlPatterns) >= maxURLPatterns {
+		return nil
+	}
+	origin, rest := splitOrigin(pattern)
+	quote := func(text string) string { return strings.ReplaceAll(regexp.QuoteMeta(text), `\*`, ".*") }
+	// Every part is quoted, so the expression always compiles.
+	compiled := regexp.MustCompile("^(?i:" + quote(normalOrigin(origin)) + ")" + quote(rest) + "$")
 	if s.urlPatterns == nil {
 		s.urlPatterns = map[string]*regexp.Regexp{}
 	}
@@ -317,13 +393,52 @@ func (s *hookScan) urlPattern(pattern string) *regexp.Regexp {
 	return compiled
 }
 
-func urlAllowed(raw string, patterns []*regexp.Regexp) bool {
+// urlAllowed reports whether a pattern allows the URL; known is false when
+// the budget left a pattern uncompiled and none of the others allows it.
+func (s *hookScan) urlAllowed(raw string, patterns []string) (allowed, known bool) {
+	origin, rest := splitOrigin(raw)
+	candidate := normalOrigin(origin) + rest
+	known = true
 	for _, pattern := range patterns {
-		if pattern.MatchString(raw) {
-			return true
+		compiled := s.urlPattern(pattern)
+		if compiled == nil {
+			known = false
+			continue
+		}
+		if compiled.MatchString(candidate) {
+			return true, true
 		}
 	}
-	return false
+	return false, known
+}
+
+// splitOrigin cuts a URL, or a pattern, after its scheme and authority.
+func splitOrigin(raw string) (origin, rest string) {
+	scheme, after, ok := strings.Cut(raw, "://")
+	if !ok {
+		return "", raw
+	}
+	if i := strings.IndexAny(after, "/?#"); i >= 0 {
+		return scheme + "://" + after[:i], after[i:]
+	}
+	return raw, ""
+}
+
+// normalOrigin drops a host's trailing dot; case is left to the match.
+func normalOrigin(origin string) string {
+	hostport := origin
+	if _, after, ok := strings.Cut(origin, "://"); ok {
+		hostport = after
+	}
+	host, port, hasPort := strings.Cut(hostport, ":")
+	if strings.HasSuffix(host, ".") && host != "." {
+		trimmed := strings.TrimSuffix(host, ".")
+		if hasPort {
+			trimmed += ":" + port
+		}
+		return strings.TrimSuffix(origin, hostport) + trimmed
+	}
+	return origin
 }
 
 // programStatTimeout bounds one binary check: a stalled network path must

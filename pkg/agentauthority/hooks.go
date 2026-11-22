@@ -233,6 +233,8 @@ type hookRaw struct {
 	layer          int
 	project        string
 	pluginDisabled bool
+	// pluginKey is the plugin's name@marketplace, for a plugin's hook.
+	pluginKey string
 	// projectUnread: a plugin installed for a project whose settings went
 	// unread.
 	projectUnread bool
@@ -671,6 +673,9 @@ func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGr
 				record, info := s.record(scope, kind, event, matcher, raw, plugin)
 				info.layer, info.project, info.kind = layer, s.project, kind
 				info.pluginDisabled = plugin != nil && plugin.disabled
+				if plugin != nil {
+					info.pluginKey = plugin.key
+				}
 				info.projectUnread = plugin != nil && plugin.projectUnread
 				info.manifestUnread = plugin != nil && plugin.manifestUnread
 				s.agent.Hooks = append(s.agent.Hooks, record)
