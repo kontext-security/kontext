@@ -6,8 +6,9 @@ import (
 )
 
 // ruleChain is RedactText without needles or stretches: each pass masks
-// the union of what two readings of the rules mask (every rule over the
-// same text, and the rules in order over what the ones before left), both
+// the union of what two readings of the rules mask (the command rules and
+// every value rule over the same text, and the command rules then the value
+// rules in order over what the ones before left), both
 // run until they settle, and the passes repeat until the text stops
 // changing. Each byte of a reading's text records the range of the pass's
 // text it stands for.
@@ -71,6 +72,9 @@ func chainReading(text string, ordered bool) []Span {
 	}
 	for pass := 0; pass < maxPasses; pass++ {
 		before := cur
+		if runs := settledRuns(cur, mergeSpans(commandSpans(cur))); ordered && len(runs) > 0 {
+			mask(runs)
+		}
 		if ordered {
 			for index := range compiledValueRules {
 				if runs := settledRuns(cur, mergeSpans(ruleMasks(&compiledValueRules[index]))); len(runs) > 0 {
@@ -78,7 +82,7 @@ func chainReading(text string, ordered bool) []Span {
 				}
 			}
 		} else {
-			var spans []Span
+			spans := commandSpans(cur)
 			for index := range compiledValueRules {
 				spans = append(spans, ruleMasks(&compiledValueRules[index])...)
 			}
