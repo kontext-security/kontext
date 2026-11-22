@@ -215,7 +215,20 @@ func evaluateEnablement(s *hookScan) {
 		// disableAllHooks in managed settings turns off every hook; elsewhere
 		// it turns off all but managed ones (Claude Code hooks reference,
 		// "Disable or remove hooks").
-		if sw.managedDisableAll || sw.otherDisableAll && !managedKind(kind) {
+		// A user or plugin hook a user file turns off still runs in a
+		// trusted project whose settings turn hooks back on and, for an
+		// HTTP hook, allow its URL.
+		lift, liftUnknown := liftNone, false
+		if !sw.managedDisableAll && sw.otherDisableAll && !managedKind(kind) && info.project == "" && !projectKind(kind) {
+			lift = s.liftedInProject(r.Type == "http", info, switchesOf)
+			liftUnknown = lift == liftUnsettled
+		}
+		switch {
+		case lift == liftSome:
+			conditional = append(conditional, HookReasonDisableAllHooks)
+		case liftUnknown:
+			unresolved = append(unresolved, HookReasonDisableAllHooks)
+		case sw.managedDisableAll || sw.otherDisableAll && !managedKind(kind):
 			disabled = append(disabled, HookReasonDisableAllHooks)
 		}
 		// allowManagedHooksOnly keeps managed hooks and drops user, project,
@@ -234,9 +247,9 @@ func evaluateEnablement(s *hookScan) {
 				case versionUnknown:
 					unresolved = append(unresolved, HookReasonManagedOnly)
 				}
-			case s.plugins.managedUnknown:
+			case s.plugins.managedUnknown && managedOnlyExempt(s.opts.AgentVersion) != versionBefore:
 				// A managed enabledPlugins that went unread may
-				// force-enable it.
+				// force-enable it; before 2.1.229 that exempts nothing.
 				unresolved = append(unresolved, HookReasonManagedOnly)
 			default:
 				disabled = append(disabled, HookReasonManagedOnly)
@@ -401,6 +414,11 @@ func (s *hookScan) httpVerdict(info hookRaw, kind string, sw switches, switchesO
 				continue
 			}
 		}
+		if !allowed && managedKind(kind) && !psw.httpAllowManaged {
+			// As above: a project's own list may not apply to a managed
+			// hook, so whether it runs there isn't settled.
+			return httpUnsettled
+		}
 		if allowed != (base == httpAllowed) {
 			return httpSomeProjects
 		}
@@ -409,6 +427,48 @@ func (s *hookScan) httpVerdict(info hookRaw, kind string, sw switches, switchesO
 		return httpUnsettled
 	}
 	return base
+}
+
+// Where a user's disableAllHooks is lifted.
+const (
+	liftNone = iota
+	liftSome
+	liftUnsettled
+)
+
+// liftedInProject reports whether a listed trusted project's settings turn
+// a hook back on, and for an HTTP hook allow its URL there: then the hook
+// runs in that project.
+func (s *hookScan) liftedInProject(http bool, info hookRaw, switchesOf func(string) switches) int {
+	unsettled := s.projectsUnread || s.projectsCut
+	for _, project := range keys(s.trust) {
+		if !s.trusted(project) {
+			continue
+		}
+		psw := switchesOf(project)
+		if psw.unreadable {
+			unsettled = true
+			continue
+		}
+		if psw.managedDisableAll || psw.otherDisableAll {
+			continue
+		}
+		if http && psw.httpAllow != nil {
+			allowed, known := s.urlAllowed(info.url, *psw.httpAllow, nil)
+			if !known {
+				unsettled = true
+				continue
+			}
+			if !allowed {
+				continue
+			}
+		}
+		return liftSome
+	}
+	if unsettled {
+		return liftUnsettled
+	}
+	return liftNone
 }
 
 // maxURLPatterns bounds the allowlist patterns one scan compiles, and
@@ -576,9 +636,21 @@ func managedOnlyExempt(version string) int { return versionSince(version, []int{
 // Code)", with since. A version it can't read is unknown.
 func versionSince(version string, since []int) int {
 	version, _, _ = strings.Cut(strings.TrimSpace(version), " ")
-	version, _, _ = strings.Cut(version, "-")
+	version, pre, prerelease := strings.Cut(version, "-")
 	parts := strings.Split(version, ".")
 	if version == "" || len(parts) < len(since) {
+		return versionUnknown
+	}
+	// A prerelease of the release itself comes before it; whether that
+	// prerelease already carries the change isn't known.
+	exact := true
+	for i, want := range since {
+		if got, err := strconv.Atoi(parts[i]); err != nil || got != want {
+			exact = false
+			break
+		}
+	}
+	if exact && prerelease && pre != "" {
 		return versionUnknown
 	}
 	for i, want := range since {

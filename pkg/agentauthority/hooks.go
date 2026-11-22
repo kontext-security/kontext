@@ -391,6 +391,8 @@ func (s *hookScan) only() { s.g.active = []*SourceHealth{s.source} }
 func (s *hookScan) scope(kind, canonical string) (*SourceHealth, string) {
 	if len(s.agent.Scopes) >= MaxHookScopes {
 		s.agent.Truncated = true
+		// A project's settings left unread may lift or set any switch.
+		s.projectsCut = s.projectsCut || s.project != "" && projectKind(kind)
 		s.source.Fail(ReasonSizeLimit)
 		return nil, ""
 	}

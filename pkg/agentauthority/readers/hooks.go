@@ -143,6 +143,19 @@ func Hooks(data []byte) (HookSettings, error) {
 			}
 		}
 	}
+	// A null switch holds no Boolean: Go reads it as false, Claude Code as
+	// no value, so the map isn't taken at its word.
+	if raw, ok := top["enabledPlugins"]; ok && s.EnabledPlugins != nil {
+		var values map[string]*bool
+		if json.Unmarshal(raw, &values) == nil {
+			for key, value := range values {
+				if value == nil {
+					delete(s.EnabledPlugins, key)
+					s.SwitchInvalid, s.EnabledPluginsInvalid = true, true
+				}
+			}
+		}
+	}
 	return s, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 // claudeCodeChecked is the Claude Code release whose documented behaviour
@@ -256,6 +257,42 @@ func enablementMatrix() []enablementRule {
 			state: hookDisabled, reasons: []string{HookReasonHTTPURLNotAllowed},
 		},
 		{
+			name: "a trusted project that turns hooks back on and allows the URL runs a user HTTP hook there", follows: "a later settings level replaces disableAllHooks; the merged allowlist",
+			setup: func(h *hookHome) string {
+				userHook(h, "Stop", http("https://hooks.example.com/x"), map[string]any{"disableAllHooks": true, "allowedHttpHookUrls": []string{}})
+				project(h, true, map[string]any{"disableAllHooks": false, "allowedHttpHookUrls": []string{"https://hooks.example.com/*"}})
+				return "Stop"
+			},
+			state: hookConditional, reasons: []string{HookReasonDisableAllHooks, HookReasonHTTPURLNotAllowed},
+		},
+		{
+			name: "a trusted project that turns hooks back on runs a user hook there", follows: "a later settings level replaces disableAllHooks",
+			setup: func(h *hookHome) string {
+				userHook(h, "Stop", command("echo stop"), map[string]any{"disableAllHooks": true})
+				project(h, true, map[string]any{"disableAllHooks": false})
+				return "Stop"
+			},
+			state: hookConditional, reasons: []string{HookReasonDisableAllHooks},
+		},
+		{
+			name: "a null plugin switch is no value", follows: "a switch of the wrong type is unresolved",
+			setup: func(h *hookHome) string {
+				h.installPlugin("formatter@acme", nil, hooksOf("Stop", "", command("echo stop")))
+				h.write(filepath.Join(h.base, "settings.json"), []byte(`{"enabledPlugins": {"formatter@acme": null}}`))
+				return "Stop"
+			},
+			state: hookUnresolved, reasons: []string{HookReasonUnresolved},
+		},
+		{
+			name: "a project's own list may not bind a managed hook", follows: "the merged allowlist",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"hooks": hooksOf("Stop", "", http("https://hooks.example.com/x"))})
+				project(h, true, map[string]any{"allowedHttpHookUrls": []string{}})
+				return "Stop"
+			},
+			state: hookUnresolved, reasons: []string{HookReasonHTTPURLNotAllowed},
+		},
+		{
 			name: "an unreadable managed enabledPlugins leaves a plugin hook unsettled", follows: "hooks of plugins force-enabled in managed enabledPlugins are exempt",
 			setup: func(h *hookHome) string {
 				managed(h, map[string]any{"allowManagedHooksOnly": true, "enabledPlugins": map[string]any{"formatter@acme": true, "other@acme": "yes"}})
@@ -401,12 +438,28 @@ func TestAllowlistPastTheBudgetIsUnsettled(t *testing.T) {
 func TestManagedOnlyExemptionFollowsTheVersion(t *testing.T) {
 	for version, want := range map[string]int{
 		"2.1.229": versionAtOrAfter, "2.1.329 (Claude Code)": versionAtOrAfter, "2.2.0": versionAtOrAfter, "3.0.0-beta": versionAtOrAfter,
-		"2.1.228": versionBefore, "1.9.999": versionBefore,
+		"2.1.228": versionBefore, "1.9.999": versionBefore, "2.1.228-beta.1": versionBefore,
+		"2.1.229-beta.1": versionUnknown,
 		"": versionUnknown, "dev": versionUnknown, "2.1": versionUnknown,
 	} {
 		if got := managedOnlyExempt(version); got != want {
 			t.Errorf("%q: %d, want %d", version, got, want)
 		}
+	}
+}
+
+// Before 2.1.229 no plugin is exempt, so an unread managed enabledPlugins
+// leaves nothing open.
+func TestUnreadManagedPluginsBeforeTheExemption(t *testing.T) {
+	h := newHookHome(t)
+	h.write(filepath.Join(h.managed, "managed-settings.json"), map[string]any{"allowManagedHooksOnly": true, "enabledPlugins": map[string]any{"formatter@acme": true, "other@acme": "yes"}})
+	h.installPlugin("formatter@acme", nil, hooksOf("Stop", "", command("echo stop")))
+	agent, _, err := scanHooks(context.Background(), HookScanOptions{Home: h.home, Key: testHookKey, AgentVersion: "2.1.228", Now: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), managed: h.managed, mdmPolicy: func() bool { return false }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := byEvent(agent, "Stop"); len(r) != 1 || r[0].Enablement.State != hookDisabled || !slices.Contains(r[0].Enablement.Reasons, HookReasonManagedOnly) {
+		t.Fatalf("%+v", r)
 	}
 }
 
