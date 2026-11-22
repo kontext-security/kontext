@@ -215,7 +215,18 @@ type hookScan struct {
 	trust map[string]*bool
 	// signedIn is the claude.ai organization ~/.claude.json names, if any.
 	signedIn bool
-	project  string
+	// frontmatterFrom, while skills and subagents are read, is the kind of
+	// the folder that holds them.
+	frontmatterFrom string
+	// settingsCut: a bound cut the scan before a settings or plugin hooks
+	// file was read. A cut among skills and subagents alone leaves the
+	// coverage verdict standing, since they never hold a device-wide
+	// handler.
+	settingsCut bool
+	// pluginSkills holds each plugin install's skills, read after every
+	// plugin's own hooks so they can't crowd those out.
+	pluginSkills []pluginSkillDir
+	project      string
 	// shadowed: an MDM profile supplies Claude Code's managed tier, so the
 	// managed-settings files on disk are not the policy in force.
 	shadowed bool
@@ -233,6 +244,9 @@ type hookScan struct {
 	policyHelper bool
 	// urlPatterns holds each allowedHttpHookUrls pattern compiled.
 	urlPatterns map[string]*regexp.Regexp
+	// emptyFrontmatter holds skills and subagents read cleanly with no
+	// hooks, listed last as far as the scope cap allows.
+	emptyFrontmatter []HookScope
 	// urlMatches counts the allowlist matches tried, against maxURLMatches.
 	urlMatches int
 	// projectsCut: the project list went past maxHookProjects.
@@ -264,6 +278,17 @@ type hookRaw struct {
 	// ownerUnknown: the check of a Kontext call's binary didn't finish, so
 	// whether it is Kontext's own is unknown, not "no".
 	ownerUnknown bool
+	// rules is the scope kind whose settings rules the hook follows: its
+	// own kind, or for a skill or subagent the kind of the folder that holds
+	// it.
+	rules string
+}
+
+// pluginSkillDir is a plugin install whose skills are still to read.
+type pluginSkillDir struct {
+	dir     string
+	ref     *pluginRef
+	project string
 }
 
 // hookLayer is one settings file that took part in the scan.
@@ -340,10 +365,12 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	if len(projects) > maxHookProjects {
 		s.source.Fail(ReasonWalkLimit)
 		s.agent.Truncated = true
+		s.settingsCut = true
 		s.projectsCut = true
 		projects = projects[:maxHookProjects]
 	}
 	listed := map[string]bool{}
+	var read []string
 	for _, project := range projects {
 		dir := filepath.Clean(project)
 		// Two spellings of one directory (a trailing slash) are one project,
@@ -355,14 +382,38 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		// Only these two files, never a walk: the one place a path found in
 		// configuration is read (ADR-0011).
 		shared, local := filepath.Join(dir, ".claude", "settings.json"), filepath.Join(dir, ".claude", "settings.local.json")
-		g.roots = append(g.roots, shared, local)
+		// And the project's own skills and subagents folders, listed
+		// within bounds (ENG-1104).
+		skills, agents := filepath.Join(dir, ".claude", "skills"), filepath.Join(dir, ".claude", "agents")
+		g.roots = append(g.roots, shared, local, skills, agents)
 		s.trust[dir] = root.Projects[project].HasTrustDialogAccepted
 		s.project = dir
 		s.settingsScope(HookScopeProject, shared, false)
 		s.settingsScope(HookScopeProjectLocal, local, false)
+		read = append(read, dir)
 	}
 	s.project = ""
 	s.pluginScopes(base)
+	// Skills and subagents last: every settings file, whose switches decide
+	// all hooks, has had its share of the scope cap first.
+	s.frontmatterScopes(filepath.Join(opts.managed, ".claude"), HookScopeManaged, nil)
+	s.frontmatterScopes(base, HookScopeUser, nil)
+	for _, dir := range read {
+		if filepath.Join(dir, ".claude") == base {
+			// A project at the home folder: its skills and subagents are
+			// the user's, already read.
+			continue
+		}
+		s.project = dir
+		s.frontmatterScopes(filepath.Join(dir, ".claude"), HookScopeProject, nil)
+	}
+	for _, plugin := range s.pluginSkills {
+		// The plugin's skills follow the plugin's switches.
+		s.project = plugin.project
+		s.frontmatterScopes(plugin.dir, HookScopePlugin, plugin.ref)
+	}
+	s.project = ""
+	s.listEmptyFrontmatter()
 	// A policy the scan can't read (an MDM profile, a policy helper) may
 	// decide what the files say, so the scan is partial: the cloud keeps
 	// what it knew rather than withdraw hooks on an unread policy's word.
@@ -407,6 +458,7 @@ func (s *hookScan) only() { s.g.active = []*SourceHealth{s.source} }
 func (s *hookScan) scope(kind, canonical string) (*SourceHealth, string) {
 	if len(s.agent.Scopes) >= MaxHookScopes {
 		s.agent.Truncated = true
+		s.settingsCut = s.settingsCut || s.frontmatterFrom == ""
 		// A project's settings left unread may lift or set any switch.
 		s.projectsCut = s.projectsCut || s.project != "" && projectKind(kind)
 		s.source.Fail(ReasonSizeLimit)
@@ -483,6 +535,9 @@ func (s *hookScan) pluginScopes(base string) {
 		Name    string          `json:"name"`
 		Version string          `json:"version"`
 		Hooks   json.RawMessage `json:"hooks"`
+		// Skills names skill folders of the plugin's own, which aren't
+		// read: their hooks would be missed.
+		Skills json.RawMessage `json:"skills"`
 		// DefaultEnabled false leaves the plugin off until a setting turns
 		// it on.
 		DefaultEnabled *bool `json:"defaultEnabled"`
@@ -556,9 +611,17 @@ func (s *hookScan) pluginScopes(base string) {
 			// the project cap, or not listed) can be turned off there.
 			_, projectRead := s.trust[filepath.Clean(entry.ProjectPath)]
 			projectUnread := entry.ProjectPath != "" && !projectRead
-			s.records(id, HookScopePlugin, hooks, &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread, manifestUnread: !manifestRead && !set}, -1)
-			s.project = ""
+			ref := &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread, manifestUnread: !manifestRead && !set, canonical: canonical}
+			s.records(id, HookScopePlugin, hooks, ref, -1)
 			s.closeScope(h, id, HookScopePlugin)
+			// The plugin's skills are read once every plugin's hooks are.
+			// Skill folders its manifest names elsewhere aren't read, so the
+			// scan says it is incomplete.
+			s.pluginSkills = append(s.pluginSkills, pluginSkillDir{dir: installed, ref: ref, project: s.project})
+			if len(manifest.Skills) > 0 && string(manifest.Skills) != "null" {
+				s.source.Fail(ReasonUnsupportedFormat)
+			}
+			s.project = ""
 		}
 	}
 }
@@ -677,6 +740,9 @@ type pluginRef struct {
 	disabled       bool
 	projectUnread  bool
 	manifestUnread bool
+	// canonical is the install's scope key: its skills' scopes are keyed
+	// under it, so one cached plugin installed for two projects has two.
+	canonical string
 }
 
 // records adds one record per handler, in declaration order within each event.
@@ -696,11 +762,15 @@ func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGr
 			for _, raw := range group.Hooks {
 				if len(s.agent.Hooks) >= MaxHookRecords {
 					s.agent.Truncated = true
+					s.settingsCut = s.settingsCut || s.frontmatterFrom == ""
 					s.g.fail(ReasonSizeLimit)
 					return
 				}
 				record, info := s.record(scope, kind, event, matcher, raw, plugin)
-				info.layer, info.project, info.kind = layer, s.project, kind
+				info.layer, info.project, info.kind, info.rules = layer, s.project, kind, kind
+				if s.frontmatterFrom != "" {
+					info.rules = s.frontmatterFrom
+				}
 				info.pluginDisabled = plugin != nil && plugin.disabled
 				if plugin != nil {
 					info.pluginKey = plugin.key
@@ -801,7 +871,7 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 		}
 	case "mcp_tool":
 		anchor = "mcp:" + safe(h.Server, 128) + "/" + safe(h.Tool, 128)
-		r.Summary = pointer(safe(hookField(h.Server, 128)+"/"+hookField(h.Tool, 128), 256))
+		r.Summary = pointer(safe(mcpName(h.Server)+"/"+mcpName(h.Tool), 256))
 	}
 	if plugin != nil {
 		r.Plugin = plugin.plugin
@@ -874,11 +944,12 @@ func (s *hookScan) managedReadable() bool {
 func (s *hookScan) coverageReadable() bool {
 	// An MDM profile or an unread project list can hold a setting, or a
 	// Kontext handler, that no record shows.
-	if s.agent.Truncated || s.unlisted || s.shadowed || s.mdmMerged || s.policyHelper || s.projectsUnread {
+	if s.settingsCut || s.unlisted || s.shadowed || s.mdmMerged || s.policyHelper || s.projectsUnread {
 		return false
 	}
 	for _, scope := range s.agent.Scopes {
-		if scope.Kind != HookScopePlugin && scope.Status != StatusComplete {
+		// A plugin, skill or subagent never holds a device-wide handler.
+		if scope.Kind != HookScopePlugin && !frontmatterKind(scope.Kind) && scope.Status != StatusComplete {
 			return false
 		}
 	}
@@ -1012,4 +1083,15 @@ func matcherCovers(matcher, tool string) bool {
 	}
 	re, err := regexp.Compile("^(?:" + matcher + ")$")
 	return err == nil && re.MatchString(tool)
+}
+
+var mcpNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+
+// mcpName shows an MCP server or tool name only when it is a plain name: a
+// path or anything else written there is redacted.
+func mcpName(value string) string {
+	if !mcpNamePattern.MatchString(value) {
+		return redacted
+	}
+	return hookField(value, 128)
 }

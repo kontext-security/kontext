@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,7 +85,13 @@ func hookStateWording(r agentauthority.HookRecord) string {
 		}
 		return "expected to run"
 	case "conditional":
-		return "runs once the project is trusted"
+		switch {
+		case slices.Contains(r.Enablement.Reasons, agentauthority.HookReasonWhileActive):
+			return "runs while its skill or subagent is active"
+		case slices.Contains(r.Enablement.Reasons, agentauthority.HookReasonAwaitingTrust):
+			return "runs once the project is trusted"
+		}
+		return "runs in some projects only"
 	case "disabled":
 		return "not running"
 	}

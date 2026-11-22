@@ -665,6 +665,14 @@ func TestKontextHookSetNeedsDeviceWideUnconditionalHandlers(t *testing.T) {
 			t.Fatalf("%+v", agent.KontextHooks)
 		}
 	})
+	t.Run("a malformed skill leaves the coverage complete", func(t *testing.T) {
+		h, bin, call := setup(t)
+		h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": all(call, "", nil)})
+		h.write(filepath.Join(h.base, "skills", "broken", "SKILL.md"), []byte("---\nhooks: [unclosed\n---\n"))
+		if agent, _ := h.scan(bin); agent.KontextHooks.State != "complete" {
+			t.Fatalf("%+v", agent.KontextHooks)
+		}
+	})
 	t.Run("trusted project only", func(t *testing.T) {
 		h, bin, call := setup(t)
 		project := filepath.Join(h.home, "src", "app")
