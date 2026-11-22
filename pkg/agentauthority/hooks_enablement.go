@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -220,10 +221,23 @@ func evaluateEnablement(s *hookScan) {
 		// local and plugin ones, except the hooks of a plugin managed
 		// enabledPlugins force-enables (hooks reference, Claude Code 2.1.229
 		// and later). Under an MDM profile the managed switches went unread.
-		if sw.managedOnly {
+		if sw.managedOnly && !managedKind(kind) {
 			switch {
-			case kind == HookScopePlugin && s.plugins.managed[info.pluginKey]:
-			case !managedKind(kind):
+			case kind != HookScopePlugin:
+				disabled = append(disabled, HookReasonManagedOnly)
+			case s.plugins.managed[info.pluginKey]:
+				// Force-enabled: exempt from 2.1.229 on, blocked before.
+				switch managedOnlyExempt(s.opts.AgentVersion) {
+				case versionBefore:
+					disabled = append(disabled, HookReasonManagedOnly)
+				case versionUnknown:
+					unresolved = append(unresolved, HookReasonManagedOnly)
+				}
+			case s.plugins.managedUnknown:
+				// A managed enabledPlugins that went unread may
+				// force-enable it.
+				unresolved = append(unresolved, HookReasonManagedOnly)
+			default:
 				disabled = append(disabled, HookReasonManagedOnly)
 			}
 		}
@@ -341,43 +355,78 @@ const (
 )
 
 // httpVerdict checks an HTTP hook's URL against the allowlist in force where
-// it runs. A hook outside any project runs in every project, where that
-// project's own list also counts.
+// it runs. A hook outside any project runs in every project too, under that
+// project's own list and switches, so it is judged in each listed project as
+// well: allowed somewhere and blocked elsewhere is "some projects". Where
+// that can't be known (a project's settings or the project list unread), a
+// block is unsettled.
 func (s *hookScan) httpVerdict(info hookRaw, kind string, sw switches, switchesOf func(string) switches) int {
-	if sw.httpAllow == nil {
-		return httpAllowed
-	}
-	allowed, known := s.urlAllowed(info.url, *sw.httpAllow)
-	switch {
-	case !known:
-		return httpUnsettled
-	case allowed:
-		return httpAllowed
-	case managedKind(kind) && !sw.httpAllowManaged:
-		// Only user or project files define the list. Whether Claude Code
-		// applies those to a managed hook isn't settled here.
-		return httpUnsettled
-	}
-	if info.project == "" && !projectKind(kind) {
-		for _, project := range keys(s.trust) {
-			if inProject, known := s.urlAllowed(info.url, *switchesOf(project).httpAllow); !known {
-				return httpUnsettled
-			} else if inProject {
-				return httpSomeProjects
-			}
+	base, known := httpAllowed, true
+	if sw.httpAllow != nil {
+		var allowed bool
+		allowed, known = s.urlAllowed(info.url, *sw.httpAllow, nil)
+		switch {
+		case !known:
+			return httpUnsettled
+		case !allowed && managedKind(kind) && !sw.httpAllowManaged:
+			// Only user or project files define the list. Whether Claude
+			// Code applies those to a managed hook isn't settled here.
+			return httpUnsettled
+		case !allowed:
+			base = httpBlocked
 		}
 	}
-	return httpBlocked
+	if info.project != "" || projectKind(kind) {
+		return base
+	}
+	unsettled := false
+	for _, project := range keys(s.trust) {
+		psw := switchesOf(project)
+		// A hook the project turns off runs there under no list.
+		if psw.managedDisableAll || psw.otherDisableAll && !managedKind(kind) {
+			continue
+		}
+		if psw.unreadable {
+			unsettled = true
+			continue
+		}
+		// The project's list holds the base list plus its own, so a URL
+		// the base list allowed is allowed there too, and only the
+		// project's own patterns are left to try.
+		allowed := true
+		switch {
+		case psw.httpAllow == nil:
+		case base == httpAllowed && sw.httpAllow != nil:
+		default:
+			var ok bool
+			if allowed, ok = s.urlAllowed(info.url, *psw.httpAllow, sw.httpAllow); !ok {
+				unsettled = true
+				continue
+			}
+		}
+		if allowed != (base == httpAllowed) {
+			return httpSomeProjects
+		}
+	}
+	if base == httpBlocked && (unsettled || s.projectsUnread || s.projectsCut) {
+		return httpUnsettled
+	}
+	return base
 }
 
-// maxURLPatterns bounds the allowlist patterns one scan compiles. Past it, a
-// URL the compiled ones don't allow is unsettled.
-const maxURLPatterns = 512
+// maxURLPatterns bounds the allowlist patterns one scan compiles, and
+// maxURLMatches the matches it tries. Past either, a URL the patterns tried
+// don't allow is unsettled.
+const (
+	maxURLPatterns = 512
+	maxURLMatches  = 1 << 16
+)
 
 // urlPattern follows allowedHttpHookUrls: each entry is a URL pattern where
 // * matches any run of characters. The scheme and host match in any case
-// and without a trailing dot, as Claude Code normalizes them; the path keeps
-// its case. A pattern is compiled once per scan, and nil past the budget.
+// and without a trailing dot, as Claude Code normalizes them; user
+// information and the path keep their case. A pattern is compiled once per
+// scan, and nil past the budget.
 func (s *hookScan) urlPattern(pattern string) *regexp.Regexp {
 	if compiled, ok := s.urlPatterns[pattern]; ok {
 		return compiled
@@ -385,10 +434,10 @@ func (s *hookScan) urlPattern(pattern string) *regexp.Regexp {
 	if len(s.urlPatterns) >= maxURLPatterns {
 		return nil
 	}
-	origin, rest := splitOrigin(pattern)
+	scheme, user, host, rest := splitURL(pattern)
 	quote := func(text string) string { return strings.ReplaceAll(regexp.QuoteMeta(text), `\*`, ".*") }
 	// Every part is quoted, so the expression always compiles.
-	compiled := regexp.MustCompile("^(?i:" + quote(normalOrigin(origin)) + ")" + quote(rest) + "$")
+	compiled := regexp.MustCompile("^(?i:" + quote(scheme) + ")" + quote(user) + "(?i:" + quote(host) + ")" + quote(rest) + "$")
 	if s.urlPatterns == nil {
 		s.urlPatterns = map[string]*regexp.Regexp{}
 	}
@@ -396,18 +445,31 @@ func (s *hookScan) urlPattern(pattern string) *regexp.Regexp {
 	return compiled
 }
 
-// urlAllowed reports whether a pattern allows the URL; known is false when
-// the budget left a pattern uncompiled and none of the others allows it.
-func (s *hookScan) urlAllowed(raw string, patterns []string) (allowed, known bool) {
-	origin, rest := splitOrigin(raw)
-	candidate := normalOrigin(origin) + rest
+// urlAllowed reports whether a pattern allows the URL; known is false when a
+// budget left a pattern untried and none of the others allows it. Patterns
+// in skip were already tried, and a pattern repeated in the list is tried
+// once.
+func (s *hookScan) urlAllowed(raw string, patterns []string, skip *[]string) (allowed, known bool) {
+	scheme, user, host, rest := splitURL(raw)
+	candidate := scheme + user + host + rest
+	tried := map[string]bool{}
+	if skip != nil {
+		for _, pattern := range *skip {
+			tried[pattern] = true
+		}
+	}
 	known = true
 	for _, pattern := range patterns {
+		if tried[pattern] {
+			continue
+		}
+		tried[pattern] = true
 		compiled := s.urlPattern(pattern)
-		if compiled == nil {
+		if compiled == nil || s.urlMatches >= maxURLMatches || s.g.ctx.Err() != nil {
 			known = false
 			continue
 		}
+		s.urlMatches++
 		if compiled.MatchString(candidate) {
 			return true, true
 		}
@@ -415,33 +477,30 @@ func (s *hookScan) urlAllowed(raw string, patterns []string) (allowed, known boo
 	return false, known
 }
 
-// splitOrigin cuts a URL, or a pattern, after its scheme and authority.
-func splitOrigin(raw string) (origin, rest string) {
-	scheme, after, ok := strings.Cut(raw, "://")
+// splitURL cuts a URL, or a pattern, into its scheme with "://", its user
+// information with "@", its host and port without a trailing host dot, and
+// the rest. One without a scheme is all rest.
+func splitURL(raw string) (scheme, user, host, rest string) {
+	name, after, ok := strings.Cut(raw, "://")
 	if !ok {
-		return "", raw
+		return "", "", "", raw
 	}
+	authority := after
 	if i := strings.IndexAny(after, "/?#"); i >= 0 {
-		return scheme + "://" + after[:i], after[i:]
+		authority, rest = after[:i], after[i:]
 	}
-	return raw, ""
-}
-
-// normalOrigin drops a host's trailing dot; case is left to the match.
-func normalOrigin(origin string) string {
-	hostport := origin
-	if _, after, ok := strings.Cut(origin, "://"); ok {
-		hostport = after
+	if i := strings.LastIndex(authority, "@"); i >= 0 {
+		user, authority = authority[:i+1], authority[i+1:]
 	}
-	host, port, hasPort := strings.Cut(hostport, ":")
-	if strings.HasSuffix(host, ".") && host != "." {
-		trimmed := strings.TrimSuffix(host, ".")
-		if hasPort {
-			trimmed += ":" + port
-		}
-		return strings.TrimSuffix(origin, hostport) + trimmed
+	hostname, port, hasPort := strings.Cut(authority, ":")
+	if strings.HasSuffix(hostname, ".") && hostname != "." {
+		hostname = strings.TrimSuffix(hostname, ".")
 	}
-	return origin
+	host = hostname
+	if hasPort {
+		host += ":" + port
+	}
+	return name + "://", user, host, rest
 }
 
 // programStatTimeout bounds one binary check: a stalled network path must
@@ -503,4 +562,39 @@ func settled[T any](ctx context.Context, fallback T, fn func() T) T {
 // evaluated.
 func toolEvent(event string) bool {
 	return strings.Contains(event, "ToolUse") || event == "PermissionRequest" || event == "PermissionDenied"
+}
+
+// Version checks for rules Claude Code changed in a release.
+const (
+	versionAtOrAfter = iota
+	versionBefore
+	versionUnknown
+)
+
+// managedOnlyExempt says whether the agent version exempts a force-enabled
+// plugin's hooks from allowManagedHooksOnly: Claude Code 2.1.229 and later.
+func managedOnlyExempt(version string) int { return versionSince(version, []int{2, 1, 229}) }
+
+// versionSince compares a dotted version, like "2.1.329" or "2.1.329 (Claude
+// Code)", with since. A version it can't read is unknown.
+func versionSince(version string, since []int) int {
+	version, _, _ = strings.Cut(strings.TrimSpace(version), " ")
+	version, _, _ = strings.Cut(version, "-")
+	parts := strings.Split(version, ".")
+	if version == "" || len(parts) < len(since) {
+		return versionUnknown
+	}
+	for i, want := range since {
+		got, err := strconv.Atoi(parts[i])
+		if err != nil || got < 0 {
+			return versionUnknown
+		}
+		if got != want {
+			if got < want {
+				return versionBefore
+			}
+			return versionAtOrAfter
+		}
+	}
+	return versionAtOrAfter
 }
