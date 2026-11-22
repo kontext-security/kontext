@@ -5,17 +5,23 @@ import (
 	"testing"
 )
 
-// ruleChain is RedactText without needles: every value pattern run over the
-// whole text, in order, repeated until the text stops changing.
+// ruleChain is RedactText without needles or stretches: every value
+// pattern run over the whole text, the union of their masks written as
+// placeholders, repeated until the text stops changing.
 func ruleChain(value string) string {
 	for pass := 0; pass < maxPasses; pass++ {
-		before := value
-		for _, rule := range compiledValueRules {
-			value = rule.re.ReplaceAllString(value, rule.replacement)
+		var spans []Span
+		for index := range compiledValueRules {
+			rule := &compiledValueRules[index]
+			for _, match := range rule.re.FindAllStringSubmatchIndex(value, -1) {
+				spans = append(spans, rule.masked(value, match))
+			}
 		}
-		if value == before {
+		next := keptText(value, settledRuns(value, mergeSpans(spans)), RedactedPlaceholder)
+		if next == value {
 			break
 		}
+		value = next
 	}
 	return value
 }
@@ -149,26 +155,4 @@ func keptText(text string, spans []Span, mark string) string {
 	}
 	out.WriteString(text[at:])
 	return out.String()
-}
-
-func TestPiecesFollowExpand(t *testing.T) {
-	t.Parallel()
-
-	for _, rule := range compiledValueRules {
-		for _, sample := range redactionSamples(t) {
-			for _, match := range rule.re.FindAllStringSubmatchIndex(sample, -1) {
-				var got strings.Builder
-				for _, p := range rule.pieces {
-					if p.group < 0 {
-						got.WriteString(p.text)
-					} else if match[2*p.group] >= 0 {
-						got.WriteString(sample[match[2*p.group]:match[2*p.group+1]])
-					}
-				}
-				if want := string(rule.re.ExpandString(nil, rule.replacement, sample, match)); got.String() != want {
-					t.Fatalf("%s: pieces give %q, Expand %q", rule.id, got.String(), want)
-				}
-			}
-		}
-	}
 }

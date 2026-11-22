@@ -2,6 +2,7 @@ package payloadcapture
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -114,58 +115,33 @@ func TestRedactTextLeavesProseAlone(t *testing.T) {
 	}
 }
 
-// TestRedactionCoverageIsOrderIndependent guards the coverage invariant
-// against rule interference: an earlier rule's placeholder substitution must
-// not prevent a later rule from catching its secret, regardless of the order
-// rules run in.
-func TestRedactionCoverageIsOrderIndependent(t *testing.T) {
+// TestRedactionIsMonotonic guards the coverage invariant against rule
+// interference: every rule matches the same text and masks are unioned, so
+// taking any one rule away never masks a byte the whole ruleset leaves.
+// Equivalently, adding a rule never unmasks one.
+func TestRedactionIsMonotonic(t *testing.T) {
 	t.Parallel()
 
 	var vectors coverageVectors
 	loadTestdata(t, "redaction-coverage-vectors.json", &vectors)
-
-	apply := func(rules []compiledRule, input string) string {
-		for pass := 0; pass < maxPasses; pass++ {
-			before := input
-			for _, rule := range rules {
-				input = rule.re.ReplaceAllString(input, rule.replacement)
-			}
-			if input == before {
-				break
-			}
-		}
-		return input
-	}
-
-	reversed := make([]compiledRule, len(compiledValueRules))
-	for index, rule := range compiledValueRules {
-		reversed[len(reversed)-1-index] = rule
-	}
-
-	// rules/4: a program's password-flag rules run before
-	// sensitive-assignment by contract, which would otherwise read a prompt
-	// text such as `sshpass -P password:` as a key and swallow the -p after
-	// it. rules/5: the vendor token rules run after the property and
-	// assignment rules by contract, so a property or assignment named like a
-	// token (`"glpat-…": "…"`, `glimt-…passwd=…`) loses its value rather than
-	// only its name. The signed-session-cookie rule runs before the vendor
-	// rules for the same reason (an `s:npm_…` ID goes with its MAC). Their
-	// vectors hold in the ruleset's order only.
-	ordered := func(ruleID, name string) bool {
-		return strings.HasPrefix(ruleID, "mysql-") || strings.HasPrefix(ruleID, "sshpass-") || strings.HasPrefix(ruleID, "redis-cli-") ||
-			name == "gitlab-named-json-property" || name == "gitlab-named-assignment" ||
-			name == "signed-session-npm-shaped-id"
-	}
+	inputs := redactionSamples(t)
 	for _, vector := range vectors.ValueVectors {
-		orders := [][]compiledRule{compiledValueRules, reversed}
-		if ordered(vector.RuleID, vector.Name) {
-			orders = orders[:1]
+		inputs = append(inputs, vector.Input)
+	}
+	for _, input := range inputs {
+		masked := make([]bool, len(input))
+		for _, span := range RedactedSpans(input) {
+			for i := span.Start; i < span.End; i++ {
+				masked[i] = true
+			}
 		}
-		for _, order := range orders {
-			redacted := apply(order, vector.Input)
-			for _, secret := range vector.MustNotSurvive {
-				if strings.Contains(redacted, secret) {
-					t.Fatalf("secret %q survived under rule order variation in %s", secret, vector.Name)
+		for index := range compiledValueRules {
+			fewer := slices.Delete(slices.Clone(compiledValueRules), index, index+1)
+			for _, span := range redactedSpans(input, fewer) {
+				for i := span.Start; i < span.End; i++ {
+					if !masked[i] {
+						t.Fatalf("%q: without %s byte %d is masked, with every rule it is not", input, compiledValueRules[index].id, i)
+					}
 				}
 			}
 		}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -40,10 +39,11 @@ type compiledRule struct {
 	id          string
 	re          *regexp.Regexp
 	replacement string
-	// pieces is the replacement split into text and the capture groups it
-	// copies; groups is set when it copies any but the whole match.
-	pieces []piece
-	groups bool
+	// before and after are the replacement's parts around the placeholder:
+	// what a match keeps of its start (capture groups and text) and of its
+	// end (text). groups is set when before copies a capture group.
+	before, after string
+	groups        bool
 	// needles, when filtered, are strings of which every match contains one
 	// (see needles.go).
 	needles  []string
@@ -86,6 +86,11 @@ func init() {
 	}
 }
 
+// maxTokenScan is the longest value HasSecretToken scans; a longer one
+// counts as a secret (fail closed). The cloud's JS RegExp backtracks where
+// RE2 does not, so it stops there, and the agent matches it.
+const maxTokenScan = 4096
+
 // HasSecretToken reports a value that holds a known secret token shape (a
 // vendor key, a JWT, a private key): the ruleset's value patterns that aren't
 // structural. The structural ones read a value's context (`--password x`,
@@ -93,6 +98,9 @@ func init() {
 // checks itself. Matches hasSecretToken in kontext-cloud's
 // redaction-ruleset.ts.
 func HasSecretToken(value string) bool {
+	if len(value) > maxTokenScan {
+		return true
+	}
 	for _, re := range tokenRules {
 		if re.MatchString(value) {
 			return true
@@ -125,20 +133,21 @@ func compileRules(rules []redactionRule) []compiledRule {
 				rule.ID,
 			))
 		}
-		if strings.Contains(replacement, "\x00") {
+		before, after, _ := strings.Cut(replacement, RedactedPlaceholder)
+		if strings.Contains(after, "$") {
 			panic(fmt.Sprintf(
-				"payloadcapture: rule %q replacement contains a NUL byte",
+				"payloadcapture: rule %q replacement copies a group after the placeholder",
 				rule.ID,
 			))
 		}
-		split := pieces(re, replacement)
 		set, filtered := needles(pattern)
 		compiled = append(compiled, compiledRule{
 			id:          rule.ID,
 			re:          re,
 			replacement: replacement,
-			pieces:      split,
-			groups:      slices.ContainsFunc(split, func(p piece) bool { return p.group > 0 }),
+			before:      before,
+			after:       after,
+			groups:      strings.Contains(before, "$"),
 			needles:     set,
 			filtered:    filtered,
 		})

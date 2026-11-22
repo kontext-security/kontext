@@ -1329,6 +1329,50 @@
       "input": "token ICB7ImFsZyI6IkhTMjU2In0=.e30.FAKEsignatureFAKEsignatureFAKEsig end",
       "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
       "expected": "token [REDACTED_SECRET] end"
+    },
+    {
+      "name": "signed-session-long-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s:FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEX.FAKEmacFAKEmacFAKEmacFAKEmac",
+      "mustNotSurvive": ["FAKEFAKEFAKE", "FAKEmacFAKEmac"],
+      "expected": "Cookie: connect.sid=s:[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-many-spaces",
+      "ruleId": "gitlab-session-cookie",
+      "input": "_gitlab_session            =FAKEsessionFAKEsession",
+      "mustNotSurvive": ["FAKEsessionFAKEsession"]
+    },
+    {
+      "name": "gitlab-session-long-suffix",
+      "ruleId": "gitlab-session-cookie",
+      "input": "_gitlab_session_geo_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=FAKEsessionFAKEsession",
+      "mustNotSurvive": ["FAKEsessionFAKEsession"]
+    },
+    {
+      "name": "gitlab-session-escaped-semicolon",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=FAKEone\\;_gitlab_session_geo_us=\"FAKEtwoFAKEtwo\"",
+      "mustNotSurvive": ["FAKEone", "FAKEtwoFAKEtwo"]
+    },
+    {
+      "name": "signed-session-then-gitlab",
+      "ruleId": "signed-session-cookie",
+      "input": "q=s:FAKE&_gitlab_session=FAKE.FAKEFAKEFAKEFAKEFAKE~FAKEtail",
+      "mustNotSurvive": ["FAKEFAKEFAKEFAKEFAKE", "FAKEtail"]
+    },
+    {
+      "name": "signed-session-then-slack",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s:~xoxd-FAKE.FAKEabcdefghijklmnop%2DFAKEtail",
+      "mustNotSurvive": ["FAKEabcdefghijklmnop", "FAKEtail"]
+    },
+    {
+      "name": "jwt-any-header-encoded-slash",
+      "ruleId": "jwt-any-header",
+      "input": "eyJFAKE000.FAKE%2FFAKEVALUE.e30.FAKESIGFAKESIG",
+      "mustNotSurvive": ["FAKEVALUE", "FAKESIGFAKESIG"],
+      "expected": "[REDACTED_SECRET]"
     }
   ],
   "keyVectors": [
