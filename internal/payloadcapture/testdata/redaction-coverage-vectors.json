@@ -1,6 +1,222 @@
 {
   "valueVectors": [
     {
+      "name": "mysql-mixed-case-no-exe",
+      "ruleId": "mysql-password-flag",
+      "input": "cmd /c MySQL -pFAKEhunter2 appdb",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "sshpass-upper-no-exe",
+      "ruleId": "sshpass-password-flag",
+      "input": "SSHPASS -p FAKEhunter2 ssh build",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "redis-cli-upper-no-exe",
+      "ruleId": "redis-cli-password-flag",
+      "input": "cmd /c REDIS-CLI -a FAKEhunter2 PING",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "jwt-tab-payload",
+      "ruleId": "jwt",
+      "input": "eyJhbGciOiJIUzI1NiJ9.CQl7fQ.FAKEsignatureFAKE",
+      "mustNotSurvive": ["CQl7fQ", "FAKEsignatureFAKE"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-after-encoded-tab",
+      "ruleId": "jwt",
+      "input": "Bearer%09eyJhbGciOiJIUzI1NiJ9.e30.FAKEsignatureFAKE",
+      "mustNotSurvive": ["eyJhbGciOiJIUzI1NiJ9", "FAKEsignatureFAKE"]
+    },
+    {
+      "name": "jwt-after-encoded-at",
+      "ruleId": "jwt",
+      "input": "archive=%40eyJhbGciOiJIUzI1NiJ9.e30.FAKEsignatureFAKE",
+      "mustNotSurvive": ["eyJhbGciOiJIUzI1NiJ9", "FAKEsignatureFAKE"]
+    },
+    {
+      "name": "jwt-before-signed-value",
+      "ruleId": "jwt",
+      "input": "eyJ4IjoxfQ.v1.eyJ1c2VyIjo0Mn0.KtbIIGZb5B0",
+      "mustNotSurvive": ["eyJ1c2VyIjo0Mn0", "KtbIIGZb5B0"]
+    },
+    {
+      "name": "slack-encoded-hyphen",
+      "ruleId": "slack-token",
+      "input": "xoxb-FAKE123456%2DFAKE123456-FAKEabcdefghijklmnop",
+      "mustNotSurvive": ["FAKEabcdefghijklmnop"]
+    },
+    {
+      "name": "slack-double-encoded-cookie",
+      "ruleId": "slack-token",
+      "input": "d=xoxd-abc%252F1PzkFAKEenfSsgX2ov7%252BOey7J3Ss%253D",
+      "mustNotSurvive": ["1PzkFAKEenfSsgX2ov7", "Oey7J3Ss"]
+    },
+    {
+      "name": "gitlab-trailer-then-shopify",
+      "ruleId": "gitlab-token",
+      "input": "glrt-0123456789abcdefghijklmnopq.01.0a1234567shpat_0123456789abcdef0123456789abcdef",
+      "mustNotSurvive": [
+        "0123456789abcdefghijklmnopq",
+        "0123456789abcdef0123456789abcdef"
+      ]
+    },
+    {
+      "name": "gitlab-trailer-then-gitlab",
+      "ruleId": "gitlab-token",
+      "input": "glrt-0123456789abcdefghijklmnopq.de.glagent-0123456789abcdefghij",
+      "mustNotSurvive": ["0123456789abcdefghijklmnopq", "0123456789abcdefghij"]
+    },
+    {
+      "name": "stripe-bare-org-key",
+      "ruleId": "stripe-key",
+      "input": "key sk_org_0123456789abcdefghijklmn",
+      "mustNotSurvive": ["0123456789abcdefghijklmn"]
+    },
+    {
+      "name": "jwt-whitespace-payload",
+      "ruleId": "jwt",
+      "input": "token eyJhbGciOiJIUzI1NiJ9.IHt9.FAKEsignatureFAKEsignatureFAKE done",
+      "mustNotSurvive": ["IHt9", "FAKEsignature"],
+      "expected": "token [REDACTED_SECRET] done"
+    },
+    {
+      "name": "jwt-whitespace-payload-unsigned",
+      "ruleId": "jwt",
+      "input": "token eyJhbGciOiJub25lIn0.CnsKfQ. done",
+      "mustNotSurvive": ["CnsKfQ"],
+      "expected": "token [REDACTED_SECRET] done"
+    },
+    {
+      "name": "aws-id-glued-to-assignment",
+      "ruleId": "aws-access-key-id",
+      "input": "AKIAFAKE0123456789ABpwd=orchid-demo",
+      "mustNotSurvive": ["FAKE0123456789AB", "orchid-demo"]
+    },
+    {
+      "name": "stripe-curl-attached-user",
+      "ruleId": "stripe-key",
+      "input": "curl -usk_test_0123456789abcdefghijklmn: https://api.stripe.com",
+      "mustNotSurvive": ["0123456789abcdefghijklmn"]
+    },
+    {
+      "name": "stripe-after-url-encoded-slash",
+      "ruleId": "stripe-key",
+      "input": "next=%2Fsk_test_0123456789abcdefghijklmn",
+      "mustNotSurvive": ["0123456789abcdefghijklmn"]
+    },
+    {
+      "name": "gitlab-incoming-mail-short-body",
+      "ruleId": "gitlab-token",
+      "input": "git+glimt-3no8h6fe0425t9avk7m1cx2q@example.test",
+      "mustNotSurvive": ["3no8h6fe0425t9avk7m1cx2q"]
+    },
+    {
+      "name": "gitlab-routable-trailer",
+      "ruleId": "gitlab-token",
+      "input": "glrt-0123456789abcdefghijklmnopq.01.0a1234567",
+      "mustNotSurvive": ["0123456789abcdefghijklmnopq", "0a1234567"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "slack-then-npm-encoded",
+      "ruleId": "slack-token",
+      "input": "?q=xoxb-FAKE123456-FAKEabcdefghijklmnop%20npm_0123456789abcdef0123456789abcdef0123",
+      "mustNotSurvive": [
+        "FAKEabcdefghijklmnop",
+        "0123456789abcdef0123456789abcdef0123"
+      ]
+    },
+    {
+      "name": "signed-value-short-mac",
+      "ruleId": "jwt",
+      "input": "session eyJ1c2VyIjo0Mn0.KtbIIGZb5B0 end",
+      "mustNotSurvive": ["eyJ1c2VyIjo0Mn0", "KtbIIGZb5B0"],
+      "expected": "session [REDACTED_SECRET] end"
+    },
+    {
+      "name": "gitlab-named-assignment",
+      "ruleId": "sensitive-assignment",
+      "input": "glimt-0123456789abcdefghijklpasswd=orchid-demo",
+      "mustNotSurvive": ["orchid-demo"]
+    },
+    {
+      "name": "jwt-after-url-encoded-slash",
+      "ruleId": "jwt",
+      "input": "GET /login?next=%2Fdownload%2FeyJhbGciOiJIUzI1NiJ9.e30.FAKEsignatureFAKEsignatureFAKE",
+      "mustNotSurvive": ["eyJhbGciOiJIUzI1NiJ9", "FAKEsignature"]
+    },
+    {
+      "name": "jwt-newline-header",
+      "ruleId": "jwt",
+      "input": "ewogImFsZyI6IkhTMjU2In0.e30.FAKEsignatureFAKEsignatureFAKE",
+      "mustNotSurvive": ["ewogImFsZyI6IkhTMjU2In0", "FAKEsignature"]
+    },
+    {
+      "name": "signed-value-short-claims",
+      "ruleId": "jwt",
+      "input": "session eyJpIjoxfQ.FAKEsignatureFAKEsignatu end",
+      "mustNotSurvive": ["eyJpIjoxfQ", "FAKEsignatureFAKEsignatu"]
+    },
+    {
+      "name": "slack-url-encoded-cookie",
+      "ruleId": "slack-token",
+      "input": "Cookie: d=xoxd-abc%2F1PzkFAKEenfSsgX2ov7%2BOey7J3Ss%3D",
+      "mustNotSurvive": ["1PzkFAKEenfSsgX2ov7", "Oey7J3Ss"]
+    },
+    {
+      "name": "mysql-uppercase-exe",
+      "ruleId": "mysql-password-flag",
+      "input": "MYSQL.EXE -pFAKEhunter2 appdb",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "sshpass-uppercase-exe",
+      "ruleId": "sshpass-password-flag",
+      "input": "SSHPASS.EXE -p FAKEhunter2 ssh host",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "redis-cli-uppercase-exe",
+      "ruleId": "redis-cli-password-flag",
+      "input": "REDIS-CLI.exe -a FAKEhunter2 PING",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "jwe-nonempty-encrypted-key",
+      "ruleId": "jwt",
+      "input": "token eyJhbGciOiJSU0EtT0FFUCJ9.FAKEkey.FAKEiv.FAKEcipher.FAKEtag done",
+      "mustNotSurvive": ["FAKEkey", "FAKEiv", "FAKEcipher", "FAKEtag"],
+      "expected": "token [REDACTED_SECRET] done"
+    },
+    {
+      "name": "mysql-windows-exe",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql.exe -pFAKEhunter2 appdb",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "mysql-grouped-quick",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqldump -qpFAKEhunter2 appdb",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "redis-cli-windows-exe",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli.exe -a FAKEhunter2 PING",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "sshpass-windows-exe",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass.exe -p FAKEhunter2 ssh host",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
       "name": "pem-private-key",
       "ruleId": "private-key-block",
       "input": "config:\n-----BEGIN RSA PRIVATE KEY-----\nMIIfakekeymaterialFAKE\n-----END RSA PRIVATE KEY-----\ndone",
@@ -265,6 +481,945 @@
       "input": "GET /login?passwd=query-passwd-secret-FAKE&next=1",
       "mustNotSurvive": ["query-passwd-secret-FAKE"],
       "expected": "GET /login?passwd=[REDACTED_SECRET]&next=1"
+    },
+    {
+      "name": "mysql-glued-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -u root -pmysql-secret-FAKE -h 10.0.0.5",
+      "mustNotSurvive": ["mysql-secret-FAKE"],
+      "expected": "mysql -u root -p[REDACTED_SECRET] -h 10.0.0.5"
+    },
+    {
+      "name": "mysqldump-quoted-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqldump -uroot -p'quoted secret-FAKE' appdb",
+      "mustNotSurvive": ["quoted secret-FAKE", "secret-FAKE"],
+      "expected": "mysqldump -uroot -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mariadb-dump-double-quoted-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mariadb-dump -p\"dq \\\" secret-FAKE\" appdb",
+      "mustNotSurvive": ["secret-FAKE"],
+      "expected": "mariadb-dump -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-escaped-space-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pescaped\\ space-secret-FAKE appdb",
+      "mustNotSurvive": ["space-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-path-and-wrapper",
+      "ruleId": "mysql-password-flag",
+      "input": "kubectl exec db -- /usr/bin/mysql -pkube-secret-FAKE",
+      "mustNotSurvive": ["kube-secret-FAKE"],
+      "expected": "kubectl exec db -- /usr/bin/mysql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-password-after-quoted-argument",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -e \"select 1\" -pafter-secret-FAKE appdb",
+      "mustNotSurvive": ["after-secret-FAKE"],
+      "expected": "mysql -e \"select 1\" -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-continuation-lines",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -h db \\\n  -u root \\\n  -pcont-secret-FAKE",
+      "mustNotSurvive": ["cont-secret-FAKE"],
+      "expected": "mysql -h db \\\n  -u root \\\n  -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "sshpass-spaced-password-keeps-ssh-port",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -p ssh-secret-FAKE ssh -p 2222 deploy@10.0.0.6",
+      "mustNotSurvive": ["ssh-secret-FAKE"],
+      "expected": "sshpass -p [REDACTED_SECRET] ssh -p 2222 deploy@10.0.0.6"
+    },
+    {
+      "name": "sshpass-glued-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -pglued-secret-FAKE ssh host",
+      "mustNotSurvive": ["glued-secret-FAKE"],
+      "expected": "sshpass -p[REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-dash-leading-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -v -p -dash-secret-FAKE ssh host",
+      "mustNotSurvive": ["dash-secret-FAKE"],
+      "expected": "sshpass -v -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "redis-cli-auth-password",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -h cache -a redis-secret-FAKE --no-auth-warning ping",
+      "mustNotSurvive": ["redis-secret-FAKE"],
+      "expected": "redis-cli -h cache -a [REDACTED_SECRET] --no-auth-warning ping"
+    },
+    {
+      "name": "psql-pgpassword-env",
+      "ruleId": "sensitive-assignment",
+      "input": "PGPASSWORD=pg-secret-FAKE psql -h db -U app",
+      "mustNotSurvive": ["pg-secret-FAKE"],
+      "expected": "PGPASSWORD=[REDACTED_SECRET] psql -h db -U app"
+    },
+    {
+      "name": "psql-conninfo-password",
+      "ruleId": "sensitive-assignment",
+      "input": "psql \"host=db user=app password=conninfo-secret-FAKE dbname=app\"",
+      "mustNotSurvive": ["conninfo-secret-FAKE"]
+    },
+    {
+      "name": "mysql-long-password-flag",
+      "ruleId": "sensitive-cli-flag",
+      "input": "mysql --user=root --password=long-secret-FAKE appdb",
+      "mustNotSurvive": ["long-secret-FAKE"],
+      "expected": "mysql --user=root --password=[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-auth-env",
+      "ruleId": "redis-cli-auth-env",
+      "input": "REDISCLI_AUTH=rediscli-secret-FAKE redis-cli -h cache ping",
+      "mustNotSurvive": ["rediscli-secret-FAKE"],
+      "expected": "REDISCLI_AUTH=[REDACTED_SECRET] redis-cli -h cache ping"
+    },
+    {
+      "name": "mysql-pwd-env",
+      "ruleId": "sensitive-assignment",
+      "input": "MYSQL_PWD=mysqlpwd-secret-FAKE mysql -u root appdb",
+      "mustNotSurvive": ["mysqlpwd-secret-FAKE"],
+      "expected": "MYSQL_PWD=[REDACTED_SECRET] mysql -u root appdb"
+    },
+    {
+      "name": "mysql-repeated-password-flag",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pfirst-secret-FAKE -h db -psecond-secret-FAKE appdb",
+      "mustNotSurvive": ["first-secret-FAKE", "second-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-repeated-password-flag",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -a first-secret-FAKE -a second-secret-FAKE ping",
+      "mustNotSurvive": ["first-secret-FAKE", "second-secret-FAKE"],
+      "expected": "redis-cli -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "sshpass-prompt-option-before-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -P \"Enter PIN:\" -p prompt-secret-FAKE ssh host",
+      "mustNotSurvive": ["prompt-secret-FAKE"],
+      "expected": "sshpass -P \"Enter PIN:\" -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-grouped-verbose-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -vpgrouped-secret-FAKE ssh host",
+      "mustNotSurvive": ["grouped-secret-FAKE"],
+      "expected": "sshpass -vp[REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "mysql-backslash-newline-inside-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -phead\\\ntail-secret-FAKE appdb",
+      "mustNotSurvive": ["tail-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-quoted-backslash-newline-password",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -a \"head\\\ntail-secret-FAKE\" ping",
+      "mustNotSurvive": ["tail-secret-FAKE"],
+      "expected": "redis-cli -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "mysql-non-ascii-space-inside-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -phead tail-secret-FAKE appdb",
+      "mustNotSurvive": ["tail-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-password-after-quoted-pager-flag",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql --pager=\"less -pERROR\" -ppager-secret-FAKE appdb",
+      "mustNotSurvive": ["pager-secret-FAKE"]
+    },
+    {
+      "name": "sshpass-grouped-prompt-option",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -vP \"Enter PIN:\" -p grouped-prompt-secret-FAKE ssh host",
+      "mustNotSurvive": ["grouped-prompt-secret-FAKE"],
+      "expected": "sshpass -vP \"Enter PIN:\" -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-escaped-prompt-argument",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -P Enter\\ PIN: -p escaped-prompt-secret-FAKE ssh host",
+      "mustNotSurvive": ["escaped-prompt-secret-FAKE"],
+      "expected": "sshpass -P Enter\\ PIN: -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-concatenated-prompt-argument",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -P \"Enter \"PIN: -p concat-prompt-secret-FAKE ssh host",
+      "mustNotSurvive": ["concat-prompt-secret-FAKE"],
+      "expected": "sshpass -P \"Enter \"PIN: -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "mysql-grouped-option-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -vpgrouped-secret-FAKE appdb",
+      "mustNotSurvive": ["grouped-secret-FAKE"],
+      "expected": "mysql -vp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-repeated-grouped-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pfirst-secret-FAKE -vpsecond-secret-FAKE appdb",
+      "mustNotSurvive": ["first-secret-FAKE", "second-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysqlslap-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqlslap -uroot -pslap-secret-FAKE --auto-generate-sql",
+      "mustNotSurvive": ["slap-secret-FAKE"],
+      "expected": "mysqlslap -uroot -p[REDACTED_SECRET] --auto-generate-sql"
+    },
+    {
+      "name": "sshpass-prompt-text-names-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -P password: -p prompt-text-secret-FAKE ssh host",
+      "mustNotSurvive": ["prompt-text-secret-FAKE"]
+    },
+    {
+      "name": "mysqldump-grouped-routines-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqldump -Rproutines-secret-FAKE appdb",
+      "mustNotSurvive": ["routines-secret-FAKE"],
+      "expected": "mysqldump -Rp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysqldump-grouped-quote-names-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqldump -Qpquote-secret-FAKE appdb",
+      "mustNotSurvive": ["quote-secret-FAKE"],
+      "expected": "mysqldump -Qp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-single-quoted-flag-token",
+      "ruleId": "mysql-quoted-password-flag",
+      "input": "mysql '-pMy pass 123-FAKE!' appdb",
+      "mustNotSurvive": ["pass 123-FAKE", "123-FAKE"],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-double-quoted-flag-token",
+      "ruleId": "sshpass-quoted-password-flag",
+      "input": "sshpass \"-pMy pass 123-FAKE!\" ssh host",
+      "mustNotSurvive": ["pass 123-FAKE", "123-FAKE"],
+      "expected": "sshpass [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "rediscli-auth-single-quoted-assignment",
+      "ruleId": "redis-cli-quoted-auth-env",
+      "input": "env 'REDISCLI_AUTH=My pass 123-FAKE!' redis-cli ping",
+      "mustNotSurvive": ["pass 123-FAKE", "123-FAKE"],
+      "expected": "env [REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "rediscli-auth-double-quoted-assignment",
+      "ruleId": "redis-cli-quoted-auth-env",
+      "input": "env \"REDISCLI_AUTH=dq pass \\\" 123-FAKE\" redis-cli ping",
+      "mustNotSurvive": ["pass", "123-FAKE"],
+      "expected": "env [REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "mysql-repeated-quoted-tokens",
+      "ruleId": "mysql-quoted-password-flag",
+      "input": "mysql '-pfirst secret-FAKE' '-psecond secret-FAKE' appdb",
+      "mustNotSurvive": [
+        "first secret-FAKE",
+        "second secret-FAKE",
+        "secret-FAKE"
+      ],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-concatenated-quoted-token",
+      "ruleId": "mysql-quoted-password-flag",
+      "input": "mysql '-pmy pa'\"'\"'ss-FAKE' appdb",
+      "mustNotSurvive": ["my pa", "ss-FAKE"],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-unquoted-then-quoted-repeat",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pfirst-secret-FAKE '-psecond secret-FAKE' appdb",
+      "mustNotSurvive": ["first-secret-FAKE", "second secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-quoted-standalone-flag",
+      "ruleId": "sshpass-quoted-password-flag",
+      "input": "sshpass \"-p\" \"quoted-flag-secret-FAKE\" ssh user@host",
+      "mustNotSurvive": ["quoted-flag-secret-FAKE"],
+      "expected": "sshpass [REDACTED_SECRET] ssh user@host"
+    },
+    {
+      "name": "redis-cli-quoted-standalone-flag",
+      "ruleId": "redis-cli-quoted-password-flag",
+      "input": "redis-cli \"-a\" \"quoted-flag-secret-FAKE\" PING",
+      "mustNotSurvive": ["quoted-flag-secret-FAKE"],
+      "expected": "redis-cli [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "mysql-quoted-executable",
+      "ruleId": "mysql-password-flag",
+      "input": "\"/usr/bin/mysql\" -pquoted-exe-secret-FAKE appdb",
+      "mustNotSurvive": ["quoted-exe-secret-FAKE"],
+      "expected": "\"/usr/bin/mysql\" -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-quoted-executable",
+      "ruleId": "sshpass-password-flag",
+      "input": "'sshpass' -p quoted-exe-secret-FAKE ssh host",
+      "mustNotSurvive": ["quoted-exe-secret-FAKE"],
+      "expected": "'sshpass' -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "redis-cli-quoted-executable",
+      "ruleId": "redis-cli-password-flag",
+      "input": "\"redis-cli\" -a quoted-exe-secret-FAKE PING",
+      "mustNotSurvive": ["quoted-exe-secret-FAKE"],
+      "expected": "\"redis-cli\" -a [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "sshpass-quoted-prompt-option",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass \"-P\" \"Enter PIN:\" -p quoted-opt-secret-FAKE ssh host",
+      "mustNotSurvive": ["quoted-opt-secret-FAKE"],
+      "expected": "sshpass \"-P\" \"Enter PIN:\" -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-quoted-flag-after-quoted-option",
+      "ruleId": "sshpass-quoted-password-flag",
+      "input": "sshpass \"-v\" \"-p\" \"quoted-both-secret-FAKE\" ssh host",
+      "mustNotSurvive": ["quoted-both-secret-FAKE"],
+      "expected": "sshpass \"-v\" [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-ansi-c-quoted-password",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass -p $'can\\'t guess-FAKE me' ssh deploy@host",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "sshpass -p [REDACTED_SECRET] ssh deploy@host"
+    },
+    {
+      "name": "mysql-ansi-c-quoted-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -p$'it\\'s ansi-FAKE' appdb",
+      "mustNotSurvive": ["ansi-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-ansi-c-quoted-password",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -a $'it\\'s ansi-FAKE' ping",
+      "mustNotSurvive": ["ansi-FAKE"],
+      "expected": "redis-cli -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "rediscli-auth-ansi-c-quoted",
+      "ruleId": "redis-cli-auth-env",
+      "input": "REDISCLI_AUTH=$'it\\'s ansi-FAKE' redis-cli ping",
+      "mustNotSurvive": ["ansi-FAKE"],
+      "expected": "REDISCLI_AUTH=[REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "mysql-ansi-c-concatenated-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -phead$'can\\'t guess-FAKE me' appdb",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-ansi-c-whole-argument",
+      "ruleId": "mysql-quoted-password-flag",
+      "input": "mysql $'-pcan\\'t guess-FAKE me' appdb",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-ansi-c-whole-argument",
+      "ruleId": "sshpass-quoted-password-flag",
+      "input": "sshpass $'-pcan\\'t guess-FAKE me' ssh host",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "sshpass [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "rediscli-auth-ansi-c-whole-argument",
+      "ruleId": "redis-cli-quoted-auth-env",
+      "input": "env $'REDISCLI_AUTH=can\\'t guess-FAKE me' redis-cli ping",
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "env [REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "mysql-password-ending-in-dollar",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -pPassw0rd-FAKE$$ appdb",
+      "mustNotSurvive": ["Passw0rd-FAKE", "$$"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "gitlab-pat",
+      "ruleId": "gitlab-token",
+      "input": "git clone https://ci:glpat-FAKE0123456789abcdefFAKE@gitlab.example/x",
+      "mustNotSurvive": ["glpat-FAKE0123456789abcdefFAKE"]
+    },
+    {
+      "name": "gitlab-token-glued",
+      "ruleId": "gitlab-token",
+      "input": "token ciglpat-FAKE0123456789abcdefFAKE used",
+      "mustNotSurvive": ["ciglpat-FAKE0123456789abcdefFAKE"]
+    },
+    {
+      "name": "pypi-token",
+      "ruleId": "pypi-token",
+      "input": "twine upload -p pypi-AgEIcHlwaS5vcmcFAKE0123456789 dist/*",
+      "mustNotSurvive": ["pypi-AgEIcHlwaS5vcmcFAKE0123456789"]
+    },
+    {
+      "name": "slack-app-token",
+      "ruleId": "slack-app-token",
+      "input": "SLACK_APP_TOKEN xapp-1-AFAKE0123-0123456789-xxxxxxxxxxxxxxxxxxxxxxxx",
+      "mustNotSurvive": ["xapp-1-AFAKE0123-0123456789-xxxxxxxxxxxxxxxxxxxxxxxx"]
+    },
+    {
+      "name": "slack-token-glued",
+      "ruleId": "slack-token",
+      "input": "hook_xoxb-FAKE123456-FAKEabcdefghij",
+      "mustNotSurvive": ["xoxb-FAKE123456-FAKEabcdefghij"]
+    },
+    {
+      "name": "npm-token-glued",
+      "ruleId": "npm-token",
+      "input": "ci_npm_FAKEabcdefghijklmnop12 set",
+      "mustNotSurvive": ["npm_FAKEabcdefghijklmnop12"]
+    },
+    {
+      "name": "stripe-secret-key",
+      "ruleId": "stripe-key",
+      "input": "STRIPE sk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxx here",
+      "mustNotSurvive": ["sk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+    },
+    {
+      "name": "stripe-restricted-key",
+      "ruleId": "stripe-key",
+      "input": "rk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "mustNotSurvive": ["rk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+    },
+    {
+      "name": "shopify-token",
+      "ruleId": "shopify-token",
+      "input": "X-Shopify-Access-Token shpat_FAKE0123456789abcdef",
+      "mustNotSurvive": ["shpat_FAKE0123456789abcdef"]
+    },
+    {
+      "name": "digitalocean-token",
+      "ruleId": "digitalocean-token",
+      "input": "doctl auth init -t dop_v1_FAKE0123456789abcdef",
+      "mustNotSurvive": ["dop_v1_FAKE0123456789abcdef"]
+    },
+    {
+      "name": "huggingface-token",
+      "ruleId": "huggingface-token",
+      "input": "HF hf_FAKE0123456789abcdefghijklmnopqrst login",
+      "mustNotSurvive": ["hf_FAKE0123456789abcdefghijklmnopqrst"]
+    },
+    {
+      "name": "sendgrid-key",
+      "ruleId": "sendgrid-key",
+      "input": "key SG.xxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx end",
+      "mustNotSurvive": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"],
+      "expected": "key [REDACTED_SECRET] end"
+    },
+    {
+      "name": "jwt-short-claims",
+      "ruleId": "jwt",
+      "input": "Authorization-less eyJhbGciOiJIUzI1NiJ9.e30.FAKEsig here",
+      "mustNotSurvive": ["eyJhbGciOiJIUzI1NiJ9.e30.FAKEsig"]
+    },
+    {
+      "name": "jwt-unsigned",
+      "ruleId": "jwt",
+      "input": "token eyJhbGciOiJub25lIn0.eyJzdWIiOjF9. end",
+      "mustNotSurvive": ["eyJhbGciOiJub25lIn0.eyJzdWIiOjF9"]
+    },
+    {
+      "name": "jwt-glued",
+      "ruleId": "jwt",
+      "input": "notify ci_eyJhbGciOiJub25lIn0.eyJzdWIiOiJhbGljZSJ9. end",
+      "mustNotSurvive": ["eyJhbGciOiJub25lIn0.eyJzdWIiOiJhbGljZSJ9"]
+    },
+    {
+      "name": "aws-access-key-glued",
+      "ruleId": "aws-access-key-id",
+      "input": "creds key_ASIAFAKE0123456789AB end",
+      "mustNotSurvive": ["ASIAFAKE0123456789AB"]
+    },
+    {
+      "name": "mysql-password-after-nested-quotes",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -h \"$(cat \"config/team's host\")\" -pFAKEnested appdb",
+      "mustNotSurvive": ["FAKEnested"]
+    },
+    {
+      "name": "gitlab-ci-job-jwt",
+      "ruleId": "gitlab-token",
+      "input": "CI_JOB_TOKEN=glcbt-eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyIn0.FAKEsignature",
+      "mustNotSurvive": ["eyJzdWIiOiJ1c2VyIn0", "FAKEsignature"]
+    },
+    {
+      "name": "gitlab-runner-token",
+      "ruleId": "gitlab-token",
+      "input": "register --token glrtr-FAKE0123456789abcdefgh",
+      "mustNotSurvive": ["FAKE0123456789abcdefgh"]
+    },
+    {
+      "name": "aws-access-key-glued-suffix",
+      "ruleId": "aws-access-key-id",
+      "input": "plugin ASIAFAKE0123456789AB_ci",
+      "mustNotSurvive": ["ASIAFAKE0123456789AB"]
+    },
+    {
+      "name": "npm-token-glued-suffix",
+      "ruleId": "npm-token",
+      "input": "npm_FAKEabcdefghijklmnop12_prod",
+      "mustNotSurvive": ["npm_FAKEabcdefghijklmnop12"]
+    },
+    {
+      "name": "jwt-encrypted",
+      "ruleId": "jwt",
+      "input": "jwe eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIn0..AAAAAAAAAAAAAAAA.ePU.PlPfGrjP2tuaFvXdWZVQpQ end",
+      "mustNotSurvive": ["AAAAAAAAAAAAAAAA", "PlPfGrjP2tuaFvXdWZVQpQ"]
+    },
+    {
+      "name": "slack-refresh-token-glued-suffix",
+      "ruleId": "slack-token",
+      "input": "artifact-xoxb-FAKE123456-FAKEabcdefghij_prod",
+      "mustNotSurvive": ["FAKE123456-FAKEabcdefghij"]
+    },
+    {
+      "name": "slack-workflow-token",
+      "ruleId": "slack-token",
+      "input": "hook xwfp-FAKE01234567890-FAKEabcdefgh",
+      "mustNotSurvive": ["FAKE01234567890-FAKEabcdefgh"]
+    },
+    {
+      "name": "gitlab-feed-token",
+      "ruleId": "gitlab-token",
+      "input": "feed glft-FAKE0123456789abcdefgh",
+      "mustNotSurvive": ["FAKE0123456789abcdefgh"]
+    },
+    {
+      "name": "gitlab-agent-token",
+      "ruleId": "gitlab-token",
+      "input": "agent glagent-FAKE0123456789abcdefgh",
+      "mustNotSurvive": ["FAKE0123456789abcdefgh"]
+    },
+    {
+      "name": "redis-cli-passwords-inside-and-after-substitution",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -h \"$(redis-cli -a FAKEinner GET current-host)\" -a FAKEouter PING",
+      "mustNotSurvive": ["FAKEinner", "FAKEouter"]
+    },
+    {
+      "name": "gitlab-named-json-property",
+      "ruleId": "json-sensitive-property",
+      "input": "{\"glpat-production-deploy-token\":\"orchid-demo\"}",
+      "mustNotSurvive": ["orchid-demo"]
+    },
+    {
+      "name": "stripe-org-key",
+      "ruleId": "stripe-key",
+      "input": "key sk_org_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "mustNotSurvive": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+    },
+    {
+      "name": "gitlab-incoming-mail-token",
+      "ruleId": "gitlab-token",
+      "input": "mail glimt-0fake1abcdefghijklmnopqr",
+      "mustNotSurvive": ["0fake1abcdefghijklmnopqr"]
+    },
+    {
+      "name": "gitlab-feature-flag-token",
+      "ruleId": "gitlab-token",
+      "input": "flags glffct-FAKEabcdefghijklmnop",
+      "mustNotSurvive": ["FAKEabcdefghijklmnop"]
+    },
+    {
+      "name": "slack-web-client-token",
+      "ruleId": "slack-token",
+      "input": "cookie xoxc-FAKE123456-FAKEabcdefghij",
+      "mustNotSurvive": ["FAKE123456-FAKEabcdefghij"]
+    },
+    {
+      "name": "jwt-spaced-header",
+      "ruleId": "jwt",
+      "input": "rev eyAiYWxnIjoiSFMyNTYifQ.eyJ1aWQiOjQyfQ.FAKEsignatureFAKE",
+      "mustNotSurvive": ["eyJ1aWQiOjQyfQ", "FAKEsignatureFAKE"]
+    },
+    {
+      "name": "signed-value-two-parts",
+      "ruleId": "jwt",
+      "input": "name eyJ1c2VyIjo0Mn0.FAKEsignatureFAKEabc",
+      "mustNotSurvive": ["eyJ1c2VyIjo0Mn0", "FAKEsignatureFAKEabc"]
+    },
+    {
+      "name": "slack-then-shopify-double-encoded-slash",
+      "ruleId": "slack-token",
+      "input": "/xoxb-export-archive%252Fshpat_FAKE0123456789abcdef0123456789ab",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "slack-all-hyphens-encoded",
+      "ruleId": "slack-token",
+      "input": "xoxb%2D123456789012%2D123456789012%2DFAKEabcdefghijklmnopqrst",
+      "mustNotSurvive": ["FAKEabcdefghijklmnopqrst", "123456789012"]
+    },
+    {
+      "name": "slack-app-encoded-hyphen",
+      "ruleId": "slack-app-token",
+      "input": "xapp-1-AFAKE0123%2D0123456789-xxxxxxxxxxxxxxxxxxxxxxxx",
+      "mustNotSurvive": ["xxxxxxxxxxxxxxxxxxxxxxxx", "0123456789"]
+    },
+    {
+      "name": "jwt-then-jwe-after-encoded-at",
+      "ruleId": "jwt",
+      "input": "%40eyJ4IjoxfQ.v1.eyJhbGciOiJSU0EtT0FFUCJ9.FAKEkey.FAKEiv.FAKEcipher.FAKEtag",
+      "mustNotSurvive": ["FAKEkey", "FAKEiv", "FAKEcipher", "FAKEtag"],
+      "expected": "%40[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-double-newline-header",
+      "ruleId": "jwt",
+      "input": "ewoKImFsZyI6IkhTMjU2In0.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-crlf-header",
+      "ruleId": "jwt",
+      "input": "ew0KICAiYWxnIjoiSFMyNTYiDQp9.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-tab-header",
+      "ruleId": "jwt",
+      "input": "ewkiYWxnIjoiSFMyNTYifQ.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-value-base64-mac",
+      "ruleId": "jwt",
+      "input": "eyJ1c2VyIjoiRkFLRSJ9./FAKE+mac/FAKEsignature+FAKE",
+      "mustNotSurvive": ["FAKE+mac/FAKEsignature+FAKE"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-cookie",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=deadbeefFAKEdeadbeefdeadbeefdead",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"],
+      "expected": "Cookie: _gitlab_session=[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-jwt",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=eyJhbGciOiJIUzI1NiJ9.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "Cookie: _gitlab_session=[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-cell",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=cell-1-deadbeefFAKEdeadbeefdeadbeefdead; theme=dark",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"],
+      "expected": "Cookie: _gitlab_session=[REDACTED_SECRET]; theme=dark"
+    },
+    {
+      "name": "gitlab-session-geo",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session_geo_0123abcd=deadbeefFAKEdeadbeefdeadbeefdead",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"]
+    },
+    {
+      "name": "gitlab-session-quoted",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=\"deadbeefFAKEdeadbeefdeadbeefdead\"",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"]
+    },
+    {
+      "name": "gitlab-session-json",
+      "ruleId": "gitlab-session-cookie",
+      "input": "{\"_gitlab_session\":\"deadbeefFAKEdeadbeefdeadbeefdead\"}",
+      "mustNotSurvive": ["deadbeefFAKEdeadbeefdeadbeefdead"]
+    },
+    {
+      "name": "signed-cookie-encoded-mac",
+      "ruleId": "jwt",
+      "input": "Cookie: sid=s%3AeyJ1c2VyIjoiRkFLRSJ9.%2FFAKEmac%2BFAKEsignature%3D",
+      "mustNotSurvive": ["FAKEmac", "FAKEsignature"],
+      "expected": "Cookie: sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-opaque-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3AFAKE0123456789abcdef.%2FFAKEmac%2BFAKEsignatureFAKE",
+      "mustNotSurvive": [
+        "FAKE0123456789abcdef",
+        "FAKEmac",
+        "FAKEsignatureFAKE"
+      ],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-plain",
+      "ruleId": "signed-session-cookie",
+      "input": "sid=s:FAKE0123456789abcdef.FAKEmac/FAKEsignature+FAKE",
+      "mustNotSurvive": ["FAKE0123456789abcdef", "FAKEmac/FAKEsignature+FAKE"],
+      "expected": "sid=s:[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-leading-newline-header",
+      "ruleId": "jwt",
+      "input": "CnsiYWxnIjoiSFMyNTYifQ.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "slack-cookie-literal-slash",
+      "ruleId": "slack-token",
+      "input": "Cookie: d=xoxd%2Dabc/FAKE0123456789abcdef%2BFAKETAILw%3D%3D",
+      "mustNotSurvive": ["FAKE0123456789abcdef", "FAKETAILw"],
+      "expected": "Cookie: d=[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-json-newline",
+      "ruleId": "gitlab-session-cookie",
+      "input": "cookies={\"_gitlab_session\":\n  \"FAKE0123456789abcdef0123456789ab\"}",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "gitlab-session-escaped-quotes",
+      "ruleId": "gitlab-session-cookie",
+      "input": "headers={\"Cookie\":\"_gitlab_session=\\\"FAKE0123456789abcdef0123456789ab\\\"\"}",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "gitlab-session-spaced-set-cookie",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Set-Cookie: _gitlab_session = FAKE0123456789abcdef0123456789ab; Path=/",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "signed-session-short-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3AFAKE123.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": ["FAKE123", "FAKEmacFAKEmacFAKEmacFAKEmac0"],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-dotted-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3Atenant.FAKE0123456789abcdef.FAKEmacFAKEmac%2BFAKEmacFAKE",
+      "mustNotSurvive": ["tenant.FAKE0123456789abcdef", "FAKEmacFAKEmac"],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-npm-shaped-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3Anpm_FAKE0123456789abcdef01234567.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": [
+        "FAKE0123456789abcdef01234567",
+        "FAKEmacFAKEmacFAKEmacFAKEmac0"
+      ],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-after-encoded-equals",
+      "ruleId": "signed-session-cookie",
+      "input": "cookie=connect.sid%3Ds%3AFAKE0123456789abcdef.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": [
+        "FAKE0123456789abcdef",
+        "FAKEmacFAKEmacFAKEmacFAKEmac0"
+      ],
+      "expected": "cookie=connect.sid%3Ds%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-carriage-return-header",
+      "ruleId": "jwt",
+      "input": "DXsiYWxnIjoiSFMyNTYifQ.e30.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-any-header-before-claims",
+      "ruleId": "jwt-any-header",
+      "input": "token ICAgCnsiYWxnIjoiSFMyNTYifQ.eyJzdWIiOjF9.FAKEsignatureFAKEsig end",
+      "mustNotSurvive": ["FAKEsignatureFAKEsig", "eyJzdWIiOjF9"],
+      "expected": "token [REDACTED_SECRET] end"
+    },
+    {
+      "name": "gitlab-session-json-escaped-char",
+      "ruleId": "gitlab-session-cookie",
+      "input": "cookies={\"_gitlab_session\":\"\\u0046AKE0123456789abcdef0123456789ab\"}",
+      "mustNotSurvive": ["AKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "gitlab-session-escaped-json-key",
+      "ruleId": "gitlab-session-cookie",
+      "input": "payload=\"{\\\"_gitlab_session\\\":\\\"FAKE0123456789abcdef0123456789ab\\\"}\"",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "signed-session-dotted-encoded-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3Axoxd-FAKE.abcdefghij0123456789%2FFAKE.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": [
+        "FAKEmacFAKEmacFAKEmacFAKEmac0",
+        "abcdefghij0123456789"
+      ],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-jwt-shaped-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3AeyJpZCI6IkZBS0UifQ.FAKE%2Ftenant0123456789abcdef.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": [
+        "FAKEmacFAKEmacFAKEmacFAKEmac0",
+        "tenant0123456789abcdef"
+      ],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-tilde-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3AFAKE~tenant.42.FAKEmac%2FFAKEmacFAKEmac%2BFAKE",
+      "mustNotSurvive": ["FAKE~tenant", "FAKEmacFAKEmac"],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-spaced-claims",
+      "ruleId": "jwt",
+      "input": "ICB7ImFsZyI6IkhTMjU2In0.ICB7InN1YiI6IkZBS0UifQ.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-padded-header",
+      "ruleId": "jwt-any-header",
+      "input": "token ICB7ImFsZyI6IkhTMjU2In0=.e30.FAKEsignatureFAKEsignatureFAKEsig end",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "token [REDACTED_SECRET] end"
+    },
+    {
+      "name": "signed-session-long-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s:FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEX.FAKEmacFAKEmacFAKEmacFAKEmac",
+      "mustNotSurvive": ["FAKEFAKEFAKE", "FAKEmacFAKEmac"],
+      "expected": "Cookie: connect.sid=s:[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-many-spaces",
+      "ruleId": "gitlab-session-cookie",
+      "input": "_gitlab_session            =FAKEsessionFAKEsession",
+      "mustNotSurvive": ["FAKEsessionFAKEsession"]
+    },
+    {
+      "name": "gitlab-session-long-suffix",
+      "ruleId": "gitlab-session-cookie",
+      "input": "_gitlab_session_geo_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=FAKEsessionFAKEsession",
+      "mustNotSurvive": ["FAKEsessionFAKEsession"]
+    },
+    {
+      "name": "gitlab-session-escaped-semicolon",
+      "ruleId": "gitlab-session-cookie",
+      "input": "Cookie: _gitlab_session=FAKEone\\;_gitlab_session_geo_us=\"FAKEtwoFAKEtwo\"",
+      "mustNotSurvive": ["FAKEone", "FAKEtwoFAKEtwo"]
+    },
+    {
+      "name": "signed-session-then-gitlab",
+      "ruleId": "signed-session-cookie",
+      "input": "q=s:FAKE&_gitlab_session=FAKE.FAKEFAKEFAKEFAKEFAKE~FAKEtail",
+      "mustNotSurvive": ["FAKEFAKEFAKEFAKEFAKE", "FAKEtail"]
+    },
+    {
+      "name": "signed-session-then-slack",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s:~xoxd-FAKE.FAKEabcdefghijklmnop%2DFAKEtail",
+      "mustNotSurvive": ["FAKEabcdefghijklmnop", "FAKEtail"]
+    },
+    {
+      "name": "jwt-any-header-encoded-slash",
+      "ruleId": "jwt-any-header",
+      "input": "eyJFAKE000.FAKE%2FFAKEVALUE.e30.FAKESIGFAKESIG",
+      "mustNotSurvive": ["FAKEVALUE", "FAKESIGFAKESIG"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-any-header-padded-short-header",
+      "ruleId": "jwt-any-header",
+      "input": "RkFLRQ==.e30.FAKESIGNATURE",
+      "mustNotSurvive": ["FAKESIGNATURE"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-escaped-semicolon-quoted",
+      "ruleId": "gitlab-session-cookie-escaped",
+      "input": "_gitlab_session=\"FAKEone\\;FAKEtwo\"",
+      "mustNotSurvive": ["FAKEone", "FAKEtwo"],
+      "expected": "_gitlab_session=\"[REDACTED_SECRET]\""
+    },
+    {
+      "name": "gitlab-session-escaped-semicolon-shell",
+      "ruleId": "gitlab-session-cookie-escaped",
+      "input": "_gitlab_session=FAKEone\\;FAKEtail",
+      "mustNotSurvive": ["FAKEone", "FAKEtail"],
+      "expected": "_gitlab_session=[REDACTED_SECRET]"
+    },
+    {
+      "name": "assignment-after-masked-userinfo",
+      "ruleId": "sensitive-assignment",
+      "input": "glimt-FAKEFAKEFAKEFAKEFAKEpasswd=redis://FAKE:p&amp;ss@fake.invalid/FAKEtail",
+      "mustNotSurvive": ["p&amp;ss", "FAKEtail"]
+    },
+    {
+      "name": "redis-password-after-masked-userinfo",
+      "ruleId": "url-userinfo",
+      "input": "redis-cli -u 'redis://FAKE:FAKE;FAKE@example.invalid' --user passwd: -a FAKEpassword PING",
+      "mustNotSurvive": ["FAKEpassword"]
+    },
+    {
+      "name": "quoted-password-holding-placeholder",
+      "ruleId": "sensitive-assignment",
+      "input": "password=\"[REDACTED_SECRET] \"",
+      "mustNotSurvive": [],
+      "expected": "password=[REDACTED_SECRET]"
+    },
+    {
+      "name": "quoted-password-holding-spaced-placeholder",
+      "ruleId": "sensitive-assignment",
+      "input": "passwd=\" [REDACTED_SECRET] \"",
+      "mustNotSurvive": [],
+      "expected": "passwd=[REDACTED_SECRET]"
     }
   ],
   "keyVectors": [
@@ -287,6 +1442,16 @@
       "key": "tokenizer",
       "sensitive": false
     },
-    { "name": "plain-command", "key": "command", "sensitive": false }
+    { "name": "plain-command", "key": "command", "sensitive": false },
+    {
+      "name": "gitlab-session-key",
+      "key": "_gitlab_session",
+      "sensitive": true
+    },
+    {
+      "name": "gitlab-session-geo-key",
+      "key": "_gitlab_session_geo_0123abcd",
+      "sensitive": true
+    }
   ]
 }

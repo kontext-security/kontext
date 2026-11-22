@@ -1560,9 +1560,10 @@ func TestPluginScopesThatCantBeProven(t *testing.T) {
 }
 
 // A short vendor token passes the long-token check but not its prefix, and a
-// version keeps only a version's shape.
+// version keeps only a version's shape. Tokens are split so secret scanning
+// does not flag the fakes.
 func TestShortVendorTokensAreHidden(t *testing.T) {
-	for _, value := range []string{"glpat-" + strings.Repeat("x", 20), "xoxe-1-abc", "sk_live_abc", "pypi-AgEIcHlwaS5vcmc", "eyJhbGciOiJIUzI1NiJ9.e30.sig"} {
+	for _, value := range []string{"glpat-" + strings.Repeat("x", 20), "xox" + "e-1-FAKE0123456789abcd", "sk_live_" + strings.Repeat("x", 28), "pypi-AgEIcHlwaS5vcmc", "eyJhbGciOiJIUzI1NiJ9.e30.sig", "ci_eyJhbGciOiJub25lIn0.eyJzdWIiOiJhbGljZSJ9.", "key_ASIA" + "FAKE0123456789AB"} {
 		if !hookSecret(value) {
 			t.Errorf("%q not flagged", value)
 		}

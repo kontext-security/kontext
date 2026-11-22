@@ -1,11 +1,11 @@
 {
-  "version": "rules/3",
+  "version": "rules/5",
   "keyNormalization": "camel_to_snake",
   "keyPatterns": [
     {
       "id": "sensitive-key",
       "description": "Object keys that denote credentials; their values are replaced wholesale.",
-      "pattern": "(^|[_-])(authorization|auth|api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|pwd|pass|credential|private[_-]?key|session[_-]?key)($|[_-])",
+      "pattern": "(^|[_-])(authorization|auth|api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|pwd|pass|credential|private[_-]?key|session[_-]?key|gitlab[_-]session)($|[_-])",
       "caseInsensitive": true,
       "provenance": "structural"
     }
@@ -43,60 +43,12 @@
       "provenance": "structural"
     },
     {
-      "id": "github-token",
-      "description": "GitHub classic tokens (ghp/gho/ghu/ghs/ghr).",
-      "pattern": "\\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{16,}\\b",
-      "caseInsensitive": false,
-      "provenance": "gitleaks:github-pat"
-    },
-    {
-      "id": "github-fine-grained-pat",
-      "description": "GitHub fine-grained personal access tokens.",
-      "pattern": "\\bgithub_pat_[A-Za-z0-9_]{16,}\\b",
-      "caseInsensitive": false,
-      "provenance": "gitleaks:github-fine-grained-pat"
-    },
-    {
-      "id": "openai-api-key",
-      "description": "OpenAI-style secret keys.",
-      "pattern": "\\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\\b",
-      "caseInsensitive": false,
-      "provenance": "gitleaks:openai-api-key"
-    },
-    {
-      "id": "aws-access-key-id",
-      "description": "AWS access key identifiers.",
-      "pattern": "\\b(?:AKIA|ASIA)[A-Z0-9]{16}\\b",
-      "caseInsensitive": false,
-      "provenance": "gitleaks:aws-access-token"
-    },
-    {
-      "id": "slack-token",
-      "description": "Slack bot/app/user tokens.",
-      "pattern": "\\bxox[baprs]-[A-Za-z0-9-]{16,}\\b",
-      "caseInsensitive": false,
-      "provenance": "gitleaks:slack-bot-token"
-    },
-    {
-      "id": "npm-token",
-      "description": "npm access tokens.",
-      "pattern": "\\bnpm_[A-Za-z0-9]{16,}\\b",
-      "caseInsensitive": false,
-      "provenance": "gitleaks:npm-access-token"
-    },
-    {
-      "id": "gcp-api-key",
-      "description": "Google Cloud API keys.",
-      "pattern": "\\bAIza[0-9A-Za-z_-]{20,}\\b",
-      "caseInsensitive": false,
-      "provenance": "gitleaks:gcp-api-key"
-    },
-    {
-      "id": "jwt",
-      "description": "JSON Web Tokens.",
-      "pattern": "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b",
-      "caseInsensitive": false,
-      "provenance": "gitleaks:jwt"
+      "id": "json-sensitive-property",
+      "description": "String values of credential-bearing properties in JSON embedded in flat text.",
+      "pattern": "(\"(?:[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|credential|private[_-]?key)[A-Za-z0-9_-]*|(?:[A-Za-z0-9]+[_-])*(?:pwd|pass)(?:[_-][A-Za-z0-9]+)*)\"\\s*:\\s*)\"(?:\\\\.|[^\"\\\\])*\"",
+      "replacement": "$1\"[REDACTED_SECRET]\"",
+      "caseInsensitive": true,
+      "provenance": "structural"
     },
     {
       "id": "url-userinfo",
@@ -107,11 +59,67 @@
       "provenance": "structural"
     },
     {
-      "id": "json-sensitive-property",
-      "description": "String values of credential-bearing properties in JSON embedded in flat text.",
-      "pattern": "(\"(?:[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|credential|private[_-]?key)[A-Za-z0-9_-]*|(?:[A-Za-z0-9]+[_-])*(?:pwd|pass)(?:[_-][A-Za-z0-9]+)*)\"\\s*:\\s*)\"(?:\\\\.|[^\"\\\\])*\"",
-      "replacement": "$1\"[REDACTED_SECRET]\"",
-      "caseInsensitive": true,
+      "id": "mysql-password-flag",
+      "description": "MySQL and MariaDB client passwords glued to -p (mysql -pSECRET, mysqldump -p'SECRET'), also after grouped options that take no argument (mysql -vpSECRET), also when the executable itself is quoted (\"/usr/bin/mysql\" -pSECRET). Only the glued form: mysql -p db prompts and db is the database; -P is the port. The flag must sit in the same shell command as the client (no unquoted ; & | or newline in between; a backslash-newline continues it). Every later password argument of the same command is masked too, with what lies between.",
+      "pattern": "\\b((?:[mM][yY][sS][qQ][lL](?:[dD][uU][mM][pP]|[aA][dD][mM][iI][nN]|[iI][mM][pP][oO][rR][tT]|[cC][hH][eE][cC][kK]|[sS][hH][oO][wW]|[pP][uU][mM][pP]|[sS][hH]|[bB][iI][nN][lL][oO][gG]|[sS][lL][aA][pP])?|[mM][aA][rR][iI][aA][dD][bB](?:-[a-zA-Z]+)?)(?:\\.[eE][xX][eE])?[\\\"']?(?:(?:[ \\t]|\\\\\\r?\\n)+[^\\t\\n\\f\\r ;&|]+)*?(?:[ \\t]|\\\\\\r?\\n)+-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*(?:[^\\t\\n\\f\\r ;&|]*(?:(?:[ \\t]|\\\\\\r?\\n)+[^\\t\\n\\f\\r ;&|]+)*?(?:[ \\t]|\\\\\\r?\\n)+(?:-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|'-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p[^']*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\"-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\\$'-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p(?:\\\\[\\s\\S]|[^'\\\\])*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*))*",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "structural"
+    },
+    {
+      "id": "mysql-quoted-password-flag",
+      "description": "The same when the first password argument is quoted as a whole (mysql '-pMy pass', also in \"...\" or $'...'): the whole argument is masked, quotes included.",
+      "pattern": "\\b((?:[mM][yY][sS][qQ][lL](?:[dD][uU][mM][pP]|[aA][dD][mM][iI][nN]|[iI][mM][pP][oO][rR][tT]|[cC][hH][eE][cC][kK]|[sS][hH][oO][wW]|[pP][uU][mM][pP]|[sS][hH]|[bB][iI][nN][lL][oO][gG]|[sS][lL][aA][pP])?|[mM][aA][rR][iI][aA][dD][bB](?:-[a-zA-Z]+)?)(?:\\.[eE][xX][eE])?[\\\"']?(?:(?:[ \\t]|\\\\\\r?\\n)+[^\\t\\n\\f\\r ;&|]+)*?(?:[ \\t]|\\\\\\r?\\n)+)(?:'-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p[^']*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\"-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\\$'-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p(?:\\\\[\\s\\S]|[^'\\\\])*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*)(?:[^\\t\\n\\f\\r ;&|]*(?:(?:[ \\t]|\\\\\\r?\\n)+[^\\t\\n\\f\\r ;&|]+)*?(?:[ \\t]|\\\\\\r?\\n)+(?:-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|'-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p[^']*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\"-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\\$'-[ABCEFGHIJKLMNQRUVWXYZabfgjklmnoqstvxyz]*p(?:\\\\[\\s\\S]|[^'\\\\])*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*))*",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "structural"
+    },
+    {
+      "id": "sshpass-password-flag",
+      "description": "sshpass -p passwords, glued, spaced or grouped (-vp). sshpass wraps a command, so only its own options (with the arguments of -P, -f and -d, also grouped as -vP) may come before -p, quoted or not: in sshpass -e ssh -p 2222 the -p belongs to ssh and is kept. Every later -p of sshpass is masked too.",
+      "pattern": "\\b([sS][sS][hH][pP][aA][sS][sS](?:\\.[eE][xX][eE])?[\\\"']?(?:(?:[ \\t]|\\\\\\r?\\n)+(?:[\\\"']?-v*[fdP][\\\"']?(?:[ \\t]|\\\\\\r?\\n)*(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|[\\\"']?-[^\\t\\n\\f\\r ;&|]*))*?(?:[ \\t]|\\\\\\r?\\n)+-v*p(?:[ \\t]|\\\\\\r?\\n)*)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*(?:[^\\t\\n\\f\\r ;&|]*(?:(?:[ \\t]|\\\\\\r?\\n)+(?:[\\\"']?-v*[fdP][\\\"']?(?:[ \\t]|\\\\\\r?\\n)*(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|[\\\"']?-[^\\t\\n\\f\\r ;&|]*))*?(?:[ \\t]|\\\\\\r?\\n)+(?:(?:'-v*p'|\"-v*p\")(?:[ \\t]|\\\\\\r?\\n)+(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|-v*p(?:[ \\t]|\\\\\\r?\\n)*(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|'-v*p[^']*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\"-v*p(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\\$'-v*p(?:\\\\[\\s\\S]|[^'\\\\])*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*))*",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "structural"
+    },
+    {
+      "id": "sshpass-quoted-password-flag",
+      "description": "The same when the first password argument is quoted as a whole (sshpass '-pMy pass', also in \"...\" or $'...') or the flag is quoted on its own (sshpass \"-p\" \"SECRET\"): masked whole, quotes included.",
+      "pattern": "\\b([sS][sS][hH][pP][aA][sS][sS](?:\\.[eE][xX][eE])?[\\\"']?(?:(?:[ \\t]|\\\\\\r?\\n)+(?:[\\\"']?-v*[fdP][\\\"']?(?:[ \\t]|\\\\\\r?\\n)*(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|[\\\"']?-[^\\t\\n\\f\\r ;&|]*))*?(?:[ \\t]|\\\\\\r?\\n)+)(?:(?:'-v*p'|\"-v*p\")(?:[ \\t]|\\\\\\r?\\n)+(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|'-v*p[^']*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\"-v*p(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\\$'-v*p(?:\\\\[\\s\\S]|[^'\\\\])*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*)(?:[^\\t\\n\\f\\r ;&|]*(?:(?:[ \\t]|\\\\\\r?\\n)+(?:[\\\"']?-v*[fdP][\\\"']?(?:[ \\t]|\\\\\\r?\\n)*(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|[\\\"']?-[^\\t\\n\\f\\r ;&|]*))*?(?:[ \\t]|\\\\\\r?\\n)+(?:(?:'-v*p'|\"-v*p\")(?:[ \\t]|\\\\\\r?\\n)+(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|-v*p(?:[ \\t]|\\\\\\r?\\n)*(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|'-v*p[^']*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\"-v*p(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|\\$'-v*p(?:\\\\[\\s\\S]|[^'\\\\])*'(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*))*",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "structural"
+    },
+    {
+      "id": "redis-cli-password-flag",
+      "description": "redis-cli -a passwords (a separate argument, as redis-cli parses it), in the same shell command as redis-cli. Every later -a is masked too.",
+      "pattern": "\\b([rR][eE][dD][iI][sS]-[cC][lL][iI](?:\\.[eE][xX][eE])?[\\\"']?(?:(?:[ \\t]|\\\\\\r?\\n)+[^\\t\\n\\f\\r ;&|]+)*?(?:[ \\t]|\\\\\\r?\\n)+-a(?:[ \\t]|\\\\\\r?\\n)+)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*(?:[^\\t\\n\\f\\r ;&|]*(?:(?:[ \\t]|\\\\\\r?\\n)+[^\\t\\n\\f\\r ;&|]+)*?(?:[ \\t]|\\\\\\r?\\n)+(?:(?:'-a'|\"-a\")(?:[ \\t]|\\\\\\r?\\n)+(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|-a(?:[ \\t]|\\\\\\r?\\n)+(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*))*",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "structural"
+    },
+    {
+      "id": "redis-cli-quoted-password-flag",
+      "description": "The same when the flag is quoted on its own (redis-cli \"-a\" \"SECRET\"): masked whole, quotes included.",
+      "pattern": "\\b([rR][eE][dD][iI][sS]-[cC][lL][iI](?:\\.[eE][xX][eE])?[\\\"']?(?:(?:[ \\t]|\\\\\\r?\\n)+[^\\t\\n\\f\\r ;&|]+)*?(?:[ \\t]|\\\\\\r?\\n)+)(?:(?:'-a'|\"-a\")(?:[ \\t]|\\\\\\r?\\n)+(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*)(?:[^\\t\\n\\f\\r ;&|]*(?:(?:[ \\t]|\\\\\\r?\\n)+[^\\t\\n\\f\\r ;&|]+)*?(?:[ \\t]|\\\\\\r?\\n)+(?:(?:'-a'|\"-a\")(?:[ \\t]|\\\\\\r?\\n)+(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*|-a(?:[ \\t]|\\\\\\r?\\n)+(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*))*",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "structural"
+    },
+    {
+      "id": "redis-cli-auth-env",
+      "description": "REDISCLI_AUTH, the environment variable redis-cli reads its password from (other credential-named variables are covered by sensitive-assignment).",
+      "pattern": "\\b(REDISCLI_AUTH=)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\"]*$|'[^']*$|`[^`]*$)(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "structural"
+    },
+    {
+      "id": "redis-cli-quoted-auth-env",
+      "description": "REDISCLI_AUTH assigned inside quotes as a whole (env 'REDISCLI_AUTH=My pass', also in \"...\" or $'...'): the whole argument is masked.",
+      "pattern": "(^|[\\t\\n\\f\\r ;&|(])(?:'REDISCLI_AUTH=[^']*'|\\\"REDISCLI_AUTH=(?:\\\\[\\s\\S]|[^\\\"\\\\])*\\\"|\\$'REDISCLI_AUTH=(?:\\\\[\\s\\S]|[^'\\\\])*')(?:\\$'(?:\\\\[\\s\\S]|[^'\\\\])*'|\\$|\"(?:\\\\[\\s\\S]|[^\\\"\\\\])*\"|'[^']*'|`(?:\\\\[\\s\\S]|[^`\\\\])*`|(?:[^\\t\\n\\f\\r &;|)\\\"'`\\\\$]|\\\\[\\s\\S])+|\"[^\\t\\n\\f\\r \"][^\"]*$|'[^\\t\\n\\f\\r '][^']*$|`[^\\t\\n\\f\\r `][^`]*$)*",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
       "provenance": "structural"
     },
     {
@@ -145,6 +153,151 @@
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": true,
       "provenance": "structural"
+    },
+    {
+      "id": "signed-session-cookie",
+      "description": "Signed session cookies (express-session `s:<id>.<mac>`, also URL-encoded as `s%3A…`): the session ID and its MAC, however short or opaque the ID, whatever it holds up to the last dot before the MAC (dots, `~`, `%2F`), also after an encoded `=` (`connect.sid%3Ds%3A…`). Runs before the vendor token rules, so an ID shaped like a token (`npm_…`) goes with its MAC.",
+      "pattern": "(^|[^A-Za-z0-9]|%[0-9A-Fa-f]{2})(s(?::|%3[Aa]))[^\\t\\n\\f\\r ;,\"'\\\\]*\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd])){20,}",
+      "replacement": "$1$2[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "express-session:signed-cookie"
+    },
+    {
+      "id": "github-token",
+      "description": "GitHub classic tokens (ghp/gho/ghu/ghs/ghr).",
+      "pattern": "\\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{16,}\\b",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:github-pat"
+    },
+    {
+      "id": "github-fine-grained-pat",
+      "description": "GitHub fine-grained personal access tokens.",
+      "pattern": "\\bgithub_pat_[A-Za-z0-9_]{16,}\\b",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:github-fine-grained-pat"
+    },
+    {
+      "id": "openai-api-key",
+      "description": "OpenAI-style secret keys.",
+      "pattern": "\\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\\b",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:openai-api-key"
+    },
+    {
+      "id": "aws-access-key-id",
+      "description": "AWS access key identifiers.",
+      "pattern": "(?:AKIA|ASIA)[A-Z0-9]{16}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:aws-access-token"
+    },
+    {
+      "id": "slack-token",
+      "description": "Slack bot/app/user tokens, also glued to a name (`ci_xoxb-...`), with URL-encoded hyphens and, in a `d=xoxd-` cookie, `+/=` literal or encoded. The body also takes `_` and `.`, so a token glued to the next one (`%2Fshpat_…`) masks both rather than leave the second without its prefix.",
+      "pattern": "(?:xox[abcdeoprs]|xwfp)(?:-|%(?:25)?2[Dd])(?:[A-Za-z0-9._+/=-]|%(?:25)?(?:2[BbDdFf]|3[Dd])){16,}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:slack-bot-token"
+    },
+    {
+      "id": "npm-token",
+      "description": "npm access tokens, also glued to a name.",
+      "pattern": "npm_[A-Za-z0-9]{16,}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:npm-access-token"
+    },
+    {
+      "id": "slack-app-token",
+      "description": "Slack app-level tokens (`xapp-1-A…-123…-abc…`), also with URL-encoded hyphens.",
+      "pattern": "xapp(?:-|%(?:25)?2[Dd])\\d(?:-|%(?:25)?2[Dd])[A-Z0-9]+(?:-|%(?:25)?2[Dd])\\d+(?:-|%(?:25)?2[Dd])[a-z0-9]{16,}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:slack-app-token"
+    },
+    {
+      "id": "gitlab-token",
+      "description": "GitLab personal, deploy, runner, trigger, SCIM, CI build and OAuth tokens, also glued to a name (`ciglpat-...`); a CI job token's JWT parts and a routable token's `.NN.xxxxxxxxx` trailer go with it.",
+      "pattern": "(?:glpat|gldt|glrtr|glrt|glptt|glsoat|gloas|glft|glwt|glagent|glffct|glimt)-[A-Za-z0-9_-]{20,}(?:\\.[0-9]{2}\\.[a-z0-9]{9})?|glcbt-[A-Za-z0-9_-]{20,}(?:\\.[A-Za-z0-9_-]*){0,2}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:gitlab-pat"
+    },
+    {
+      "id": "gitlab-session-cookie",
+      "description": "GitLab's session cookie, listed with GitLab's token prefixes: the whole value to the next `;`, quote, comma or whitespace, whatever it holds (`cell-1-…`, a JWT, a quoted value, JSON escapes such as `\\u0046`, but not an escaped `;`, which ends it: gitlab-session-cookie-escaped reads past one), also under a Geo-suffixed name (`_gitlab_session_geo_…`), with whitespace around `=` (Set-Cookie) and as a JSON property in flat text, escaped or not; the cookie name is kept. A decoded `_gitlab_session` key is a sensitive key.",
+      "pattern": "(_gitlab_session[A-Za-z0-9_]*(?:[\\t\\n\\f\\r ]*=[\\t\\n\\f\\r ]*|\\\\?\"[\\t\\n\\f\\r ]*:[\\t\\n\\f\\r ]*)(?:\\\\?[\"'])?)(?:[^\\t\\n\\f\\r ;\",\\\\]|\\\\[^\";])+",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "gitlab:session-cookie"
+    },
+    {
+      "id": "gitlab-session-cookie-escaped",
+      "description": "GitLab's session cookie as gitlab-session-cookie reads it, but with an escaped `;` (`FAKEone\\;FAKEtwo`) taken as part of the value, as a shell assignment does. Kept apart so that gitlab-session-cookie still finds a second cookie after one.",
+      "pattern": "(_gitlab_session[A-Za-z0-9_]*(?:[\\t\\n\\f\\r ]*=[\\t\\n\\f\\r ]*|\\\\?\"[\\t\\n\\f\\r ]*:[\\t\\n\\f\\r ]*)(?:\\\\?[\"'])?)(?:[^\\t\\n\\f\\r ;\",\\\\]|\\\\[^\"])+",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "gitlab:session-cookie"
+    },
+    {
+      "id": "pypi-token",
+      "description": "PyPI upload tokens (a macaroon, so `pypi-AgE…`; a package named `pypi-…` is not one).",
+      "pattern": "pypi-AgE[A-Za-z0-9_-]{8,}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:pypi-upload-token"
+    },
+    {
+      "id": "stripe-key",
+      "description": "Stripe secret and restricted keys, organization keys included (`sk_org_…`, `sk_org_live_…`).",
+      "pattern": "(?:[sr]k_(?:live|test)|sk_org(?:_(?:live|test))?)_[A-Za-z0-9]{24,}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:stripe-access-token"
+    },
+    {
+      "id": "shopify-token",
+      "description": "Shopify access, shared-secret, custom-app and private-app tokens.",
+      "pattern": "shp(?:at|ss|ca|pa)_[A-Za-z0-9]{16,}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:shopify-access-token"
+    },
+    {
+      "id": "digitalocean-token",
+      "description": "DigitalOcean personal, OAuth and refresh tokens.",
+      "pattern": "do[opr]_v1_[A-Za-z0-9]{16,}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:digitalocean-pat"
+    },
+    {
+      "id": "huggingface-token",
+      "description": "Hugging Face access tokens.",
+      "pattern": "hf_(?:oauth_)?[A-Za-z0-9]{30,}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:huggingface-access-token"
+    },
+    {
+      "id": "sendgrid-key",
+      "description": "SendGrid API keys: `SG.`, a 22-character id, a dot and a 43-character secret.",
+      "pattern": "SG\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:sendgrid-api-token"
+    },
+    {
+      "id": "gcp-api-key",
+      "description": "Google Cloud API keys.",
+      "pattern": "\\bAIza[0-9A-Za-z_-]{20,}\\b",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:gcp-api-key"
+    },
+    {
+      "id": "jwt-any-header",
+      "description": "Signed values whose header has some other spelling (standard Base64, padding, whitespace): any header followed by JSON claims (`.eyJ…`, `.e30`, or claims with whitespace before the brace) and a signature. It never starts after a header character, so a long run of them is scanned once; `=` is padding at the header's end only (eight characters with it, `RkFLRQ==`), so a cookie name before it (`_gitlab_session=`) stays out. Runs before jwt, which would otherwise take the claims and leave the header.",
+      "pattern": "(^|[^A-Za-z0-9_+/-]|%[0-9A-Fa-f]{2})(?:[A-Za-z0-9_+/-]{8,}={0,2}|[A-Za-z0-9_+/-]{7}={1,2}|[A-Za-z0-9_+/-]{6}==)\\.(?:eyJ|eyA|ew[ok0]|e30|Cns|CXs|DXs|IHs|ICB7|DQp7)[A-Za-z0-9_+/=-]*(?:\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd]))*)+",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:jwt"
+    },
+    {
+      "id": "jwt",
+      "description": "JSON Web Tokens and other signed values: the header (`eyJ`, `eyA…` with a space, `ewo…`/`ew0…`/`ewk…` with a newline, carriage return or tab after the brace, `Cns`/`CXs`/`DXs`/`IHs`/`ICB7`/`DQp7` with whitespace before it) and every dotted part after it, whatever they hold, in base64url or standard Base64, also URL-encoded (a cookie-signature MAC, `.%2F…`). Glued after `_`, `-` or a URL-encoded byte, never inside a word (`keyJson…`).",
+      "pattern": "(^|[^A-Za-z0-9]|%[0-9A-Fa-f]{2})(?:eyJ|eyA|ew[ok0]|Cns|CXs|DXs|IHs|ICB7|DQp7)[A-Za-z0-9_+/=-]{6,}(?:\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd]))*)+",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "gitleaks:jwt"
     }
   ]
 }
