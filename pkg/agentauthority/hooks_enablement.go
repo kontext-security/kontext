@@ -14,10 +14,9 @@ import (
 )
 
 // Enablement reason codes (ADR-0011). Each rule below names the Claude Code
-// behaviour it follows; hooks_test.go tests each one by example. The
-// per-rule matrix pinned to a Claude Code version comes with ENG-1092. A
-// setting whose effect isn't established here leaves the hook unresolved
-// instead of guessing.
+// behaviour it follows; hooks_enablement_test.go pins each one to the Claude
+// Code version it was checked against. A setting whose effect isn't
+// established here leaves the hook unresolved instead of guessing.
 const (
 	HookReasonDisableAllHooks         = "disable_all_hooks"
 	HookReasonManagedOnly             = "managed_only"
@@ -107,23 +106,35 @@ func (s *hookScan) switchesFor(project string) switches {
 					sw.pluginOnlyUnclear = sw.pluginOnlyUnclear || unclear
 				}
 			}
-			if allow := layer.settings.AllowedHTTPHookURLs; allow != nil {
-				merged := []*regexp.Regexp{}
-				if sw.httpAllow != nil {
-					merged = append(merged, *sw.httpAllow...)
-				}
-				for _, pattern := range *allow {
-					merged = append(merged, s.urlPattern(pattern))
-				}
-				sw.httpAllow = &merged
-			}
+			s.allowHTTP(&sw, layer)
 		case layer.kind == HookScopeUser:
 			merge(&sw.otherDisableAll, layer)
+			s.allowHTTP(&sw, layer)
 		case projectKind(layer.kind) && layer.project == project && project != "":
 			merge(&sw.otherDisableAll, layer)
+			s.allowHTTP(&sw, layer)
 		}
 	}
 	return sw
+}
+
+// allowHTTP adds a layer's allowedHttpHookUrls to the allowlist. Claude Code
+// reads the key in any settings file and runs an HTTP hook only if its URL
+// matches the list merged from every level that defines it (hooks reference,
+// "Hook locations"): a later file adds URLs, it never removes one.
+func (s *hookScan) allowHTTP(sw *switches, layer hookLayer) {
+	allow := layer.settings.AllowedHTTPHookURLs
+	if allow == nil {
+		return
+	}
+	merged := []*regexp.Regexp{}
+	if sw.httpAllow != nil {
+		merged = append(merged, *sw.httpAllow...)
+	}
+	for _, pattern := range *allow {
+		merged = append(merged, s.urlPattern(pattern))
+	}
+	sw.httpAllow = &merged
 }
 
 // pluginOnlyCoversHooks reads strictPluginOnlyCustomization: true locks every
@@ -264,8 +275,10 @@ func evaluateEnablement(s *hookScan) {
 		// A user or project switch can be lifted by a file that went unread
 		// (`disableAllHooks` or `enabledPlugins` in a local file); a managed
 		// one can't, and a missing binary is missing whatever the files say.
+		// An allowlist can't settle it either: any unread file may add the
+		// URL to it.
 		byManaged := sw.managedDisableAll || slices.ContainsFunc(disabled, func(reason string) bool {
-			return reason == HookReasonManagedOnly || reason == HookReasonPluginOnly || reason == HookReasonHTTPURLNotAllowed
+			return reason == HookReasonManagedOnly || reason == HookReasonPluginOnly
 		})
 		settledOff := slices.Contains(disabled, HookReasonBinaryMissing) ||
 			managedSettled && !info.projectUnread && (!sw.unreadable || byManaged)
