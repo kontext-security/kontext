@@ -322,6 +322,17 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Diagnostic: opts.Diagnostic,
 	})
 
+	// Runtime evidence of Kontext's own hooks, for the hook inventory.
+	hookEvidence := newHookRuntime()
+	// Under a static observe posture the hook turns every deny into an
+	// allow, the probe's too, so nothing is verified.
+	hookEvidence.honoursDeny = mode != guardhookruntime.ModeObserve
+	hookEvidence.policyRevision = func() string {
+		if deployment := cedarCache.Current().Deployment; deployment != nil {
+			return deployment.DeploymentIdentity
+		}
+		return ""
+	}
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          managedconfig.Agent,
 		DBPath:             dbPath,
@@ -353,6 +364,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		CodexProxy:             codexProxyAnswer(compactor),
 		ObserveEvent:           compactor.Observe,
 		HoldFor:                enrolmentHold(started, enrolmentWait(opts.Diagnostic), cedarEnforcement, cedarCache),
+		InterceptEvent:         hookEvidence.intercept,
+		EvaluatedEvent:         hookEvidence.evaluated,
 	})
 	if err != nil {
 		return err
@@ -395,6 +408,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	hookKeys := newHookKeyBox()
 	hookKeys.wake = wakeHooks
+	hookEvidence.mu.Lock()
+	hookEvidence.verified = wakeHooks
+	hookEvidence.mu.Unlock()
 	// A re-enrolment on the same cloud holds prompts until the new
 	// enrolment's own settings are confirmed, and moves the hook scan.
 	liveOwner.mu.Lock()
@@ -520,7 +536,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	server.SetConnectorScan(authorityHolder.Fact)
 	hookHolder := &hookHolder{
-		keys: hookKeys,
+		keys:     hookKeys,
+		evidence: hookEvidence,
 		switches: func() (bool, bool) {
 			snapshot := endpointConfigCache.Current()
 			return snapshot.HookInventoryEnabled(), snapshot.Confirmed

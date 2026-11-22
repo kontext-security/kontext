@@ -119,6 +119,8 @@ type hookHolder struct {
 	beginRead  func() func()
 	// ownBinary verifies a handler's program is this Kontext binary.
 	ownBinary func(string) bool
+	// evidence adds runtime evidence to Kontext's own hooks in each scan.
+	evidence *hookRuntime
 	// record stores a scan with the tag of the key it was read under.
 	record func(agentauthority.HookAgent, agentauthority.SourceResult, string)
 	// switches reads the switch and its confirmation from one snapshot; it
@@ -200,6 +202,7 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	if on, _ := h.switchState(); !on || !h.isAuthorized() || !bytes.Equal(h.keys.get(), key) {
 		return
 	}
+	h.evidence.apply(&agent)
 	if h.record != nil {
 		h.record(agent, result, hookKeyTag(key))
 	}

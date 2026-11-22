@@ -404,6 +404,8 @@ func newTestServiceWithOptions(t *testing.T, opts Options) *Service {
 		CodexProxy:        opts.CodexProxy,
 		Observe:           opts.Observe,
 		HoldFor:           opts.HoldFor,
+		Intercept:         opts.Intercept,
+		Evaluated:         opts.Evaluated,
 		Diagnostic:        opts.Diagnostic,
 	})
 	if err != nil {
@@ -735,5 +737,51 @@ func TestServiceAnswersHooksWhileACodexProxyQuestionWaits(t *testing.T) {
 	}
 	if elapsed := time.Since(begun); elapsed > 250*time.Millisecond {
 		t.Fatalf("PreToolUse took %v behind a Codex proxy question", elapsed)
+	}
+}
+
+// An intercepted event is answered without the runtime, and Evaluated sees
+// only the events the runtime answered.
+func TestServiceInterceptsAndReportsEvaluatedEvents(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow, Reason: "fine"}}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var evaluated []string
+	service := newTestServiceWithOptions(t, Options{
+		Core: core,
+		Intercept: func(event hook.Event) (hook.Result, bool) {
+			if event.ToolName != "Probe" {
+				return hook.Result{}, false
+			}
+			return hook.Result{Decision: hook.DecisionDeny, Reason: "probe", Mode: "enforce"}, true
+		},
+		Evaluated: func(event hook.Event, result hook.Result) {
+			mu.Lock()
+			defer mu.Unlock()
+			evaluated = append(evaluated, event.ToolName+":"+string(result.Decision))
+		},
+	})
+	client := NewClient(service.SocketPath())
+
+	result, err := client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Probe"})
+	if err != nil || result.Decision != hook.DecisionDeny || result.Reason != "probe" || result.Mode != "enforce" {
+		t.Fatalf("probe = %+v, %v", result, err)
+	}
+	if got := runtime.evaluateCalls.Load(); got != 0 {
+		t.Fatalf("runtime saw the probe: %d calls", got)
+	}
+	result, err = client.Process(context.Background(), hook.Event{HookName: hook.HookPreToolUse, ToolName: "Bash"})
+	if err != nil || result.Decision != hook.DecisionAllow {
+		t.Fatalf("bash = %+v, %v", result, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(evaluated) != 1 || evaluated[0] != "Bash:allow" {
+		t.Fatalf("evaluated %v", evaluated)
 	}
 }

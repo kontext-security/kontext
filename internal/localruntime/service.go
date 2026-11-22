@@ -33,6 +33,8 @@ type Service struct {
 	codexProxy    func(context.Context, json.RawMessage) json.RawMessage
 	observe       func(context.Context, hook.Event)
 	holdFor       func(hook.Event) time.Duration
+	intercept     func(hook.Event) (hook.Result, bool)
+	evaluated     func(hook.Event, hook.Result)
 	diagnostic    diagnostic.Logger
 	duplicates    *duplicateHooks
 	pendingEvents atomic.Int64
@@ -68,7 +70,13 @@ type Options struct {
 	// HoldFor says how long a PreToolUse call from a hook that can wait may
 	// be held until the policy arrives; zero holds nothing. Without it no
 	// call is held.
-	HoldFor    func(hook.Event) time.Duration
+	HoldFor func(hook.Event) time.Duration
+	// Intercept answers an event itself when it returns true: the event is
+	// neither evaluated, recorded nor observed. It must only ever deny.
+	Intercept func(hook.Event) (hook.Result, bool)
+	// Evaluated sees each evaluated event and the result its hook gets,
+	// before the response is written. It must not block.
+	Evaluated  func(hook.Event, hook.Result)
 	Diagnostic diagnostic.Logger
 }
 
@@ -92,6 +100,8 @@ func NewService(opts Options) (*Service, error) {
 		codexProxy:  opts.CodexProxy,
 		observe:     opts.Observe,
 		holdFor:     opts.HoldFor,
+		intercept:   opts.Intercept,
+		evaluated:   opts.Evaluated,
 		diagnostic:  opts.Diagnostic,
 		duplicates:  newDuplicateHooks(),
 	}, nil
@@ -232,6 +242,17 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 			s.diagnostic.Printf("local runtime write: %v\n", err)
 		}
 		return
+	}
+
+	if s.intercept != nil {
+		if event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, &req); err == nil {
+			if result, ok := s.intercept(event); ok {
+				if err := WriteMessage(conn, EvaluateResultFromResult(result)); err != nil {
+					s.diagnostic.Printf("local runtime write: %v\n", err)
+				}
+				return
+			}
+		}
 	}
 
 	ctx = s.grantHold(ctx, conn, &req)
@@ -390,6 +411,9 @@ func (s *Service) noteDuplicate(event hook.Event, duplicate bool) {
 func (s *Service) result(event hook.Event, result hook.Result) EvaluateResult {
 	if s.transform != nil {
 		result = s.transform(event, result)
+	}
+	if s.evaluated != nil {
+		s.evaluated(event, result)
 	}
 	return EvaluateResultFromResult(result)
 }

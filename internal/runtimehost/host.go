@@ -58,6 +58,10 @@ type Options struct {
 	// HoldFor says how long a PreToolUse call may be held until the policy
 	// arrives (see localruntime.Options).
 	HoldFor func(hook.Event) time.Duration
+	// InterceptEvent and EvaluatedEvent are passed to the local runtime as
+	// Intercept and Evaluated.
+	InterceptEvent func(hook.Event) (hook.Result, bool)
+	EvaluatedEvent func(hook.Event, hook.Result)
 }
 
 type Host struct {
@@ -225,6 +229,8 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		CodexProxy:        opts.CodexProxy,
 		Observe:           opts.ObserveEvent,
 		HoldFor:           opts.HoldFor,
+		Intercept:         opts.InterceptEvent,
+		Evaluated:         opts.EvaluatedEvent,
 		Diagnostic:        opts.Diagnostic,
 	})
 	if err != nil {
