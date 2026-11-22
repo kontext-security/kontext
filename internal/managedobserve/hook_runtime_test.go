@@ -141,7 +141,8 @@ func TestHookVerificationBindsAtTheProbe(t *testing.T) {
 func TestHookProbeExpires(t *testing.T) {
 	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
 	r := testRuntime(at)
-	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled"))}}
+	version := "2.1.329"
+	agent := agentauthority.HookAgent{AgentVersion: &version, Hooks: []agentauthority.HookRecord{agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled"))}}
 	r.apply(&agent)
 	nonce := strings.Repeat("7", 32)
 	r.intercept(probeEvent(HookVerifyCommandPrefix + nonce))
@@ -301,7 +302,8 @@ func TestObservedAllowStaysAllow(t *testing.T) {
 func TestAmbiguousEvidenceIsNoOnes(t *testing.T) {
 	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
 	r := testRuntime(at.Add(-time.Second))
-	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{
+	version := "2.1.329"
+	agent := agentauthority.HookAgent{AgentVersion: &version, Hooks: []agentauthority.HookRecord{
 		agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_all", "PreToolUse", "fp1", agentauthority.HookOriginKontext, "enabled")),
 		kontextRecord("hk_edit", "PreToolUse", "fp2", agentauthority.HookOriginKontext, "enabled"),
 	}}
@@ -337,7 +339,8 @@ func TestProbeNeedsAGuardingHandler(t *testing.T) {
 func TestVerificationFollowsPolicyAndOrder(t *testing.T) {
 	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
 	r := testRuntime(at)
-	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled"))}}
+	version := "2.1.329"
+	agent := agentauthority.HookAgent{AgentVersion: &version, Hooks: []agentauthority.HookRecord{agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled"))}}
 	r.now = func() time.Time { return at.Add(-time.Minute) }
 	r.apply(&agent)
 	first, second := strings.Repeat("5", 32), strings.Repeat("6", 32)
@@ -408,5 +411,22 @@ func TestEvidenceStaysWithTheHandlersOfItsTime(t *testing.T) {
 	r.apply(&agent)
 	if e := agent.Hooks[0].Evidence; e.InvocationAt == nil || e.PolicyEvaluatedAt == nil {
 		t.Fatalf("a sole handler's event wasn't credited: %+v", e)
+	}
+}
+
+// A verification holds only while the handler guards every Bash call and the
+// agent version is known.
+func TestVerificationNeedsCoverageAndAVersion(t *testing.T) {
+	version := "2.1.329"
+	e := agentauthority.HookEvidence{VerifiedAt: &version, Verification: &agentauthority.HookVerification{AgentVersion: &version, ContentFP: "fp"}}
+	if got := evidenceLevel(e, "fp", &version, "", true); got != agentauthority.HookEvidenceEnforcementVerified {
+		t.Fatalf("%s", got)
+	}
+	if got := evidenceLevel(e, "fp", &version, "", false); got == agentauthority.HookEvidenceEnforcementVerified {
+		t.Fatal("verified without covering every Bash call")
+	}
+	e.Verification.AgentVersion = nil
+	if got := evidenceLevel(e, "fp", nil, "", true); got == agentauthority.HookEvidenceEnforcementVerified {
+		t.Fatal("two unknown versions matched")
 	}
 }

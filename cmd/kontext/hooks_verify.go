@@ -68,7 +68,8 @@ func hooksVerifyCmd() *cobra.Command {
 			// keep it in its ledger: ask first.
 			capabilities, err := localruntime.NewClient(hookDaemonSocketPath()).Capabilities(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("the Kontext daemon isn't answering: %w", err)
+				// The socket's path stays out of the message.
+				return errors.New("the Kontext daemon isn't answering; run kontext doctor")
 			}
 			if !capabilities.HookVerify {
 				return errors.New("the running Kontext daemon is older than this command; update or restart it, then run this again")

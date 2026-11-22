@@ -319,7 +319,7 @@ func (r *hookRuntime) apply(agent *agentauthority.HookAgent) {
 				evidence.Verification = &agentauthority.HookVerification{AgentVersion: v.agentVersion, ContentFP: content, PolicyRevision: revision}
 			}
 		}
-		evidence.Level = evidenceLevel(*evidence, record.ContentFP, agent.AgentVersion, revision)
+		evidence.Level = evidenceLevel(*evidence, record.ContentFP, agent.AgentVersion, revision, record.GuardsEveryBashCall())
 	}
 }
 
@@ -342,9 +342,11 @@ func kontextRunning(record agentauthority.HookRecord) bool {
 // evidenceLevel is the highest level the evidence supports: verified needs
 // a verification of this content, on this agent version, under the policy
 // deployment in force now.
-func evidenceLevel(e agentauthority.HookEvidence, content string, agentVersion *string, policyRevision string) string {
-	verified := e.VerifiedAt != nil && e.Verification != nil && e.Verification.ContentFP == content &&
-		equalVersion(e.Verification.AgentVersion, agentVersion) && equalVersion(e.Verification.PolicyRevision, optional(policyRevision))
+func evidenceLevel(e agentauthority.HookEvidence, content string, agentVersion *string, policyRevision string, guards bool) string {
+	// A verification holds while the handler still guards every Bash call
+	// and runs under the same, known, agent version and policy.
+	verified := guards && e.VerifiedAt != nil && e.Verification != nil && e.Verification.ContentFP == content &&
+		agentVersion != nil && equalVersion(e.Verification.AgentVersion, agentVersion) && equalVersion(e.Verification.PolicyRevision, optional(policyRevision))
 	switch {
 	case verified:
 		return agentauthority.HookEvidenceEnforcementVerified
