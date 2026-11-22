@@ -5,25 +5,95 @@ import (
 	"testing"
 )
 
-// ruleChain is RedactText without needles or stretches: every value
-// pattern run over the whole text, the union of their masks written as
-// placeholders, repeated until the text stops changing.
+// ruleChain is RedactText without needles or stretches: each pass masks
+// the union of what two readings of the rules mask (every rule over the
+// same text, and the rules in order over what the ones before left), both
+// run until they settle, and the passes repeat until the text stops
+// changing. Each byte of a reading's text records the range of the pass's
+// text it stands for.
 func ruleChain(value string) string {
 	for pass := 0; pass < maxPasses; pass++ {
-		var spans []Span
-		for index := range compiledValueRules {
-			rule := &compiledValueRules[index]
-			for _, match := range rule.re.FindAllStringSubmatchIndex(value, -1) {
-				spans = append(spans, rule.masked(value, match))
-			}
-		}
-		next := keptText(value, settledRuns(value, mergeSpans(spans)), RedactedPlaceholder)
+		masks := append(chainReading(value, false), chainReading(value, true)...)
+		next := keptText(value, settledRuns(value, mergeSpans(masks)), RedactedPlaceholder)
 		if next == value {
 			break
 		}
 		value = next
 	}
 	return value
+}
+
+// chainReading is the ranges of text one reading masks.
+func chainReading(text string, ordered bool) []Span {
+	cur := text
+	origin := make([]Span, len(text))
+	for i := range origin {
+		origin[i] = Span{i, i + 1}
+	}
+	var holes []Span // the ranges placeholders took, empty ones too
+	mask := func(runs []Span) {
+		var next strings.Builder
+		var nextOrigin []Span
+		at := 0
+		for _, run := range runs {
+			next.WriteString(cur[at:run.Start])
+			nextOrigin = append(nextOrigin, origin[at:run.Start]...)
+			from := 0
+			if run.Start > 0 {
+				from = origin[run.Start-1].End
+			}
+			if run.Start < len(origin) {
+				from = min(from, origin[run.Start].Start)
+				if run.Start == run.End {
+					from = origin[run.Start].Start
+				}
+			}
+			to := from
+			for i := run.Start; i < run.End; i++ {
+				to = max(to, origin[i].End)
+			}
+			holes = append(holes, Span{from, to})
+			next.WriteString(RedactedPlaceholder)
+			for range len(RedactedPlaceholder) {
+				nextOrigin = append(nextOrigin, Span{from, to})
+			}
+			at = run.End
+		}
+		next.WriteString(cur[at:])
+		cur, origin = next.String(), append(nextOrigin, origin[at:]...)
+	}
+	ruleMasks := func(rule *compiledRule) []Span {
+		var spans []Span
+		for _, match := range rule.re.FindAllStringSubmatchIndex(cur, -1) {
+			spans = append(spans, rule.masked(cur, match))
+		}
+		return spans
+	}
+	for pass := 0; pass < maxPasses; pass++ {
+		before := cur
+		if ordered {
+			for index := range compiledValueRules {
+				if runs := settledRuns(cur, mergeSpans(ruleMasks(&compiledValueRules[index]))); len(runs) > 0 {
+					mask(runs)
+				}
+			}
+		} else {
+			var spans []Span
+			for index := range compiledValueRules {
+				spans = append(spans, ruleMasks(&compiledValueRules[index])...)
+			}
+			if runs := settledRuns(cur, mergeSpans(spans)); len(runs) > 0 {
+				mask(runs)
+			}
+		}
+		if cur == before {
+			break
+		}
+	}
+	if cur == text {
+		return nil
+	}
+	return holes
 }
 
 // redactionSamples are the coverage vectors' inputs, in other cases and

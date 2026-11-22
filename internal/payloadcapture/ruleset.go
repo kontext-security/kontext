@@ -89,7 +89,7 @@ func init() {
 // maxTokenScan is the longest value HasSecretToken scans; a longer one
 // counts as a secret (fail closed). The cloud's JS RegExp backtracks where
 // RE2 does not, so it stops there, and the agent matches it.
-const maxTokenScan = 4096
+const maxTokenScan = 1024
 
 // HasSecretToken reports a value that holds a known secret token shape (a
 // vendor key, a JWT, a private key): the ruleset's value patterns that aren't

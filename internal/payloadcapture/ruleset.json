@@ -220,8 +220,16 @@
     },
     {
       "id": "gitlab-session-cookie",
-      "description": "GitLab's session cookie, listed with GitLab's token prefixes: the whole value to the next `;`, quote, comma or whitespace, whatever it holds (`cell-1-…`, a JWT, a quoted value, JSON escapes such as `\\u0046`, but not an escaped `;`, which ends it), also under a Geo-suffixed name (`_gitlab_session_geo_…`), with whitespace around `=` (Set-Cookie) and as a JSON property in flat text, escaped or not; the cookie name is kept. A decoded `_gitlab_session` key is a sensitive key.",
+      "description": "GitLab's session cookie, listed with GitLab's token prefixes: the whole value to the next `;`, quote, comma or whitespace, whatever it holds (`cell-1-…`, a JWT, a quoted value, JSON escapes such as `\\u0046`, but not an escaped `;`, which ends it: gitlab-session-cookie-escaped reads past one), also under a Geo-suffixed name (`_gitlab_session_geo_…`), with whitespace around `=` (Set-Cookie) and as a JSON property in flat text, escaped or not; the cookie name is kept. A decoded `_gitlab_session` key is a sensitive key.",
       "pattern": "(_gitlab_session[A-Za-z0-9_]*(?:[\\t\\n\\f\\r ]*=[\\t\\n\\f\\r ]*|\\\\?\"[\\t\\n\\f\\r ]*:[\\t\\n\\f\\r ]*)(?:\\\\?[\"'])?)(?:[^\\t\\n\\f\\r ;\",\\\\]|\\\\[^\";])+",
+      "replacement": "$1[REDACTED_SECRET]",
+      "caseInsensitive": false,
+      "provenance": "gitlab:session-cookie"
+    },
+    {
+      "id": "gitlab-session-cookie-escaped",
+      "description": "GitLab's session cookie as gitlab-session-cookie reads it, but with an escaped `;` (`FAKEone\\;FAKEtwo`) taken as part of the value, as a shell assignment does. Kept apart so that gitlab-session-cookie still finds a second cookie after one.",
+      "pattern": "(_gitlab_session[A-Za-z0-9_]*(?:[\\t\\n\\f\\r ]*=[\\t\\n\\f\\r ]*|\\\\?\"[\\t\\n\\f\\r ]*:[\\t\\n\\f\\r ]*)(?:\\\\?[\"'])?)(?:[^\\t\\n\\f\\r ;\",\\\\]|\\\\[^\"])+",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": false,
       "provenance": "gitlab:session-cookie"
@@ -277,8 +285,8 @@
     },
     {
       "id": "jwt-any-header",
-      "description": "Signed values whose header has some other spelling (standard Base64, padding, whitespace): any header followed by JSON claims (`.eyJ…`, `.e30`, or claims with whitespace before the brace) and a signature. It never starts after a header character, so a long run of them is scanned once; `=` is padding at the header's end only, so a cookie name before it (`_gitlab_session=`) stays out. Runs before jwt, which would otherwise take the claims and leave the header.",
-      "pattern": "(^|[^A-Za-z0-9_+/-]|%[0-9A-Fa-f]{2})[A-Za-z0-9_+/-]{8,}={0,2}\\.(?:eyJ|eyA|ew[ok0]|e30|Cns|CXs|DXs|IHs|ICB7|DQp7)[A-Za-z0-9_+/=-]*(?:\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd]))*)+",
+      "description": "Signed values whose header has some other spelling (standard Base64, padding, whitespace): any header followed by JSON claims (`.eyJ…`, `.e30`, or claims with whitespace before the brace) and a signature. It never starts after a header character, so a long run of them is scanned once; `=` is padding at the header's end only (eight characters with it, `RkFLRQ==`), so a cookie name before it (`_gitlab_session=`) stays out. Runs before jwt, which would otherwise take the claims and leave the header.",
+      "pattern": "(^|[^A-Za-z0-9_+/-]|%[0-9A-Fa-f]{2})(?:[A-Za-z0-9_+/-]{8,}={0,2}|[A-Za-z0-9_+/-]{7}={1,2}|[A-Za-z0-9_+/-]{6}==)\\.(?:eyJ|eyA|ew[ok0]|e30|Cns|CXs|DXs|IHs|ICB7|DQp7)[A-Za-z0-9_+/=-]*(?:\\.(?:[A-Za-z0-9_+/=-]|%(?:25)?(?:2[BbFf]|3[Dd]))*)+",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": false,
       "provenance": "gitleaks:jwt"

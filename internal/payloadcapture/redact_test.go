@@ -115,29 +115,29 @@ func TestRedactTextLeavesProseAlone(t *testing.T) {
 	}
 }
 
-// TestRedactionIsMonotonic guards the coverage invariant against rule
+// TestRedactionIsMonotonic guards the union pass against rule
 // interference: every rule matches the same text and masks are unioned, so
-// taking any one rule away never masks a byte the whole ruleset leaves.
-// Equivalently, adding a rule never unmasks one.
+// taking any one rule away never masks a byte the whole ruleset leaves in
+// that pass. Equivalently, adding a rule never unmasks one. Later passes
+// read placeholders, where that no longer holds (a token rule can take an
+// assignment's name), and the ordered reading covers them
+// (TestRedactionCoversBothReadings).
 func TestRedactionIsMonotonic(t *testing.T) {
 	t.Parallel()
 
-	var vectors coverageVectors
-	loadTestdata(t, "redaction-coverage-vectors.json", &vectors)
-	inputs := redactionSamples(t)
-	for _, vector := range vectors.ValueVectors {
-		inputs = append(inputs, vector.Input)
-	}
-	for _, input := range inputs {
-		masked := make([]bool, len(input))
-		for _, span := range RedactedSpans(input) {
-			for i := span.Start; i < span.End; i++ {
-				masked[i] = true
-			}
+	unionMasks := func(input string, rules []compiledRule) []Span {
+		var spans []Span
+		var folded lazyFold
+		for index := range rules {
+			spans = append(spans, rules[index].masks(input, &folded)...)
 		}
+		return mergeSpans(spans)
+	}
+	for _, input := range redactionInputs(t) {
+		masked := maskedBytes(len(input), unionMasks(input, compiledValueRules))
 		for index := range compiledValueRules {
 			fewer := slices.Delete(slices.Clone(compiledValueRules), index, index+1)
-			for _, span := range redactedSpans(input, fewer) {
+			for _, span := range unionMasks(input, fewer) {
 				for i := span.Start; i < span.End; i++ {
 					if !masked[i] {
 						t.Fatalf("%q: without %s byte %d is masked, with every rule it is not", input, compiledValueRules[index].id, i)
@@ -146,6 +146,47 @@ func TestRedactionIsMonotonic(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestRedactionCoversBothReadings checks that RedactText never masks less
+// than either reading of the rules alone: the union, or the rules in order
+// (the engine before rules/5).
+func TestRedactionCoversBothReadings(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range redactionInputs(t) {
+		masked := maskedBytes(len(input), RedactedSpans(input))
+		for _, step := range []func(string, []stretch, []compiledRule) (string, []stretch){unionPass, orderedPass} {
+			for _, span := range reading(input, compiledValueRules, step) {
+				for i := span.Start; i < span.End; i++ {
+					if !masked[i] {
+						t.Fatalf("%q: a reading masks byte %d, RedactText does not", input, i)
+					}
+				}
+			}
+		}
+	}
+}
+
+func redactionInputs(t *testing.T) []string {
+	t.Helper()
+	var vectors coverageVectors
+	loadTestdata(t, "redaction-coverage-vectors.json", &vectors)
+	inputs := redactionSamples(t)
+	for _, vector := range vectors.ValueVectors {
+		inputs = append(inputs, vector.Input)
+	}
+	return inputs
+}
+
+func maskedBytes(n int, spans []Span) []bool {
+	masked := make([]bool, n)
+	for _, span := range spans {
+		for i := span.Start; i < span.End; i++ {
+			masked[i] = true
+		}
+	}
+	return masked
 }
 
 func TestRedactJSONDoesNotMutateInput(t *testing.T) {

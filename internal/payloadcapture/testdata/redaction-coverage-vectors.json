@@ -1373,6 +1373,53 @@
       "input": "eyJFAKE000.FAKE%2FFAKEVALUE.e30.FAKESIGFAKESIG",
       "mustNotSurvive": ["FAKEVALUE", "FAKESIGFAKESIG"],
       "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-any-header-padded-short-header",
+      "ruleId": "jwt-any-header",
+      "input": "RkFLRQ==.e30.FAKESIGNATURE",
+      "mustNotSurvive": ["FAKESIGNATURE"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "gitlab-session-escaped-semicolon-quoted",
+      "ruleId": "gitlab-session-cookie-escaped",
+      "input": "_gitlab_session=\"FAKEone\\;FAKEtwo\"",
+      "mustNotSurvive": ["FAKEone", "FAKEtwo"],
+      "expected": "_gitlab_session=\"[REDACTED_SECRET]\""
+    },
+    {
+      "name": "gitlab-session-escaped-semicolon-shell",
+      "ruleId": "gitlab-session-cookie-escaped",
+      "input": "_gitlab_session=FAKEone\\;FAKEtail",
+      "mustNotSurvive": ["FAKEone", "FAKEtail"],
+      "expected": "_gitlab_session=[REDACTED_SECRET]"
+    },
+    {
+      "name": "assignment-after-masked-userinfo",
+      "ruleId": "sensitive-assignment",
+      "input": "glimt-FAKEFAKEFAKEFAKEFAKEpasswd=redis://FAKE:p&amp;ss@fake.invalid/FAKEtail",
+      "mustNotSurvive": ["p&amp;ss", "FAKEtail"]
+    },
+    {
+      "name": "redis-password-after-masked-userinfo",
+      "ruleId": "url-userinfo",
+      "input": "redis-cli -u 'redis://FAKE:FAKE;FAKE@example.invalid' --user passwd: -a FAKEpassword PING",
+      "mustNotSurvive": ["FAKEpassword"]
+    },
+    {
+      "name": "quoted-password-holding-placeholder",
+      "ruleId": "sensitive-assignment",
+      "input": "password=\"[REDACTED_SECRET] \"",
+      "mustNotSurvive": [],
+      "expected": "password=[REDACTED_SECRET]"
+    },
+    {
+      "name": "quoted-password-holding-spaced-placeholder",
+      "ruleId": "sensitive-assignment",
+      "input": "passwd=\" [REDACTED_SECRET] \"",
+      "mustNotSurvive": [],
+      "expected": "passwd=[REDACTED_SECRET]"
     }
   ],
   "keyVectors": [
