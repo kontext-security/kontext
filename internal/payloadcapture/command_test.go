@@ -228,12 +228,18 @@ func TestCommandSpansAreLinear(t *testing.T) {
 	t.Parallel()
 
 	for _, unit := range []string{"mysql -p\\\n", "redis-cli auth ", "mysql -u", "redis-cli -h", "mysql redis-cli ", `mysql -p"`} {
-		input := strings.Repeat(unit, 131072/len(unit))
-		started := time.Now()
-		commandSpans(input)
-		// About 0.2 s today on a busy runner; quadratic reading took minutes.
-		if elapsed := time.Since(started); elapsed > 3*time.Second {
-			t.Errorf("%q: 128 KB took %v", unit, elapsed)
+		elapsed := func(size int) time.Duration {
+			input := strings.Repeat(unit, size/len(unit))
+			started := time.Now()
+			commandSpans(input)
+			return time.Since(started)
+		}
+		// About 0.2 s today, and up to 4 s under -race on a busy runner;
+		// quadratic reading took minutes. A slow run fails only when doubling
+		// the input also more than triples the time.
+		half, full := elapsed(65536), elapsed(131072)
+		if full > 3*time.Second && full > 3*half {
+			t.Errorf("%q: 64 KB took %v, 128 KB took %v", unit, half, full)
 		}
 	}
 }
