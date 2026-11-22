@@ -226,3 +226,20 @@ func TestBaselineKeepsKnownEventsOnly(t *testing.T) {
 		t.Fatalf("baseline event %q", e)
 	}
 }
+
+// A scope that reads again shows its hooks without calling them added: they
+// may have been there while it couldn't be read.
+func TestRecoveredScopeShowsNoAdditions(t *testing.T) {
+	agent, source := changeScan{StatusPartial, false, map[string]string{"a": StatusComplete, "b": StatusFailed}, []HookRecord{hookIn("a", "h1", "f1", hookEnabled)}}.agent()
+	_, base := HookChanges(nil, agent, source)
+	agent, source = changeScan{StatusComplete, false, map[string]string{"a": StatusComplete, "b": StatusComplete}, []HookRecord{hookIn("a", "h1", "f1", hookEnabled), hookIn("b", "h2", "f2", hookEnabled)}}.agent()
+	changes, next := HookChanges(base, agent, source)
+	if len(changes) != 0 {
+		t.Fatalf("%+v", changes)
+	}
+	// From then on a new hook there is an addition.
+	agent.Hooks = append(agent.Hooks, hookIn("b", "h3", "f3", hookEnabled))
+	if changes, _ := HookChanges(next, agent, source); !slices.Equal(changeKinds(changes), []string{"added:h3"}) {
+		t.Fatalf("%v", changeKinds(changes))
+	}
+}

@@ -140,6 +140,9 @@ func HookChanges(base *HookBaseline, agent HookAgent, source SourceResult) ([]Ho
 	for _, r := range agent.Hooks {
 		before, seen := base.Hooks[r.ID]
 		switch {
+		case !seen && base.Scopes[r.ScopeID] != "" && base.Scopes[r.ScopeID] != StatusComplete:
+			// Its scope couldn't be read before: the hook may have been
+			// there all along, so it is seen, not added.
 		case !seen:
 			changes = append(changes, HookChange{Kind: HookChangeAdded, HookID: r.ID, ScopeID: r.ScopeID, Event: changeEvent(r.Event), At: at})
 		case before.ContentFP != r.ContentFP || before.State != r.Enablement.State:
