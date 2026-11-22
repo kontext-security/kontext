@@ -60,7 +60,7 @@ var (
 	compiledValueRules []compiledRule
 	// tokenRules are the value rules that read a token's own shape; the
 	// structural ones read its context.
-	tokenRules    []*regexp.Regexp
+	tokenRules    []tokenRule
 	camelBoundary = regexp.MustCompile(`([a-z])([A-Z])`)
 )
 
@@ -81,10 +81,23 @@ func init() {
 	compiledValueRules = compileRules(ruleset.ValuePatterns)
 	for index, rule := range ruleset.ValuePatterns {
 		if rule.Provenance != "structural" {
-			tokenRules = append(tokenRules, compiledValueRules[index].re)
+			tokenRules = append(tokenRules, tokenRule{compiledValueRules[index].re, tokenRuleNeeds[rule.ID]})
 		}
 	}
 }
+
+// tokenRule is a token rule HasSecretToken scans only when the value
+// holds needs (when set).
+type tokenRule struct {
+	re    *regexp.Regexp
+	needs string
+}
+
+// tokenRuleNeeds is what a value must hold for a token rule to match where
+// another one does not: gitlab-session-cookie-escaped differs from
+// gitlab-session-cookie only in reading past an escaped ;, and skipping it
+// otherwise saves a second scan of a run of cookie names.
+var tokenRuleNeeds = map[string]string{"gitlab-session-cookie-escaped": `\;`}
 
 // maxTokenScan is the longest value HasSecretToken scans; a longer one
 // counts as a secret (fail closed). The cloud's JS RegExp backtracks where
@@ -101,8 +114,8 @@ func HasSecretToken(value string) bool {
 	if len(value) > maxTokenScan {
 		return true
 	}
-	for _, re := range tokenRules {
-		if re.MatchString(value) {
+	for _, rule := range tokenRules {
+		if (rule.needs == "" || strings.Contains(value, rule.needs)) && rule.re.MatchString(value) {
 			return true
 		}
 	}
