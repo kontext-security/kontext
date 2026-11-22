@@ -145,6 +145,19 @@ func (c Client) CodexProxy(ctx context.Context, question json.RawMessage) (json.
 	return result.Answer, nil
 }
 
+// Capabilities asks the daemon what it supports. An older daemon's answer
+// carries none.
+func (c Client) Capabilities(ctx context.Context) (CapabilitiesResult, error) {
+	var result CapabilitiesResult
+	if err := c.roundTrip(ctx, EvaluateRequest{Type: CapabilitiesRequestType}, &result); err != nil {
+		return CapabilitiesResult{}, err
+	}
+	if result.Type != CapabilitiesResultType {
+		return CapabilitiesResult{}, nil
+	}
+	return result, nil
+}
+
 func (c Client) roundTrip(ctx context.Context, req EvaluateRequest, result any) error {
 	timeout := c.Timeout
 	if timeout == 0 {

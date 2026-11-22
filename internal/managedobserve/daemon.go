@@ -322,6 +322,18 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Diagnostic: opts.Diagnostic,
 	})
 
+	// Runtime evidence of Kontext's own hooks, for the hook inventory.
+	hookEvidence := newHookRuntime()
+	// Under a static observe posture the hook turns every deny into an
+	// allow, the probe's too, so nothing is verified.
+	hookEvidence.honoursDeny = mode != guardhookruntime.ModeObserve
+	hookEvidence.policyRevision = func() string { return policyRevision(cedarCache.Current()) }
+	// Evidence is kept only while the current enrolment's own settings turn
+	// the hook inventory on, and is dropped with the hook results.
+	hookEvidence.enabled = func() bool {
+		snapshot := endpointConfigCache.Current()
+		return snapshot.HookInventoryEnabled() && snapshot.Confirmed
+	}
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          managedconfig.Agent,
 		DBPath:             dbPath,
@@ -353,6 +365,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		CodexProxy:             codexProxyAnswer(compactor),
 		ObserveEvent:           compactor.Observe,
 		HoldFor:                enrolmentHold(started, enrolmentWait(opts.Diagnostic), cedarEnforcement, cedarCache),
+		InterceptEvent:         hookEvidence.intercept,
+		InterceptMarker:        HookVerifyMarker,
+		EvaluatedEvent:         hookEvidence.evaluated,
 	})
 	if err != nil {
 		return err
@@ -395,6 +410,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	hookKeys := newHookKeyBox()
 	hookKeys.wake = wakeHooks
+	hookEvidence.mu.Lock()
+	hookEvidence.verified = wakeHooks
+	hookEvidence.mu.Unlock()
 	// A re-enrolment on the same cloud holds prompts until the new
 	// enrolment's own settings are confirmed, and moves the hook scan.
 	liveOwner.mu.Lock()
@@ -452,6 +470,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// confirm an opt-in first and upload results from before the opt-out.
 	purgeHooksIfOff := func(snapshot endpointconfig.Snapshot) {
 		if snapshot.Confirmed && !snapshot.HookInventoryEnabled() {
+			hookEvidence.reset()
 			if err := inventoryStore.DiscardHooks(); err != nil {
 				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
 			}
@@ -527,7 +546,8 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	}
 	server.SetConnectorScan(authorityHolder.Fact)
 	hookHolder := &hookHolder{
-		keys: hookKeys,
+		keys:     hookKeys,
+		evidence: hookEvidence,
 		switches: func() (bool, bool) {
 			snapshot := endpointConfigCache.Current()
 			return snapshot.HookInventoryEnabled(), snapshot.Confirmed
@@ -560,6 +580,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			}
 		},
 		discard: func() error {
+			hookEvidence.reset()
 			err := inventoryStore.DiscardHooks()
 			if err != nil {
 				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
