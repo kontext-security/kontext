@@ -850,6 +850,18 @@
       "ruleId": "jwt",
       "input": "jwe eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIn0..AAAAAAAAAAAAAAAA.ePU.PlPfGrjP2tuaFvXdWZVQpQ end",
       "mustNotSurvive": ["AAAAAAAAAAAAAAAA", "PlPfGrjP2tuaFvXdWZVQpQ"]
+    },
+    {
+      "name": "mysql-password-after-nested-substitution-and-quoted-semicolon",
+      "ruleId": "mysql-password-flag-quoted-args",
+      "input": "mysql -h $(cat $(printenv DB_HOST_FILE)) -e \"SELECT 1;\" -pFAKEnestedsub appdb",
+      "mustNotSurvive": ["FAKEnestedsub"]
+    },
+    {
+      "name": "redis-cli-password-after-nested-substitution-and-quoted-semicolon",
+      "ruleId": "redis-cli-password-flag-quoted-args",
+      "input": "redis-cli -h $(cat $(printenv REDIS_HOST_FILE)) --eval 'a;b' -a FAKEredisnested ping",
+      "mustNotSurvive": ["FAKEredisnested"]
     }
   ],
   "keyVectors": [
