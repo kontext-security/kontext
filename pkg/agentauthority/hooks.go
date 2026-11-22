@@ -217,6 +217,10 @@ type hookScan struct {
 	policyHelper bool
 	// urlPatterns holds each allowedHttpHookUrls pattern compiled.
 	urlPatterns map[string]*regexp.Regexp
+	// urlMatches counts the allowlist matches tried, against maxURLMatches.
+	urlMatches int
+	// projectsCut: the project list went past maxHookProjects.
+	projectsCut bool
 }
 
 type hookRaw struct {
@@ -233,6 +237,8 @@ type hookRaw struct {
 	layer          int
 	project        string
 	pluginDisabled bool
+	// pluginKey is the plugin's name@marketplace, for a plugin's hook.
+	pluginKey string
 	// projectUnread: a plugin installed for a project whose settings went
 	// unread.
 	projectUnread bool
@@ -318,6 +324,7 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	if len(projects) > maxHookProjects {
 		s.source.Fail(ReasonWalkLimit)
 		s.agent.Truncated = true
+		s.projectsCut = true
 		projects = projects[:maxHookProjects]
 	}
 	listed := map[string]bool{}
@@ -384,6 +391,8 @@ func (s *hookScan) only() { s.g.active = []*SourceHealth{s.source} }
 func (s *hookScan) scope(kind, canonical string) (*SourceHealth, string) {
 	if len(s.agent.Scopes) >= MaxHookScopes {
 		s.agent.Truncated = true
+		// A project's settings left unread may lift or set any switch.
+		s.projectsCut = s.projectsCut || s.project != "" && projectKind(kind)
 		s.source.Fail(ReasonSizeLimit)
 		return nil, ""
 	}
@@ -416,6 +425,9 @@ func (s *hookScan) settingsScope(kind, path string, listed bool) {
 	s.layers = append(s.layers, hookLayer{kind: kind, scope: id, settings: settings, ok: ok, project: s.project})
 	if ok && managedKind(kind) && settings.PolicyHelper {
 		s.policyHelper = true
+	}
+	if ok && managedKind(kind) && !s.shadowed && settings.EnabledPluginsInvalid {
+		s.plugins.managedUnknown = true
 	}
 	if ok {
 		for key, value := range settings.EnabledPlugins {
@@ -622,6 +634,9 @@ func (s *hookScan) pluginHooks(h *SourceHealth, installed string, declared json.
 type pluginSwitches struct {
 	managed, user map[string]bool
 	project       map[string]map[string]bool
+	// managedUnknown: a managed file's enabledPlugins couldn't be read, so
+	// whether managed settings force-enable a plugin is unknown.
+	managedUnknown bool
 }
 
 func (p pluginSwitches) lookup(key, project string) (enabled, set bool) {
@@ -671,6 +686,9 @@ func (s *hookScan) records(scope, kind string, hooks map[string][]readers.HookGr
 				record, info := s.record(scope, kind, event, matcher, raw, plugin)
 				info.layer, info.project, info.kind = layer, s.project, kind
 				info.pluginDisabled = plugin != nil && plugin.disabled
+				if plugin != nil {
+					info.pluginKey = plugin.key
+				}
 				info.projectUnread = plugin != nil && plugin.projectUnread
 				info.manifestUnread = plugin != nil && plugin.manifestUnread
 				s.agent.Hooks = append(s.agent.Hooks, record)
