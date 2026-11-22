@@ -440,7 +440,7 @@ func TestManagedOnlyExemptionFollowsTheVersion(t *testing.T) {
 		"2.1.229": versionAtOrAfter, "2.1.329 (Claude Code)": versionAtOrAfter, "2.2.0": versionAtOrAfter, "3.0.0-beta": versionAtOrAfter,
 		"2.1.228": versionBefore, "1.9.999": versionBefore, "2.1.228-beta.1": versionBefore,
 		"2.1.229-beta.1": versionUnknown,
-		"": versionUnknown, "dev": versionUnknown, "2.1": versionUnknown,
+		"":               versionUnknown, "dev": versionUnknown, "2.1": versionUnknown,
 	} {
 		if got := managedOnlyExempt(version); got != want {
 			t.Errorf("%q: %d, want %d", version, got, want)
