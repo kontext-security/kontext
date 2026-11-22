@@ -430,3 +430,28 @@ func TestVerificationNeedsCoverageAndAVersion(t *testing.T) {
 		t.Fatal("two unknown versions matched")
 	}
 }
+
+// Under a Cedar observe rollout, an allow standing in for the policy's deny
+// is reported as observe; a plain allow stays allow.
+func TestCedarObserveDenyIsObserve(t *testing.T) {
+	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	r := testRuntime(at.Add(-time.Second))
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
+	r.apply(&agent)
+	cedar := func(action cedareval.DerivedCedarAction) hook.Result {
+		return hook.WithMetadata(hook.Result{Decision: hook.DecisionAllow}, risk.RiskDecision{Cedar: &risk.CedarEvidence{AppliedRolloutMode: cedareval.RolloutModeObserve, Mapping: cedareval.DecisionMapping{EvaluationState: cedareval.EvaluationStateEvaluated, DerivedCedarAction: action}}})
+	}
+	pre := hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}
+	for i, tc := range []struct {
+		action cedareval.DerivedCedarAction
+		want   string
+	}{{cedareval.DerivedCedarActionDeny, "observe"}, {cedareval.DerivedCedarActionAllow, "allow"}} {
+		r.now = func() time.Time { return at.Add(time.Duration(i) * time.Second) }
+		r.evaluated(pre, cedar(tc.action), true)
+		agent.Hooks[0].Evidence = kontextRecord("", "", "", "", "").Evidence
+		r.apply(&agent)
+		if d := agent.Hooks[0].Evidence.PolicyDecision; d == nil || *d != tc.want {
+			t.Fatalf("%s: decision %v", tc.action, d)
+		}
+	}
+}

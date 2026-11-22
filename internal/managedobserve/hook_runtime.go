@@ -236,7 +236,7 @@ func (r *hookRuntime) evaluated(event hook.Event, result hook.Result, policy boo
 	// Under the observe posture every answer is an allow: "observe" names
 	// one the policy would have blocked, and a plain allow stays "allow".
 	decision := string(result.Decision)
-	if guardhookruntime.ObservedWouldBlock(result) {
+	if guardhookruntime.ObservedWouldBlock(result) || decision == "allow" && cedarObservedBlock(result) {
 		decision = "observe"
 	}
 	switch decision {
@@ -321,6 +321,20 @@ func (r *hookRuntime) apply(agent *agentauthority.HookAgent) {
 		}
 		evidence.Level = evidenceLevel(*evidence, record.ContentFP, agent.AgentVersion, revision, record.GuardsEveryBashCall())
 	}
+}
+
+// cedarObservedBlock reports an allow that a Cedar observe rollout gave in
+// place of its own deny or ask.
+func cedarObservedBlock(result hook.Result) bool {
+	decision, ok := result.Metadata().(risk.RiskDecision)
+	if !ok || decision.Cedar == nil || decision.Cedar.AppliedRolloutMode != cedareval.RolloutModeObserve {
+		return false
+	}
+	switch decision.Cedar.Mapping.DerivedCedarAction {
+	case cedareval.DerivedCedarActionDeny, cedareval.DerivedCedarActionAsk:
+		return true
+	}
+	return false
 }
 
 // policyEvaluated reports an answer the policy itself gave: not one where
