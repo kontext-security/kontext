@@ -1,6 +1,30 @@
 {
   "valueVectors": [
     {
+      "name": "mysql-windows-exe",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql.exe -pFAKEhunter2 appdb",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "mysql-grouped-quick",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqldump -qpFAKEhunter2 appdb",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "redis-cli-windows-exe",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli.exe -a FAKEhunter2 PING",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "sshpass-windows-exe",
+      "ruleId": "sshpass-password-flag",
+      "input": "sshpass.exe -p FAKEhunter2 ssh host",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
       "name": "pem-private-key",
       "ruleId": "private-key-block",
       "input": "config:\n-----BEGIN RSA PRIVATE KEY-----\nMIIfakekeymaterialFAKE\n-----END RSA PRIVATE KEY-----\ndone",
