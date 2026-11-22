@@ -276,6 +276,7 @@
             "next": false
           }
         ],
+        "longNoArg": [],
         "positionalSecrets": []
       },
       {
@@ -296,17 +297,20 @@
           }
         ],
         "longSecrets": [],
+        "longNoArg": [
+          "help"
+        ],
         "positionalSecrets": []
       },
       {
         "id": "redis-cli",
-        "description": "redis-cli and valkey-cli passwords after -a or --pass, and every word after an AUTH command.",
+        "description": "redis-cli and valkey-cli passwords after -a or --pass, and every word after an AUTH command. Options end at the command name, as redis-cli reads them (SET -a value is the command's).",
         "names": [
           "redis-cli",
           "valkey-cli"
         ],
         "namePrefixes": [],
-        "optionsAnywhere": true,
+        "optionsAnywhere": false,
         "shortNoArg": "",
         "shortWithArg": "DRdhinprsu",
         "shortSecrets": [
@@ -322,6 +326,37 @@
             "attached": true,
             "next": true
           }
+        ],
+        "longNoArg": [
+          "askpass",
+          "bigkeys",
+          "cluster-only-masters",
+          "cluster-only-replicas",
+          "cluster-yes",
+          "csv",
+          "help",
+          "hotkeys",
+          "insecure",
+          "json",
+          "keystats",
+          "latency",
+          "latency-dist",
+          "latency-history",
+          "ldb",
+          "ldb-sync-mode",
+          "memkeys",
+          "no-auth-warning",
+          "no-raw",
+          "pipe",
+          "quoted-input",
+          "quoted-json",
+          "raw",
+          "replica",
+          "scan",
+          "stat",
+          "tls",
+          "verbose",
+          "version"
         ],
         "positionalSecrets": [
           {

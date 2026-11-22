@@ -800,6 +800,30 @@
       "spans": [[23, 34]],
       "mustNotSurvive": ["FAKEhunter2"],
       "expected": "redis-cli --pass [REDACTED_SECRET] [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "redis-long-option-with-value",
+      "program": "redis-cli",
+      "input": "redis-cli --user app -a FAKEhunter2 PING",
+      "spans": [[24, 35]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "redis-cli --user app -a [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "redis-long-option-without-value",
+      "program": "redis-cli",
+      "input": "redis-cli --no-auth-warning -a FAKEhunter2 PING",
+      "spans": [[31, 42]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "redis-cli --no-auth-warning -a [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "mysql-path-argument-fails-closed",
+      "program": "mysql-client",
+      "input": "find /var/lib/mysql -pFAKEhunter2",
+      "spans": [[22, 33]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "find /var/lib/mysql -p[REDACTED_SECRET]"
     }
   ],
   "prose": [
@@ -836,7 +860,8 @@
     "git commit -a -m msg",
     "mysql -P 3306 -h db",
     "mysql -u root -p appdb",
-    "redis-cli -h cache -p 6380 ping"
+    "redis-cli -h cache -p 6380 ping",
+    "redis-cli SET -a value"
   ],
   "argvVectors": [
     {

@@ -45,7 +45,11 @@ type commandProgram struct {
 	// ShortNoArg are the short options that may come before a secret one
 	// in a group (-vpSECRET); ShortWithArg take the next word when nothing
 	// follows them in their group. Any other letter ends its group.
-	ShortNoArg   string           `json:"shortNoArg"`
+	ShortNoArg string `json:"shortNoArg"`
+	// LongNoArg, when options end at the first operand, are the long
+	// options that take no value; any other takes the next word unless it
+	// is an option.
+	LongNoArg    []string         `json:"longNoArg"`
 	ShortWithArg string           `json:"shortWithArg"`
 	ShortSecrets []commandSecret  `json:"shortSecrets"`
 	LongSecrets  []commandSecret  `json:"longSecrets"`
@@ -885,6 +889,12 @@ func (l *lexer) longOption(program *commandProgram, w *word, rest []word) int {
 			return 1
 		}
 		return 0
+	}
+	// Options end at the first operand: an unknown long option takes the
+	// next word as its value, unless that is an option (masks more at worst).
+	if !program.OptionsAnywhere && !equals && len(rest) > 0 && !strings.HasPrefix(string(rest[0].cooked), "-") &&
+		!slices.Contains(program.LongNoArg, toLowerASCII(name)) {
+		return 1
 	}
 	return 0
 }
