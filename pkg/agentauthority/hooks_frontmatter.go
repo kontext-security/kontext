@@ -56,7 +56,15 @@ func (s *hookScan) frontmatterScopes(dir, from string, plugin *pluginRef) {
 		read++
 		// The folder was listed, not the file: a folder without SKILL.md
 		// is no skill, not a vanished file.
-		s.frontmatterScope(HookScopeSkill, filepath.Join(skills, name, "SKILL.md"), false, plugin)
+		path := filepath.Join(skills, name, "SKILL.md")
+		// A plugin skill is keyed under its install, not its cache path: an
+		// update keeps the scope, and two installs of one plugin don't share
+		// one.
+		canonical := filepath.Clean(path)
+		if plugin != nil && plugin.canonical != "" {
+			canonical = plugin.canonical + "|skill|" + name
+		}
+		s.frontmatterScope(HookScopeSkill, path, canonical, false, plugin)
 	}
 	if from == HookScopePlugin {
 		return
@@ -76,6 +84,7 @@ func (s *hookScan) frontmatterScopes(dir, from string, plugin *pluginRef) {
 					walk(path, depth+1)
 				} else {
 					s.source.Fail(ReasonWalkLimit)
+					s.agent.Truncated = true
 				}
 				continue
 			}
@@ -88,7 +97,7 @@ func (s *hookScan) frontmatterScopes(dir, from string, plugin *pluginRef) {
 				return
 			}
 			read++
-			s.frontmatterScope(HookScopeSubagent, path, true, nil)
+			s.frontmatterScope(HookScopeSubagent, path, filepath.Clean(path), true, nil)
 		}
 	}
 	walk(filepath.Join(dir, "agents"), 0)
@@ -97,8 +106,8 @@ func (s *hookScan) frontmatterScopes(dir, from string, plugin *pluginRef) {
 // frontmatterScope reads one file's hooks into a scope. A file that declares
 // none and read cleanly lists no scope, so skills without hooks don't use
 // the scope cap; one that couldn't be read is listed, so its hooks stay.
-func (s *hookScan) frontmatterScope(kind, path string, listed bool, plugin *pluginRef) {
-	h, id := s.scope(kind, filepath.Clean(path))
+func (s *hookScan) frontmatterScope(kind, path, canonical string, listed bool, plugin *pluginRef) {
+	h, id := s.scope(kind, canonical)
 	if h == nil {
 		return
 	}

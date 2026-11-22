@@ -312,9 +312,7 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		}
 		s.settingsScope(HookScopeManagedDropIn, filepath.Join(dropins, name), true)
 	}
-	s.frontmatterScopes(filepath.Join(opts.managed, ".claude"), HookScopeManaged, nil)
 	s.settingsScope(HookScopeUser, filepath.Join(base, "settings.json"), false)
-	s.frontmatterScopes(base, HookScopeUser, nil)
 
 	s.only()
 	// The guard already marks the source for a failed read; coverage needs
@@ -332,6 +330,7 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		projects = projects[:maxHookProjects]
 	}
 	listed := map[string]bool{}
+	var read []string
 	for _, project := range projects {
 		dir := filepath.Clean(project)
 		// Two spellings of one directory (a trailing slash) are one project,
@@ -351,10 +350,19 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		s.project = dir
 		s.settingsScope(HookScopeProject, shared, false)
 		s.settingsScope(HookScopeProjectLocal, local, false)
-		s.frontmatterScopes(filepath.Join(dir, ".claude"), HookScopeProject, nil)
+		read = append(read, dir)
 	}
 	s.project = ""
 	s.pluginScopes(base)
+	// Skills and subagents last: every settings file, whose switches decide
+	// all hooks, has had its share of the scope cap first.
+	s.frontmatterScopes(filepath.Join(opts.managed, ".claude"), HookScopeManaged, nil)
+	s.frontmatterScopes(base, HookScopeUser, nil)
+	for _, dir := range read {
+		s.project = dir
+		s.frontmatterScopes(filepath.Join(dir, ".claude"), HookScopeProject, nil)
+	}
+	s.project = ""
 	// A policy the scan can't read (an MDM profile, a policy helper) may
 	// decide what the files say, so the scan is partial: the cloud keeps
 	// what it knew rather than withdraw hooks on an unread policy's word.
@@ -543,7 +551,7 @@ func (s *hookScan) pluginScopes(base string) {
 			// the project cap, or not listed) can be turned off there.
 			_, projectRead := s.trust[filepath.Clean(entry.ProjectPath)]
 			projectUnread := entry.ProjectPath != "" && !projectRead
-			ref := &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread, manifestUnread: !manifestRead && !set}
+			ref := &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread, manifestUnread: !manifestRead && !set, canonical: canonical}
 			s.records(id, HookScopePlugin, hooks, ref, -1)
 			s.closeScope(h, id, HookScopePlugin)
 			// The plugin's skills follow the plugin's switches.
@@ -664,6 +672,9 @@ type pluginRef struct {
 	disabled       bool
 	projectUnread  bool
 	manifestUnread bool
+	// canonical is the install's scope key: its skills' scopes are keyed
+	// under it, so one cached plugin installed for two projects has two.
+	canonical string
 }
 
 // records adds one record per handler, in declaration order within each event.
