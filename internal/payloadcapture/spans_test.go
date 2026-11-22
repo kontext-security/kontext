@@ -6,10 +6,16 @@ import (
 )
 
 // ruleChain is RedactText without needles: every value pattern run over the
-// whole text, in order.
+// whole text, in order, repeated until the text stops changing.
 func ruleChain(value string) string {
-	for _, rule := range compiledValueRules {
-		value = rule.re.ReplaceAllString(value, rule.replacement)
+	for pass := 0; pass < maxPasses; pass++ {
+		before := value
+		for _, rule := range compiledValueRules {
+			value = rule.re.ReplaceAllString(value, rule.replacement)
+		}
+		if value == before {
+			break
+		}
 	}
 	return value
 }

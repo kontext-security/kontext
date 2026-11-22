@@ -46,15 +46,35 @@ type stretch struct {
 	from, len int
 }
 
+// maxPasses bounds the repeated ordered pass, as in the cloud API: a few
+// passes settle every input seen so far, and if one ever does not, the last
+// pass wins, which only masks more.
+const maxPasses = 4
+
 // redact runs the ruleset's value patterns over value in order, each over
-// what the ones before it left, and reports whether anything changed. With
-// track it also returns where each stretch of the result came from.
+// what the ones before it left, and repeats the ordered pass until the text
+// stops changing, so a placeholder one rule writes can complete a match for
+// an earlier rule (AKIA…pwd=SECRET). It reports whether anything changed.
+// With track it also returns where each stretch of the result came from.
 func redact(value string, track bool) (string, []stretch, bool) {
 	text, changed := value, false
 	var stretches []stretch
 	if track {
 		stretches = appendStretch(nil, stretch{0, len(value)})
 	}
+	for pass := 0; pass < maxPasses; pass++ {
+		before := text
+		text, stretches = redactPass(text, stretches, track)
+		if text == before {
+			break
+		}
+		changed = true
+	}
+	return text, stretches, changed
+}
+
+// redactPass runs the value patterns over text once, in order.
+func redactPass(text string, stretches []stretch, track bool) (string, []stretch) {
 	folded, foldedNow := "", false
 	for _, rule := range compiledValueRules {
 		if rule.filtered {
@@ -107,11 +127,11 @@ func redact(value string, track bool) (string, []stretch, bool) {
 		}
 		keep(last, len(text))
 		if result := next.String(); result != text {
-			text, changed, foldedNow = result, true, false
+			text, foldedNow = result, false
 		}
 		stretches = nextStretches
 	}
-	return text, stretches, changed
+	return text, stretches
 }
 
 // appendRange appends the stretches that make up text[a:b], where starts

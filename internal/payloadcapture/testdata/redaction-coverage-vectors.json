@@ -1,9 +1,56 @@
 {
   "valueVectors": [
     {
+      "name": "aws-id-glued-to-assignment",
+      "ruleId": "aws-access-key-id",
+      "input": "AKIAFAKE0123456789ABpwd=orchid-demo",
+      "mustNotSurvive": ["FAKE0123456789AB", "orchid-demo"]
+    },
+    {
+      "name": "stripe-curl-attached-user",
+      "ruleId": "stripe-key",
+      "input": "curl -usk_test_0123456789abcdefghijklmn: https://api.stripe.com",
+      "mustNotSurvive": ["0123456789abcdefghijklmn"]
+    },
+    {
+      "name": "stripe-after-url-encoded-slash",
+      "ruleId": "stripe-key",
+      "input": "next=%2Fsk_test_0123456789abcdefghijklmn",
+      "mustNotSurvive": ["0123456789abcdefghijklmn"]
+    },
+    {
+      "name": "gitlab-incoming-mail-short-body",
+      "ruleId": "gitlab-token",
+      "input": "git+glimt-3no8h6fe0425t9avk7m1cx2q@example.test",
+      "mustNotSurvive": ["3no8h6fe0425t9avk7m1cx2q"]
+    },
+    {
+      "name": "gitlab-routable-trailer",
+      "ruleId": "gitlab-token",
+      "input": "glrt-0123456789abcdefghijklmnopq.01.0a1234567",
+      "mustNotSurvive": ["0123456789abcdefghijklmnopq", "0a1234567"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "slack-then-npm-encoded",
+      "ruleId": "slack-token",
+      "input": "?q=xoxb-FAKE123456-FAKEabcdefghijklmnop%20npm_0123456789abcdef0123456789abcdef0123",
+      "mustNotSurvive": [
+        "FAKEabcdefghijklmnop",
+        "0123456789abcdef0123456789abcdef0123"
+      ]
+    },
+    {
+      "name": "signed-value-short-mac",
+      "ruleId": "jwt",
+      "input": "session eyJ1c2VyIjo0Mn0.KtbIIGZb5B0 end",
+      "mustNotSurvive": ["eyJ1c2VyIjo0Mn0", "KtbIIGZb5B0"],
+      "expected": "session [REDACTED_SECRET] end"
+    },
+    {
       "name": "gitlab-named-assignment",
       "ruleId": "sensitive-assignment",
-      "input": "glimt-production-deploy-passwd=orchid-demo",
+      "input": "glimt-0123456789abcdefghijklpasswd=orchid-demo",
       "mustNotSurvive": ["orchid-demo"]
     },
     {
@@ -916,8 +963,8 @@
     {
       "name": "gitlab-incoming-mail-token",
       "ruleId": "gitlab-token",
-      "input": "mail glimt-FAKEabcdefghijklmnopqrstu",
-      "mustNotSurvive": ["FAKEabcdefghijklmnopqrstu"]
+      "input": "mail glimt-0fake1abcdefghijklmnopqr",
+      "mustNotSurvive": ["0fake1abcdefghijklmnopqr"]
     },
     {
       "name": "gitlab-feature-flag-token",

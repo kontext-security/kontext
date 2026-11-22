@@ -104,6 +104,14 @@ func TestRedactTextLeavesProseAlone(t *testing.T) {
 		"curl https://unpkg.com/react@18.3.1/umd/react.js",
 		"curl http://localhost:5173/@vite/client",
 		"git clone git@github.com:org/repo.git",
+		// Case-folded client names count only as Windows executables.
+		"find docs/MySQL -print",
+		"git grep -e SSHPASS -p README.md",
+		"grep -e REDIS-CLI -a README.md",
+		// Unsigned JSON basenames and encoded letters are not tokens.
+		"cat cache/eyJpIjoxfQ.json.gz",
+		"src/%6BeyJsonSchema.properties.type",
+		"docs/xoxb-token%20format%20guide.md",
 	} {
 		redacted, changed := RedactText(input)
 		if changed || redacted != input {
@@ -123,8 +131,14 @@ func TestRedactionCoverageIsOrderIndependent(t *testing.T) {
 	loadTestdata(t, "redaction-coverage-vectors.json", &vectors)
 
 	apply := func(rules []compiledRule, input string) string {
-		for _, rule := range rules {
-			input = rule.re.ReplaceAllString(input, rule.replacement)
+		for pass := 0; pass < maxPasses; pass++ {
+			before := input
+			for _, rule := range rules {
+				input = rule.re.ReplaceAllString(input, rule.replacement)
+			}
+			if input == before {
+				break
+			}
 		}
 		return input
 	}
@@ -137,13 +151,13 @@ func TestRedactionCoverageIsOrderIndependent(t *testing.T) {
 	// rules/4: a program's password-flag rules run before
 	// sensitive-assignment by contract, which would otherwise read a prompt
 	// text such as `sshpass -P password:` as a key and swallow the -p after
-	// it. rules/5: json-sensitive-property runs before the vendor token rules
-	// by contract, so a property named like a token (`"glpat-…": "…"`) loses
-	// its value rather than only its name. Their vectors hold in the ruleset's
-	// order only.
+	// it. rules/5: the vendor token rules run after the property and
+	// assignment rules by contract, so a property or assignment named like a
+	// token (`"glpat-…": "…"`, `glimt-…passwd=…`) loses its value rather than
+	// only its name. Their vectors hold in the ruleset's order only.
 	ordered := func(ruleID, name string) bool {
 		return strings.HasPrefix(ruleID, "mysql-") || strings.HasPrefix(ruleID, "sshpass-") || strings.HasPrefix(ruleID, "redis-cli-") ||
-			name == "gitlab-named-json-property"
+			name == "gitlab-named-json-property" || name == "gitlab-named-assignment"
 	}
 	for _, vector := range vectors.ValueVectors {
 		orders := [][]compiledRule{compiledValueRules, reversed}
@@ -203,6 +217,7 @@ func TestHasSecretTokenReadsTokenShapesOnly(t *testing.T) {
 		"publicKeyJsonConverter.test.js", "libxapp/xapp-status-icon-monitor.h",
 		"cache/eyJwYWdlIjoxfQ.json", "docs/glimt-incoming-mail-settings.md",
 		"network_org_defaultNotificationSettings", "task_org_defaultNotificationSettings", "work_org_507f1f77bcf86cd799439011",
+		"cache/eyJ4IjoxfQ.tar.gz", "src/%6BeyJsonSchema.properties.type", "docs/xoxb-token%20format%20guide.md",
 	} {
 		if HasSecretToken(plain) {
 			t.Fatalf("%q read as a token", plain)
