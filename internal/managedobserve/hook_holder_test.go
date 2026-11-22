@@ -38,7 +38,10 @@ func (f *fakeHookScan) holder(on *bool, keys *hookKeyBox) *hookHolder {
 			f.opts = opts
 			return agentauthority.HookAgent{ID: "claude_code"}, agentauthority.SourceResult{ID: "claude_code/hooks", Status: agentauthority.StatusComplete}, nil
 		},
-		record:  func(_ agentauthority.HookAgent, _ agentauthority.SourceResult, tag string) { f.recorded++; f.tag = tag },
+		record: func(_ agentauthority.HookAgent, _ agentauthority.SourceResult, tag string, _ uint64) {
+			f.recorded++
+			f.tag = tag
+		},
 		discard: func() error { f.discards++; return f.discardErr },
 	}
 }

@@ -3,6 +3,7 @@ package managedstream
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,7 +73,7 @@ func heartbeatWith(store *InventoryStore, hooksOn bool) Payload {
 func TestHookInventoryFollowsTheSwitch(t *testing.T) {
 	store, _ := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:one")
-	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+	if err := store.RecordHooks(agent, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	if off := heartbeatWith(store, false); off.Device.HookInventory != nil || off.Device.Inventory != nil {
@@ -100,7 +101,7 @@ func TestHookInventoryFollowsTheSwitch(t *testing.T) {
 func TestHookAndAuthorityDiscardsAreSeparate(t *testing.T) {
 	store, _ := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:one")
-	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+	if err := store.RecordHooks(agent, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.RecordAuthority(mcpScan(agentauthority.StatusComplete, "github")); err != nil {
@@ -134,11 +135,11 @@ func TestHookAndAuthorityDiscardsAreSeparate(t *testing.T) {
 func TestHookMergeKeepsCompleteScopes(t *testing.T) {
 	store, _ := openTestStore(t)
 	older, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete", "sc_b": "complete"}, "sc_a:a1", "sc_b:b1")
-	if err := store.RecordHooks(older, res, "tag"); err != nil {
+	if err := store.RecordHooks(older, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	newer, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "failed", "sc_b": "complete"}, "sc_b:b2")
-	if err := store.RecordHooks(newer, res, "tag"); err != nil {
+	if err := store.RecordHooks(newer, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	merged := pendingOf(t, store, hookSource)
@@ -155,7 +156,7 @@ func TestHookMergeKeepsCompleteScopes(t *testing.T) {
 	}
 	// A failed source with nothing in it keeps the older scan whole.
 	failed := agentauthority.HookAgent{ID: "claude_code", Scopes: []agentauthority.HookScope{}, Hooks: []agentauthority.HookRecord{}}
-	if err := store.RecordHooks(failed, result(hookSource, agentauthority.StatusFailed, agentauthority.ReasonMalformed), "tag"); err != nil {
+	if err := store.RecordHooks(failed, result(hookSource, agentauthority.StatusFailed, agentauthority.ReasonMalformed), "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	if got := hookIDs(pendingOf(t, store, hookSource).Claims.Hooks); !slices.Equal(got, []string{"hk_a1", "hk_b2"}) {
@@ -178,7 +179,7 @@ func TestHookBlockStaysInsideTheBudget(t *testing.T) {
 	for i := range agent.Hooks {
 		agent.Hooks[i].Summary = &long
 	}
-	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+	if err := store.RecordHooks(agent, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	payload := heartbeatWith(store, true)
@@ -210,7 +211,7 @@ func TestHookBlockStaysInsideTheBudget(t *testing.T) {
 func TestFlushAcknowledgesHookSource(t *testing.T) {
 	store, _ := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:one")
-	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+	if err := store.RecordHooks(agent, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	scan := presenceScan(agentauthority.StatusComplete, "cursor")
@@ -236,7 +237,7 @@ func TestFlushAcknowledgesHookSource(t *testing.T) {
 func TestHookResultsTravelOnlyUnderTheirKey(t *testing.T) {
 	store, _ := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:old")
-	if err := store.RecordHooks(agent, res, "acme"); err != nil {
+	if err := store.RecordHooks(agent, res, "acme", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	send := func(tag string) Payload {
@@ -254,7 +255,7 @@ func TestHookResultsTravelOnlyUnderTheirKey(t *testing.T) {
 		t.Fatal("own key's result not sent")
 	}
 	newer, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_b": "complete"}, "sc_b:new")
-	if err := store.RecordHooks(newer, res, "other"); err != nil {
+	if err := store.RecordHooks(newer, res, "other", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	if got := hookIDs(pendingOf(t, store, hookSource).Claims.Hooks); !slices.Equal(got, []string{"hk_new"}) {
@@ -266,7 +267,7 @@ func TestHookResultsTravelOnlyUnderTheirKey(t *testing.T) {
 func TestHookResultsNeedAKeyTagCallback(t *testing.T) {
 	store, _ := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:one")
-	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+	if err := store.RecordHooks(agent, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	opts := Options{Inventory: store, CLIVersion: "test", HookInventoryEnabled: func() bool { return true }}
@@ -282,11 +283,11 @@ func TestHookResultsNeedAKeyTagCallback(t *testing.T) {
 func TestHookMergeKeepsNewRecordsInAPartialScope(t *testing.T) {
 	store, _ := openTestStore(t)
 	older, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a")
-	if err := store.RecordHooks(older, res, "tag"); err != nil {
+	if err := store.RecordHooks(older, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	newer, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "partial"}, "sc_a:b")
-	if err := store.RecordHooks(newer, res, "tag"); err != nil {
+	if err := store.RecordHooks(newer, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	merged := pendingOf(t, store, hookSource).Claims.Hooks
@@ -298,11 +299,11 @@ func TestHookMergeKeepsNewRecordsInAPartialScope(t *testing.T) {
 	}
 	// More incomplete scans before an upload keep every older record.
 	third, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "partial"}, "sc_a:c")
-	if err := store.RecordHooks(third, res, "tag"); err != nil {
+	if err := store.RecordHooks(third, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	failed, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "failed"})
-	if err := store.RecordHooks(failed, res, "tag"); err != nil {
+	if err := store.RecordHooks(failed, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	merged = pendingOf(t, store, hookSource).Claims.Hooks
@@ -319,7 +320,7 @@ func TestHookMergeKeepsNewRecordsInAPartialScope(t *testing.T) {
 func TestDiscardHooksWritesAgainAfterAFailedWrite(t *testing.T) {
 	store, path := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a")
-	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+	if err := store.RecordHooks(agent, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	// A non-empty directory where the file goes refuses the write, for root
@@ -360,7 +361,7 @@ func TestDiscardHooksWritesAgainAfterAFailedWrite(t *testing.T) {
 func TestHookResultsFromAnOlderRedactorStayHome(t *testing.T) {
 	store, _ := openTestStore(t)
 	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a")
-	if err := store.RecordHooks(agent, res, "tag"); err != nil {
+	if err := store.RecordHooks(agent, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	store.mu.Lock()
@@ -373,7 +374,7 @@ func TestHookResultsFromAnOlderRedactorStayHome(t *testing.T) {
 	}
 	// A partial rescan doesn't merge it in either.
 	newer, res := hookScan(agentauthority.StatusPartial, map[string]string{"sc_a": "partial"}, "sc_a:b")
-	if err := store.RecordHooks(newer, res, "tag"); err != nil {
+	if err := store.RecordHooks(newer, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	if got := hookIDs(pendingOf(t, store, hookSource).Claims.Hooks); !slices.Equal(got, []string{"hk_b"}) {
@@ -438,7 +439,7 @@ func TestHookChangesFollowTheBaseline(t *testing.T) {
 	var seen []agentauthority.HookChange
 	store.HookChanged = func(changes []agentauthority.HookChange) { seen = append(seen, changes...) }
 	first, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a1")
-	if err := store.RecordHooks(first, res, "tag"); err != nil {
+	if err := store.RecordHooks(first, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.HookChanges()) != 0 || len(seen) != 0 {
@@ -451,7 +452,7 @@ func TestHookChangesFollowTheBaseline(t *testing.T) {
 	store.HookChanged = func(changes []agentauthority.HookChange) { seen = append(seen, changes...) }
 	store.file.Pending = map[string]pendingSource{}
 	second, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a2")
-	if err := store.RecordHooks(second, res, "tag"); err != nil {
+	if err := store.RecordHooks(second, res, "tag", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
 	kinds := func(changes []agentauthority.HookChange) []string {
@@ -469,12 +470,13 @@ func TestHookChangesFollowTheBaseline(t *testing.T) {
 		t.Fatalf("callback %v", kinds(seen))
 	}
 
-	// Ids under another workspace's key don't compare with these.
-	if err := store.RecordHooks(first, res, "other"); err != nil {
+	// Ids under another workspace's key don't compare with these, and the
+	// old workspace's log goes.
+	if err := store.RecordHooks(first, res, "other", store.HookGeneration()); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.HookChanges()) != 2 {
-		t.Fatalf("a new key reported changes: %v", kinds(store.HookChanges()))
+	if len(store.HookChanges()) != 0 || len(seen) != 2 {
+		t.Fatalf("a new key kept or reported changes: %v", kinds(store.HookChanges()))
 	}
 
 	if err := store.DiscardHooks(); err != nil {
@@ -491,12 +493,54 @@ func TestHookChangesAreBounded(t *testing.T) {
 	store, _ := openTestStore(t)
 	for i := range maxHookChanges + 10 {
 		agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:"+strconv.Itoa(i))
-		if err := store.RecordHooks(agent, res, "tag"); err != nil {
+		if err := store.RecordHooks(agent, res, "tag", store.HookGeneration()); err != nil {
 			t.Fatal(err)
 		}
 	}
 	changes := store.HookChanges()
 	if len(changes) != maxHookChanges || changes[len(changes)-1].HookID != wireID("hk_"+strconv.Itoa(maxHookChanges+9)) {
 		t.Fatalf("%d changes, last %+v", len(changes), changes[len(changes)-1])
+	}
+}
+
+// A scan that began before a discard records nothing: it may be from before
+// an opt-out, or under the previous workspace.
+func TestScanRacingADiscardRecordsNothing(t *testing.T) {
+	store, path := openTestStore(t)
+	agent, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a1")
+	generation := store.HookGeneration()
+	if err := store.DiscardHooks(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordHooks(agent, res, "tag", generation); !errors.Is(err, ErrHooksDiscarded) {
+		t.Fatalf("err %v", err)
+	}
+	reopened := OpenInventoryStore(path, testInstallation)
+	if len(reopened.file.HookBaselines) != 0 || len(reopened.file.Pending) != 0 {
+		t.Fatalf("a stale scan was recorded: %+v", reopened.file)
+	}
+}
+
+// A failed write still hands the scan's changes on: memory holds them and
+// the next write keeps them.
+func TestHookChangesReachTheCallbackWhenTheWriteFails(t *testing.T) {
+	store, _ := openTestStore(t)
+	var seen []agentauthority.HookChange
+	store.HookChanged = func(changes []agentauthority.HookChange) { seen = append(seen, changes...) }
+	first, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a1")
+	if err := store.RecordHooks(first, res, "tag", store.HookGeneration()); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store.path = filepath.Join(blocker, "state.json")
+	second, res := hookScan(agentauthority.StatusComplete, map[string]string{"sc_a": "complete"}, "sc_a:a2")
+	if err := store.RecordHooks(second, res, "tag", store.HookGeneration()); err == nil {
+		t.Fatal("the write should fail")
+	}
+	if len(seen) != 2 || len(store.HookChanges()) != 2 {
+		t.Fatalf("seen %+v", seen)
 	}
 }

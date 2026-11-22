@@ -120,7 +120,11 @@ type hookHolder struct {
 	// ownBinary verifies a handler's program is this Kontext binary.
 	ownBinary func(string) bool
 	// record stores a scan with the tag of the key it was read under.
-	record func(agentauthority.HookAgent, agentauthority.SourceResult, string)
+	// The last argument is what generation said before the scan began.
+	record func(agentauthority.HookAgent, agentauthority.SourceResult, string, uint64)
+	// generation names the store's hook state, so a discard while a scan
+	// runs voids the scan.
+	generation func() uint64
 	// switches reads the switch and its confirmation from one snapshot; it
 	// replaces enabled and confirmed when set.
 	switches func() (on, confirmed bool)
@@ -187,6 +191,10 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 		// Reading another profile would report hooks Claude Code doesn't load.
 		return
 	}
+	var generation uint64
+	if h.generation != nil {
+		generation = h.generation()
+	}
 	scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	agent, result, err := scan(scanCtx, agentauthority.HookScanOptions{
@@ -201,7 +209,7 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 		return
 	}
 	if h.record != nil {
-		h.record(agent, result, hookKeyTag(key))
+		h.record(agent, result, hookKeyTag(key), generation)
 	}
 }
 
@@ -338,6 +346,7 @@ func ClaudeConfigDir() (string, error) {
 // describeHookChange is one line for the daemon log: the kind and the opaque
 // ids, never a command or a path.
 func describeHookChange(change agentauthority.HookChange) string {
+	// Event is a known name or "other"; ids and reasons are opaque codes.
 	line := change.Kind + " scope=" + change.ScopeID
 	if change.HookID != "" {
 		line += " hook=" + change.HookID + " event=" + change.Event

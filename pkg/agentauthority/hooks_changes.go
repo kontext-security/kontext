@@ -1,6 +1,7 @@
 package agentauthority
 
 import (
+	"maps"
 	"slices"
 	"strings"
 )
@@ -22,6 +23,39 @@ type HookChange struct {
 	Event   string   `json:"event,omitempty"`
 	Reasons []string `json:"reasons,omitempty"`
 	At      string   `json:"at"`
+}
+
+// maxBaselineHooks and maxBaselineScopes bound what a baseline keeps. Past
+// them, entries carried over from scopes this scan couldn't read go first;
+// a hook dropped that way is reported as added if it comes back.
+const (
+	maxBaselineHooks  = 4096
+	maxBaselineScopes = 1024
+)
+
+// HookEventOther stands for an event name change detection doesn't know. A
+// change record is logged and kept on disk, so it carries a known name or
+// this, never a string read from a settings file.
+const HookEventOther = "other"
+
+// knownHookEvents are the Claude Code hook events a change may name.
+var knownHookEvents = map[string]bool{
+	"PreToolUse": true, "PostToolUse": true, "PostToolUseFailure": true,
+	"PermissionRequest": true, "PermissionDenied": true, "UserPromptSubmit": true,
+	"Notification": true, "Stop": true, "StopFailure": true,
+	"SubagentStart": true, "SubagentStop": true, "SessionStart": true,
+	"SessionEnd": true, "PreCompact": true, "PostCompact": true,
+	"TeammateIdle": true, "TaskCompleted": true, "TaskCreated": true,
+	"ConfigChange": true, "InstructionsLoaded": true, "WorktreeCreate": true,
+	"WorktreeRemove": true, "Elicitation": true, "ElicitationResult": true,
+	"Setup": true, "CwdChanged": true, "FileChanged": true,
+}
+
+func changeEvent(event string) string {
+	if knownHookEvents[event] {
+		return event
+	}
+	return HookEventOther
 }
 
 // HookBaseline is what change detection keeps of the last scan: each hook's
@@ -49,17 +83,28 @@ type HookBaselineEntry struct {
 // Changes are deduplicated: a scope that stays unreadable is reported once,
 // when it stops reading, and a hook is reported only when its content or
 // enablement state moves. A nil baseline is the first scan, which sets the
-// baseline and reports nothing.
-func HookChanges(base *HookBaseline, agent HookAgent, source SourceResult) ([]HookChange, HookBaseline) {
-	next := HookBaseline{Hooks: map[string]HookBaselineEntry{}, Scopes: map[string]string{}}
-	if source.Status == StatusFailed {
-		// A failed scan establishes nothing.
-		if base != nil {
-			next = cloneBaseline(*base)
-		}
-		return nil, next
-	}
+// baseline and reports nothing; a nil result means no baseline yet.
+func HookChanges(base *HookBaseline, agent HookAgent, source SourceResult) ([]HookChange, *HookBaseline) {
 	at := source.FinishedAt
+	if source.Status == StatusFailed {
+		// A failed scan establishes no hook. Before any baseline it sets
+		// none, so the first readable scan still reports nothing.
+		if base == nil {
+			return nil, nil
+		}
+		next := cloneBaseline(*base)
+		// Scopes it names as unreadable are still reported, once.
+		changes := checkFailures(base, agent.Scopes, at)
+		for _, scope := range agent.Scopes {
+			if scope.Status != StatusComplete {
+				next.Scopes[scope.ID] = scope.Status
+			}
+		}
+		boundBaseline(&next, nil, nil)
+		sortChanges(changes)
+		return changes, &next
+	}
+	next := HookBaseline{Hooks: map[string]HookBaselineEntry{}, Scopes: map[string]string{}}
 	listed := make(map[string]HookScope, len(agent.Scopes))
 	for _, scope := range agent.Scopes {
 		listed[scope.ID] = scope
@@ -74,27 +119,18 @@ func HookChanges(base *HookBaseline, agent HookAgent, source SourceResult) ([]Ho
 		next.Scopes[scope.ID] = scope.Status
 	}
 	if base == nil {
-		return nil, next
+		boundBaseline(&next, reported, listed)
+		return nil, &next
 	}
 
-	var changes []HookChange
-	for _, scope := range agent.Scopes {
-		// A scope reports a failed check when it stops reading completely,
-		// or first appears unreadable; never again while it stays so.
-		if scope.Status == StatusComplete {
-			continue
-		}
-		if before, seen := base.Scopes[scope.ID]; !seen || before == StatusComplete {
-			changes = append(changes, HookChange{Kind: HookChangeCheckFailed, ScopeID: scope.ID, Reasons: slices.Clone(scope.Reasons), At: at})
-		}
-	}
+	changes := checkFailures(base, agent.Scopes, at)
 	for _, r := range agent.Hooks {
 		before, seen := base.Hooks[r.ID]
 		switch {
 		case !seen:
-			changes = append(changes, HookChange{Kind: HookChangeAdded, HookID: r.ID, ScopeID: r.ScopeID, Event: r.Event, At: at})
+			changes = append(changes, HookChange{Kind: HookChangeAdded, HookID: r.ID, ScopeID: r.ScopeID, Event: changeEvent(r.Event), At: at})
 		case before.ContentFP != r.ContentFP || before.State != r.Enablement.State:
-			changes = append(changes, HookChange{Kind: HookChangeChanged, HookID: r.ID, ScopeID: r.ScopeID, Event: r.Event, At: at})
+			changes = append(changes, HookChange{Kind: HookChangeChanged, HookID: r.ID, ScopeID: r.ScopeID, Event: changeEvent(r.Event), At: at})
 		}
 	}
 	for id, before := range base.Hooks {
@@ -104,7 +140,7 @@ func HookChanges(base *HookBaseline, agent HookAgent, source SourceResult) ([]Ho
 		scope, ok := listed[before.ScopeID]
 		withdrawn := ok && scope.Status == StatusComplete || !ok && authoritative
 		if withdrawn {
-			changes = append(changes, HookChange{Kind: HookChangeRemoved, HookID: id, ScopeID: before.ScopeID, Event: before.Event, At: at})
+			changes = append(changes, HookChange{Kind: HookChangeRemoved, HookID: id, ScopeID: before.ScopeID, Event: changeEvent(before.Event), At: at})
 			continue
 		}
 		// Not established gone: kept until its scope is read again.
@@ -115,6 +151,55 @@ func HookChanges(base *HookBaseline, agent HookAgent, source SourceResult) ([]Ho
 			next.Scopes[id] = status
 		}
 	}
+	boundBaseline(&next, reported, listed)
+	sortChanges(changes)
+	return changes, &next
+}
+
+// checkFailures reports each scope that stops reading completely, or first
+// appears unreadable; never again while it stays so.
+func checkFailures(base *HookBaseline, scopes []HookScope, at string) []HookChange {
+	var changes []HookChange
+	for _, scope := range scopes {
+		if scope.Status == StatusComplete {
+			continue
+		}
+		if before, seen := base.Scopes[scope.ID]; !seen || before == StatusComplete {
+			changes = append(changes, HookChange{Kind: HookChangeCheckFailed, ScopeID: scope.ID, Reasons: slices.Clone(scope.Reasons), At: at})
+		}
+	}
+	return changes
+}
+
+// boundBaseline drops carried-over entries, those this scan didn't report
+// or list, past the bounds, in id order so the result is the same each time.
+// What this scan read itself is already bounded by the scan.
+func boundBaseline(b *HookBaseline, reported map[string]bool, listed map[string]HookScope) {
+	if extra := len(b.Hooks) - maxBaselineHooks; extra > 0 {
+		for _, id := range slices.Sorted(maps.Keys(b.Hooks)) {
+			if extra == 0 {
+				break
+			}
+			if !reported[id] {
+				delete(b.Hooks, id)
+				extra--
+			}
+		}
+	}
+	if extra := len(b.Scopes) - maxBaselineScopes; extra > 0 {
+		for _, id := range slices.Sorted(maps.Keys(b.Scopes)) {
+			if extra == 0 {
+				break
+			}
+			if _, ok := listed[id]; !ok {
+				delete(b.Scopes, id)
+				extra--
+			}
+		}
+	}
+}
+
+func sortChanges(changes []HookChange) {
 	slices.SortStableFunc(changes, func(a, b HookChange) int {
 		if c := strings.Compare(changeRank(a.Kind), changeRank(b.Kind)); c != 0 {
 			return c
@@ -124,7 +209,15 @@ func HookChanges(base *HookBaseline, agent HookAgent, source SourceResult) ([]Ho
 		}
 		return strings.Compare(a.HookID, b.HookID)
 	})
-	return changes, next
+}
+
+// CloneHookChanges copies changes and their reasons.
+func CloneHookChanges(changes []HookChange) []HookChange {
+	out := slices.Clone(changes)
+	for i := range out {
+		out[i].Reasons = slices.Clone(out[i].Reasons)
+	}
+	return out
 }
 
 // changeRank orders a scan's changes: check failures first, since they say

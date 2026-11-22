@@ -1,6 +1,7 @@
 package agentauthority
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -80,7 +81,7 @@ func TestHookChanges(t *testing.T) {
 				t.Fatalf("%s: %+v", step.name, c)
 			}
 		}
-		base = &next
+		base = next
 	}
 }
 
@@ -91,13 +92,16 @@ func TestHookChangeShowsOnTheNextScan(t *testing.T) {
 	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("echo stop"))})
 	agent, source := h.scan()
 	_, base := HookChanges(nil, agent, source)
+	if base == nil {
+		t.Fatal("a complete first scan sets no baseline")
+	}
 
 	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": map[string]any{
 		"Stop":         hooksOf("Stop", "", command("echo stop"))["Stop"],
 		"SessionStart": hooksOf("SessionStart", "", command("echo hello"))["SessionStart"],
 	}})
 	agent, source = h.scan()
-	changes, base := HookChanges(&base, agent, source)
+	changes, base := HookChanges(base, agent, source)
 	if len(changes) != 1 || changes[0].Kind != HookChangeAdded || changes[0].Event != "SessionStart" {
 		t.Fatalf("%+v", changes)
 	}
@@ -105,7 +109,7 @@ func TestHookChangeShowsOnTheNextScan(t *testing.T) {
 	// Unparsed settings fail the scope's check and keep its hooks.
 	h.write(filepath.Join(h.base, "settings.json"), []byte(`{"hooks": [`))
 	agent, source = h.scan()
-	changes, base = HookChanges(&base, agent, source)
+	changes, base = HookChanges(base, agent, source)
 	if got := changeKinds(changes); len(got) != 1 || changes[0].Kind != HookChangeCheckFailed || !slices.Equal(changes[0].Reasons, []string{ReasonMalformed}) {
 		t.Fatalf("%+v", changes)
 	}
@@ -118,8 +122,68 @@ func TestHookChangeShowsOnTheNextScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent, source = h.scan()
-	changes, _ = HookChanges(&base, agent, source)
+	changes, _ = HookChanges(base, agent, source)
 	if got := changeKinds(changes); len(got) != 2 || changes[0].Kind != HookChangeRemoved || changes[1].Kind != HookChangeRemoved {
 		t.Fatalf("%+v", changes)
+	}
+}
+
+// A failed first scan sets no baseline, so the next readable scan is still
+// the first and reports nothing.
+func TestFailedFirstScanSetsNoBaseline(t *testing.T) {
+	agent, source := changeScan{StatusFailed, false, map[string]string{"a": StatusFailed}, nil}.agent()
+	changes, base := HookChanges(nil, agent, source)
+	if len(changes) != 0 || base != nil {
+		t.Fatalf("%+v %+v", changes, base)
+	}
+}
+
+// A failed source still reports the scopes it names as unreadable, once.
+func TestFailedSourceReportsItsUnreadScopes(t *testing.T) {
+	agent, source := changeScan{StatusComplete, false, map[string]string{"a": StatusComplete}, []HookRecord{hookIn("a", "h1", "f1", hookEnabled)}}.agent()
+	_, base := HookChanges(nil, agent, source)
+	agent, source = changeScan{StatusFailed, false, map[string]string{"a": StatusFailed}, nil}.agent()
+	changes, base := HookChanges(base, agent, source)
+	if got := changeKinds(changes); !slices.Equal(got, []string{"check_failed:a"}) || len(base.Hooks) != 1 {
+		t.Fatalf("%v %+v", got, base)
+	}
+	if changes, _ := HookChanges(base, agent, source); len(changes) != 0 {
+		t.Fatalf("reported twice: %+v", changes)
+	}
+}
+
+// Changes name only known events.
+func TestHookChangesNameKnownEventsOnly(t *testing.T) {
+	agent, source := changeScan{StatusComplete, false, map[string]string{"a": StatusComplete}, nil}.agent()
+	_, base := HookChanges(nil, agent, source)
+	odd := hookIn("a", "h1", "f1", hookEnabled)
+	odd.Event = "FAKEhunter2Event"
+	agent.Hooks = []HookRecord{odd, hookIn("a", "h2", "f2", hookEnabled)}
+	changes, _ := HookChanges(base, agent, source)
+	if len(changes) != 2 || changes[0].Event != HookEventOther || changes[1].Event != "Stop" {
+		t.Fatalf("%+v", changes)
+	}
+}
+
+// Hooks carried over from unread scopes are bounded; what the scan read
+// itself is kept.
+func TestBaselineIsBounded(t *testing.T) {
+	base := &HookBaseline{Hooks: map[string]HookBaselineEntry{}, Scopes: map[string]string{}}
+	for i := range maxBaselineHooks {
+		base.Hooks[fmt.Sprintf("old%05d", i)] = HookBaselineEntry{ScopeID: "gone", Event: "Stop"}
+	}
+	for i := range maxBaselineScopes {
+		base.Scopes[fmt.Sprintf("gone%05d", i)] = StatusFailed
+	}
+	agent, source := changeScan{StatusPartial, false, map[string]string{"a": StatusComplete}, []HookRecord{hookIn("a", "new", "f1", hookEnabled)}}.agent()
+	_, next := HookChanges(base, agent, source)
+	if len(next.Hooks) != maxBaselineHooks || len(next.Scopes) != maxBaselineScopes {
+		t.Fatalf("%d hooks, %d scopes", len(next.Hooks), len(next.Scopes))
+	}
+	if _, ok := next.Hooks["new"]; !ok {
+		t.Fatal("dropped a hook the scan read")
+	}
+	if _, ok := next.Scopes["a"]; !ok {
+		t.Fatal("dropped a scope the scan listed")
 	}
 }

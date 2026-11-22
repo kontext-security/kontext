@@ -104,6 +104,8 @@ type inventoryFile struct {
 	// HookChanges is the latest transitions, newest last, at most
 	// maxHookChanges.
 	HookChanges []agentauthority.HookChange `json:"hook_changes,omitempty"`
+	// HookChangesKey is the key tag the change log was made under.
+	HookChangesKey string `json:"hook_changes_key,omitempty"`
 }
 
 // hookBaseline is a source's last scan under one key: ids from another
@@ -126,10 +128,26 @@ type InventoryStore struct {
 	// unsaved: the last write failed, so the file may still hold what
 	// memory dropped, and the next discard writes again.
 	unsaved bool
-	// HookChanged, when set, receives each hook scan's transitions after
-	// they are stored. It runs under no lock.
+	// hookGeneration moves on with each DiscardHooks, so a scan that began
+	// before a discard can't record into the state after it.
+	hookGeneration uint64
+	// HookChanged, when set, receives each hook scan's transitions once
+	// they are in the store, also when the write to disk failed: memory
+	// holds them and the next write keeps them. It runs under no lock.
 	HookChanged func([]agentauthority.HookChange)
 }
+
+// HookGeneration names the store's hook state now. A scan reads it before
+// it starts and hands it to RecordHooks.
+func (s *InventoryStore) HookGeneration() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hookGeneration
+}
+
+// ErrHooksDiscarded is RecordHooks refusing a scan that began before the
+// hook state was discarded.
+var ErrHooksDiscarded = errors.New("hook state was discarded while the scan ran")
 
 // InventoryStatePath is the store's place beside the stream's own state.
 func InventoryStatePath(streamStatePath string) string {
@@ -215,32 +233,54 @@ func (s *InventoryStore) RecordAuthority(report agentauthority.Report) error {
 }
 
 // RecordHooks takes a new revision for a hook scan of one agent, and records
-// what changed since the last scan under the same key.
-func (s *InventoryStore) RecordHooks(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) error {
+// what changed since the last scan under the same key. generation is what
+// HookGeneration said before the scan began: if hook state was discarded
+// since, the scan may be from before an opt-out or under the previous
+// workspace, and nothing is recorded.
+func (s *InventoryStore) RecordHooks(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string, generation uint64) error {
 	var changes []agentauthority.HookChange
+	stale := false
 	err := s.record([]agentauthority.SourceResult{result}, func(string, string) sourceClaims {
 		changes = s.hookChangesLocked(agent, result, keyTag)
 		return sourceClaims{Hooks: &agent, KeyTag: keyTag, Redactor: hookRedactor}
+	}, func() bool {
+		stale = s.hookGeneration != generation
+		return !stale
 	})
-	if err == nil && len(changes) > 0 && s.HookChanged != nil {
-		s.HookChanged(changes)
+	if stale {
+		return ErrHooksDiscarded
+	}
+	if len(changes) > 0 && s.HookChanged != nil {
+		s.HookChanged(agentauthority.CloneHookChanges(changes))
 	}
 	return err
 }
 
 // hookChangesLocked compares a scan with its source's baseline and moves the
-// baseline on. A new key or redactor starts a new baseline and reports
-// nothing: its ids don't compare with the old ones.
+// baseline on. A new key or redactor starts over and reports nothing: its
+// ids don't compare with the old ones, and the change log of the old key
+// goes with it.
 func (s *InventoryStore) hookChangesLocked(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) []agentauthority.HookChange {
 	if s.file.HookBaselines == nil {
 		s.file.HookBaselines = map[string]hookBaseline{}
 	}
+	for id, prior := range s.file.HookBaselines {
+		if prior.KeyTag != keyTag || prior.Redactor != hookRedactor {
+			delete(s.file.HookBaselines, id)
+			s.file.HookChanges = nil
+		}
+	}
+	if s.file.HookChangesKey != keyTag {
+		s.file.HookChanges, s.file.HookChangesKey = nil, keyTag
+	}
 	var base *agentauthority.HookBaseline
-	if prior, ok := s.file.HookBaselines[result.ID]; ok && prior.KeyTag == keyTag && prior.Redactor == hookRedactor {
+	if prior, ok := s.file.HookBaselines[result.ID]; ok {
 		base = &prior.Baseline
 	}
 	changes, next := agentauthority.HookChanges(base, agent, result)
-	s.file.HookBaselines[result.ID] = hookBaseline{KeyTag: keyTag, Redactor: hookRedactor, Baseline: next}
+	if next != nil {
+		s.file.HookBaselines[result.ID] = hookBaseline{KeyTag: keyTag, Redactor: hookRedactor, Baseline: *next}
+	}
 	s.file.HookChanges = append(s.file.HookChanges, changes...)
 	if extra := len(s.file.HookChanges) - maxHookChanges; extra > 0 {
 		s.file.HookChanges = slices.Clone(s.file.HookChanges[extra:])
@@ -252,15 +292,20 @@ func (s *InventoryStore) hookChangesLocked(agent agentauthority.HookAgent, resul
 func (s *InventoryStore) HookChanges() []agentauthority.HookChange {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.file.HookChanges)
+	return agentauthority.CloneHookChanges(s.file.HookChanges)
 }
 
-func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf func(agent, family string) sourceClaims) error {
+func (s *InventoryStore) record(results []agentauthority.SourceResult, claimsOf func(agent, family string) sourceClaims, admit ...func() bool) error {
 	if len(results) == 0 {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, ok := range admit {
+		if !ok() {
+			return nil
+		}
+	}
 	s.file.Revision++
 	if s.file.Health.IncompleteSources == nil {
 		s.file.Health.IncompleteSources = map[string]bool{}
@@ -579,8 +624,9 @@ func (s *InventoryStore) DiscardHooks() error {
 	defer s.mu.Unlock()
 	// Change detection starts over too: the next scan may be under another
 	// workspace's key, or after the deployment turned hooks back on.
-	if len(s.file.HookBaselines)+len(s.file.HookChanges) > 0 {
-		s.file.HookBaselines, s.file.HookChanges = nil, nil
+	s.hookGeneration++
+	if len(s.file.HookBaselines)+len(s.file.HookChanges) > 0 || s.file.HookChangesKey != "" {
+		s.file.HookBaselines, s.file.HookChanges, s.file.HookChangesKey = nil, nil, ""
 		s.unsaved = true
 	}
 	return s.discard(func(id string) bool { return sourceKind(id) == kindHooks })

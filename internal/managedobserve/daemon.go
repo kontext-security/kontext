@@ -442,7 +442,9 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	inventoryStore := managedstream.OpenInventoryStore(managedstream.InventoryStatePath(streamStatePath), installationState.InstallationID)
 	inventoryStore.HookChanged = func(changes []agentauthority.HookChange) {
 		for _, change := range changes {
-			opts.Diagnostic.Printf("hook inventory: %s\n", describeHookChange(change))
+			// Unconditional: an admin follows hook changes in the log
+			// without turning debug output on.
+			logAlways(opts.Diagnostic, "hook inventory: %s\n", describeHookChange(change))
 		}
 	}
 	// A confirmed opt-out drops pending hook results when it is seen, not
@@ -548,11 +550,12 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			}
 			return hookAuthorized(endpointConfigCache.Current(), token)
 		},
-		available: hookAvailable,
-		beginRead: authorityHolder.scanner.BeginRead,
-		ownBinary: ownBinaryCheck(),
-		record: func(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string) {
-			if err := inventoryStore.RecordHooks(agent, result, keyTag); err != nil {
+		available:  hookAvailable,
+		beginRead:  authorityHolder.scanner.BeginRead,
+		ownBinary:  ownBinaryCheck(),
+		generation: inventoryStore.HookGeneration,
+		record: func(agent agentauthority.HookAgent, result agentauthority.SourceResult, keyTag string, generation uint64) {
+			if err := inventoryStore.RecordHooks(agent, result, keyTag, generation); err != nil && !errors.Is(err, managedstream.ErrHooksDiscarded) {
 				opts.Diagnostic.Printf("hook inventory: record scan: %v\n", err)
 			}
 		},
