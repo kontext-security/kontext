@@ -81,7 +81,7 @@ type sourceClaims struct {
 
 // hookRedactor numbers the redaction rules in pkg/agentauthority
 // hooks_redact.go. Raise it whenever they drop more.
-const hookRedactor = 6
+const hookRedactor = 7
 
 func (c sourceClaims) positive() bool {
 	return c.Agent != nil || len(c.MCPServers) > 0 || len(c.Plugins) > 0 || len(c.Connectors) > 0 || c.Permissions != nil || len(c.Credentials) > 0 ||
