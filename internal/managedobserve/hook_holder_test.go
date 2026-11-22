@@ -38,7 +38,10 @@ func (f *fakeHookScan) holder(on *bool, keys *hookKeyBox) *hookHolder {
 			f.opts = opts
 			return agentauthority.HookAgent{ID: "claude_code"}, agentauthority.SourceResult{ID: "claude_code/hooks", Status: agentauthority.StatusComplete}, nil
 		},
-		record:  func(_ agentauthority.HookAgent, _ agentauthority.SourceResult, tag string) { f.recorded++; f.tag = tag },
+		record: func(_ agentauthority.HookAgent, _ agentauthority.SourceResult, tag string, _ uint64) {
+			f.recorded++
+			f.tag = tag
+		},
 		discard: func() error { f.discards++; return f.discardErr },
 	}
 }
@@ -341,5 +344,28 @@ func TestHookScansWaitForRestartAfterCloudURLChange(t *testing.T) {
 	}
 	if !enrolledAtStartupCloud("https://new.example/") {
 		t.Fatal("the startup cloud is refused")
+	}
+}
+
+// The scan carries the generation from before any check, so an opt-out and
+// discard between the checks voids it.
+func TestHookHolderTakesTheGenerationFirst(t *testing.T) {
+	fake := &fakeHookScan{confirmed: true}
+	on := true
+	keys := newHookKeyBox()
+	keys.set([]byte("k"), "t")
+	h := fake.holder(&on, keys)
+	var generation uint64
+	var got uint64
+	h.generation = func() uint64 { return generation }
+	h.authorized = func() bool {
+		// A discard lands while the checks run.
+		generation++
+		return true
+	}
+	h.record = func(_ agentauthority.HookAgent, _ agentauthority.SourceResult, _ string, g uint64) { got = g }
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	if got != 0 || generation == 0 {
+		t.Fatalf("recorded under generation %d, store at %d", got, generation)
 	}
 }
