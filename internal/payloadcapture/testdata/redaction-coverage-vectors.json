@@ -1,6 +1,54 @@
 {
   "valueVectors": [
     {
+      "name": "gitlab-named-assignment",
+      "ruleId": "sensitive-assignment",
+      "input": "glimt-production-deploy-passwd=orchid-demo",
+      "mustNotSurvive": ["orchid-demo"]
+    },
+    {
+      "name": "jwt-after-url-encoded-slash",
+      "ruleId": "jwt",
+      "input": "GET /login?next=%2Fdownload%2FeyJhbGciOiJIUzI1NiJ9.e30.FAKEsignatureFAKEsignatureFAKE",
+      "mustNotSurvive": ["eyJhbGciOiJIUzI1NiJ9", "FAKEsignature"]
+    },
+    {
+      "name": "jwt-newline-header",
+      "ruleId": "jwt",
+      "input": "ewogImFsZyI6IkhTMjU2In0.e30.FAKEsignatureFAKEsignatureFAKE",
+      "mustNotSurvive": ["ewogImFsZyI6IkhTMjU2In0", "FAKEsignature"]
+    },
+    {
+      "name": "signed-value-short-claims",
+      "ruleId": "jwt",
+      "input": "session eyJpIjoxfQ.FAKEsignatureFAKEsignatu end",
+      "mustNotSurvive": ["eyJpIjoxfQ", "FAKEsignatureFAKEsignatu"]
+    },
+    {
+      "name": "slack-url-encoded-cookie",
+      "ruleId": "slack-token",
+      "input": "Cookie: d=xoxd-abc%2F1PzkFAKEenfSsgX2ov7%2BOey7J3Ss%3D",
+      "mustNotSurvive": ["1PzkFAKEenfSsgX2ov7", "Oey7J3Ss"]
+    },
+    {
+      "name": "mysql-uppercase-exe",
+      "ruleId": "mysql-password-flag",
+      "input": "MYSQL.EXE -pFAKEhunter2 appdb",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "sshpass-uppercase-exe",
+      "ruleId": "sshpass-password-flag",
+      "input": "SSHPASS.EXE -p FAKEhunter2 ssh host",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
+      "name": "redis-cli-uppercase-exe",
+      "ruleId": "redis-cli-password-flag",
+      "input": "REDIS-CLI.exe -a FAKEhunter2 PING",
+      "mustNotSurvive": ["FAKEhunter2"]
+    },
+    {
       "name": "jwe-nonempty-encrypted-key",
       "ruleId": "jwt",
       "input": "token eyJhbGciOiJSU0EtT0FFUCJ9.FAKEkey.FAKEiv.FAKEcipher.FAKEtag done",
@@ -760,7 +808,8 @@
       "name": "sendgrid-key",
       "ruleId": "sendgrid-key",
       "input": "key SG.xxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx end",
-      "mustNotSurvive": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+      "mustNotSurvive": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"],
+      "expected": "key [REDACTED_SECRET] end"
     },
     {
       "name": "jwt-short-claims",

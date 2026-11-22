@@ -201,6 +201,8 @@ func TestHasSecretTokenReadsTokenShapesOnly(t *testing.T) {
 		"pypi-attestations", "task_test_environment", "hf_imageclassification.py", "SG.SecurityGroupIngress",
 		"SG.SecurityGroupIngress.SourceSecurityGroupId", "keyJsonSchema.properties.type",
 		"publicKeyJsonConverter.test.js", "libxapp/xapp-status-icon-monitor.h",
+		"cache/eyJwYWdlIjoxfQ.json", "docs/glimt-incoming-mail-settings.md",
+		"network_org_defaultNotificationSettings", "task_org_defaultNotificationSettings", "work_org_507f1f77bcf86cd799439011",
 	} {
 		if HasSecretToken(plain) {
 			t.Fatalf("%q read as a token", plain)
