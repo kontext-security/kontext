@@ -793,3 +793,29 @@ func TestServiceInterceptsAndReportsEvaluatedEvents(t *testing.T) {
 		t.Fatalf("evaluated %v", evaluated)
 	}
 }
+
+// The daemon says whether it answers verification probes itself, without
+// the runtime seeing the question.
+func TestServiceAnswersCapabilities(t *testing.T) {
+	t.Parallel()
+	runtime := &stubRuntime{evaluateResult: hook.Result{Decision: hook.DecisionAllow}}
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, intercept := range []bool{false, true} {
+		opts := Options{Core: core}
+		if intercept {
+			opts.Intercept = func(hook.Event) (hook.Result, bool) { return hook.Result{}, false }
+			opts.InterceptMarker = "FAKEmarker"
+		}
+		service := newTestServiceWithOptions(t, opts)
+		got, err := NewClient(service.SocketPath()).Capabilities(context.Background())
+		if err != nil || got.HookVerify != intercept {
+			t.Fatalf("intercept %v: %+v %v", intercept, got, err)
+		}
+	}
+	if got := runtime.evaluateCalls.Load(); got != 0 {
+		t.Fatalf("the runtime saw %d calls", got)
+	}
+}

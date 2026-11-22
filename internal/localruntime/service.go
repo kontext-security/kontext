@@ -241,6 +241,12 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 	case CompactRequestType:
 		s.handleCompact(ctx, conn, &req)
 		return
+	case CapabilitiesRequestType:
+		result := CapabilitiesResult{Type: CapabilitiesResultType, HookVerify: s.intercept != nil && len(s.interceptMark) > 0}
+		if err := WriteMessage(conn, result); err != nil {
+			s.diagnostic.Printf("local runtime write: %v\n", err)
+		}
+		return
 	case CodexProxyRequestType:
 		result := CodexProxyResult{Type: "codex_proxy_result"}
 		if s.codexProxy != nil {

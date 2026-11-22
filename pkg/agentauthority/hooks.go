@@ -115,6 +115,22 @@ type HookRecord struct {
 	Match         string         `json:"match"`
 	Enablement    HookEnablement `json:"enablement"`
 	Evidence      HookEvidence   `json:"evidence"`
+	// guardsBash: a Kontext PreToolUse handler Claude Code runs, and waits
+	// for, on every Bash call on this Mac. Set by the scan, never sent.
+	guardsBash bool
+}
+
+// GuardsEveryBashCall reports a Kontext PreToolUse handler that Claude Code
+// runs synchronously on every Bash call on this Mac: device wide,
+// unconditional, and with a matcher that covers Bash. It is known only on
+// a record straight from a scan in this process.
+func (r HookRecord) GuardsEveryBashCall() bool { return r.guardsBash }
+
+// WithGuardsEveryBashCall marks a record as one that guards every Bash call,
+// for fixtures that build records without a scan.
+func WithGuardsEveryBashCall(r HookRecord) HookRecord {
+	r.guardsBash = true
+	return r
 }
 
 type HookPlugin struct {
@@ -891,6 +907,9 @@ func kontextHookSet(records []HookRecord, raw []hookRaw, projectDisables, manage
 		if deviceWide && !info.conditional && (!info.async || installedAsync(r.Event)) && (matcher == "" || matcher == "*" || matcher == ".*") {
 			covered[r.Event] = true
 		}
+		if deviceWide && !info.conditional && !info.async && r.Event == "PreToolUse" && matcherCovers(matcher, "Bash") {
+			records[i].guardsBash = true
+		}
 	}
 	set := KontextHookSet{State: "complete", MissingEvents: []string{}}
 	for _, event := range claudemanaged.SupportedEvents {
@@ -963,4 +982,16 @@ func literalProgram(command, program string) bool {
 	}
 	fields = withoutAssignments(fields)
 	return len(fields) > 0 && fields[0] == program
+}
+
+// matcherCovers reports a tool matcher that selects tool: every tool, the
+// exact name, or a regular expression that matches the whole name, as
+// Claude Code reads a matcher.
+func matcherCovers(matcher, tool string) bool {
+	switch matcher {
+	case "", "*", ".*", tool:
+		return true
+	}
+	re, err := regexp.Compile("^(?:" + matcher + ")$")
+	return err == nil && re.MatchString(tool)
 }

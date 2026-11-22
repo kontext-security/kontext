@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/internal/managedobserve"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
@@ -42,9 +43,11 @@ func hooksVerifyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			key, _, err := managedobserve.LocalHookKey(cmd.Context())
-			if err != nil {
-				return fmt.Errorf("hook verification needs this Mac's hardware id: %w", err)
+			// The check needs no stable ids: a throwaway key keeps it local,
+			// with no request to the cloud for this Mac's own.
+			key := make([]byte, 32)
+			if _, err := rand.Read(key); err != nil {
+				return err
 			}
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -58,8 +61,17 @@ func hooksVerifyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !coversPreToolUse(agent) {
+			if !guardsEveryBashCall(agent) {
 				return errors.New("no Kontext PreToolUse hook from this binary runs for every Bash call in Claude Code; run kontext hooks inventory to see why")
+			}
+			// Ask the daemon the hook talks to: an older one would take the probe for ordinary activity and
+			// keep it in its ledger: ask first.
+			capabilities, err := localruntime.NewClient(resolveHookSocketPath("")).Capabilities(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("the Kontext daemon isn't answering: %w", err)
+			}
+			if !capabilities.HookVerify {
+				return errors.New("the running Kontext daemon is older than this command; update or restart it, then run this again")
 			}
 			nonce := make([]byte, 16)
 			if _, err := rand.Read(nonce); err != nil {
@@ -79,7 +91,10 @@ func hooksVerifyCmd() *cobra.Command {
 				return err
 			}
 			if reason != managedobserve.HookVerifyReason {
-				return fmt.Errorf("the hook ran but the Kontext daemon did not deny the probe (%s); the daemon may not be running, or may be an older version", describeAnswer(reason))
+				if reason == probeAnswerMissing {
+					return errors.New("the hook ran but its deny did not come back: Kontext may be set to observe only on this Mac, where every deny is turned into an allow")
+				}
+				return fmt.Errorf("the hook ran but the Kontext daemon did not deny the probe (%s)", describeAnswer(reason))
 			}
 			reason, err = runHookProbe(ctx, self, cwd, id, managedobserve.HookVerifyAckPrefix+id)
 			if err != nil {
@@ -98,12 +113,11 @@ func hooksVerifyCmd() *cobra.Command {
 	}
 }
 
-// coversPreToolUse reports that a Kontext PreToolUse handler of this binary
-// runs for every Bash call: device wide, unconditional, synchronous and
-// matching every tool, as the scan's Kontext hook set counts it.
-func coversPreToolUse(agent agentauthority.HookAgent) bool {
-	set := agent.KontextHooks
-	return set.State != agentauthority.KontextHooksUnknown && !slices.Contains(set.MissingEvents, "PreToolUse")
+// guardsEveryBashCall reports a Kontext PreToolUse handler of this binary
+// that Claude Code runs, and waits for, on every Bash call: device wide,
+// unconditional, synchronous, with a matcher that covers Bash.
+func guardsEveryBashCall(agent agentauthority.HookAgent) bool {
+	return slices.ContainsFunc(agent.Hooks, agentauthority.HookRecord.GuardsEveryBashCall)
 }
 
 // probeAnswerMissing stands for an answer with no deny reason.
@@ -157,11 +171,14 @@ func readProbeAnswer(stdout []byte, exitCode int, stderr []byte) string {
 	}
 	var output struct {
 		HookSpecificOutput *struct {
+			HookEventName            string `json:"hookEventName"`
 			PermissionDecision       string `json:"permissionDecision"`
 			PermissionDecisionReason string `json:"permissionDecisionReason"`
 		} `json:"hookSpecificOutput"`
 	}
-	if exitCode == 0 && json.Unmarshal(bytes.TrimSpace(stdout), &output) == nil && output.HookSpecificOutput != nil && output.HookSpecificOutput.PermissionDecision == "deny" {
+	// A deny Claude Code reads: for this event, with its decision.
+	if exitCode == 0 && json.Unmarshal(bytes.TrimSpace(stdout), &output) == nil && output.HookSpecificOutput != nil &&
+		output.HookSpecificOutput.HookEventName == "PreToolUse" && output.HookSpecificOutput.PermissionDecision == "deny" {
 		return output.HookSpecificOutput.PermissionDecisionReason
 	}
 	return probeAnswerMissing

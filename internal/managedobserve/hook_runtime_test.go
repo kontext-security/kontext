@@ -2,11 +2,15 @@ package managedobserve
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/cedareval"
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
+	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
@@ -83,7 +87,7 @@ func TestHookVerificationBindsAtTheProbe(t *testing.T) {
 	version := "2.1.329"
 	scan := func(content, version string) agentauthority.HookAgent {
 		return agentauthority.HookAgent{AgentVersion: &version, Hooks: []agentauthority.HookRecord{
-			kontextRecord("hk_pre", "PreToolUse", content, agentauthority.HookOriginKontext, "enabled"),
+			agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", content, agentauthority.HookOriginKontext, "enabled")),
 			kontextRecord("hk_other", "PreToolUse", "fp_x", agentauthority.HookOriginSettings, "enabled"),
 		}}
 	}
@@ -105,6 +109,7 @@ func TestHookVerificationBindsAtTheProbe(t *testing.T) {
 	// The configuration changes between the probe and the next scan: the
 	// verification stays with what the probe ran through.
 	changed := scan("fp_b", version)
+	r.apply(&changed)
 	if reason, _ := r.intercept(probeEvent(HookVerifyAckPrefix + nonce)); reason.Reason != HookVerifyAckReason || woke != 1 {
 		t.Fatalf("ack %+v, woke %d", reason, woke)
 	}
@@ -136,7 +141,7 @@ func TestHookVerificationBindsAtTheProbe(t *testing.T) {
 func TestHookProbeExpires(t *testing.T) {
 	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
 	r := testRuntime(at)
-	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled"))}}
 	r.apply(&agent)
 	nonce := strings.Repeat("7", 32)
 	r.intercept(probeEvent(HookVerifyCommandPrefix + nonce))
@@ -154,7 +159,7 @@ func TestObservePostureOrInventoryOffVerifiesNothing(t *testing.T) {
 		func(r *hookRuntime) { r.enabled = func() bool { return false } },
 	} {
 		r := testRuntime(time.Now())
-		agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
+		agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled"))}}
 		r.apply(&agent)
 		off(r)
 		if reason := verifyNow(t, r, strings.Repeat("1", 32)); reason != HookVerifyNotRecordedReason {
@@ -174,7 +179,7 @@ func TestObservePostureOrInventoryOffVerifiesNothing(t *testing.T) {
 func TestHookRuntimeReset(t *testing.T) {
 	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
 	r := testRuntime(at)
-	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled"))}}
 	r.apply(&agent)
 	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionAllow}, true)
 	verifyNow(t, r, strings.Repeat("2", 32))
@@ -207,7 +212,8 @@ func TestHookRuntimeEvidence(t *testing.T) {
 	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookSessionStart}, hook.Result{Decision: hook.DecisionAllow}, true)
 	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, guardhookruntime.ObserveResult(hook.Event{HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionDeny, Reason: "nope"}), true)
 	r.evaluated(hook.Event{Agent: "codex", HookName: hook.HookStop}, hook.Result{Decision: hook.DecisionAllow}, true)
-	late := kontextRecord("hk_late", "SessionStart", "fp6", agentauthority.HookOriginKontext, "enabled")
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPostToolUse}, hook.Result{Decision: hook.DecisionAllow}, true)
+	late := kontextRecord("hk_late", "PostToolUse", "fp6", agentauthority.HookOriginKontext, "enabled")
 	agent.Hooks = append(agent.Hooks, late)
 	r.now = func() time.Time { return at.Add(time.Second) }
 	for i := range agent.Hooks {
@@ -268,8 +274,8 @@ func TestDaemonDeniesTheVerifyProbe(t *testing.T) {
 	stop()
 	store := openTestStore(t, dbPath)
 	defer store.Close()
-	if _, err := store.Session(context.Background(), "kontext-hooks-verify-probe"); err == nil {
-		t.Fatal("the probe opened a session in the ledger")
+	if _, err := store.Session(context.Background(), "kontext-hooks-verify-probe"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("the probe reached the ledger, or the read failed: %v", err)
 	}
 }
 
@@ -278,7 +284,7 @@ func TestDaemonDeniesTheVerifyProbe(t *testing.T) {
 func TestObservedAllowStaysAllow(t *testing.T) {
 	at := time.Date(2026, 11, 22, 11, 0, 0, 0, time.UTC)
 	r := testRuntime(at)
-	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled"))}}
 	r.now = func() time.Time { return at.Add(-time.Second) }
 	r.apply(&agent)
 	r.now = func() time.Time { return at }
@@ -287,5 +293,91 @@ func TestObservedAllowStaysAllow(t *testing.T) {
 	r.apply(&agent)
 	if d := agent.Hooks[0].Evidence.PolicyDecision; d == nil || *d != "allow" {
 		t.Fatalf("decision %v", d)
+	}
+}
+
+// With two Kontext handlers for an event, its evidence is no one's; a
+// verification goes only to the handler that guards every Bash call.
+func TestAmbiguousEvidenceIsNoOnes(t *testing.T) {
+	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	r := testRuntime(at.Add(-time.Second))
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{
+		agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_all", "PreToolUse", "fp1", agentauthority.HookOriginKontext, "enabled")),
+		kontextRecord("hk_edit", "PreToolUse", "fp2", agentauthority.HookOriginKontext, "enabled"),
+	}}
+	r.apply(&agent)
+	r.now = func() time.Time { return at }
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionAllow}, true)
+	if reason := verifyNow(t, r, strings.Repeat("3", 32)); reason != HookVerifyAckReason {
+		t.Fatalf("ack %q", reason)
+	}
+	r.apply(&agent)
+	all, edit := agent.Hooks[0].Evidence, agent.Hooks[1].Evidence
+	if all.InvocationAt != nil || edit.InvocationAt != nil || all.PolicyEvaluatedAt != nil {
+		t.Fatalf("ambiguous evidence credited: %+v %+v", all, edit)
+	}
+	if all.Level != agentauthority.HookEvidenceEnforcementVerified || edit.VerifiedAt != nil {
+		t.Fatalf("verification %+v %+v", all, edit)
+	}
+}
+
+// A scan with no handler guarding every Bash call gives a probe nothing to
+// bind to.
+func TestProbeNeedsAGuardingHandler(t *testing.T) {
+	r := testRuntime(time.Now())
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_edit", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
+	r.apply(&agent)
+	if reason := verifyNow(t, r, strings.Repeat("4", 32)); reason != HookVerifyNotRecordedReason {
+		t.Fatalf("recorded %q", reason)
+	}
+}
+
+// A new policy deployment makes the verification an older result, and an
+// earlier probe acknowledged late never replaces a later one.
+func TestVerificationFollowsPolicyAndOrder(t *testing.T) {
+	at := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	r := testRuntime(at)
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{agentauthority.WithGuardsEveryBashCall(kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled"))}}
+	r.now = func() time.Time { return at.Add(-time.Minute) }
+	r.apply(&agent)
+	first, second := strings.Repeat("5", 32), strings.Repeat("6", 32)
+	r.now = func() time.Time { return at }
+	r.intercept(probeEvent(HookVerifyCommandPrefix + first))
+	r.now = func() time.Time { return at.Add(time.Second) }
+	r.policyRevision = func() string { return "dep_2" }
+	r.intercept(probeEvent(HookVerifyCommandPrefix + second))
+	r.intercept(probeEvent(HookVerifyAckPrefix + second))
+	r.intercept(probeEvent(HookVerifyAckPrefix + first))
+	r.apply(&agent)
+	e := agent.Hooks[0].Evidence
+	if e.Verification == nil || *e.Verification.PolicyRevision != "dep_2" || e.Level != agentauthority.HookEvidenceEnforcementVerified {
+		t.Fatalf("%+v %+v", e, e.Verification)
+	}
+	r.policyRevision = func() string { return "dep_3" }
+	r.apply(&agent)
+	if e := agent.Hooks[0].Evidence; e.Level == agentauthority.HookEvidenceEnforcementVerified {
+		t.Fatalf("a new deployment kept the verification current: %+v", e)
+	}
+}
+
+// An answer Cedar didn't evaluate, or one after an engine error, is no
+// policy evaluation.
+func TestPolicyEvaluated(t *testing.T) {
+	cedar := func(state cedareval.EvaluationState, errors int) hook.Result {
+		return hook.WithMetadata(hook.Result{Decision: hook.DecisionAllow}, risk.RiskDecision{Cedar: &risk.CedarEvidence{Mapping: cedareval.DecisionMapping{EvaluationState: state}, EngineErrorCount: errors}})
+	}
+	for _, tc := range []struct {
+		result hook.Result
+		want   bool
+	}{
+		{hook.Result{Decision: hook.DecisionAllow}, true},
+		{cedar(cedareval.EvaluationStateEvaluated, 0), true},
+		{cedar(cedareval.EvaluationStateEvaluated, 1), false},
+		{cedar(cedareval.EvaluationStateNotEvaluated, 0), false},
+		{cedar(cedareval.EvaluationStateFailed, 0), false},
+	} {
+		if got := policyEvaluated(tc.result); got != tc.want {
+			t.Errorf("%+v: %v", tc.result.Metadata(), got)
+		}
 	}
 }

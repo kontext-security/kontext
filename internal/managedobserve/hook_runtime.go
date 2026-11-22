@@ -6,8 +6,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/cedareval"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
+	"github.com/kontext-security/kontext/internal/guard/risk"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
@@ -167,7 +169,9 @@ func (r *hookRuntime) intercept(event hook.Event) (hook.Result, bool) {
 		defer r.mu.Unlock()
 		now := r.now()
 		maps.DeleteFunc(r.probes, func(_ string, p hookVerification) bool { return now.Sub(p.at) > hookProbeTTL })
-		if r.honoursDeny && on && r.scanned && len(r.probes) < maxHookProbes {
+		// Only a scan that found a handler guarding every Bash call gives
+		// the probe something to have run through.
+		if r.honoursDeny && on && r.scanned && len(r.last) > 0 && len(r.probes) < maxHookProbes {
 			r.probes[nonce] = hookVerification{at: now, policyRevision: revision, agentVersion: r.lastVersion, contents: maps.Clone(r.last)}
 		}
 		return deny(HookVerifyReason, "hook_verification")
@@ -182,7 +186,9 @@ func (r *hookRuntime) intercept(event hook.Event) (hook.Result, bool) {
 	delete(r.probes, nonce)
 	recorded := pending && on && r.now().Sub(probe.at) <= hookProbeTTL
 	wake := r.verified
-	if recorded {
+	// Acknowledgements may come out of order: a later probe's result is
+	// never replaced by an earlier one's.
+	if recorded && (r.verify == nil || probe.at.After(r.verify.at)) {
 		r.verify = &probe
 	}
 	r.mu.Unlock()
@@ -202,6 +208,7 @@ func (r *hookRuntime) evaluated(event hook.Event, result hook.Result, policy boo
 	if r == nil || event.Agent != managedconfig.Agent || !r.on() {
 		return
 	}
+	policy = policy && policyEvaluated(result)
 	name := string(event.HookName)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -228,25 +235,34 @@ func (r *hookRuntime) evaluated(event hook.Event, result hook.Result, policy boo
 
 // apply adds the runtime evidence to Kontext's own enabled hooks in a scan.
 // Claude Code doesn't say which handler ran, so an event's evidence goes to
-// each of Kontext's enabled handlers for it that was seen before the event.
+// a handler only when it is Kontext's one enabled handler for that event
+// and was seen before the event; with two, it is no one's. A verification
+// goes to the handlers that guard every Bash call, the ones the probe ran
+// through, bound at the probe.
 func (r *hookRuntime) apply(agent *agentauthority.HookAgent) {
 	if r == nil {
 		return
+	}
+	revision := ""
+	if r.policyRevision != nil {
+		revision = r.policyRevision()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
 	present := map[string]bool{}
+	handlers := map[string]int{}
 	r.last, r.lastVersion, r.scanned = map[string]string{}, agent.AgentVersion, true
 	for _, record := range agent.Hooks {
 		if !kontextRunning(record) {
 			continue
 		}
 		present[record.ID] = true
+		handlers[record.Event]++
 		if _, ok := r.seen[record.ID]; !ok {
 			r.seen[record.ID] = now
 		}
-		if record.Event == string(hook.HookPreToolUse) {
+		if record.GuardsEveryBashCall() {
 			r.last[record.ID] = record.ContentFP
 		}
 	}
@@ -262,11 +278,13 @@ func (r *hookRuntime) apply(agent *agentauthority.HookAgent) {
 		}
 		since := r.seen[record.ID]
 		evidence := &record.Evidence
-		if at, ok := r.invocations[record.Event]; ok && !at.Before(since) {
-			evidence.InvocationAt = format(at)
-		}
-		if d, ok := r.decisions[record.Event]; ok && !d.at.Before(since) {
-			evidence.PolicyEvaluatedAt, evidence.PolicyDecision = format(d.at), &d.decision
+		if handlers[record.Event] == 1 {
+			if at, ok := r.invocations[record.Event]; ok && !at.Before(since) {
+				evidence.InvocationAt = format(at)
+			}
+			if d, ok := r.decisions[record.Event]; ok && !d.at.Before(since) {
+				evidence.PolicyEvaluatedAt, evidence.PolicyDecision = format(d.at), &d.decision
+			}
 		}
 		if v := r.verify; v != nil {
 			if content, ok := v.contents[record.ID]; ok && !v.at.Before(since) {
@@ -278,8 +296,19 @@ func (r *hookRuntime) apply(agent *agentauthority.HookAgent) {
 				evidence.Verification = &agentauthority.HookVerification{AgentVersion: v.agentVersion, ContentFP: content, PolicyRevision: revision}
 			}
 		}
-		evidence.Level = evidenceLevel(*evidence, record.ContentFP, agent.AgentVersion)
+		evidence.Level = evidenceLevel(*evidence, record.ContentFP, agent.AgentVersion, revision)
 	}
+}
+
+// policyEvaluated reports an answer the policy itself gave: not one where
+// Cedar didn't evaluate (enforcement not ready, no principal) or failed and
+// fell back.
+func policyEvaluated(result hook.Result) bool {
+	decision, ok := result.Metadata().(risk.RiskDecision)
+	if !ok || decision.Cedar == nil {
+		return true
+	}
+	return decision.Cedar.Mapping.EvaluationState == cedareval.EvaluationStateEvaluated && decision.Cedar.EngineErrorCount == 0
 }
 
 // kontextRunning is one of Kontext's own handlers that Claude Code runs.
@@ -287,12 +316,12 @@ func kontextRunning(record agentauthority.HookRecord) bool {
 	return record.Origin == agentauthority.HookOriginKontext && record.Enablement.State == "enabled"
 }
 
-// evidenceLevel is the highest level the evidence supports, as the cloud
-// reads it: verified needs a verification of this content on this agent
-// version.
-func evidenceLevel(e agentauthority.HookEvidence, content string, agentVersion *string) string {
+// evidenceLevel is the highest level the evidence supports: verified needs
+// a verification of this content, on this agent version, under the policy
+// deployment in force now.
+func evidenceLevel(e agentauthority.HookEvidence, content string, agentVersion *string, policyRevision string) string {
 	verified := e.VerifiedAt != nil && e.Verification != nil && e.Verification.ContentFP == content &&
-		equalVersion(e.Verification.AgentVersion, agentVersion)
+		equalVersion(e.Verification.AgentVersion, agentVersion) && equalVersion(e.Verification.PolicyRevision, optional(policyRevision))
 	switch {
 	case verified:
 		return agentauthority.HookEvidenceEnforcementVerified
@@ -304,6 +333,13 @@ func evidenceLevel(e agentauthority.HookEvidence, content string, agentVersion *
 		return agentauthority.HookEvidenceConfigChecked
 	}
 	return agentauthority.HookEvidenceDiscovered
+}
+
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func equalVersion(a, b *string) bool {

@@ -16,6 +16,8 @@ func TestReadProbeAnswer(t *testing.T) {
 		reason string
 	}{
 		{`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"x"}}`, 0, "", "x"},
+		{`{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"x"}}`, 0, "", probeAnswerMissing},
+		{`{"hookSpecificOutput":{"hookEventName":"PostToolUse","permissionDecision":"deny","permissionDecisionReason":"x"}}`, 0, "", probeAnswerMissing},
 		{"", 2, "blocked\n", "blocked"},
 		{`{"suppressOutput":true}`, 0, "managed policy daemon unavailable at /Users/FAKE", probeAnswerMissing},
 		{`{"hookSpecificOutput":{"permissionDecision":"allow"}}`, 0, "", probeAnswerMissing},
@@ -28,20 +30,11 @@ func TestReadProbeAnswer(t *testing.T) {
 	}
 }
 
-// The handler must run for every Bash call, as the scan's Kontext hook set
-// counts it: device wide, unconditional, synchronous, matching every tool.
-func TestVerifyNeedsAKontextPreToolUseForEveryCall(t *testing.T) {
-	for _, tc := range []struct {
-		set  agentauthority.KontextHookSet
-		want bool
-	}{
-		{agentauthority.KontextHookSet{State: "complete", MissingEvents: []string{}}, true},
-		{agentauthority.KontextHookSet{State: "needs_update", MissingEvents: []string{"Stop"}}, true},
-		{agentauthority.KontextHookSet{State: "needs_update", MissingEvents: []string{"PreToolUse"}}, false},
-		{agentauthority.KontextHookSet{State: agentauthority.KontextHooksUnknown, MissingEvents: []string{}}, false},
-	} {
-		if got := coversPreToolUse(agentauthority.HookAgent{KontextHooks: tc.set}); got != tc.want {
-			t.Fatalf("%+v: %v", tc.set, got)
-		}
+// Without a handler that guards every Bash call there is nothing to verify;
+// which handlers do is the scan's to say (TestGuardsEveryBashCall).
+func TestVerifyNeedsAHandlerForEveryBashCall(t *testing.T) {
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{{Event: "PreToolUse", Origin: agentauthority.HookOriginKontext, Enablement: agentauthority.HookEnablement{State: "enabled"}}}}
+	if guardsEveryBashCall(agent) {
+		t.Fatal("a record not from a scan guards nothing")
 	}
 }
