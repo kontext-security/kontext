@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/localruntime"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
@@ -204,7 +205,7 @@ func TestHookRuntimeEvidence(t *testing.T) {
 	r.apply(&agent)
 	r.now = func() time.Time { return at }
 	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookSessionStart}, hook.Result{Decision: hook.DecisionAllow}, true)
-	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionDeny, Mode: "observe"}, true)
+	r.evaluated(hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}, guardhookruntime.ObserveResult(hook.Event{HookName: hook.HookPreToolUse}, hook.Result{Decision: hook.DecisionDeny, Reason: "nope"}), true)
 	r.evaluated(hook.Event{Agent: "codex", HookName: hook.HookStop}, hook.Result{Decision: hook.DecisionAllow}, true)
 	late := kontextRecord("hk_late", "SessionStart", "fp6", agentauthority.HookOriginKontext, "enabled")
 	agent.Hooks = append(agent.Hooks, late)
@@ -269,5 +270,22 @@ func TestDaemonDeniesTheVerifyProbe(t *testing.T) {
 	defer store.Close()
 	if _, err := store.Session(context.Background(), "kontext-hooks-verify-probe"); err == nil {
 		t.Fatal("the probe opened a session in the ledger")
+	}
+}
+
+// Under the observe posture a plain allow stays "allow"; only one the policy
+// would have blocked is "observe".
+func TestObservedAllowStaysAllow(t *testing.T) {
+	at := time.Date(2026, 11, 22, 11, 0, 0, 0, time.UTC)
+	r := testRuntime(at)
+	agent := agentauthority.HookAgent{Hooks: []agentauthority.HookRecord{kontextRecord("hk_pre", "PreToolUse", "fp", agentauthority.HookOriginKontext, "enabled")}}
+	r.now = func() time.Time { return at.Add(-time.Second) }
+	r.apply(&agent)
+	r.now = func() time.Time { return at }
+	pre := hook.Event{Agent: "claude", HookName: hook.HookPreToolUse}
+	r.evaluated(pre, guardhookruntime.ObserveResult(pre, hook.Result{Decision: hook.DecisionAllow}), true)
+	r.apply(&agent)
+	if d := agent.Hooks[0].Evidence.PolicyDecision; d == nil || *d != "allow" {
+		t.Fatalf("decision %v", d)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
+	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
@@ -211,8 +212,10 @@ func (r *hookRuntime) evaluated(event hook.Event, result hook.Result, policy boo
 	if event.HookName != hook.HookPreToolUse || !policy || result.FailedOpen {
 		return
 	}
+	// Under the observe posture every answer is an allow: "observe" names
+	// one the policy would have blocked, and a plain allow stays "allow".
 	decision := string(result.Decision)
-	if result.Mode == "observe" {
+	if guardhookruntime.ObservedWouldBlock(result) {
 		decision = "observe"
 	}
 	switch decision {
