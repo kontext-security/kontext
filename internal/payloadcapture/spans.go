@@ -128,10 +128,10 @@ func reading(text string, rules []compiledRule, step func(string, []stretch, []c
 	return removedSpans(len(text), stretches)
 }
 
-// unionPass runs every rule over the same text and masks the union of what
-// they find.
+// unionPass runs the command rules and every value rule over the same text
+// and masks the union of what they find.
 func unionPass(text string, stretches []stretch, rules []compiledRule) (string, []stretch) {
-	var spans []Span
+	spans := commandSpans(text)
 	var folded lazyFold
 	for index := range rules {
 		spans = append(spans, rules[index].masks(text, &folded)...)
@@ -143,9 +143,12 @@ func unionPass(text string, stretches []stretch, rules []compiledRule) (string, 
 	return maskRuns(text, stretches, true, masks)
 }
 
-// orderedPass runs the rules in order, each over what the ones before it
-// left.
+// orderedPass runs the command rules, then the value rules in order, each
+// over what the ones before it left.
 func orderedPass(text string, stretches []stretch, rules []compiledRule) (string, []stretch) {
+	if masks := settledRuns(text, mergeSpans(commandSpans(text))); len(masks) > 0 {
+		text, stretches = maskRuns(text, stretches, true, masks)
+	}
 	var folded lazyFold
 	for index := range rules {
 		masks := settledRuns(text, mergeSpans(rules[index].masks(text, &folded)))

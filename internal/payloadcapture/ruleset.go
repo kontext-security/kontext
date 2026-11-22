@@ -33,6 +33,7 @@ type redactionRuleset struct {
 	KeyNormalization string          `json:"keyNormalization"`
 	KeyPatterns      []redactionRule `json:"keyPatterns"`
 	ValuePatterns    []redactionRule `json:"valuePatterns"`
+	CommandRules     commandRuleset  `json:"commandRules"`
 }
 
 type compiledRule struct {
@@ -79,6 +80,10 @@ func init() {
 	RedactorVersion = ruleset.Version
 	compiledKeyRules = compileRules(ruleset.KeyPatterns)
 	compiledValueRules = compileRules(ruleset.ValuePatterns)
+	if ruleset.CommandRules.MaxDepth <= 0 || len(ruleset.CommandRules.Programs) == 0 {
+		panic("payloadcapture: embedded ruleset has no command rules")
+	}
+	compileCommandRules(ruleset.CommandRules)
 	for index, rule := range ruleset.ValuePatterns {
 		if rule.Provenance != "structural" {
 			tokenRules = append(tokenRules, compiledValueRules[index].re)

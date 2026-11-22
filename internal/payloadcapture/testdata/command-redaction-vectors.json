@@ -1,0 +1,908 @@
+{
+  "vectors": [
+    {
+      "name": "mysql-mixed-case-no-exe",
+      "program": "mysql-client",
+      "input": "cmd /c MySQL -pFAKEhunter2 appdb",
+      "spans": [[15, 26]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "cmd /c MySQL -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-upper-no-exe",
+      "program": "sshpass",
+      "input": "SSHPASS -p FAKEhunter2 ssh build",
+      "spans": [[11, 22]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "SSHPASS -p [REDACTED_SECRET] ssh build"
+    },
+    {
+      "name": "redis-cli-upper-no-exe",
+      "program": "redis-cli",
+      "input": "cmd /c REDIS-CLI -a FAKEhunter2 PING",
+      "spans": [[20, 31]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "cmd /c REDIS-CLI -a [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "mysql-uppercase-exe",
+      "program": "mysql-client",
+      "input": "MYSQL.EXE -pFAKEhunter2 appdb",
+      "spans": [[12, 23]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "MYSQL.EXE -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-uppercase-exe",
+      "program": "sshpass",
+      "input": "SSHPASS.EXE -p FAKEhunter2 ssh host",
+      "spans": [[15, 26]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "SSHPASS.EXE -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "redis-cli-uppercase-exe",
+      "program": "redis-cli",
+      "input": "REDIS-CLI.exe -a FAKEhunter2 PING",
+      "spans": [[17, 28]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "REDIS-CLI.exe -a [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "mysql-windows-exe",
+      "program": "mysql-client",
+      "input": "mysql.exe -pFAKEhunter2 appdb",
+      "spans": [[12, 23]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "mysql.exe -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-grouped-quick",
+      "program": "mysql-client",
+      "input": "mysqldump -qpFAKEhunter2 appdb",
+      "spans": [[13, 24]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "mysqldump -qp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-windows-exe",
+      "program": "redis-cli",
+      "input": "redis-cli.exe -a FAKEhunter2 PING",
+      "spans": [[17, 28]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "redis-cli.exe -a [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "sshpass-windows-exe",
+      "program": "sshpass",
+      "input": "sshpass.exe -p FAKEhunter2 ssh host",
+      "spans": [[15, 26]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "sshpass.exe -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "mysql-glued-password",
+      "program": "mysql-client",
+      "input": "mysql -u root -pmysql-secret-FAKE -h 10.0.0.5",
+      "spans": [[16, 33]],
+      "mustNotSurvive": ["mysql-secret-FAKE"],
+      "expected": "mysql -u root -p[REDACTED_SECRET] -h 10.0.0.5"
+    },
+    {
+      "name": "mysqldump-quoted-password",
+      "program": "mysql-client",
+      "input": "mysqldump -uroot -p'quoted secret-FAKE' appdb",
+      "spans": [[19, 39]],
+      "mustNotSurvive": ["quoted secret-FAKE", "secret-FAKE"],
+      "expected": "mysqldump -uroot -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mariadb-dump-double-quoted-password",
+      "program": "mysql-client",
+      "input": "mariadb-dump -p\"dq \\\" secret-FAKE\" appdb",
+      "spans": [[15, 34]],
+      "mustNotSurvive": ["secret-FAKE"],
+      "expected": "mariadb-dump -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-escaped-space-password",
+      "program": "mysql-client",
+      "input": "mysql -pescaped\\ space-secret-FAKE appdb",
+      "spans": [[8, 34]],
+      "mustNotSurvive": ["space-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-path-and-wrapper",
+      "program": "mysql-client",
+      "input": "kubectl exec db -- /usr/bin/mysql -pkube-secret-FAKE",
+      "spans": [[36, 52]],
+      "mustNotSurvive": ["kube-secret-FAKE"],
+      "expected": "kubectl exec db -- /usr/bin/mysql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-password-after-quoted-argument",
+      "program": "mysql-client",
+      "input": "mysql -e \"select 1\" -pafter-secret-FAKE appdb",
+      "spans": [[22, 39]],
+      "mustNotSurvive": ["after-secret-FAKE"],
+      "expected": "mysql -e \"select 1\" -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-continuation-lines",
+      "program": "mysql-client",
+      "input": "mysql -h db \\\n  -u root \\\n  -pcont-secret-FAKE",
+      "spans": [[30, 46]],
+      "mustNotSurvive": ["cont-secret-FAKE"],
+      "expected": "mysql -h db \\\n  -u root \\\n  -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "sshpass-spaced-password-keeps-ssh-port",
+      "program": "sshpass",
+      "input": "sshpass -p ssh-secret-FAKE ssh -p 2222 deploy@10.0.0.6",
+      "spans": [[11, 26]],
+      "mustNotSurvive": ["ssh-secret-FAKE"],
+      "expected": "sshpass -p [REDACTED_SECRET] ssh -p 2222 deploy@10.0.0.6"
+    },
+    {
+      "name": "sshpass-glued-password",
+      "program": "sshpass",
+      "input": "sshpass -pglued-secret-FAKE ssh host",
+      "spans": [[10, 27]],
+      "mustNotSurvive": ["glued-secret-FAKE"],
+      "expected": "sshpass -p[REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-dash-leading-password",
+      "program": "sshpass",
+      "input": "sshpass -v -p -dash-secret-FAKE ssh host",
+      "spans": [[14, 31]],
+      "mustNotSurvive": ["dash-secret-FAKE"],
+      "expected": "sshpass -v -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "redis-cli-auth-password",
+      "program": "redis-cli",
+      "input": "redis-cli -h cache -a redis-secret-FAKE --no-auth-warning ping",
+      "spans": [[22, 39]],
+      "mustNotSurvive": ["redis-secret-FAKE"],
+      "expected": "redis-cli -h cache -a [REDACTED_SECRET] --no-auth-warning ping"
+    },
+    {
+      "name": "redis-cli-auth-env",
+      "program": "redis-cli",
+      "input": "REDISCLI_AUTH=rediscli-secret-FAKE redis-cli -h cache ping",
+      "spans": [[14, 34]],
+      "mustNotSurvive": ["rediscli-secret-FAKE"],
+      "expected": "REDISCLI_AUTH=[REDACTED_SECRET] redis-cli -h cache ping"
+    },
+    {
+      "name": "mysql-repeated-password-flag",
+      "program": "mysql-client",
+      "input": "mysql -pfirst-secret-FAKE -h db -psecond-secret-FAKE appdb",
+      "spans": [
+        [8, 25],
+        [34, 52]
+      ],
+      "mustNotSurvive": ["first-secret-FAKE", "second-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] -h db -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-repeated-password-flag",
+      "program": "redis-cli",
+      "input": "redis-cli -a first-secret-FAKE -a second-secret-FAKE ping",
+      "spans": [
+        [13, 30],
+        [34, 52]
+      ],
+      "mustNotSurvive": ["first-secret-FAKE", "second-secret-FAKE"],
+      "expected": "redis-cli -a [REDACTED_SECRET] -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "sshpass-prompt-option-before-password",
+      "program": "sshpass",
+      "input": "sshpass -P \"Enter PIN:\" -p prompt-secret-FAKE ssh host",
+      "spans": [[27, 45]],
+      "mustNotSurvive": ["prompt-secret-FAKE"],
+      "expected": "sshpass -P \"Enter PIN:\" -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-grouped-verbose-password",
+      "program": "sshpass",
+      "input": "sshpass -vpgrouped-secret-FAKE ssh host",
+      "spans": [[11, 30]],
+      "mustNotSurvive": ["grouped-secret-FAKE"],
+      "expected": "sshpass -vp[REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "mysql-backslash-newline-inside-password",
+      "program": "mysql-client",
+      "input": "mysql -phead\\\ntail-secret-FAKE appdb",
+      "spans": [[8, 30]],
+      "mustNotSurvive": ["tail-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-quoted-backslash-newline-password",
+      "program": "redis-cli",
+      "input": "redis-cli -a \"head\\\ntail-secret-FAKE\" ping",
+      "spans": [[13, 37]],
+      "mustNotSurvive": ["tail-secret-FAKE"],
+      "expected": "redis-cli -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "mysql-non-ascii-space-inside-password",
+      "program": "mysql-client",
+      "input": "mysql -phead tail-secret-FAKE appdb",
+      "spans": [[8, 30]],
+      "mustNotSurvive": ["tail-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-password-after-quoted-pager-flag",
+      "program": "mysql-client",
+      "input": "mysql --pager=\"less -pERROR\" -ppager-secret-FAKE appdb",
+      "spans": [[31, 48]],
+      "mustNotSurvive": ["pager-secret-FAKE"],
+      "expected": "mysql --pager=\"less -pERROR\" -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-grouped-prompt-option",
+      "program": "sshpass",
+      "input": "sshpass -vP \"Enter PIN:\" -p grouped-prompt-secret-FAKE ssh host",
+      "spans": [[28, 54]],
+      "mustNotSurvive": ["grouped-prompt-secret-FAKE"],
+      "expected": "sshpass -vP \"Enter PIN:\" -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-escaped-prompt-argument",
+      "program": "sshpass",
+      "input": "sshpass -P Enter\\ PIN: -p escaped-prompt-secret-FAKE ssh host",
+      "spans": [[26, 52]],
+      "mustNotSurvive": ["escaped-prompt-secret-FAKE"],
+      "expected": "sshpass -P Enter\\ PIN: -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-concatenated-prompt-argument",
+      "program": "sshpass",
+      "input": "sshpass -P \"Enter \"PIN: -p concat-prompt-secret-FAKE ssh host",
+      "spans": [[27, 52]],
+      "mustNotSurvive": ["concat-prompt-secret-FAKE"],
+      "expected": "sshpass -P \"Enter \"PIN: -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "mysql-grouped-option-password",
+      "program": "mysql-client",
+      "input": "mysql -vpgrouped-secret-FAKE appdb",
+      "spans": [[9, 28]],
+      "mustNotSurvive": ["grouped-secret-FAKE"],
+      "expected": "mysql -vp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-repeated-grouped-password",
+      "program": "mysql-client",
+      "input": "mysql -pfirst-secret-FAKE -vpsecond-secret-FAKE appdb",
+      "spans": [
+        [8, 25],
+        [29, 47]
+      ],
+      "mustNotSurvive": ["first-secret-FAKE", "second-secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] -vp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysqlslap-password",
+      "program": "mysql-client",
+      "input": "mysqlslap -uroot -pslap-secret-FAKE --auto-generate-sql",
+      "spans": [[19, 35]],
+      "mustNotSurvive": ["slap-secret-FAKE"],
+      "expected": "mysqlslap -uroot -p[REDACTED_SECRET] --auto-generate-sql"
+    },
+    {
+      "name": "sshpass-prompt-text-names-password",
+      "program": "sshpass",
+      "input": "sshpass -P password: -p prompt-text-secret-FAKE ssh host",
+      "spans": [[24, 47]],
+      "mustNotSurvive": ["prompt-text-secret-FAKE"],
+      "expected": "sshpass -P password: [REDACTED_SECRET] [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "mysqldump-grouped-routines-password",
+      "program": "mysql-client",
+      "input": "mysqldump -Rproutines-secret-FAKE appdb",
+      "spans": [[13, 33]],
+      "mustNotSurvive": ["routines-secret-FAKE"],
+      "expected": "mysqldump -Rp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysqldump-grouped-quote-names-password",
+      "program": "mysql-client",
+      "input": "mysqldump -Qpquote-secret-FAKE appdb",
+      "spans": [[13, 30]],
+      "mustNotSurvive": ["quote-secret-FAKE"],
+      "expected": "mysqldump -Qp[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-single-quoted-flag-token",
+      "program": "mysql-client",
+      "input": "mysql '-pMy pass 123-FAKE!' appdb",
+      "spans": [[6, 27]],
+      "mustNotSurvive": ["pass 123-FAKE", "123-FAKE"],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-double-quoted-flag-token",
+      "program": "sshpass",
+      "input": "sshpass \"-pMy pass 123-FAKE!\" ssh host",
+      "spans": [[8, 29]],
+      "mustNotSurvive": ["pass 123-FAKE", "123-FAKE"],
+      "expected": "sshpass [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "rediscli-auth-single-quoted-assignment",
+      "program": "redis-cli",
+      "input": "env 'REDISCLI_AUTH=My pass 123-FAKE!' redis-cli ping",
+      "spans": [[4, 37]],
+      "mustNotSurvive": ["pass 123-FAKE", "123-FAKE"],
+      "expected": "env [REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "rediscli-auth-double-quoted-assignment",
+      "program": "redis-cli",
+      "input": "env \"REDISCLI_AUTH=dq pass \\\" 123-FAKE\" redis-cli ping",
+      "spans": [[4, 39]],
+      "mustNotSurvive": ["pass", "123-FAKE"],
+      "expected": "env [REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "mysql-repeated-quoted-tokens",
+      "program": "mysql-client",
+      "input": "mysql '-pfirst secret-FAKE' '-psecond secret-FAKE' appdb",
+      "spans": [
+        [6, 27],
+        [28, 50]
+      ],
+      "mustNotSurvive": [
+        "first secret-FAKE",
+        "second secret-FAKE",
+        "secret-FAKE"
+      ],
+      "expected": "mysql [REDACTED_SECRET] [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-concatenated-quoted-token",
+      "program": "mysql-client",
+      "input": "mysql '-pmy pa'\"'\"'ss-FAKE' appdb",
+      "spans": [[6, 27]],
+      "mustNotSurvive": ["my pa", "ss-FAKE"],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-unquoted-then-quoted-repeat",
+      "program": "mysql-client",
+      "input": "mysql -pfirst-secret-FAKE '-psecond secret-FAKE' appdb",
+      "spans": [
+        [8, 25],
+        [26, 48]
+      ],
+      "mustNotSurvive": ["first-secret-FAKE", "second secret-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-quoted-standalone-flag",
+      "program": "sshpass",
+      "input": "sshpass \"-p\" \"quoted-flag-secret-FAKE\" ssh user@host",
+      "spans": [[13, 38]],
+      "mustNotSurvive": ["quoted-flag-secret-FAKE"],
+      "expected": "sshpass \"-p\" [REDACTED_SECRET] ssh user@host"
+    },
+    {
+      "name": "redis-cli-quoted-standalone-flag",
+      "program": "redis-cli",
+      "input": "redis-cli \"-a\" \"quoted-flag-secret-FAKE\" PING",
+      "spans": [[15, 40]],
+      "mustNotSurvive": ["quoted-flag-secret-FAKE"],
+      "expected": "redis-cli \"-a\" [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "mysql-quoted-executable",
+      "program": "mysql-client",
+      "input": "\"/usr/bin/mysql\" -pquoted-exe-secret-FAKE appdb",
+      "spans": [[19, 41]],
+      "mustNotSurvive": ["quoted-exe-secret-FAKE"],
+      "expected": "\"/usr/bin/mysql\" -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-quoted-executable",
+      "program": "sshpass",
+      "input": "'sshpass' -p quoted-exe-secret-FAKE ssh host",
+      "spans": [[13, 35]],
+      "mustNotSurvive": ["quoted-exe-secret-FAKE"],
+      "expected": "'sshpass' -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "redis-cli-quoted-executable",
+      "program": "redis-cli",
+      "input": "\"redis-cli\" -a quoted-exe-secret-FAKE PING",
+      "spans": [[15, 37]],
+      "mustNotSurvive": ["quoted-exe-secret-FAKE"],
+      "expected": "\"redis-cli\" -a [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "sshpass-quoted-prompt-option",
+      "program": "sshpass",
+      "input": "sshpass \"-P\" \"Enter PIN:\" -p quoted-opt-secret-FAKE ssh host",
+      "spans": [[29, 51]],
+      "mustNotSurvive": ["quoted-opt-secret-FAKE"],
+      "expected": "sshpass \"-P\" \"Enter PIN:\" -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-quoted-flag-after-quoted-option",
+      "program": "sshpass",
+      "input": "sshpass \"-v\" \"-p\" \"quoted-both-secret-FAKE\" ssh host",
+      "spans": [[18, 43]],
+      "mustNotSurvive": ["quoted-both-secret-FAKE"],
+      "expected": "sshpass \"-v\" \"-p\" [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-ansi-c-quoted-password",
+      "program": "sshpass",
+      "input": "sshpass -p $'can\\'t guess-FAKE me' ssh deploy@host",
+      "spans": [[11, 34]],
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "sshpass -p [REDACTED_SECRET] ssh deploy@host"
+    },
+    {
+      "name": "mysql-ansi-c-quoted-password",
+      "program": "mysql-client",
+      "input": "mysql -p$'it\\'s ansi-FAKE' appdb",
+      "spans": [[8, 26]],
+      "mustNotSurvive": ["ansi-FAKE"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-ansi-c-quoted-password",
+      "program": "redis-cli",
+      "input": "redis-cli -a $'it\\'s ansi-FAKE' ping",
+      "spans": [[13, 31]],
+      "mustNotSurvive": ["ansi-FAKE"],
+      "expected": "redis-cli -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "rediscli-auth-ansi-c-quoted",
+      "program": "redis-cli",
+      "input": "REDISCLI_AUTH=$'it\\'s ansi-FAKE' redis-cli ping",
+      "spans": [[14, 32]],
+      "mustNotSurvive": ["ansi-FAKE"],
+      "expected": "REDISCLI_AUTH=[REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "mysql-ansi-c-concatenated-password",
+      "program": "mysql-client",
+      "input": "mysql -phead$'can\\'t guess-FAKE me' appdb",
+      "spans": [[8, 35]],
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-ansi-c-whole-argument",
+      "program": "mysql-client",
+      "input": "mysql $'-pcan\\'t guess-FAKE me' appdb",
+      "spans": [[6, 31]],
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "mysql [REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "sshpass-ansi-c-whole-argument",
+      "program": "sshpass",
+      "input": "sshpass $'-pcan\\'t guess-FAKE me' ssh host",
+      "spans": [[8, 33]],
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "sshpass [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "rediscli-auth-ansi-c-whole-argument",
+      "program": "redis-cli",
+      "input": "env $'REDISCLI_AUTH=can\\'t guess-FAKE me' redis-cli ping",
+      "spans": [[4, 41]],
+      "mustNotSurvive": ["guess-FAKE", "me'"],
+      "expected": "env [REDACTED_SECRET] redis-cli ping"
+    },
+    {
+      "name": "mysql-password-ending-in-dollar",
+      "program": "mysql-client",
+      "input": "mysql -pPassw0rd-FAKE$$ appdb",
+      "spans": [[8, 23]],
+      "mustNotSurvive": ["Passw0rd-FAKE", "$$"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-password-after-nested-quotes",
+      "program": "mysql-client",
+      "input": "mysql -h \"$(cat \"config/team's host\")\" -pFAKEnested appdb",
+      "spans": [[41, 51]],
+      "mustNotSurvive": ["FAKEnested"],
+      "expected": "mysql -h \"$(cat \"config/team's host\")\" -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-cli-passwords-inside-and-after-substitution",
+      "program": "redis-cli",
+      "input": "redis-cli -h \"$(redis-cli -a FAKEinner GET current-host)\" -a FAKEouter PING",
+      "spans": [
+        [29, 38],
+        [61, 70]
+      ],
+      "mustNotSurvive": ["FAKEinner", "FAKEouter"],
+      "expected": "redis-cli -h \"$(redis-cli -a [REDACTED_SECRET] GET current-host)\" -a [REDACTED_SECRET] PING"
+    },
+    {
+      "name": "mysql-semicolon-in-quotes",
+      "program": "mysql-client",
+      "input": "mysql -e \"SELECT 1;\" -pFAKEsemi appdb",
+      "spans": [[23, 31]],
+      "mustNotSurvive": ["FAKEsemi"],
+      "expected": "mysql -e \"SELECT 1;\" -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-json-escaped",
+      "program": "mysql-client",
+      "input": "{\"cmd\":\"mysql -e \\\"SELECT 1;\\\" -pFAKEjson appdb\"}",
+      "spans": [[33, 41]],
+      "mustNotSurvive": ["FAKEjson"],
+      "expected": "{\"cmd\":\"mysql -e \\\"SELECT 1;\\\" -p[REDACTED_SECRET] appdb\"}"
+    },
+    {
+      "name": "mysql-json-newline",
+      "program": "mysql-client",
+      "input": "{\"cmd\":\"echo hi\\nmysql -pFAKEnewline appdb\"}",
+      "spans": [[25, 36]],
+      "mustNotSurvive": ["FAKEnewline"],
+      "expected": "{\"cmd\":\"echo hi\\nmysql -p[REDACTED_SECRET] appdb\"}"
+    },
+    {
+      "name": "redis-ansi-flag",
+      "program": "redis-cli",
+      "input": "redis-cli $'-a' FAKEansiflag ping",
+      "spans": [[16, 28]],
+      "mustNotSurvive": ["FAKEansiflag"],
+      "expected": "redis-cli $'-a' [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "mysql-quoted-flag-glued",
+      "program": "mysql-client",
+      "input": "mysql \"-p\"FAKEsplit appdb",
+      "spans": [[10, 19]],
+      "mustNotSurvive": ["FAKEsplit"],
+      "expected": "mysql \"-p\"[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-quoted-letter",
+      "program": "mysql-client",
+      "input": "mysql -\"p\"FAKEletter appdb",
+      "spans": [[10, 20]],
+      "mustNotSurvive": ["FAKEletter"],
+      "expected": "mysql -\"p\"[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-substitution-value",
+      "program": "mysql-client",
+      "input": "mysql -p$(cat /run/FAKEpwfile) appdb",
+      "spans": [[8, 30]],
+      "mustNotSurvive": ["FAKEpwfile"],
+      "expected": "mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-auth-command",
+      "program": "redis-cli",
+      "input": "redis-cli AUTH FAKEauthword",
+      "spans": [[15, 27]],
+      "mustNotSurvive": ["FAKEauthword"],
+      "expected": "redis-cli AUTH [REDACTED_SECRET]"
+    },
+    {
+      "name": "redis-auth-user",
+      "program": "redis-cli",
+      "input": "redis-cli -h cache auth default FAKEauthuser",
+      "spans": [
+        [24, 31],
+        [32, 44]
+      ],
+      "mustNotSurvive": ["FAKEauthuser"],
+      "expected": "redis-cli -h cache auth [REDACTED_SECRET] [REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-mixed-case-exe",
+      "program": "mysql-client",
+      "input": "MySQL.Exe -pFAKEexe appdb",
+      "spans": [[12, 19]],
+      "mustNotSurvive": ["FAKEexe"],
+      "expected": "MySQL.Exe -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-bash-c",
+      "program": "mysql-client",
+      "input": "bash -c \"mysql -pFAKEbashc appdb\"",
+      "spans": [[17, 26]],
+      "mustNotSurvive": ["FAKEbashc"],
+      "expected": "bash -c \"mysql -p[REDACTED_SECRET] appdb\""
+    },
+    {
+      "name": "mysql-ssh-remote",
+      "program": "mysql-client",
+      "input": "ssh db-host 'mysql -pFAKEsshremote appdb'",
+      "spans": [[21, 34]],
+      "mustNotSurvive": ["FAKEsshremote"],
+      "expected": "ssh db-host 'mysql -p[REDACTED_SECRET] appdb'"
+    },
+    {
+      "name": "mysql-docker-env",
+      "program": "mysql-client",
+      "input": "docker exec db sh -c \"MYSQL_PWD=FAKEdockerpwd mysql appdb\"",
+      "spans": [[21, 58]],
+      "mustNotSurvive": ["FAKEdockerpwd"],
+      "expected": "docker exec db sh -c [REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-sudo",
+      "program": "mysql-client",
+      "input": "sudo -u mysql mysqldump -pFAKEsudo appdb",
+      "spans": [[26, 34]],
+      "mustNotSurvive": ["FAKEsudo"],
+      "expected": "sudo -u mysql mysqldump -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-comment",
+      "program": "mysql-client",
+      "input": "ls\n# was: mysql -pFAKEcomment appdb",
+      "spans": [[18, 29]],
+      "mustNotSurvive": ["FAKEcomment"],
+      "expected": "ls\n# was: mysql -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-in-substitution",
+      "program": "mysql-client",
+      "input": "echo $(mysql -pFAKEsubst -e 'select 1')",
+      "spans": [[15, 24]],
+      "mustNotSurvive": ["FAKEsubst"],
+      "expected": "echo $(mysql -p[REDACTED_SECRET] -e 'select 1')"
+    },
+    {
+      "name": "mysql-in-backticks",
+      "program": "mysql-client",
+      "input": "echo `mysql -pFAKEbacktick -e 'select 1'`",
+      "spans": [[14, 26]],
+      "mustNotSurvive": ["FAKEbacktick"],
+      "expected": "echo `mysql -p[REDACTED_SECRET] -e 'select 1'`"
+    },
+    {
+      "name": "mysql-after-redirect",
+      "program": "mysql-client",
+      "input": "mysql -u root < dump.sql -pFAKEredirect",
+      "spans": [[27, 39]],
+      "mustNotSurvive": ["FAKEredirect"],
+      "expected": "mysql -u root < dump.sql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "sshpass-after-fd-redirect",
+      "program": "sshpass",
+      "input": "sshpass 2>/dev/null -p FAKEfdredirect ssh host",
+      "spans": [[23, 37]],
+      "mustNotSurvive": ["FAKEfdredirect"],
+      "expected": "sshpass 2>/dev/null -p [REDACTED_SECRET] ssh host"
+    },
+    {
+      "name": "sshpass-env-export",
+      "program": "sshpass",
+      "input": "export SSHPASS=FAKEexport; sshpass -e ssh host",
+      "spans": [[15, 25]],
+      "mustNotSurvive": ["FAKEexport"],
+      "expected": "export SSHPASS=[REDACTED_SECRET]; sshpass -e ssh host"
+    },
+    {
+      "name": "mysql-pwd-env",
+      "program": "mysql-client",
+      "input": "MYSQL_PWD=FAKEmysqlpwd mysql appdb",
+      "spans": [[10, 22]],
+      "mustNotSurvive": ["FAKEmysqlpwd"],
+      "expected": "MYSQL_PWD=[REDACTED_SECRET] mysql appdb"
+    },
+    {
+      "name": "mysql-long-password",
+      "program": "mysql-client",
+      "input": "mysql --password=FAKElong appdb",
+      "spans": [[17, 25]],
+      "mustNotSurvive": ["FAKElong"],
+      "expected": "mysql --password=[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-long-abbreviated",
+      "program": "mysql-client",
+      "input": "mysql --pass=FAKEabbr appdb",
+      "spans": [[13, 21]],
+      "mustNotSurvive": ["FAKEabbr"],
+      "expected": "mysql --pass=[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "redis-long-pass",
+      "program": "redis-cli",
+      "input": "redis-cli --pass FAKElongpass ping",
+      "spans": [[17, 29]],
+      "mustNotSurvive": ["FAKElongpass"],
+      "expected": "redis-cli --pass [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "mysql-too-deep",
+      "program": "mysql-client",
+      "input": "echo $(echo $(echo $(echo $(echo $(mysql -pFAKEdeep)))))",
+      "spans": [[35, 52]],
+      "mustNotSurvive": ["FAKEdeep"],
+      "expected": "echo $(echo $(echo $(echo $(echo $([REDACTED_SECRET]))))"
+    },
+    {
+      "name": "mysql-unterminated-quote",
+      "program": "mysql-client",
+      "input": "mysql -p'FAKEopen secret appdb",
+      "spans": [[8, 30]],
+      "mustNotSurvive": ["FAKEopen", "secret"],
+      "expected": "mysql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "valkey-cli",
+      "program": "redis-cli",
+      "input": "valkey-cli -a FAKEvalkey ping",
+      "spans": [[14, 24]],
+      "mustNotSurvive": ["FAKEvalkey"],
+      "expected": "valkey-cli -a [REDACTED_SECRET] ping"
+    },
+    {
+      "name": "mysql-windows-path",
+      "program": "mysql-client",
+      "input": "C:\\tools\\mysql.exe -pFAKEwinpath appdb",
+      "spans": [[21, 32]],
+      "mustNotSurvive": ["FAKEwinpath"],
+      "expected": "C:\\tools\\mysql.exe -p[REDACTED_SECRET] appdb"
+    },
+    {
+      "name": "mysql-heredoc-body",
+      "program": "mysql-client",
+      "input": "cat <<EOF\nmysql -pFAKEheredoc appdb\nEOF",
+      "spans": [[18, 29]],
+      "mustNotSurvive": ["FAKEheredoc"],
+      "expected": "cat <<EOF\nmysql -p[REDACTED_SECRET] appdb\nEOF"
+    },
+    {
+      "name": "sshpass-noclobber-redirect",
+      "program": "sshpass",
+      "input": "sshpass -p FAKEhunter2 ssh h >|log",
+      "spans": [[11, 22]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "sshpass -p [REDACTED_SECRET] ssh h >|log"
+    },
+    {
+      "name": "sshpass-fd-redirect-before-option",
+      "program": "sshpass",
+      "input": "sshpass 2>err -p FAKEhunter2 ssh h",
+      "spans": [[17, 28]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "sshpass 2>err -p [REDACTED_SECRET] ssh h"
+    },
+    {
+      "name": "mysql-trailing-line-continuation",
+      "program": "mysql-client",
+      "input": "mysql -pFAKEhunter2\\\n appdb",
+      "spans": [[8, 19]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "mysql -p[REDACTED_SECRET]\\\n appdb"
+    },
+    {
+      "name": "redis-pass-value-after-redirect",
+      "program": "redis-cli",
+      "input": "redis-cli --pass 2>err FAKEhunter2 PING",
+      "spans": [[23, 34]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "redis-cli --pass [REDACTED_SECRET] [REDACTED_SECRET] PING"
+    }
+  ],
+  "prose": [
+    "pip install basic package",
+    "mysql -u root -p appdb",
+    "mysql -p -u root",
+    "mysql -upeter appdb",
+    "mysqldump -wpublished=1 appdb posts",
+    "mysqlbinlog -dprod binlog.000001",
+    "mysql -hpg-replica appdb",
+    "mysql -s -p appdb",
+    "mysql -uroot appdb; ls -pla",
+    "mysql -uroot appdb && cp -pr a b",
+    "mysql -uroot appdb\nls -pla",
+    "sshpass -e ssh -p 2222 host",
+    "sshpass -f /run/db-pass ssh -p 2222 host",
+    "sshpass -P \"Enter PIN:\" -e ssh -p 2222 host",
+    "sshpass -d 3 ssh -p 2222 host",
+    "sshpass \"-e\" ssh -p 2222 host",
+    "\"mysql\" -P 3306 appdb",
+    "redis-cli -h cache ping; tar -a -cf x.tgz y",
+    "redis-cli --askpass -h cache ping",
+    "docker run --env BUILD=$(mysql -Nse 'SELECT 1;') -p8080:80 nginx",
+    "mysql -P 3306 -h db",
+    "ssh -p 2222 host",
+    "docker run -p 8080:80 img",
+    "docker run --name mysql -p 3306:3306 mysql:8",
+    "find /var/lib/mysql -name '*.cnf'",
+    "mysql -e \"select 1\" appdb",
+    "ls -pla",
+    "cp -pr a b",
+    "nc -l -p 8080",
+    "scp -P 22 a host:b",
+    "git commit -a -m msg",
+    "mysql -P 3306 -h db",
+    "mysql -u root -p appdb",
+    "redis-cli -h cache -p 6380 ping"
+  ],
+  "argvVectors": [
+    {
+      "name": "argv-mysql-attached",
+      "value": { "cmd": ["mysql", "-uroot", "-pFAKEhunter2", "appdb"] },
+      "expected": { "cmd": ["mysql", "-uroot", "-p[REDACTED_SECRET]", "appdb"] }
+    },
+    {
+      "name": "argv-sshpass-next",
+      "value": ["sshpass", "-p", "FAKEhunter2", "ssh", "build"],
+      "expected": ["sshpass", "-p", "[REDACTED_SECRET]", "ssh", "build"]
+    },
+    {
+      "name": "command-args-sshpass",
+      "value": {
+        "command": "sshpass",
+        "args": ["-p", "FAKEhunter2", "ssh", "build"]
+      },
+      "expected": {
+        "command": "sshpass",
+        "args": ["-p", "[REDACTED_SECRET]", "ssh", "build"]
+      }
+    },
+    {
+      "name": "command-args-redis-mixed",
+      "value": {
+        "command": "redis-cli",
+        "args": ["-a", "FAKEhunter2", { "db": 1 }]
+      },
+      "expected": {
+        "command": "redis-cli",
+        "args": ["-a", "[REDACTED_SECRET]", { "db": 1 }]
+      }
+    },
+    {
+      "name": "command-args-redis-auth",
+      "value": {
+        "command": "/usr/bin/valkey-cli",
+        "args": ["AUTH", "FAKEhunter2"]
+      },
+      "expected": {
+        "command": "/usr/bin/valkey-cli",
+        "args": ["AUTH", "[REDACTED_SECRET]"]
+      }
+    },
+    {
+      "name": "argv-bash-c",
+      "value": ["bash", "-c", "mysql -pFAKEhunter2 appdb"],
+      "expected": ["bash", "-c", "mysql -p[REDACTED_SECRET] appdb"]
+    },
+    {
+      "name": "argv-env-assignment",
+      "value": ["env", "SSHPASS=FAKEhunter2", "sshpass", "-e", "ssh", "h"],
+      "expected": [
+        "env",
+        "SSHPASS=[REDACTED_SECRET]",
+        "sshpass",
+        "-e",
+        "ssh",
+        "h"
+      ]
+    },
+    {
+      "name": "argv-prose",
+      "value": { "args": ["git", "status"], "command": "ls" },
+      "expected": { "args": ["git", "status"], "command": "ls" }
+    }
+  ]
+}
