@@ -8,7 +8,30 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-var errFrontmatterShape = errors.New("frontmatter is not a mapping")
+var (
+	errFrontmatterShape = errors.New("frontmatter is not a mapping")
+	errFrontmatterAlias = errors.New("frontmatter uses a YAML alias")
+)
+
+// maxFrontmatterDepth bounds how deep frontmatter nests.
+const maxFrontmatterDepth = 32
+
+// hasAlias reports an alias anywhere in the document, or nesting past
+// maxFrontmatterDepth.
+func hasAlias(node *yaml.Node, depth int) bool {
+	if node == nil {
+		return false
+	}
+	if node.Kind == yaml.AliasNode || depth > maxFrontmatterDepth {
+		return true
+	}
+	for _, child := range node.Content {
+		if hasAlias(child, depth+1) {
+			return true
+		}
+	}
+	return false
+}
 
 // FrontmatterHooks reads the `hooks` field of a skill's SKILL.md or a
 // subagent's definition: YAML frontmatter between a leading `---` line and
@@ -20,8 +43,17 @@ func FrontmatterHooks(data []byte) (HookSettings, error) {
 	if !ok {
 		return HookSettings{}, nil
 	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(block, &doc); err != nil {
+		return HookSettings{}, err
+	}
+	// An alias repeats a value without its bytes, so a small file could
+	// expand past every bound: frontmatter with one isn't read.
+	if hasAlias(&doc, 0) {
+		return HookSettings{}, errFrontmatterAlias
+	}
 	var top map[string]any
-	if err := yaml.Unmarshal(block, &top); err != nil {
+	if err := doc.Decode(&top); err != nil {
 		return HookSettings{}, err
 	}
 	if top == nil {

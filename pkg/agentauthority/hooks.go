@@ -220,6 +220,9 @@ type hookScan struct {
 	policyHelper bool
 	// urlPatterns holds each allowedHttpHookUrls pattern compiled.
 	urlPatterns map[string]*regexp.Regexp
+	// emptyFrontmatter holds skills and subagents read cleanly with no
+	// hooks, listed last as far as the scope cap allows.
+	emptyFrontmatter []HookScope
 	// urlMatches counts the allowlist matches tried, against maxURLMatches.
 	urlMatches int
 	// projectsCut: the project list went past maxHookProjects.
@@ -368,6 +371,7 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		s.frontmatterScopes(filepath.Join(dir, ".claude"), HookScopeProject, nil)
 	}
 	s.project = ""
+	s.listEmptyFrontmatter()
 	// A policy the scan can't read (an MDM profile, a policy helper) may
 	// decide what the files say, so the scan is partial: the cloud keeps
 	// what it knew rather than withdraw hooks on an unread policy's word.
@@ -486,6 +490,9 @@ func (s *hookScan) pluginScopes(base string) {
 		Name    string          `json:"name"`
 		Version string          `json:"version"`
 		Hooks   json.RawMessage `json:"hooks"`
+		// Skills names skill folders of the plugin's own, which aren't
+		// read: their hooks would be missed.
+		Skills json.RawMessage `json:"skills"`
 		// DefaultEnabled false leaves the plugin off until a setting turns
 		// it on.
 		DefaultEnabled *bool `json:"defaultEnabled"`
@@ -562,8 +569,13 @@ func (s *hookScan) pluginScopes(base string) {
 			ref := &pluginRef{plugin: plugin, key: key, disabled: disabled, projectUnread: projectUnread, manifestUnread: !manifestRead && !set, canonical: canonical}
 			s.records(id, HookScopePlugin, hooks, ref, -1)
 			s.closeScope(h, id, HookScopePlugin)
-			// The plugin's skills follow the plugin's switches.
+			// The plugin's skills follow the plugin's switches. Skill
+			// folders its manifest names elsewhere aren't read, so the scan
+			// says it is incomplete.
 			s.frontmatterScopes(installed, HookScopePlugin, ref)
+			if len(manifest.Skills) > 0 && string(manifest.Skills) != "null" {
+				s.source.Fail(ReasonUnsupportedFormat)
+			}
 			s.project = ""
 		}
 	}
@@ -813,7 +825,7 @@ func (s *hookScan) record(scope, kind, event, matcher string, raw json.RawMessag
 		}
 	case "mcp_tool":
 		anchor = "mcp:" + safe(h.Server, 128) + "/" + safe(h.Tool, 128)
-		r.Summary = pointer(safe(hookField(h.Server, 128)+"/"+hookField(h.Tool, 128), 256))
+		r.Summary = pointer(safe(mcpName(h.Server)+"/"+mcpName(h.Tool), 256))
 	}
 	if plugin != nil {
 		r.Plugin = plugin.plugin
@@ -890,7 +902,8 @@ func (s *hookScan) coverageReadable() bool {
 		return false
 	}
 	for _, scope := range s.agent.Scopes {
-		if scope.Kind != HookScopePlugin && scope.Status != StatusComplete {
+		// A plugin, skill or subagent never holds a device-wide handler.
+		if scope.Kind != HookScopePlugin && !frontmatterKind(scope.Kind) && scope.Status != StatusComplete {
 			return false
 		}
 	}
@@ -1009,4 +1022,15 @@ func literalProgram(command, program string) bool {
 	}
 	fields = withoutAssignments(fields)
 	return len(fields) > 0 && fields[0] == program
+}
+
+var mcpNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+
+// mcpName shows an MCP server or tool name only when it is a plain name: a
+// path or anything else written there is redacted.
+func mcpName(value string) string {
+	if !mcpNamePattern.MatchString(value) {
+		return redacted
+	}
+	return hookField(value, 128)
 }

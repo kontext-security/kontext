@@ -1,7 +1,9 @@
 package agentauthority
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,8 +12,8 @@ import (
 	"github.com/kontext-security/kontext/pkg/agentauthority/readers"
 )
 
-// Skills and subagents with hooks are scopes of their own; those without
-// list nothing.
+// Skills and subagents are scopes of their own. Those without hooks are still
+// listed, so a hook removed from one is withdrawn rather than kept.
 func TestFrontmatterHooksAreScopes(t *testing.T) {
 	h := newHookHome(t)
 	h.write(filepath.Join(h.base, "skills", "deploy", "SKILL.md"), skillFile("PreToolUse", "echo check"))
@@ -23,12 +25,22 @@ func TestFrontmatterHooksAreScopes(t *testing.T) {
 	if result.Status != StatusComplete {
 		t.Fatalf("result %+v", result)
 	}
-	kinds := map[string]int{}
+	withHooks := map[string]int{}
+	listed := map[string]int{}
 	for _, scope := range agent.Scopes {
-		kinds[scope.Kind]++
+		listed[scope.Kind]++
+		for _, hook := range agent.Hooks {
+			if hook.ScopeID == scope.ID {
+				withHooks[scope.Kind]++
+				break
+			}
+		}
 	}
-	if kinds[HookScopeSkill] != 1 || kinds[HookScopeSubagent] != 1 {
-		t.Fatalf("scopes %+v", agent.Scopes)
+	if withHooks[HookScopeSkill] != 1 || withHooks[HookScopeSubagent] != 1 {
+		t.Fatalf("scopes with hooks %+v", agent.Scopes)
+	}
+	if listed[HookScopeSkill] < 2 || listed[HookScopeSubagent] < 2 {
+		t.Fatalf("empty scopes not listed %+v", agent.Scopes)
 	}
 	pre := byEvent(agent, "PreToolUse")
 	if len(pre) != 1 || pre[0].Matcher == nil || *pre[0].Matcher != "Bash" || scopeOf(agent, pre[0].ScopeID).Kind != HookScopeSkill {
@@ -103,10 +115,76 @@ func TestFrontmatterHooksAreRedacted(t *testing.T) {
 	h := newHookHome(t)
 	h.write(filepath.Join(h.base, "skills", "db", "SKILL.md"), skillFile("PreToolUse", "mysql -pFAKEhunter2 appdb"))
 	agent, _ := h.scan()
-	for _, r := range agent.Hooks {
-		if r.Summary != nil && strings.Contains(*r.Summary, "FAKEhunter2") {
-			t.Fatalf("summary %q", *r.Summary)
-		}
+	if len(byEvent(agent, "PreToolUse")) != 1 {
+		t.Fatalf("no record to check: %+v", agent.Hooks)
+	}
+	data, err := json.Marshal(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "FAKEhunter2") {
+		t.Fatalf("agent %s", data)
+	}
+}
+
+// An MCP server or tool written as a path shows redacted.
+func TestMCPToolNamesAreRedacted(t *testing.T) {
+	h := newHookHome(t)
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", map[string]any{"type": "mcp_tool", "server": "/Users/someone/FAKEhunter2", "tool": "notify"})})
+	agent, _ := h.scan()
+	stop := byEvent(agent, "Stop")
+	if len(stop) != 1 || stop[0].Summary == nil || *stop[0].Summary != redacted+"/notify" {
+		t.Fatalf("mcp hooks %+v", stop)
+	}
+}
+
+// What the scan doesn't follow leaves it partial: a symlinked skill or
+// subagent, and skill folders a plugin's manifest names.
+func TestUnreadSkillsLeaveTheScanPartial(t *testing.T) {
+	h := newHookHome(t)
+	target := filepath.Join(h.home, "elsewhere")
+	h.write(filepath.Join(target, "SKILL.md"), skillFile("Stop", "echo stop"))
+	if err := os.MkdirAll(filepath.Join(h.base, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(h.base, "skills", "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if _, result := h.scan(); result.Status != StatusPartial || !slices.Contains(result.Reasons, ReasonUnsupportedFormat) {
+		t.Fatalf("symlinked skill %+v", result)
+	}
+
+	h = newHookHome(t)
+	h.write(filepath.Join(h.home, "elsewhere.md"), skillFile("Stop", "echo stop"))
+	if err := os.MkdirAll(filepath.Join(h.base, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(h.home, "elsewhere.md"), filepath.Join(h.base, "agents", "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, result := h.scan(); result.Status != StatusPartial || !slices.Contains(result.Reasons, ReasonUnsupportedFormat) {
+		t.Fatalf("symlinked subagent %+v", result)
+	}
+
+	h = newHookHome(t)
+	h.installPlugin("formatter@acme", nil, map[string]any{})
+	dir := filepath.Join(h.base, "plugins/cache", "formatter", "1.4.0")
+	h.write(filepath.Join(dir, ".claude-plugin/plugin.json"), map[string]any{"name": "formatter", "version": "1.4.0", "skills": "./extra"})
+	if _, result := h.scan(); result.Status != StatusPartial || !slices.Contains(result.Reasons, ReasonUnsupportedFormat) {
+		t.Fatalf("manifest skills %+v", result)
+	}
+}
+
+// A wide subagents folder is listed within a budget, and the cut truncates
+// the scan.
+func TestSubagentListingsAreBounded(t *testing.T) {
+	h := newHookHome(t)
+	for i := range maxAgentListings + 1 {
+		h.write(filepath.Join(h.base, "agents", fmt.Sprintf("team%02d", i), "a.md"), []byte("no frontmatter"))
+	}
+	agent, result := h.scan()
+	if !agent.Truncated || result.Status != StatusPartial || !slices.Contains(result.Reasons, ReasonWalkLimit) {
+		t.Fatalf("truncated %v result %+v", agent.Truncated, result)
 	}
 }
 
@@ -123,6 +201,8 @@ func TestFrontmatterReader(t *testing.T) {
 		{"---\n---\n", nil, false},
 		{"---\nhooks: [1, 2]\n---\n", nil, true},
 		{"---\nhooks:\n  1: x\n---\n", nil, true},
+		{"---\nshared: &h\n  Stop: []\nhooks: *h\n---\n", nil, true},
+		{"---\nhooks:\n  Stop: " + strings.Repeat("[", 40) + strings.Repeat("]", 40) + "\n---\n", nil, true},
 	} {
 		got, err := readers.FrontmatterHooks([]byte(tc.in))
 		if (err != nil) != tc.err {

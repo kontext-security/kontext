@@ -350,6 +350,42 @@ func enablementMatrix() []enablementRule {
 			state: hookConditional, reasons: []string{HookReasonWhileActive},
 		},
 		{
+			name: "a skills lock drops a personal skill's hooks", follows: "strictPluginOnlyCustomization skills keeps skills to plugin and managed sources",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"strictPluginOnlyCustomization": []string{"skills"}})
+				h.write(filepath.Join(h.base, "skills", "deploy", "SKILL.md"), skillFile("PreToolUse", "echo check"))
+				return "PreToolUse"
+			},
+			state: hookDisabled, reasons: []string{HookReasonPluginOnly, HookReasonWhileActive},
+		},
+		{
+			name: "an agents lock drops a personal subagent's hooks", follows: "strictPluginOnlyCustomization agents keeps subagents to plugin and managed sources",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"strictPluginOnlyCustomization": []string{"agents"}})
+				h.write(filepath.Join(h.base, "agents", "reviewer.md"), skillFile("PreToolUse", "echo check"))
+				return "PreToolUse"
+			},
+			state: hookDisabled, reasons: []string{HookReasonPluginOnly, HookReasonWhileActive},
+		},
+		{
+			name: "a skills lock leaves a subagent's hooks alone", follows: "strictPluginOnlyCustomization locks only the surfaces it names",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"strictPluginOnlyCustomization": []string{"skills"}})
+				h.write(filepath.Join(h.base, "agents", "reviewer.md"), skillFile("PreToolUse", "echo check"))
+				return "PreToolUse"
+			},
+			state: hookConditional, reasons: []string{HookReasonWhileActive},
+		},
+		{
+			name: "a skills lock leaves a settings hook alone", follows: "strictPluginOnlyCustomization locks only the surfaces it names",
+			setup: func(h *hookHome) string {
+				managed(h, map[string]any{"strictPluginOnlyCustomization": []string{"skills", "agents"}})
+				userHook(h, "Stop", command("echo stop"), nil)
+				return "Stop"
+			},
+			state: hookEnabled, reasons: []string{},
+		},
+		{
 			name: "a claude.ai sign-in is named without changing the state", follows: "server-managed settings apply to signed-in organizations",
 			setup: func(h *hookHome) string {
 				userHook(h, "Stop", command("echo stop"), nil)

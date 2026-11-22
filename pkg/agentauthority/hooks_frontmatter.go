@@ -1,6 +1,7 @@
 package agentauthority
 
 import (
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -29,6 +30,9 @@ const (
 	// maxAgentDepth is how deep a subagents folder is listed: Claude Code
 	// reads it recursively.
 	maxAgentDepth = 3
+	// maxAgentListings is the most folders listed under one subagents
+	// folder.
+	maxAgentListings = 32
 )
 
 func frontmatterKind(kind string) bool { return kind == HookScopeSkill || kind == HookScopeSubagent }
@@ -45,7 +49,16 @@ func (s *hookScan) frontmatterScopes(dir, from string, plugin *pluginRef) {
 	read := 0
 	for _, entry := range s.g.entries(skills) {
 		name := entry.Name()
-		if !entry.IsDir() || strings.HasPrefix(name, ".") {
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			// Never followed: what it holds goes unread, so the scan
+			// isn't complete.
+			s.source.Fail(ReasonUnsupportedFormat)
+			continue
+		}
+		if !entry.IsDir() {
 			continue
 		}
 		if read >= maxFrontmatterFiles {
@@ -70,8 +83,15 @@ func (s *hookScan) frontmatterScopes(dir, from string, plugin *pluginRef) {
 		return
 	}
 	read = 0
+	listings := 0
 	var walk func(folder string, depth int)
 	walk = func(folder string, depth int) {
+		if listings >= maxAgentListings {
+			s.source.Fail(ReasonWalkLimit)
+			s.agent.Truncated = true
+			return
+		}
+		listings++
 		s.only()
 		for _, entry := range s.g.entries(folder) {
 			name := entry.Name()
@@ -79,6 +99,10 @@ func (s *hookScan) frontmatterScopes(dir, from string, plugin *pluginRef) {
 				continue
 			}
 			path := filepath.Join(folder, name)
+			if entry.Type()&fs.ModeSymlink != 0 {
+				s.source.Fail(ReasonUnsupportedFormat)
+				continue
+			}
 			if entry.IsDir() {
 				if depth+1 < maxAgentDepth {
 					walk(path, depth+1)
@@ -126,11 +150,27 @@ func (s *hookScan) frontmatterScope(kind, path, canonical string, listed bool, p
 		}
 		s.records(id, kind, hooks, plugin, -1)
 	}
-	if len(s.agent.Hooks) == before && h.Result(s.opts.Now).Status == StatusComplete {
+	if result := h.Result(s.opts.Now); len(s.agent.Hooks) == before && result.Status == StatusComplete {
+		// Read and empty: listed after every scope with hooks, so a skill
+		// whose last hook was removed is seen without it.
+		s.emptyFrontmatter = append(s.emptyFrontmatter, HookScope{ID: id, Kind: kind, Status: result.Status, Reasons: []string{}, CheckedAt: result.FinishedAt})
 		s.only()
 		return
 	}
 	s.closeScope(h, id, kind)
+}
+
+// listEmptyFrontmatter lists the skills and subagents read cleanly with no
+// hooks while the scope cap allows. One left out carries no hook, so the
+// scan isn't truncated for it; a hook it held before is withdrawn as soon
+// as the scan is complete.
+func (s *hookScan) listEmptyFrontmatter() {
+	for _, scope := range s.emptyFrontmatter {
+		if len(s.agent.Scopes) >= MaxHookScopes {
+			break
+		}
+		s.agent.Scopes = append(s.agent.Scopes, scope)
+	}
 }
 
 // subagentEvents names a subagent's Stop hooks as Claude Code runs them:

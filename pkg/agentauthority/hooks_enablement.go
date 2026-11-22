@@ -65,7 +65,12 @@ type switches struct {
 	managedDisableAll bool
 	otherDisableAll   bool
 	managedOnly       bool
+	// pluginOnly, pluginOnlySkills and pluginOnlyAgents say
+	// strictPluginOnlyCustomization locks the hooks, skills or agents
+	// surface: a locked surface loads only from plugins and managed files.
 	pluginOnly        bool
+	pluginOnlySkills  bool
+	pluginOnlyAgents  bool
 	pluginOnlyUnclear bool
 	// httpAllow holds the allowedHttpHookUrls patterns merged from every
 	// level that defines the key; nil when none does. httpAllowManaged says
@@ -112,10 +117,13 @@ func (s *hookScan) switchesFor(project string) switches {
 			if raw := layer.settings.StrictPluginOnlyCustomization; len(raw) > 0 {
 				var all bool
 				if json.Unmarshal(raw, &all) == nil {
-					sw.pluginOnly, sw.pluginOnlyUnclear = all, false
+					sw.pluginOnly, sw.pluginOnlySkills, sw.pluginOnlyAgents = all, all, all
+					sw.pluginOnlyUnclear = false
 				} else {
-					covers, unclear := pluginOnlyCoversHooks(raw)
-					sw.pluginOnly = sw.pluginOnly || covers
+					locked, unclear := pluginOnlySurfaces(raw)
+					sw.pluginOnly = sw.pluginOnly || locked.hooks
+					sw.pluginOnlySkills = sw.pluginOnlySkills || locked.skills
+					sw.pluginOnlyAgents = sw.pluginOnlyAgents || locked.agents
 					sw.pluginOnlyUnclear = sw.pluginOnlyUnclear || unclear
 				}
 			}
@@ -152,18 +160,27 @@ func (s *hookScan) allowHTTP(sw *switches, layer hookLayer) {
 	}
 }
 
-// pluginOnlyCoversHooks reads strictPluginOnlyCustomization: true locks every
+// lockedSurfaces names the strictPluginOnlyCustomization surfaces that
+// decide whether a hook loads: hooks for settings hooks, skills and agents
+// for the hooks those files declare.
+type lockedSurfaces struct{ hooks, skills, agents bool }
+
+// pluginOnlySurfaces reads strictPluginOnlyCustomization: true locks every
 // surface, a list locks the surfaces it names.
-func pluginOnlyCoversHooks(raw json.RawMessage) (covers, unclear bool) {
+func pluginOnlySurfaces(raw json.RawMessage) (locked lockedSurfaces, unclear bool) {
 	var all bool
 	if json.Unmarshal(raw, &all) == nil {
-		return all, false
+		return lockedSurfaces{all, all, all}, false
 	}
 	var surfaces []string
 	if json.Unmarshal(raw, &surfaces) == nil {
-		return slices.Contains(surfaces, "hooks"), false
+		return lockedSurfaces{
+			hooks:  slices.Contains(surfaces, "hooks"),
+			skills: slices.Contains(surfaces, "skills"),
+			agents: slices.Contains(surfaces, "agents"),
+		}, false
 	}
-	return false, true
+	return lockedSurfaces{}, true
 }
 
 func (s *hookScan) scopeStatus(id string) string {
@@ -241,7 +258,13 @@ func evaluateEnablement(s *hookScan) {
 				disabled = append(disabled, HookReasonManagedOnly)
 			}
 		}
-		if sw.pluginOnly && !managedKind(kind) && kind != HookScopePlugin {
+		// A locked surface keeps what plugins and managed files bring. A
+		// skill or subagent outside them doesn't load at all, so its hooks
+		// don't run either.
+		locked := sw.pluginOnly ||
+			info.kind == HookScopeSkill && sw.pluginOnlySkills ||
+			info.kind == HookScopeSubagent && sw.pluginOnlyAgents
+		if locked && !managedKind(kind) && kind != HookScopePlugin {
 			disabled = append(disabled, HookReasonPluginOnly)
 		}
 		if sw.pluginOnlyUnclear && !managedKind(kind) {
