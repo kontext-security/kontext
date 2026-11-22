@@ -815,7 +815,7 @@ func (l *lexer) read(command []word) {
 // ssh host '…', a JSON string), mapping its masks back to the source.
 func (l *lexer) inner(w *word) {
 	cooked := string(w.cooked)
-	if !w.argv && cooked == l.src[w.start:w.end] || !containsAny(fold(cooked), commandNeedles) {
+	if !w.argv && cooked == l.src[w.start:w.end] || !namesClient(cooked) {
 		return
 	}
 	if l.tooDeep() {

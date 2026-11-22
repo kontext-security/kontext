@@ -834,6 +834,22 @@
       "expected": "m\\ysql -p[REDACTED_SECRET]"
     },
     {
+      "name": "mysql-escaped-name-in-bash-c",
+      "program": "mysql-client",
+      "input": "bash -c 'm\\ysql -pFAKEhunter2 appdb'",
+      "spans": [[18, 29]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "bash -c 'm\\ysql -p[REDACTED_SECRET] appdb'"
+    },
+    {
+      "name": "mysql-quoted-name-in-bash-c",
+      "program": "mysql-client",
+      "input": "bash -c \"my''sql -pFAKEhunter2 appdb\"",
+      "spans": [[19, 30]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "bash -c \"my''sql -p[REDACTED_SECRET] appdb\""
+    },
+    {
       "name": "mysql-empty-quotes-in-name",
       "program": "mysql-client",
       "input": "my\"\"sql -pFAKEhunter2",
