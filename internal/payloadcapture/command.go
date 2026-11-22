@@ -394,7 +394,9 @@ func (l *lexer) commands(term byte) {
 			return
 		case c == '<' || c == '>':
 			// A file descriptor glued to the operator (2>) is no argument.
-			if n := len(command); n > 0 && command[n-1].end == l.i && isDigits([]byte(l.src[command[n-1].start:l.i])) {
+			// A line continuation between them still glues them (2\<newline>>).
+			if n := len(command); n > 0 && onlyContinuations(l.src[command[n-1].end:l.i]) &&
+				isDigits([]byte(withoutContinuations(l.src[command[n-1].start:command[n-1].end]))) {
 				command[n-1].redirect = true
 			}
 			for l.i < l.limit && (l.src[l.i] == '<' || l.src[l.i] == '>' || l.src[l.i] == '&' ||
@@ -462,6 +464,26 @@ func (l *lexer) substitution(term byte) int {
 	child.commands(term)
 	l.masks = append(l.masks, child.masks...)
 	return child.i
+}
+
+// onlyContinuations reports whether text is nothing but line
+// continuations (\<newline> or \<CR><newline>).
+func onlyContinuations(text string) bool {
+	for text != "" {
+		if strings.HasPrefix(text, "\\\n") {
+			text = text[2:]
+		} else if strings.HasPrefix(text, "\\\r\n") {
+			text = text[3:]
+		} else {
+			return false
+		}
+	}
+	return true
+}
+
+// withoutContinuations is text with its line continuations taken out.
+func withoutContinuations(text string) string {
+	return strings.NewReplacer("\\\r\n", "", "\\\n", "").Replace(text)
 }
 
 func isDigits(text []byte) bool {
@@ -598,7 +620,7 @@ func (l *lexer) dollar(w *word, quote int, inDouble bool) {
 		w.add(0, start, end, quote, false)
 		w.dynamic = true
 	case next == '{':
-		end := braceEnd(l.src, l.i+2, l.limit)
+		end := l.braceEnd(l.i + 2)
 		l.i = end
 		w.add(0, start, end, quote, false)
 		w.dynamic = true
@@ -625,8 +647,21 @@ func isNameByte(c byte) bool {
 }
 
 // braceEnd is the end of ${…} whose body starts at i: past the } that
-// closes it, skipping quotes and nested ${…}, or limit.
-func braceEnd(src string, i, limit int) int {
+// closes it, skipping quotes, nested ${…} and command substitutions (whose
+// { } groups do not close it), or the limit.
+func (l *lexer) braceEnd(i int) int {
+	src, limit := l.src, l.limit
+	if l.depth >= blindDepth {
+		return limit
+	}
+	// skip finds where the substitution whose commands start at from ends,
+	// reading nothing, and returns the index of its last byte.
+	skip := func(from int, term byte) int {
+		child := l.child(from, limit)
+		child.blind = true
+		child.commands(term)
+		return child.i - 1
+	}
 	depth := 1
 	for i < limit {
 		switch src[i] {
@@ -641,19 +676,28 @@ func braceEnd(src string, i, limit int) int {
 		case '"':
 			// The shell reads quotes in the word after the operator.
 			for i++; i < limit && src[i] != '"'; i++ {
-				if src[i] == '\\' {
+				switch {
+				case src[i] == '\\':
 					i++
+				case src[i] == '$' && i+1 < limit && src[i+1] == '(':
+					i = skip(i+2, ')')
+				case src[i] == '`':
+					i = skip(i+1, '`')
 				}
 			}
 			if i >= limit {
 				return limit
 			}
+		case '`':
+			i = skip(i+1, '`')
 		case '$':
-			// Only a nested ${ nests; a bare { does not (${x%{} ends at the
-			// first }).
+			// A nested ${ nests and $(…) is skipped whole; a bare { does
+			// not nest (${x%{} ends at the first }).
 			if i+1 < limit && src[i+1] == '{' {
 				depth++
 				i++
+			} else if i+1 < limit && src[i+1] == '(' {
+				i = skip(i+2, ')')
 			}
 		case '}':
 			depth--

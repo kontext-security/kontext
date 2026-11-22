@@ -112,6 +112,12 @@ func shellWords(src string) ([]Span, bool) {
 	if strings.Contains(src, "`") && strings.Contains(src, "\\") {
 		return nil, false
 	}
+	// Bash rejects a quote where ${ wants a name (bad substitution), so
+	// such a command never runs; mvdan reads it one way and the lexer
+	// another.
+	if strings.Contains(src, "${\"") || strings.Contains(src, "${'") {
+		return nil, false
+	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "")
 	if err != nil {
 		return nil, false

@@ -880,6 +880,22 @@
       "spans": [[23, 34]],
       "mustNotSurvive": ["FAKEhunter2"],
       "expected": "echo ${x%{} && mysql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-default-holding-command-group",
+      "program": "mysql-client",
+      "input": "mysql -p${DB_PASS:-$( { printf prefix; }; printf FAKEhunter2; )}",
+      "spans": [[8, 64]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "mysql -p[REDACTED_SECRET]"
+    },
+    {
+      "name": "mysql-default-holding-backquoted-group",
+      "program": "mysql-client",
+      "input": "mysql -p${DB_PASS:-`{ printf prefix; }; printf FAKEhunter2`}",
+      "spans": [[8, 60]],
+      "mustNotSurvive": ["FAKEhunter2"],
+      "expected": "mysql -p[REDACTED_SECRET]"
     }
   ],
   "prose": [
