@@ -43,6 +43,14 @@
       "provenance": "structural"
     },
     {
+      "id": "json-sensitive-property",
+      "description": "String values of credential-bearing properties in JSON embedded in flat text.",
+      "pattern": "(\"(?:[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|credential|private[_-]?key)[A-Za-z0-9_-]*|(?:[A-Za-z0-9]+[_-])*(?:pwd|pass)(?:[_-][A-Za-z0-9]+)*)\"\\s*:\\s*)\"(?:\\\\.|[^\"\\\\])*\"",
+      "replacement": "$1\"[REDACTED_SECRET]\"",
+      "caseInsensitive": true,
+      "provenance": "structural"
+    },
+    {
       "id": "github-token",
       "description": "GitHub classic tokens (ghp/gho/ghu/ghs/ghr).",
       "pattern": "\\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{16,}\\b",
@@ -73,7 +81,7 @@
     {
       "id": "slack-token",
       "description": "Slack bot/app/user tokens, also glued to a name (`ci_xoxb-...`).",
-      "pattern": "(?:xox[aboprse]|xwfp)-[A-Za-z0-9-]{16,}",
+      "pattern": "(?:xox[abcdeoprs]|xwfp)-[A-Za-z0-9-]{16,}",
       "caseInsensitive": false,
       "provenance": "gitleaks:slack-bot-token"
     },
@@ -86,15 +94,15 @@
     },
     {
       "id": "slack-app-token",
-      "description": "Slack app-level tokens.",
-      "pattern": "xapp-[A-Za-z0-9-]{16,}",
+      "description": "Slack app-level tokens (`xapp-1-A…-123…-abc…`).",
+      "pattern": "xapp-\\d-[A-Z0-9]+-\\d+-[a-z0-9]{16,}",
       "caseInsensitive": false,
       "provenance": "gitleaks:slack-app-token"
     },
     {
       "id": "gitlab-token",
       "description": "GitLab personal, deploy, runner, trigger, SCIM, CI build and OAuth tokens, also glued to a name (`ciglpat-...`); a CI job token's JWT parts go with it.",
-      "pattern": "(?:glpat|gldt|glrtr|glrt|glptt|glsoat|glcbt|gloas|glft|glwt|glagent)-[A-Za-z0-9_-]{20,}(?:\\.[A-Za-z0-9_-]*){0,2}",
+      "pattern": "(?:glpat|gldt|glrtr|glrt|glptt|glsoat|glcbt|gloas|glft|glwt|glagent|glimt|glffct)-[A-Za-z0-9_-]{20,}(?:\\.[A-Za-z0-9_-]*){0,2}",
       "caseInsensitive": false,
       "provenance": "gitleaks:gitlab-pat"
     },
@@ -107,8 +115,8 @@
     },
     {
       "id": "stripe-key",
-      "description": "Stripe secret and restricted keys.",
-      "pattern": "[sr]k_(?:live|test)_[A-Za-z0-9]{24,}",
+      "description": "Stripe secret and restricted keys, organization keys included (`sk_org_live_…`).",
+      "pattern": "[sr]k_(?:(?:org_)?(?:live|test)|org)_[A-Za-z0-9]{24,}",
       "caseInsensitive": false,
       "provenance": "gitleaks:stripe-access-token"
     },
@@ -135,8 +143,8 @@
     },
     {
       "id": "sendgrid-key",
-      "description": "SendGrid API keys.",
-      "pattern": "SG\\.[A-Za-z0-9_-]{16,}\\.[A-Za-z0-9_-]{16,}",
+      "description": "SendGrid API keys: `SG.`, a 22-character id, a dot and a 43-character secret.",
+      "pattern": "SG\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}",
       "caseInsensitive": false,
       "provenance": "gitleaks:sendgrid-api-token"
     },
@@ -149,8 +157,9 @@
     },
     {
       "id": "jwt",
-      "description": "JSON Web Tokens, also with short claims or no signature (`eyJ….e30.`), and encrypted ones in five parts.",
-      "pattern": "eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]*(?:\\.[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]*)?",
+      "description": "JSON Web Tokens and other signed values: two parts or more, short claims, no signature (`eyJ….e30.`), encrypted in five parts, or a header with a space (`eyAi…`). Glued after `_` or `-`, never inside a word (`keyJson…`).",
+      "pattern": "(^|[^A-Za-z0-9])(?:eyJ|eyAi)[A-Za-z0-9_-]{8,}\\.(?:[A-Za-z0-9_-]{2,}(?:\\.[A-Za-z0-9_-]*)?|[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]{2,}(?:\\.[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]*)?)",
+      "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": false,
       "provenance": "gitleaks:jwt"
     },
@@ -159,14 +168,6 @@
       "description": "Credentials embedded in URLs of any scheme (postgres, mysql, mongodb+srv, redis, amqp, https, ...): the whole userinfo through the last @ before the host, keeping the scheme.",
       "pattern": "([a-z][a-z0-9+.-]{0,31}://)[^/?#\\s\"<>]+@",
       "replacement": "$1[REDACTED_SECRET]@",
-      "caseInsensitive": true,
-      "provenance": "structural"
-    },
-    {
-      "id": "json-sensitive-property",
-      "description": "String values of credential-bearing properties in JSON embedded in flat text.",
-      "pattern": "(\"(?:[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?(?:key|token)|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|credential|private[_-]?key)[A-Za-z0-9_-]*|(?:[A-Za-z0-9]+[_-])*(?:pwd|pass)(?:[_-][A-Za-z0-9]+)*)\"\\s*:\\s*)\"(?:\\\\.|[^\"\\\\])*\"",
-      "replacement": "$1\"[REDACTED_SECRET]\"",
       "caseInsensitive": true,
       "provenance": "structural"
     },

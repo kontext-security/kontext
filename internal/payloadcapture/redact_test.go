@@ -137,13 +137,17 @@ func TestRedactionCoverageIsOrderIndependent(t *testing.T) {
 	// rules/4: a program's password-flag rules run before
 	// sensitive-assignment by contract, which would otherwise read a prompt
 	// text such as `sshpass -P password:` as a key and swallow the -p after
-	// it. Their vectors hold in the ruleset's order only.
-	ordered := func(ruleID string) bool {
-		return strings.HasPrefix(ruleID, "mysql-") || strings.HasPrefix(ruleID, "sshpass-") || strings.HasPrefix(ruleID, "redis-cli-")
+	// it. rules/5: json-sensitive-property runs before the vendor token rules
+	// by contract, so a property named like a token (`"glpat-…": "…"`) loses
+	// its value rather than only its name. Their vectors hold in the ruleset's
+	// order only.
+	ordered := func(ruleID, name string) bool {
+		return strings.HasPrefix(ruleID, "mysql-") || strings.HasPrefix(ruleID, "sshpass-") || strings.HasPrefix(ruleID, "redis-cli-") ||
+			name == "gitlab-named-json-property"
 	}
 	for _, vector := range vectors.ValueVectors {
 		orders := [][]compiledRule{compiledValueRules, reversed}
-		if ordered(vector.RuleID) {
+		if ordered(vector.RuleID, vector.Name) {
 			orders = orders[:1]
 		}
 		for _, order := range orders {
@@ -184,7 +188,8 @@ func TestHasSecretTokenReadsTokenShapesOnly(t *testing.T) {
 		"ciglpat-FAKE0123456789abcdefgh",
 		"ghp_FAKE0123456789abcdefFAKE",
 		"sk_live_" + strings.Repeat("x", 28),
-		"SG.FAKE0123456789abcd.FAKEefghijklmnopqrst",
+		"SG." + strings.Repeat("x", 22) + "." + strings.Repeat("x", 43),
+		"eyJ1c2VyIjo0Mn0.FAKEsignatureFAKEabc",
 		"key_ASIA" + "FAKE0123456789AB_ci",
 	} {
 		if !HasSecretToken(token) {
@@ -194,6 +199,8 @@ func TestHasSecretTokenReadsTokenShapesOnly(t *testing.T) {
 	for _, plain := range []string{
 		"--password hunter2", "token=abc", "deploy-check", "1.4.0",
 		"pypi-attestations", "task_test_environment", "hf_imageclassification.py", "SG.SecurityGroupIngress",
+		"SG.SecurityGroupIngress.SourceSecurityGroupId", "keyJsonSchema.properties.type",
+		"publicKeyJsonConverter.test.js", "libxapp/xapp-status-icon-monitor.h",
 	} {
 		if HasSecretToken(plain) {
 			t.Fatalf("%q read as a token", plain)

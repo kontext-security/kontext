@@ -680,8 +680,8 @@
     {
       "name": "slack-app-token",
       "ruleId": "slack-app-token",
-      "input": "SLACK_APP_TOKEN xapp-1-FAKE0123456789-abcdef",
-      "mustNotSurvive": ["xapp-1-FAKE0123456789-abcdef"]
+      "input": "SLACK_APP_TOKEN xapp-1-AFAKE0123-0123456789-xxxxxxxxxxxxxxxxxxxxxxxx",
+      "mustNotSurvive": ["xapp-1-AFAKE0123-0123456789-xxxxxxxxxxxxxxxxxxxxxxxx"]
     },
     {
       "name": "slack-token-glued",
@@ -728,8 +728,8 @@
     {
       "name": "sendgrid-key",
       "ruleId": "sendgrid-key",
-      "input": "key SG.FAKE0123456789abcd.FAKEefghijklmnopqrst end",
-      "mustNotSurvive": ["SG.FAKE0123456789abcd", "FAKEefghijklmnopqrst"]
+      "input": "key SG.xxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx end",
+      "mustNotSurvive": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
     },
     {
       "name": "jwt-short-claims",
@@ -820,6 +820,48 @@
       "ruleId": "redis-cli-password-flag",
       "input": "redis-cli -h \"$(redis-cli -a FAKEinner GET current-host)\" -a FAKEouter PING",
       "mustNotSurvive": ["FAKEinner", "FAKEouter"]
+    },
+    {
+      "name": "gitlab-named-json-property",
+      "ruleId": "json-sensitive-property",
+      "input": "{\"glpat-production-deploy-token\":\"orchid-demo\"}",
+      "mustNotSurvive": ["orchid-demo"]
+    },
+    {
+      "name": "stripe-org-key",
+      "ruleId": "stripe-key",
+      "input": "key sk_org_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "mustNotSurvive": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+    },
+    {
+      "name": "gitlab-incoming-mail-token",
+      "ruleId": "gitlab-token",
+      "input": "mail glimt-FAKEabcdefghijklmnopqrstu",
+      "mustNotSurvive": ["FAKEabcdefghijklmnopqrstu"]
+    },
+    {
+      "name": "gitlab-feature-flag-token",
+      "ruleId": "gitlab-token",
+      "input": "flags glffct-FAKEabcdefghijklmnop",
+      "mustNotSurvive": ["FAKEabcdefghijklmnop"]
+    },
+    {
+      "name": "slack-web-client-token",
+      "ruleId": "slack-token",
+      "input": "cookie xoxc-FAKE123456-FAKEabcdefghij",
+      "mustNotSurvive": ["FAKE123456-FAKEabcdefghij"]
+    },
+    {
+      "name": "jwt-spaced-header",
+      "ruleId": "jwt",
+      "input": "rev eyAiYWxnIjoiSFMyNTYifQ.eyJ1aWQiOjQyfQ.FAKEsignatureFAKE",
+      "mustNotSurvive": ["eyJ1aWQiOjQyfQ", "FAKEsignatureFAKE"]
+    },
+    {
+      "name": "signed-value-two-parts",
+      "ruleId": "jwt",
+      "input": "name eyJ1c2VyIjo0Mn0.FAKEsignatureFAKEabc",
+      "mustNotSurvive": ["eyJ1c2VyIjo0Mn0", "FAKEsignatureFAKEabc"]
     }
   ],
   "keyVectors": [
