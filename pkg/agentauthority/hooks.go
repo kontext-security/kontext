@@ -210,7 +210,7 @@ type hookScan struct {
 	// pluginSkills holds each plugin install's skills, read after every
 	// plugin's own hooks so they can't crowd those out.
 	pluginSkills []pluginSkillDir
-	project         string
+	project      string
 	// shadowed: an MDM profile supplies Claude Code's managed tier, so the
 	// managed-settings files on disk are not the policy in force.
 	shadowed bool
