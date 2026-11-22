@@ -204,6 +204,16 @@ func TestUnexplainedPartialScanIsACheckFailure(t *testing.T) {
 	if again, _ := HookChanges(next, agent, source); len(again) != 0 {
 		t.Fatalf("reported twice: %+v", again)
 	}
+	// A scope failing meanwhile doesn't end the outage, so it isn't
+	// reported again once that scope recovers.
+	failed, failedSource := changeScan{StatusPartial, false, map[string]string{"a": StatusFailed}, nil}.agent()
+	_, during := HookChanges(next, failed, failedSource)
+	if during.Source == "" {
+		t.Fatal("the outage was forgotten while a scope failed")
+	}
+	if after, _ := HookChanges(during, agent, source); slices.Contains(changeKinds(after), "check_failed:"+HookChangeSourceScope) {
+		t.Fatalf("one outage reported twice: %+v", after)
+	}
 }
 
 // The baseline keeps only known event names, as the changes do.

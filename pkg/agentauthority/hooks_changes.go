@@ -187,11 +187,19 @@ func checkFailures(base *HookBaseline, scopes []HookScope, at string) []HookChan
 // sourceFailure reports a scan that couldn't read the whole source when no
 // scope it lists says why, such as an unreadable plugin registry: otherwise
 // the hooks it lost sight of would vanish from view without a word. It is
-// reported once per outage, and sets next.Source.
+// reported once per outage, and sets next.Source. Only a complete scan ends
+// the outage: a scope failing meanwhile hides it without ending it.
 func sourceFailure(base, next *HookBaseline, agent HookAgent, source SourceResult) []HookChange {
-	explained := slices.ContainsFunc(agent.Scopes, func(scope HookScope) bool { return scope.Status != StatusComplete })
-	if source.Status == StatusComplete || explained {
+	if source.Status == StatusComplete {
 		next.Source = ""
+		return nil
+	}
+	if slices.ContainsFunc(agent.Scopes, func(scope HookScope) bool { return scope.Status != StatusComplete }) {
+		// Explained by a scope: keep what was remembered.
+		next.Source = ""
+		if base != nil {
+			next.Source = base.Source
+		}
 		return nil
 	}
 	next.Source = source.Status
