@@ -183,14 +183,18 @@ func TestHasSecretTokenReadsTokenShapesOnly(t *testing.T) {
 		"glpat-FAKE0123456789abcdefgh",
 		"ciglpat-FAKE0123456789abcdefgh",
 		"ghp_FAKE0123456789abcdefFAKE",
-		"sk_live_FAKE012345",
-		"SG.FAKE0123456789abcd",
+		"sk_live_" + strings.Repeat("x", 28),
+		"SG.FAKE0123456789abcd.FAKEefghijklmnopqrst",
+		"key_ASIA" + "FAKE0123456789AB_ci",
 	} {
 		if !HasSecretToken(token) {
 			t.Fatalf("%q is not a token", token)
 		}
 	}
-	for _, plain := range []string{"--password hunter2", "token=abc", "deploy-check", "1.4.0"} {
+	for _, plain := range []string{
+		"--password hunter2", "token=abc", "deploy-check", "1.4.0",
+		"pypi-attestations", "task_test_environment", "hf_imageclassification.py", "SG.SecurityGroupIngress",
+	} {
 		if HasSecretToken(plain) {
 			t.Fatalf("%q read as a token", plain)
 		}

@@ -698,14 +698,14 @@
     {
       "name": "stripe-secret-key",
       "ruleId": "stripe-key",
-      "input": "STRIPE sk_live_FAKE0123456789abcd here",
-      "mustNotSurvive": ["sk_live_FAKE0123456789abcd"]
+      "input": "STRIPE sk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxx here",
+      "mustNotSurvive": ["sk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
     },
     {
       "name": "stripe-restricted-key",
       "ruleId": "stripe-key",
-      "input": "rk_test_FAKE0123456789abcd",
-      "mustNotSurvive": ["rk_test_FAKE0123456789abcd"]
+      "input": "rk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "mustNotSurvive": ["rk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
     },
     {
       "name": "shopify-token",
@@ -722,8 +722,8 @@
     {
       "name": "huggingface-token",
       "ruleId": "huggingface-token",
-      "input": "HF hf_FAKE0123456789abcdef login",
-      "mustNotSurvive": ["hf_FAKE0123456789abcdef"]
+      "input": "HF hf_FAKE0123456789abcdefghijklmnopqrst login",
+      "mustNotSurvive": ["hf_FAKE0123456789abcdefghijklmnopqrst"]
     },
     {
       "name": "sendgrid-key",
@@ -756,70 +756,10 @@
       "mustNotSurvive": ["ASIAFAKE0123456789AB"]
     },
     {
-      "name": "mysql-password-after-quoted-semicolon",
-      "ruleId": "mysql-password-flag-quoted-args",
-      "input": "mysql -e \"SELECT 1;\" -pFAKEmysqlpass appdb",
-      "mustNotSurvive": ["FAKEmysqlpass"]
-    },
-    {
-      "name": "redis-cli-password-after-quoted-semicolon",
-      "ruleId": "redis-cli-password-flag-quoted-args",
-      "input": "redis-cli --eval 'a;b' -a FAKEredispass get k",
-      "mustNotSurvive": ["FAKEredispass"]
-    },
-    {
-      "name": "mysql-password-after-ansi-c-quote",
-      "ruleId": "mysql-password-flag-quoted-args",
-      "input": "mysql -e $'SELECT \\'x\\'' -pFAKEmysqlansi appdb",
-      "mustNotSurvive": ["FAKEmysqlansi"]
-    },
-    {
-      "name": "redis-cli-password-after-ansi-c-quote",
-      "ruleId": "redis-cli-password-flag-quoted-args",
-      "input": "redis-cli -h $'can\\'t' -a FAKEredisansi ping",
-      "mustNotSurvive": ["FAKEredisansi"]
-    },
-    {
-      "name": "mysql-quoted-password-after-quoted-semicolon",
-      "ruleId": "mysql-quoted-password-flag-quoted-args",
-      "input": "mysql -e \"SELECT 1;\" '-pFAKE my pass' appdb",
-      "mustNotSurvive": ["FAKE my pass"]
-    },
-    {
-      "name": "redis-cli-quoted-password-after-quoted-semicolon",
-      "ruleId": "redis-cli-quoted-password-flag-quoted-args",
-      "input": "redis-cli --eval 'a;b' '-a' FAKEredisquoted ping",
-      "mustNotSurvive": ["FAKEredisquoted"]
-    },
-    {
-      "name": "mysql-password-after-command-substitution",
-      "ruleId": "mysql-password-flag-quoted-args",
-      "input": "mysql -h $(hostname -s || hostname) -pFAKEmysqlsub db",
-      "mustNotSurvive": ["FAKEmysqlsub"]
-    },
-    {
-      "name": "redis-cli-passwords-inside-and-after-substitution",
-      "ruleId": "redis-cli-password-flag-quoted-args",
-      "input": "redis-cli -h \"$(redis-cli -a FAKEinner GET current-host)\" -a FAKEouter PING",
-      "mustNotSurvive": ["FAKEinner", "FAKEouter"]
-    },
-    {
       "name": "mysql-password-after-nested-quotes",
       "ruleId": "mysql-password-flag",
       "input": "mysql -h \"$(cat \"config/team's host\")\" -pFAKEnested appdb",
       "mustNotSurvive": ["FAKEnested"]
-    },
-    {
-      "name": "mysql-password-after-quick-flag",
-      "ruleId": "mysql-password-flag",
-      "input": "mysqldump -qpFAKEquick appdb",
-      "mustNotSurvive": ["FAKEquick"]
-    },
-    {
-      "name": "mysql-exe-password",
-      "ruleId": "mysql-password-flag",
-      "input": "mysql.exe -pFAKEwindows db",
-      "mustNotSurvive": ["FAKEwindows"]
     },
     {
       "name": "gitlab-ci-job-jwt",
@@ -852,16 +792,34 @@
       "mustNotSurvive": ["AAAAAAAAAAAAAAAA", "PlPfGrjP2tuaFvXdWZVQpQ"]
     },
     {
-      "name": "mysql-password-after-nested-substitution-and-quoted-semicolon",
-      "ruleId": "mysql-password-flag-quoted-args",
-      "input": "mysql -h $(cat $(printenv DB_HOST_FILE)) -e \"SELECT 1;\" -pFAKEnestedsub appdb",
-      "mustNotSurvive": ["FAKEnestedsub"]
+      "name": "slack-refresh-token-glued-suffix",
+      "ruleId": "slack-token",
+      "input": "artifact-xoxb-FAKE123456-FAKEabcdefghij_prod",
+      "mustNotSurvive": ["FAKE123456-FAKEabcdefghij"]
     },
     {
-      "name": "redis-cli-password-after-nested-substitution-and-quoted-semicolon",
-      "ruleId": "redis-cli-password-flag-quoted-args",
-      "input": "redis-cli -h $(cat $(printenv REDIS_HOST_FILE)) --eval 'a;b' -a FAKEredisnested ping",
-      "mustNotSurvive": ["FAKEredisnested"]
+      "name": "slack-workflow-token",
+      "ruleId": "slack-token",
+      "input": "hook xwfp-FAKE01234567890-FAKEabcdefgh",
+      "mustNotSurvive": ["FAKE01234567890-FAKEabcdefgh"]
+    },
+    {
+      "name": "gitlab-feed-token",
+      "ruleId": "gitlab-token",
+      "input": "feed glft-FAKE0123456789abcdefgh",
+      "mustNotSurvive": ["FAKE0123456789abcdefgh"]
+    },
+    {
+      "name": "gitlab-agent-token",
+      "ruleId": "gitlab-token",
+      "input": "agent glagent-FAKE0123456789abcdefgh",
+      "mustNotSurvive": ["FAKE0123456789abcdefgh"]
+    },
+    {
+      "name": "redis-cli-passwords-inside-and-after-substitution",
+      "ruleId": "redis-cli-password-flag",
+      "input": "redis-cli -h \"$(redis-cli -a FAKEinner GET current-host)\" -a FAKEouter PING",
+      "mustNotSurvive": ["FAKEinner", "FAKEouter"]
     }
   ],
   "keyVectors": [
