@@ -158,7 +158,7 @@
     {
       "id": "jwt",
       "description": "JSON Web Tokens and other signed values: two parts or more, short claims, no signature (`eyJ….e30.`), encrypted in five parts, or a header with a space (`eyAi…`). Glued after `_` or `-`, never inside a word (`keyJson…`).",
-      "pattern": "(^|[^A-Za-z0-9])(?:eyJ|eyAi)[A-Za-z0-9_-]{8,}\\.(?:[A-Za-z0-9_-]{2,}(?:\\.[A-Za-z0-9_-]*)?|[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]{2,}(?:\\.[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]*)?)",
+      "pattern": "(^|[^A-Za-z0-9])(?:eyJ|eyAi)[A-Za-z0-9_-]{8,}\\.(?:[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]*|[A-Za-z0-9_-]{2,}(?:\\.[A-Za-z0-9_-]*)?|[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]{2,})",
       "replacement": "$1[REDACTED_SECRET]",
       "caseInsensitive": false,
       "provenance": "gitleaks:jwt"

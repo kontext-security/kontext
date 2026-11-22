@@ -1,6 +1,13 @@
 {
   "valueVectors": [
     {
+      "name": "jwe-nonempty-encrypted-key",
+      "ruleId": "jwt",
+      "input": "token eyJhbGciOiJSU0EtT0FFUCJ9.FAKEkey.FAKEiv.FAKEcipher.FAKEtag done",
+      "mustNotSurvive": ["FAKEkey", "FAKEiv", "FAKEcipher", "FAKEtag"],
+      "expected": "token [REDACTED_SECRET] done"
+    },
+    {
       "name": "mysql-windows-exe",
       "ruleId": "mysql-password-flag",
       "input": "mysql.exe -pFAKEhunter2 appdb",
