@@ -674,8 +674,8 @@
     {
       "name": "pypi-token",
       "ruleId": "pypi-token",
-      "input": "twine upload -p pypi-FAKE0123456789abcdefFAKE dist/*",
-      "mustNotSurvive": ["pypi-FAKE0123456789abcdefFAKE"]
+      "input": "twine upload -p pypi-AgEIcHlwaS5vcmcFAKE0123456789 dist/*",
+      "mustNotSurvive": ["pypi-AgEIcHlwaS5vcmcFAKE0123456789"]
     },
     {
       "name": "slack-app-token",
@@ -757,27 +757,99 @@
     },
     {
       "name": "mysql-password-after-quoted-semicolon",
-      "ruleId": "mysql-password-flag",
+      "ruleId": "mysql-password-flag-quoted-args",
       "input": "mysql -e \"SELECT 1;\" -pFAKEmysqlpass appdb",
       "mustNotSurvive": ["FAKEmysqlpass"]
     },
     {
       "name": "redis-cli-password-after-quoted-semicolon",
-      "ruleId": "redis-cli-password-flag",
+      "ruleId": "redis-cli-password-flag-quoted-args",
       "input": "redis-cli --eval 'a;b' -a FAKEredispass get k",
       "mustNotSurvive": ["FAKEredispass"]
     },
     {
       "name": "mysql-password-after-ansi-c-quote",
-      "ruleId": "mysql-password-flag",
+      "ruleId": "mysql-password-flag-quoted-args",
       "input": "mysql -e $'SELECT \\'x\\'' -pFAKEmysqlansi appdb",
       "mustNotSurvive": ["FAKEmysqlansi"]
     },
     {
       "name": "redis-cli-password-after-ansi-c-quote",
-      "ruleId": "redis-cli-password-flag",
+      "ruleId": "redis-cli-password-flag-quoted-args",
       "input": "redis-cli -h $'can\\'t' -a FAKEredisansi ping",
       "mustNotSurvive": ["FAKEredisansi"]
+    },
+    {
+      "name": "mysql-quoted-password-after-quoted-semicolon",
+      "ruleId": "mysql-quoted-password-flag-quoted-args",
+      "input": "mysql -e \"SELECT 1;\" '-pFAKE my pass' appdb",
+      "mustNotSurvive": ["FAKE my pass"]
+    },
+    {
+      "name": "redis-cli-quoted-password-after-quoted-semicolon",
+      "ruleId": "redis-cli-quoted-password-flag-quoted-args",
+      "input": "redis-cli --eval 'a;b' '-a' FAKEredisquoted ping",
+      "mustNotSurvive": ["FAKEredisquoted"]
+    },
+    {
+      "name": "mysql-password-after-command-substitution",
+      "ruleId": "mysql-password-flag-quoted-args",
+      "input": "mysql -h $(hostname -s || hostname) -pFAKEmysqlsub db",
+      "mustNotSurvive": ["FAKEmysqlsub"]
+    },
+    {
+      "name": "redis-cli-passwords-inside-and-after-substitution",
+      "ruleId": "redis-cli-password-flag-quoted-args",
+      "input": "redis-cli -h \"$(redis-cli -a FAKEinner GET current-host)\" -a FAKEouter PING",
+      "mustNotSurvive": ["FAKEinner", "FAKEouter"]
+    },
+    {
+      "name": "mysql-password-after-nested-quotes",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql -h \"$(cat \"config/team's host\")\" -pFAKEnested appdb",
+      "mustNotSurvive": ["FAKEnested"]
+    },
+    {
+      "name": "mysql-password-after-quick-flag",
+      "ruleId": "mysql-password-flag",
+      "input": "mysqldump -qpFAKEquick appdb",
+      "mustNotSurvive": ["FAKEquick"]
+    },
+    {
+      "name": "mysql-exe-password",
+      "ruleId": "mysql-password-flag",
+      "input": "mysql.exe -pFAKEwindows db",
+      "mustNotSurvive": ["FAKEwindows"]
+    },
+    {
+      "name": "gitlab-ci-job-jwt",
+      "ruleId": "gitlab-token",
+      "input": "CI_JOB_TOKEN=glcbt-eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyIn0.FAKEsignature",
+      "mustNotSurvive": ["eyJzdWIiOiJ1c2VyIn0", "FAKEsignature"]
+    },
+    {
+      "name": "gitlab-runner-token",
+      "ruleId": "gitlab-token",
+      "input": "register --token glrtr-FAKE0123456789abcdefgh",
+      "mustNotSurvive": ["FAKE0123456789abcdefgh"]
+    },
+    {
+      "name": "aws-access-key-glued-suffix",
+      "ruleId": "aws-access-key-id",
+      "input": "plugin ASIAFAKE0123456789AB_ci",
+      "mustNotSurvive": ["ASIAFAKE0123456789AB"]
+    },
+    {
+      "name": "npm-token-glued-suffix",
+      "ruleId": "npm-token",
+      "input": "npm_FAKEabcdefghijklmnop12_prod",
+      "mustNotSurvive": ["npm_FAKEabcdefghijklmnop12"]
+    },
+    {
+      "name": "jwt-encrypted",
+      "ruleId": "jwt",
+      "input": "jwe eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIn0..AAAAAAAAAAAAAAAA.ePU.PlPfGrjP2tuaFvXdWZVQpQ end",
+      "mustNotSurvive": ["AAAAAAAAAAAAAAAA", "PlPfGrjP2tuaFvXdWZVQpQ"]
     }
   ],
   "keyVectors": [
