@@ -199,6 +199,10 @@ func (w *Watcher) run(b backend) {
 		if _, ok := watched[path]; ok {
 			return true, false
 		}
+		if len(watched) >= MaxTargets {
+			// The bound holds for open handles, not only chosen ones.
+			return false, false
+		}
 		handle, err := b.add(path)
 		if err != nil {
 			return false, errors.Is(err, fs.ErrNotExist)
@@ -212,7 +216,20 @@ func (w *Watcher) run(b backend) {
 		paths[handle] = path
 		return true, false
 	}
-	apply := func(targets []Target) {
+	release := func(keep func(string) bool) (freed bool) {
+		for path, handle := range watched {
+			if !keep(path) {
+				b.remove(handle)
+				delete(watched, path)
+				delete(paths, handle)
+				freed = true
+			}
+		}
+		return freed
+	}
+	// pick watches the first existing candidate of each target, up to the
+	// bound.
+	pick := func(targets []Target) map[string]bool {
 		chosen := map[string]bool{}
 		for _, target := range targets {
 			if len(chosen) >= MaxTargets {
@@ -228,12 +245,25 @@ func (w *Watcher) run(b backend) {
 				}
 			}
 		}
-		for path, handle := range watched {
-			if !chosen[path] {
-				b.remove(handle)
-				delete(watched, path)
-				delete(paths, handle)
+		return chosen
+	}
+	apply := func(targets []Target) {
+		// Release what the new set can't use before opening anything, so
+		// a replaced set never holds both.
+		wanted := map[string]bool{}
+		for _, target := range targets {
+			wanted[target.Path] = true
+			for _, path := range target.Fallbacks {
+				wanted[path] = true
 			}
+		}
+		release(func(path string) bool { return wanted[path] })
+		chosen := pick(targets)
+		// A kept fallback whose own path is back can hold a slot the bound
+		// refused another target; once released, pick again.
+		if release(func(path string) bool { return chosen[path] }) && len(chosen) < MaxTargets {
+			chosen = pick(targets)
+			release(func(path string) bool { return chosen[path] })
 		}
 	}
 	var last []Target
