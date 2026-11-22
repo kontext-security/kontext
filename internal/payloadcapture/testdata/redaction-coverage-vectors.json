@@ -1272,9 +1272,62 @@
     },
     {
       "name": "jwt-any-header-before-claims",
-      "ruleId": "jwt",
+      "ruleId": "jwt-any-header",
       "input": "token ICAgCnsiYWxnIjoiSFMyNTYifQ.eyJzdWIiOjF9.FAKEsignatureFAKEsig end",
       "mustNotSurvive": ["FAKEsignatureFAKEsig", "eyJzdWIiOjF9"],
+      "expected": "token [REDACTED_SECRET] end"
+    },
+    {
+      "name": "gitlab-session-json-escaped-char",
+      "ruleId": "gitlab-session-cookie",
+      "input": "cookies={\"_gitlab_session\":\"\\u0046AKE0123456789abcdef0123456789ab\"}",
+      "mustNotSurvive": ["AKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "gitlab-session-escaped-json-key",
+      "ruleId": "gitlab-session-cookie",
+      "input": "payload=\"{\\\"_gitlab_session\\\":\\\"FAKE0123456789abcdef0123456789ab\\\"}\"",
+      "mustNotSurvive": ["FAKE0123456789abcdef0123456789ab"]
+    },
+    {
+      "name": "signed-session-dotted-encoded-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3Axoxd-FAKE.abcdefghij0123456789%2FFAKE.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": [
+        "FAKEmacFAKEmacFAKEmacFAKEmac0",
+        "abcdefghij0123456789"
+      ],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-jwt-shaped-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3AeyJpZCI6IkZBS0UifQ.FAKE%2Ftenant0123456789abcdef.FAKEmacFAKEmacFAKEmacFAKEmac0",
+      "mustNotSurvive": [
+        "FAKEmacFAKEmacFAKEmacFAKEmac0",
+        "tenant0123456789abcdef"
+      ],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "signed-session-tilde-id",
+      "ruleId": "signed-session-cookie",
+      "input": "Cookie: connect.sid=s%3AFAKE~tenant.42.FAKEmac%2FFAKEmacFAKEmac%2BFAKE",
+      "mustNotSurvive": ["FAKE~tenant", "FAKEmacFAKEmac"],
+      "expected": "Cookie: connect.sid=s%3A[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-spaced-claims",
+      "ruleId": "jwt",
+      "input": "ICB7ImFsZyI6IkhTMjU2In0.ICB7InN1YiI6IkZBS0UifQ.FAKEsignatureFAKEsignatureFAKEsig",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
+      "expected": "[REDACTED_SECRET]"
+    },
+    {
+      "name": "jwt-padded-header",
+      "ruleId": "jwt-any-header",
+      "input": "token ICB7ImFsZyI6IkhTMjU2In0=.e30.FAKEsignatureFAKEsignatureFAKEsig end",
+      "mustNotSurvive": ["FAKEsignatureFAKEsignatureFAKEsig"],
       "expected": "token [REDACTED_SECRET] end"
     }
   ],
