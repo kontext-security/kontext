@@ -49,7 +49,12 @@ type hookHome struct {
 
 func newHookHome(t *testing.T) *hookHome {
 	t.Helper()
-	root := t.TempDir()
+	// The scanner refuses symlinks on the way, and macOS's temp folder is
+	// under /var, itself a symlink.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	h := &hookHome{t: t, home: filepath.Join(root, "home"), managed: filepath.Join(root, "managed")}
 	h.base = filepath.Join(h.home, ".claude")
 	for _, dir := range []string{h.base, h.managed} {
