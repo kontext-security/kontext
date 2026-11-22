@@ -62,10 +62,10 @@ func TestHookChanges(t *testing.T) {
 		{"new content and a new state are changes, a new id an addition", changeScan{complete, false, map[string]string{"a": complete, "b": complete}, []HookRecord{hookIn("a", "h1", "f9", hookEnabled), hookIn("b", "h2", "f2", hookDisabled), hookIn("b", "h3", "f3", hookEnabled)}}, []string{"changed:h1", "changed:h2", "added:h3"}},
 		{"an unreadable scope is a failed check and removes nothing", changeScan{StatusPartial, false, map[string]string{"a": StatusFailed, "b": complete}, []HookRecord{hookIn("b", "h2", "f2", hookDisabled), hookIn("b", "h3", "f3", hookEnabled)}}, []string{"check_failed:a"}},
 		{"a scope that stays unreadable is reported once", changeScan{StatusPartial, false, map[string]string{"a": StatusFailed, "b": complete}, []HookRecord{hookIn("b", "h2", "f2", hookDisabled), hookIn("b", "h3", "f3", hookEnabled)}}, []string{}},
-		{"a failed source establishes nothing", changeScan{StatusFailed, false, map[string]string{}, nil}, []string{}},
+		{"a failed source with no scope to blame is a source check failure, and removes nothing", changeScan{StatusFailed, false, map[string]string{}, nil}, []string{"check_failed:" + HookChangeSourceScope}},
 		{"a recovered scope reports only what changed meanwhile", changeScan{complete, false, map[string]string{"a": complete, "b": complete}, []HookRecord{hookIn("a", "h1", "f9", hookEnabled), hookIn("b", "h2", "f2", hookDisabled)}}, []string{"removed:h3"}},
 		{"a hook gone from a complete scope is removed", changeScan{complete, false, map[string]string{"a": complete, "b": complete}, []HookRecord{hookIn("b", "h2", "f2", hookDisabled)}}, []string{"removed:h1"}},
-		{"a truncated scan withdraws no unlisted scope", changeScan{StatusPartial, true, map[string]string{"a": complete}, nil}, []string{}},
+		{"a truncated scan withdraws no unlisted scope, and says it lost sight", changeScan{StatusPartial, true, map[string]string{"a": complete}, nil}, []string{"check_failed:" + HookChangeSourceScope}},
 		{"an unlisted scope's hooks go with a complete scan", changeScan{complete, false, map[string]string{"a": complete}, nil}, []string{"removed:h2"}},
 		{"a scope failing again after recovering is reported again", changeScan{StatusPartial, false, map[string]string{"a": StatusFailed}, nil}, []string{"check_failed:a"}},
 	}
@@ -85,8 +85,7 @@ func TestHookChanges(t *testing.T) {
 	}
 }
 
-// A change made between two scans shows on the next scan, so within two
-// poll cycles of the edit.
+// A change made between two scans shows on the next scan.
 func TestHookChangeShowsOnTheNextScan(t *testing.T) {
 	h := newHookHome(t)
 	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("echo stop"))})
@@ -185,5 +184,35 @@ func TestBaselineIsBounded(t *testing.T) {
 	}
 	if _, ok := next.Scopes["a"]; !ok {
 		t.Fatal("dropped a scope the scan listed")
+	}
+}
+
+// A scan that loses sight of hooks with no scope to say why, such as an
+// unreadable plugin registry, reports one source-level check failure.
+func TestUnexplainedPartialScanIsACheckFailure(t *testing.T) {
+	agent, source := changeScan{StatusComplete, false, map[string]string{"a": StatusComplete}, []HookRecord{hookIn("a", "h1", "f1", hookEnabled)}}.agent()
+	_, base := HookChanges(nil, agent, source)
+	agent, source = changeScan{StatusPartial, false, map[string]string{}, nil}.agent()
+	source.Reasons = []string{ReasonMalformed}
+	changes, next := HookChanges(base, agent, source)
+	if got := changeKinds(changes); !slices.Equal(got, []string{"check_failed:" + HookChangeSourceScope}) || !slices.Equal(changes[0].Reasons, []string{ReasonMalformed}) {
+		t.Fatalf("%v %+v", got, changes)
+	}
+	if len(next.Hooks) != 1 {
+		t.Fatalf("the unseen hook was dropped: %+v", next.Hooks)
+	}
+	if again, _ := HookChanges(next, agent, source); len(again) != 0 {
+		t.Fatalf("reported twice: %+v", again)
+	}
+}
+
+// The baseline keeps only known event names, as the changes do.
+func TestBaselineKeepsKnownEventsOnly(t *testing.T) {
+	odd := hookIn("a", "h1", "f1", hookEnabled)
+	odd.Event = "FAKEhunter2Event"
+	agent, source := changeScan{StatusComplete, false, map[string]string{"a": StatusComplete}, []HookRecord{odd}}.agent()
+	_, base := HookChanges(nil, agent, source)
+	if e := base.Hooks["h1"].Event; e != HookEventOther {
+		t.Fatalf("baseline event %q", e)
 	}
 }

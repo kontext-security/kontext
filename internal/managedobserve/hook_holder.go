@@ -160,6 +160,12 @@ func (h *hookHolder) switchState() (on, confirmed bool) {
 }
 
 func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) {
+	// Taken before any check: a discard after this point, an opt-out
+	// between the checks included, voids the scan.
+	var generation uint64
+	if h.generation != nil {
+		generation = h.generation()
+	}
 	if on, confirmed := h.switchState(); !on {
 		if !h.discarded && confirmed {
 			h.discarded = h.discard == nil || h.discard() == nil
@@ -190,10 +196,6 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	if err != nil {
 		// Reading another profile would report hooks Claude Code doesn't load.
 		return
-	}
-	var generation uint64
-	if h.generation != nil {
-		generation = h.generation()
 	}
 	scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

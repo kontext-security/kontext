@@ -64,7 +64,14 @@ func changeEvent(event string) string {
 type HookBaseline struct {
 	Hooks  map[string]HookBaselineEntry `json:"hooks"`
 	Scopes map[string]string            `json:"scopes"`
+	// Source is the source's status when no listed scope explained an
+	// incomplete scan, such as an unreadable plugin registry.
+	Source string `json:"source,omitempty"`
 }
+
+// HookChangeSourceScope is the scope a check failure names when the source
+// itself couldn't be read in full and no scope it lists says why.
+const HookChangeSourceScope = "source"
 
 type HookBaselineEntry struct {
 	ScopeID   string `json:"scope_id"`
@@ -95,12 +102,15 @@ func HookChanges(base *HookBaseline, agent HookAgent, source SourceResult) ([]Ho
 		next := cloneBaseline(*base)
 		// Scopes it names as unreadable are still reported, once.
 		changes := checkFailures(base, agent.Scopes, at)
+		listed := map[string]HookScope{}
 		for _, scope := range agent.Scopes {
+			listed[scope.ID] = scope
 			if scope.Status != StatusComplete {
 				next.Scopes[scope.ID] = scope.Status
 			}
 		}
-		boundBaseline(&next, nil, nil)
+		changes = append(changes, sourceFailure(base, &next, agent, source)...)
+		boundBaseline(&next, nil, listed)
 		sortChanges(changes)
 		return changes, &next
 	}
@@ -113,17 +123,20 @@ func HookChanges(base *HookBaseline, agent HookAgent, source SourceResult) ([]Ho
 	reported := make(map[string]bool, len(agent.Hooks))
 	for _, r := range agent.Hooks {
 		reported[r.ID] = true
-		next.Hooks[r.ID] = HookBaselineEntry{ScopeID: r.ScopeID, Event: r.Event, ContentFP: r.ContentFP, State: r.Enablement.State}
+		// Only a known event name is kept on disk.
+		next.Hooks[r.ID] = HookBaselineEntry{ScopeID: r.ScopeID, Event: changeEvent(r.Event), ContentFP: r.ContentFP, State: r.Enablement.State}
 	}
 	for _, scope := range agent.Scopes {
 		next.Scopes[scope.ID] = scope.Status
 	}
 	if base == nil {
+		sourceFailure(nil, &next, agent, source)
 		boundBaseline(&next, reported, listed)
 		return nil, &next
 	}
 
 	changes := checkFailures(base, agent.Scopes, at)
+	changes = append(changes, sourceFailure(base, &next, agent, source)...)
 	for _, r := range agent.Hooks {
 		before, seen := base.Hooks[r.ID]
 		switch {
@@ -169,6 +182,23 @@ func checkFailures(base *HookBaseline, scopes []HookScope, at string) []HookChan
 		}
 	}
 	return changes
+}
+
+// sourceFailure reports a scan that couldn't read the whole source when no
+// scope it lists says why, such as an unreadable plugin registry: otherwise
+// the hooks it lost sight of would vanish from view without a word. It is
+// reported once per outage, and sets next.Source.
+func sourceFailure(base, next *HookBaseline, agent HookAgent, source SourceResult) []HookChange {
+	explained := slices.ContainsFunc(agent.Scopes, func(scope HookScope) bool { return scope.Status != StatusComplete })
+	if source.Status == StatusComplete || explained {
+		next.Source = ""
+		return nil
+	}
+	next.Source = source.Status
+	if base == nil || base.Source != "" {
+		return nil
+	}
+	return []HookChange{{Kind: HookChangeCheckFailed, ScopeID: HookChangeSourceScope, Reasons: slices.Clone(source.Reasons), At: source.FinishedAt}}
 }
 
 // boundBaseline drops carried-over entries, those this scan didn't report
@@ -235,7 +265,7 @@ func changeRank(kind string) string {
 }
 
 func cloneBaseline(b HookBaseline) HookBaseline {
-	out := HookBaseline{Hooks: make(map[string]HookBaselineEntry, len(b.Hooks)), Scopes: make(map[string]string, len(b.Scopes))}
+	out := HookBaseline{Hooks: make(map[string]HookBaselineEntry, len(b.Hooks)), Scopes: make(map[string]string, len(b.Scopes)), Source: b.Source}
 	for k, v := range b.Hooks {
 		out.Hooks[k] = v
 	}

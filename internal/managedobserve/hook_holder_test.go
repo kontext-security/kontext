@@ -346,3 +346,26 @@ func TestHookScansWaitForRestartAfterCloudURLChange(t *testing.T) {
 		t.Fatal("the startup cloud is refused")
 	}
 }
+
+// The scan carries the generation from before any check, so an opt-out and
+// discard between the checks voids it.
+func TestHookHolderTakesTheGenerationFirst(t *testing.T) {
+	fake := &fakeHookScan{confirmed: true}
+	on := true
+	keys := newHookKeyBox()
+	keys.set([]byte("k"), "t")
+	h := fake.holder(&on, keys)
+	var generation uint64
+	var got uint64
+	h.generation = func() uint64 { return generation }
+	h.authorized = func() bool {
+		// A discard lands while the checks run.
+		generation++
+		return true
+	}
+	h.record = func(_ agentauthority.HookAgent, _ agentauthority.SourceResult, _ string, g uint64) { got = g }
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	if got != 0 || generation == 0 {
+		t.Fatalf("recorded under generation %d, store at %d", got, generation)
+	}
+}
