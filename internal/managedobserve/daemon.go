@@ -13,6 +13,7 @@ import (
 
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/configwatch"
 	"github.com/kontext-security/kontext/internal/deviceid"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/endpointconfig"
@@ -568,6 +569,13 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		},
 	}
 	hookHolder.keys.changed = func() { _ = hookHolder.discard() }
+	if home, err := os.UserHomeDir(); err == nil {
+		// A changed hook file wakes the scan within seconds; the hourly
+		// scan stays the fallback (ENG-1105).
+		watcher := configwatch.New(wakeHooks, configwatch.Options{Home: home})
+		hookHolder.watch = watcher.Set
+		defer watcher.Close()
+	}
 	background.Add(1)
 	go func() {
 		defer background.Done()

@@ -132,6 +132,10 @@ type hookHolder struct {
 	discard func() error
 	scan    func(context.Context, agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error)
 	home    func() (string, error)
+	// watch receives the paths each scan read, so a change to one wakes
+	// the next scan within seconds (ENG-1105); nil watches nothing. It
+	// gets nil while no scan may run, which releases what it holds.
+	watch func([]string)
 	// discarded remembers that results were dropped for this off period, so
 	// it happens once rather than on every tick. It starts false: results a
 	// previous run stored are dropped too once a confirmed config says off.
@@ -167,6 +171,7 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 		generation = h.generation()
 	}
 	if on, confirmed := h.switchState(); !on {
+		h.unwatch()
 		if !h.discarded && confirmed {
 			h.discarded = h.discard == nil || h.discard() == nil
 		}
@@ -174,6 +179,7 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	}
 	h.discarded = false
 	if !h.isAuthorized() {
+		h.unwatch()
 		return
 	}
 	key := h.keys.get()
@@ -200,7 +206,7 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	agent, result, err := scan(scanCtx, agentauthority.HookScanOptions{
-		Home: home, ConfigDir: configDir, Key: key, AgentVersion: agentVersionOf(inv, "claude_code"), OwnBinary: h.ownBinary, Now: time.Now(), BeginRead: h.beginRead,
+		Home: home, ConfigDir: configDir, Key: key, AgentVersion: agentVersionOf(inv, "claude_code"), OwnBinary: h.ownBinary, Now: time.Now(), BeginRead: h.beginRead, Watch: h.watch,
 	})
 	if errors.Is(err, agentauthority.ErrNoHookKey) || err != nil || ctx.Err() != nil {
 		return
@@ -212,6 +218,14 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	}
 	if h.record != nil {
 		h.record(agent, result, hookKeyTag(key), generation)
+	}
+}
+
+// unwatch stops watching while hook inventory is off or not authorized, so
+// an opted-out Mac holds nothing open for it.
+func (h *hookHolder) unwatch() {
+	if h.watch != nil {
+		h.watch(nil)
 	}
 }
 
@@ -249,7 +263,8 @@ func agentVersionOf(inv agentinventory.Inventory, id string) string {
 }
 
 // run checks the switch at once, scans once the key is known, then hourly
-// and on each rescan signal. It does not wait for the key first: a confirmed
+// and on each rescan signal, which includes a change to a file the last scan
+// read. The hourly scan stays the fallback for a missed notification. It does not wait for the key first: a confirmed
 // off must drop stored results even while no key can be derived.
 func (h *hookHolder) run(ctx context.Context, inv *agentInventoryHolder) {
 	scan := func() {

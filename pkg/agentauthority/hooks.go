@@ -164,6 +164,10 @@ type HookScanOptions struct {
 	// mdmPolicy reports a Claude Code policy from an MDM profile; nil checks
 	// this Mac's managed preferences.
 	mdmPolicy func() bool
+	// Watch, when set, receives the paths the scan read or found missing,
+	// in scan order (managed settings first), so a watcher can wake the next scan when one changes. It is
+	// never part of the result: paths stay on the Mac.
+	Watch func(paths []string)
 }
 
 // HookSourceID is the inventory source the scan's result reports under.
@@ -303,6 +307,9 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 		rootConfig = filepath.Join(base, ".claude.json")
 	}
 	g := &guard{ctx: ctx, home: home, managed: opts.managed, roots: []string{opts.managed, base, rootConfig}, report: report, beginRead: opts.BeginRead, seen: map[string]bool{}}
+	if opts.Watch != nil {
+		g.watched = map[string]bool{}
+	}
 	s := &hookScan{g: g, opts: opts, source: NewSourceHealth(HookSourceID(agentID), opts.Now), buckets: map[string]int{}, plugins: pluginSwitches{managed: map[string]bool{}, user: map[string]bool{}, project: map[string]map[string]bool{}}, trust: map[string]*bool{}}
 	s.agent = HookAgent{ID: agentID, Scopes: []HookScope{}, Hooks: []HookRecord{}}
 	// A test supplies the replace switch alone; the Mac's profiles give the
@@ -418,6 +425,9 @@ func scanHooks(ctx context.Context, opts HookScanOptions) (HookAgent, SourceResu
 	if s.agent.Truncated && result.Status == StatusComplete {
 		result.Status = StatusPartial
 		result.Reasons = []string{ReasonSizeLimit}
+	}
+	if opts.Watch != nil {
+		opts.Watch(append([]string(nil), g.watchedList...))
 	}
 	return s.agent, result, nil
 }

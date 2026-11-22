@@ -1699,3 +1699,37 @@ func TestUnreadPluginManifestLeavesHooksUnresolved(t *testing.T) {
 		}
 	}
 }
+
+// The scan hands its watcher every file it read or found missing, managed
+// settings first, and never a path in a privacy folder (ENG-1105).
+func TestScanNamesTheFilesToWatch(t *testing.T) {
+	h := newHookHome(t)
+	project := filepath.Join(h.home, "code", "app")
+	guarded := filepath.Join(h.home, "Documents", "secret")
+	h.write(filepath.Join(h.base, "settings.json"), map[string]any{"hooks": hooksOf("Stop", "", command("echo stop"))})
+	h.write(filepath.Join(h.home, ".claude.json"), map[string]any{"projects": map[string]any{project: map[string]any{"hasTrustDialogAccepted": true}, guarded: map[string]any{}}})
+	var got []string
+	opts := HookScanOptions{Home: h.home, Key: testHookKey, Now: time.Now(), managed: h.managed, mdmPolicy: func() bool { return false }, Watch: func(paths []string) { got = paths }}
+	if _, _, err := scanHooks(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		filepath.Join(h.managed, "managed-settings.json"),
+		filepath.Join(h.base, "settings.json"),
+		filepath.Join(h.home, ".claude.json"),
+		filepath.Join(project, ".claude", "settings.json"),
+		filepath.Join(project, ".claude", "settings.local.json"),
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("not watched: %s in %v", want, got)
+		}
+	}
+	if got[0] != filepath.Join(h.managed, "managed-settings.json") {
+		t.Errorf("managed settings not first: %v", got)
+	}
+	for _, path := range got {
+		if strings.HasPrefix(path, filepath.Join(h.home, "Documents")) {
+			t.Errorf("privacy folder watched: %s", path)
+		}
+	}
+}
