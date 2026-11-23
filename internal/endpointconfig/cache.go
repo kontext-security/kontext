@@ -58,12 +58,13 @@ func (s Snapshot) HookInventoryEnabled() bool {
 }
 
 // HookInventoryDecided reports whether this snapshot settles the hook
-// inventory switch either way: confirmed, and not since refused by a server
-// that hasn't confirmed another version. While a fallback is negotiated the
-// switch reads off but is undecided, so an off then pauses uploads and never
+// inventory switch either way. A confirmed config that says off always does,
+// so an opt-out's purge can still be retried while a fallback is negotiated.
+// A confirmed on that a server has since refused without confirming another
+// version doesn't: the switch then reads off, which pauses uploads and never
 // purges what is queued.
 func (s Snapshot) HookInventoryDecided() bool {
-	return s.Confirmed && !s.Status.NewestUnsupported
+	return s.Confirmed && (!s.Status.NewestUnsupported || !s.Config.HookInventoryEnabled())
 }
 
 // HookState is the desired state of Kontext's hooks as far as this snapshot
