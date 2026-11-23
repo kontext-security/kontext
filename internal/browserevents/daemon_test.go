@@ -239,6 +239,49 @@ func TestSenderAcksABatchTheCloudAnswered(t *testing.T) {
 	}
 }
 
+// The endpoint's clock runs ahead of the cloud's: the cloud refuses the
+// account as in the future. The row stays pending, so it goes again once
+// the clocks agree, while the row the cloud took is not sent again.
+func TestARowAheadOfTheCloudsClockIsSentAgain(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{
+		visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z"),
+		account(AccountPersonal, "2026-11-20T09:00:00Z"),
+	})
+	ahead := true
+	var batches *[]CloudBatch
+	var sender *Sender
+	sender, batches = newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		batch := (*batches)[len(*batches)-1]
+		var rejected []string
+		for i, record := range batch.Records {
+			if ahead && record.Kind == KindAccount {
+				rejected = append(rejected, fmt.Sprintf(`{"index":%d,"reason":"account observed_at in the future"}`, i))
+			}
+		}
+		_, _ = fmt.Fprintf(w, `{"accepted":%d,"rejected":[%s]}`, len(batch.Records)-len(rejected), strings.Join(rejected, ","))
+	})
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
+		t.Fatalf("first send = %v, %v", outcome, err)
+	}
+	// Only the held account is left: it goes again after a backoff, not
+	// at once.
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Retry {
+		t.Fatalf("second send = %v, want Retry", outcome)
+	}
+	ahead = false
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
+		t.Fatalf("third send = %v, %v", outcome, err)
+	}
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Nothing {
+		t.Fatalf("fourth send = %v, want Nothing", outcome)
+	}
+	got := *batches
+	if len(got) != 3 || len(got[0].Records) != 2 || len(got[1].Records) != 1 || len(got[2].Records) != 1 || got[2].Records[0].Kind != KindAccount {
+		t.Fatalf("batches = %+v", got)
+	}
+}
+
 func TestSenderKeepsRowsWhenTheCloudCannotTakeThem(t *testing.T) {
 	for status, want := range map[int]Outcome{404: NotFound, 429: Retry, 503: Retry, 401: Refused} {
 		s := openTestStore(t)
@@ -1138,13 +1181,21 @@ func TestADamagedRowDoesNotDiscardTheOthers(t *testing.T) {
 // A stored account row with a key the contract does not allow, such as an
 // address put back by a backup, is dropped at open and leaves the file: a
 // decode would drop the key silently and keep the text on disk.
-func TestAStoredAccountWithAnExtraKeyIsDroppedAtOpen(t *testing.T) {
+func TestAStoredAccountWithAnExtraOrRepeatedKeyIsDroppedAtOpen(t *testing.T) {
 	for name, tamper := range map[string]func(string) string{
 		"in the record": func(data string) string {
 			return strings.Replace(data, `"kind":"account"`, `"kind":"account","email":"jane@example.com"`, 1)
 		},
 		"beside the record": func(data string) string {
 			return strings.Replace(data, `"record":{`, `"email":"jane@example.com","record":{`, 1)
+		},
+		// A key given twice reads as its last value here, but may read as
+		// its first anywhere else.
+		"a record key given twice": func(data string) string {
+			return strings.Replace(data, `"account_type":"personal"`, `"account_type":"company","account_type":"personal"`, 1)
+		},
+		"a row key given twice": func(data string) string {
+			return strings.Replace(data, `"sent":0`, `"sent":1,"sent":0`, 1)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
