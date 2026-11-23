@@ -147,15 +147,16 @@ func TestHookReconcilerSendsOnlyForItsRequest(t *testing.T) {
 	if report, _ := reconciler.take(owner); report != nil {
 		t.Fatalf("workspace A's report went with B's token: %+v", report)
 	}
-	// The config still names workspace A, but the post goes with B's token
-	// (re-enrolled, config not yet refreshed): A's report is dropped.
+	// A post goes with another token than the config's (a flush that began
+	// before a re-enrolment): it carries nothing, and the report waits for
+	// a post with its own enrolment's token.
 	owner = "owner-a"
 	queue()
 	if report, _ := reconciler.take("owner-b"); report != nil {
 		t.Fatalf("workspace A's report went with B's token: %+v", report)
 	}
-	if report, _ := reconciler.take(owner); report != nil {
-		t.Fatalf("the dropped report came back: %+v", report)
+	if report, _ := reconciler.take(owner); report == nil {
+		t.Fatal("a post with another token dropped the report")
 	}
 	// The cloud rolled back to v6: unmanaged, nothing goes.
 	owner = "owner-a"
