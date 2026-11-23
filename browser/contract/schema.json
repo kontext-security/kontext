@@ -74,6 +74,12 @@
           "minimum": 1,
           "maximum": 100000,
           "description": "Page loads plus POST requests to the app's hosts that UTC day, so far."
+        },
+        "messages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000,
+          "description": "Messages sent, approximate: how many of the requests were sends to the app's message endpoint. A regenerate or an edit counts too. Missing reads as 0. At most requests."
         }
       }
     },
@@ -184,13 +190,15 @@
       "anyOf": [
         { "required": ["day"] }, { "required": ["app"] }, { "required": ["app_name"] },
         { "required": ["provider"] }, { "required": ["surface"] }, { "required": ["host"] },
-        { "required": ["first_seen"] }, { "required": ["last_seen"] }, { "required": ["requests"] }
+        { "required": ["first_seen"] }, { "required": ["last_seen"] }, { "required": ["requests"] },
+        { "required": ["messages"] }
       ]
     },
     "visitOnlyFields": {
       "anyOf": [
         { "required": ["app_name"] }, { "required": ["provider"] }, { "required": ["surface"] },
-        { "required": ["first_seen"] }, { "required": ["last_seen"] }, { "required": ["requests"] }
+        { "required": ["first_seen"] }, { "required": ["last_seen"] }, { "required": ["requests"] },
+        { "required": ["messages"] }
       ]
     },
     "accountFields": {

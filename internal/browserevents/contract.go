@@ -116,6 +116,10 @@ type Record struct {
 	FirstSeen string `json:"first_seen,omitempty"`
 	LastSeen  string `json:"last_seen,omitempty"`
 	Requests  int    `json:"requests,omitempty"`
+	// Messages is how many of the requests were sends to the app's
+	// message endpoint, approximately: a regenerate or an edit is a send
+	// too. Missing reads as 0, as from an extension before it.
+	Messages int `json:"messages,omitempty"`
 
 	// account, with day, app, host and observed_at. EmailDomain is set only
 	// for a corporate account: a personal account carries no address and no
@@ -320,6 +324,7 @@ func decodeRecord(data []byte) (Record, error) {
 		record.FirstSeen, _ = fields.text("first_seen")
 		record.LastSeen, _ = fields.text("last_seen")
 		record.Requests, _ = fields.integer("requests")
+		record.Messages, _ = fields.integer("messages")
 	case KindAccount:
 		record.Day, _ = fields.text("day")
 		record.App, _ = fields.text("app")
@@ -521,6 +526,10 @@ func (r Record) Validate() error {
 		}
 		if r.Requests < 1 || r.Requests > MaxRequestsPerDay {
 			return errors.New("visit requests out of range")
+		}
+		if r.Messages < 0 || r.Messages > r.Requests {
+			// Every send is a POST, so it is one of the requests.
+			return errors.New("visit messages out of range")
 		}
 		return nil
 	case KindAccount:

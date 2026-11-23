@@ -25,7 +25,7 @@ Record kinds in v1:
 | Kind | Meaning |
 |---|---|
 | `health` | The extension is running: when it connected and when it was last seen. |
-| `visit` | An AI web app from the catalog was used that UTC day: first and last time, and `requests`, the number of page loads plus POST requests to the app's hosts. Page loads alone would miss a tab kept open for days; every request would count an idle tab that polls. |
+| `visit` | An AI web app from the catalog was used that UTC day: first and last time, and `requests`, the number of page loads plus POST requests to the app's hosts. Page loads alone would miss a tab kept open for days; every request would count an idle tab that polls. `messages` is how many of those requests were sends to the app's message endpoint: messages sent, approximate, as a regenerate or an edit is a send too. It is a count for the day, never an event per message, and never more than `requests`. |
 | `account` | Which kind of account was signed in to an app that UTC day, at the newest observation: `plan` is `anonymous` (not signed in), `free` or `paid` (a personal account), `team` or `enterprise` (an organisation's workspace), or `unknown` (the app's answer could not be read). `corporate` is true for a team or enterprise workspace, or for an account whose email domain is one of `corporate_domains`. |
 
 `day` is the UTC date. A `visit` is a snapshot of the day so far with an

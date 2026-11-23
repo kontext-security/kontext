@@ -234,6 +234,9 @@ func merge(current, next CloudRecord) (CloudRecord, bool) {
 		if next.Requests > current.Requests {
 			merged.Requests = next.Requests
 		}
+		if next.Messages > current.Messages {
+			merged.Messages = next.Messages
+		}
 	case KindAccount:
 		// The newest observation of the day says which account it was.
 		if later(next.ObservedAt, current.ObservedAt) {

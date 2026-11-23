@@ -763,3 +763,30 @@ func TestCorporateDomainsComeFromTheEnrolledEmail(t *testing.T) {
 		t.Fatalf("corporate domains = %v", answer.CorporateDomains)
 	}
 }
+
+// Messages are a share of the requests, merge by their maximum, and are
+// never more than the requests: every send is a POST.
+func TestVisitMessagesKeepTheirMaximumAndStayWithinRequests(t *testing.T) {
+	s := openTestStore(t)
+	first := visit(5, "2026-11-20T08:00:00Z", "2026-11-20T10:00:00Z")
+	first.Record.Messages = 3
+	late := visit(4, "2026-11-20T08:00:00Z", "2026-11-20T09:00:00Z")
+	late.Record.Messages = 1
+	for _, r := range []IndexedRecord{first, late} {
+		if _, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := s.Pending(10).Records[0].Messages; got != 3 {
+		t.Fatalf("messages = %d, want 3", got)
+	}
+	tooMany := visit(2, "2026-11-20T08:00:00Z", "2026-11-20T09:00:00Z").Record
+	tooMany.Messages = 3
+	if err := tooMany.Validate(); err == nil {
+		t.Fatal("more messages than requests validated")
+	}
+	health := Record{Kind: KindHealth, ConnectedSince: "2026-11-20T08:00:00Z", ObservedAt: "2026-11-20T09:00:00Z", Messages: 1}
+	if err := health.Validate(); err == nil {
+		t.Fatal("health carrying messages validated")
+	}
+}
