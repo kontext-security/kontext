@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -197,6 +198,11 @@ func (b *eventBackend) handleFor(path string) (int, bool) {
 // old watch goes checks the path first, so lstat never follows the linked
 // parent into the protected folder.
 func TestALinkIntoAPrivacyFolderIsNeverRead(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// As in privacyfolder's own TestGuarded: the guard is macOS's and
+		// reads paths as /-separated, so Windows paths do not fit it.
+		t.Skip("the macOS privacy-folder guard does not read Windows paths")
+	}
 	saved := waitSlice
 	waitSlice = 5 * time.Millisecond
 	t.Cleanup(func() { waitSlice = saved })
