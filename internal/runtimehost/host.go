@@ -53,7 +53,9 @@ type Options struct {
 	CompactToolOutput func(context.Context, hook.Event) map[string]any
 	OffersCompaction  func(hook.Event) bool
 	// CodexProxy answers the Codex proxy's questions (see localruntime).
-	CodexProxy   func(context.Context, json.RawMessage) json.RawMessage
+	CodexProxy func(context.Context, json.RawMessage) json.RawMessage
+	// Browser answers messages from the browser extension (see localruntime).
+	Browser      func(context.Context, json.RawMessage) json.RawMessage
 	ObserveEvent func(context.Context, hook.Event)
 	// HoldFor says how long a PreToolUse call may be held until the policy
 	// arrives (see localruntime.Options).
@@ -228,6 +230,7 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		CompactToolOutput: opts.CompactToolOutput,
 		OffersCompaction:  opts.OffersCompaction,
 		CodexProxy:        opts.CodexProxy,
+		Browser:           opts.Browser,
 		Observe:           opts.ObserveEvent,
 		HoldFor:           opts.HoldFor,
 		Intercept:         opts.InterceptEvent,
