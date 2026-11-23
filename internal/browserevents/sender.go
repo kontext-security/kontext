@@ -128,12 +128,16 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 		// Another read is under way; it decides the binding.
 		return "", fmt.Errorf("browser events: waiting for the install token: %w", ctx.Err())
 	}
-	defer func() { <-s.rebind }()
-	// A stuck credential read must not hold the binding for every later
-	// hello.
+	release := func() { <-s.rebind }
+	// A stuck credential read must not hold up its caller past the
+	// deadline. It keeps the slot until it ends, so at most one read is
+	// ever outstanding; later callers wait for it up to their own deadline.
 	readCtx, cancel := context.WithTimeout(ctx, TokenReadTimeout)
 	defer cancel()
-	token, err = readToken(readCtx, s.Tokens)
+	token, err, handedOff := readToken(readCtx, s.Tokens, release)
+	if !handedOff {
+		defer release()
+	}
 	if err != nil || strings.TrimSpace(token) == "" {
 		// The enrollment cannot be confirmed, such as when the
 		// configuration names another cloud: no record is taken until it
@@ -361,21 +365,38 @@ func (s *Sender) logf(format string, args ...any) {
 }
 
 // readToken returns at ctx's deadline even when read does not honor it, as
-// some credential stores do not; a late answer is dropped.
-func readToken(ctx context.Context, read func(context.Context) (string, error)) (string, error) {
+// some credential stores do not. A read still running then calls release
+// when it ends, and handedOff is true; its answer is dropped.
+func readToken(ctx context.Context, read func(context.Context) (string, error), release func()) (token string, err error, handedOff bool) {
 	type result struct {
 		token string
 		err   error
 	}
+	var mu sync.Mutex
+	abandoned := false
 	done := make(chan result, 1)
 	go func() {
 		token, err := read(ctx)
+		mu.Lock()
+		defer mu.Unlock()
+		if abandoned {
+			release()
+			return
+		}
 		done <- result{token, err}
 	}()
 	select {
 	case r := <-done:
-		return r.token, r.err
+		return r.token, r.err, false
 	case <-ctx.Done():
-		return "", ctx.Err()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	select {
+	case r := <-done:
+		return r.token, r.err, false
+	default:
+		abandoned = true
+		return "", ctx.Err(), true
 	}
 }

@@ -47,9 +47,15 @@ func TestRowsOfAStoreOthersCouldChangeAreNotRead(t *testing.T) {
 // A backup restored read-only for its owner keeps its rows: no other
 // account could have changed it.
 func TestRowsOfAnOwnerReadOnlyStoreAreRead(t *testing.T) {
+	for _, mode := range []os.FileMode{0o400, 0o644} {
+		t.Run(mode.String(), func(t *testing.T) { ownerOnlyWritable(t, mode) })
+	}
+}
+
+func ownerOnlyWritable(t *testing.T, mode os.FileMode) {
 	s := openTestStore(t)
 	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
-	if err := os.Chmod(s.path, 0o400); err != nil {
+	if err := os.Chmod(s.path, mode); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := openStore(s.path, testNow)
