@@ -2,9 +2,6 @@
 
 package browserhost
 
-// AllowedExtensionIDs are the extension IDs this build accepts: the Chrome
-// Web Store and Edge Add-ons IDs, once the listings exist (ENG-1074). Until
-// then a release build refuses every caller.
+// AllowedExtensionIDs are the extension IDs this build accepts: the store IDs
+// only.
 func AllowedExtensionIDs() []string { return storeExtensionIDs }
-
-var storeExtensionIDs = []string{}

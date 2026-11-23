@@ -76,13 +76,18 @@ func TestServeRefusesAnotherExtension(t *testing.T) {
 	}
 }
 
-func TestReleaseBuildRefusesEveryoneUntilStoreIDsExist(t *testing.T) {
-	if len(storeExtensionIDs) != 0 {
-		t.Skip("store IDs are set")
+func TestOnlyStoreAndDevIDsAreAllowed(t *testing.T) {
+	want := map[string]bool{"jdakicfhknddbigfcfgfmhoabhgpjega": true}
+	if dev := devIDForTest(); dev != "" {
+		want[dev] = true
 	}
-	for _, id := range AllowedExtensionIDs() {
-		if id != devIDForTest() {
-			t.Fatalf("unexpected allowed id %q", id)
+	got := AllowedExtensionIDs()
+	if len(got) != len(want) {
+		t.Fatalf("allowed ids = %q, want %d ids", got, len(want))
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("unexpected allowed id %q", id)
 		}
 	}
 }
