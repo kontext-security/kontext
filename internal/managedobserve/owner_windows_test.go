@@ -3,6 +3,7 @@
 package managedobserve
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"unsafe"
@@ -74,4 +75,24 @@ func aceCount(acl *windows.ACL) any {
 		return "no DACL"
 	}
 	return acl.AceCount
+}
+
+// The browser host's check passes on a folder EnsureSocketDir made private,
+// and refuses one the user owns but whose inherited DACL others can use.
+func TestCheckSocketDirReadsTheDACL(t *testing.T) {
+	root := hermetic.SocketDir(t)
+	private := filepath.Join(root, "run")
+	if err := EnsureSocketDir(filepath.Join(private, "kontext.sock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSocketDir(filepath.Join(private, "kontext.sock")); err != nil {
+		t.Fatalf("a private folder refused: %v", err)
+	}
+	inherited := filepath.Join(root, "inherited")
+	if err := os.Mkdir(inherited, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSocketDir(filepath.Join(inherited, "kontext.sock")); err == nil {
+		t.Fatal("a folder with an inherited DACL was taken")
+	}
 }

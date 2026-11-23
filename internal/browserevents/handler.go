@@ -17,13 +17,16 @@ type Handler struct {
 	CaptureMode func() string
 	// Changed, when set, is told that the store has rows to send.
 	Changed func()
+	// Refresh, if set, binds the store to the current enrollment. A hello
+	// calls it, so a new connection learns of an enrollment change at once.
+	Refresh func(context.Context)
 	// Logf reports what the extension cannot be told.
 	Logf func(format string, args ...any)
 }
 
 // Answer handles one message and returns the answer to write back. It never
 // fails: a message it cannot take gets an error answer.
-func (h *Handler) Answer(_ context.Context, raw json.RawMessage) json.RawMessage {
+func (h *Handler) Answer(ctx context.Context, raw json.RawMessage) json.RawMessage {
 	msg, err := DecodeMessage(raw)
 	if errors.Is(err, ErrUnsupportedContract) {
 		return encode(NewError(ErrorUnsupportedContract))
@@ -34,6 +37,9 @@ func (h *Handler) Answer(_ context.Context, raw json.RawMessage) json.RawMessage
 	}
 	if h.Store == nil {
 		return encode(NewError(ErrorUnavailable))
+	}
+	if msg.Type == TypeHello && h.Refresh != nil {
+		h.Refresh(ctx)
 	}
 	settings := h.settings()
 	settings.Enrollment = h.Store.Enrollment()

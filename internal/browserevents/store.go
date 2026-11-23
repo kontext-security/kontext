@@ -68,7 +68,7 @@ func OpenStore(path string) (*Store, error) {
 
 func openStore(path string, now func() time.Time) (*Store, error) {
 	s := &Store{path: path, now: now, rows: map[string]*row{}}
-	data, err := readStoreFile(path)
+	data, private, err := readStoreFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}
@@ -94,7 +94,9 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		s.rows = file.Rows
 		s.binding = file.Binding
 	}
-	if s.pruneLocked() {
+	// A file others can read, such as one restored from a backup, is
+	// written again at once: a save makes a private file.
+	if s.pruneLocked() || !private {
 		// Days past KeepDays leave the disk now, not at the next message.
 		if err := s.saveLocked(); err != nil {
 			s.dirty = true
@@ -107,40 +109,45 @@ var errOversizedStore = errors.New("browser events: store file is too large")
 
 // readStoreFile reads the store without blocking on a FIFO or reading a file
 // of any size: startup waits for it, and hooks start only after it.
-func readStoreFile(path string) ([]byte, error) {
+func readStoreFile(path string) (data []byte, private bool, err error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !info.Mode().IsRegular() {
 		// A FIFO would block startup; a folder or link is not ours.
-		return nil, fmt.Errorf("browser events: store %s is not a regular file", path)
+		return nil, false, fmt.Errorf("browser events: store %s is not a regular file", path)
 	}
 	if info.Size() > MaxStoreBytes {
-		return nil, errOversizedStore
+		return nil, false, errOversizedStore
 	}
 	// The file can change between Lstat and open, so the opened file is
 	// checked again, and opening it never waits.
 	f, err := os.OpenFile(path, os.O_RDONLY|openNoBlock, 0)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer f.Close()
 	opened, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-		return nil, fmt.Errorf("browser events: store %s changed while it was opened", path)
+		return nil, false, fmt.Errorf("browser events: store %s changed while it was opened", path)
 	}
-	data, err := io.ReadAll(io.LimitReader(f, MaxStoreBytes+1))
+	private, err = fsperm.PrivateFile(path, opened)
 	if err != nil {
-		return nil, err
+		// Unknown counts as not private: the next save fixes it.
+		private = false
+	}
+	data, err = io.ReadAll(io.LimitReader(f, MaxStoreBytes+1))
+	if err != nil {
+		return nil, false, err
 	}
 	if len(data) > MaxStoreBytes {
-		return nil, errOversizedStore
+		return nil, false, errOversizedStore
 	}
-	return data, nil
+	return data, private, nil
 }
 
 // DefaultStorePath is the store beside the daemon's database, named after
@@ -178,6 +185,11 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := s.pruneLocked()
+	if changed {
+		// Expired rows leave the disk at the next save, even when this
+		// message is refused below.
+		s.dirty = true
+	}
 	current := s.enrollmentLocked()
 	refuseAll := func(reason string) Applied {
 		applied := Applied{Enrollment: current}
@@ -360,6 +372,20 @@ func (s *Store) Ack(p Pending) error {
 	for i, key := range p.keys {
 		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
 			r.Sent = r.Version
+		}
+	}
+	return s.saveLocked()
+}
+
+// Drop removes rows the contract no longer allows, so their text leaves the
+// disk and they stop taking room. A row that changed since the batch was
+// taken stays.
+func (s *Store) Drop(p Pending) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, key := range p.keys {
+		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
+			delete(s.rows, key)
 		}
 	}
 	return s.saveLocked()

@@ -1,5 +1,5 @@
 {
-  "contract": 1,
+  "contract": 2,
   "type": "hello",
   "Type": "other",
   "extension": { "version": "0.1.0", "browser": "chrome", "profile": "p7Hq2vXkLm9s", "Profile": 7 }

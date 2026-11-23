@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kontext.security/schemas/browser-contract-v1.json",
-  "title": "Kontext browser event contract v1",
+  "$id": "https://kontext.security/schemas/browser-contract-v2.json",
+  "title": "Kontext browser event contract v2",
   "$comment": "Every branch is told apart by its discriminator: type for messages, schema for the cloud batch, and no type, schema or contract for the cloud's answer.",
   "oneOf": [
     { "$ref": "#/$defs/hello" },
@@ -12,7 +12,7 @@
     { "$ref": "#/$defs/cloudResponse" }
   ],
   "$defs": {
-    "contract": { "const": 1 },
+    "contract": { "const": 2 },
     "time": { "type": "string", "format": "date-time", "maxLength": 40 },
     "day": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
     "browser": { "enum": ["chrome", "edge", "chromium"] },

@@ -266,8 +266,8 @@ func TestVisitTimesMustFallOnItsDay(t *testing.T) {
 }
 
 func TestAnUnknownVersionIsNamedWhateverItsShape(t *testing.T) {
-	if _, err := DecodeMessage([]byte(`{"contract":2,"type":"hello","extension":"a string in v2"}`)); !errors.Is(err, ErrUnsupportedContract) {
-		t.Fatalf("contract 2: err = %v, want ErrUnsupportedContract", err)
+	if _, err := DecodeMessage([]byte(`{"contract":3,"type":"hello","extension":"a string in v3"}`)); !errors.Is(err, ErrUnsupportedContract) {
+		t.Fatalf("contract 3: err = %v, want ErrUnsupportedContract", err)
 	}
 	for _, data := range []string{`{"type":"hello"}`, `{"contract":null,"type":"hello"}`} {
 		if _, err := DecodeMessage([]byte(data)); err == nil || errors.Is(err, ErrUnsupportedContract) {
@@ -285,7 +285,7 @@ func TestAnAnswerWithNothingRejectedHasArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"contract":1,"type":"settings","capture_mode":"commands","corporate_domains":[],"paused":false,"accepted":1,"rejected":[],"enrollment":""}`
+	want := `{"contract":2,"type":"settings","capture_mode":"commands","corporate_domains":[],"paused":false,"accepted":1,"rejected":[],"enrollment":""}`
 	if string(encoded) != want {
 		t.Fatalf("encoded\n%s\nwant\n%s", encoded, want)
 	}
@@ -306,7 +306,7 @@ func TestTheCloudAnswerMustAccountForTheBatch(t *testing.T) {
 		`{"accepted":2,"rejected":[{"index":3,"reason":"a"}]}`,
 		`{"accepted":2,"rejected":[{"index":-1,"reason":"a"}]}`,
 		// A settings answer or an echoed batch is no proof of ingestion.
-		`{"contract":1,"type":"settings","accepted":3,"rejected":[]}`,
+		`{"contract":2,"type":"settings","accepted":3,"rejected":[]}`,
 		`{"schema":"browser-activity-v1","accepted":3,"rejected":[]}`,
 		`{"accepted":2,"rejected":[{"index":0}]}`,
 		`{"accepted":2,"rejected":[{"index":0,"reason":7}]}`,
