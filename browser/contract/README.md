@@ -39,8 +39,8 @@ absolute count, never an increment, so sending it twice is harmless.
 The catalog is [`catalog.json`](catalog.json), part of this contract: the
 extension is built from it and the daemon checks visits against it. A visit's
 `app` must be a catalog id, `app_name` and `provider` must be that entry's own
-`name` and `provider`, and `host` one of its exact `hosts`, or `example.com` for an entry
-`*.example.com`. So no field of a visit can carry a page title, a
+`name` and `provider`, and `host` one of its exact `hosts`, or `example.com`
+for an entry `*.example.com`. So no field of a visit can carry a page title, a
 URL or other text people or pages wrote. The schema holds names to the
 catalog's shape (at most 40 letters, digits, spaces and `. & + ' ( ) -`); a
 catalog entry must fit it too. `extension.version` is at most 32 characters.
