@@ -15,6 +15,9 @@ type inotify struct{ fd int }
 
 const inotifyChanges = unix.IN_MODIFY | unix.IN_ATTRIB | unix.IN_CLOSE_WRITE | unix.IN_CREATE | unix.IN_DELETE | unix.IN_MOVED_FROM | unix.IN_MOVED_TO | unix.IN_DELETE_SELF | unix.IN_MOVE_SELF
 
+// inotifyEntries are the folder events that change which files it holds.
+const inotifyEntries = unix.IN_CREATE | unix.IN_DELETE | unix.IN_MOVED_FROM | unix.IN_MOVED_TO
+
 func newBackend() (backend, error) {
 	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if err != nil {
@@ -24,7 +27,9 @@ func newBackend() (backend, error) {
 }
 
 func (i *inotify) add(path string) (int, error) {
-	return unix.InotifyAddWatch(i.fd, path, inotifyChanges)
+	// The final component is never followed: a link is refused before here,
+	// and one swapped in since stays unwatched.
+	return unix.InotifyAddWatch(i.fd, path, inotifyChanges|unix.IN_DONT_FOLLOW)
 }
 
 func (i *inotify) remove(handle int) { _, _ = unix.InotifyRmWatch(i.fd, uint32(handle)) }
@@ -49,6 +54,14 @@ func (i *inotify) wait(timeout time.Duration) ([]event, error) {
 	var events []event
 	for offset := 0; offset+unix.SizeofInotifyEvent <= size; {
 		raw := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
+		offset += unix.SizeofInotifyEvent + int(raw.Len)
+		if raw.Len > 0 && raw.Mask&inotifyEntries == 0 {
+			// A child of a watched folder changed content, such as a log
+			// appended next to settings.json. A watched file reports its
+			// own writes, so only entries added, removed or renamed count,
+			// as kqueue reports for a folder.
+			continue
+		}
 		gone := raw.Mask&(unix.IN_DELETE_SELF|unix.IN_MOVE_SELF|unix.IN_IGNORED) != 0
 		if raw.Mask&unix.IN_Q_OVERFLOW != 0 {
 			// Lost events: report a change so the scan reads everything.
@@ -56,7 +69,6 @@ func (i *inotify) wait(timeout time.Duration) ([]event, error) {
 		} else {
 			events = append(events, event{handle: int(raw.Wd), gone: gone})
 		}
-		offset += unix.SizeofInotifyEvent + int(raw.Len)
 	}
 	return events, nil
 }

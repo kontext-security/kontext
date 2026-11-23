@@ -403,3 +403,28 @@ func TestHookHolderWatchesOnlyWhileOn(t *testing.T) {
 		t.Fatalf("off: %v", sets)
 	}
 }
+
+// A scan still running when the Mac opts out names its files, but they are
+// never watched: the holder watches only after its last check passes.
+func TestHookHolderWatchesNothingAfterAnOptOutMidScan(t *testing.T) {
+	fake := &fakeHookScan{confirmed: true}
+	on := true
+	keys := newHookKeyBox()
+	keys.set([]byte("k"), "t")
+	h := fake.holder(&on, keys)
+	var sets [][]string
+	h.watch = func(paths []string) { sets = append(sets, paths) }
+	scan := h.scan
+	h.scan = func(ctx context.Context, opts agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error) {
+		opts.Watch([]string{"/Users/dana/.claude/settings.json"})
+		// The switch goes off while the scan finishes.
+		on = false
+		return scan(ctx, opts)
+	}
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	for _, set := range sets {
+		if set != nil {
+			t.Fatalf("watched %v after the opt-out", set)
+		}
+	}
+}

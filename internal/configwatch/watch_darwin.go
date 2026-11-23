@@ -25,7 +25,8 @@ func newBackend() (backend, error) {
 }
 
 func (k *kqueue) add(path string) (int, error) {
-	fd, err := unix.Open(path, unix.O_EVTONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	// O_NOFOLLOW: a link swapped in since the check is refused, not followed.
+	fd, err := unix.Open(path, unix.O_EVTONLY|unix.O_CLOEXEC|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return 0, err
 	}

@@ -11,6 +11,7 @@ package configwatch
 import (
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -33,6 +34,9 @@ const (
 
 // waitSlice is how long the watcher waits for events before it looks for a
 // new set or a close. Tests shorten it.
+// lstat reads what a path is before it is watched; tests replace it.
+var lstat = os.Lstat
+
 var waitSlice = 500 * time.Millisecond
 
 // event is one notification: the target it came from, and whether that
@@ -195,12 +199,29 @@ func (w *Watcher) run(b backend) {
 	}()
 	// watch watches path, reporting whether it is watched now and whether
 	// it is missing.
+	added := 0
 	watch := func(path string) (ok, missing bool) {
 		if _, ok := watched[path]; ok {
 			return true, false
 		}
 		if len(watched) >= MaxTargets {
 			// The bound holds for open handles, not only chosen ones.
+			return false, false
+		}
+		// Checked again at every registration, not only when the set
+		// arrived: a watched folder replaced by a link into a privacy
+		// folder is refused like the scan refuses it, and never opened.
+		// Guarded goes first: it resolves links one part at a time and
+		// stops before a protected folder, where lstat would follow a
+		// linked parent into it.
+		if privacyfolder.Guarded(w.opts.Home, path) {
+			return false, false
+		}
+		info, err := lstat(path)
+		if err != nil {
+			return false, errors.Is(err, fs.ErrNotExist)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
 			return false, false
 		}
 		handle, err := b.add(path)
@@ -214,6 +235,7 @@ func (w *Watcher) run(b backend) {
 		}
 		watched[path] = handle
 		paths[handle] = path
+		added++
 		return true, false
 	}
 	release := func(keep func(string) bool) (freed bool) {
@@ -275,7 +297,17 @@ func (w *Watcher) run(b backend) {
 			return
 		case set := <-w.next:
 			last = Targets(w.opts.Home, set)
+			added = 0
 			apply(last)
+			if added > 0 && due.IsZero() {
+				// A write between the scan's read and this watch sent no
+				// event: one more scan reads what the new watches missed.
+				// It names the same paths, so it adds none and stops here.
+				due = time.Now().Add(w.opts.Delay)
+				if gap := fired.Add(w.opts.MinGap); due.Before(gap) {
+					due = gap
+				}
+			}
 		default:
 		}
 		timeout := waitSlice

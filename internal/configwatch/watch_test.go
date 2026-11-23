@@ -46,6 +46,15 @@ func drain(fired <-chan struct{}) {
 // settle lets the watcher take a new set before the test changes files.
 func settle() { time.Sleep(100 * time.Millisecond) }
 
+// registered waits for the scan that new watches ask for, then clears it,
+// so the change a test makes next has to wake the scan through its own
+// file event.
+func registered(t *testing.T, fired <-chan struct{}) {
+	t.Helper()
+	expectFire(t, fired, "new watches")
+	drain(fired)
+}
+
 func TestChangesWakeTheScan(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".claude")
@@ -58,7 +67,7 @@ func TestChangesWakeTheScan(t *testing.T) {
 	}
 	w, fired := newTestWatcher(t, home)
 	w.Set([]string{settings})
-	settle()
+	registered(t, fired)
 
 	if err := os.WriteFile(settings, []byte(`{"hooks":{}}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -104,10 +113,17 @@ func TestBurstsAreSpaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	fired := make(chan struct{}, 64)
-	w := New(func() { fired <- struct{}{} }, Options{Home: home, Delay: 20 * time.Millisecond, MinGap: time.Hour})
+	const gap = time.Second
+	w := New(func() { fired <- struct{}{} }, Options{Home: home, Delay: 20 * time.Millisecond, MinGap: gap})
 	t.Cleanup(w.Close)
 	w.Set([]string{file})
-	settle()
+	// The scan new watches ask for opens a gap of its own; let it close so
+	// the burst below is what wakes the scan.
+	expectFire(t, fired, "new watches")
+	time.Sleep(gap + 200*time.Millisecond)
+	if n := len(fired); n != 0 {
+		t.Fatalf("new watches woke the scan %d more times", n)
+	}
 	for i := range 20 {
 		if err := os.WriteFile(file, []byte{byte(i)}, 0o600); err != nil {
 			t.Fatal(err)
@@ -128,7 +144,8 @@ func TestEmptySetStopsWatching(t *testing.T) {
 	}
 	w, fired := newTestWatcher(t, home)
 	w.Set([]string{file})
-	settle()
+	// New watches ask for one scan of their own; let it pass.
+	drain(fired)
 	w.Set(nil)
 	settle()
 	if err := os.WriteFile(file, []byte(`{}`), 0o600); err != nil {
@@ -167,7 +184,7 @@ func TestFirstProjectSettingsWakeTheScan(t *testing.T) {
 	settings := filepath.Join(project, ".claude", "settings.json")
 	w, fired := newTestWatcher(t, home)
 	w.Set([]string{settings})
-	settle()
+	registered(t, fired)
 	if err := os.Mkdir(filepath.Join(project, ".claude"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +192,7 @@ func TestFirstProjectSettingsWakeTheScan(t *testing.T) {
 	drain(fired)
 	// The next scan's set watches the new folder itself.
 	w.Set([]string{settings})
-	settle()
+	registered(t, fired)
 	if err := os.WriteFile(settings, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -190,4 +207,65 @@ func TestCloseIsIdempotent(t *testing.T) {
 	var none *Watcher
 	none.Set(nil)
 	none.Close()
+}
+
+// A scan's read and the watch placed after it leave a gap a write can fall
+// into, so new watches ask for one more scan, and the same set again asks
+// for none.
+func TestNewWatchesAskForOneScan(t *testing.T) {
+	home := t.TempDir()
+	file := filepath.Join(home, "sub", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, fired := newTestWatcher(t, home)
+	w.Set([]string{file})
+	expectFire(t, fired, "new watches")
+	drain(fired)
+	w.Set([]string{file})
+	select {
+	case <-fired:
+		t.Fatal("the same set asked for another scan")
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A log appended next to a watched file is not a hook change: only the
+// watched file's own writes, or entries added or removed, wake the scan.
+func TestSiblingWritesDoNotWakeTheScan(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "sub")
+	file := filepath.Join(dir, "settings.json")
+	log := filepath.Join(dir, "history.jsonl")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{file, log} {
+		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w, fired := newTestWatcher(t, home)
+	w.Set([]string{file})
+	drain(fired)
+	f, err := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("{}\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	select {
+	case <-fired:
+		t.Fatal("a write to an unwatched sibling woke the scan")
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := os.WriteFile(file, []byte(`{"hooks":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expectFire(t, fired, "watched file write")
 }
