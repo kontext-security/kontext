@@ -520,18 +520,44 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			logAlways(opts.Diagnostic, "hook inventory: %s\n", describeHookChange(change))
 		}
 	}
-	// A confirmed opt-out drops pending hook results when it is seen, not
+	// A decided opt-out drops pending hook results when it is seen, not
 	// when the hook worker next runs: a restart in between could otherwise
 	// confirm an opt-in first and upload results from before the opt-out.
-	purgeHooksIfOff := func(snapshot endpointconfig.Snapshot) {
-		if snapshot.Confirmed && !snapshot.HookInventoryEnabled() {
-			hookEvidence.reset()
-			if err := inventoryStore.DiscardHooks(); err != nil {
-				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
+	// Only the refresher's goroutine touches it after this first purge.
+	hookPurge := hookOptOutPurge{discard: func() error {
+		hookEvidence.reset()
+		err := inventoryStore.DiscardHooks()
+		if err != nil {
+			opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
+		}
+		return err
+	}}
+	startup := endpointConfigCache.Current()
+	hookPurge.purge(startup.HookInventoryDecided(), startup.HookInventoryEnabled())
+	// An admin's desired state for Kontext's hooks (ADR-0012), only from a
+	// config the current enrolment confirmed: after a re-enrolment the cache
+	// can still hold the previous workspace's.
+	hookReconciler := newHookReconciler(func() (endpointconfig.HookState, string) {
+		snapshot := endpointConfigCache.Current()
+		owner := liveOwner.get()
+		if owner == "" || snapshot.Owner != owner {
+			return endpointconfig.UnmanagedHookState, ""
+		}
+		return snapshot.HookState(), owner
+	})
+	// A changed desired state, generation, nonce or enrolment runs a pass
+	// at once.
+	hookKick := make(chan struct{}, 1)
+	lastHookState, lastHookOwner := hookReconciler.state()
+	kickHooks := func() {
+		if state, owner := hookReconciler.state(); !state.Equal(lastHookState) || owner != lastHookOwner {
+			lastHookState, lastHookOwner = state, owner
+			select {
+			case hookKick <- struct{}{}:
+			default:
 			}
 		}
 	}
-	purgeHooksIfOff(endpointConfigCache.Current())
 	endpointConfigRefresher := endpointconfig.Refresher{
 		Client:         endpointConfigClient,
 		Cache:          endpointConfigCache,
@@ -542,9 +568,12 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot, liveOwner.get()))
 			codexRouting.follow(snapshot)
+			kickHooks()
 			// The hook scan follows the switch now, not at the next hour.
-			if hookWatch.config(snapshot.HookInventoryEnabled(), snapshot.Confirmed) {
-				purgeHooksIfOff(snapshot)
+			enabled, decided := snapshot.HookInventoryEnabled(), snapshot.HookInventoryDecided()
+			changed := hookWatch.config(enabled, decided)
+			hookPurge.follow(changed, decided, enabled)
+			if changed {
 				wakeHooks()
 			}
 		},
@@ -552,6 +581,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			if hookWatch.enrolment(token) {
 				wakeHooks()
 			}
+			kickHooks()
 		},
 	}
 	background.Add(1)
@@ -610,9 +640,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	hookHolder := &hookHolder{
 		keys:     hookKeys,
 		evidence: hookEvidence,
+		actions:  hookReconciler,
 		switches: func() (bool, bool) {
 			snapshot := endpointConfigCache.Current()
-			return snapshot.HookInventoryEnabled(), snapshot.Confirmed
+			return snapshot.HookInventoryEnabled(), snapshot.HookInventoryDecided()
 		},
 		// One snapshot says both that the switch is on and that the current
 		// enrolment's own refresh confirmed it: after a re-enrolment the cache
@@ -720,7 +751,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	background.Add(1)
 	go func() {
 		defer background.Done()
-		runHookWatch(policyCtx, loadedConfig, opts.Diagnostic, inventoryHolder.requestRescan)
+		runHookWatch(policyCtx, loadedConfig, opts.Diagnostic, inventoryHolder.requestRescan, hookWatchOptions{reconciler: hookReconciler, kick: hookKick})
 	}()
 
 	startUpdater := opts.HomebrewUpdater
@@ -1246,9 +1277,12 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startup
 		// made their ids.
 		HookInventoryEnabled: func() bool { return hookHolder.uploading() && hookHolder.keys.enrolment() == installToken },
 		HookKeyTag:           hookHolder.currentKeyTag,
-		DeviceKey:            func() string { return deviceKey },
-		HTTPClient:           opts.StreamHTTPClient,
-		Diagnostic:           opts.Diagnostic,
+		HookActions: func() (*managedstream.HookActions, func()) {
+			return hookHolder.hookActions(installToken)
+		},
+		DeviceKey:  func() string { return deviceKey },
+		HTTPClient: opts.StreamHTTPClient,
+		Diagnostic: opts.Diagnostic,
 		OnFlushSuccess: func() {
 			// Once per flush, on the first accepted post: a flush can make several,
 			// and draining a backlog shouldn't hold the policy back.

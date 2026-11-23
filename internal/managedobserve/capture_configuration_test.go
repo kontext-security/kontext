@@ -17,7 +17,7 @@ func TestCaptureConfigurationCarriesWorkTypeSwitchOnlyWhenConfirmed(t *testing.T
 		t.Fatalf("unconfirmed configuration enables the switch: %+v", got)
 	}
 	on, off := true, false
-	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &on, HookInventory: &off}
+	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &on, HookInventory: &off, HookState: &endpointconfig.UnmanagedHookState}
 	identity, err := endpointconfig.ComputeIdentity(config)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestCaptureConfigurationBelongsToItsEnrolment(t *testing.T) {
 	cache := endpointconfig.NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
 	cache.Bind("https://cloud.example", "token-a")
 	on, off := true, false
-	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &on, HookInventory: &off}
+	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &on, HookInventory: &off, HookState: &endpointconfig.UnmanagedHookState}
 	identity, err := endpointconfig.ComputeIdentity(config)
 	if err != nil {
 		t.Fatal(err)

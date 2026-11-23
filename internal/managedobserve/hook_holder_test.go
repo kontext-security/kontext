@@ -150,7 +150,7 @@ func TestHookHolderWaitsForTheNewEnrolmentsSettings(t *testing.T) {
 	optedIn := map[string]bool{"Bearer token-a": true}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		on, mode, yes, no := optedIn[r.Header.Get("Authorization")], payloadcapture.ModeSummary, true, false
-		config := endpointconfig.Config{PayloadCaptureMode: mode, WorkTypeClassification: &yes, ToolOutputCompaction: &no, CodexProxy: &yes, HookInventory: &on}
+		config := endpointconfig.Config{PayloadCaptureMode: mode, WorkTypeClassification: &yes, ToolOutputCompaction: &no, CodexProxy: &yes, HookInventory: &on, HookState: &endpointconfig.UnmanagedHookState}
 		identity, err := endpointconfig.ComputeIdentity(config)
 		if err != nil {
 			t.Error(err)
@@ -310,7 +310,7 @@ func TestHookAuthorizedNeedsAServerThatStillServesV6(t *testing.T) {
 	if !hookAuthorized(snapshot, "t") {
 		t.Fatal("confirmed opt-in refused")
 	}
-	snapshot.Status.V6Unsupported = true
+	snapshot.Status.NewestUnsupported = true
 	if hookAuthorized(snapshot, "t") {
 		t.Fatal("opt-in kept after a v6 refusal")
 	}
@@ -401,6 +401,37 @@ func TestHookHolderWatchesOnlyWhileOn(t *testing.T) {
 	h.refresh(context.Background(), agentinventory.Inventory{})
 	if len(sets) != 3 || sets[2] != nil {
 		t.Fatalf("off: %v", sets)
+	}
+}
+
+// A purge that failed to write runs again on the next refresh, though the
+// switch hasn't changed; a decided on, or an undecided off, never purges.
+func TestAFailedOptOutPurgeRetriesOnAnUnchangedSwitch(t *testing.T) {
+	calls, fail := 0, true
+	p := hookOptOutPurge{discard: func() error {
+		calls++
+		if fail {
+			return errors.New("disk full")
+		}
+		return nil
+	}}
+	p.follow(true, true, false)
+	if calls != 1 {
+		t.Fatalf("first opt-out: %d purges", calls)
+	}
+	fail = false
+	p.follow(false, true, false)
+	if calls != 2 {
+		t.Fatalf("after a failed purge: %d purges, want a retry", calls)
+	}
+	p.follow(false, true, false)
+	if calls != 2 {
+		t.Fatalf("after a purge that worked: %d purges, want none", calls)
+	}
+	p.follow(true, false, false)
+	p.follow(true, true, true)
+	if calls != 2 {
+		t.Fatalf("undecided off or decided on purged: %d purges", calls)
 	}
 }
 

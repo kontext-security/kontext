@@ -44,16 +44,37 @@ type Status struct {
 	// leave the endpoint. Until a config is confirmed again, prompts are
 	// recorded as omitted, so a later opt-in can't recover them.
 	PromptVeto bool
-	// V6Unsupported: the server refused this build's response version and
-	// the older one could not be confirmed, so a v6-only switch is off.
-	V6Unsupported bool
+	// NewestUnsupported: the server refused this build's response version and
+	// the older one could not be confirmed, so the hook switches (v6 and v7)
+	// read as off and unmanaged.
+	NewestUnsupported bool
 }
 
 // HookInventoryEnabled is the hook inventory switch as far as this snapshot
-// can confirm it: a confirmed v6 config that says on, from a server that
-// hasn't since refused v6.
+// can confirm it: a confirmed v6 or v7 config that says on, from a server
+// that hasn't since refused this build's version without confirming another.
 func (s Snapshot) HookInventoryEnabled() bool {
-	return s.Confirmed && !s.Status.V6Unsupported && s.Config.HookInventoryEnabled()
+	return s.Confirmed && !s.Status.NewestUnsupported && s.Config.HookInventoryEnabled()
+}
+
+// HookInventoryDecided reports whether this snapshot settles the hook
+// inventory switch either way. A confirmed config that says off always does,
+// so an opt-out's purge can still be retried while a fallback is negotiated.
+// A confirmed on that a server has since refused without confirming another
+// version doesn't: the switch then reads off, which pauses uploads and never
+// purges what is queued.
+func (s Snapshot) HookInventoryDecided() bool {
+	return s.Confirmed && (!s.Status.NewestUnsupported || !s.Config.HookInventoryEnabled())
+}
+
+// HookState is the desired state of Kontext's hooks as far as this snapshot
+// can confirm it (ADR-0012): a confirmed v7 config's, and unmanaged for
+// anything less, so nothing changes on a Mac the cloud hasn't asked about.
+func (s Snapshot) HookState() HookState {
+	if !s.Confirmed || s.Status.NewestUnsupported {
+		return UnmanagedHookState
+	}
+	return s.Config.DesiredHookState()
 }
 
 type Snapshot struct {
@@ -87,10 +108,11 @@ type cacheFile struct {
 	// re-enrolling into another workspace on the same cloud doesn't inherit
 	// it.
 	Owner string `json:"owner,omitempty"`
-	// V6Refused: after Response was confirmed, the server refused v6 and the
-	// older version could not be confirmed. It keeps v6-only switches off
-	// across a restart until a config is confirmed again.
-	V6Refused bool `json:"v6Refused,omitempty"`
+	// NewestRefused: after Response was confirmed, the server refused this
+	// build's version and the older one could not be confirmed. It keeps the
+	// hook switches off across a restart until a config is confirmed again.
+	// The key dates from when v6 was the newest version.
+	NewestRefused bool `json:"v6Refused,omitempty"`
 	// Retained only to decode existing cache files with the strict decoder.
 	GuardrailLLMDirective *bool `json:"guardrailLlmDirective,omitempty"`
 }
@@ -251,7 +273,7 @@ func (c *Cache) Load() error {
 	c.lastGood = cloneResponse(file.Response)
 	// Bound, the file names this enrolment, which confirmed it.
 	c.owner = c.boundOwner
-	c.status = Status{FetchedAt: fetchedAt, Stale: true, V6Unsupported: file.V6Refused}
+	c.status = Status{FetchedAt: fetchedAt, Stale: true, NewestUnsupported: file.NewestRefused}
 	return nil
 }
 
@@ -289,6 +311,14 @@ func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) err
 	case result.NotModified:
 		if lastGood == nil || result.ETag == "" || result.ETag != lastGood.ConfigIdentity {
 			return errors.New("endpoint configuration cache: not-modified result does not match last-known-good config")
+		}
+		// A 304 to the fallback request can't confirm a newer version's
+		// directive, whatever ETag it carries.
+		if result.Version != 0 && result.Version < lastGood.ResponseVersion {
+			return fmt.Errorf("%w: a not-modified answer for response version %d", ErrNewestUnsupported, result.Version)
+		}
+		if result.Version != 0 && result.Version != lastGood.ResponseVersion {
+			return errors.New("endpoint configuration cache: not-modified result is for another response version")
 		}
 		confirmed = lastGood
 	case result.Response != nil:
@@ -376,11 +406,18 @@ func (c *Cache) markFailedLocked(err error, attemptedAt time.Time) {
 	}
 }
 
-// markV6Unsupported turns the v6-only switches off until a config is
+// markNewestUnsupported turns the hook switches off until a config is
 // confirmed again.
-func (c *Cache) markV6Unsupported() {
+func (c *Cache) markNewestUnsupported() {
 	c.mu.Lock()
-	c.status.V6Unsupported = true
+	// A config the fallback version confirmed is the server's word: a
+	// later failure to refresh it is only a failure. The file may still
+	// hold the newer version's config, if storage refused the fallback's
+	// write; that file is marked below, so a restart can't restore it.
+	fallbackConfirmed := c.lastGood != nil && c.lastGood.ResponseVersion < ResponseVersion
+	if !fallbackConfirmed {
+		c.status.NewestUnsupported = true
+	}
 	c.mu.Unlock()
 	// The refusal is kept with the file, so a restart while configuration
 	// is unavailable doesn't turn v6-only switches back on.
@@ -392,15 +429,21 @@ func (c *Cache) markV6Unsupported() {
 		return
 	}
 	var file cacheFile
-	if decodeStrict(strings.NewReader(string(data)), &file) != nil || file.Response == nil || file.V6Refused {
+	if decodeStrict(strings.NewReader(string(data)), &file) != nil || file.Response == nil || file.NewestRefused {
 		return
 	}
-	file.V6Refused = true
+	if fallbackConfirmed && file.Response.ResponseVersion < ResponseVersion {
+		return
+	}
+	file.NewestRefused = true
 	if c.persist(file) != nil {
 		// Without the flag on disk, the file must not restore the switch.
 		// The marker that replaces it keeps the confirmed opt-out.
 		c.mu.Lock()
-		c.status.PromptVeto = !promptsAllowed(file.Response.Config)
+		// Keep a veto the confirmed config set: the stale file's directive
+		// may allow prompts the server since refused.
+		c.status.PromptVeto = c.status.PromptVeto || !promptsAllowed(file.Response.Config) ||
+			c.lastGood != nil && !promptsAllowed(c.lastGood.Config)
 		c.mu.Unlock()
 		_ = c.invalidatePersisted()
 	}
@@ -524,6 +567,12 @@ func cloneResponse(input *Response) *Response {
 		return nil
 	}
 	clone := *input
+	// The hook state carries a pointer of its own: a caller changing the
+	// nonce of one snapshot must not change the cache's.
+	if input.Config.HookState != nil {
+		state := input.Config.HookState.clone()
+		clone.Config.HookState = &state
+	}
 	return &clone
 }
 
@@ -563,7 +612,21 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	if err != nil {
 		return r.fail(err)
 	}
-	if err := r.Cache.apply(result, r.now(), Owner(token)); err != nil {
+	err = r.Cache.apply(result, r.now(), Owner(token))
+	if err != nil && result.NotModified && errors.Is(err, ErrNewestUnsupported) {
+		// The 304 answered the newer version's identity on the fallback
+		// request, and confirms nothing; asked again without it, the server
+		// sends the fallback's config. Until then the newer version's
+		// switches are off, so nothing sends what the server refuses.
+		r.Cache.MarkFailed(err, r.now())
+		r.Cache.markNewestUnsupported()
+		r.notify()
+		result, err = r.Client.Fetch(ctx, token, r.InstallationID, "")
+		if err == nil {
+			err = r.Cache.apply(result, r.now(), Owner(token))
+		}
+	}
+	if err != nil {
 		return r.fail(err)
 	}
 	if r.OnApplied != nil {
@@ -617,8 +680,8 @@ func (r *Refresher) fail(err error) error {
 			err = errors.Join(err, r.Cache.rejectAuthority(err, r.now()))
 		} else {
 			r.Cache.MarkFailed(err, r.now())
-			if errors.Is(err, ErrV6Unsupported) {
-				r.Cache.markV6Unsupported()
+			if errors.Is(err, ErrNewestUnsupported) {
+				r.Cache.markNewestUnsupported()
 			}
 		}
 		r.notify()

@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +15,9 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/deviceid"
+	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"github.com/kontext-security/kontext/internal/installation"
+	"github.com/kontext-security/kontext/internal/managedstream"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
@@ -106,6 +107,8 @@ func (b *hookKeyBox) get() []byte {
 // turns hook inventory on, at the authority scan's times, and records each
 // scan for upload.
 type hookHolder struct {
+	// actions holds the hook reconciler's report for the stream.
+	actions *hookReconciler
 	keys    *hookKeyBox
 	enabled func() bool
 	// confirmed reports whether enabled reads a config the cloud confirmed.
@@ -345,6 +348,32 @@ func (w *hookSwitchWatch) config(on, confirmed bool) bool {
 	return changed
 }
 
+// hookOptOutPurge drops pending hook results once a config decides the
+// switch is off, and tries again on each later refresh until a purge
+// succeeds: an unchanged switch otherwise never retries one that failed to
+// write, and a later opt-in could upload results from before the opt-out.
+type hookOptOutPurge struct {
+	discard func() error
+	failed  bool
+}
+
+// purge runs for a decided off; it reports whether it ran.
+func (p *hookOptOutPurge) purge(decided, enabled bool) bool {
+	if !decided || enabled {
+		p.failed = false
+		return false
+	}
+	p.failed = p.discard() != nil
+	return true
+}
+
+// follow purges when the switch changed, or when the last purge failed.
+func (p *hookOptOutPurge) follow(changed, decided, enabled bool) {
+	if changed || p.failed {
+		p.purge(decided, enabled)
+	}
+}
+
 func (w *hookSwitchWatch) enrolment(token string) bool {
 	changed := w.token != token
 	w.token = token
@@ -384,4 +413,13 @@ func describeHookChange(change agentauthority.HookChange) string {
 		line += " reasons=" + strings.Join(change.Reasons, ",")
 	}
 	return line
+}
+
+// hookActions is the reconciler's pending report for a post that goes with
+// installToken.
+func (h *hookHolder) hookActions(installToken string) (*managedstream.HookActions, func()) {
+	if h == nil {
+		return nil, nil
+	}
+	return h.actions.take(endpointconfig.Owner(installToken))
 }
