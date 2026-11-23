@@ -29,8 +29,14 @@ func startedByBrowser(args []string) bool {
 // runBrowserHost serves the extension on stdin and stdout until the browser
 // closes the pipe. It writes nothing else to stdout, which carries frames.
 func runBrowserHost(args []string, in io.Reader, out io.Writer) error {
-	client := localruntime.Client{SocketPath: managedobserve.DefaultSocketPath(), Timeout: browserHostRelayTimeout}
+	socket := managedobserve.DefaultSocketPath()
+	client := localruntime.Client{SocketPath: socket, Timeout: browserHostRelayTimeout}
 	relay := func(ctx context.Context, message json.RawMessage) (json.RawMessage, error) {
+		// Checked before every message: the daemon may create the folder
+		// after the host starts.
+		if err := managedobserve.CheckSocketDir(socket); err != nil {
+			return nil, err
+		}
 		return client.Browser(ctx, message)
 	}
 	return browserhost.Serve(context.Background(), browserhost.CallerOrigin(args), in, out, relay)

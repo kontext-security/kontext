@@ -338,11 +338,34 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// now, the store takes nothing until the sender binds it.
 	browserTokens := sameCloudTokenSource(loadedConfig.Config.CloudURL)
 	if browserStore != nil {
-		bindBrowserStore(ctx, browserStore, browserTokens, loadedConfig.Config.CloudURL, installationState.InstallationID, opts.Diagnostic)
+		// With the token read above: a second Keychain read would delay
+		// the socket, and if it failed a reopened store would take records
+		// under its old binding until the sender found out.
+		bindBrowserStore(browserStore, startupToken, loadedConfig.Config.CloudURL, installationState.InstallationID, opts.Diagnostic)
 	}
 	browserChanged := make(chan struct{}, 1)
+	browserLogf := func(format string, args ...any) { opts.Diagnostic.Printf(format+"\n", args...) }
+	browserSender := &browserevents.Sender{
+		Store:          browserStore,
+		BaseURL:        loadedConfig.Config.CloudURL,
+		InstallationID: installationState.InstallationID,
+		Tokens:         browserTokens,
+		HTTP:           cloudhttp.NewClient(30 * time.Second),
+		Logf:           browserLogf,
+		Warnf:          func(format string, args ...any) { diagnostic.LogAlways(opts.Diagnostic, format+"\n", args...) },
+	}
 	browserHandler := &browserevents.Handler{
-		Store:       browserStore,
+		Store: browserStore,
+		// A new connection sees an enrollment change at once, not only when
+		// the sender next has rows to upload.
+		Refresh: func(ctx context.Context) error {
+			// Within the browser host's own deadline: a slow Keychain read
+			// must not hold the connection.
+			ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+			defer cancel()
+			_, err := browserSender.Rebind(ctx)
+			return err
+		},
 		CaptureMode: func() string { return browserCaptureMode(endpointConfigCache.Current(), liveOwner.get()) },
 		Changed: func() {
 			select {
@@ -350,7 +373,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			default:
 			}
 		},
-		Logf: func(format string, args ...any) { opts.Diagnostic.Printf(format+"\n", args...) },
+		Logf: browserLogf,
 	}
 
 	// Runtime evidence of Kontext's own hooks, for the hook inventory.
@@ -541,15 +564,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		defer background.Done()
 		compactor.Run(policyCtx)
 	}()
-	browserSender := &browserevents.Sender{
-		Store:          browserStore,
-		BaseURL:        loadedConfig.Config.CloudURL,
-		InstallationID: installationState.InstallationID,
-		Tokens:         browserTokens,
-		HTTP:           cloudhttp.NewClient(30 * time.Second),
-		Logf:           browserHandler.Logf,
-		Warnf:          func(format string, args ...any) { diagnostic.LogAlways(opts.Diagnostic, format+"\n", args...) },
-	}
 	if browserStore != nil {
 		background.Add(1)
 		go func() {
@@ -1435,14 +1449,9 @@ func sameCloudTokenSource(cloudURL string) func(context.Context) (string, error)
 	}
 }
 
-// bindBrowserStore binds the store to the enrollment at startup. A token
-// that cannot be read now leaves it to the sender.
-func bindBrowserStore(ctx context.Context, store *browserevents.Store, tokens func(context.Context) (string, error), cloudURL, installationID string, logs diagnostic.Logger) {
-	token, err := tokens(ctx)
-	if err != nil {
-		diagnostic.LogAlways(logs, "browser activity: install token: %v\n", err)
-		return
-	}
+// bindBrowserStore binds the store to the enrollment at startup, with the
+// token the daemon started with.
+func bindBrowserStore(store *browserevents.Store, token, cloudURL, installationID string, logs diagnostic.Logger) {
 	if _, err := store.Bind(browserevents.Binding(cloudURL, installationID, token)); err != nil {
 		diagnostic.LogAlways(logs, "browser activity: bind store: %v\n", err)
 	}

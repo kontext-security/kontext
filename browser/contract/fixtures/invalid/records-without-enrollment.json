@@ -1,0 +1,12 @@
+{
+  "contract": 2,
+  "type": "records",
+  "extension": { "version": "0.1.0", "browser": "chrome", "profile": "p7Hq2vXkLm9s" },
+  "records": [
+    {
+      "kind": "health",
+      "connected_since": "2026-11-20T08:00:00Z",
+      "observed_at": "2026-11-20T09:15:00Z"
+    }
+  ]
+}

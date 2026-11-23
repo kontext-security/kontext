@@ -14,7 +14,7 @@ import (
 )
 
 // Contract is the version of the browser event contract this build speaks.
-const Contract = 1
+const Contract = 2
 
 // CloudSchema names the batch the daemon sends to the cloud.
 const CloudSchema = "browser-activity-v1"
@@ -36,7 +36,7 @@ const (
 	TypeError    = "error"
 )
 
-// Record kinds in contract v1.
+// Record kinds in contract v2.
 const (
 	KindHealth = "health"
 	KindVisit  = "visit"
@@ -60,9 +60,20 @@ var (
 	profilePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 	versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	appPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-	hostPattern    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+	hostPattern    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
 	dayPattern     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 	installPattern = regexp.MustCompile(`^ins_[A-Za-z0-9_-]{32}$`)
+	// enrollmentPattern is Store.Enrollment's shape, or "" for none yet.
+	enrollmentPattern = regexp.MustCompile(`^([0-9a-f]{16})?$`)
+	// labelPattern holds a catalog name such as "ChatGPT" or "OpenAI": no
+	// punctuation a sentence, path or query would need.
+	labelPattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} .&+'()-]{0,39}$`)
+)
+
+// Field limits beyond the patterns.
+const (
+	maxVersionLength = 32
+	maxReasonLength  = 200
 )
 
 // Extension says which extension, browser and profile a message came from.
@@ -100,6 +111,9 @@ type Message struct {
 	Type      string          `json:"type"`
 	Extension Extension       `json:"extension"`
 	Records   json.RawMessage `json:"records,omitempty"`
+	// Enrollment is the enrollment id the records' visits were recorded
+	// under, as the extension last had it from a settings answer.
+	Enrollment string `json:"enrollment,omitempty"`
 }
 
 // Rejection names a record that was not taken, by its index in the message
@@ -118,6 +132,11 @@ type Settings struct {
 	Paused           bool        `json:"paused"`
 	Accepted         int         `json:"accepted"`
 	Rejected         []Rejection `json:"rejected"`
+	// Enrollment is an opaque id of the enrollment the daemon records
+	// under, empty until it has one. When it changes, the extension drops
+	// what it kept for the previous one, so nothing recorded for one
+	// workspace reaches another.
+	Enrollment string `json:"enrollment"`
 }
 
 // MarshalJSON writes empty lists as [], as the schema wants arrays, never
@@ -217,9 +236,14 @@ func DecodeMessage(data []byte) (Message, error) {
 		if len(bytes.TrimSpace(msg.Records)) == 0 {
 			return Message{}, errors.New("browser events: records message without records")
 		}
+		enrollment, ok := fields.text("enrollment")
+		if !ok || !enrollmentPattern.MatchString(enrollment) {
+			return Message{}, errors.New("browser events: records message without an enrollment id")
+		}
+		msg.Enrollment = enrollment
 		return msg, nil
 	default:
-		return Message{}, fmt.Errorf("browser events: unknown message type %q", msg.Type)
+		return Message{}, errors.New("browser events: unknown message type")
 	}
 }
 
@@ -290,13 +314,20 @@ func DecodeCloudResponse(data []byte, sent int) (CloudResponse, error) {
 	if err != nil {
 		return CloudResponse{}, fmt.Errorf("browser events: cloud answer is not an object: %w", err)
 	}
+	// The schema tells the answer apart by having no discriminator: a
+	// settings answer or a batch echoed back is not proof of ingestion.
+	for _, key := range []string{"type", "schema", "contract"} {
+		if _, ok := fields[key]; ok {
+			return CloudResponse{}, fmt.Errorf("browser events: cloud answer carries %s", key)
+		}
+	}
 	accepted, ok := fields.integer("accepted")
 	if !ok || accepted < 0 {
 		return CloudResponse{}, errors.New("browser events: cloud answer without accepted")
 	}
-	var items []json.RawMessage
-	if err := json.Unmarshal(fields["rejected"], &items); err != nil || items == nil {
-		return CloudResponse{}, errors.New("browser events: cloud answer without rejected")
+	items, err := rejectionItems(fields["rejected"], sent)
+	if err != nil {
+		return CloudResponse{}, err
 	}
 	response := CloudResponse{Accepted: accepted, Rejected: make([]Rejection, 0, len(items))}
 	seen := map[int]bool{}
@@ -310,7 +341,10 @@ func DecodeCloudResponse(data []byte, sent int) (CloudResponse, error) {
 			return CloudResponse{}, errors.New("browser events: cloud rejection index is out of range or repeated")
 		}
 		seen[index] = true
-		reason, _ := rejection.text("reason")
+		reason, ok := rejection.text("reason")
+		if !ok || utf8.RuneCountInString(reason) > maxReasonLength {
+			return CloudResponse{}, errors.New("browser events: cloud rejection without a reason")
+		}
 		response.Rejected = append(response.Rejected, Rejection{Index: index, Reason: reason})
 	}
 	if accepted+len(response.Rejected) != sent {
@@ -372,13 +406,14 @@ type IndexedRecord struct {
 }
 
 func (e Extension) validate() error {
-	if !versionPattern.MatchString(e.Version) {
+	if len(e.Version) > maxVersionLength || !versionPattern.MatchString(e.Version) {
 		return errors.New("browser events: extension version must be X.Y.Z")
 	}
 	switch e.Browser {
 	case "chrome", "edge", "chromium":
 	default:
-		return fmt.Errorf("browser events: unknown browser %q", e.Browser)
+		// The value stays out of the error: errors reach the logs.
+		return errors.New("browser events: unknown browser")
 	}
 	if !profilePattern.MatchString(e.Profile) {
 		return errors.New("browser events: profile must be a random id of 8 to 64 letters, digits, - or _")
@@ -423,14 +458,21 @@ func (r Record) Validate() error {
 		if !appPattern.MatchString(r.App) {
 			return errors.New("visit app id is invalid")
 		}
-		if !isLabel(r.AppName) || !isLabel(r.Provider) {
-			return errors.New("visit app_name and provider are required")
+		app, known := catalog[r.App]
+		if !known {
+			return errors.New("visit app is not in the catalog")
+		}
+		if !isLabel(r.AppName) || !isLabel(r.Provider) || r.AppName != app.Name || r.Provider != app.Provider {
+			return errors.New("visit app_name and provider must be catalog names")
 		}
 		if r.Surface != "web" {
 			return errors.New("visit surface must be web")
 		}
 		if len(r.Host) > 253 || !hostPattern.MatchString(r.Host) {
 			return errors.New("visit host must be a bare hostname")
+		}
+		if !app.matchesHost(r.Host) {
+			return errors.New("visit host is not one of its app's hosts")
 		}
 		if !isTime(r.FirstSeen) || !isTime(r.LastSeen) {
 			return errors.New("visit needs first_seen and last_seen")
@@ -499,7 +541,34 @@ func insideDay(day, first, last string) bool {
 	return from.UTC().Format(time.DateOnly) == day && to.UTC().Format(time.DateOnly) == day
 }
 
-// isLabel counts characters, as the schema's maxLength does, not bytes.
+// isLabel holds a name to the catalog's shape. It counts characters, as the
+// schema's maxLength does, not bytes.
 func isLabel(value string) bool {
-	return value != "" && utf8.ValidString(value) && utf8.RuneCountInString(value) <= 80
+	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= 40 && labelPattern.MatchString(value)
+}
+
+// rejectionItems reads the rejected array one entry at a time and stops at
+// the first entry past sent: more rejections than records sent cannot be an
+// answer to them, and nothing is kept for the rest.
+func rejectionItems(raw json.RawMessage, sent int) ([]json.RawMessage, error) {
+	missing := errors.New("browser events: cloud answer without rejected")
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if open, err := decoder.Token(); err != nil || open != json.Delim('[') {
+		return nil, missing
+	}
+	items := []json.RawMessage{}
+	for decoder.More() {
+		if len(items) == sent {
+			return nil, errors.New("browser events: cloud answer rejects more records than were sent")
+		}
+		var item json.RawMessage
+		if err := decoder.Decode(&item); err != nil {
+			return nil, missing
+		}
+		items = append(items, item)
+	}
+	if end, err := decoder.Token(); err != nil || end != json.Delim(']') {
+		return nil, missing
+	}
+	return items, nil
 }

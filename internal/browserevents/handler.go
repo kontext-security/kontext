@@ -17,13 +17,18 @@ type Handler struct {
 	CaptureMode func() string
 	// Changed, when set, is told that the store has rows to send.
 	Changed func()
+	// Refresh, if set, binds the store to the current enrollment. A hello
+	// calls it, so a new connection learns of an enrollment change at once.
+	// If it fails, the enrollment is not known and the answer is
+	// unavailable.
+	Refresh func(context.Context) error
 	// Logf reports what the extension cannot be told.
 	Logf func(format string, args ...any)
 }
 
 // Answer handles one message and returns the answer to write back. It never
 // fails: a message it cannot take gets an error answer.
-func (h *Handler) Answer(_ context.Context, raw json.RawMessage) json.RawMessage {
+func (h *Handler) Answer(ctx context.Context, raw json.RawMessage) json.RawMessage {
 	msg, err := DecodeMessage(raw)
 	if errors.Is(err, ErrUnsupportedContract) {
 		return encode(NewError(ErrorUnsupportedContract))
@@ -35,7 +40,20 @@ func (h *Handler) Answer(_ context.Context, raw json.RawMessage) json.RawMessage
 	if h.Store == nil {
 		return encode(NewError(ErrorUnavailable))
 	}
+	if msg.Type == TypeHello && h.Refresh != nil {
+		if err := h.Refresh(ctx); err != nil {
+			h.logf("browser events: could not confirm the enrollment: %v", err)
+			return encode(NewError(ErrorUnavailable))
+		}
+	}
+	enrollment, confirmed := h.Store.Confirmed()
+	if !confirmed {
+		// Not a change of enrollment: the extension keeps its counts and
+		// asks again.
+		return encode(NewError(ErrorUnavailable))
+	}
 	settings := h.settings()
+	settings.Enrollment = enrollment
 	if msg.Type == TypeHello {
 		return encode(settings)
 	}
@@ -44,16 +62,19 @@ func (h *Handler) Answer(_ context.Context, raw json.RawMessage) json.RawMessage
 		h.logf("browser events: refused records: %v", err)
 		return encode(NewError(ErrorInvalidMessage))
 	}
-	notKept, err := h.Store.Apply(msg.Extension, valid)
+	applied, err := h.Store.Apply(msg.Extension, msg.Enrollment, valid)
 	if err != nil {
 		h.logf("browser events: store: %v", err)
 		return encode(NewError(ErrorUnavailable))
 	}
-	rejected = append(rejected, notKept...)
+	// The answer names the enrollment the records were judged by, so an
+	// extension refused for an old one learns the new one from it.
+	settings.Enrollment = applied.Enrollment
+	rejected = append(rejected, applied.Rejected...)
 	if rejected == nil {
 		rejected = []Rejection{}
 	}
-	settings.Accepted = len(valid) - len(notKept)
+	settings.Accepted = len(valid) - len(applied.Rejected)
 	settings.Rejected = rejected
 	if settings.Accepted > 0 && h.Changed != nil {
 		h.Changed()

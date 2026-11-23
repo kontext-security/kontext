@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,6 +46,46 @@ type Sender struct {
 	// 413; then it halves, down to one record, and doubles back with each
 	// accepted batch.
 	limit int
+	// rebind makes reading the token and binding to it one step, so an
+	// older read cannot bind the store back after a newer one. It is a
+	// channel so a hello can stop waiting for it at its deadline.
+	rebind     chan struct{}
+	rebindInit sync.Once
+}
+
+// TokenReadTimeout bounds one read of the install token.
+const TokenReadTimeout = 10 * time.Second
+
+// MaxResponseBytes bounds the cloud's answer.
+const MaxResponseBytes = 4 << 20
+
+// noRedirects is client without following redirects: a 307 or 308 would send
+// the batch, with the installation id, to wherever it points. A redirect
+// then reads as its status, which SendOnce refuses.
+func noRedirects(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	copied := *client
+	copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &copied
+}
+
+// split separates rows the contract allows from rows it does not.
+func (p Pending) split() (valid, invalid Pending) {
+	for i, record := range p.Records {
+		source := Extension{Version: record.ExtensionVersion, Browser: record.Browser, Profile: record.Profile}
+		target := &valid
+		if source.validate() != nil || record.Record.Validate() != nil {
+			target = &invalid
+		}
+		target.Records = append(target.Records, record)
+		target.keys = append(target.keys, p.keys[i])
+		target.versions = append(target.versions, p.versions[i])
+	}
+	valid.binding, invalid.binding = p.binding, p.binding
+	valid.generation, invalid.generation = p.generation, p.generation
+	return valid, invalid
 }
 
 // WarnEvery spaces out the warnings of a run of failed sends.
@@ -75,33 +116,90 @@ const (
 	Refused
 )
 
-// SendOnce sends up to one batch of pending rows.
-func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
-	// An unbound store takes no records, so it is bound even with nothing
-	// to send.
-	if s.Store.Bound() && len(s.Store.Pending(1).Records) == 0 {
-		// Days that aged out leave the disk even when nothing is sent.
-		if err := s.Store.Flush(); err != nil {
-			return Retry, err
-		}
-		return Nothing, nil
+// Rebind reads the current install token and binds the store to it, so an
+// enrollment change is seen before the next record is taken, not only when
+// there is something to send. Rows recorded under the previous enrollment are
+// dropped and never leave with the new token.
+func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
+	s.rebindInit.Do(func() { s.rebind = make(chan struct{}, 1) })
+	// One deadline covers waiting for an earlier read and this one, so a
+	// stuck read never holds up the background sender (and its flush).
+	readCtx, cancel := context.WithTimeout(ctx, TokenReadTimeout)
+	defer cancel()
+	waited := s.Store.Epoch()
+	select {
+	case s.rebind <- struct{}{}:
+	case <-readCtx.Done():
+		// Another read is under way and has not confirmed the enrollment
+		// in time: nothing more is taken until one does, for any profile.
+		// A read that confirmed it while this one waited is not undone.
+		s.Store.SuspendAt(waited)
+		return "", fmt.Errorf("browser events: waiting for the install token: %w", readCtx.Err())
 	}
-	token, err := s.Tokens(ctx)
+	release := func() { <-s.rebind }
+	if deadline, _ := readCtx.Deadline(); readCtx.Err() != nil || !beforeDeadline(deadline) {
+		// The slot came free together with the deadline: this caller
+		// gave up waiting, so a read confirmed meanwhile is not undone.
+		release()
+		s.Store.SuspendAt(waited)
+		return "", fmt.Errorf("browser events: waiting for the install token: %w", context.DeadlineExceeded)
+	}
+	// Taken with the slot held: a Bind or Suspend after this, such as a
+	// waiter that gave up, is newer than this read, so it is not undone.
+	started := s.Store.Epoch()
+	// A stuck credential read must not hold up its caller past the
+	// deadline. It keeps the slot until it ends, so at most one read is
+	// ever outstanding; later callers wait for it up to their own deadline.
+	// The store is suspended before an abandoned read can give up the
+	// slot, so a later successful bind is never undone by this timeout.
+	// Its own suspensions are fenced too: nothing newer than this read is
+	// undone by it.
+	suspend := func() { s.Store.SuspendAt(started) }
+	token, err, handedOff := readToken(readCtx, s.Tokens, release, suspend)
+	if handedOff {
+		return "", fmt.Errorf("browser events: install token: %v", err)
+	}
+	defer release()
 	if err != nil || strings.TrimSpace(token) == "" {
-		return Retry, fmt.Errorf("browser events: install token: %v", err)
+		// The enrollment cannot be confirmed, such as when the
+		// configuration names another cloud: no record is taken until it
+		// can, so none is counted for the wrong workspace.
+		suspend()
+		return "", fmt.Errorf("browser events: install token: %v", err)
 	}
-	// Rows recorded under another enrollment never leave with this token.
-	dropped, err := s.Store.Bind(Binding(s.BaseURL, s.InstallationID, token))
+	dropped, ok, err := s.Store.BindAt(Binding(s.BaseURL, s.InstallationID, token), started)
 	if err != nil {
-		return Retry, err
+		return "", err
+	}
+	if !ok {
+		// The store was suspended while this read ran: the token it read
+		// may be older than that suspension, so the next read confirms.
+		return "", errors.New("browser events: the enrollment changed while the install token was read")
 	}
 	if dropped > 0 {
 		s.logf("browser events: the enrollment changed; dropped %d rows recorded under the previous one", dropped)
+	}
+	return token, nil
+}
+
+// SendOnce sends up to one batch of pending rows.
+func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
+	// Local retention does not wait for the token or the cloud: expired
+	// days leave the disk whatever this send's outcome.
+	defer func() { _ = s.Store.Flush() }()
+	token, err := s.Rebind(ctx)
+	if err != nil {
+		return Retry, err
 	}
 	if s.limit <= 0 || s.limit > MaxRecordsPerBatch {
 		s.limit = MaxRecordsPerBatch
 	}
 	pending := s.Store.Pending(s.limit)
+	if pending.binding != Binding(s.BaseURL, s.InstallationID, token) {
+		// A hello bound the store to another enrollment after the token was
+		// read: these rows are not this token's. The next send reads again.
+		return Retry, errors.New("browser events: the enrollment changed during a send")
+	}
 	if len(pending.Records) == 0 {
 		if err := s.Store.Flush(); err != nil {
 			return Retry, err
@@ -109,11 +207,22 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 		return Nothing, nil
 	}
 	now := s.clock()
+	// A row the store kept that the contract no longer allows is dropped on
+	// its own, rather than retried forever; the valid rows go on.
+	pending, invalid := pending.split()
+	if len(invalid.Records) > 0 {
+		if err := s.Store.Drop(invalid); err != nil {
+			return Retry, err
+		}
+		s.logf("browser events: dropped %d stored records the contract does not allow", len(invalid.Records))
+	}
+	if len(pending.Records) == 0 {
+		return Sent, nil
+	}
 	batch := CloudBatch{Schema: CloudSchema, InstallationID: s.InstallationID, SentAt: now().UTC().Format(time.RFC3339), Records: pending.Records}
 	if err := batch.Validate(); err != nil {
-		// A row the store kept that the contract no longer allows: drop the
-		// batch's rows rather than retry them forever.
-		_ = s.Store.Ack(pending)
+		// The batch itself is wrong, such as its installation id: no row
+		// is to blame, so none is marked sent.
 		return Refused, err
 	}
 	body, err := json.Marshal(batch)
@@ -130,14 +239,24 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	}
 	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	request.Header.Set("Content-Type", "application/json")
-	response, err := s.HTTP.Do(request)
+	response, err := noRedirects(s.HTTP).Do(request)
 	if err != nil {
 		return Retry, err
 	}
 	defer response.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(response.Body, 256<<10))
+	// Large enough for a full batch of rejections with the longest reasons
+	// in any script. A cut-off answer would be retried forever.
 	switch {
 	case response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated:
+		// Only an acknowledgement needs its whole body; other answers are
+		// judged by their status.
+		data, err := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
+		if err != nil {
+			return Retry, fmt.Errorf("browser events: read the answer: %w", err)
+		}
+		if len(data) > MaxResponseBytes {
+			return Retry, errors.New("browser events: the answer is too large")
+		}
 		// Rows are marked sent only when the answer accounts for each of
 		// them; {} from a proxy would otherwise mark them all.
 		answer, err := DecodeCloudResponse(data, len(pending.Records))
@@ -270,4 +389,60 @@ func (s *Sender) logf(format string, args ...any) {
 	if s.Logf != nil {
 		s.Logf(format, args...)
 	}
+}
+
+// readToken returns at ctx's deadline even when read does not honor it, as
+// some credential stores do not. A read still running then calls release
+// when it ends, and handedOff is true; its answer is dropped. abandon runs
+// first, while the read cannot yet release.
+func readToken(ctx context.Context, read func(context.Context) (string, error), release, abandon func()) (token string, err error, handedOff bool) {
+	type result struct {
+		token string
+		err   error
+	}
+	var mu sync.Mutex
+	abandoned := false
+	done := make(chan result, 1)
+	go func() {
+		token, err := read(ctx)
+		mu.Lock()
+		defer mu.Unlock()
+		if abandoned {
+			release()
+			return
+		}
+		done <- result{token, err}
+	}()
+	select {
+	case r := <-done:
+		// The clock is checked as well as the context, which learns of
+		// its deadline only when its timer runs.
+		if deadline, ok := ctx.Deadline(); ctx.Err() == nil && (!ok || beforeDeadline(deadline)) {
+			return r.token, r.err, false
+		}
+		// Ready together with the deadline: the deadline wins.
+		abandon()
+		return "", context.DeadlineExceeded, false
+	case <-ctx.Done():
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	select {
+	case <-done:
+		// It answered, but after the deadline: not taken, so the deadline
+		// holds. The read has ended, so the caller keeps the slot.
+		abandon()
+		return "", ctx.Err(), false
+	default:
+		abandon()
+		abandoned = true
+		return "", ctx.Err(), true
+	}
+}
+
+// beforeDeadline checks both clocks: the monotonic one stops while a Mac
+// sleeps, so a deadline slept through is passed only by the wall clock.
+func beforeDeadline(deadline time.Time) bool {
+	now := time.Now()
+	return now.Before(deadline) && now.Round(0).Before(deadline.Round(0))
 }

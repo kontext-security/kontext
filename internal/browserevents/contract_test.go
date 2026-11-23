@@ -60,7 +60,7 @@ func decodeFixture(t *testing.T, data []byte) error {
 
 // checkSettings holds a settings answer to the schema's settings definition.
 func checkSettings(fields object) error {
-	for _, key := range []string{"contract", "type", "capture_mode", "corporate_domains", "paused", "accepted", "rejected"} {
+	for _, key := range []string{"contract", "type", "capture_mode", "corporate_domains", "paused", "accepted", "rejected", "enrollment"} {
 		if _, ok := fields[key]; !ok {
 			return fmt.Errorf("settings without %s", key)
 		}
@@ -93,6 +93,9 @@ func checkSettings(fields object) error {
 	var rejected []Rejection
 	if err := json.Unmarshal(fields["rejected"], &rejected); err != nil || rejected == nil {
 		return errors.New("settings rejected must be an array")
+	}
+	if enrollment, ok := fields.text("enrollment"); !ok || !enrollmentPattern.MatchString(enrollment) {
+		return errors.New("settings enrollment must be empty or 16 hex digits")
 	}
 	return nil
 }
@@ -202,16 +205,44 @@ func TestHealthRecordKeepsOnlyItsOwnFields(t *testing.T) {
 	}
 }
 
-func TestLabelsCountCharactersNotBytes(t *testing.T) {
-	name := strings.Repeat("智", 80) // 240 bytes, 80 characters
-	visit := Record{Kind: KindVisit, Day: "2026-11-20", App: "qwen", AppName: name, Provider: name, Surface: "web",
-		Host: "chat.qwen.ai", FirstSeen: "2026-11-20T08:00:00Z", LastSeen: "2026-11-20T09:00:00Z", Requests: 1}
+// A visit names an app of the contract's catalog, with the catalog's own name,
+// provider and one of its hosts. Anything else could carry text a page or a
+// person wrote, so it is refused.
+func TestAVisitNamesACatalogApp(t *testing.T) {
+	visit := Record{Kind: KindVisit, Day: "2026-11-20", App: "chatgpt", AppName: "ChatGPT", Provider: "OpenAI", Surface: "web",
+		Host: "chatgpt.com", FirstSeen: "2026-11-20T08:00:00Z", LastSeen: "2026-11-20T09:00:00Z", Requests: 1}
 	if err := visit.Validate(); err != nil {
-		t.Fatalf("80 characters refused: %v", err)
+		t.Fatalf("a catalog visit refused: %v", err)
 	}
-	visit.AppName += "智"
-	if err := visit.Validate(); err == nil {
-		t.Fatal("81 characters taken")
+	for _, host := range []string{"chat.openai.com"} {
+		v := visit
+		v.Host = host
+		if err := v.Validate(); err != nil {
+			t.Errorf("host %q refused: %v", host, err)
+		}
+	}
+	n8n := visit
+	n8n.App, n8n.AppName, n8n.Provider, n8n.Host = "n8n-cloud", "n8n cloud", "n8n", "app.n8n.cloud"
+	if err := n8n.Validate(); err != nil {
+		t.Errorf("a wildcard entry's own domain refused: %v", err)
+	}
+	refused := map[string]func(*Record){
+		"unknown app":        func(r *Record) { r.App = "qwen" },
+		"other name":         func(r *Record) { r.AppName = "Plan cut costs" },
+		"other provider":     func(r *Record) { r.Provider = "Anthropic" },
+		"text in a name":     func(r *Record) { r.AppName = "chatgpt.com/c/123" },
+		"another app's host": func(r *Record) { r.Host = "claude.ai" },
+		"workspace below a wildcard": func(r *Record) {
+			r.App, r.AppName, r.Provider, r.Host = "n8n-cloud", "n8n cloud", "n8n", "acme.app.n8n.cloud"
+		},
+		"host that only ends alike": func(r *Record) { r.Host = "evilchatgpt.com" },
+	}
+	for name, change := range refused {
+		v := visit
+		change(&v)
+		if err := v.Validate(); err == nil {
+			t.Errorf("%s taken", name)
+		}
 	}
 }
 
@@ -235,8 +266,8 @@ func TestVisitTimesMustFallOnItsDay(t *testing.T) {
 }
 
 func TestAnUnknownVersionIsNamedWhateverItsShape(t *testing.T) {
-	if _, err := DecodeMessage([]byte(`{"contract":2,"type":"hello","extension":"a string in v2"}`)); !errors.Is(err, ErrUnsupportedContract) {
-		t.Fatalf("contract 2: err = %v, want ErrUnsupportedContract", err)
+	if _, err := DecodeMessage([]byte(`{"contract":3,"type":"hello","extension":"a string in v3"}`)); !errors.Is(err, ErrUnsupportedContract) {
+		t.Fatalf("contract 3: err = %v, want ErrUnsupportedContract", err)
 	}
 	for _, data := range []string{`{"type":"hello"}`, `{"contract":null,"type":"hello"}`} {
 		if _, err := DecodeMessage([]byte(data)); err == nil || errors.Is(err, ErrUnsupportedContract) {
@@ -254,7 +285,7 @@ func TestAnAnswerWithNothingRejectedHasArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"contract":1,"type":"settings","capture_mode":"commands","corporate_domains":[],"paused":false,"accepted":1,"rejected":[]}`
+	want := `{"contract":2,"type":"settings","capture_mode":"commands","corporate_domains":[],"paused":false,"accepted":1,"rejected":[],"enrollment":""}`
 	if string(encoded) != want {
 		t.Fatalf("encoded\n%s\nwant\n%s", encoded, want)
 	}
@@ -274,9 +305,32 @@ func TestTheCloudAnswerMustAccountForTheBatch(t *testing.T) {
 		`{"accepted":1,"rejected":[{"index":1,"reason":"a"},{"index":1,"reason":"b"}]}`,
 		`{"accepted":2,"rejected":[{"index":3,"reason":"a"}]}`,
 		`{"accepted":2,"rejected":[{"index":-1,"reason":"a"}]}`,
+		// A settings answer or an echoed batch is no proof of ingestion.
+		`{"contract":2,"type":"settings","accepted":3,"rejected":[]}`,
+		`{"schema":"browser-activity-v1","accepted":3,"rejected":[]}`,
+		`{"accepted":2,"rejected":[{"index":0}]}`,
+		`{"accepted":2,"rejected":[{"index":0,"reason":7}]}`,
 	} {
 		if _, err := DecodeCloudResponse([]byte(data), 3); err == nil {
 			t.Errorf("%s: taken for 3 records", data)
+		}
+	}
+}
+
+// Every catalog entry must pass the contract itself, or the extension would
+// record visits the daemon refuses.
+func TestTheCatalogFitsTheContract(t *testing.T) {
+	if len(catalog) == 0 {
+		t.Fatal("the catalog is empty")
+	}
+	for id, app := range catalog {
+		if !appPattern.MatchString(id) || !isLabel(app.Name) || !isLabel(app.Provider) || len(app.Hosts) == 0 {
+			t.Errorf("catalog entry %q does not fit the contract", id)
+		}
+		for _, host := range app.Hosts {
+			if !hostPattern.MatchString(strings.TrimPrefix(host, "*.")) {
+				t.Errorf("catalog host %q of %q is not a hostname", host, id)
+			}
 		}
 	}
 }

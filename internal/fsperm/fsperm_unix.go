@@ -16,3 +16,8 @@ func RestrictFile(file *os.File) error {
 func PrivateFile(_ string, info os.FileInfo) (bool, error) {
 	return info.Mode().Perm() == 0o600, nil
 }
+
+// PrivateFileAnyOwner is PrivateFile: mode bits do not depend on elevation.
+func PrivateFileAnyOwner(path string, info os.FileInfo) (bool, error) {
+	return PrivateFile(path, info)
+}

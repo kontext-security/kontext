@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kontext.security/schemas/browser-contract-v1.json",
-  "title": "Kontext browser event contract v1",
-  "$comment": "Every branch is told apart by its discriminator: type for messages, schema for the cloud batch, and no type or schema for the cloud's answer.",
+  "$id": "https://kontext.security/schemas/browser-contract-v2.json",
+  "title": "Kontext browser event contract v2",
+  "$comment": "Every branch is told apart by its discriminator: type for messages, schema for the cloud batch, and no type, schema or contract for the cloud's answer.",
   "oneOf": [
     { "$ref": "#/$defs/hello" },
     { "$ref": "#/$defs/records" },
@@ -12,17 +12,27 @@
     { "$ref": "#/$defs/cloudResponse" }
   ],
   "$defs": {
-    "contract": { "const": 1 },
+    "contract": { "const": 2 },
     "time": { "type": "string", "format": "date-time", "maxLength": 40 },
     "day": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
     "browser": { "enum": ["chrome", "edge", "chromium"] },
     "profile": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
-    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$", "maxLength": 32 },
     "appId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
-    "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "label": {
+      "$comment": "A catalog name such as an app or a provider, never page text: letters, digits, spaces and . & + ' ( ) -.",
+      "type": "string",
+      "pattern": "^[\\p{L}\\p{N}][\\p{L}\\p{N} .&+'()-]{0,39}$",
+      "maxLength": 40
+    },
+    "enrollment": {
+      "$comment": "Opaque id of the enrollment the daemon records under, empty until it has one. When it changes, the extension drops what it kept for the previous one.",
+      "type": "string",
+      "pattern": "^([0-9a-f]{16})?$"
+    },
     "host": {
       "type": "string",
-      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$",
       "maxLength": 253
     },
     "extension": {
@@ -79,7 +89,7 @@
     },
     "records": {
       "type": "object",
-      "required": ["contract", "type", "extension", "records"],
+      "required": ["contract", "type", "extension", "records", "enrollment"],
       "properties": {
         "contract": { "$ref": "#/$defs/contract" },
         "type": { "const": "records" },
@@ -89,7 +99,8 @@
           "minItems": 1,
           "maxItems": 200,
           "items": { "$ref": "#/$defs/record" }
-        }
+        },
+        "enrollment": { "$ref": "#/$defs/enrollment" }
       }
     },
     "rejection": {
@@ -104,7 +115,7 @@
       "type": "object",
       "required": [
         "contract", "type", "capture_mode", "corporate_domains", "paused",
-        "accepted", "rejected"
+        "accepted", "rejected", "enrollment"
       ],
       "properties": {
         "contract": { "$ref": "#/$defs/contract" },
@@ -117,7 +128,8 @@
         },
         "paused": { "type": "boolean" },
         "accepted": { "type": "integer", "minimum": 0 },
-        "rejected": { "type": "array", "items": { "$ref": "#/$defs/rejection" } }
+        "rejected": { "type": "array", "items": { "$ref": "#/$defs/rejection" } },
+        "enrollment": { "$ref": "#/$defs/enrollment" }
       }
     },
     "error": {
@@ -179,7 +191,9 @@
     "cloudResponse": {
       "type": "object",
       "required": ["accepted", "rejected"],
-      "not": { "anyOf": [{ "required": ["type"] }, { "required": ["schema"] }] },
+      "not": {
+        "anyOf": [{ "required": ["type"] }, { "required": ["schema"] }, { "required": ["contract"] }]
+      },
       "properties": {
         "accepted": { "type": "integer", "minimum": 0 },
         "rejected": { "type": "array", "items": { "$ref": "#/$defs/rejection" } }

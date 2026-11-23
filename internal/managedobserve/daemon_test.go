@@ -1723,3 +1723,38 @@ func TestBrowserTokensStopWhenTheCloudMoves(t *testing.T) {
 		t.Fatalf("a token for another cloud was handed out: %q", token)
 	}
 }
+
+// The browser host checks the socket's folder before it dials, and changes
+// nothing: a folder others can write to, or a link, is refused as it is.
+func TestCheckSocketDirRefusesWithoutChanging(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket directory permissions are not portable to windows")
+	}
+	dir := filepath.Join(t.TempDir(), "socket-dir")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "kontext.sock")
+	if err := CheckSocketDir(socket); err != nil {
+		t.Fatalf("a private folder refused: %v", err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSocketDir(socket); err == nil {
+		t.Fatal("a folder others can write to was taken")
+	}
+	if info, _ := os.Stat(dir); info.Mode().Perm() != 0o777 {
+		t.Fatal("CheckSocketDir changed the folder")
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSocketDir(filepath.Join(link, "kontext.sock")); err == nil {
+		t.Fatal("a linked folder was taken")
+	}
+	if err := CheckSocketDir(filepath.Join(t.TempDir(), "missing", "kontext.sock")); err == nil {
+		t.Fatal("a missing folder was taken")
+	}
+}

@@ -1,9 +1,10 @@
 {
-  "contract": 1,
+  "contract": 2,
   "type": "settings",
   "capture_mode": "commands",
   "corporate_domains": [],
   "paused": false,
   "accepted": 2,
-  "rejected": []
+  "rejected": [],
+  "enrollment": ""
 }

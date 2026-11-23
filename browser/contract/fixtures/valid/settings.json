@@ -1,9 +1,10 @@
 {
-  "contract": 1,
+  "contract": 2,
   "type": "settings",
   "capture_mode": "commands",
   "corporate_domains": ["example.com"],
   "paused": false,
   "accepted": 1,
-  "rejected": [{ "index": 1, "reason": "unknown record kind" }]
+  "rejected": [{ "index": 1, "reason": "unknown record kind" }],
+  "enrollment": "3f9a1c2b7d4e6f80"
 }

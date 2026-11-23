@@ -1,0 +1,38 @@
+[
+  {
+    "id": "chatgpt",
+    "name": "ChatGPT",
+    "provider": "OpenAI",
+    "hosts": ["chatgpt.com", "chat.openai.com"]
+  },
+  {
+    "id": "claude",
+    "name": "Claude",
+    "provider": "Anthropic",
+    "hosts": ["claude.ai"]
+  },
+  {
+    "id": "gemini",
+    "name": "Gemini",
+    "provider": "Google",
+    "hosts": ["gemini.google.com"]
+  },
+  {
+    "id": "copilot",
+    "name": "Microsoft Copilot",
+    "provider": "Microsoft",
+    "hosts": ["copilot.microsoft.com", "m365.cloud.microsoft"]
+  },
+  {
+    "id": "lovable",
+    "name": "Lovable",
+    "provider": "Lovable",
+    "hosts": ["lovable.dev"]
+  },
+  {
+    "id": "n8n-cloud",
+    "name": "n8n cloud",
+    "provider": "n8n",
+    "hosts": ["*.app.n8n.cloud"]
+  }
+]
