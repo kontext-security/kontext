@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -983,6 +984,102 @@ func TestAHealthRowFromTheFutureIsRefused(t *testing.T) {
 	applied, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{future})
 	if err != nil || len(applied.Rejected) != 1 || s.Len() != 0 {
 		t.Fatalf("applied = %+v, rows = %d, err = %v", applied, s.Len(), err)
+	}
+}
+
+// Messages are a share of the requests, merge by their maximum, and are
+// never more than the requests: every send is a POST.
+func TestVisitMessagesKeepTheirMaximumAndStayWithinRequests(t *testing.T) {
+	s := openTestStore(t)
+	// 1, then 3, then a late 1: a store that keeps the first count, or one
+	// that takes a stale replay, ends on 1.
+	early := visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:30:00Z")
+	early.Record.Messages = 1
+	first := visit(5, "2026-11-20T08:00:00Z", "2026-11-20T10:00:00Z")
+	first.Record.Messages = 3
+	late := visit(4, "2026-11-20T08:00:00Z", "2026-11-20T09:00:00Z")
+	late.Record.Messages = 1
+	for _, r := range []IndexedRecord{early, first, late} {
+		if _, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := s.Pending(10).Records[0].Messages; got != 3 {
+		t.Fatalf("messages = %d, want 3", got)
+	}
+	tooMany := visit(2, "2026-11-20T08:00:00Z", "2026-11-20T09:00:00Z").Record
+	tooMany.Messages = 3
+	if err := tooMany.Validate(); err == nil {
+		t.Fatal("more messages than requests validated")
+	}
+	health := Record{Kind: KindHealth, ConnectedSince: "2026-11-20T08:00:00Z", ObservedAt: "2026-11-20T09:00:00Z", Messages: 1}
+	if err := health.Validate(); err == nil {
+		t.Fatal("health carrying messages validated")
+	}
+}
+
+// A present messages count of the wrong type is refused, not read as zero.
+func TestAVisitWithAMalformedMessageCountIsRefused(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(fixtures, "valid", "records-visit-messages.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message struct {
+		Records []map[string]any `json:"records"`
+	}
+	if err := json.Unmarshal(data, &message); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []any{"3", 1.5, nil, true} {
+		record := message.Records[1]
+		if record["kind"] != KindVisit {
+			t.Fatalf("fixture record = %v", record)
+		}
+		record["messages"] = bad
+		raw, _ := json.Marshal([]any{record})
+		valid, rejected, err := DecodeRecords(raw)
+		if err != nil || len(valid) != 0 || len(rejected) != 1 {
+			t.Errorf("messages %v: valid = %d, rejected = %+v, err = %v", bad, len(valid), rejected, err)
+		}
+	}
+}
+
+// JSON Schema counts 3.0 and 3e0 as integers, so the daemon reads them as 3.
+func TestAnIntegralMessageCountInAnyNotationIsRead(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(fixtures, "valid", "records-visit-messages.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message struct {
+		Records []map[string]json.RawMessage `json:"records"`
+	}
+	if err := json.Unmarshal(data, &message); err != nil {
+		t.Fatal(err)
+	}
+	for _, notation := range []string{"1.0", "1e0"} {
+		record := message.Records[1]
+		record["messages"] = json.RawMessage(notation)
+		raw, _ := json.Marshal([]any{record})
+		valid, rejected, err := DecodeRecords(raw)
+		if err != nil || len(valid) != 1 || len(rejected) != 0 || valid[0].Record.Messages != 1 {
+			t.Errorf("messages %s: valid = %+v, rejected = %+v, err = %v", notation, valid, rejected, err)
+		}
+	}
+	// A number that only rounds to an integer is not one, and neither is a
+	// huge exponent.
+	for _, notation := range []string{"1.0000000000000001", "1e1000000000", "2147483648", "1.5e0"} {
+		record := message.Records[1]
+		record["messages"] = json.RawMessage(notation)
+		raw, _ := json.Marshal([]any{record})
+		valid, rejected, err := DecodeRecords(raw)
+		if err != nil || len(valid) != 0 || len(rejected) != 1 {
+			t.Errorf("messages %s: valid = %+v, rejected = %+v, err = %v", notation, valid, rejected, err)
+		}
+	}
+	for notation, want := range map[string]int{"5e-0": 5, "0e-65": 0, "1." + strings.Repeat("0", 80): 1, "120e-1": 12, "-0.0": 0, "2147483647": math.MaxInt32} {
+		if n, ok := exactInteger(notation); !ok || n != want {
+			t.Errorf("%s = %d, %v, want %d", notation, n, ok, want)
+		}
 	}
 }
 

@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -129,6 +132,10 @@ type Record struct {
 	FirstSeen string `json:"first_seen,omitempty"`
 	LastSeen  string `json:"last_seen,omitempty"`
 	Requests  int    `json:"requests,omitempty"`
+	// Messages is how many of the requests were sends to the app's
+	// message endpoint, approximately: a regenerate or an edit is a send
+	// too. Missing reads as 0, as from an extension before it.
+	Messages int `json:"messages,omitempty"`
 
 	// account, with day, app and observed_at, and no host: the type alone,
 	// never a plan, an address, a domain or a name.
@@ -351,6 +358,15 @@ func decodeRecord(data []byte) (Record, error) {
 		record.FirstSeen, _ = fields.text("first_seen")
 		record.LastSeen, _ = fields.text("last_seen")
 		record.Requests, _ = fields.integer("requests")
+		if _, present := fields["messages"]; present {
+			// Optional, but a present count must be one: a wrong type is
+			// refused rather than read as zero.
+			if n, ok := fields.integer("messages"); ok {
+				record.Messages = n
+			} else {
+				record.Messages = -1
+			}
+		}
 	case KindAccount:
 		for key := range fields {
 			if !accountKeys[key] {
@@ -448,10 +464,65 @@ func (o object) integer(key string) (int, bool) {
 	if o.null(key) {
 		return 0, false
 	}
-	if err := json.Unmarshal(o[key], &value); err != nil {
+	if err := json.Unmarshal(o[key], &value); err == nil {
+		return value, true
+	}
+	// JSON Schema counts 3.0 and 3e0 as integers, so they are read as 3. A
+	// fraction, or a number past what a count can be, is not an integer.
+	// The number is read exactly, never through a float64, which would
+	// round 3.0000000000000001 to 3.
+	// json.Number also takes a string such as "3", which is not a number.
+	raw := bytes.TrimSpace(o[key])
+	var number json.Number
+	if raw[0] == '"' || json.Unmarshal(raw, &number) != nil {
 		return 0, false
 	}
-	return value, true
+	return exactInteger(number.String())
+}
+
+// exactInteger reads a JSON number as an int when its exact value is an
+// integer within the int32 range, whatever its notation: 3, 3.0, 3e0, 0e-65
+// and 3.000 are all read. It works on the digits, never through a float64,
+// so 3.0000000000000001 is not an integer, and a huge exponent costs nothing.
+func exactInteger(number string) (int, bool) {
+	if len(number) > 4096 {
+		return 0, false
+	}
+	mantissa, exponentText, hasExponent := strings.Cut(strings.ToLower(number), "e")
+	negative := strings.HasPrefix(mantissa, "-")
+	mantissa = strings.TrimPrefix(mantissa, "-")
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	digits := strings.TrimLeft(whole+fraction, "0")
+	// The value is digits × 10^shift.
+	shift := -len(fraction)
+	trimmed := strings.TrimRight(digits, "0")
+	shift += len(digits) - len(trimmed)
+	digits = trimmed
+	if digits == "" {
+		return 0, true
+	}
+	if hasExponent {
+		exponent, err := strconv.Atoi(exponentText)
+		if err != nil || exponent < -4096 || exponent > 4096 {
+			return 0, false
+		}
+		shift += exponent
+	}
+	// digits has no trailing zero, so a negative shift leaves a fraction.
+	if shift < 0 || len(digits)+shift > 10 {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(digits+strings.Repeat("0", shift), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	if negative {
+		n = -n
+	}
+	if n > math.MaxInt32 || n < math.MinInt32 {
+		return 0, false
+	}
+	return int(n), true
 }
 
 // null reports whether key is missing or null.
@@ -549,6 +620,10 @@ func (r Record) Validate() error {
 		}
 		if r.Requests < 1 || r.Requests > MaxRequestsPerDay {
 			return errors.New("visit requests out of range")
+		}
+		if r.Messages < 0 || r.Messages > r.Requests {
+			// Every send is a POST, so it is one of the requests.
+			return errors.New("visit messages out of range")
 		}
 		return nil
 	case KindAccount:
