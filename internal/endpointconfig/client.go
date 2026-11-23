@@ -25,6 +25,9 @@ type FetchResult struct {
 	NotModified bool
 	Response    *Response
 	ETag        string
+	// Version is the response version asked for. A 304 confirms the cached
+	// config only if that config is of the same version.
+	Version int
 }
 
 type Client struct {
@@ -143,7 +146,7 @@ func (c *Client) fetch(ctx context.Context, version int, installToken, installat
 			return FetchResult{}, errors.New("endpoint configuration: invalid not-modified ETag")
 		}
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1))
-		return FetchResult{NotModified: true, ETag: etag}, nil
+		return FetchResult{NotModified: true, ETag: etag, Version: version}, nil
 	}
 	if response.StatusCode == http.StatusNotAcceptable {
 		var refused struct {
@@ -188,7 +191,7 @@ func (c *Client) fetch(ctx context.Context, version int, installToken, installat
 	if etag == "" || etag != decoded.ConfigIdentity {
 		return FetchResult{}, errors.New("endpoint configuration: ETag does not match config identity")
 	}
-	return FetchResult{Response: &decoded, ETag: etag}, nil
+	return FetchResult{Response: &decoded, ETag: etag, Version: version}, nil
 }
 
 // parseETag extracts the config identity from a strong or weak ETag. Weak
