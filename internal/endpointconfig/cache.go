@@ -430,7 +430,10 @@ func (c *Cache) markNewestUnsupported() {
 		// Without the flag on disk, the file must not restore the switch.
 		// The marker that replaces it keeps the confirmed opt-out.
 		c.mu.Lock()
-		c.status.PromptVeto = !promptsAllowed(file.Response.Config)
+		// Keep a veto the confirmed config set: the stale file's directive
+		// may allow prompts the server since refused.
+		c.status.PromptVeto = c.status.PromptVeto || !promptsAllowed(file.Response.Config) ||
+			c.lastGood != nil && !promptsAllowed(c.lastGood.Config)
 		c.mu.Unlock()
 		_ = c.invalidatePersisted()
 	}
@@ -603,7 +606,11 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	if err != nil && result.NotModified && errors.Is(err, ErrNewestUnsupported) {
 		// The 304 answered the newer version's identity on the fallback
 		// request, and confirms nothing; asked again without it, the server
-		// sends the fallback's config.
+		// sends the fallback's config. Until then the newer version's
+		// switches are off, so nothing sends what the server refuses.
+		r.Cache.MarkFailed(err, r.now())
+		r.Cache.markNewestUnsupported()
+		r.notify()
 		result, err = r.Client.Fetch(ctx, token, r.InstallationID, "")
 		if err == nil {
 			err = r.Cache.apply(result, r.now(), Owner(token))
