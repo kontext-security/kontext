@@ -141,6 +141,40 @@ This runs only when the daemon loaded the self-serve user config. An
 organization-managed config never reaches it, whatever files exist on disk.
 Development and custom builds outside Homebrew are left alone too.
 
+To stop the daemon writing hook files at all, set `"hook_repair": false` in
+the managed config. It then writes none, on either kind of Mac; removal when
+the package itself is removed still runs.
+
+## Install and repair from the dashboard
+
+An admin can ask for Kontext's hooks on one Mac to be installed, or repaired
+now, from the dashboard (ADR-0012). The endpoint reads the request from
+endpoint config v7: a desired state (`unmanaged` or `installed`), a generation
+that goes up with every admin change, and a repair nonce. A Mac reads it the
+next time it fetches its config, so one that is asleep picks it up when it
+wakes; a new generation or nonce runs the daemon's pass at once instead of at
+the next minute. There is no remote remove.
+
+The pass is the self-heal above. After it, the daemon reads Claude Code's
+Kontext hooks back and reports one status in `device.hook_actions`:
+
+- `in_place`: they were already there.
+- `restored`: the daemon wrote them and read them back.
+- `missing`: they are absent and this daemon may not write them, for example
+  while it is an old process after an upgrade.
+- `admin_off`: the managed config sets `"hook_repair": false`.
+- `not_ours`: the settings file is not a JSON object, or resolves into a macOS
+  privacy-guarded folder, so Kontext leaves it alone.
+- `unrestorable`: the write or the read-back failed.
+- `needs_privileged`: on a packaged Mac, the machine-wide drop-in is missing or
+  names another binary. Only root writes it, so push the package again.
+
+On a self-serve Mac the status is for the user's settings; on a packaged Mac,
+for the drop-in. A Mac no admin has acted on sends no report, and neither does
+one whose cloud predates v7.
+
+## Rescans after hook changes
+
 When any hook file of either scope changes, the daemon rescans agents right
 away, so the dashboard's agent inventory follows within a minute instead of
 waiting for the ten-minute scan. Already-running agent sessions may need

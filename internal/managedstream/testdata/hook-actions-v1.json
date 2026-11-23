@@ -1,0 +1,20 @@
+{
+  "schema": "hook-actions-v1",
+  "desired": "installed",
+  "generation": 3,
+  "repair_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "finished_at": "2026-11-23T10:00:00Z",
+  "results": [
+    {
+      "agent": "claude_code",
+      "scope_kind": "user",
+      "scope_id": "sc_BBBBBBBBBBBBBBBBBBBBBB",
+      "status": "restored"
+    },
+    {
+      "agent": "claude_code",
+      "scope_kind": "managed_dropin",
+      "status": "needs_privileged"
+    }
+  ]
+}

@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +15,9 @@ import (
 
 	"github.com/kontext-security/kontext/internal/agentinventory"
 	"github.com/kontext-security/kontext/internal/deviceid"
+	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"github.com/kontext-security/kontext/internal/installation"
+	"github.com/kontext-security/kontext/internal/managedstream"
 	"github.com/kontext-security/kontext/pkg/agentauthority"
 )
 
@@ -106,6 +107,8 @@ func (b *hookKeyBox) get() []byte {
 // turns hook inventory on, at the authority scan's times, and records each
 // scan for upload.
 type hookHolder struct {
+	// actions holds the hook reconciler's report for the stream.
+	actions *hookReconciler
 	keys    *hookKeyBox
 	enabled func() bool
 	// confirmed reports whether enabled reads a config the cloud confirmed.
@@ -375,4 +378,12 @@ func describeHookChange(change agentauthority.HookChange) string {
 		line += " reasons=" + strings.Join(change.Reasons, ",")
 	}
 	return line
+}
+
+// hookActions is the reconciler's pending report for the stream.
+func (h *hookHolder) hookActions() (*managedstream.HookActions, func()) {
+	if h == nil {
+		return nil, nil
+	}
+	return h.actions.take()
 }

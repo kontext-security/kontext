@@ -310,7 +310,7 @@ func TestManagedDaemonRemovesItsHooksAsItStops(t *testing.T) {
 			case rescanned <- struct{}{}:
 			default:
 			}
-		})
+		}, hookWatchOptions{})
 	}()
 	hooks := antigravitymanaged.UserHooksPath(home)
 	select {

@@ -532,6 +532,28 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		}
 	}
 	purgeHooksIfOff(endpointConfigCache.Current())
+	// An admin's desired state for Kontext's hooks (ADR-0012), only from a
+	// config the current enrolment confirmed: after a re-enrolment the cache
+	// can still hold the previous workspace's.
+	hookReconciler := newHookReconciler(func() endpointconfig.HookState {
+		snapshot := endpointConfigCache.Current()
+		if owner := liveOwner.get(); owner == "" || snapshot.Owner != owner {
+			return endpointconfig.UnmanagedHookState
+		}
+		return snapshot.HookState()
+	})
+	// A changed desired state, generation or nonce runs a pass at once.
+	hookKick := make(chan struct{}, 1)
+	lastHookState := hookReconciler.state()
+	kickHooks := func() {
+		if state := hookReconciler.state(); !sameHookState(state, lastHookState) {
+			lastHookState = state
+			select {
+			case hookKick <- struct{}{}:
+			default:
+			}
+		}
+	}
 	endpointConfigRefresher := endpointconfig.Refresher{
 		Client:         endpointConfigClient,
 		Cache:          endpointConfigCache,
@@ -542,6 +564,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot, liveOwner.get()))
 			codexRouting.follow(snapshot)
+			kickHooks()
 			// The hook scan follows the switch now, not at the next hour.
 			if hookWatch.config(snapshot.HookInventoryEnabled(), snapshot.Confirmed) {
 				purgeHooksIfOff(snapshot)
@@ -552,6 +575,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			if hookWatch.enrolment(token) {
 				wakeHooks()
 			}
+			kickHooks()
 		},
 	}
 	background.Add(1)
@@ -610,6 +634,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	hookHolder := &hookHolder{
 		keys:     hookKeys,
 		evidence: hookEvidence,
+		actions:  hookReconciler,
 		switches: func() (bool, bool) {
 			snapshot := endpointConfigCache.Current()
 			return snapshot.HookInventoryEnabled(), snapshot.Confirmed
@@ -720,7 +745,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	background.Add(1)
 	go func() {
 		defer background.Done()
-		runHookWatch(policyCtx, loadedConfig, opts.Diagnostic, inventoryHolder.requestRescan)
+		runHookWatch(policyCtx, loadedConfig, opts.Diagnostic, inventoryHolder.requestRescan, hookWatchOptions{reconciler: hookReconciler, kick: hookKick})
 	}()
 
 	startUpdater := opts.HomebrewUpdater
@@ -1246,6 +1271,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startup
 		// made their ids.
 		HookInventoryEnabled: func() bool { return hookHolder.uploading() && hookHolder.keys.enrolment() == installToken },
 		HookKeyTag:           hookHolder.currentKeyTag,
+		HookActions:          hookHolder.hookActions,
 		DeviceKey:            func() string { return deviceKey },
 		HTTPClient:           opts.StreamHTTPClient,
 		Diagnostic:           opts.Diagnostic,

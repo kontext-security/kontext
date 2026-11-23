@@ -17,6 +17,7 @@ import (
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/managedconfig"
+	"github.com/kontext-security/kontext/internal/managedstream"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
@@ -29,13 +30,27 @@ const hookWatchInterval = time.Minute
 // every file it writes is in the user's home. For a self-serve config that is
 // every hook file; for an organization-managed config, whose package owns the
 // machine-wide files, only the files of agents that read none (Antigravity).
-func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log diagnostic.Logger, rescan func()) {
-	heal := hookHealer(loaded, log)
+//
+// With an admin's desired state in the endpoint config (ADR-0012) the same
+// pass is the reconciler: watch.reconciler reports what it found for Claude
+// Code after every pass, and watch.kick runs a pass at once when the desired
+// state, generation or repair nonce changes.
+func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log diagnostic.Logger, rescan func(), watch hookWatchOptions) {
+	repair, probe := newHookRepair(loaded, log)
 	last, started := "", false
 	ticker := time.NewTicker(hookWatchInterval)
 	defer ticker.Stop()
 	for {
-		healed := heal != nil && heal(false)
+		reporting := probe != nil && watch.reconciler.active()
+		before := reporting && probe.complete()
+		var outcome healOutcome
+		if repair != nil {
+			outcome = repair(false)
+		}
+		if reporting {
+			watch.reconciler.record([]managedstream.HookActionResult{probe.action(before, outcome)})
+		}
+		healed := outcome.changed
 		current := hookFilesFingerprint()
 		// The inventory scans once at start; later changes need a rescan.
 		if healed || started && current != last {
@@ -48,13 +63,41 @@ func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log di
 			// deletes the machine-wide hooks and then stops this daemon, which
 			// removes the user's hooks here. It never installs: a self-serve
 			// uninstall stops the daemon before it removes the hooks.
-			if heal != nil {
-				heal(true)
+			if repair != nil {
+				repair(true)
 			}
 			return
 		case <-ticker.C:
+		case <-watch.kick:
 		}
 	}
+}
+
+// hookWatchOptions connects the hook watch to the endpoint config's desired
+// hook state. The zero value is the self-heal alone.
+type hookWatchOptions struct {
+	reconciler *hookReconciler
+	kick       <-chan struct{}
+}
+
+// healOutcome is what one healer pass did.
+type healOutcome struct {
+	// changed: a hook file was written.
+	changed bool
+	// optOut: the managed config turns hook repair off, so nothing was
+	// written.
+	optOut bool
+	// claude is the pass over Claude Code's user settings, self-serve only.
+	claude agentPass
+}
+
+// agentPass is one agent's part of a healer pass.
+type agentPass struct {
+	// attempted: the healer planned this agent's files.
+	attempted bool
+	// guarded: its file is in a macOS privacy-guarded folder.
+	guarded bool
+	err     error
 }
 
 // HookRepairAvailable reports whether this install's daemon adds hooks later,
@@ -158,22 +201,33 @@ func startedFrom() os.FileInfo {
 // It returns nil when the daemon must leave hook files alone; the healer
 // reports whether it changed one.
 func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(final bool) bool {
-	if runtime.GOOS != "darwin" {
+	repair, _ := newHookRepair(loaded, log)
+	if repair == nil {
 		return nil
+	}
+	return func(final bool) bool { return repair(final).changed }
+}
+
+// newHookRepair is hookHealer with what each pass did, and the probe that
+// reads Claude Code's Kontext hooks back for the reconciler.
+func newHookRepair(loaded managedconfig.LoadedConfig, log diagnostic.Logger) (func(final bool) healOutcome, *claudeHookProbe) {
+	if runtime.GOOS != "darwin" {
+		return nil, nil
 	}
 	selfServe := loaded.Scope == managedconfig.ScopeUser
 	scope, binary, label := hookinstall.System, managedHookBinary, "managed hooks"
 	if selfServe {
 		brew, _, ok := currentExecutableBrewPath()
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		scope, binary, label = hookinstall.User, filepath.Join(filepath.Dir(brew), "kontext"), "self-serve hooks"
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || !filepath.IsAbs(home) {
-		return nil
+		return nil, nil
 	}
+	probe := newClaudeHookProbe(selfServe, home, binary)
 	started := startedFrom()
 	lastErr := ""
 	report := func(err error) {
@@ -182,7 +236,7 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(f
 		}
 		lastErr = fmt.Sprint(err)
 	}
-	return func(final bool) bool {
+	return func(final bool) (outcome healOutcome) {
 		current, loadErr := managedconfig.Load()
 		// The package is being removed: it deleted its machine-wide hooks
 		// first, and may delete its config next, which can bring a self-serve
@@ -195,23 +249,30 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(f
 			// gone, remove or do nothing.
 			inPlace, gone := packageHooks()
 			if !inPlace && !(gone && packageBinaryOurs(binary, started)) {
-				return false
+				return outcome
 			}
 			remove = !inPlace
 		}
 		if final && !remove {
-			return false
+			return outcome
 		}
 		if !remove {
 			// A config of the other kind installed while this daemon runs takes
 			// over; the daemon it starts heals from then on.
 			if loadErr != nil || (current.Scope == managedconfig.ScopeUser) != selfServe {
-				return false
+				return outcome
+			}
+			// The local opt-out wins over the self-heal and over the cloud.
+			// Removal still runs: it only takes back what the package's
+			// removal leaves behind.
+			if current.Config.HookRepairOff() {
+				outcome.optOut = true
+				return outcome
 			}
 			// After an upgrade replaces the binary this process is the old
 			// version; it restarts, and the new one installs its hooks.
 			if !sameFile(binary, started) {
-				return false
+				return outcome
 			}
 		}
 		apply, verb := hookinstall.Install, "installed"
@@ -221,19 +282,23 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(f
 		defs, err := hookinstall.SetupDefinitions(scope, home)
 		if err != nil {
 			report(err)
-			return false
+			return outcome
 		}
 		var guarded, changed []string
 		var errs []error
 		// One pass per agent: a broken file of one agent must not stop the
 		// repair of another.
 		for _, def := range defs {
+			absent, guardedBefore := false, len(guarded)
 			err := apply(hookinstall.Options{
 				// At system scope PerUser keeps the daemon to the user's files: the
 				// package's machine-wide files already run Claude Code, Codex and
 				// Cursor hooks, and a user copy would run each twice.
 				Scope: scope, PerUser: !selfServe, Home: home, Binary: binary, NoBackup: true, SetupPaths: true,
-				SkipAgent: func(agent string) bool { return agentAbsent(home, agent) },
+				SkipAgent: func(agent string) bool {
+					absent = agentAbsent(home, agent)
+					return absent
+				},
 				// Removal takes only hooks that name the package's binary: a
 				// Homebrew install's, or one a person changed, stay.
 				RemoveIf: func(_ hookinstall.File, content []byte) bool { return namesBinary(content, def.Validate, binary) },
@@ -258,6 +323,9 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(f
 			if err != nil {
 				errs = append(errs, err)
 			}
+			if def.Agent == "claude_code" && selfServe && !remove {
+				outcome.claude = agentPass{attempted: !absent, guarded: len(guarded) > guardedBefore, err: err}
+			}
 		}
 		if len(changed) > 0 {
 			logAlways(log, "%s: %s %s\n", label, verb, strings.Join(changed, ", "))
@@ -270,8 +338,9 @@ func hookHealer(loaded managedconfig.LoadedConfig, log diagnostic.Logger) func(f
 			errs = append(errs, fmt.Errorf("skipped %s in a macOS privacy-guarded folder%s", strings.Join(guarded, ", "), hint))
 		}
 		report(errors.Join(errs...))
-		return len(changed) > 0
-	}
+		outcome.changed = len(changed) > 0
+		return outcome
+	}, probe
 }
 
 // hookFilesFingerprint covers the content of every hook file either scope can
