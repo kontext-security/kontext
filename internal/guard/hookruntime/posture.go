@@ -1,6 +1,8 @@
 package hookruntime
 
 import (
+	"strings"
+
 	"github.com/kontext-security/kontext/internal/hook"
 )
 
@@ -16,6 +18,14 @@ func AuthoritativeEnforce(result hook.Result) bool {
 // decision that would have blocked is preserved as a would-note in the
 // reason. Observe is the default posture wherever a stronger one has not
 // been explicitly established.
+const observeWouldPrefix = "Kontext observe mode: would "
+
+// ObservedWouldBlock reports an observe-stamped result whose policy decision
+// was a deny or an ask, which the posture turned into an allow.
+func ObservedWouldBlock(result hook.Result) bool {
+	return result.Mode == string(ModeObserve) && strings.HasPrefix(result.Reason, observeWouldPrefix)
+}
+
 func ObserveResult(event hook.Event, result hook.Result) hook.Result {
 	result.Mode = string(ModeObserve)
 	if result.Decision == "" {
@@ -26,7 +36,7 @@ func ObserveResult(event hook.Event, result hook.Result) hook.Result {
 			result.Reason = "no reason provided"
 		}
 		if result.Decision != hook.DecisionAllow {
-			result.Reason = "Kontext observe mode: would " + string(result.Decision) + "; " + result.Reason
+			result.Reason = observeWouldPrefix + string(result.Decision) + "; " + result.Reason
 		}
 	}
 	result.Decision = hook.DecisionAllow
