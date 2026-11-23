@@ -43,6 +43,22 @@ func coworkSensorCmd() *cobra.Command {
 		},
 	}
 	check.Flags().StringVar(&socket, "socket", "/run/kontext-cowork/sensor.sock", "sensor socket")
-	cmd.AddCommand(run, check)
+	var session string
+	var duration time.Duration
+	var maxEvents int
+	collect := &cobra.Command{Use: "collect", Args: cobra.NoArgs, SilenceUsage: true, Short: "Attach to this VM session's future transcript tool results", RunE: func(cmd *cobra.Command, _ []string) error {
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, sensorStopSignal())
+		defer cancel()
+		return coworksensor.Collect(ctx, session, duration, maxEvents, cmd.OutOrStdout())
+	}}
+	collect.Flags().StringVar(&session, "session-id", "", "this task's transcript session UUID")
+	collect.Flags().DurationVar(&duration, "duration", 3*time.Minute, "bounded observation duration (maximum 10m)")
+	collect.Flags().IntVar(&maxEvents, "max-events", 1, "stop after this many completed VM Bash calls (1..100)")
+	var observationSocket string
+	status := &cobra.Command{Use: "status", Args: cobra.NoArgs, SilenceUsage: true, Short: "Query the running VM daemon identity and observation counters", RunE: func(cmd *cobra.Command, _ []string) error {
+		return coworksensor.Status(cmd.Context(), observationSocket, cmd.OutOrStdout())
+	}}
+	status.Flags().StringVar(&observationSocket, "socket", "/run/kontext-cowork/observations.sock", "VM observation socket")
+	cmd.AddCommand(run, check, collect, status)
 	return cmd
 }

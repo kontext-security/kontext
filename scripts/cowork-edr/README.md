@@ -4,25 +4,48 @@ Run the test from Claude Desktop on an Apple silicon Mac. Cowork executes the
 sensor inside its local Linux ARM64 VM; the Mac hosts the signed archive and
 device profile. No separate container test is required for this milestone.
 
-**Current integration gap (Claude Desktop 6.28899.6):** installation and the
-shared sensor socket work in the real VM, and staging receives heartbeats.
-The tested local session runs Claude Code 2.1.330 on the Mac (`hostLoopMode:
-true`, CLI cwd `/private/var/empty`) while Bash runs as a separate user in the
-VM. The VM's managed hook drop-in therefore does not automatically receive
-those tool events. Automatic collection is not complete. Resolve an approved
-host-to-sensor hook path or a VM process-observation design before treating
-this as a working Cowork collection integration. A manually submitted
-synthetic hook tests transport only and must not be counted as automatic
-Cowork event capture.
+**VM observation path (internal test):** the agent loop is on macOS, so
+registering a hook only in the VM does not establish a producer. The actual
+local Cowork session exposes its live Claude transcript read-only inside the
+VM at `$HOME/mnt/.claude/projects/session/<session-uuid>.jsonl`.
 
-This prototype uses a dedicated staging enrollment token. It always allows tool
-execution, ignores remote enforcement settings, and starts no model, compactor,
-Codex proxy, browser bridge, agent discovery or transcript-recovery workers.
-Only SessionStart, SessionEnd, PreToolUse, PostToolUse and PostToolUseFailure
-hooks reach the ledger runtime. Session users cannot supply transcript files or
-user prompts for the daemon to read. Ordinary hook metadata and authorization
-actions/receipts use the existing ledger uploader; turns and usage recovery do
-not run. Test with synthetic activity only.
+The signed CLI now includes a bounded `cowork-sensor collect` client. Run that
+client as the session user: it follows only new records in that user's selected
+transcript, reuses the existing Claude transcript parser, and pairs real
+`mcp__workspace__bash` calls with their results. It sends only the original
+session/tool IDs, command and result-error flag to the EDR daemon's Unix socket.
+The daemon stores the existing ledger's retrospective `request.observed` or
+`request.failed` row with `adapter_event_name=CoworkTranscriptToolResult`,
+`capture_source=cowork.vm_mounted_transcript`, and `native_hook=false`.
+It creates no `request.decided`, policy verdict or fabricated native hook.
+Only existing redacted summaries are uploaded, with no raw output, prompt or
+thinking. The collector has no enrollment credential; only the VM daemon
+uploads to staging. The Mac daemon is not involved.
+
+```mermaid
+flowchart LR
+  A[Real Cowork VM Bash call] --> B[Claude-managed read-only transcript mount]
+  B --> C[Session-user collector from signed EDR binary]
+  C -->|Unix socket, real IDs and paired result| D[Signed-package VM daemon]
+  D --> E[Existing SQLite ledger and receipts]
+  E --> F[Existing uploader to staging / VM installation ID]
+```
+
+**Limits:** attachment is explicit for this test, for at most 10 minutes and
+100 calls (default 3 minutes / one call). There is no automatic per-session
+startup yet. The transcript mount is observed implementation behavior, not an
+Anthropic EDR API guarantee. This is retrospective VM Bash visibility, not
+native hooks, kernel/process tracing or blocking. It does not recover calls
+before attachment, report model usage, capture all tools, or provide full
+feature-matrix parity. The session-side socket input has the same trust level
+as the existing cross-user hook socket; it is not independently attested
+kernel evidence. `status` queries the running daemon's installation, version,
+boot ID and accepted observation counter; `installed` alone proves none of it.
+
+The daemon remains observe-only, with no model, compactor, Codex proxy,
+browser bridge, remote enforcement or device-discovery workers. Existing VM
+managed hook registration is retained for compatibility, but is not counted
+as the automatic source in this local host-loop deployment.
 
 ## Build and sign
 
@@ -101,10 +124,29 @@ service-owned directory (0755) that other session users cannot modify. Config,
 credential and state are private. The root-owned hook drop-in is
 `/etc/claude-code/managed-settings.d/95-kontext-cowork.json`.
 
-Record the Cowork session ID and the matching action in staging. Generate a
-Claude diagnostic report via Help → Troubleshooting → Generate Diagnostic
-Report, and inspect `cowork-edr-integration.txt`. Installer success alone does
-not prove that hooks were delivered or that the event reached staging.
+Inside the actual local task, attach the installed client before a separate
+harmless tool call. Use the task's transcript UUID (not its `local_` UI ID):
+
+```sh
+/usr/local/lib/kontext-cowork/kontext cowork-sensor status
+nohup /usr/local/lib/kontext-cowork/kontext cowork-sensor collect \
+  --session-id YOUR_TRANSCRIPT_UUID --duration 3m --max-events 1 \
+  > /tmp/kontext-eng1109-collector.log 2>&1 < /dev/null &
+```
+
+Confirm `COLLECTOR_READY` in that log, then request a **separate** real Cowork
+Bash call such as `printf '%s\n' 'kontext-eng1109-vm-real-call'`.
+The collector should log `OBSERVATION_ACK` with the actual tool ID and ledger
+action ID. Do not manually construct JSON or invoke `kontext hook` for this
+acceptance check. Match the action/session/tool IDs and redacted marker in
+staging under this package's installation ID. Verify the row has source
+`cowork.vm_mounted_transcript` and no authorization decision. No host endpoint
+may count as evidence.
+
+Generate a Claude diagnostic report and inspect `cowork-edr-integration.txt`
+to verify that the **updated** archive was vendor-verified and installed in
+the same VM boot. A fresh signed archive needs staging in the protected Mac
+package path and a full Claude restart/VM boot through the EDR loader.
 
 ## Removal
 
@@ -124,8 +166,8 @@ file. Do not revoke a shared Mac enrollment token.
 ## Checks
 
 ```sh
-go test -tags=nostepsafetymodel ./internal/coworksensor \
-  ./internal/localruntime ./internal/runtimehost ./internal/managedstream
+go test -race -tags=nostepsafetymodel,integration ./internal/coworksensor
+go test -tags=nostepsafetymodel ./internal/localruntime ./internal/runtimehost ./internal/managedstream
 cd scripts/cowork-edr/sign && go test ./...
 ```
 

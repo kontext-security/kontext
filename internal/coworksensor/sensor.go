@@ -1,6 +1,7 @@
 // Package coworksensor runs the bounded, internal Cowork EDR prototype. It
 // reuses the CLI's hook runtime and ledger uploader without the device daemon's
-// enforcement, compaction, discovery, transcript or model workers.
+// enforcement, compaction, discovery or model workers. An explicit VM session
+// collector can supply retrospective transcript observations on a second socket.
 package coworksensor
 
 import (
@@ -183,11 +184,16 @@ func run(ctx context.Context, cfg Config, version string, log io.Writer) error {
 	if err := flush(ctx); err != nil {
 		return fmt.Errorf("test workspace did not accept sensor startup: %w", err)
 	}
+	stopObservations, err := serveObservations(ctx, cfg, version)
+	if err != nil {
+		return fmt.Errorf("start VM observation receiver: %w", err)
+	}
+	defer stopObservations()
 	ready, _ := json.Marshal(map[string]any{"mode": "observe", "version": version, "installation_id": cfg.InstallationID, "pid": os.Getpid()})
 	if err := os.WriteFile(readyPath, append(ready, '\n'), 0644); err != nil {
 		return err
 	}
-	fmt.Fprintln(log, "Cowork sensor ready: observe-only; test workspace accepted startup; model, compaction, proxy, discovery and transcript recovery disabled")
+	fmt.Fprintln(log, "Cowork sensor ready: observe-only; test workspace accepted startup; explicit guest transcript collector supported; model, compaction, proxy and discovery disabled")
 	interval := cfg.Interval
 	if interval == 0 {
 		interval = 3 * time.Second
