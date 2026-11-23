@@ -83,6 +83,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(whoamiCmd())
 	root.AddCommand(profileCmd())
 	root.AddCommand(hookCmd())
+	root.AddCommand(coworkSensorCmd())
 	root.AddCommand(managedObserveDaemonCmd())
 	root.AddCommand(codexProxyCmd())
 	root.AddCommand(doctorCmd())

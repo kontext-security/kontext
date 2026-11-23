@@ -1,0 +1,25 @@
+[Unit]
+Description=Kontext internal observe-only Cowork sensor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kontext-cowork
+Group=kontext-cowork
+Environment=HOME=/var/lib/kontext-cowork
+ExecStart=/usr/local/lib/kontext-cowork/kontext cowork-sensor run --config /etc/kontext-cowork/config.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kontext-cowork /run/kontext-cowork
+MemoryMax=800M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

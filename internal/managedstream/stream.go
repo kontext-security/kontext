@@ -270,6 +270,12 @@ func Flush(ctx context.Context, opts Options) error {
 	return errors.Join(turnsErr, flushToolUsage(ctx, opts))
 }
 
+// FlushLedger sends only hook activity and its receipts. Sensor runtimes use
+// this instead of Flush so they never recover transcripts, turns or usage.
+func FlushLedger(ctx context.Context, opts Options) error {
+	return flushLedger(ctx, opts)
+}
+
 func flushLedger(ctx context.Context, opts Options) error {
 	if err := validateOptions(opts); err != nil {
 		return err

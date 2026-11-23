@@ -39,6 +39,8 @@ type Service struct {
 	interceptMark []byte
 	evaluated     func(hook.Event, hook.Result, bool)
 	diagnostic    diagnostic.Logger
+	requestFilter func(*EvaluateRequest) error
+	socketMode    os.FileMode
 	duplicates    *duplicateHooks
 	pendingEvents atomic.Int64
 	cancel        context.CancelFunc
@@ -49,6 +51,11 @@ type Service struct {
 }
 
 type Options struct {
+	// RequestFilter restricts and sanitizes requests for specialized runtimes.
+	// It runs before any request-specific work or filesystem reads.
+	RequestFilter func(*EvaluateRequest) error
+	// SocketMode is optional; the ordinary per-user socket keeps its default.
+	SocketMode  os.FileMode
 	SocketPath  string
 	Core        *runtimecore.Core
 	SessionID   string
@@ -116,6 +123,8 @@ func NewService(opts Options) (*Service, error) {
 		interceptMark: []byte(opts.InterceptMarker),
 		evaluated:     opts.Evaluated,
 		diagnostic:    opts.Diagnostic,
+		requestFilter: opts.RequestFilter,
+		socketMode:    opts.SocketMode,
 		duplicates:    newDuplicateHooks(),
 	}, nil
 }
@@ -132,6 +141,13 @@ func (s *Service) Start(ctx context.Context) error {
 	ln, err := net.Listen("unix", s.socketPath)
 	if err != nil {
 		return err
+	}
+	if s.socketMode != 0 {
+		if err := os.Chmod(s.socketPath, s.socketMode); err != nil {
+			_ = ln.Close()
+			_ = os.Remove(s.socketPath)
+			return fmt.Errorf("set socket permissions: %w", err)
+		}
 	}
 	s.listener = ln
 
@@ -241,6 +257,12 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 	if err := ReadMessage(conn, &req); err != nil {
 		s.diagnostic.Printf("local runtime read: %v\n", err)
 		return
+	}
+	if s.requestFilter != nil {
+		if err := s.requestFilter(&req); err != nil {
+			_ = WriteMessage(conn, EvaluateResult{Type: "result", Allowed: true, Mode: "observe", Reason: "request outside sensor scope"})
+			return
+		}
 	}
 	switch req.Type {
 	case CompactRequestType:

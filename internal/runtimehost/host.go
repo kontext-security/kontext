@@ -26,6 +26,10 @@ import (
 )
 
 type Options struct {
+	// Sensor runtimes can expose a restricted socket across VM session users.
+	RequestFilter      func(*localruntime.EvaluateRequest) error
+	SocketMode         os.FileMode
+	DisableStepSafety  bool
 	AgentName          string
 	SessionID          string
 	CWD                string
@@ -140,12 +144,12 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		return nil, fmt.Errorf("create runtime data dir: %w", err)
 	}
 
-	stepSafetyConfig, err := stepsafety.ConfigFromEnv(dbPath)
-	if err != nil {
-		return nil, err
-	}
 	stepSafety := opts.StepSafety
-	if stepSafety == nil {
+	if stepSafety == nil && !opts.DisableStepSafety {
+		stepSafetyConfig, err := stepsafety.ConfigFromEnv(dbPath)
+		if err != nil {
+			return nil, err
+		}
 		// Nothing on the hook's response path needs the model, so the socket below
 		// doesn't wait for it. Records wait instead, in deferred recording.
 		stepSafety = stepsafety.NewBackground(ctx, stepSafetyConfig)
@@ -221,6 +225,8 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 		serviceSessionID = ""
 	}
 	runtimeService, err := localruntime.NewService(localruntime.Options{
+		RequestFilter:     opts.RequestFilter,
+		SocketMode:        opts.SocketMode,
 		SocketPath:        socketPath,
 		Core:              localServer.RuntimeCore(),
 		SessionID:         serviceSessionID,
