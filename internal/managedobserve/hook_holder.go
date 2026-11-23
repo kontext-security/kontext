@@ -380,10 +380,11 @@ func describeHookChange(change agentauthority.HookChange) string {
 	return line
 }
 
-// hookActions is the reconciler's pending report for the stream.
-func (h *hookHolder) hookActions() (*managedstream.HookActions, func()) {
+// hookActions is the reconciler's pending report for a post that goes with
+// installToken.
+func (h *hookHolder) hookActions(installToken string) (*managedstream.HookActions, func()) {
 	if h == nil {
 		return nil, nil
 	}
-	return h.actions.take()
+	return h.actions.take(endpointconfig.Owner(installToken))
 }

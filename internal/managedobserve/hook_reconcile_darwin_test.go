@@ -75,7 +75,7 @@ func TestReconcilerReportsThePackagesDropIn(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(10 * time.Second)
 		for {
-			if report, sent := reconciler.take(); report != nil {
+			if report, sent := reconciler.take("owner"); report != nil {
 				sent()
 				want := managedstream.HookActionResult{Agent: "claude_code", ScopeKind: "managed_dropin", Status: status}
 				if report.Generation == 1 && *report.RepairNonce == nonce && len(report.Results) == 1 && report.Results[0] == want {

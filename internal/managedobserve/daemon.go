@@ -1273,10 +1273,12 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startup
 		// made their ids.
 		HookInventoryEnabled: func() bool { return hookHolder.uploading() && hookHolder.keys.enrolment() == installToken },
 		HookKeyTag:           hookHolder.currentKeyTag,
-		HookActions:          hookHolder.hookActions,
-		DeviceKey:            func() string { return deviceKey },
-		HTTPClient:           opts.StreamHTTPClient,
-		Diagnostic:           opts.Diagnostic,
+		HookActions: func() (*managedstream.HookActions, func()) {
+			return hookHolder.hookActions(installToken)
+		},
+		DeviceKey:  func() string { return deviceKey },
+		HTTPClient: opts.StreamHTTPClient,
+		Diagnostic: opts.Diagnostic,
 		OnFlushSuccess: func() {
 			// Once per flush, on the first accepted post: a flush can make several,
 			// and draining a backlog shouldn't hold the policy back.

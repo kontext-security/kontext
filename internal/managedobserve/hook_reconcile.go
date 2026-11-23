@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/claudemanaged"
 	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"github.com/kontext-security/kontext/internal/hookinstall"
 	"github.com/kontext-security/kontext/internal/managedstream"
@@ -119,8 +120,9 @@ func nonceOf(report *managedstream.HookActions) string {
 // marks it sent. A newer report queued meanwhile stays pending. A report
 // made for another enrolment, or for a state the cloud no longer serves
 // (a re-enrolment, a fallback to v6), is dropped: it would go with the
-// wrong token, or fail a strict schema.
-func (r *hookReconciler) take() (*managedstream.HookActions, func()) {
+// wrong token, or fail a strict schema. flushOwner is the owner of the token
+// the post goes with; a report goes only with the enrolment it was made for.
+func (r *hookReconciler) take(flushOwner string) (*managedstream.HookActions, func()) {
 	if r == nil {
 		return nil, nil
 	}
@@ -131,7 +133,7 @@ func (r *hookReconciler) take() (*managedstream.HookActions, func()) {
 	if pending == nil {
 		return nil, nil
 	}
-	if owner == "" || owner != r.owner || state.Generation == 0 || pending.Generation > state.Generation {
+	if owner == "" || owner != r.owner || flushOwner != owner || state.Generation == 0 || pending.Generation > state.Generation {
 		r.pending, r.last, r.owner = nil, nil, ""
 		return nil, nil
 	}
@@ -173,8 +175,10 @@ func newClaudeHookProbe(selfServe bool, home, binary string) *claudeHookProbe {
 	return nil
 }
 
-// complete reports whether Kontext's full hook set is in place, naming the
-// binary the daemon installs.
+// complete reports whether Kontext's full hook set is in place: naming the
+// binary the daemon installs, or exactly the handlers the installer writes
+// when it repeats a machine-wide source's (an earlier drop-in naming another
+// binary), so that Claude runs each once.
 func (p *claudeHookProbe) complete() bool {
 	if !p.selfServe {
 		inPlace, _ := packageHooks()
@@ -184,7 +188,25 @@ func (p *claudeHookProbe) complete() bool {
 		return false
 	}
 	raw, err := os.ReadFile(p.path)
-	return err == nil && namesBinary(raw, p.validate, p.binary)
+	if err != nil {
+		return false
+	}
+	return namesBinary(raw, p.validate, p.binary) || claudemanaged.UserHooksMatch(raw, p.binary, machineClaudeSettings()...)
+}
+
+// machineClaudeSettings reads Claude's machine-wide settings the way the
+// installer does, skipping any path in a privacy-guarded folder.
+func machineClaudeSettings() [][]byte {
+	var sources [][]byte
+	for _, path := range claudemanaged.MachineSettingsFiles(managedSettingsDropInPath, managedSettingsFilePath) {
+		if privacyfolder.Guarded("", path) {
+			continue
+		}
+		if raw, err := os.ReadFile(path); err == nil {
+			sources = append(sources, raw)
+		}
+	}
+	return sources
 }
 
 // foreign reports a settings file Kontext can't merge its entries into:
