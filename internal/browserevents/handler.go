@@ -19,7 +19,9 @@ type Handler struct {
 	Changed func()
 	// Refresh, if set, binds the store to the current enrollment. A hello
 	// calls it, so a new connection learns of an enrollment change at once.
-	Refresh func(context.Context)
+	// If it fails, the enrollment is not known and the answer is
+	// unavailable.
+	Refresh func(context.Context) error
 	// Logf reports what the extension cannot be told.
 	Logf func(format string, args ...any)
 }
@@ -39,7 +41,10 @@ func (h *Handler) Answer(ctx context.Context, raw json.RawMessage) json.RawMessa
 		return encode(NewError(ErrorUnavailable))
 	}
 	if msg.Type == TypeHello && h.Refresh != nil {
-		h.Refresh(ctx)
+		if err := h.Refresh(ctx); err != nil {
+			h.logf("browser events: could not confirm the enrollment: %v", err)
+			return encode(NewError(ErrorUnavailable))
+		}
 	}
 	settings := h.settings()
 	settings.Enrollment = h.Store.Enrollment()
