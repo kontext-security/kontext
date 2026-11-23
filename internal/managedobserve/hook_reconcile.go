@@ -59,9 +59,11 @@ func (r *hookReconciler) begin() (pass hookPass, reporting bool) {
 // reports nothing: its result answers no request, and the change that moved
 // the state runs a pass of its own.
 func (r *hookReconciler) record(pass hookPass, results []managedstream.HookActionResult) {
-	state, owner := r.state()
+	// The state is read under the lock: a queue change made after the read
+	// can't then be judged against it.
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	state, owner := r.state()
 	if state.Generation == 0 || owner == "" {
 		r.pending, r.last, r.owner = nil, nil, ""
 		return
@@ -126,9 +128,11 @@ func (r *hookReconciler) take(flushOwner string) (*managedstream.HookActions, fu
 	if r == nil {
 		return nil, nil
 	}
-	state, owner := r.state()
+	// The state is read under the lock: a queue change made after the read
+	// can't then be judged against it.
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	state, owner := r.state()
 	pending := r.pending
 	if pending == nil {
 		return nil, nil
@@ -137,8 +141,8 @@ func (r *hookReconciler) take(flushOwner string) (*managedstream.HookActions, fu
 		r.pending, r.last, r.owner = nil, nil, ""
 		return nil, nil
 	}
-	// A report newer than the state read above was queued after that read:
-	// it stays for the next post, which reads the state again.
+	// A report newer than the state served (the config moved back to an
+	// older generation's cache): it stays for the next post.
 	if pending.Generation > state.Generation {
 		return nil, nil
 	}
@@ -201,7 +205,18 @@ func (p *claudeHookProbe) complete() bool {
 	if err != nil {
 		return false
 	}
-	return namesBinary(raw, p.validate, p.binary) || claudemanaged.UserHooksMatch(raw, p.binary, machineClaudeSettings()...)
+	if namesBinary(raw, p.validate, p.binary) {
+		return true
+	}
+	// The structural match reads handlers only: a file that turns every
+	// hook off runs none of them.
+	var settings struct {
+		DisableAllHooks bool `json:"disableAllHooks"`
+	}
+	if json.Unmarshal(raw, &settings) != nil || settings.DisableAllHooks {
+		return false
+	}
+	return claudemanaged.UserHooksMatch(raw, p.binary, machineClaudeSettings()...)
 }
 
 // machineClaudeSettings reads Claude's machine-wide settings the way the

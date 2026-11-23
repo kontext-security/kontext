@@ -265,6 +265,21 @@ func TestClaudeHookProbeReadsTheUserSettings(t *testing.T) {
 	if !probe.complete() {
 		t.Fatal("the installer's mirrored copy reads incomplete")
 	}
+	// The same handlers with every hook turned off run none of them.
+	settings["disableAllHooks"] = true
+	disabled, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(probe.path, disabled, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if probe.complete() {
+		t.Fatal("a mirrored copy with disableAllHooks reads complete")
+	}
+	if err := os.WriteFile(probe.path, mirrored, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// The same copy once the drop-in is gone is not what the installer writes.
 	if err := os.Remove(dropIn); err != nil {
 		t.Fatal(err)
