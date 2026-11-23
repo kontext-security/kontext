@@ -168,9 +168,9 @@ func readStoreFile(path string) (data []byte, private, trusted bool, err error) 
 		// Unknown counts as not private: the next save fixes it.
 		private = false
 	}
-	// Rows are read from a private file, or one only its owner can use at
-	// all, such as a backup restored read-only: no other account could
-	// have changed it. The second is still written again private.
+	// Rows are read from a private file, or one only its owner could have
+	// written, such as a backup restored 0644 or 0400: no other account
+	// could have changed it. It is still written again private.
 	trusted = private || onlyOwnerMode(opened)
 	data, err = io.ReadAll(io.LimitReader(f, MaxStoreBytes+1))
 	if err != nil {
@@ -317,6 +317,12 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 		return applied, nil
 	}
 	if err := s.saveLocked(); err != nil {
+		var committed *committedError
+		if errors.As(err, &committed) {
+			// On disk already: taken back in memory, it would come back at
+			// the next start.
+			return applied, nil
+		}
 		for key, before := range undo {
 			if before == nil {
 				delete(s.rows, key)
@@ -618,11 +624,24 @@ func (s *Store) saveLocked() error {
 	// Until the rename is durable the store stays dirty, and the extension
 	// is not told its records were taken.
 	if err := fsperm.SyncDir(dir); err != nil {
-		return fmt.Errorf("browser events: sync store folder: %w", err)
+		// The new file is in place and a restart reads it: this save
+		// counts as done, so the answer agrees with what is on disk. The
+		// store stays dirty and the next save syncs again.
+		return &committedError{err}
 	}
 	s.dirty = false
 	return nil
 }
+
+// committedError is a save whose file is in place but whose folder could not
+// be synced.
+type committedError struct{ err error }
+
+func (e *committedError) Error() string {
+	return "browser events: sync store folder: " + e.err.Error()
+}
+
+func (e *committedError) Unwrap() error { return e.err }
 
 func isTempSuffix(s string) bool {
 	n, err := strconv.ParseUint(s, 10, 32)
