@@ -41,14 +41,15 @@ func runHookWatch(ctx context.Context, loaded managedconfig.LoadedConfig, log di
 	ticker := time.NewTicker(hookWatchInterval)
 	defer ticker.Stop()
 	for {
-		reporting := probe != nil && watch.reconciler.active()
+		pass, reporting := watch.reconciler.begin()
+		reporting = reporting && probe != nil
 		before := reporting && probe.complete()
 		var outcome healOutcome
 		if repair != nil {
 			outcome = repair(false)
 		}
 		if reporting {
-			watch.reconciler.record([]managedstream.HookActionResult{probe.action(before, outcome)})
+			watch.reconciler.record(pass, []managedstream.HookActionResult{probe.action(before, outcome)})
 		}
 		healed := outcome.changed
 		current := hookFilesFingerprint()
@@ -238,6 +239,10 @@ func newHookRepair(loaded managedconfig.LoadedConfig, log diagnostic.Logger) (fu
 	}
 	return func(final bool) (outcome healOutcome) {
 		current, loadErr := managedconfig.Load()
+		// The local opt-out wins over the self-heal and over the cloud, and
+		// is reported whatever else stops the pass. Removal still runs: it
+		// only takes back what the package's removal leaves behind.
+		outcome.optOut = loadErr == nil && (current.Scope == managedconfig.ScopeUser) == selfServe && current.Config.HookRepairOff()
 		// The package is being removed: it deleted its machine-wide hooks
 		// first, and may delete its config next, which can bring a self-serve
 		// config back into view. The user's hooks that name the package's
@@ -262,11 +267,7 @@ func newHookRepair(loaded managedconfig.LoadedConfig, log diagnostic.Logger) (fu
 			if loadErr != nil || (current.Scope == managedconfig.ScopeUser) != selfServe {
 				return outcome
 			}
-			// The local opt-out wins over the self-heal and over the cloud.
-			// Removal still runs: it only takes back what the package's
-			// removal leaves behind.
-			if current.Config.HookRepairOff() {
-				outcome.optOut = true
+			if outcome.optOut {
 				return outcome
 			}
 			// After an upgrade replaces the binary this process is the old

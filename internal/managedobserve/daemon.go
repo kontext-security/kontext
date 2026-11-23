@@ -535,19 +535,21 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// An admin's desired state for Kontext's hooks (ADR-0012), only from a
 	// config the current enrolment confirmed: after a re-enrolment the cache
 	// can still hold the previous workspace's.
-	hookReconciler := newHookReconciler(func() endpointconfig.HookState {
+	hookReconciler := newHookReconciler(func() (endpointconfig.HookState, string) {
 		snapshot := endpointConfigCache.Current()
-		if owner := liveOwner.get(); owner == "" || snapshot.Owner != owner {
-			return endpointconfig.UnmanagedHookState
+		owner := liveOwner.get()
+		if owner == "" || snapshot.Owner != owner {
+			return endpointconfig.UnmanagedHookState, ""
 		}
-		return snapshot.HookState()
+		return snapshot.HookState(), owner
 	})
-	// A changed desired state, generation or nonce runs a pass at once.
+	// A changed desired state, generation, nonce or enrolment runs a pass
+	// at once.
 	hookKick := make(chan struct{}, 1)
-	lastHookState := hookReconciler.state()
+	lastHookState, lastHookOwner := hookReconciler.state()
 	kickHooks := func() {
-		if state := hookReconciler.state(); !sameHookState(state, lastHookState) {
-			lastHookState = state
+		if state, owner := hookReconciler.state(); !state.Equal(lastHookState) || owner != lastHookOwner {
+			lastHookState, lastHookOwner = state, owner
 			select {
 			case hookKick <- struct{}{}:
 			default:

@@ -401,7 +401,7 @@ func flushLedger(ctx context.Context, opts Options) error {
 		}
 		// Authority is independently retryable. Do not skip an otherwise valid
 		// minimum ledger batch just because the optional report filled it up.
-		if limit == 1 && len(body) > MaxPayloadBytes && payload.Device != nil && (payload.Device.Authority != nil || payload.Device.HookInventory != nil) {
+		if limit == 1 && len(body) > MaxPayloadBytes && payload.Device != nil && (payload.Device.Authority != nil || payload.Device.HookInventory != nil || payload.Device.HookActions != nil) {
 			dropAuthority(&payload)
 			body, err = json.Marshal(payload)
 			if err != nil {

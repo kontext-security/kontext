@@ -21,7 +21,8 @@ import (
 
 // On a packaged Mac the reconciler reports the package's drop-in: in place,
 // then, once removed, needing the package pushed again (the daemon never
-// writes it), and the local opt-out over both. A kick runs the pass at once.
+// writes it), and the local opt-out over both, even over a drop-in that names
+// another binary. A kick runs the pass at once.
 func TestReconcilerReportsThePackagesDropIn(t *testing.T) {
 	home := t.TempDir()
 	hermetic.SetHome(t, home)
@@ -58,8 +59,8 @@ func TestReconcilerReportsThePackagesDropIn(t *testing.T) {
 	}
 
 	nonce := "AAAAAAAAAAAAAAAAAAAAAA"
-	reconciler := newHookReconciler(func() endpointconfig.HookState {
-		return endpointconfig.HookState{Desired: endpointconfig.HookStateInstalled, Generation: 1, RepairNonce: &nonce}
+	reconciler := newHookReconciler(func() (endpointconfig.HookState, string) {
+		return endpointconfig.HookState{Desired: endpointconfig.HookStateInstalled, Generation: 1, RepairNonce: &nonce}, "owner"
 	})
 	kick := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,8 +99,13 @@ func TestReconcilerReportsThePackagesDropIn(t *testing.T) {
 		t.Fatal("the daemon wrote the package's drop-in")
 	}
 
-	// The package is pushed again, and the admin opts this Mac out locally.
-	if err := os.WriteFile(dropIn, template, 0o644); err != nil {
+	// A drop-in naming another binary is pushed, and the admin opts this
+	// Mac out locally: the opt-out is what the cloud hears.
+	other, err := claudemanaged.TemplateJSON(hermetic.KontextBinary(t, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dropIn, other, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	optOut := strings.Replace(string(managedConfigJSON), `"mode":"observe"`, `"mode":"observe","hook_repair":false`, 1)

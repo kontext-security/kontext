@@ -47,27 +47,33 @@ func TestClaudeHookStatus(t *testing.T) {
 // A report goes only after an admin acted, once per distinct finding, and a
 // newer one queued while the older is in flight stays pending.
 func TestHookReconcilerQueuesOnlyNewFindings(t *testing.T) {
-	state := endpointconfig.UnmanagedHookState
-	reconciler := newHookReconciler(func() endpointconfig.HookState { return state })
+	state, owner := endpointconfig.UnmanagedHookState, "owner-a"
+	reconciler := newHookReconciler(func() (endpointconfig.HookState, string) { return state, owner })
 	clock := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
 	reconciler.now = func() time.Time { return clock }
-	restored := []managedstream.HookActionResult{{Agent: "claude_code", ScopeKind: "user", Status: managedstream.HookRestored}}
-	inPlace := []managedstream.HookActionResult{{Agent: "claude_code", ScopeKind: "user", Status: managedstream.HookInPlace}}
-
-	if reconciler.active() {
-		t.Fatal("active before any admin acted")
+	result := func(status string) []managedstream.HookActionResult {
+		return []managedstream.HookActionResult{{Agent: "claude_code", ScopeKind: "user", Status: status}}
 	}
-	reconciler.record(restored)
+	// record runs one pass that starts and finishes under the current state.
+	record := func(status string) {
+		pass, _ := reconciler.begin()
+		reconciler.record(pass, result(status))
+	}
+
+	if _, reporting := reconciler.begin(); reporting {
+		t.Fatal("reporting before any admin acted")
+	}
+	record(managedstream.HookRestored)
 	if report, _ := reconciler.take(); report != nil {
 		t.Fatalf("queued %+v at generation 0", report)
 	}
 
 	nonce := "AAAAAAAAAAAAAAAAAAAAAA"
 	state = endpointconfig.HookState{Desired: endpointconfig.HookStateInstalled, Generation: 2, RepairNonce: &nonce}
-	if !reconciler.active() {
-		t.Fatal("inactive after an admin acted")
+	if _, reporting := reconciler.begin(); !reporting {
+		t.Fatal("not reporting after an admin acted")
 	}
-	reconciler.record(restored)
+	record(managedstream.HookRestored)
 	report, sent := reconciler.take()
 	if report == nil || report.Generation != 2 || report.Desired != "installed" || *report.RepairNonce != nonce ||
 		report.FinishedAt != "2026-11-23T10:00:00Z" || report.Schema != managedstream.HookActionsSchema {
@@ -75,16 +81,22 @@ func TestHookReconcilerQueuesOnlyNewFindings(t *testing.T) {
 	}
 	// The next pass finds the same: nothing new to send.
 	clock = clock.Add(time.Minute)
-	reconciler.record(restored)
+	record(managedstream.HookRestored)
 	if again, _ := reconciler.take(); again != report {
 		t.Fatal("the same finding was queued again")
 	}
+	// The repaired hooks found in place before the repair went up: the
+	// cloud still hears "restored".
+	record(managedstream.HookInPlace)
+	if kept, _ := reconciler.take(); kept != report {
+		t.Fatalf("a periodic pass replaced the unsent repair: %+v", kept)
+	}
 	// A different finding while the first is in flight: the first's
 	// acknowledgement leaves the new one pending.
-	reconciler.record(inPlace)
+	record(managedstream.HookMissing)
 	sent()
 	next, nextSent := reconciler.take()
-	if next == nil || next.Results[0].Status != managedstream.HookInPlace || next.FinishedAt != "2026-11-23T10:01:00Z" {
+	if next == nil || next.Results[0].Status != managedstream.HookMissing || next.FinishedAt != "2026-11-23T10:01:00Z" {
 		t.Fatalf("next = %+v", next)
 	}
 	nextSent()
@@ -94,22 +106,66 @@ func TestHookReconcilerQueuesOnlyNewFindings(t *testing.T) {
 	// A new repair asks again, with the same finding.
 	other := "BBBBBBBBBBBBBBBBBBBBBB"
 	state.RepairNonce, state.Generation = &other, 3
-	reconciler.record(inPlace)
+	record(managedstream.HookMissing)
 	if repaired, _ := reconciler.take(); repaired == nil || *repaired.RepairNonce != other || repaired.Generation != 3 {
 		t.Fatalf("repair report = %+v", repaired)
 	}
 	// Back to no admin state: nothing stays queued.
 	state = endpointconfig.UnmanagedHookState
-	reconciler.record(inPlace)
+	record(managedstream.HookInPlace)
 	if left, _ := reconciler.take(); left != nil {
 		t.Fatalf("left %+v", left)
 	}
 	var none *hookReconciler
-	if none.active() {
-		t.Fatal("a nil reconciler is active")
+	if _, reporting := none.begin(); reporting {
+		t.Fatal("a nil reconciler reports")
 	}
 	if report, _ := none.take(); report != nil {
 		t.Fatal("a nil reconciler has a report")
+	}
+}
+
+// A queued report goes only with the enrolment and the request it was made
+// for: a re-enrolment, a fallback to v6 or a pass that started under an
+// older request sends nothing.
+func TestHookReconcilerSendsOnlyForItsRequest(t *testing.T) {
+	nonce := "AAAAAAAAAAAAAAAAAAAAAA"
+	installed := endpointconfig.HookState{Desired: endpointconfig.HookStateInstalled, Generation: 1, RepairNonce: &nonce}
+	state, owner := installed, "owner-a"
+	reconciler := newHookReconciler(func() (endpointconfig.HookState, string) { return state, owner })
+	restored := []managedstream.HookActionResult{{Agent: "claude_code", ScopeKind: "user", Status: managedstream.HookRestored}}
+	queue := func() {
+		t.Helper()
+		pass, _ := reconciler.begin()
+		reconciler.record(pass, restored)
+	}
+
+	// Re-enrolled in another workspace with the same generation.
+	queue()
+	owner = "owner-b"
+	if report, _ := reconciler.take(); report != nil {
+		t.Fatalf("workspace A's report went with B's token: %+v", report)
+	}
+	// The cloud rolled back to v6: unmanaged, nothing goes.
+	owner = "owner-a"
+	queue()
+	state = endpointconfig.UnmanagedHookState
+	if report, _ := reconciler.take(); report != nil {
+		t.Fatalf("a report went to a v6 cloud: %+v", report)
+	}
+	// Generation 2 arrived while a generation 1 pass ran: that pass
+	// reports nothing, and the next one reports generation 2.
+	state = installed
+	pass, _ := reconciler.begin()
+	second := "BBBBBBBBBBBBBBBBBBBBBB"
+	state = endpointconfig.HookState{Desired: endpointconfig.HookStateInstalled, Generation: 2, RepairNonce: &second}
+	reconciler.record(pass, restored)
+	if report, _ := reconciler.take(); report != nil {
+		t.Fatalf("generation 1's pass reported under generation 2: %+v", report)
+	}
+	queue()
+	if report, _ := reconciler.take(); report == nil || report.Generation != 2 || *report.RepairNonce != second {
+		t.Fatalf("report = %+v", report)
 	}
 }
 

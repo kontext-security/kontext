@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,33 +19,57 @@ import (
 // takes a confirmed v7 config with a generation above zero: a server that
 // serves no v7 has a strict device schema without the field.
 type hookReconciler struct {
-	state func() endpointconfig.HookState
+	// state is the desired state the current enrolment's confirmed config
+	// asks for, and the owner (endpointconfig.Owner) of that config; an
+	// empty owner when no config of this enrolment is confirmed.
+	state func() (endpointconfig.HookState, string)
 	now   func() time.Time
 
 	mu sync.Mutex
 	// pending waits for an accepted post; last is the report last queued,
-	// so a pass that finds the same again queues nothing.
+	// so a pass that finds the same again queues nothing. owner is the
+	// enrolment both were made for.
 	pending, last *managedstream.HookActions
+	owner         string
 }
 
-func newHookReconciler(state func() endpointconfig.HookState) *hookReconciler {
+func newHookReconciler(state func() (endpointconfig.HookState, string)) *hookReconciler {
 	return &hookReconciler{state: state, now: time.Now}
 }
 
-// active reports whether an admin's desired state applies to this device.
-func (r *hookReconciler) active() bool {
-	return r != nil && r.state().Generation > 0
+// hookPass is the desired state one pass acts on, read as it starts.
+type hookPass struct {
+	state endpointconfig.HookState
+	owner string
+}
+
+// begin reads the state a pass is about to act on. reporting is false when
+// no admin acted on this device, so the pass reports nothing.
+func (r *hookReconciler) begin() (pass hookPass, reporting bool) {
+	if r == nil {
+		return hookPass{}, false
+	}
+	state, owner := r.state()
+	return hookPass{state: state, owner: owner}, state.Generation > 0 && owner != ""
 }
 
 // record queues the report of a pass that just finished, unless it says
-// what the last one queued said.
-func (r *hookReconciler) record(results []managedstream.HookActionResult) {
-	state := r.state()
+// what the last one queued said. A pass that started under another state
+// reports nothing: its result answers no request, and the change that moved
+// the state runs a pass of its own.
+func (r *hookReconciler) record(pass hookPass, results []managedstream.HookActionResult) {
+	state, owner := r.state()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if state.Generation == 0 {
-		r.pending, r.last = nil, nil
+	if state.Generation == 0 || owner == "" {
+		r.pending, r.last, r.owner = nil, nil, ""
 		return
+	}
+	if owner != pass.owner || !state.Equal(pass.state) {
+		return
+	}
+	if r.owner != owner {
+		r.pending, r.last, r.owner = nil, nil, owner
 	}
 	report := &managedstream.HookActions{
 		Schema:      managedstream.HookActionsSchema,
@@ -52,7 +77,7 @@ func (r *hookReconciler) record(results []managedstream.HookActionResult) {
 		Generation:  state.Generation,
 		RepairNonce: state.RepairNonce,
 		FinishedAt:  r.now().UTC().Format(time.RFC3339Nano),
-		Results:     results,
+		Results:     keepRestored(r.pending, state, results),
 	}
 	if r.last != nil && r.last.Same(*report) {
 		return
@@ -60,16 +85,54 @@ func (r *hookReconciler) record(results []managedstream.HookActionResult) {
 	r.pending, r.last = report, report
 }
 
+// keepRestored keeps a repair the cloud hasn't heard of yet: while a report
+// for the same request waits to go, a later pass that finds the repaired
+// hooks in place leaves that scope's "restored" as it is.
+func keepRestored(pending *managedstream.HookActions, state endpointconfig.HookState, results []managedstream.HookActionResult) []managedstream.HookActionResult {
+	if pending == nil || pending.Desired != state.Desired || pending.Generation != state.Generation ||
+		(pending.RepairNonce == nil) != (state.RepairNonce == nil) || state.Nonce() != nonceOf(pending) {
+		return results
+	}
+	kept := slices.Clone(results)
+	for i, result := range kept {
+		if result.Status != managedstream.HookInPlace {
+			continue
+		}
+		for _, earlier := range pending.Results {
+			if earlier.Status == managedstream.HookRestored && earlier.Agent == result.Agent &&
+				earlier.ScopeKind == result.ScopeKind && earlier.ScopeID == result.ScopeID {
+				kept[i].Status = managedstream.HookRestored
+			}
+		}
+	}
+	return kept
+}
+
+func nonceOf(report *managedstream.HookActions) string {
+	if report.RepairNonce == nil {
+		return ""
+	}
+	return *report.RepairNonce
+}
+
 // take is the stream's view: the report waiting to go, and a func that
-// marks it sent. A newer report queued meanwhile stays pending.
+// marks it sent. A newer report queued meanwhile stays pending. A report
+// made for another enrolment, or for a state the cloud no longer serves
+// (a re-enrolment, a fallback to v6), is dropped: it would go with the
+// wrong token, or fail a strict schema.
 func (r *hookReconciler) take() (*managedstream.HookActions, func()) {
 	if r == nil {
 		return nil, nil
 	}
+	state, owner := r.state()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	pending := r.pending
 	if pending == nil {
+		return nil, nil
+	}
+	if owner == "" || owner != r.owner || state.Generation == 0 || pending.Generation > state.Generation {
+		r.pending, r.last, r.owner = nil, nil, ""
 		return nil, nil
 	}
 	return pending, func() {
@@ -184,9 +247,4 @@ func claudeHookStatus(o claudeHookObservation) string {
 	default:
 		return managedstream.HookMissing
 	}
-}
-
-// sameHookState compares two states by value: the nonce is a pointer.
-func sameHookState(a, b endpointconfig.HookState) bool {
-	return a.Desired == b.Desired && a.Generation == b.Generation && a.Nonce() == b.Nonce()
 }
