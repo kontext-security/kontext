@@ -115,6 +115,9 @@ func checkSettings(fields object) error {
 				return fmt.Errorf("settings record kind %q", kind)
 			}
 		}
+		if !slices.Contains(kinds, KindHealth) || !slices.Contains(kinds, KindVisit) {
+			return errors.New("settings record_kinds must name health and visit")
+		}
 	}
 	return nil
 }

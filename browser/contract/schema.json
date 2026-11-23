@@ -167,10 +167,11 @@
         "rejected": { "type": "array", "items": { "$ref": "#/$defs/rejection" } },
         "enrollment": { "$ref": "#/$defs/enrollment" },
         "record_kinds": {
-          "$comment": "The record kinds the daemon takes. Optional: a daemon from before the account kind sends none, and the extension then reads no account.",
+          "$comment": "The record kinds the daemon takes. Optional: a daemon from before the account kind sends none, and the extension then reads no account. When present it names health and visit, which every daemon of this contract takes.",
           "type": "array",
           "uniqueItems": true,
-          "items": { "enum": ["health", "visit", "account"] }
+          "items": { "enum": ["health", "visit", "account"] },
+          "allOf": [{ "contains": { "const": "health" } }, { "contains": { "const": "visit" } }]
         }
       }
     },

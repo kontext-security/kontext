@@ -1398,7 +1398,8 @@ func TestARepeatedRowIDLeavesTheDiskAtOpen(t *testing.T) {
 	}
 }
 
-// A restored file that gives its binding or its rows twice says two things:
+// A restored file that gives its binding or its rows twice, in any case,
+// or in another spelling, says two things:
 // none of its rows is read, whichever a decoder would keep, and the file is
 // written again without them.
 func TestAFileWithARepeatedBindingOrRowsIsNotRead(t *testing.T) {
@@ -1408,6 +1409,17 @@ func TestAFileWithARepeatedBindingOrRowsIsNotRead(t *testing.T) {
 		},
 		"rows": func(data string) string {
 			return strings.Replace(data, `"rows":`, `"rows":{},"rows":`, 1)
+		},
+		// The decoder matches keys in any case: "Binding" fills the same
+		// field as "binding".
+		"binding in another case": func(data string) string {
+			return strings.Replace(data, `"binding":`, `"binding":"other","Binding":`, 1)
+		},
+		"rows in another case": func(data string) string {
+			return strings.Replace(data, `"rows":`, `"Rows":{},"rows":`, 1)
+		},
+		"only a binding in another case": func(data string) string {
+			return strings.Replace(data, `"binding":`, `"BINDING":`, 1)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1515,7 +1527,7 @@ func TestARowWithDamagedCountersIsSentAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, counters := range []string{`"version":null,"sent":0`, `"version":1,"sent":"1"`, `"version":1,"sent":-0.5`, `"version":7,"sent":null`, `"version":9223372036854775807,"sent":9223372036854775807`} {
+	for _, counters := range []string{`"version":null,"sent":0`, `"version":1,"sent":"1"`, `"version":1,"sent":-0.5`, `"version":7,"sent":null`, `"version":9223372036854775807,"sent":9223372036854775807`, `"version":1e400,"sent":0`} {
 		damaged := strings.Replace(string(data), `"version":1,"sent":0`, counters, 1)
 		if damaged == string(data) {
 			t.Fatalf("no counters in %s", data)
