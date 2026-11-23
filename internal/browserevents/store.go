@@ -765,9 +765,12 @@ func isTempSuffix(s string) bool {
 
 // trimRows removes the oldest rows until at most MaxRows remain.
 func trimRows(rows map[string]*row) {
+	// Rows without a LastSeen (health, and any kind that only carries an
+	// observation time) sort by ObservedAt, so a fresh row never sorts at the
+	// zero time and is dropped before an older visit.
 	seen := func(r *row) time.Time {
 		at := r.Record.LastSeen
-		if r.Record.Kind == KindHealth {
+		if r.Record.Kind == KindHealth || at == "" {
 			at = r.Record.ObservedAt
 		}
 		t, _ := time.Parse(time.RFC3339Nano, at)
