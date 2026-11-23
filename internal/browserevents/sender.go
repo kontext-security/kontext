@@ -137,7 +137,7 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 		return "", fmt.Errorf("browser events: waiting for the install token: %w", readCtx.Err())
 	}
 	release := func() { <-s.rebind }
-	if deadline, _ := readCtx.Deadline(); readCtx.Err() != nil || !time.Now().Before(deadline) {
+	if deadline, _ := readCtx.Deadline(); readCtx.Err() != nil || !beforeDeadline(deadline) {
 		// The slot came free together with the deadline: this caller
 		// gave up waiting, so a read confirmed meanwhile is not undone.
 		release()
@@ -417,7 +417,7 @@ func readToken(ctx context.Context, read func(context.Context) (string, error), 
 	case r := <-done:
 		// The clock is checked as well as the context, which learns of
 		// its deadline only when its timer runs.
-		if deadline, ok := ctx.Deadline(); ctx.Err() == nil && (!ok || time.Now().Before(deadline)) {
+		if deadline, ok := ctx.Deadline(); ctx.Err() == nil && (!ok || beforeDeadline(deadline)) {
 			return r.token, r.err, false
 		}
 		// Ready together with the deadline: the deadline wins.
@@ -438,4 +438,11 @@ func readToken(ctx context.Context, read func(context.Context) (string, error), 
 		abandoned = true
 		return "", ctx.Err(), true
 	}
+}
+
+// beforeDeadline checks both clocks: the monotonic one stops while a Mac
+// sleeps, so a deadline slept through is passed only by the wall clock.
+func beforeDeadline(deadline time.Time) bool {
+	now := time.Now()
+	return now.Before(deadline) && now.Round(0).Before(deadline.Round(0))
 }

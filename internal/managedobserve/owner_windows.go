@@ -35,8 +35,8 @@ func ensurePrivateOwner(dir string, _ os.FileInfo) error {
 		return fmt.Errorf("socket directory %s: read token owner: %w", dir, err)
 	}
 	// Administrators and LocalSystem can take any folder anyway: one an
-	// elevated daemon of this user created is used again unelevated, and its
-	// DACL is replaced below either way.
+	// elevated daemon of this user created and made private is used again
+	// unelevated.
 	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
 	if err != nil {
 		return err
@@ -45,8 +45,16 @@ func ensurePrivateOwner(dir string, _ os.FileInfo) error {
 	if err != nil {
 		return err
 	}
-	if !fsperm.OwnerAllowed(owner, user.User.Sid, defaultOwner, admins, system) {
-		return fmt.Errorf("socket directory %s is owned by %s, want %s", dir, owner, user.User.Sid)
+	if !fsperm.OwnerAllowed(owner, user.User.Sid, defaultOwner) {
+		if !fsperm.OwnerAllowed(owner, admins, system) {
+			return fmt.Errorf("socket directory %s is owned by %s, want %s", dir, owner, user.User.Sid)
+		}
+		// Only a folder an earlier daemon of this user already made
+		// private is adopted: a shared folder of another product keeps
+		// its grants.
+		if err := checkPrivateOwner(dir, nil); err != nil {
+			return fmt.Errorf("socket directory %s is owned by %s and is not private to %s: %w", dir, owner, user.User.Sid, err)
+		}
 	}
 	acl, err := fsperm.OwnerOnlyACL(user.User.Sid, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
 	if err != nil {

@@ -52,7 +52,7 @@ func counter(raw json.RawMessage, into *int) bool {
 
 // maxRowVersion bounds a stored row's version, so a damaged one can never
 // overflow when the row changes again.
-const maxRowVersion = 1 << 40
+const maxRowVersion = 1 << 30
 
 type storeFile struct {
 	// Binding names the enrollment the rows were recorded under: a hash of
@@ -163,19 +163,21 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 			}
 			rows[key] = r
 		}
-		// A restored file can hold more rows than the store takes: the
-		// oldest leave, so new profiles are not refused until they expire.
-		if len(rows) > MaxRows {
-			trimRows(rows)
-			rewrite = true
-		}
 		s.rows = rows
 		s.binding = file.Binding
 		s.generation = 1
 	}
 	// A file others can read, such as one restored from a backup, is
 	// written again at once: a save makes a private file.
-	if s.pruneLocked() || rewrite || !private {
+	pruned := s.pruneLocked()
+	// A restored file can hold more rows than the store takes: after
+	// retention, the oldest leave, so new profiles are not refused until
+	// they expire.
+	if len(s.rows) > MaxRows {
+		trimRows(s.rows)
+		rewrite = true
+	}
+	if pruned || rewrite || !private {
 		// Days past KeepDays leave the disk now, not at the next message.
 		var committed *committedError
 		if err := s.saveLocked(); err != nil && !errors.As(err, &committed) {
