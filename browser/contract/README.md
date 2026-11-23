@@ -74,9 +74,10 @@ is listed with its index and reason and is dropped, not retried.
 ## Who may connect
 
 `kontext browser-host` accepts only the extension IDs compiled into it. A
-release build lists the store IDs and nothing else, so until they exist it
-refuses every caller. Only a build with the `kontext_browser_dev` tag also
-accepts the dev ID that the extension's dev builds carry.
+release build lists the store IDs and nothing else: today the Chrome Web Store
+ID `jdakicfhknddbigfcfgfmhoabhgpjega`, which Edge also uses until an Edge
+Add-ons listing has its own ID. Only a build with the `kontext_browser_dev` tag
+also accepts the dev ID that the extension's dev builds carry.
 
 ## Rules for both sides
 

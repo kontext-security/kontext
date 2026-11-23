@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -32,8 +33,9 @@ func TestRegisterDevWritesTheManifestIntoAProfile(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
+	want := []string{"chrome-extension://jdakicfhknddbigfcfgfmhoabhgpjega/", "chrome-extension://" + DevExtensionID + "/"}
 	if manifest.Path != "/usr/local/bin/kontext" || manifest.Type != "stdio" ||
-		len(manifest.AllowedOrigins) != 1 || manifest.AllowedOrigins[0] != "chrome-extension://"+DevExtensionID+"/" {
-		t.Fatalf("manifest = %+v", manifest)
+		!slices.Equal(manifest.AllowedOrigins, want) {
+		t.Fatalf("manifest = %+v, want origins %q", manifest, want)
 	}
 }
