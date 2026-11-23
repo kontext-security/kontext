@@ -870,14 +870,18 @@ func overlayAuthority(device *Device, pending map[string]pendingSource, ids []st
 	return trimmed
 }
 
+// dropHookActions takes the hook report off a post: it is not sent, and
+// waits for the next one.
+func dropHookActions(payload *Payload) {
+	payload.Device.HookActions = nil
+	payload.hookActionsSent = nil
+}
+
 // dropAuthority removes the optional report and hook block together with
 // their sources. They stay pending for a later upload.
 func dropAuthority(payload *Payload) {
 	payload.Device.Authority = nil
 	payload.Device.HookInventory = nil
-	// The hook report waits for the next post: dropped here, it is not sent.
-	payload.Device.HookActions = nil
-	payload.hookActionsSent = nil
 	if inventory := payload.Device.Inventory; inventory != nil {
 		inventory.Sources = slices.DeleteFunc(inventory.Sources, func(r agentauthority.SourceResult) bool { return !isPresence(r.ID) })
 	}

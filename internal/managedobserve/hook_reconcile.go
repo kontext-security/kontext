@@ -133,8 +133,13 @@ func (r *hookReconciler) take(flushOwner string) (*managedstream.HookActions, fu
 	if pending == nil {
 		return nil, nil
 	}
-	if owner == "" || owner != r.owner || state.Generation == 0 || pending.Generation > state.Generation {
+	if owner == "" || owner != r.owner || state.Generation == 0 {
 		r.pending, r.last, r.owner = nil, nil, ""
+		return nil, nil
+	}
+	// A report newer than the state read above was queued after that read:
+	// it stays for the next post, which reads the state again.
+	if pending.Generation > state.Generation {
 		return nil, nil
 	}
 	// A flush that started under another token gets nothing, and leaves the

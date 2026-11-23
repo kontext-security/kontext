@@ -179,6 +179,16 @@ func TestHookReconcilerSendsOnlyForItsRequest(t *testing.T) {
 	if report, _ := reconciler.take(owner); report == nil || report.Generation != 2 || *report.RepairNonce != second {
 		t.Fatalf("report = %+v", report)
 	}
+	// A post that read generation 1 just before generation 2's report was
+	// queued sends nothing, and leaves that report for the next post.
+	state = installed
+	if report, _ := reconciler.take(owner); report != nil {
+		t.Fatalf("generation 2's report went under generation 1: %+v", report)
+	}
+	state = endpointconfig.HookState{Desired: endpointconfig.HookStateInstalled, Generation: 2, RepairNonce: &second}
+	if report, _ := reconciler.take(owner); report == nil || report.Generation != 2 {
+		t.Fatalf("a stale read dropped the newer report: %+v", report)
+	}
 }
 
 // The probe reads Claude Code's user settings back the way the installer

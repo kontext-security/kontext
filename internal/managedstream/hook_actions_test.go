@@ -127,14 +127,19 @@ func TestHookActionsGoOnTheHeartbeatUntilAccepted(t *testing.T) {
 	}
 }
 
-// A minimum batch the hook report pushes past the cap goes without it, and
-// the report is not marked sent, so the next post carries it.
+// A minimum batch over the cap loses the larger optional blocks first; the
+// small hook report stays on it. Dropped too, it is not marked sent, so the
+// next post carries it.
 func TestDroppingAuthorityKeepsTheHookReportPending(t *testing.T) {
 	sent := false
 	report := &HookActions{Schema: HookActionsSchema, Desired: "installed", Generation: 1, FinishedAt: "2026-11-23T10:00:00Z", Results: []HookActionResult{}}
 	payload := Payload{}
 	addHookActions(&payload, Options{HookActions: func() (*HookActions, func()) { return report, func() { sent = true } }})
 	dropAuthority(&payload)
+	if payload.Device.HookActions != report {
+		t.Fatal("dropping the authority report took the hook report too")
+	}
+	dropHookActions(&payload)
 	ackHookActions(payload)
 	if payload.Device.HookActions != nil || sent {
 		t.Fatalf("dropped report: on payload=%v marked sent=%v", payload.Device.HookActions != nil, sent)
