@@ -51,6 +51,11 @@ type guard struct {
 	active        []*SourceHealth
 	// listed marks a read of a path a listing just returned.
 	listed bool
+	// watched collects, in scan order, each path the scan looked at and may
+	// watch for changes: read, or found missing, and outside every privacy
+	// folder. Nil collects nothing.
+	watched     map[string]bool
+	watchedList []string
 }
 
 func (g *guard) skip() { g.report.Coverage.SkippedFiles++ }
@@ -195,6 +200,10 @@ func (g *guard) access(path, mode string) fileResult {
 			g.skip()
 			g.fail(ReasonPermissionDenied)
 			return fileResult{err: os.ErrPermission}
+		}
+		if g.watched != nil && !g.watched[path] && (result.err == nil || errors.Is(result.err, os.ErrNotExist)) {
+			g.watched[path] = true
+			g.watchedList = append(g.watchedList, path)
 		}
 		if result.opened {
 			g.opened++

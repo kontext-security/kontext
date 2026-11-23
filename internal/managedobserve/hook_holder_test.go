@@ -369,3 +369,37 @@ func TestHookHolderTakesTheGenerationFirst(t *testing.T) {
 		t.Fatalf("recorded under generation %d, store at %d", got, generation)
 	}
 }
+
+// A scan hands the watcher its files; while hook inventory is off or not
+// authorized the watcher is emptied, so nothing is held open (ENG-1105).
+func TestHookHolderWatchesOnlyWhileOn(t *testing.T) {
+	fake := &fakeHookScan{confirmed: true}
+	on := true
+	keys := newHookKeyBox()
+	keys.set([]byte("k"), "t")
+	h := fake.holder(&on, keys)
+	var sets [][]string
+	h.watch = func(paths []string) { sets = append(sets, paths) }
+	scan := h.scan
+	h.scan = func(ctx context.Context, opts agentauthority.HookScanOptions) (agentauthority.HookAgent, agentauthority.SourceResult, error) {
+		if opts.Watch != nil {
+			opts.Watch([]string{"/Users/dana/.claude/settings.json"})
+		}
+		return scan(ctx, opts)
+	}
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	if len(sets) != 1 || len(sets[0]) != 1 {
+		t.Fatalf("on: %v", sets)
+	}
+	authorized := false
+	h.authorized = func() bool { return authorized }
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	if len(sets) != 2 || sets[1] != nil {
+		t.Fatalf("unauthorized: %v", sets)
+	}
+	authorized, on = true, false
+	h.refresh(context.Background(), agentinventory.Inventory{})
+	if len(sets) != 3 || sets[2] != nil {
+		t.Fatalf("off: %v", sets)
+	}
+}
