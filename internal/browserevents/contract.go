@@ -63,6 +63,8 @@ var (
 	hostPattern    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 	dayPattern     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 	installPattern = regexp.MustCompile(`^ins_[A-Za-z0-9_-]{32}$`)
+	// enrollmentPattern is Store.Enrollment's shape, or "" for none yet.
+	enrollmentPattern = regexp.MustCompile(`^([0-9a-f]{16})?$`)
 	// labelPattern holds a catalog name such as "ChatGPT" or "OpenAI": no
 	// punctuation a sentence, path or query would need.
 	labelPattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} .&+'()-]{0,39}$`)
@@ -109,6 +111,9 @@ type Message struct {
 	Type      string          `json:"type"`
 	Extension Extension       `json:"extension"`
 	Records   json.RawMessage `json:"records,omitempty"`
+	// Enrollment is the enrollment id the records' visits were recorded
+	// under, as the extension last had it from a settings answer.
+	Enrollment string `json:"enrollment,omitempty"`
 }
 
 // Rejection names a record that was not taken, by its index in the message
@@ -231,6 +236,11 @@ func DecodeMessage(data []byte) (Message, error) {
 		if len(bytes.TrimSpace(msg.Records)) == 0 {
 			return Message{}, errors.New("browser events: records message without records")
 		}
+		enrollment, ok := fields.text("enrollment")
+		if !ok || !enrollmentPattern.MatchString(enrollment) {
+			return Message{}, errors.New("browser events: records message without an enrollment id")
+		}
+		msg.Enrollment = enrollment
 		return msg, nil
 	default:
 		return Message{}, errors.New("browser events: unknown message type")

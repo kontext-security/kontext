@@ -1,6 +1,7 @@
 {
   "contract": 1,
   "type": "records",
+  "enrollment": "3f9a1c2b7d4e6f80",
   "extension": { "version": "0.1.0", "browser": "chrome", "profile": "p7Hq2vXkLm9s" },
   "records": [
     {

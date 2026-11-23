@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -100,8 +99,6 @@ func checkSettings(fields object) error {
 	}
 	return nil
 }
-
-var enrollmentPattern = regexp.MustCompile(`^([0-9a-f]{16})?$`)
 
 // checkError holds an error answer to the schema's error definition.
 func checkError(fields object) error {

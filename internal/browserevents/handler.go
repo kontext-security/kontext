@@ -45,7 +45,7 @@ func (h *Handler) Answer(_ context.Context, raw json.RawMessage) json.RawMessage
 		h.logf("browser events: refused records: %v", err)
 		return encode(NewError(ErrorInvalidMessage))
 	}
-	notKept, err := h.Store.Apply(msg.Extension, valid)
+	notKept, err := h.Store.Apply(msg.Extension, msg.Enrollment, valid)
 	if err != nil {
 		h.logf("browser events: store: %v", err)
 		return encode(NewError(ErrorUnavailable))

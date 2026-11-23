@@ -16,7 +16,9 @@ the daemon's answer back.
 
 - `hello`: sent once per connection. Carries the extension's version, browser
   and profile id (a random id the extension makes; never the profile's email).
-- `records`: up to 200 records.
+- `records`: up to 200 records, and `enrollment`: the enrollment id from the
+  settings answer the visits were recorded under. The daemon refuses a visit
+  recorded for another enrollment than its own.
 
 Record kinds in v1:
 

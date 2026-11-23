@@ -153,8 +153,11 @@ func rowKey(r CloudRecord) string {
 }
 
 // Apply merges valid records from one extension into the store and returns
-// the ones it could not keep.
-func (s *Store) Apply(ext Extension, records []IndexedRecord) ([]Rejection, error) {
+// the ones it could not keep. enrollment is the id the extension recorded its
+// visits under: a visit recorded for another enrollment is refused, so a
+// snapshot counted for one workspace never reaches another. Health says only
+// that the extension runs, and is kept.
+func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord) ([]Rejection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := s.pruneLocked()
@@ -167,14 +170,19 @@ func (s *Store) Apply(ext Extension, records []IndexedRecord) ([]Rejection, erro
 		}
 		return rejected, nil
 	}
+	current := s.enrollmentLocked()
 	for _, indexed := range records {
 		record := CloudRecord{Browser: ext.Browser, Profile: ext.Profile, ExtensionVersion: ext.Version, Record: indexed.Record}
+		if record.Kind == KindVisit && enrollment != current {
+			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: "visit recorded for another enrollment"})
+			continue
+		}
 		if record.Kind == KindVisit && !s.recentDay(record.Day) {
 			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: "visit day is too old or in the future"})
 			continue
 		}
 		key := rowKey(record)
-		current, ok := s.rows[key]
+		existing, ok := s.rows[key]
 		if !ok {
 			if len(s.rows) >= MaxRows {
 				rejected = append(rejected, Rejection{Index: indexed.Index, Reason: "daemon store is full"})
@@ -184,9 +192,9 @@ func (s *Store) Apply(ext Extension, records []IndexedRecord) ([]Rejection, erro
 			changed = true
 			continue
 		}
-		if merged, differs := merge(current.Record, record); differs {
-			current.Record = merged
-			current.Version++
+		if merged, differs := merge(existing.Record, record); differs {
+			existing.Record = merged
+			existing.Version++
 			changed = true
 		}
 	}
@@ -356,6 +364,10 @@ func (s *Store) Flush() error {
 func (s *Store) Enrollment() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.enrollmentLocked()
+}
+
+func (s *Store) enrollmentLocked() string {
 	if s.binding == "" {
 		return ""
 	}

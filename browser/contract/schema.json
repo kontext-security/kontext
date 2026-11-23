@@ -89,7 +89,7 @@
     },
     "records": {
       "type": "object",
-      "required": ["contract", "type", "extension", "records"],
+      "required": ["contract", "type", "extension", "records", "enrollment"],
       "properties": {
         "contract": { "$ref": "#/$defs/contract" },
         "type": { "const": "records" },
@@ -99,7 +99,8 @@
           "minItems": 1,
           "maxItems": 200,
           "items": { "$ref": "#/$defs/record" }
-        }
+        },
+        "enrollment": { "$ref": "#/$defs/enrollment" }
       }
     },
     "rejection": {
