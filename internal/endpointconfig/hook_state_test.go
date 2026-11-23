@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -133,14 +134,14 @@ func TestFallbackNotModifiedNeverConfirmsTheNewerDirective(t *testing.T) {
 func TestAFailedFallbackRefreshKeepsTheFallbacksSwitches(t *testing.T) {
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
 	fallback := fallbackResponse(t, payloadcapture.ModeSummary, false)
-	down := false
+	var down atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("response_version") == strconv.Itoa(ResponseVersion) {
 			w.WriteHeader(http.StatusNotAcceptable)
 			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5,6]}`))
 			return
 		}
-		if down {
+		if down.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -159,11 +160,77 @@ func TestAFailedFallbackRefreshKeepsTheFallbacksSwitches(t *testing.T) {
 	if !cache.Current().HookInventoryEnabled() {
 		t.Fatal("the fallback's switch reads off")
 	}
-	down = true
+	down.Store(true)
 	if err := refresher.Refresh(context.Background()); err == nil {
 		t.Fatal("refresh against a failing server succeeded")
 	}
 	if !cache.Current().HookInventoryEnabled() {
 		t.Fatal("a transient failure turned the fallback's confirmed switch off")
+	}
+}
+
+// A 304 that answers the newer version's identity on the fallback request
+// confirms nothing; the refresher asks again without it and takes the
+// fallback's config, rather than sending the same identity every time.
+func TestACrossVersionNotModifiedFetchesTheFallbackAgain(t *testing.T) {
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	response, _ := installedResponse(t)
+	if err := cache.Apply(FetchResult{Response: &response, Version: ResponseVersion}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	fallback := fallbackResponse(t, payloadcapture.ModeSummary, false)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("response_version") == strconv.Itoa(ResponseVersion) {
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5,6]}`))
+			return
+		}
+		if r.Header.Get("If-None-Match") != "" {
+			w.Header().Set("ETag", `"`+response.ConfigIdentity+`"`)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"`+fallback.ConfigIdentity+`"`)
+		_ = json.NewEncoder(w).Encode(fallback)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token", nil }}
+	if err := refresher.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh() = %v", err)
+	}
+	if got := cache.Current(); got.ConfigIdentity != fallback.ConfigIdentity || got.Status.NewestUnsupported {
+		t.Fatalf("after the retry: identity %s, status %+v", got.ConfigIdentity, got.Status)
+	}
+}
+
+// Storage refused the fallback's write, so the file still holds the newer
+// version's config: a later refusal marks that file, and a restart doesn't
+// bring its hook state back.
+func TestARefusalMarksANewerFileTheFallbackCouldNotReplace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "endpoint-config.json")
+	cache := NewCache(path)
+	response, _ := installedResponse(t)
+	if err := cache.Apply(FetchResult{Response: &response, Version: ResponseVersion}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	// What a fallback apply leaves when its write fails.
+	fallback := fallbackResponse(t, payloadcapture.ModeSummary, false)
+	cache.mu.Lock()
+	cache.lastGood, cache.active = cloneResponse(&fallback), cloneResponse(&fallback)
+	cache.mu.Unlock()
+	cache.markNewestUnsupported()
+	if cache.Current().Status.NewestUnsupported {
+		t.Fatal("the fallback's confirmed config reads refused")
+	}
+	restarted := NewCache(path)
+	if err := restarted.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := restarted.Current().HookState(); !got.Equal(UnmanagedHookState) {
+		t.Fatalf("after restart: %+v", got)
 	}
 }
