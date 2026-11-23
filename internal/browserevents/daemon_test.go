@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -897,8 +898,10 @@ func TestAnIntegralMessageCountInAnyNotationIsRead(t *testing.T) {
 			t.Errorf("messages %s: valid = %+v, rejected = %+v, err = %v", notation, valid, rejected, err)
 		}
 	}
-	if n, ok := exactInteger("5e-0"); !ok || n != 5 {
-		t.Errorf("5e-0 = %d, %v", n, ok)
+	for notation, want := range map[string]int{"5e-0": 5, "0e-65": 0, "1." + strings.Repeat("0", 80): 1, "120e-1": 12, "-0.0": 0, "2147483647": math.MaxInt32} {
+		if n, ok := exactInteger(notation); !ok || n != want {
+			t.Errorf("%s = %d, %v, want %d", notation, n, ok, want)
+		}
 	}
 }
 

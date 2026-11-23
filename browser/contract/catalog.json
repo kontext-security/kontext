@@ -11,7 +11,7 @@
     "name": "Claude",
     "provider": "Anthropic",
     "hosts": ["claude.ai"],
-    "sends": ["/api/organizations/*/chat_conversations/*/completion", "/api/organizations/*/chat_conversations/*/retry_completion"]
+    "sends": []
   },
   {
     "id": "gemini",

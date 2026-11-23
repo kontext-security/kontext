@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -470,27 +469,48 @@ func (o object) integer(key string) (int, bool) {
 }
 
 // exactInteger reads a JSON number as an int when its exact value is an
-// integer within the int32 range. A long number or a large exponent is not
-// one, which also keeps the exact arithmetic small.
+// integer within the int32 range, whatever its notation: 3, 3.0, 3e0, 0e-65
+// and 3.000 are all read. It works on the digits, never through a float64,
+// so 3.0000000000000001 is not an integer, and a huge exponent costs nothing.
 func exactInteger(number string) (int, bool) {
-	if len(number) > 64 {
+	if len(number) > 4096 {
 		return 0, false
 	}
-	if i := strings.IndexAny(number, "eE"); i >= 0 {
-		exponent, err := strconv.Atoi(number[i+1:])
-		if err != nil || exponent < -64 || exponent > 64 {
+	mantissa, exponentText, hasExponent := strings.Cut(strings.ToLower(number), "e")
+	negative := strings.HasPrefix(mantissa, "-")
+	mantissa = strings.TrimPrefix(mantissa, "-")
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	digits := strings.TrimLeft(whole+fraction, "0")
+	// The value is digits × 10^shift.
+	shift := -len(fraction)
+	trimmed := strings.TrimRight(digits, "0")
+	shift += len(digits) - len(trimmed)
+	digits = trimmed
+	if digits == "" {
+		return 0, true
+	}
+	if hasExponent {
+		exponent, err := strconv.Atoi(exponentText)
+		if err != nil || exponent < -4096 || exponent > 4096 {
 			return 0, false
 		}
+		shift += exponent
 	}
-	value, ok := new(big.Rat).SetString(number)
-	if !ok || !value.IsInt() {
+	// digits has no trailing zero, so a negative shift leaves a fraction.
+	if shift < 0 || len(digits)+shift > 10 {
 		return 0, false
 	}
-	n := value.Num()
-	if !n.IsInt64() || n.Int64() > math.MaxInt32 || n.Int64() < math.MinInt32 {
+	n, err := strconv.ParseInt(digits+strings.Repeat("0", shift), 10, 64)
+	if err != nil {
 		return 0, false
 	}
-	return int(n.Int64()), true
+	if negative {
+		n = -n
+	}
+	if n > math.MaxInt32 || n < math.MinInt32 {
+		return 0, false
+	}
+	return int(n), true
 }
 
 // null reports whether key is missing or null.
