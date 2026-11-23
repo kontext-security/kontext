@@ -122,9 +122,13 @@ const (
 // dropped and never leave with the new token.
 func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 	s.rebindInit.Do(func() { s.rebind = make(chan struct{}, 1) })
+	// One deadline covers waiting for an earlier read and this one, so a
+	// stuck read never holds up the background sender (and its flush).
+	readCtx, cancel := context.WithTimeout(ctx, TokenReadTimeout)
+	defer cancel()
 	select {
 	case s.rebind <- struct{}{}:
-	case <-ctx.Done():
+	case <-readCtx.Done():
 		// Another read is under way; it decides the binding.
 		return "", fmt.Errorf("browser events: waiting for the install token: %w", ctx.Err())
 	}
@@ -132,12 +136,13 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 	// A stuck credential read must not hold up its caller past the
 	// deadline. It keeps the slot until it ends, so at most one read is
 	// ever outstanding; later callers wait for it up to their own deadline.
-	readCtx, cancel := context.WithTimeout(ctx, TokenReadTimeout)
-	defer cancel()
-	token, err, handedOff := readToken(readCtx, s.Tokens, release)
-	if !handedOff {
-		defer release()
+	// The store is suspended before an abandoned read can give up the
+	// slot, so a later successful bind is never undone by this timeout.
+	token, err, handedOff := readToken(readCtx, s.Tokens, release, s.Store.Suspend)
+	if handedOff {
+		return "", fmt.Errorf("browser events: install token: %v", err)
 	}
+	defer release()
 	if err != nil || strings.TrimSpace(token) == "" {
 		// The enrollment cannot be confirmed, such as when the
 		// configuration names another cloud: no record is taken until it
@@ -366,8 +371,9 @@ func (s *Sender) logf(format string, args ...any) {
 
 // readToken returns at ctx's deadline even when read does not honor it, as
 // some credential stores do not. A read still running then calls release
-// when it ends, and handedOff is true; its answer is dropped.
-func readToken(ctx context.Context, read func(context.Context) (string, error), release func()) (token string, err error, handedOff bool) {
+// when it ends, and handedOff is true; its answer is dropped. abandon runs
+// first, while the read cannot yet release.
+func readToken(ctx context.Context, read func(context.Context) (string, error), release, abandon func()) (token string, err error, handedOff bool) {
 	type result struct {
 		token string
 		err   error
@@ -396,6 +402,7 @@ func readToken(ctx context.Context, read func(context.Context) (string, error), 
 	case r := <-done:
 		return r.token, r.err, false
 	default:
+		abandon()
 		abandoned = true
 		return "", ctx.Err(), true
 	}

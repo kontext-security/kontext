@@ -121,7 +121,8 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	// written again at once: a save makes a private file.
 	if s.pruneLocked() || !private {
 		// Days past KeepDays leave the disk now, not at the next message.
-		if err := s.saveLocked(); err != nil {
+		var committed *committedError
+		if err := s.saveLocked(); err != nil && !errors.As(err, &committed) {
 			if !private {
 				// Others could read the file and it cannot be replaced:
 				// it is not used.
@@ -171,7 +172,7 @@ func readStoreFile(path string) (data []byte, private, trusted bool, err error) 
 	// Rows are read from a private file, or one only its owner could have
 	// written, such as a backup restored 0644 or 0400: no other account
 	// could have changed it. It is still written again private.
-	trusted = private || onlyOwnerMode(opened)
+	trusted = trustedFile(private, opened)
 	data, err = io.ReadAll(io.LimitReader(f, MaxStoreBytes+1))
 	if err != nil {
 		return nil, false, false, err
