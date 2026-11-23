@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,10 @@ func TestHandlerAnswersHelloAndRecords(t *testing.T) {
 	if hello.Type != TypeSettings || hello.CaptureMode != CaptureFull || hello.Paused || hello.Rejected == nil {
 		t.Fatalf("hello answer = %+v", hello)
 	}
+	// The extension reads accounts only for a daemon that says it takes them.
+	if !slices.Contains(hello.RecordKinds, KindAccount) {
+		t.Fatalf("record kinds = %v, want the account kind", hello.RecordKinds)
+	}
 	data, err := os.ReadFile(filepath.Join(fixtures, "valid", "records.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -240,8 +245,9 @@ func TestSenderAcksABatchTheCloudAnswered(t *testing.T) {
 }
 
 // The endpoint's clock runs ahead of the cloud's: the cloud refuses the
-// account as in the future. The row stays pending, so it goes again once
-// the clocks agree, while the row the cloud took is not sent again.
+// account as in the future. The row stays pending and goes again after its
+// own backoff, growing with each refusal, and meanwhile the rows behind it
+// are sent, even when it fills a batch on its own.
 func TestARowAheadOfTheCloudsClockIsSentAgain(t *testing.T) {
 	s := openTestStore(t)
 	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{
@@ -261,24 +267,48 @@ func TestARowAheadOfTheCloudsClockIsSentAgain(t *testing.T) {
 		}
 		_, _ = fmt.Fprintf(w, `{"accepted":%d,"rejected":[%s]}`, len(batch.Records)-len(rejected), strings.Join(rejected, ","))
 	})
-	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
-		t.Fatalf("first send = %v, %v", outcome, err)
+	clock := testNow()
+	sender.now = func() time.Time { return clock }
+	// One record per batch: the account comes first and fills it.
+	sender.limit = 1
+	send := func(want Outcome) {
+		t.Helper()
+		if outcome, err := sender.SendOnce(context.Background()); outcome != want {
+			t.Fatalf("send = %v, %v, want %v", outcome, err, want)
+		}
 	}
-	// Only the held account is left: it goes again after a backoff, not
-	// at once.
-	if outcome, _ := sender.SendOnce(context.Background()); outcome != Retry {
-		t.Fatalf("second send = %v, want Retry", outcome)
+	kinds := func() []string {
+		var got []string
+		for _, b := range *batches {
+			for _, r := range b.Records {
+				got = append(got, r.Kind)
+			}
+		}
+		return got
 	}
+	send(Sent) // the account, refused
+	send(Sent) // the visit behind it, taken
+	send(Nothing)
+	if due, ok := sender.heldDue(); !ok || !due.Equal(clock.Add(SendDelay)) {
+		t.Fatalf("held due = %v, %v, want %v", due, ok, clock.Add(SendDelay))
+	}
+	// Its wait is over: refused again, it waits twice as long.
+	clock = clock.Add(SendDelay)
+	send(Sent)
+	if due, _ := sender.heldDue(); !due.Equal(clock.Add(2 * SendDelay)) {
+		t.Fatalf("held due = %v, want %v", due, clock.Add(2*SendDelay))
+	}
+	send(Nothing)
+	// The clocks agree: taken, and not sent again.
 	ahead = false
-	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
-		t.Fatalf("third send = %v, %v", outcome, err)
+	clock = clock.Add(2 * SendDelay)
+	send(Sent)
+	send(Nothing)
+	if got := kinds(); !slices.Equal(got, []string{KindAccount, KindVisit, KindAccount, KindAccount}) {
+		t.Fatalf("sent = %v", got)
 	}
-	if outcome, _ := sender.SendOnce(context.Background()); outcome != Nothing {
-		t.Fatalf("fourth send = %v, want Nothing", outcome)
-	}
-	got := *batches
-	if len(got) != 3 || len(got[0].Records) != 2 || len(got[1].Records) != 1 || len(got[2].Records) != 1 || got[2].Records[0].Kind != KindAccount {
-		t.Fatalf("batches = %+v", got)
+	if _, ok := sender.heldDue(); ok {
+		t.Fatal("a row is still held")
 	}
 }
 
@@ -1181,6 +1211,36 @@ func TestADamagedRowDoesNotDiscardTheOthers(t *testing.T) {
 // A stored account row with a key the contract does not allow, such as an
 // address put back by a backup, is dropped at open and leaves the file: a
 // decode would drop the key silently and keep the text on disk.
+// A restored file with one row id twice decodes as its last row; the
+// earlier one, with whatever it holds, leaves the disk at open.
+func TestARepeatedRowIDLeavesTheDiskAtOpen(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+	s.mu.Lock()
+	_ = s.saveLocked()
+	s.mu.Unlock()
+	data, _ := os.ReadFile(s.path)
+	text := string(data)
+	start := strings.Index(text, `"rows":{`) + len(`"rows":{`)
+	end := strings.Index(text[start:], `:{"record"`)
+	if start < len(`"rows":{`) || end < 0 {
+		t.Fatalf("no row in %s", text)
+	}
+	id := text[start : start+end]
+	tampered := text[:start] + id + `:{"email":"jane@example.com"},` + text[start:]
+	if err := os.WriteFile(s.path, []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(s.path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(s.path)
+	if reopened.Len() != 1 || strings.Contains(string(data), "jane@example.com") {
+		t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+	}
+}
+
 func TestAStoredAccountWithAnExtraOrRepeatedKeyIsDroppedAtOpen(t *testing.T) {
 	for name, tamper := range map[string]func(string) string{
 		"in the record": func(data string) string {

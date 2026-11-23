@@ -72,6 +72,9 @@ the extension stops every detector and sends
 only `hello` and `health`. In v2 the daemon always answers `paused: false` and
 no corporate domains; `paused` gets a server source with the endpoint
 configuration. The account type does not use corporate domains.
+`record_kinds` lists the record kinds the daemon takes. It is optional: a
+v2 daemon from before the account kind sends none, and the extension then
+reads no session and sends no account, while visits go on.
 
 A message with another contract version gets an `error` answer with
 `unsupported_contract`. The extension then stops recording until a handshake

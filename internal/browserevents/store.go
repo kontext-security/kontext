@@ -130,6 +130,11 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		// Rows without a binding cannot say which workspace they belong
 		// to, so they are not read: Bind would otherwise give them to the
 		// current one.
+		// A row id given twice decodes as its last row: the file is
+		// written again, so the first one's text leaves the disk.
+		if hasDuplicateKeys(data) {
+			rewrite = true
+		}
 		rows := make(map[string]*row, len(file.Rows))
 		for key, raw := range file.Rows {
 			// Each row is read on its own: a damaged or null one is
@@ -613,6 +618,12 @@ type Pending struct {
 
 // Pending returns the rows to send.
 func (s *Store) Pending(max int) Pending {
+	return s.PendingExcept(max, nil)
+}
+
+// PendingExcept returns the rows to send, leaving out those held says are
+// waiting, so rows held back never take a batch from the rows behind them.
+func (s *Store) PendingExcept(max int, held func(key string, version int) bool) Pending {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.pruneLocked() {
@@ -620,7 +631,7 @@ func (s *Store) Pending(max int) Pending {
 	}
 	var keys []string
 	for key, r := range s.rows {
-		if r.Version != r.Sent {
+		if r.Version != r.Sent && (held == nil || !held(key, r.Version)) {
 			keys = append(keys, key)
 		}
 	}
