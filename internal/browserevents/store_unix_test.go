@@ -43,3 +43,23 @@ func TestRowsOfAStoreOthersCouldChangeAreNotRead(t *testing.T) {
 		t.Fatalf("%d rows read from a file others could change", n)
 	}
 }
+
+// A backup restored read-only for its owner keeps its rows: no other
+// account could have changed it.
+func TestRowsOfAnOwnerReadOnlyStoreAreRead(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	if err := os.Chmod(s.path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(s.path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.Bind(Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-a")); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(reopened.Pending(10).Records); n != 1 {
+		t.Fatalf("%d rows read, want 1", n)
+	}
+}

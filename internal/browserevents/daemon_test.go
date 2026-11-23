@@ -800,15 +800,17 @@ func TestALeftoverTemporaryCopyIsRemoved(t *testing.T) {
 		t.Fatalf("leftover still there: %v", err)
 	}
 	// A file someone saved under a similar name is not the store's.
-	kept := filepath.Join(filepath.Dir(s.path), "."+filepath.Base(s.path)+"-backup.tmp")
-	if err := os.WriteFile(kept, []byte(`{}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := openStore(s.path, testNow); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(kept); err != nil {
-		t.Fatalf("a file the store did not make was removed: %v", err)
+	for _, name := range []string{"-backup.tmp", "-000123.tmp", "-202611230930.tmp"} {
+		kept := filepath.Join(filepath.Dir(s.path), "."+filepath.Base(s.path)+name)
+		if err := os.WriteFile(kept, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := openStore(s.path, testNow); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(kept); err != nil {
+			t.Fatalf("%s, which CreateTemp cannot make, was removed: %v", name, err)
+		}
 	}
 }
 
@@ -906,5 +908,48 @@ func TestASentRowTheContractNoLongerAllowsIsDroppedAtOpen(t *testing.T) {
 	data, _ := os.ReadFile(s.path)
 	if reopened.Len() != 0 || strings.Contains(string(data), "no longer allowed") {
 		t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+	}
+}
+
+// A token read that ignores its context still ends at the deadline.
+func TestATokenReadEndsAtItsDeadline(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := readToken(ctx, func(context.Context) (string, error) {
+		<-release
+		return "token", nil
+	})
+	if err == nil || time.Since(start) > time.Second {
+		t.Fatalf("err = %v after %v", err, time.Since(start))
+	}
+}
+
+// A message whose save fails is taken back, so it cannot go out after the
+// extension was told unavailable.
+func TestAMessageWhoseSaveFailsIsTakenBack(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	if err := s.Ack(s.Pending(10)); err != nil {
+		t.Fatal(err)
+	}
+	// A file where the store's folder was: the save cannot make it again.
+	if err := os.RemoveAll(filepath.Dir(s.path)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Dir(s.path), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{
+		visit(3, "2026-11-20T08:00:00Z", "2026-11-20T09:00:00Z"),
+		{Index: 2, Record: Record{Kind: KindVisit, Day: "2026-11-20", App: "claude", AppName: "Claude", Provider: "Anthropic", Surface: "web", Host: "claude.ai", FirstSeen: "2026-11-20T08:00:00Z", LastSeen: "2026-11-20T08:00:00Z", Requests: 1}},
+	})
+	if err == nil {
+		t.Fatal("a failed save was not reported")
+	}
+	if n := len(s.Pending(10).Records); n != 0 {
+		t.Fatalf("%d rows of a refused message pending", n)
 	}
 }

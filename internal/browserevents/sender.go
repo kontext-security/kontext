@@ -133,7 +133,7 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 	// hello.
 	readCtx, cancel := context.WithTimeout(ctx, TokenReadTimeout)
 	defer cancel()
-	token, err = s.Tokens(readCtx)
+	token, err = readToken(readCtx, s.Tokens)
 	if err != nil || strings.TrimSpace(token) == "" {
 		// The enrollment cannot be confirmed, such as when the
 		// configuration names another cloud: no record is taken until it
@@ -357,5 +357,25 @@ func (s *Sender) clock() func() time.Time {
 func (s *Sender) logf(format string, args ...any) {
 	if s.Logf != nil {
 		s.Logf(format, args...)
+	}
+}
+
+// readToken returns at ctx's deadline even when read does not honor it, as
+// some credential stores do not; a late answer is dropped.
+func readToken(ctx context.Context, read func(context.Context) (string, error)) (string, error) {
+	type result struct {
+		token string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		token, err := read(ctx)
+		done <- result{token, err}
+	}()
+	select {
+	case r := <-done:
+		return r.token, r.err
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
 }
