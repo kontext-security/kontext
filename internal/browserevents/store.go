@@ -68,6 +68,7 @@ func OpenStore(path string) (*Store, error) {
 
 func openStore(path string, now func() time.Time) (*Store, error) {
 	s := &Store{path: path, now: now, rows: map[string]*row{}}
+	removeLeftovers(path)
 	data, private, err := readStoreFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -99,6 +100,11 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	if s.pruneLocked() || !private {
 		// Days past KeepDays leave the disk now, not at the next message.
 		if err := s.saveLocked(); err != nil {
+			if !private {
+				// Others could read the file and it cannot be replaced:
+				// it is not used.
+				return nil, fmt.Errorf("browser events: store %s is not private and cannot be rewritten: %w", path, err)
+			}
 			s.dirty = true
 		}
 	}
@@ -148,6 +154,21 @@ func readStoreFile(path string) (data []byte, private bool, err error) {
 		return nil, false, errOversizedStore
 	}
 	return data, private, nil
+}
+
+// tempPattern names the store's temporary files after the store, so a
+// leftover from a crash is found and removed at the next open.
+func tempPattern(path string) string {
+	return "." + filepath.Base(path) + "-*.tmp"
+}
+
+// removeLeftovers deletes temporary copies a crash left beside the store:
+// they hold rows that would never be pruned.
+func removeLeftovers(path string) {
+	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(path), tempPattern(path)))
+	for _, match := range matches {
+		_ = os.Remove(match)
+	}
 }
 
 // DefaultStorePath is the store beside the daemon's database, named after
@@ -324,6 +345,10 @@ type Pending struct {
 	Records  []CloudRecord
 	keys     []string
 	versions []int
+	// binding is the enrollment the rows were taken under. A batch is sent
+	// only with that enrollment's token, and acknowledged only while the
+	// store is still bound to it.
+	binding string
 }
 
 // Pending returns the rows to send.
@@ -344,7 +369,7 @@ func (s *Store) Pending(max int) Pending {
 	if len(keys) > max {
 		keys = keys[:max]
 	}
-	var p Pending
+	p := Pending{binding: s.binding}
 	for _, key := range keys {
 		p.Records = append(p.Records, s.rows[key].Record)
 		p.keys = append(p.keys, key)
@@ -359,6 +384,11 @@ func (s *Store) Pending(max int) Pending {
 func (s *Store) Ack(p Pending) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if p.binding != s.binding {
+		// The store was bound to another enrollment while the batch was out:
+		// its rows are gone, and a row with the same key is another one.
+		return nil
+	}
 	for i, key := range p.keys {
 		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
 			r.Sent = r.Version
@@ -373,6 +403,9 @@ func (s *Store) Ack(p Pending) error {
 func (s *Store) Drop(p Pending) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if p.binding != s.binding {
+		return nil
+	}
 	for i, key := range p.keys {
 		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
 			delete(s.rows, key)
@@ -455,7 +488,7 @@ func (s *Store) saveLocked() error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".browser-activity-*.json")
+	tmp, err := os.CreateTemp(dir, tempPattern(s.path))
 	if err != nil {
 		return err
 	}

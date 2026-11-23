@@ -333,7 +333,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Store: browserStore,
 		// A new connection sees an enrollment change at once, not only when
 		// the sender next has rows to upload.
-		Refresh:     func(ctx context.Context) { _, _ = browserSender.Rebind(ctx) },
+		Refresh: func(ctx context.Context) error {
+			_, err := browserSender.Rebind(ctx)
+			return err
+		},
 		CaptureMode: func() string { return browserCaptureMode(endpointConfigCache.Current()) },
 		Changed: func() {
 			select {

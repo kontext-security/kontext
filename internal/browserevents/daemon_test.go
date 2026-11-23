@@ -3,6 +3,7 @@ package browserevents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -710,7 +711,10 @@ func TestAHelloSeesAnEnrollmentChangeAtOnce(t *testing.T) {
 	token := "workspace-b"
 	sender := &Sender{Store: s, BaseURL: "https://app.kontext.dev", InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
 		Tokens: func(context.Context) (string, error) { return token, nil }}
-	h := &Handler{Store: s, Refresh: func(ctx context.Context) { _, _ = sender.Rebind(ctx) }}
+	h := &Handler{Store: s, Refresh: func(ctx context.Context) error {
+		_, err := sender.Rebind(ctx)
+		return err
+	}}
 	var answer Settings
 	_ = json.Unmarshal(h.Answer(context.Background(), json.RawMessage(`{"contract":2,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)), &answer)
 	if answer.Enrollment == "" || answer.Enrollment == before || answer.Enrollment != s.Enrollment() {
@@ -750,5 +754,49 @@ func TestAnAnswerOverTheLimitIsNotTaken(t *testing.T) {
 	}
 	if len(s.Pending(10).Records) != 1 {
 		t.Fatal("the row was marked sent")
+	}
+}
+
+// An answer for a batch taken under one enrollment does not mark rows of the
+// next one sent, even when key and version match.
+func TestAnAckFromThePreviousEnrollmentIsIgnored(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	old := s.Pending(10)
+	if _, err := s.Bind(Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-b")); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	if err := s.Ack(old); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Pending(10).Records) != 1 {
+		t.Fatal("the previous enrollment's answer marked the new row sent")
+	}
+}
+
+// A hello whose enrollment cannot be confirmed is answered unavailable, not
+// with the enrollment the store last had.
+func TestAHelloWithoutAConfirmedEnrollmentIsUnavailable(t *testing.T) {
+	s := openTestStore(t)
+	h := &Handler{Store: s, Refresh: func(context.Context) error { return errors.New("another cloud") }}
+	got := string(h.Answer(context.Background(), json.RawMessage(`{"contract":2,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)))
+	if !strings.Contains(got, ErrorUnavailable) {
+		t.Fatalf("answer = %s", got)
+	}
+}
+
+// A temporary copy a crash left beside the store is removed at the next open.
+func TestALeftoverTemporaryCopyIsRemoved(t *testing.T) {
+	s := openTestStore(t)
+	leftover := filepath.Join(filepath.Dir(s.path), "."+filepath.Base(s.path)+"-123.tmp")
+	if err := os.WriteFile(leftover, []byte(`{"rows":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openStore(s.path, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("leftover still there: %v", err)
 	}
 }
