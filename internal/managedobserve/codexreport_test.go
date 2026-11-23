@@ -435,6 +435,12 @@ func TestCodexRoutingFollowsBothSwitches(t *testing.T) {
 		t.Fatalf("an unconfirmed configuration switched the route: %q", off)
 	default:
 	}
+	// A server that serves no version this build reads leaves the defaults:
+	// Codex is unrouted.
+	c.follow(endpointconfig.Snapshot{Config: endpointconfig.Config{ToolOutputCompaction: boolPtr(true)}, Status: endpointconfig.Status{NoCommonVersion: true}})
+	if got := <-c.switched; got != codexroute.ReasonCompactionOff {
+		t.Fatalf("no common version: off = %q", got)
+	}
 }
 
 func boolPtr(value bool) *bool { return &value }

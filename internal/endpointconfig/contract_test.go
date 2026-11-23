@@ -23,15 +23,17 @@ func TestResponseValidate(t *testing.T) {
 		{name: "missing work-type switch", mutate: func(response *Response) { response.Config.WorkTypeClassification = nil }, wantErr: "workTypeClassification"},
 		{name: "missing compaction switch", mutate: func(response *Response) { response.Config.ToolOutputCompaction = nil }, wantErr: "toolOutputCompaction"},
 		{name: "missing Codex proxy switch", mutate: func(response *Response) { response.Config.CodexProxy = nil }, wantErr: "codexProxy"},
-		// The fallback version's identity covers no Codex proxy switch, so a
-		// v4 response must not carry one, and a v5 identity never passes for
-		// a v4 response.
+		{name: "missing hook inventory switch", mutate: func(response *Response) { response.Config.HookInventory = nil }, wantErr: "hookInventory"},
+		{name: "v4 is no longer read", mutate: func(response *Response) { response.ResponseVersion = 4 }, wantErr: "version"},
+		// The fallback version's identity covers no hook inventory switch, so
+		// a v5 response must not carry one, and a v6 identity never passes for
+		// a v5 response.
 		{name: "fallback version", mutate: func(response *Response) { *response = fallbackResponse(t, payloadcapture.ModeSummary, true) }},
-		{name: "fallback version with the Codex proxy switch", mutate: func(response *Response) {
+		{name: "fallback version with the hook inventory switch", mutate: func(response *Response) {
 			*response = fallbackResponse(t, payloadcapture.ModeSummary, true)
-			response.Config.CodexProxy = boolPtr(false)
-		}, wantErr: "codexProxy"},
-		{name: "fallback version with a v5 identity", mutate: func(response *Response) {
+			response.Config.HookInventory = boolPtr(false)
+		}, wantErr: "hookInventory"},
+		{name: "fallback version with a v6 identity", mutate: func(response *Response) {
 			identity := response.ConfigIdentity
 			*response = fallbackResponse(t, payloadcapture.ModeSummary, false)
 			response.ConfigIdentity = identity
@@ -56,7 +58,7 @@ func TestResponseValidate(t *testing.T) {
 
 func TestDecodeStrictRejectsUnknownAndTrailingFields(t *testing.T) {
 	response := testResponse(t, payloadcapture.ModeFull)
-	valid := `{"responseVersion":5,"config":{"payloadCaptureMode":"full","workTypeClassification":true,"toolOutputCompaction":false,"codexProxy":true},"configIdentity":"` + response.ConfigIdentity + `"}`
+	valid := `{"responseVersion":6,"config":{"payloadCaptureMode":"full","workTypeClassification":true,"toolOutputCompaction":false,"codexProxy":true,"hookInventory":false},"configIdentity":"` + response.ConfigIdentity + `"}`
 	var decoded Response
 	if err := decodeStrict(strings.NewReader(valid), &decoded); err != nil || decoded.Validate() != nil {
 		t.Fatalf("decodeStrict(valid) = %v, %v", err, decoded.Validate())
@@ -64,8 +66,8 @@ func TestDecodeStrictRejectsUnknownAndTrailingFields(t *testing.T) {
 	for _, body := range []string{
 		strings.TrimSuffix(valid, "}") + `,"policyText":"permit();"}`,
 		valid + `{}`,
-		// The retired v2 flag is not part of v5.
-		`{"responseVersion":5,"config":{"payloadCaptureMode":"full","workTypeClassification":true,"toolOutputCompaction":false,"codexProxy":true,"guardrailLlmEnabled":true},"configIdentity":"` + response.ConfigIdentity + `"}`,
+		// The retired v2 flag is not part of v6.
+		`{"responseVersion":6,"config":{"payloadCaptureMode":"full","workTypeClassification":true,"toolOutputCompaction":false,"codexProxy":true,"hookInventory":false,"guardrailLlmEnabled":true},"configIdentity":"` + response.ConfigIdentity + `"}`,
 	} {
 		var decoded Response
 		if err := decodeStrict(strings.NewReader(body), &decoded); err == nil {

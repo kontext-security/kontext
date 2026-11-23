@@ -1,6 +1,7 @@
 package localruntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -34,6 +35,9 @@ type Service struct {
 	browser       func(context.Context, json.RawMessage) json.RawMessage
 	observe       func(context.Context, hook.Event)
 	holdFor       func(hook.Event) time.Duration
+	intercept     func(hook.Event) (hook.Result, bool)
+	interceptMark []byte
+	evaluated     func(hook.Event, hook.Result, bool)
 	diagnostic    diagnostic.Logger
 	duplicates    *duplicateHooks
 	pendingEvents atomic.Int64
@@ -72,7 +76,18 @@ type Options struct {
 	// HoldFor says how long a PreToolUse call from a hook that can wait may
 	// be held until the policy arrives; zero holds nothing. Without it no
 	// call is held.
-	HoldFor    func(hook.Event) time.Duration
+	HoldFor func(hook.Event) time.Duration
+	// Intercept answers an event itself when it returns true: the event is
+	// neither evaluated, recorded nor observed. It must only ever deny. It
+	// sees only PreToolUse requests whose raw tool input holds
+	// InterceptMarker, so other events aren't decoded twice.
+	Intercept       func(hook.Event) (hook.Result, bool)
+	InterceptMarker string
+	// Evaluated sees each answered event and the result its hook gets,
+	// before the response is written; policy is false for a fallback after
+	// a failure. A duplicate copy of an event isn't seen again. It must not
+	// block.
+	Evaluated  func(event hook.Event, result hook.Result, policy bool)
 	Diagnostic diagnostic.Logger
 }
 
@@ -84,21 +99,24 @@ func NewService(opts Options) (*Service, error) {
 		return nil, errors.New("local runtime service requires runtime core")
 	}
 	return &Service{
-		socketPath:  opts.SocketPath,
-		core:        opts.Core,
-		sessionID:   opts.SessionID,
-		agentName:   opts.AgentName,
-		asyncIngest: opts.AsyncIngest,
-		transform:   opts.Transform,
-		onFailure:   opts.OnFailure,
-		compact:     opts.CompactToolOutput,
-		offers:      opts.OffersCompaction,
-		codexProxy:  opts.CodexProxy,
-		browser:     opts.Browser,
-		observe:     opts.Observe,
-		holdFor:     opts.HoldFor,
-		diagnostic:  opts.Diagnostic,
-		duplicates:  newDuplicateHooks(),
+		socketPath:    opts.SocketPath,
+		core:          opts.Core,
+		sessionID:     opts.SessionID,
+		agentName:     opts.AgentName,
+		asyncIngest:   opts.AsyncIngest,
+		transform:     opts.Transform,
+		onFailure:     opts.OnFailure,
+		compact:       opts.CompactToolOutput,
+		offers:        opts.OffersCompaction,
+		codexProxy:    opts.CodexProxy,
+		browser:       opts.Browser,
+		observe:       opts.Observe,
+		holdFor:       opts.HoldFor,
+		intercept:     opts.Intercept,
+		interceptMark: []byte(opts.InterceptMarker),
+		evaluated:     opts.Evaluated,
+		diagnostic:    opts.Diagnostic,
+		duplicates:    newDuplicateHooks(),
 	}, nil
 }
 
@@ -228,6 +246,12 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 	case CompactRequestType:
 		s.handleCompact(ctx, conn, &req)
 		return
+	case CapabilitiesRequestType:
+		result := CapabilitiesResult{Type: CapabilitiesResultType, HookVerify: s.intercept != nil && len(s.interceptMark) > 0}
+		if err := WriteMessage(conn, result); err != nil {
+			s.diagnostic.Printf("local runtime write: %v\n", err)
+		}
+		return
 	case CodexProxyRequestType:
 		result := CodexProxyResult{Type: "codex_proxy_result"}
 		if s.codexProxy != nil {
@@ -246,6 +270,17 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 			s.diagnostic.Printf("local runtime write: %v\n", err)
 		}
 		return
+	}
+
+	if s.intercept != nil && len(s.interceptMark) > 0 && req.HookEvent == string(hook.HookPreToolUse) && bytes.Contains(req.ToolInput, s.interceptMark) {
+		if event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, &req); err == nil {
+			if result, ok := s.intercept(event); ok {
+				if err := WriteMessage(conn, EvaluateResultFromResult(result)); err != nil {
+					s.diagnostic.Printf("local runtime write: %v\n", err)
+				}
+				return
+			}
+		}
 	}
 
 	ctx = s.grantHold(ctx, conn, &req)
@@ -368,7 +403,7 @@ func (s *Service) process(ctx context.Context, req *EvaluateRequest) (EvaluateRe
 		})
 		if err != nil {
 			s.diagnostic.Printf("local runtime observe async event: %v\n", err)
-			return s.result(event, processFailureResult(event)), false
+			return s.result(event, processFailureResult(event), answerFallback), false
 		}
 		s.noteDuplicate(event, duplicate)
 		// Both copies of a doubled PostToolUse carry the offer: only a call's
@@ -376,7 +411,7 @@ func (s *Service) process(ctx context.Context, req *EvaluateRequest) (EvaluateRe
 		if event.HookName == hook.HookPostToolUse && s.compact != nil && s.offers != nil {
 			result.CompactToolOutput = s.offers(event)
 		}
-		return s.result(event, result), duplicate
+		return s.result(event, result, answerOf(duplicate)), duplicate
 	}
 	result, duplicate, err := s.duplicates.do(event, req, func() (hook.Result, error) {
 		return s.core.ProcessHook(ctx, event)
@@ -384,15 +419,15 @@ func (s *Service) process(ctx context.Context, req *EvaluateRequest) (EvaluateRe
 	if err != nil {
 		s.diagnostic.Printf("local runtime process: %v\n", err)
 		if s.onFailure != nil {
-			return s.result(event, s.onFailure(event, err)), false
+			return s.result(event, s.onFailure(event, err), answerFallback), false
 		}
-		return s.result(event, processFailureResult(event)), false
+		return s.result(event, processFailureResult(event), answerFallback), false
 	}
 	s.noteDuplicate(event, duplicate)
 	if !duplicate {
 		s.closeSessionEnd(ctx, event)
 	}
-	return s.result(event, result), duplicate
+	return s.result(event, result, answerOf(duplicate)), duplicate
 }
 
 func (s *Service) noteDuplicate(event hook.Event, duplicate bool) {
@@ -401,9 +436,28 @@ func (s *Service) noteDuplicate(event hook.Event, duplicate bool) {
 	}
 }
 
-func (s *Service) result(event hook.Event, result hook.Result) EvaluateResult {
+// answer says where a result came from, for Evaluated.
+type answer int
+
+const (
+	answerPolicy answer = iota
+	answerFallback
+	answerDuplicate
+)
+
+func answerOf(duplicate bool) answer {
+	if duplicate {
+		return answerDuplicate
+	}
+	return answerPolicy
+}
+
+func (s *Service) result(event hook.Event, result hook.Result, from answer) EvaluateResult {
 	if s.transform != nil {
 		result = s.transform(event, result)
+	}
+	if s.evaluated != nil && from != answerDuplicate {
+		s.evaluated(event, result, from == answerPolicy)
 	}
 	return EvaluateResultFromResult(result)
 }

@@ -25,7 +25,7 @@ func TestDirectiveAuthorityE2E(t *testing.T) {
 	dbPath := filepath.Join(dir, "guard.db")
 	cache := endpointconfig.NewCacheForDB(path, dbPath)
 	on, off := true, false
-	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off}
+	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off, HookInventory: &off}
 	var mu sync.Mutex
 	status := 200
 	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
