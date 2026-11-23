@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,6 +46,9 @@ type Sender struct {
 	// 413; then it halves, down to one record, and doubles back with each
 	// accepted batch.
 	limit int
+	// rebind makes reading the token and binding to it one step, so an
+	// older read cannot bind the store back after a newer one.
+	rebind sync.Mutex
 }
 
 // MaxResponseBytes bounds the cloud's answer.
@@ -75,6 +79,7 @@ func (p Pending) split() (valid, invalid Pending) {
 		target.versions = append(target.versions, p.versions[i])
 	}
 	valid.binding, invalid.binding = p.binding, p.binding
+	valid.generation, invalid.generation = p.generation, p.generation
 	return valid, invalid
 }
 
@@ -111,8 +116,14 @@ const (
 // there is something to send. Rows recorded under the previous enrollment are
 // dropped and never leave with the new token.
 func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
+	s.rebind.Lock()
+	defer s.rebind.Unlock()
 	token, err = s.Tokens(ctx)
 	if err != nil || strings.TrimSpace(token) == "" {
+		// The enrollment cannot be confirmed, such as when the
+		// configuration names another cloud: no record is taken until it
+		// can, so none is counted for the wrong workspace.
+		s.Store.Suspend()
 		return "", fmt.Errorf("browser events: install token: %v", err)
 	}
 	dropped, err := s.Store.Bind(Binding(s.BaseURL, s.InstallationID, token))
