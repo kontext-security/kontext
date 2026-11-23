@@ -584,15 +584,28 @@ func (s *Store) bindLocked(binding string) (dropped int, err error) {
 	s.epoch.Add(1)
 	switch s.binding {
 	case binding:
-		return 0, nil
+		// A switch whose save failed is not confirmed until it is on
+		// disk: otherwise a restart under the old binding brings its rows
+		// back.
+		if !s.dirty {
+			return 0, nil
+		}
 	case "":
 	default:
 		dropped = len(s.rows)
 		s.rows = map[string]*row{}
 	}
-	s.binding = binding
-	s.generation++
-	return dropped, s.saveLocked()
+	if s.binding != binding {
+		s.binding = binding
+		s.generation++
+	}
+	var committed *committedError
+	if err := s.saveLocked(); err != nil && !errors.As(err, &committed) {
+		// Not on disk: nothing is taken under the new binding yet.
+		s.suspended = true
+		return dropped, err
+	}
+	return dropped, nil
 }
 
 // Suspend stops the store taking records until the next Bind, for when the

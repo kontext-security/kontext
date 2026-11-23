@@ -1074,3 +1074,39 @@ func TestARestoredStoreOverTheRowCapKeepsTheNewest(t *testing.T) {
 		}
 	}
 }
+
+// A switch whose save failed is not confirmed by the next bind until it is
+// on disk.
+func TestASwitchWhoseSaveFailedIsNotConfirmedUntilSaved(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	dir := filepath.Dir(s.path)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-b")
+	if _, err := s.Bind(b); err == nil {
+		t.Fatal("a switch whose save failed was reported done")
+	}
+	if _, err := s.Bind(b); err == nil {
+		t.Fatal("a second bind confirmed a switch that is still not on disk")
+	}
+	if _, ok := s.Confirmed(); ok {
+		t.Fatal("the store takes records under a switch not on disk")
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Bind(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Confirmed(); !ok {
+		t.Fatal("a saved switch was not confirmed")
+	}
+}
