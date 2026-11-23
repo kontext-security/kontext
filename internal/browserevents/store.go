@@ -599,7 +599,10 @@ func (s *Store) Ack(p Pending) error {
 		return nil
 	}
 	for i, key := range p.keys {
-		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
+		// The record too, not only its version: a row pruned while the
+		// batch was out, such as an account ahead of a clock set back, and
+		// recorded again under the same key starts again at version 1.
+		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] && r.Record == p.Records[i] {
 			r.Sent = r.Version
 		}
 	}
@@ -616,7 +619,7 @@ func (s *Store) Drop(p Pending) error {
 		return nil
 	}
 	for i, key := range p.keys {
-		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
+		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] && r.Record == p.Records[i] {
 			delete(s.rows, key)
 		}
 	}
@@ -650,15 +653,28 @@ func (s *Store) bindLocked(binding string) (dropped int, err error) {
 	s.epoch.Add(1)
 	switch s.binding {
 	case binding:
-		return 0, nil
+		// A switch whose save failed is not confirmed until it is on
+		// disk: otherwise a restart under the old binding brings its rows
+		// back.
+		if !s.dirty {
+			return 0, nil
+		}
 	case "":
 	default:
 		dropped = len(s.rows)
 		s.rows = map[string]*row{}
 	}
-	s.binding = binding
-	s.generation++
-	return dropped, s.saveLocked()
+	if s.binding != binding {
+		s.binding = binding
+		s.generation++
+	}
+	var committed *committedError
+	if err := s.saveLocked(); err != nil && !errors.As(err, &committed) {
+		// Not on disk: nothing is taken under the new binding yet.
+		s.suspended = true
+		return dropped, err
+	}
+	return dropped, nil
 }
 
 // Suspend stops the store taking records until the next Bind, for when the
@@ -818,9 +834,12 @@ func isTempSuffix(s string) bool {
 
 // trimRows removes the oldest rows until at most MaxRows remain.
 func trimRows(rows map[string]*row) {
+	// Rows without a LastSeen (health, and any kind that only carries an
+	// observation time) sort by ObservedAt, so a fresh row never sorts at the
+	// zero time and is dropped before an older visit.
 	seen := func(r *row) time.Time {
 		at := r.Record.LastSeen
-		if r.Record.Kind == KindHealth {
+		if r.Record.Kind == KindHealth || at == "" {
 			at = r.Record.ObservedAt
 		}
 		t, _ := time.Parse(time.RFC3339Nano, at)

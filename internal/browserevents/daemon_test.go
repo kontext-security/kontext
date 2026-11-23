@@ -1342,3 +1342,92 @@ func TestARestoredStoreOverTheRowCapKeepsTheNewest(t *testing.T) {
 		}
 	}
 }
+
+// With accounts among the rows, the cap still drops the oldest by time: an
+// account sorts by its observation time, never at the zero time.
+func TestARestoredStoreOverTheRowCapKeepsTheNewestAccounts(t *testing.T) {
+	rows := map[string]*row{}
+	source := func(r Record) CloudRecord {
+		return CloudRecord{Browser: "chrome", Profile: "p7Hq2vXkLm9s", ExtensionVersion: "0.1.0", Record: r}
+	}
+	for i := 0; i < MaxRows; i++ {
+		at := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		rows[fmt.Sprint("visit", i)] = &row{Record: source(visit(1, at, at).Record), Version: 1}
+	}
+	// The newest row of all is an account; the oldest is one too.
+	rows["new account"] = &row{Record: source(account(AccountPersonal, "2026-11-20T11:00:00Z").Record), Version: 1}
+	rows["old account"] = &row{Record: source(account(AccountCompany, "2026-11-19T23:00:00Z").Record), Version: 1}
+	trimRows(rows)
+	if len(rows) != MaxRows {
+		t.Fatalf("rows = %d", len(rows))
+	}
+	if _, ok := rows["new account"]; !ok {
+		t.Fatal("the newest row, an account, was dropped")
+	}
+	if _, ok := rows["old account"]; ok {
+		t.Fatal("the oldest row, an account, was kept")
+	}
+	if _, ok := rows["visit0"]; ok {
+		t.Fatal("the oldest visit was kept")
+	}
+}
+
+// An answer to a batch acknowledges only the record it carried: a row
+// pruned while the batch was out and recorded again under the same key, at
+// version 1 again, is still sent.
+func TestAnAnswerDoesNotAcknowledgeARowRecordedAgain(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T11:55:00Z")})
+	sent := s.Pending(10)
+	if len(sent.Records) != 1 {
+		t.Fatalf("pending = %d", len(sent.Records))
+	}
+	// The clock is set back while the batch is out: the row is dropped as
+	// ahead of the clock, and a new observation takes its key.
+	s.mu.Lock()
+	s.now = func() time.Time { return testNow().Add(-2 * time.Hour) }
+	s.mu.Unlock()
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T10:00:00Z")})
+	if err := s.Ack(sent); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Pending(10).Records; len(got) != 1 || got[0].ObservedAt != "2026-11-20T10:00:00Z" {
+		t.Fatalf("pending = %+v, want the 10:00 observation still to send", got)
+	}
+}
+
+// A switch whose save failed is not confirmed by the next bind until it is
+// on disk.
+func TestASwitchWhoseSaveFailedIsNotConfirmedUntilSaved(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	dir := filepath.Dir(s.path)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-b")
+	if _, err := s.Bind(b); err == nil {
+		t.Fatal("a switch whose save failed was reported done")
+	}
+	if _, err := s.Bind(b); err == nil {
+		t.Fatal("a second bind confirmed a switch that is still not on disk")
+	}
+	if _, ok := s.Confirmed(); ok {
+		t.Fatal("the store takes records under a switch not on disk")
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Bind(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Confirmed(); !ok {
+		t.Fatal("a saved switch was not confirmed")
+	}
+}

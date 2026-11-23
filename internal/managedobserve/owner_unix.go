@@ -10,7 +10,7 @@ import (
 )
 
 // ensurePrivateOwner refuses a socket directory another uid owns and narrows its mode to 0700.
-func ensurePrivateOwner(dir string, info os.FileInfo, _ bool) error {
+func ensurePrivateOwner(dir string, info os.FileInfo) error {
 	if err := checkOwner(dir, info); err != nil {
 		return err
 	}

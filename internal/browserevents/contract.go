@@ -390,14 +390,9 @@ func DecodeCloudResponse(data []byte, sent int) (CloudResponse, error) {
 	if !ok || accepted < 0 {
 		return CloudResponse{}, errors.New("browser events: cloud answer without accepted")
 	}
-	var items []json.RawMessage
-	if err := json.Unmarshal(fields["rejected"], &items); err != nil || items == nil {
-		return CloudResponse{}, errors.New("browser events: cloud answer without rejected")
-	}
-	// More rejections than records sent cannot be an answer to them: refused
-	// before anything is allocated for each.
-	if len(items) > sent {
-		return CloudResponse{}, errors.New("browser events: cloud answer rejects more records than were sent")
+	items, err := rejectionItems(fields["rejected"], sent)
+	if err != nil {
+		return CloudResponse{}, err
 	}
 	response := CloudResponse{Accepted: accepted, Rejected: make([]Rejection, 0, len(items))}
 	seen := map[int]bool{}
@@ -704,4 +699,30 @@ func insideDay(day, first, last string) bool {
 // schema's maxLength does, not bytes.
 func isLabel(value string) bool {
 	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= 40 && labelPattern.MatchString(value)
+}
+
+// rejectionItems reads the rejected array one entry at a time and stops at
+// the first entry past sent: more rejections than records sent cannot be an
+// answer to them, and nothing is kept for the rest.
+func rejectionItems(raw json.RawMessage, sent int) ([]json.RawMessage, error) {
+	missing := errors.New("browser events: cloud answer without rejected")
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if open, err := decoder.Token(); err != nil || open != json.Delim('[') {
+		return nil, missing
+	}
+	items := []json.RawMessage{}
+	for decoder.More() {
+		if len(items) == sent {
+			return nil, errors.New("browser events: cloud answer rejects more records than were sent")
+		}
+		var item json.RawMessage
+		if err := decoder.Decode(&item); err != nil {
+			return nil, missing
+		}
+		items = append(items, item)
+	}
+	if end, err := decoder.Token(); err != nil || end != json.Delim(']') {
+		return nil, missing
+	}
+	return items, nil
 }
