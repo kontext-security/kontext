@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
-func devIDForTest() string { return DevExtensionID }
+// Pinned as a literal, so a changed DevExtensionID fails the tests.
+func devIDForTest() string { return "jbfhbfeilekhmfekihompjpmkecgpfgn" }
 
 func TestRegisterDevWritesTheManifestIntoAProfile(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -32,8 +34,9 @@ func TestRegisterDevWritesTheManifestIntoAProfile(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
+	want := []string{"chrome-extension://jdakicfhknddbigfcfgfmhoabhgpjega/", "chrome-extension://jbfhbfeilekhmfekihompjpmkecgpfgn/"}
 	if manifest.Path != "/usr/local/bin/kontext" || manifest.Type != "stdio" ||
-		len(manifest.AllowedOrigins) != 1 || manifest.AllowedOrigins[0] != "chrome-extension://"+DevExtensionID+"/" {
-		t.Fatalf("manifest = %+v", manifest)
+		!slices.Equal(manifest.AllowedOrigins, want) {
+		t.Fatalf("manifest = %+v, want origins %q", manifest, want)
 	}
 }
