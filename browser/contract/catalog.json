@@ -4,7 +4,7 @@
     "name": "ChatGPT",
     "provider": "OpenAI",
     "hosts": ["chatgpt.com", "chat.openai.com"],
-    "sends": ["/backend-api/f/conversation"]
+    "sends": ["https://chatgpt.com/backend-api/f/conversation"]
   },
   {
     "id": "claude",
