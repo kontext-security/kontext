@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -426,19 +425,11 @@ func (s *Store) saveLocked() error {
 	if err := os.Rename(tmp.Name(), s.path); err != nil {
 		return fmt.Errorf("browser events: save store: %w", err)
 	}
-	syncDir(dir)
+	// Until the rename is durable the store stays dirty, and the extension
+	// is not told its records were taken.
+	if err := fsperm.SyncDir(dir); err != nil {
+		return fmt.Errorf("browser events: sync store folder: %w", err)
+	}
 	s.dirty = false
 	return nil
-}
-
-// syncDir makes a rename in dir durable. Windows cannot open a folder for
-// that, and NTFS logs the rename itself.
-func syncDir(dir string) {
-	if runtime.GOOS == "windows" {
-		return
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
 }

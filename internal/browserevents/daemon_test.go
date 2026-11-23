@@ -662,9 +662,10 @@ func TestAStoreThatIsNotAFileIsRefusedWithoutBlocking(t *testing.T) {
 }
 
 func TestTwoDatabasesInOneFolderKeepTheirOwnStores(t *testing.T) {
-	a := DefaultStorePath("/data/guard.db")
-	b := DefaultStorePath("/data/other.db")
-	if a == b || a == "/data/guard.db" || filepath.Dir(a) != "/data" {
+	dir := filepath.Join("data")
+	a := DefaultStorePath(filepath.Join(dir, "guard.db"))
+	b := DefaultStorePath(filepath.Join(dir, "other.db"))
+	if a == b || filepath.Dir(a) != dir || filepath.Base(a) != "guard.browser-activity.json" {
 		t.Fatalf("store paths %q and %q", a, b)
 	}
 }
