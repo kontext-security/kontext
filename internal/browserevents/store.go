@@ -149,7 +149,7 @@ func rowKey(r CloudRecord) string {
 	if r.Kind == KindHealth {
 		return r.Browser + "|" + r.Profile + "|health"
 	}
-	return r.Browser + "|" + r.Profile + "|visit|" + r.App + "|" + r.Day
+	return r.Browser + "|" + r.Profile + "|" + r.Kind + "|" + r.App + "|" + r.Day
 }
 
 // Apply merges valid records from one extension into the store and returns
@@ -173,12 +173,14 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 	current := s.enrollmentLocked()
 	for _, indexed := range records {
 		record := CloudRecord{Browser: ext.Browser, Profile: ext.Profile, ExtensionVersion: ext.Version, Record: indexed.Record}
-		if record.Kind == KindVisit && enrollment != current {
-			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: "visit recorded for another enrollment"})
+		if record.Kind != KindHealth && enrollment != current {
+			// An account type seen for one workspace must not reach another,
+			// as with visits.
+			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: record.Kind + " recorded for another enrollment"})
 			continue
 		}
-		if record.Kind == KindVisit && !s.recentDay(record.Day) {
-			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: "visit day is too old or in the future"})
+		if record.Kind != KindHealth && !s.recentDay(record.Day) {
+			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: record.Kind + " day is too old or in the future"})
 			continue
 		}
 		key := rowKey(record)
@@ -232,6 +234,11 @@ func merge(current, next CloudRecord) (CloudRecord, bool) {
 		if next.Requests > current.Requests {
 			merged.Requests = next.Requests
 		}
+	case KindAccount:
+		// The newest observation of the day says which account it was.
+		if later(next.ObservedAt, current.ObservedAt) {
+			merged = next
+		}
 	}
 	return merged, merged != current
 }
@@ -267,7 +274,7 @@ func (s *Store) pruneLocked() bool {
 
 func (s *Store) expired(r CloudRecord) bool {
 	switch r.Kind {
-	case KindVisit:
+	case KindVisit, KindAccount:
 		return !s.recentDay(r.Day)
 	case KindHealth:
 		observed, err := time.Parse(time.RFC3339, r.ObservedAt)

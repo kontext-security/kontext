@@ -322,6 +322,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	browserHandler := &browserevents.Handler{
 		Store:       browserStore,
 		CaptureMode: func() string { return browserCaptureMode(endpointConfigCache.Current()) },
+		// Until the dashboard has a list, the enrolled user's email domain
+		// is the organisation's: an account signed in with it is a company
+		// account.
+		CorporateDomains: func() []string { return browserevents.EmailDomains(loadedConfig.Config.Device.UserEmail) },
 		Changed: func() {
 			select {
 			case browserChanged <- struct{}{}:

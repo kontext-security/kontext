@@ -675,3 +675,91 @@ func TestALongExtensionVersionIsRefused(t *testing.T) {
 		t.Fatal("a 70-character version was taken")
 	}
 }
+
+func account(plan, observed string) IndexedRecord {
+	return IndexedRecord{Record: Record{Kind: KindAccount, Day: "2026-11-20", App: "chatgpt", Host: "chatgpt.com",
+		Plan: plan, ObservedAt: observed}}
+}
+
+// The account fixture goes through the handler into the store and on to a
+// batch the cloud schema takes; the newest observation of the day wins, and
+// an older one replayed late changes nothing.
+func TestAccountsKeepTheNewestObservationOfTheDay(t *testing.T) {
+	s := openTestStore(t)
+	h := &Handler{Store: s}
+	data, err := os.ReadFile(filepath.Join(fixtures, "valid", "records-account.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), "3f9a1c2b7d4e6f80", s.Enrollment(), 1))
+	var answer Settings
+	_ = json.Unmarshal(h.Answer(context.Background(), data), &answer)
+	if answer.Accepted != 3 || len(answer.Rejected) != 0 {
+		t.Fatalf("answer = %+v", answer)
+	}
+	for _, r := range []IndexedRecord{account(PlanFree, "2026-11-20T11:30:00Z"), account(PlanTeam, "2026-11-20T08:00:00Z")} {
+		if _, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plans := map[string]string{}
+	p := s.Pending(10)
+	for _, r := range p.Records {
+		plans[r.App] = r.Plan
+	}
+	if len(p.Records) != 2 || plans["chatgpt"] != PlanFree || plans["claude"] != PlanPaid {
+		t.Fatalf("pending = %+v", p.Records)
+	}
+	batch := CloudBatch{Schema: CloudSchema, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", SentAt: "2026-11-20T12:00:00Z", Records: p.Records}
+	if err := batch.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnAccountRecordedForAnotherEnrollmentIsRefused(t *testing.T) {
+	s := openTestStore(t)
+	rejected, err := s.Apply(testExtension, "0000000000000000", []IndexedRecord{account(PlanTeam, "2026-11-20T09:00:00Z")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rejected) != 1 || s.Len() != 0 {
+		t.Fatalf("rejected = %+v, rows = %d", rejected, s.Len())
+	}
+}
+
+// A personal account never carries its domain, and a record built in Go
+// with one is refused before it is stored or sent.
+func TestAPersonalAccountCannotCarryADomain(t *testing.T) {
+	r := account(PlanPaid, "2026-11-20T09:00:00Z").Record
+	r.EmailDomain = "gmail.com"
+	if err := r.Validate(); err == nil {
+		t.Fatal("a personal account with a domain validated")
+	}
+	r.Corporate = true
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a corporate account with its domain: %v", err)
+	}
+	r.EmailDomain = "jane@example.com"
+	if err := r.Validate(); err == nil {
+		t.Fatal("an address validated as a domain")
+	}
+	visit := visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z").Record
+	visit.Plan = PlanFree
+	if err := visit.Validate(); err == nil {
+		t.Fatal("a visit carrying a plan validated")
+	}
+}
+
+func TestCorporateDomainsComeFromTheEnrolledEmail(t *testing.T) {
+	if got := EmailDomains("Jane@Example.COM", "sam@gmail.com", "no-at", ""); len(got) != 1 || got[0] != "example.com" {
+		t.Fatalf("domains = %v", got)
+	}
+	h := &Handler{Store: openTestStore(t), CorporateDomains: func() []string {
+		return []string{"example.com", "EXAMPLE.com", "not a domain", "example.org"}
+	}}
+	var answer Settings
+	_ = json.Unmarshal(h.Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)), &answer)
+	if strings.Join(answer.CorporateDomains, ",") != "example.com,example.org" {
+		t.Fatalf("corporate domains = %v", answer.CorporateDomains)
+	}
+}

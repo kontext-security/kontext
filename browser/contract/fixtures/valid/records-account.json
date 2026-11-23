@@ -1,0 +1,35 @@
+{
+  "contract": 1,
+  "type": "records",
+  "enrollment": "3f9a1c2b7d4e6f80",
+  "extension": { "version": "0.1.0", "browser": "chrome", "profile": "p7Hq2vXkLm9s" },
+  "records": [
+    {
+      "kind": "account",
+      "day": "2026-11-20",
+      "app": "chatgpt",
+      "host": "chatgpt.com",
+      "plan": "team",
+      "corporate": true,
+      "email_domain": "example.com",
+      "observed_at": "2026-11-20T09:14:40Z"
+    },
+    {
+      "kind": "account",
+      "day": "2026-11-20",
+      "app": "claude",
+      "host": "claude.ai",
+      "plan": "paid",
+      "observed_at": "2026-11-20T10:02:11Z"
+    },
+    {
+      "kind": "account",
+      "day": "2026-11-20",
+      "app": "chatgpt",
+      "host": "chat.openai.com",
+      "plan": "anonymous",
+      "corporate": false,
+      "observed_at": "2026-11-20T11:00:00Z"
+    }
+  ]
+}

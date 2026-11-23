@@ -26,9 +26,15 @@ Record kinds in v1:
 |---|---|
 | `health` | The extension is running: when it connected and when it was last seen. |
 | `visit` | An AI web app from the catalog was used that UTC day: first and last time, and `requests`, the number of page loads plus POST requests to the app's hosts. Page loads alone would miss a tab kept open for days; every request would count an idle tab that polls. |
+| `account` | Which kind of account was signed in to an app that UTC day, at the newest observation: `plan` is `anonymous` (not signed in), `free` or `paid` (a personal account), `team` or `enterprise` (an organisation's workspace), or `unknown` (the app's answer could not be read). `corporate` is true for a team or enterprise workspace, or for an account whose email domain is one of `corporate_domains`. |
 
 `day` is the UTC date. A `visit` is a snapshot of the day so far with an
 absolute count, never an increment, so sending it twice is harmless.
+
+An `account` never carries an address or a name. `email_domain` is sent only
+for a corporate account; a personal account's domain stays in the browser.
+The daemon keeps the newest `account` of each app and day per profile, and
+refuses one recorded for another enrollment, as it does visits.
 
 `app_name` and `provider` are names from the extension's catalog, such as
 "ChatGPT" and "OpenAI": at most 40 letters, digits, spaces and `. & + ' ( ) -`.
@@ -44,9 +50,10 @@ accepted, and `enrollment`: an opaque id of the enrollment the daemon records
 under, empty until it has one. When `enrollment` changes, the extension drops
 the visits it kept for the previous one, so nothing recorded for one workspace
 reaches another; the daemon drops its own rows on the same change. While `paused` is true the extension stops every detector and sends
-only `hello` and `health`. In v1 the daemon always answers `paused: false` and
-no corporate domains; both get a server source with the endpoint configuration
-(planned before account detection).
+only `hello` and `health`. In v1 the daemon always answers `paused: false`,
+until it gets a server source with the endpoint configuration. Its corporate
+domains are the domain of the enrolled user's email, unless that is a consumer
+webmail domain, until the dashboard has a list of its own.
 
 A message with another contract version gets an `error` answer with
 `unsupported_contract`. The extension then stops recording until a handshake

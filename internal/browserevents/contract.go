@@ -38,8 +38,21 @@ const (
 
 // Record kinds in contract v1.
 const (
-	KindHealth = "health"
-	KindVisit  = "visit"
+	KindHealth  = "health"
+	KindVisit   = "visit"
+	KindAccount = "account"
+)
+
+// Plans an account record names: what kind of account was signed in to an
+// app, never which one. Free and paid are personal accounts; team and
+// enterprise are an organisation's workspace.
+const (
+	PlanAnonymous  = "anonymous"
+	PlanFree       = "free"
+	PlanPaid       = "paid"
+	PlanTeam       = "team"
+	PlanEnterprise = "enterprise"
+	PlanUnknown    = "unknown"
 )
 
 // Answers to a message that cannot be taken.
@@ -84,8 +97,8 @@ type Extension struct {
 	Profile string `json:"profile"`
 }
 
-// Record is one health or visit record. Fields that belong to the other kind
-// stay empty.
+// Record is one health, visit or account record. Fields that belong to
+// another kind stay empty.
 type Record struct {
 	Kind string `json:"kind"`
 
@@ -103,6 +116,13 @@ type Record struct {
 	FirstSeen string `json:"first_seen,omitempty"`
 	LastSeen  string `json:"last_seen,omitempty"`
 	Requests  int    `json:"requests,omitempty"`
+
+	// account, with day, app, host and observed_at. EmailDomain is set only
+	// for a corporate account: a personal account carries no address and no
+	// domain.
+	Plan        string `json:"plan,omitempty"`
+	Corporate   bool   `json:"corporate,omitempty"`
+	EmailDomain string `json:"email_domain,omitempty"`
 }
 
 // Message is what the extension sends: a hello, or records.
@@ -300,6 +320,14 @@ func decodeRecord(data []byte) (Record, error) {
 		record.FirstSeen, _ = fields.text("first_seen")
 		record.LastSeen, _ = fields.text("last_seen")
 		record.Requests, _ = fields.integer("requests")
+	case KindAccount:
+		record.Day, _ = fields.text("day")
+		record.App, _ = fields.text("app")
+		record.Host, _ = fields.text("host")
+		record.Plan, _ = fields.text("plan")
+		record.Corporate, _ = fields.boolean("corporate")
+		record.EmailDomain, _ = fields.text("email_domain")
+		record.ObservedAt, _ = fields.text("observed_at")
 	}
 	return record, nil
 }
@@ -393,6 +421,18 @@ func (o object) integer(key string) (int, bool) {
 	return value, true
 }
 
+// boolean is the boolean at key, and whether there is one.
+func (o object) boolean(key string) (bool, bool) {
+	var value bool
+	if o.null(key) {
+		return false, false
+	}
+	if err := json.Unmarshal(o[key], &value); err != nil {
+		return false, false
+	}
+	return value, true
+}
+
 // null reports whether key is missing or null.
 func (o object) null(key string) bool {
 	value := bytes.TrimSpace(o[key])
@@ -431,7 +471,13 @@ func (r Record) own() Record {
 	case KindVisit:
 		visit := r
 		visit.ConnectedSince, visit.ObservedAt = "", ""
+		visit.Plan, visit.Corporate, visit.EmailDomain = "", false, ""
 		return visit
+	case KindAccount:
+		return Record{
+			Kind: r.Kind, Day: r.Day, App: r.App, Host: r.Host, ObservedAt: r.ObservedAt,
+			Plan: r.Plan, Corporate: r.Corporate, EmailDomain: r.EmailDomain,
+		}
 	default:
 		return Record{Kind: r.Kind}
 	}
@@ -475,6 +521,32 @@ func (r Record) Validate() error {
 		}
 		if r.Requests < 1 || r.Requests > MaxRequestsPerDay {
 			return errors.New("visit requests out of range")
+		}
+		return nil
+	case KindAccount:
+		if !isDay(r.Day) {
+			return errors.New("account day must be a UTC date")
+		}
+		if !appPattern.MatchString(r.App) {
+			return errors.New("account app id is invalid")
+		}
+		if len(r.Host) > 253 || !hostPattern.MatchString(r.Host) {
+			return errors.New("account host must be a bare hostname")
+		}
+		if !isTime(r.ObservedAt) || !insideDay(r.Day, r.ObservedAt, r.ObservedAt) {
+			return errors.New("account observed_at must fall on its day")
+		}
+		switch r.Plan {
+		case PlanAnonymous, PlanFree, PlanPaid, PlanTeam, PlanEnterprise, PlanUnknown:
+		default:
+			return errors.New("account plan is unknown")
+		}
+		if r.EmailDomain != "" && (!r.Corporate || len(r.EmailDomain) > 253 || !hostPattern.MatchString(r.EmailDomain)) {
+			// A personal account's domain stays in the browser.
+			return errors.New("account email_domain must be a corporate account's bare domain")
+		}
+		if r.Corporate && r.Plan == PlanAnonymous {
+			return errors.New("an anonymous account cannot be corporate")
 		}
 		return nil
 	default:

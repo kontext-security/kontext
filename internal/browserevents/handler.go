@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 // Handler answers the extension's messages for the daemon.
@@ -15,6 +16,9 @@ type Handler struct {
 	// (CaptureCommands, CaptureFull or CapturePrompts). Nil reads as
 	// CaptureCommands, the most restrictive.
 	CaptureMode func() string
+	// CorporateDomains are the organisation's email domains, which make a
+	// signed-in account a company account. Nil reads as none.
+	CorporateDomains func() []string
 	// Changed, when set, is told that the store has rows to send.
 	Changed func()
 	// Logf reports what the extension cannot be told.
@@ -72,11 +76,60 @@ func (h *Handler) settings() Settings {
 	}
 	return Settings{
 		Contract: Contract, Type: TypeSettings, CaptureMode: mode,
-		// Both get a server source with the endpoint configuration; until
-		// then the daemon has none and never pauses the extension.
-		CorporateDomains: []string{}, Paused: false,
+		// Paused gets a server source with the endpoint configuration;
+		// until then the daemon never pauses the extension.
+		CorporateDomains: h.corporateDomains(), Paused: false,
 		Rejected: []Rejection{},
 	}
+}
+
+// corporateDomains are the valid, distinct domains of CorporateDomains, at
+// most the 50 the contract allows.
+func (h *Handler) corporateDomains() []string {
+	domains := []string{}
+	if h.CorporateDomains == nil {
+		return domains
+	}
+	seen := map[string]bool{}
+	for _, domain := range h.CorporateDomains() {
+		domain = strings.ToLower(strings.TrimSpace(domain))
+		if seen[domain] || len(domain) > 253 || !hostPattern.MatchString(domain) || len(domains) == maxCorporateDomains {
+			continue
+		}
+		seen[domain] = true
+		domains = append(domains, domain)
+	}
+	return domains
+}
+
+// maxCorporateDomains is the contract's limit on corporate_domains.
+const maxCorporateDomains = 50
+
+// consumerMailDomains are webmail domains that never make an account a
+// company one, even when the enrolled user's address is on one of them.
+var consumerMailDomains = map[string]bool{
+	"gmail.com": true, "googlemail.com": true, "outlook.com": true, "hotmail.com": true,
+	"live.com": true, "msn.com": true, "yahoo.com": true, "icloud.com": true, "me.com": true,
+	"mac.com": true, "aol.com": true, "gmx.de": true, "gmx.net": true, "web.de": true,
+	"t-online.de": true, "proton.me": true, "protonmail.com": true, "pm.me": true,
+}
+
+// EmailDomains is the corporate domain of each address: the part after the
+// last @, lowercased, unless it is a consumer webmail domain.
+func EmailDomains(addresses ...string) []string {
+	domains := []string{}
+	for _, address := range addresses {
+		at := strings.LastIndex(address, "@")
+		if at < 0 {
+			continue
+		}
+		domain := strings.ToLower(strings.TrimSpace(address[at+1:]))
+		if domain == "" || consumerMailDomains[domain] {
+			continue
+		}
+		domains = append(domains, domain)
+	}
+	return domains
 }
 
 func (h *Handler) logf(format string, args ...any) {
