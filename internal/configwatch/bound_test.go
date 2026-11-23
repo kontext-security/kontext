@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext/internal/privacyfolder"
 )
 
 // countingBackend accepts every path and records the most handles open at
@@ -160,5 +162,111 @@ func TestLinksAreNeverWatched(t *testing.T) {
 		if path == link {
 			t.Fatalf("watched the link %s", link)
 		}
+	}
+}
+
+// eventBackend is a countingBackend whose events the test sends.
+type eventBackend struct {
+	countingBackend
+	events chan []event
+}
+
+func (b *eventBackend) wait(timeout time.Duration) ([]event, error) {
+	select {
+	case events := <-b.events:
+		return events, nil
+	case <-time.After(timeout):
+		return nil, nil
+	}
+}
+
+// handleFor returns the open handle for path.
+func (b *eventBackend) handleFor(path string) (int, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for handle, open := range b.open {
+		if open == path {
+			return handle, true
+		}
+	}
+	return 0, false
+}
+
+// A watched project folder replaced by a link into a privacy folder is
+// refused before anything is read through the link: the renewal after the
+// old watch goes checks the path first, so lstat never follows the linked
+// parent into the protected folder.
+func TestALinkIntoAPrivacyFolderIsNeverRead(t *testing.T) {
+	saved := waitSlice
+	waitSlice = 5 * time.Millisecond
+	t.Cleanup(func() { waitSlice = saved })
+	enabled := privacyfolder.Enabled
+	privacyfolder.Enabled = true
+	t.Cleanup(func() { privacyfolder.Enabled = enabled })
+	home := t.TempDir()
+	code := filepath.Join(home, "code")
+	settings := filepath.Join(code, "app", ".claude", "settings.json")
+	protected := filepath.Join(home, "Documents", "app", ".claude", "settings.json")
+	for _, path := range []string{settings, protected} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	var throughLink []string
+	savedLstat := lstat
+	lstat = func(path string) (os.FileInfo, error) {
+		if info, err := os.Lstat(code); err == nil && info.Mode()&os.ModeSymlink != 0 &&
+			strings.HasPrefix(path, code+string(filepath.Separator)) {
+			mu.Lock()
+			throughLink = append(throughLink, path)
+			mu.Unlock()
+		}
+		return os.Lstat(path)
+	}
+	t.Cleanup(func() { lstat = savedLstat })
+
+	b := &eventBackend{countingBackend: countingBackend{open: map[int]string{}}, events: make(chan []event)}
+	w := &Watcher{changed: func() {}, opts: Options{Home: home, Delay: time.Second, MinGap: time.Second}, next: make(chan []string, 1), done: make(chan struct{}), stopped: make(chan struct{})}
+	go w.run(b)
+	t.Cleanup(w.Close)
+	w.Set([]string{settings})
+	deadline := time.Now().Add(3 * time.Second)
+	handle, ok := b.handleFor(settings)
+	for !ok {
+		if time.Now().After(deadline) {
+			t.Fatal("the settings file was never watched")
+		}
+		time.Sleep(5 * time.Millisecond)
+		handle, ok = b.handleFor(settings)
+	}
+
+	// The fake backend sends nothing on its own, so the swap is complete
+	// before the watcher looks again.
+	if err := os.RemoveAll(code); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, "Documents"), code); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	opened := b.next
+	b.mu.Unlock()
+	b.events <- []event{{handle: handle, gone: true}}
+	// A second send returns once the first batch, and its renewal, is done.
+	b.events <- nil
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(throughLink) > 0 {
+		t.Fatalf("lstat read through the link into a privacy folder: %v", throughLink)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.next != opened {
+		t.Fatalf("%d watches opened through the link: %v", b.next-opened, b.open)
 	}
 }

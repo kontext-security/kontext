@@ -46,6 +46,15 @@ func drain(fired <-chan struct{}) {
 // settle lets the watcher take a new set before the test changes files.
 func settle() { time.Sleep(100 * time.Millisecond) }
 
+// registered waits for the scan that new watches ask for, then clears it,
+// so the change a test makes next has to wake the scan through its own
+// file event.
+func registered(t *testing.T, fired <-chan struct{}) {
+	t.Helper()
+	expectFire(t, fired, "new watches")
+	drain(fired)
+}
+
 func TestChangesWakeTheScan(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".claude")
@@ -58,7 +67,7 @@ func TestChangesWakeTheScan(t *testing.T) {
 	}
 	w, fired := newTestWatcher(t, home)
 	w.Set([]string{settings})
-	settle()
+	registered(t, fired)
 
 	if err := os.WriteFile(settings, []byte(`{"hooks":{}}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -104,10 +113,17 @@ func TestBurstsAreSpaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	fired := make(chan struct{}, 64)
-	w := New(func() { fired <- struct{}{} }, Options{Home: home, Delay: 20 * time.Millisecond, MinGap: time.Hour})
+	const gap = time.Second
+	w := New(func() { fired <- struct{}{} }, Options{Home: home, Delay: 20 * time.Millisecond, MinGap: gap})
 	t.Cleanup(w.Close)
 	w.Set([]string{file})
-	settle()
+	// The scan new watches ask for opens a gap of its own; let it close so
+	// the burst below is what wakes the scan.
+	expectFire(t, fired, "new watches")
+	time.Sleep(gap + 200*time.Millisecond)
+	if n := len(fired); n != 0 {
+		t.Fatalf("new watches woke the scan %d more times", n)
+	}
 	for i := range 20 {
 		if err := os.WriteFile(file, []byte{byte(i)}, 0o600); err != nil {
 			t.Fatal(err)
@@ -168,7 +184,7 @@ func TestFirstProjectSettingsWakeTheScan(t *testing.T) {
 	settings := filepath.Join(project, ".claude", "settings.json")
 	w, fired := newTestWatcher(t, home)
 	w.Set([]string{settings})
-	settle()
+	registered(t, fired)
 	if err := os.Mkdir(filepath.Join(project, ".claude"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +192,7 @@ func TestFirstProjectSettingsWakeTheScan(t *testing.T) {
 	drain(fired)
 	// The next scan's set watches the new folder itself.
 	w.Set([]string{settings})
-	settle()
+	registered(t, fired)
 	if err := os.WriteFile(settings, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -211,11 +211,17 @@ func (w *Watcher) run(b backend) {
 		// Checked again at every registration, not only when the set
 		// arrived: a watched folder replaced by a link into a privacy
 		// folder is refused like the scan refuses it, and never opened.
+		// Guarded goes first: it resolves links one part at a time and
+		// stops before a protected folder, where lstat would follow a
+		// linked parent into it.
+		if privacyfolder.Guarded(w.opts.Home, path) {
+			return false, false
+		}
 		info, err := lstat(path)
 		if err != nil {
 			return false, errors.Is(err, fs.ErrNotExist)
 		}
-		if info.Mode()&os.ModeSymlink != 0 || privacyfolder.Guarded(w.opts.Home, path) {
+		if info.Mode()&os.ModeSymlink != 0 {
 			return false, false
 		}
 		handle, err := b.add(path)
