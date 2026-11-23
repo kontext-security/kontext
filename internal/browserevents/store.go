@@ -596,7 +596,10 @@ func (s *Store) Ack(p Pending) error {
 		return nil
 	}
 	for i, key := range p.keys {
-		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
+		// The record too, not only its version: a row pruned while the
+		// batch was out, such as an account ahead of a clock set back, and
+		// recorded again under the same key starts again at version 1.
+		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] && r.Record == p.Records[i] {
 			r.Sent = r.Version
 		}
 	}
@@ -613,7 +616,7 @@ func (s *Store) Drop(p Pending) error {
 		return nil
 	}
 	for i, key := range p.keys {
-		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
+		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] && r.Record == p.Records[i] {
 			delete(s.rows, key)
 		}
 	}
