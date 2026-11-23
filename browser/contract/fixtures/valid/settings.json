@@ -1,0 +1,9 @@
+{
+  "contract": 1,
+  "type": "settings",
+  "capture_mode": "commands",
+  "corporate_domains": ["example.com"],
+  "paused": false,
+  "accepted": 1,
+  "rejected": [{ "index": 1, "reason": "unknown record kind" }]
+}
