@@ -1,0 +1,630 @@
+{
+  "schemaVersion": "endpoint-config-identity-fixture-v6",
+  "identityDomain": "kontext:endpoint-config:v6",
+  "vectors": [
+    {
+      "name": "omitted-work-type-on-compaction-on-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",true,true,true,true]",
+      "configIdentity": "7d296b9c4e152546fb79675d19495ab9913f253b0bf89f7ad3532331d5c7d094"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-on-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",true,true,true,false]",
+      "configIdentity": "c726d8d6714c632381f1594ccdb32bd49c2ff9000ccef5e2db716e279b6d946a"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-on-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",true,true,false,true]",
+      "configIdentity": "cd3a4ecaf5c558aa939df8edb24fd0eb3ddbb82335a382bc92c3e0cdf0c0573b"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-on-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",true,true,false,false]",
+      "configIdentity": "4c265a0233f0b1ad46e2c7ec7e3ff57007c402610b05000a432c1a8282cc89dd"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-off-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",true,false,true,true]",
+      "configIdentity": "39e5490ec7793bd43805f78d63b829f4b49abfc9ac8b2dc140ff8c394838e8a1"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-off-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",true,false,true,false]",
+      "configIdentity": "0cf59ffa846db56f739e137cb4de3a56089e43c0259d2f1df4a1d6fecff32e09"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-off-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",true,false,false,true]",
+      "configIdentity": "f6c5c6a4a12106f4b40efe1d913aab1a7ec1f37b66c3ded829a317547ffbaa6c"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-off-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",true,false,false,false]",
+      "configIdentity": "6a8d649b7456dd378ae2945a43e2d1fcb785fb3d0e6a6b116eeb0e56c829772a"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-on-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",false,true,true,true]",
+      "configIdentity": "dc9aea9dabee9b1b9f4b7d426f612ad4eeee97cdcbd61c583602119f16469cae"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-on-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",false,true,true,false]",
+      "configIdentity": "f80cb7fd401426c6128aa040bf116b1a5694e626c79314e722a37ca75326c5ed"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-on-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",false,true,false,true]",
+      "configIdentity": "608fb57e2e2a2a3ddb6ab7fc1fd0805be87bb1c97f96be5e2a942a7e6b6c05bc"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-on-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",false,true,false,false]",
+      "configIdentity": "de60956577349a1c2b43fc65b156fd154d839cbc88b47b71ecebce91a1629d26"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-off-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",false,false,true,true]",
+      "configIdentity": "1fc3b13a9eb8394d124d726ffaabd1074a27ad9f8c68eba3771eadc206a1dc7a"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-off-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",false,false,true,false]",
+      "configIdentity": "28750de52181b1ede2edce97145c7415e964d9025fce7ada51f996bd0ab626fb"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-off-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",false,false,false,true]",
+      "configIdentity": "94e6895da320843fc29d167d091160870f11e4332c1529570ac120fa9f9d5325"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-off-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"omitted\",false,false,false,false]",
+      "configIdentity": "c8525cd9d3c5ab44ccdf4755709c4bb9602e966f547d806d9373a780778dd835"
+    },
+    {
+      "name": "summary-work-type-on-compaction-on-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",true,true,true,true]",
+      "configIdentity": "b71bb97384056822ddc9149b0921f1760793181a6d4f41b660d6abedd50d635d"
+    },
+    {
+      "name": "summary-work-type-on-compaction-on-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",true,true,true,false]",
+      "configIdentity": "dc6c7d92877bce55bbf38b3b816ccf8665532daf652a29c9cf0e2bf997820d8c"
+    },
+    {
+      "name": "summary-work-type-on-compaction-on-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",true,true,false,true]",
+      "configIdentity": "76c9cb69ee92b2e9e2d791a30442fb7f62711c94f516943cb9a41fa38dcf5726"
+    },
+    {
+      "name": "summary-work-type-on-compaction-on-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",true,true,false,false]",
+      "configIdentity": "8a01af91333fd1cb79e19b747a99959838271292e8c84103f6970753ea027bc3"
+    },
+    {
+      "name": "summary-work-type-on-compaction-off-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",true,false,true,true]",
+      "configIdentity": "39fe2b72ec234f5e4091e2b28709f5d5929adf9ba57be275aa7aa1317fd40299"
+    },
+    {
+      "name": "summary-work-type-on-compaction-off-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",true,false,true,false]",
+      "configIdentity": "38f112c52989c6c3a293e9e081cc985743e30b43e4d69baca1a6a8951de86826"
+    },
+    {
+      "name": "summary-work-type-on-compaction-off-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",true,false,false,true]",
+      "configIdentity": "381c091032cd6d6190902e38bb7524b0bbe8d96e25ec3ba527814b6277891545"
+    },
+    {
+      "name": "summary-work-type-on-compaction-off-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",true,false,false,false]",
+      "configIdentity": "2b12266585f48222d88af6579ac1127041e465787496a1706fb97729a63ac2f4"
+    },
+    {
+      "name": "summary-work-type-off-compaction-on-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",false,true,true,true]",
+      "configIdentity": "37228818bd3d48ba734cbb4429dbc343abee45de3ca0126efbde3f76d4ecb5d7"
+    },
+    {
+      "name": "summary-work-type-off-compaction-on-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",false,true,true,false]",
+      "configIdentity": "25bcad11c07e1f753168915adc28672e42402ec26c84c15cfc37d7f517460623"
+    },
+    {
+      "name": "summary-work-type-off-compaction-on-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",false,true,false,true]",
+      "configIdentity": "cd9fea017646b85006926599bf5b182c7ed470d92dfb378ffdf8a52d96055973"
+    },
+    {
+      "name": "summary-work-type-off-compaction-on-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",false,true,false,false]",
+      "configIdentity": "0d4c8d59e4da31fd9deea23d853d85798e9adaa3a0cd206c744d05141f672e17"
+    },
+    {
+      "name": "summary-work-type-off-compaction-off-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",false,false,true,true]",
+      "configIdentity": "81db40e7c257f20d4f486ef75f1e4803453365068c55977a160c0390aa05852b"
+    },
+    {
+      "name": "summary-work-type-off-compaction-off-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",false,false,true,false]",
+      "configIdentity": "14cdfe0a87a84401a54c11d3938774016be137af9b3d7a66b2693f9ce4b112e4"
+    },
+    {
+      "name": "summary-work-type-off-compaction-off-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",false,false,false,true]",
+      "configIdentity": "71049709287dea2627ae6be94db1fc32a83c2af187edfd53277cef4f95376c66"
+    },
+    {
+      "name": "summary-work-type-off-compaction-off-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"summary\",false,false,false,false]",
+      "configIdentity": "6807869b0f542fc95219e5515c349df104e15853f595012eea263b0240884329"
+    },
+    {
+      "name": "full-work-type-on-compaction-on-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",true,true,true,true]",
+      "configIdentity": "7f428996db54de5c17b4099d4570365331e7c892696adc1648886823c7f520b2"
+    },
+    {
+      "name": "full-work-type-on-compaction-on-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",true,true,true,false]",
+      "configIdentity": "67d204470baa974d62d9ad5deb49c2f546b955de53d250ce08e90437f648e90d"
+    },
+    {
+      "name": "full-work-type-on-compaction-on-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",true,true,false,true]",
+      "configIdentity": "838ba3e77c92579611dd439b03de6c5328a3624775d1b2b37fc3840561e5a91a"
+    },
+    {
+      "name": "full-work-type-on-compaction-on-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",true,true,false,false]",
+      "configIdentity": "160ac6bcfe87089eff7b013958121fbcd91548d4ffb38f4d65dedd11b401f2c5"
+    },
+    {
+      "name": "full-work-type-on-compaction-off-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",true,false,true,true]",
+      "configIdentity": "a8104254845568805ce8e2ddeb03447b52ec989f5190be927bc39af4ed08e4c0"
+    },
+    {
+      "name": "full-work-type-on-compaction-off-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",true,false,true,false]",
+      "configIdentity": "dd6f66c581110212ed8ca6421b97f2a79ed26ad16bf22bcf7819a1d4655f727f"
+    },
+    {
+      "name": "full-work-type-on-compaction-off-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",true,false,false,true]",
+      "configIdentity": "a87dc31b0dd92b6d1bfc57dd8b7f3a21fe9eb39905bb4e14f01f9f55e12decd0"
+    },
+    {
+      "name": "full-work-type-on-compaction-off-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",true,false,false,false]",
+      "configIdentity": "f06072b72e15fc60441cd1a201aa92c1cc07ec9f240a3c38c80394f601949991"
+    },
+    {
+      "name": "full-work-type-off-compaction-on-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",false,true,true,true]",
+      "configIdentity": "883cd4c3d8f7683cd910b67ed0e85fc90d2a60f06d8571f2d4e7ceb7742a8a27"
+    },
+    {
+      "name": "full-work-type-off-compaction-on-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",false,true,true,false]",
+      "configIdentity": "59443c2e51cb598c62e481c211dde10fc5c405e2483281c73a02a40558729905"
+    },
+    {
+      "name": "full-work-type-off-compaction-on-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",false,true,false,true]",
+      "configIdentity": "1b6faee08268b0aa9d85c5a3fc5b262888842a55737e8d0a4bf6f748a758df7e"
+    },
+    {
+      "name": "full-work-type-off-compaction-on-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",false,true,false,false]",
+      "configIdentity": "c1ae3dfbf0ac354e6c342f356546a344b203f7e8c1b76817d01d1016dbf7ee89"
+    },
+    {
+      "name": "full-work-type-off-compaction-off-codex-proxy-on-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",false,false,true,true]",
+      "configIdentity": "8eff25fd71f5b70c7b7ad6d7af790b5c4f13cdc8d508a4a017ba0c262478e9db"
+    },
+    {
+      "name": "full-work-type-off-compaction-off-codex-proxy-on-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",false,false,true,false]",
+      "configIdentity": "25812f0be188bfe4b4dbb044f1ead96aa4eb2ada651518641d76cd1959506c0f"
+    },
+    {
+      "name": "full-work-type-off-compaction-off-codex-proxy-off-hook-inventory-on",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",false,false,false,true]",
+      "configIdentity": "ee28b4a65e4bbd511b4079a380a25541c55c134f1f7f78d7ff899b7348369293"
+    },
+    {
+      "name": "full-work-type-off-compaction-off-codex-proxy-off-hook-inventory-off",
+      "responseVersion": 6,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false
+      },
+      "preimage": "[\"kontext:endpoint-config:v6\",6,\"full\",false,false,false,false]",
+      "configIdentity": "c746cc324d827239ac960dd492c5b9b533fa01d30ac72099aaa5ca92fa20342e"
+    }
+  ]
+}

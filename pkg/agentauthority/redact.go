@@ -5,11 +5,12 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
 // Keep identical to AUTHORITY_SECRET_PATTERN in the cloud contract.
-var secretPattern = regexp.MustCompile(`(?i)ghp_|gho_|ghu_|github_pat_|\bsk-[A-Za-z0-9]|xox[abp]-|\bAKIA[0-9A-Z]{16}|AIza|Bearer |-----BEGIN|(password|passwd|secret|token|api[-_]?key)=`)
+var secretPattern = regexp.MustCompile(`(?i)gh[pousr]_|github_pat_|\bsk-[A-Za-z0-9]|xox[abp]-|\bAKIA[0-9A-Z]{16}|AIza|Bearer |Basic [A-Za-z0-9+/]{12,}|-----BEGIN|(password|passwd|secret|token|api[-_]?key)=`)
 
 var secretArgName = regexp.MustCompile(`(?i)(password|passwd|secret|token|api[-_]?key)`)
 
@@ -40,13 +41,23 @@ func secret(value, key string) bool {
 	return false
 }
 
+// safe drops a value that reads as a secret and cuts the rest to limit
+// UTF-16 code units, the length the cloud's schema counts, at a whole rune.
 func safe(value string, limit int) string {
 	if secretPattern.MatchString(value) {
 		return ""
 	}
-	runes := []rune(value)
-	if len(runes) > limit {
-		return string(runes[:limit])
+	units := 0
+	for i, r := range value {
+		// Invalid bytes travel as U+FFFD, one unit.
+		if n := utf16.RuneLen(r); n > 0 {
+			units += n
+		} else {
+			units++
+		}
+		if units > limit {
+			return value[:i]
+		}
 	}
 	return value
 }

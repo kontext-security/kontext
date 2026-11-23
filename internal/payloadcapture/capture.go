@@ -36,6 +36,10 @@ type RuntimeConfiguration struct {
 	// It travels with the capture mode so each turn snapshots both at once,
 	// and stays out of the serialized evidence recorded on every action.
 	WorkTypeClassification bool `json:"-"`
+	// PromptVeto: the workspace's last confirmed config let no prompt leave,
+	// and no config has been confirmed since. Prompts are then omitted, so a
+	// later opt-in can't recover them.
+	PromptVeto bool `json:"-"`
 }
 
 // PromptsAllowed reports whether what a person types may leave the endpoint:

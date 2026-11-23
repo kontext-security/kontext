@@ -84,7 +84,7 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 				t.Fatal(err)
 			}
 			on, off := true, false
-			config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off}
+			config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off, HookInventory: &off}
 			identity, err := endpointconfig.ComputeIdentity(config)
 			if err != nil {
 				t.Fatal(err)
@@ -138,6 +138,11 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 				w.WriteHeader(201)
 				json.NewEncoder(w).Encode(map[string]string{"turn_recovery_before": recoveryBefore})
 			}))
+			// The daemon binds its cache to the cloud and enrolment it runs under.
+			cache.Bind(cloud.URL, "fixture")
+			if err := cache.Apply(endpointconfig.FetchResult{Response: &endpointconfig.Response{ResponseVersion: endpointconfig.ResponseVersion, Config: config, ConfigIdentity: identity}}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
 			defer cloud.Close()
 			opts := Options{DBPath: dbPath, CloudURL: cloud.URL, InstallationID: "ins_test", InstallToken: "fixture", EndpointConfigCachePath: cachePath, HeartbeatInterval: time.Nanosecond}
 			if err := Flush(ctx, opts); err != nil {
@@ -402,7 +407,7 @@ func TestSkippedPromptRecoveryE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	on, off := true, false
-	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off}
+	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off, HookInventory: &off}
 	identity, _ := endpointconfig.ComputeIdentity(config)
 	cache := endpointconfig.NewCache(endpointconfig.DefaultCachePathForDB(dbPath))
 	if err := cache.Apply(endpointconfig.FetchResult{Response: &endpointconfig.Response{ResponseVersion: endpointconfig.ResponseVersion, Config: config, ConfigIdentity: identity}}, time.Now()); err != nil {
@@ -431,6 +436,11 @@ func TestSkippedPromptRecoveryE2E(t *testing.T) {
 		w.WriteHeader(201)
 		w.Write([]byte(`{}`))
 	}))
+	// The daemon binds its cache to the cloud and enrolment it runs under.
+	cache.Bind(cloud.URL, "fixture")
+	if err := cache.Apply(endpointconfig.FetchResult{Response: &endpointconfig.Response{ResponseVersion: endpointconfig.ResponseVersion, Config: config, ConfigIdentity: identity}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	defer cloud.Close()
 	opts := Options{DBPath: dbPath, CloudURL: cloud.URL, InstallationID: "ins_test", InstallToken: "fixture", AllowHistoricalTurnRecovery: true}
 	for range 2 {

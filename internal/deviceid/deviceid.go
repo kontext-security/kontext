@@ -75,3 +75,20 @@ func Key(platformUUID, organizationID string) (string, error) {
 	mac.Write([]byte(uuid))
 	return "dk_" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
+
+// HookInventoryKey derives K_dev, the secret hook inventory ids and
+// fingerprints are keyed with (ADR-0011). It is the platform UUID keying the
+// organization id, the reverse of Key, so it is never a value this Mac sends:
+// the organization id is no secret, but the hardware identifier stays local.
+// Both inputs are required; without the hardware id there is no hook
+// inventory rather than a weaker key.
+func HookInventoryKey(platformUUID, organizationID string) ([]byte, error) {
+	uuid := strings.ToUpper(strings.TrimSpace(platformUUID))
+	org := strings.TrimSpace(organizationID)
+	if uuid == "" || org == "" {
+		return nil, errors.New("hook inventory key requires both a platform UUID and an organization id")
+	}
+	mac := hmac.New(sha256.New, []byte(uuid))
+	mac.Write([]byte("kontext/hook-inventory/v1|" + org))
+	return mac.Sum(nil), nil
+}

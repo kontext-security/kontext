@@ -2,6 +2,7 @@ package payloadcapture
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -104,6 +105,8 @@ func TestRedactTextLeavesProseAlone(t *testing.T) {
 		"curl https://unpkg.com/react@18.3.1/umd/react.js",
 		"curl http://localhost:5173/@vite/client",
 		"git clone git@github.com:org/repo.git",
+		// Encoded spaces end a Slack token.
+		"docs/xoxb-token%20format%20guide.md",
 	} {
 		redacted, changed := RedactText(input)
 		if changed || redacted != input {
@@ -112,38 +115,78 @@ func TestRedactTextLeavesProseAlone(t *testing.T) {
 	}
 }
 
-// TestRedactionCoverageIsOrderIndependent guards the coverage invariant
-// against rule interference: an earlier rule's placeholder substitution must
-// not prevent a later rule from catching its secret, regardless of the order
-// rules run in.
-func TestRedactionCoverageIsOrderIndependent(t *testing.T) {
+// TestRedactionIsMonotonic guards the union pass against rule
+// interference: every rule matches the same text and masks are unioned, so
+// taking any one rule away never masks a byte the whole ruleset leaves in
+// that pass. Equivalently, adding a rule never unmasks one. Later passes
+// read placeholders, where that no longer holds (a token rule can take an
+// assignment's name), and the ordered reading covers them
+// (TestRedactionCoversBothReadings).
+func TestRedactionIsMonotonic(t *testing.T) {
 	t.Parallel()
 
-	var vectors coverageVectors
-	loadTestdata(t, "redaction-coverage-vectors.json", &vectors)
-
-	apply := func(rules []compiledRule, input string) string {
-		for _, rule := range rules {
-			input = rule.re.ReplaceAllString(input, rule.replacement)
+	unionMasks := func(input string, rules []compiledRule) []Span {
+		var spans []Span
+		var folded lazyFold
+		for index := range rules {
+			spans = append(spans, rules[index].masks(input, &folded)...)
 		}
-		return input
+		return mergeSpans(spans)
 	}
-
-	reversed := make([]compiledRule, len(compiledValueRules))
-	for index, rule := range compiledValueRules {
-		reversed[len(reversed)-1-index] = rule
-	}
-
-	for _, vector := range vectors.ValueVectors {
-		for _, order := range [][]compiledRule{compiledValueRules, reversed} {
-			redacted := apply(order, vector.Input)
-			for _, secret := range vector.MustNotSurvive {
-				if strings.Contains(redacted, secret) {
-					t.Fatalf("secret %q survived under rule order variation in %s", secret, vector.Name)
+	for _, input := range redactionInputs(t) {
+		masked := maskedBytes(len(input), unionMasks(input, compiledValueRules))
+		for index := range compiledValueRules {
+			fewer := slices.Delete(slices.Clone(compiledValueRules), index, index+1)
+			for _, span := range unionMasks(input, fewer) {
+				for i := span.Start; i < span.End; i++ {
+					if !masked[i] {
+						t.Fatalf("%q: without %s byte %d is masked, with every rule it is not", input, compiledValueRules[index].id, i)
+					}
 				}
 			}
 		}
 	}
+}
+
+// TestRedactionCoversBothReadings checks that RedactText never masks less
+// than either reading of the rules alone: the union, or the rules in order
+// (the engine before rules/5).
+func TestRedactionCoversBothReadings(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range redactionInputs(t) {
+		masked := maskedBytes(len(input), RedactedSpans(input))
+		for _, step := range []func(string, []stretch, []compiledRule) (string, []stretch){unionPass, orderedPass} {
+			for _, span := range reading(input, compiledValueRules, step) {
+				for i := span.Start; i < span.End; i++ {
+					if !masked[i] {
+						t.Fatalf("%q: a reading masks byte %d, RedactText does not", input, i)
+					}
+				}
+			}
+		}
+	}
+}
+
+func redactionInputs(t *testing.T) []string {
+	t.Helper()
+	var vectors coverageVectors
+	loadTestdata(t, "redaction-coverage-vectors.json", &vectors)
+	inputs := redactionSamples(t)
+	for _, vector := range vectors.ValueVectors {
+		inputs = append(inputs, vector.Input)
+	}
+	return inputs
+}
+
+func maskedBytes(n int, spans []Span) []bool {
+	masked := make([]bool, n)
+	for _, span := range spans {
+		for i := span.Start; i < span.End; i++ {
+			masked[i] = true
+		}
+	}
+	return masked
 }
 
 func TestRedactJSONDoesNotMutateInput(t *testing.T) {
@@ -163,5 +206,34 @@ func TestRedactJSONDoesNotMutateInput(t *testing.T) {
 	}
 	if redacted["apiKey"] != RedactedPlaceholder {
 		t.Fatalf("sensitive key not replaced: %v", redacted["apiKey"])
+	}
+}
+
+func TestHasSecretTokenReadsTokenShapesOnly(t *testing.T) {
+	t.Parallel()
+	for _, token := range []string{
+		"glpat-FAKE0123456789abcdefgh",
+		"ciglpat-FAKE0123456789abcdefgh",
+		"ghp_FAKE0123456789abcdefFAKE",
+		"sk_live_" + strings.Repeat("x", 28),
+		"SG." + strings.Repeat("x", 22) + "." + strings.Repeat("x", 43),
+		"eyJ1c2VyIjo0Mn0.FAKEsignatureFAKEabc",
+		"key_ASIA" + "FAKE0123456789AB_ci",
+	} {
+		if !HasSecretToken(token) {
+			t.Fatalf("%q is not a token", token)
+		}
+	}
+	for _, plain := range []string{
+		"--password hunter2", "token=abc", "deploy-check", "1.4.0",
+		"pypi-attestations", "task_test_environment", "hf_imageclassification.py", "SG.SecurityGroupIngress",
+		"SG.SecurityGroupIngress.SourceSecurityGroupId", "keyJsonSchema.properties.type",
+		"publicKeyJsonConverter.test.js", "libxapp/xapp-status-icon-monitor.h",
+		"network_org_defaultNotificationSettings", "work_org_507f1f77bcf86cd799439011",
+		"docs/xoxb-token%20format%20guide.md",
+	} {
+		if HasSecretToken(plain) {
+			t.Fatalf("%q read as a token", plain)
+		}
 	}
 }

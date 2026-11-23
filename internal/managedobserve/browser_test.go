@@ -23,7 +23,7 @@ func TestBrowserCaptureModeFollowsTheConfirmedDirectiveOnly(t *testing.T) {
 		"full":              {confirmed(payloadcapture.ModeFull, &off), browserevents.CaptureFull},
 		"prompts":           {confirmed(payloadcapture.ModeFull, &on), browserevents.CapturePrompts},
 	} {
-		if got := browserCaptureMode(tc.snapshot); got != tc.want {
+		if got := browserCaptureMode(tc.snapshot, ""); got != tc.want {
 			t.Errorf("%s: %q, want %q", name, got, tc.want)
 		}
 	}
