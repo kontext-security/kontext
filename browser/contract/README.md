@@ -32,7 +32,7 @@ Record kinds in v2:
 |---|---|
 | `health` | The extension is running: when it connected and when it was last seen. |
 | `visit` | An AI web app from the catalog was used that UTC day: first and last time, and `requests`, the number of page loads plus POST requests to the app's hosts. Page loads alone would miss a tab kept open for days; every request would count an idle tab that polls. |
-| `account` | Which type of account was signed in to an app that UTC day: `account_type` is `company` (a managed team or enterprise workspace), `personal` (any other signed-in account, also on a work email), `none` (the app answered that nobody is signed in) or `unknown` (its answer could not be read). |
+| `account` | Which type of account was signed in to an app that UTC day: `account_type` is `company` (a managed team or enterprise workspace), `personal` (any other signed-in account, also on a work email), `none` (the app answered that nobody is signed in) or `unknown` (the app answered, but its answer could not be classified). A read that fails, such as a timeout, sends no record. |
 
 `day` is the UTC date. A `visit` is a snapshot of the day so far with an
 absolute count, never an increment, so sending it twice is harmless.

@@ -1138,26 +1138,64 @@ func TestADamagedRowDoesNotDiscardTheOthers(t *testing.T) {
 // address put back by a backup, is dropped at open and leaves the file: a
 // decode would drop the key silently and keep the text on disk.
 func TestAStoredAccountWithAnExtraKeyIsDroppedAtOpen(t *testing.T) {
+	for name, tamper := range map[string]func(string) string{
+		"in the record": func(data string) string {
+			return strings.Replace(data, `"kind":"account"`, `"kind":"account","email":"jane@example.com"`, 1)
+		},
+		"beside the record": func(data string) string {
+			return strings.Replace(data, `"record":{`, `"email":"jane@example.com","record":{`, 1)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := openTestStore(t)
+			_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+			s.mu.Lock()
+			_ = s.saveLocked()
+			s.mu.Unlock()
+			data, _ := os.ReadFile(s.path)
+			tampered := tamper(string(data))
+			if tampered == string(data) {
+				t.Fatalf("no account row in %s", data)
+			}
+			if err := os.WriteFile(s.path, []byte(tampered), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := openStore(s.path, testNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ = os.ReadFile(s.path)
+			if reopened.Len() != 0 || strings.Contains(string(data), "jane@example.com") {
+				t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+			}
+		})
+	}
+}
+
+// An account too far ahead of the clock, kept while the clock was set back
+// or restored from a file, is dropped at open and before a send: its later
+// time would hide every later observation of that type.
+func TestAStoredAccountAheadOfTheClockIsDropped(t *testing.T) {
 	s := openTestStore(t)
-	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T11:55:00Z")})
+	// The clock is set back two hours.
+	earlier := func() time.Time { return testNow().Add(-2 * time.Hour) }
 	s.mu.Lock()
-	_ = s.saveLocked()
+	s.now = earlier
 	s.mu.Unlock()
-	data, _ := os.ReadFile(s.path)
-	tampered := strings.Replace(string(data), `"kind":"account"`, `"kind":"account","email":"jane@example.com"`, 1)
-	if tampered == string(data) {
-		t.Fatalf("no account row in %s", data)
+	if n := len(s.Pending(10).Records); n != 0 {
+		t.Fatalf("pending = %d, want the account dropped", n)
 	}
-	if err := os.WriteFile(s.path, []byte(tampered), 0o600); err != nil {
-		t.Fatal(err)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T10:00:00Z")})
+	if got := s.Pending(10).Records; len(got) != 1 || got[0].ObservedAt != "2026-11-20T10:00:00Z" {
+		t.Fatalf("pending = %+v, want the 10:00 observation", got)
 	}
-	reopened, err := openStore(s.path, testNow)
+	reopened, err := openStore(s.path, func() time.Time { return testNow().Add(-3 * time.Hour) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ = os.ReadFile(s.path)
-	if reopened.Len() != 0 || strings.Contains(string(data), "jane@example.com") {
-		t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+	if reopened.Len() != 0 {
+		t.Fatalf("rows = %d, want the account dropped at open", reopened.Len())
 	}
 }
 

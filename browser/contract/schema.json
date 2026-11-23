@@ -100,7 +100,7 @@
         "app": { "$ref": "#/$defs/appId" },
         "account_type": {
           "enum": ["company", "personal", "none", "unknown"],
-          "description": "company: the active workspace is a managed one (team or enterprise); its owner is not checked. personal: any other signed-in account, also on a work email. none: the app answered that nobody is signed in. unknown: the app's answer could not be read."
+          "description": "company: the active workspace is a managed one (team or enterprise); its owner is not checked. personal: any other signed-in account, also on a work email. none: the app answered that nobody is signed in. unknown: the app answered, but its answer could not be classified. A failed read sends no record."
         },
         "observed_at": { "$ref": "#/$defs/time" }
       }
