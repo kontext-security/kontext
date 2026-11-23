@@ -1,0 +1,169 @@
+{
+  "schema": "hook-inventory-v1",
+  "id_scheme": 1,
+  "agents": [
+    {
+      "id": "claude_code",
+      "agent_version": "2.1.120",
+      "truncated": false,
+      "kontext_hooks": {
+        "state": "complete",
+        "missing_events": []
+      },
+      "scopes": [
+        {
+          "id": "sc_AAAAAAAAAAAAAAAAAAAAAA",
+          "kind": "managed",
+          "status": "complete",
+          "reasons": [],
+          "checked_at": "2026-11-20T10:00:00Z"
+        },
+        {
+          "id": "sc_BBBBBBBBBBBBBBBBBBBBBB",
+          "kind": "user",
+          "status": "complete",
+          "reasons": [],
+          "checked_at": "2026-11-20T10:00:00Z"
+        },
+        {
+          "id": "sc_CCCCCCCCCCCCCCCCCCCCCC",
+          "kind": "plugin",
+          "status": "complete",
+          "reasons": [],
+          "checked_at": "2026-11-20T10:00:00Z"
+        },
+        {
+          "id": "sc_DDDDDDDDDDDDDDDDDDDDDD",
+          "kind": "project",
+          "status": "failed",
+          "reasons": [
+            "permission_denied"
+          ],
+          "checked_at": "2026-11-20T10:00:00Z"
+        }
+      ],
+      "hooks": [
+        {
+          "id": "hk_aaaaaaaaaaaaaaaaaaaaaa",
+          "scope_id": "sc_AAAAAAAAAAAAAAAAAAAAAA",
+          "event": "PreToolUse",
+          "matcher": "*",
+          "type": "command",
+          "summary": "kontext hook claude-code",
+          "timeout_s": 30,
+          "plugin": null,
+          "origin": "kontext",
+          "claims_kontext": true,
+          "content_fp": "fp_aaaaaaaaaaaaaaaaaaaaaa",
+          "match": "anchor",
+          "enablement": {
+            "state": "enabled",
+            "reasons": []
+          },
+          "evidence": {
+            "level": "policy_evaluated",
+            "discovered_at": "2026-11-20T10:00:00Z",
+            "config_checked_at": "2026-11-20T10:00:00Z",
+            "invocation_at": "2026-11-20T09:58:12Z",
+            "policy_evaluated_at": "2026-11-20T09:58:12Z",
+            "policy_decision": "allow",
+            "verified_at": null,
+            "verification": null
+          }
+        },
+        {
+          "id": "hk_bbbbbbbbbbbbbbbbbbbbbb",
+          "scope_id": "sc_BBBBBBBBBBBBBBBBBBBBBB",
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "type": "command",
+          "summary": "bash check-secrets.sh",
+          "timeout_s": null,
+          "plugin": null,
+          "origin": "settings",
+          "claims_kontext": false,
+          "content_fp": "fp_bbbbbbbbbbbbbbbbbbbbbb",
+          "match": "anchor",
+          "enablement": {
+            "state": "enabled",
+            "reasons": []
+          },
+          "evidence": {
+            "level": "config_checked",
+            "discovered_at": "2026-11-20T10:00:00Z",
+            "config_checked_at": "2026-11-20T10:00:00Z",
+            "invocation_at": null,
+            "policy_evaluated_at": null,
+            "policy_decision": null,
+            "verified_at": null,
+            "verification": null
+          }
+        },
+        {
+          "id": "hk_cccccccccccccccccccccc",
+          "scope_id": "sc_CCCCCCCCCCCCCCCCCCCCCC",
+          "event": "PostToolUse",
+          "matcher": "Edit|Write",
+          "type": "command",
+          "summary": "node format.js",
+          "timeout_s": 10,
+          "plugin": {
+            "name": "formatter",
+            "marketplace": "acme-tools",
+            "version": "1.4.0"
+          },
+          "origin": "plugin",
+          "claims_kontext": false,
+          "content_fp": "fp_cccccccccccccccccccccc",
+          "match": "anchor",
+          "enablement": {
+            "state": "disabled",
+            "reasons": [
+              "plugin_disabled"
+            ]
+          },
+          "evidence": {
+            "level": "config_checked",
+            "discovered_at": "2026-11-20T10:00:00Z",
+            "config_checked_at": "2026-11-20T10:00:00Z",
+            "invocation_at": null,
+            "policy_evaluated_at": null,
+            "policy_decision": null,
+            "verified_at": null,
+            "verification": null
+          }
+        },
+        {
+          "id": "hk_dddddddddddddddddddddd",
+          "scope_id": "sc_BBBBBBBBBBBBBBBBBBBBBB",
+          "event": "Stop",
+          "matcher": null,
+          "type": "http",
+          "summary": "https://hooks.example.com",
+          "timeout_s": 5,
+          "plugin": null,
+          "origin": "settings",
+          "claims_kontext": false,
+          "content_fp": "fp_dddddddddddddddddddddd",
+          "match": "positional",
+          "enablement": {
+            "state": "unresolved",
+            "reasons": [
+              "unresolved"
+            ]
+          },
+          "evidence": {
+            "level": "discovered",
+            "discovered_at": "2026-11-20T10:00:00Z",
+            "config_checked_at": null,
+            "invocation_at": null,
+            "policy_evaluated_at": null,
+            "policy_decision": null,
+            "verified_at": null,
+            "verification": null
+          }
+        }
+      ]
+    }
+  ]
+}

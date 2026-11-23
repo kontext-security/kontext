@@ -93,6 +93,21 @@ const CompactRequestType = "compact_tool_output"
 // request it carries, instead of a hook's. The answer is a CodexProxyResult.
 const CodexProxyRequestType = "codex_proxy"
 
+// CapabilitiesRequestType asks the daemon what it supports, before a client
+// sends a request an older daemon would treat as ordinary activity. An older
+// daemon answers it as an undecodable hook request, which records nothing.
+const CapabilitiesRequestType = "capabilities"
+
+// CapabilitiesResult answers a CapabilitiesRequestType request.
+type CapabilitiesResult struct {
+	Type string `json:"type"`
+	// HookVerify: the daemon answers `kontext hooks verify` probes itself.
+	HookVerify bool `json:"hook_verify,omitempty"`
+}
+
+// CapabilitiesResultType is CapabilitiesResult's type.
+const CapabilitiesResultType = "capabilities_result"
+
 // CodexProxyResult answers a CodexProxyRequestType request.
 type CodexProxyResult struct {
 	Type   string          `json:"type"`

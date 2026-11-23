@@ -1,6 +1,7 @@
 package deviceid
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -117,5 +118,24 @@ func TestKeyShape(t *testing.T) {
 	}
 	if len(key) != len("dk_")+43 {
 		t.Fatalf("len(Key()) = %d, want 3+43 (raw-url base64 of 32 bytes)", len(key))
+	}
+}
+
+// K_dev is stable for one Mac and workspace and differs across workspaces,
+// so identical hooks are never linkable between organizations.
+func TestHookInventoryKeySeparatesWorkspaces(t *testing.T) {
+	const mac = "0F3A45B2-1C4D-4E5F-8A9B-0C1D2E3F4A5B"
+	a1, err := HookInventoryKey(mac, "org_acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, _ := HookInventoryKey(strings.ToLower(mac), " org_acme ")
+	b, _ := HookInventoryKey(mac, "org_other")
+	other, _ := HookInventoryKey("11111111-2222-3333-4444-555555555555", "org_acme")
+	if !bytes.Equal(a1, a2) {
+		t.Fatal("key not stable within one workspace")
+	}
+	if bytes.Equal(a1, b) || bytes.Equal(a1, other) {
+		t.Fatal("key shared across workspaces or Macs")
 	}
 }

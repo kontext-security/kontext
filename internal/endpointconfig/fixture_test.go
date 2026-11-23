@@ -11,7 +11,7 @@ import (
 
 // The portable fixtures of the versions this build reads. Update a digest
 // only when deliberately revising that fixture's bytes. The cloud pins the
-// same digests (FIXTURE_V4_DIGEST and FIXTURE_V5_DIGEST in packages/shared
+// same digests (FIXTURE_V5_DIGEST and FIXTURE_V6_DIGEST in packages/shared
 // endpoint-config).
 var identityFixtures = []struct {
 	path    string
@@ -22,8 +22,8 @@ var identityFixtures = []struct {
 	// identity.
 	vectors int
 }{
-	{path: "testdata/portable/v4/identity-v4.json", sha256: "97754c4d0d3fc70b05ca1324bf68c352a4a2d0e075acde9bcb2d055c53f560a9", version: FallbackResponseVersion, vectors: 12},
-	{path: "testdata/portable/v5/identity-v5.json", sha256: "afd695658eff0cea245ef62267b92b6d5029064d3fc44d4ef67e12d82aed2677", version: ResponseVersion, vectors: 24},
+	{path: "testdata/portable/v5/identity-v5.json", sha256: "afd695658eff0cea245ef62267b92b6d5029064d3fc44d4ef67e12d82aed2677", version: FallbackResponseVersion, vectors: 24},
+	{path: "testdata/portable/v6/identity-v6.json", sha256: "89386eade1aa943e41638dc39b2fdb0b9b51e034e316f6344244937c61327f6d", version: ResponseVersion, vectors: 48},
 }
 
 type identityFixture struct {
@@ -79,6 +79,9 @@ func TestPortableIdentityFixture(t *testing.T) {
 					}
 					if vector.Config.CodexProxy != nil {
 						fields = append(fields, *vector.Config.CodexProxy)
+					}
+					if vector.Config.HookInventory != nil {
+						fields = append(fields, *vector.Config.HookInventory)
 					}
 					preimage, err := json.Marshal(fields)
 					if err != nil {

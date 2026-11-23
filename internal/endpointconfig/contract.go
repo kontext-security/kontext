@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
@@ -21,12 +24,12 @@ const (
 	// keep getting their shape and identity hashes. v3 dropped the retired
 	// guardrail LLM flag and added the workspace's work-type switch; v4 adds
 	// the endpoint's tool output compaction switch; v5 adds its Codex proxy
-	// switch.
-	ResponseVersion = 5
+	// switch; v6 adds the hook inventory switch (ADR-0011).
+	ResponseVersion = 6
 	// FallbackResponseVersion is what this build asks a server for that
 	// answers ResponseVersion with 406 unsupported_version: one that predates
-	// the Codex proxy switch, which then reads as on.
-	FallbackResponseVersion = 4
+	// the hook inventory switch, which then reads as off.
+	FallbackResponseVersion = 5
 	MaxResponseBytes        = 64 * 1024
 )
 
@@ -51,6 +54,57 @@ type Config struct {
 	// proxy, which also needs tool output compaction on. Part of the hashed
 	// contract from v5, which always emits it; v4 never does.
 	CodexProxy *bool `json:"codexProxy,omitempty"`
+	// HookInventory is the deployment's switch for reporting hook inventory
+	// (ADR-0011). Part of the hashed contract from v6, which always emits it;
+	// v5 never does.
+	HookInventory *bool `json:"hookInventory,omitempty"`
+	// nulls names the optional switches the response sent as JSON null,
+	// which a pointer can't tell from absent: a version without the switch
+	// must not carry its key at all.
+	nulls []string
+}
+
+// UnmarshalJSON keeps the strict decoder's unknown-field check and records
+// an optional switch sent as null.
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type plain Config
+	var decoded plain
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return err
+	}
+	// Go matches field names without case; the contract doesn't, and the
+	// cloud's schema refuses `HookInventory` for `hookInventory`.
+	for key := range keys {
+		if !slices.Contains(configKeys(), key) {
+			return fmt.Errorf("json: unknown field %q", key)
+		}
+	}
+	*c = Config(decoded)
+	for _, key := range []string{"codexProxy", "hookInventory"} {
+		if raw, ok := keys[key]; ok && string(bytes.TrimSpace(raw)) == "null" {
+			c.nulls = append(c.nulls, key)
+		}
+	}
+	return nil
+}
+
+// configKeys are Config's wire keys, spelled exactly.
+func configKeys() []string {
+	t := reflect.TypeOf(Config{})
+	keys := make([]string, 0, t.NumField())
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			keys = append(keys, name)
+		}
+	}
+	return keys
 }
 
 // WorkTypeClassificationEnabled reports the switch; absent reads as off.
@@ -68,6 +122,12 @@ func (c Config) ToolOutputCompactionEnabled() bool {
 // alone.
 func (c Config) CodexProxyEnabled() bool {
 	return c.CodexProxy == nil || *c.CodexProxy
+}
+
+// HookInventoryEnabled reports the switch; absent, as from a server that
+// predates v6, reads as off, so nothing new is sent until the server asks.
+func (c Config) HookInventoryEnabled() bool {
+	return c.HookInventory != nil && *c.HookInventory
 }
 
 // Validate checks the config as ResponseVersion has it.
@@ -97,6 +157,15 @@ func (c Config) validate(version int) error {
 	}
 	if version < 5 && c.CodexProxy != nil {
 		return fmt.Errorf("endpoint configuration: codexProxy is not part of version %d", version)
+	}
+	if len(c.nulls) > 0 {
+		return fmt.Errorf("endpoint configuration: %s must not be null", c.nulls[0])
+	}
+	if version >= 6 && c.HookInventory == nil {
+		return errors.New("endpoint configuration: hookInventory is required")
+	}
+	if version < 6 && c.HookInventory != nil {
+		return fmt.Errorf("endpoint configuration: hookInventory is not part of version %d", version)
 	}
 	return nil
 }
@@ -155,6 +224,9 @@ func computeIdentity(version int, config Config) (string, error) {
 	}
 	if version >= 5 {
 		fields = append(fields, *config.CodexProxy)
+	}
+	if version >= 6 {
+		fields = append(fields, *config.HookInventory)
 	}
 	preimage, err := json.Marshal(fields)
 	if err != nil {
