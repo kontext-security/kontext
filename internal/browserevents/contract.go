@@ -378,6 +378,11 @@ func DecodeCloudResponse(data []byte, sent int) (CloudResponse, error) {
 	if err := json.Unmarshal(fields["rejected"], &items); err != nil || items == nil {
 		return CloudResponse{}, errors.New("browser events: cloud answer without rejected")
 	}
+	// More rejections than records sent cannot be an answer to them: refused
+	// before anything is allocated for each.
+	if len(items) > sent {
+		return CloudResponse{}, errors.New("browser events: cloud answer rejects more records than were sent")
+	}
 	response := CloudResponse{Accepted: accepted, Rejected: make([]Rejection, 0, len(items))}
 	seen := map[int]bool{}
 	for _, item := range items {

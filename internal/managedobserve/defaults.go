@@ -1,6 +1,7 @@
 package managedobserve
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -82,6 +83,8 @@ func EnsureSocketDir(socketPath string) error {
 		return err
 	}
 	dir := filepath.Dir(socketPath)
+	_, statErr := os.Lstat(dir)
+	created := errors.Is(statErr, os.ErrNotExist)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -95,7 +98,7 @@ func EnsureSocketDir(socketPath string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%s is not a directory", dir)
 	}
-	return ensurePrivateOwner(dir, info)
+	return ensurePrivateOwner(dir, info, created)
 }
 
 // CheckSocketDir checks, without changing anything, that the socket's
