@@ -1,7 +1,13 @@
 package endpointconfig
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -56,5 +62,108 @@ func TestHookStateIsTheConfirmedConfigs(t *testing.T) {
 		if other == identity {
 			t.Fatalf("%s is not part of the identity", name)
 		}
+	}
+}
+
+// installedResponse is a v7 response asking for installed hooks.
+func installedResponse(t *testing.T) (Response, HookState) {
+	t.Helper()
+	response := testResponse(t, payloadcapture.ModeSummary)
+	nonce := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	state := HookState{Desired: HookStateInstalled, Generation: 3, RepairNonce: &nonce}
+	response.Config.HookState = &state
+	identity, err := ComputeIdentity(response.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.ConfigIdentity = identity
+	return response, state
+}
+
+// A snapshot's hook state is a copy: changing its nonce changes nothing
+// the cache later hands out.
+func TestHookStateIsACopy(t *testing.T) {
+	cache := NewCache("")
+	response, state := installedResponse(t)
+	if err := cache.Apply(FetchResult{Response: &response}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	// Neither the caller's response nor a snapshot shares the cache's nonce.
+	*response.Config.HookState.RepairNonce = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+	got := cache.Current().HookState()
+	*got.RepairNonce = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	if again := cache.Current().HookState(); again.Nonce() != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" || again.Generation != state.Generation {
+		t.Fatalf("a caller's change reached the cache: %+v", again)
+	}
+}
+
+// A 304 to the fallback request can't confirm the newer version's
+// directive, whatever ETag it carries: the hooks read unmanaged.
+func TestFallbackNotModifiedNeverConfirmsTheNewerDirective(t *testing.T) {
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	response, _ := installedResponse(t)
+	if err := cache.Apply(FetchResult{Response: &response, Version: ResponseVersion}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("response_version") == strconv.Itoa(ResponseVersion) {
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5,6]}`))
+			return
+		}
+		w.Header().Set("ETag", `"`+response.ConfigIdentity+`"`)
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token", nil }}
+	if err := refresher.Refresh(context.Background()); !errors.Is(err, ErrNewestUnsupported) {
+		t.Fatalf("Refresh() = %v", err)
+	}
+	if got := cache.Current().HookState(); !got.Equal(UnmanagedHookState) {
+		t.Fatalf("hook state after a fallback 304: %+v", got)
+	}
+}
+
+// Once the fallback version confirmed a config, a failure to refresh it is
+// only a failure: its hook inventory switch stays on.
+func TestAFailedFallbackRefreshKeepsTheFallbacksSwitches(t *testing.T) {
+	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	fallback := fallbackResponse(t, payloadcapture.ModeSummary, false)
+	down := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("response_version") == strconv.Itoa(ResponseVersion) {
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5,6]}`))
+			return
+		}
+		if down {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("ETag", `"`+fallback.ConfigIdentity+`"`)
+		_ = json.NewEncoder(w).Encode(fallback)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token", nil }}
+	if err := refresher.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.Current().HookInventoryEnabled() {
+		t.Fatal("the fallback's switch reads off")
+	}
+	down = true
+	if err := refresher.Refresh(context.Background()); err == nil {
+		t.Fatal("refresh against a failing server succeeded")
+	}
+	if !cache.Current().HookInventoryEnabled() {
+		t.Fatal("a transient failure turned the fallback's confirmed switch off")
 	}
 }

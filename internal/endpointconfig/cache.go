@@ -302,6 +302,14 @@ func (c *Cache) apply(result FetchResult, fetchedAt time.Time, owner string) err
 		if lastGood == nil || result.ETag == "" || result.ETag != lastGood.ConfigIdentity {
 			return errors.New("endpoint configuration cache: not-modified result does not match last-known-good config")
 		}
+		// A 304 to the fallback request can't confirm a newer version's
+		// directive, whatever ETag it carries.
+		if result.Version != 0 && result.Version < lastGood.ResponseVersion {
+			return fmt.Errorf("%w: a not-modified answer for response version %d", ErrNewestUnsupported, result.Version)
+		}
+		if result.Version != 0 && result.Version != lastGood.ResponseVersion {
+			return errors.New("endpoint configuration cache: not-modified result is for another response version")
+		}
 		confirmed = lastGood
 	case result.Response != nil:
 		if err := result.Response.Validate(); err != nil {
@@ -392,6 +400,12 @@ func (c *Cache) markFailedLocked(err error, attemptedAt time.Time) {
 // confirmed again.
 func (c *Cache) markNewestUnsupported() {
 	c.mu.Lock()
+	// A config the fallback version confirmed is the server's word: a
+	// later failure to refresh it is only a failure.
+	if c.lastGood != nil && c.lastGood.ResponseVersion < ResponseVersion {
+		c.mu.Unlock()
+		return
+	}
 	c.status.NewestUnsupported = true
 	c.mu.Unlock()
 	// The refusal is kept with the file, so a restart while configuration
@@ -536,6 +550,12 @@ func cloneResponse(input *Response) *Response {
 		return nil
 	}
 	clone := *input
+	// The hook state carries a pointer of its own: a caller changing the
+	// nonce of one snapshot must not change the cache's.
+	if input.Config.HookState != nil {
+		state := input.Config.HookState.clone()
+		clone.Config.HookState = &state
+	}
 	return &clone
 }
 

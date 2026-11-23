@@ -117,6 +117,21 @@ func (h HookState) validate() error {
 	return nil
 }
 
+// clone copies the state and its nonce, so the copy shares no pointer.
+func (h HookState) clone() HookState {
+	if h.RepairNonce != nil {
+		nonce := *h.RepairNonce
+		h.RepairNonce = &nonce
+	}
+	return h
+}
+
+// Equal compares two states by value, the nonce included.
+func (h HookState) Equal(other HookState) bool {
+	return h.Desired == other.Desired && h.Generation == other.Generation &&
+		(h.RepairNonce == nil) == (other.RepairNonce == nil) && h.Nonce() == other.Nonce()
+}
+
 // Nonce is the repair nonce, empty when none was asked for.
 func (h HookState) Nonce() string {
 	if h.RepairNonce == nil {
@@ -225,7 +240,7 @@ func (c Config) DesiredHookState() HookState {
 	if c.HookState == nil {
 		return UnmanagedHookState
 	}
-	return *c.HookState
+	return c.HookState.clone()
 }
 
 // Validate checks the config as ResponseVersion has it.

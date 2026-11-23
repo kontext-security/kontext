@@ -271,7 +271,7 @@ func TestClientFallsBackForAServerThatPredatesV7(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Response == nil || result.Response.ResponseVersion != FallbackResponseVersion || result.Response.Config.HookState != nil ||
-		result.Response.Config.DesiredHookState() != UnmanagedHookState || !result.Response.Config.HookInventoryEnabled() ||
+		!result.Response.Config.DesiredHookState().Equal(UnmanagedHookState) || !result.Response.Config.HookInventoryEnabled() ||
 		!result.Response.Config.CodexProxyEnabled() || !result.Response.Config.ToolOutputCompactionEnabled() {
 		t.Fatalf("Fetch() = %#v", result.Response)
 	}
@@ -287,7 +287,7 @@ func TestClientFallsBackForAServerThatPredatesV7(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snapshot := cache.Current(); !snapshot.Confirmed || !snapshot.Config.CodexProxyEnabled() ||
-		!snapshot.HookInventoryEnabled() || snapshot.HookState() != UnmanagedHookState {
+		!snapshot.HookInventoryEnabled() || !snapshot.HookState().Equal(UnmanagedHookState) {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	clock = clock.Add(fallbackFor)
@@ -584,7 +584,7 @@ func TestNewestRefusalTurnsTheHookSwitchesOff(t *testing.T) {
 	if err := cache.Apply(FetchResult{Response: &on}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if !cache.Current().HookInventoryEnabled() || cache.Current().HookState() != installed {
+	if !cache.Current().HookInventoryEnabled() || !cache.Current().HookState().Equal(installed) {
 		t.Fatal("confirmed switches read off")
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -605,7 +605,7 @@ func TestNewestRefusalTurnsTheHookSwitchesOff(t *testing.T) {
 		t.Fatalf("Refresh() = %v", err)
 	}
 	snapshot := cache.Current()
-	if snapshot.HookInventoryEnabled() || snapshot.HookState() != UnmanagedHookState || !snapshot.Confirmed {
+	if snapshot.HookInventoryEnabled() || !snapshot.HookState().Equal(UnmanagedHookState) || !snapshot.Confirmed {
 		t.Fatalf("after v7 refusal: inventory=%v state=%+v confirmed=%v", snapshot.HookInventoryEnabled(), snapshot.HookState(), snapshot.Confirmed)
 	}
 	// A restart while configuration is still unavailable keeps it off.
@@ -613,7 +613,7 @@ func TestNewestRefusalTurnsTheHookSwitchesOff(t *testing.T) {
 	if err := restarted.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if restarted.Current().HookInventoryEnabled() || restarted.Current().HookState() != UnmanagedHookState {
+	if restarted.Current().HookInventoryEnabled() || !restarted.Current().HookState().Equal(UnmanagedHookState) {
 		t.Fatal("restart turned a refused switch back on")
 	}
 }
