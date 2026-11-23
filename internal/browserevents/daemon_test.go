@@ -1027,3 +1027,28 @@ func TestADamagedRowDoesNotDiscardTheOthers(t *testing.T) {
 		t.Fatalf("rows = %d, file = %s", reopened.Len(), after)
 	}
 }
+
+// A row whose delivery counters are damaged is sent again, not taken as
+// delivered and never sent.
+func TestARowWithDamagedCountersIsSentAgain(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	damaged := strings.Replace(string(data), `"version":1`, `"version":null`, 1)
+	if damaged == string(data) {
+		t.Fatalf("no version in %s", data)
+	}
+	if err := os.WriteFile(s.path, []byte(damaged), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(s.path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(reopened.Pending(10).Records); n != 1 {
+		t.Fatalf("pending = %d, want the row sent again", n)
+	}
+}
