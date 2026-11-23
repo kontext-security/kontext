@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kontext-security/kontext/internal/fsperm"
@@ -64,8 +65,9 @@ type Store struct {
 	// taken and the extension is told there is no enrollment.
 	suspended bool
 	// epoch counts every Bind and Suspend, so a token read that started
-	// before a later one never undoes it.
-	epoch uint64
+	// before a later one never undoes it. It is changed under mu but read
+	// without it, so a caller never waits for a slow save to learn it.
+	epoch atomic.Uint64
 	// dirty is set while the file is behind the rows, such as after a failed
 	// save, so the next call saves again rather than report success.
 	dirty bool
@@ -129,6 +131,13 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 			if source.validate() != nil || r.Record.Record.Validate() != nil || rowKey(r.Record) != key || !storedKeysAllowed(raw, r.Record.Kind) {
 				rewrite = true
 				continue
+			}
+			// Damaged delivery counters cannot say what was sent: the
+			// row is kept and sent again, which changes nothing in the
+			// cloud, rather than taken as delivered and never sent.
+			if r.Version < 1 || r.Sent < 0 || r.Sent > r.Version {
+				r.Version, r.Sent = max(r.Version, r.Sent, 0)+1, 0
+				rewrite = true
 			}
 			rows[key] = r
 		}
@@ -579,7 +588,7 @@ func (s *Store) Bind(binding string) (dropped int, err error) {
 func (s *Store) BindAt(binding string, epoch uint64) (dropped int, ok bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.epoch != epoch {
+	if s.epoch.Load() != epoch {
 		return 0, false, nil
 	}
 	dropped, err = s.bindLocked(binding)
@@ -588,7 +597,7 @@ func (s *Store) BindAt(binding string, epoch uint64) (dropped int, ok bool, err 
 
 func (s *Store) bindLocked(binding string) (dropped int, err error) {
 	s.suspended = false
-	s.epoch++
+	s.epoch.Add(1)
 	switch s.binding {
 	case binding:
 		return 0, nil
@@ -609,7 +618,7 @@ func (s *Store) Suspend() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.suspended = true
-	s.epoch++
+	s.epoch.Add(1)
 }
 
 // SuspendAt suspends as Suspend does only if no Bind or Suspend has happened
@@ -618,20 +627,18 @@ func (s *Store) Suspend() {
 func (s *Store) SuspendAt(epoch uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.epoch != epoch {
+	if s.epoch.Load() != epoch {
 		return false
 	}
 	s.suspended = true
-	s.epoch++
+	s.epoch.Add(1)
 	return true
 }
 
 // Epoch returns the count of Bind and Suspend calls so far, for BindAt and
 // SuspendAt.
 func (s *Store) Epoch() uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.epoch
+	return s.epoch.Load()
 }
 
 // Flush writes the store if the file is behind it, such as after a prune

@@ -137,6 +137,13 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 		return "", fmt.Errorf("browser events: waiting for the install token: %w", readCtx.Err())
 	}
 	release := func() { <-s.rebind }
+	if readCtx.Err() != nil {
+		// The slot came free together with the deadline: this caller
+		// gave up waiting, so a read confirmed meanwhile is not undone.
+		release()
+		s.Store.SuspendAt(waited)
+		return "", fmt.Errorf("browser events: waiting for the install token: %w", readCtx.Err())
+	}
 	// Taken with the slot held: a Bind or Suspend after this, such as a
 	// waiter that gave up, is newer than this read, so it is not undone.
 	started := s.Store.Epoch()
