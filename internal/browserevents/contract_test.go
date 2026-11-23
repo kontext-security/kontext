@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext/browser/contract"
 )
 
 const fixtures = "../../browser/contract/fixtures"
@@ -361,5 +364,37 @@ func TestTheCatalogFitsTheContract(t *testing.T) {
 				t.Errorf("catalog host %q of %q is not a hostname", host, id)
 			}
 		}
+	}
+}
+
+// The schema's app ids are the catalog's, so a consumer that checks the
+// schema alone refuses an app id the daemon refuses.
+func TestTheSchemaNamesTheCatalogApps(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(fixtures, "..", "schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs struct {
+			AppID struct {
+				Enum []string `json:"enum"`
+			} `json:"appId"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	var apps []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(contract.CatalogJSON, &apps); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(apps))
+	for _, app := range apps {
+		ids = append(ids, app.ID)
+	}
+	if !slices.Equal(schema.Defs.AppID.Enum, ids) {
+		t.Errorf("schema app ids = %v, catalog ids = %v", schema.Defs.AppID.Enum, ids)
 	}
 }
