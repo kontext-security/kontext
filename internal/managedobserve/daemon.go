@@ -11,8 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/browserevents"
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
 	"github.com/kontext-security/kontext/internal/claudemanaged"
+	"github.com/kontext-security/kontext/internal/cloudhttp"
 	"github.com/kontext-security/kontext/internal/configwatch"
 	"github.com/kontext-security/kontext/internal/deviceid"
 	"github.com/kontext-security/kontext/internal/diagnostic"
@@ -323,6 +325,34 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		Diagnostic: opts.Diagnostic,
 	})
 
+	// The browser extension's records wait here until the cloud has them.
+	// A store that cannot be read leaves the browser extension unanswered
+	// ("unavailable"), never the rest of the daemon: hooks and policy run on.
+	browserStore, err := browserevents.OpenStore(browserevents.DefaultStorePath(dbPath))
+	if err != nil {
+		diagnostic.LogAlways(opts.Diagnostic, "browser activity: store unavailable, the browser extension is not recorded: %v\n", err)
+		browserStore = nil
+	}
+	// Bound to the enrollment before it takes any record, so no record can
+	// later leave under another workspace's token. If the token cannot be read
+	// now, the store takes nothing until the sender binds it.
+	browserTokens := sameCloudTokenSource(loadedConfig.Config.CloudURL)
+	if browserStore != nil {
+		bindBrowserStore(ctx, browserStore, browserTokens, loadedConfig.Config.CloudURL, installationState.InstallationID, opts.Diagnostic)
+	}
+	browserChanged := make(chan struct{}, 1)
+	browserHandler := &browserevents.Handler{
+		Store:       browserStore,
+		CaptureMode: func() string { return browserCaptureMode(endpointConfigCache.Current(), liveOwner.get()) },
+		Changed: func() {
+			select {
+			case browserChanged <- struct{}{}:
+			default:
+			}
+		},
+		Logf: func(format string, args ...any) { opts.Diagnostic.Printf(format+"\n", args...) },
+	}
+
 	// Runtime evidence of Kontext's own hooks, for the hook inventory.
 	hookEvidence := newHookRuntime()
 	// Under a static observe posture the hook turns every deny into an
@@ -364,6 +394,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		CompactToolOutput:      compactor.Compact,
 		OffersCompaction:       compactor.Offers,
 		CodexProxy:             codexProxyAnswer(compactor),
+		Browser:                browserHandler.Answer,
 		ObserveEvent:           compactor.Observe,
 		HoldFor:                enrolmentHold(started, enrolmentWait(opts.Diagnostic), cedarEnforcement, cedarCache),
 		InterceptEvent:         hookEvidence.intercept,
@@ -510,6 +541,22 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		defer background.Done()
 		compactor.Run(policyCtx)
 	}()
+	browserSender := &browserevents.Sender{
+		Store:          browserStore,
+		BaseURL:        loadedConfig.Config.CloudURL,
+		InstallationID: installationState.InstallationID,
+		Tokens:         browserTokens,
+		HTTP:           cloudhttp.NewClient(30 * time.Second),
+		Logf:           browserHandler.Logf,
+		Warnf:          func(format string, args ...any) { diagnostic.LogAlways(opts.Diagnostic, format+"\n", args...) },
+	}
+	if browserStore != nil {
+		background.Add(1)
+		go func() {
+			defer background.Done()
+			browserSender.Run(policyCtx, browserChanged)
+		}()
+	}
 	background.Add(1)
 	go func() {
 		defer background.Done()
@@ -1367,6 +1414,37 @@ func (e *enrolmentRefresh) afterAcceptedPost() {
 	case e.now <- struct{}{}:
 		e.left--
 	default:
+	}
+}
+
+// sameCloudTokenSource reads the current install token, but only while the
+// managed configuration still names cloudURL, the address the caller sends
+// to. After a re-enrollment to another cloud it refuses, so a new token never
+// reaches the old address; the daemon's restart picks up the new one.
+func sameCloudTokenSource(cloudURL string) func(context.Context) (string, error) {
+	want := strings.TrimRight(strings.TrimSpace(cloudURL), "/")
+	return func(ctx context.Context) (string, error) {
+		loaded, err := managedconfig.Load()
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimRight(strings.TrimSpace(loaded.Config.CloudURL), "/") != want {
+			return "", errors.New("the managed configuration names another cloud; waiting for the daemon to restart")
+		}
+		return managedconfig.ResolveInstallToken(ctx, loaded.Config.Credentials.InstallTokenRef)
+	}
+}
+
+// bindBrowserStore binds the store to the enrollment at startup. A token
+// that cannot be read now leaves it to the sender.
+func bindBrowserStore(ctx context.Context, store *browserevents.Store, tokens func(context.Context) (string, error), cloudURL, installationID string, logs diagnostic.Logger) {
+	token, err := tokens(ctx)
+	if err != nil {
+		diagnostic.LogAlways(logs, "browser activity: install token: %v\n", err)
+		return
+	}
+	if _, err := store.Bind(browserevents.Binding(cloudURL, installationID, token)); err != nil {
+		diagnostic.LogAlways(logs, "browser activity: bind store: %v\n", err)
 	}
 }
 

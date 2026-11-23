@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kontext-security/kontext/internal/browserevents"
 	"github.com/kontext-security/kontext/internal/diagnostic"
 	"github.com/kontext-security/kontext/internal/hermetic"
 	"github.com/kontext-security/kontext/internal/instancelock"
@@ -396,5 +397,30 @@ func TestRunDaemonParkedDoesNotTakeTheLock(t *testing.T) {
 	defer cancel()
 	if err := RunDaemon(ctx, fixture.opts); err != nil {
 		t.Fatalf("RunDaemon() = %v, want a park until the context ends", err)
+	}
+}
+
+// The browser store is telemetry: when it cannot be read, hooks and policy
+// still need their daemon.
+func TestRunDaemonStartsWhenTheBrowserStoreCannotBeRead(t *testing.T) {
+	fixture := newInstanceFixture(t)
+	if err := os.MkdirAll(browserevents.DefaultStorePath(fixture.dbPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- RunDaemon(ctx, fixture.opts) }()
+	waitForSocket(t, fixture.socketPath, errCh)
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunDaemon() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunDaemon did not stop")
+	}
+	if !strings.Contains(fixture.log.String(), "browser activity: store unavailable") {
+		t.Fatalf("the store failure was not logged:\n%s", fixture.log.String())
 	}
 }
