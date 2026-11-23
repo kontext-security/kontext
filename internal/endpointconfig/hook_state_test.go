@@ -179,6 +179,7 @@ func TestACrossVersionNotModifiedFetchesTheFallbackAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	fallback := fallbackResponse(t, payloadcapture.ModeSummary, false)
+	var suppressed atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("response_version") == strconv.Itoa(ResponseVersion) {
 			w.WriteHeader(http.StatusNotAcceptable)
@@ -190,6 +191,8 @@ func TestACrossVersionNotModifiedFetchesTheFallbackAgain(t *testing.T) {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
+		// While the retry runs, the refused version's hook state is off.
+		suppressed.Store(cache.Current().HookState().Equal(UnmanagedHookState))
 		w.Header().Set("ETag", `"`+fallback.ConfigIdentity+`"`)
 		_ = json.NewEncoder(w).Encode(fallback)
 	}))
@@ -201,6 +204,9 @@ func TestACrossVersionNotModifiedFetchesTheFallbackAgain(t *testing.T) {
 	refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token", nil }}
 	if err := refresher.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh() = %v", err)
+	}
+	if !suppressed.Load() {
+		t.Fatal("the refused version's hook state stayed on during the retry")
 	}
 	if got := cache.Current(); got.ConfigIdentity != fallback.ConfigIdentity || got.Status.NewestUnsupported {
 		t.Fatalf("after the retry: identity %s, status %+v", got.ConfigIdentity, got.Status)
