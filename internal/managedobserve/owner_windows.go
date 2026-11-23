@@ -16,7 +16,7 @@ import (
 // token's default owner, Administrators or LocalSystem, then replaces its DACL with a protected one that grants only the user full
 // control, inherited by the socket inside. The default owner counts because an elevated process
 // creates objects owned by its default owner (Administrators) rather than by the user.
-func ensurePrivateOwner(dir string, _ os.FileInfo, created bool) error {
+func ensurePrivateOwner(dir string, _ os.FileInfo) error {
 	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		return fmt.Errorf("socket directory %s: read owner: %w", dir, err)
@@ -45,14 +45,13 @@ func ensurePrivateOwner(dir string, _ os.FileInfo, created bool) error {
 	if err != nil {
 		return err
 	}
-	if !fsperm.OwnerAllowed(owner, user.User.Sid, defaultOwner, admins, system) {
-		return fmt.Errorf("socket directory %s is owned by %s, want %s", dir, owner, user.User.Sid)
-	}
-	// A folder this call did not create and this user does not own, such
-	// as a shared folder of another product owned by Administrators, is
-	// adopted only if an earlier daemon of this user already made it
-	// private: otherwise its grants are left alone and it is refused.
-	if !created && !owner.Equals(user.User.Sid) {
+	if !fsperm.OwnerAllowed(owner, user.User.Sid, defaultOwner) {
+		if !fsperm.OwnerAllowed(owner, admins, system) {
+			return fmt.Errorf("socket directory %s is owned by %s, want %s", dir, owner, user.User.Sid)
+		}
+		// Only a folder an earlier daemon of this user already made
+		// private is adopted: a shared folder of another product keeps
+		// its grants.
 		if err := checkPrivateOwner(dir, nil); err != nil {
 			return fmt.Errorf("socket directory %s is owned by %s and is not private to %s: %w", dir, owner, user.User.Sid, err)
 		}
