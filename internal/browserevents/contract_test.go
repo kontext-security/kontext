@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -60,7 +61,7 @@ func decodeFixture(t *testing.T, data []byte) error {
 
 // checkSettings holds a settings answer to the schema's settings definition.
 func checkSettings(fields object) error {
-	for _, key := range []string{"contract", "type", "capture_mode", "corporate_domains", "paused", "accepted", "rejected"} {
+	for _, key := range []string{"contract", "type", "capture_mode", "corporate_domains", "paused", "accepted", "rejected", "enrollment"} {
 		if _, ok := fields[key]; !ok {
 			return fmt.Errorf("settings without %s", key)
 		}
@@ -94,8 +95,13 @@ func checkSettings(fields object) error {
 	if err := json.Unmarshal(fields["rejected"], &rejected); err != nil || rejected == nil {
 		return errors.New("settings rejected must be an array")
 	}
+	if enrollment, ok := fields.text("enrollment"); !ok || !enrollmentPattern.MatchString(enrollment) {
+		return errors.New("settings enrollment must be empty or 16 hex digits")
+	}
 	return nil
 }
+
+var enrollmentPattern = regexp.MustCompile(`^([0-9a-f]{16})?$`)
 
 // checkError holds an error answer to the schema's error definition.
 func checkError(fields object) error {
@@ -203,15 +209,34 @@ func TestHealthRecordKeepsOnlyItsOwnFields(t *testing.T) {
 }
 
 func TestLabelsCountCharactersNotBytes(t *testing.T) {
-	name := strings.Repeat("智", 80) // 240 bytes, 80 characters
+	name := strings.Repeat("智", 40) // 120 bytes, 40 characters
 	visit := Record{Kind: KindVisit, Day: "2026-11-20", App: "qwen", AppName: name, Provider: name, Surface: "web",
 		Host: "chat.qwen.ai", FirstSeen: "2026-11-20T08:00:00Z", LastSeen: "2026-11-20T09:00:00Z", Requests: 1}
 	if err := visit.Validate(); err != nil {
-		t.Fatalf("80 characters refused: %v", err)
+		t.Fatalf("40 characters refused: %v", err)
 	}
 	visit.AppName += "智"
 	if err := visit.Validate(); err == nil {
-		t.Fatal("81 characters taken")
+		t.Fatal("41 characters taken")
+	}
+}
+
+// Names come from the extension's catalog. Text a page or a person wrote
+// needs punctuation a catalog name does not, so it is refused.
+func TestLabelsAreCatalogNames(t *testing.T) {
+	visit := Record{Kind: KindVisit, Day: "2026-11-20", App: "chatgpt", AppName: "ChatGPT", Provider: "OpenAI", Surface: "web",
+		Host: "chatgpt.com", FirstSeen: "2026-11-20T08:00:00Z", LastSeen: "2026-11-20T09:00:00Z", Requests: 1}
+	for _, name := range []string{"ChatGPT", "Microsoft Copilot", "n8n", "Le Chat (Mistral)", "AT&T Ask"} {
+		visit.AppName = name
+		if err := visit.Validate(); err != nil {
+			t.Errorf("%q refused: %v", name, err)
+		}
+	}
+	for _, name := range []string{"", " ChatGPT", "chatgpt.com/c/123", "a?q=secret", "Plan: cut costs", "line\nbreak", "say \"hi\""} {
+		visit.AppName = name
+		if err := visit.Validate(); err == nil {
+			t.Errorf("%q taken", name)
+		}
 	}
 }
 
@@ -254,7 +279,7 @@ func TestAnAnswerWithNothingRejectedHasArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"contract":1,"type":"settings","capture_mode":"commands","corporate_domains":[],"paused":false,"accepted":1,"rejected":[]}`
+	want := `{"contract":1,"type":"settings","capture_mode":"commands","corporate_domains":[],"paused":false,"accepted":1,"rejected":[],"enrollment":""}`
 	if string(encoded) != want {
 		t.Fatalf("encoded\n%s\nwant\n%s", encoded, want)
 	}
@@ -274,6 +299,11 @@ func TestTheCloudAnswerMustAccountForTheBatch(t *testing.T) {
 		`{"accepted":1,"rejected":[{"index":1,"reason":"a"},{"index":1,"reason":"b"}]}`,
 		`{"accepted":2,"rejected":[{"index":3,"reason":"a"}]}`,
 		`{"accepted":2,"rejected":[{"index":-1,"reason":"a"}]}`,
+		// A settings answer or an echoed batch is no proof of ingestion.
+		`{"contract":1,"type":"settings","accepted":3,"rejected":[]}`,
+		`{"schema":"browser-activity-v1","accepted":3,"rejected":[]}`,
+		`{"accepted":2,"rejected":[{"index":0}]}`,
+		`{"accepted":2,"rejected":[{"index":0,"reason":7}]}`,
 	} {
 		if _, err := DecodeCloudResponse([]byte(data), 3); err == nil {
 			t.Errorf("%s: taken for 3 records", data)

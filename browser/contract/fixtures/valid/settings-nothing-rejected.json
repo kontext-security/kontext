@@ -5,5 +5,6 @@
   "corporate_domains": [],
   "paused": false,
   "accepted": 2,
-  "rejected": []
+  "rejected": [],
+  "enrollment": ""
 }

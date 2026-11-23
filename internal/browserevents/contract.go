@@ -63,6 +63,15 @@ var (
 	hostPattern    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 	dayPattern     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 	installPattern = regexp.MustCompile(`^ins_[A-Za-z0-9_-]{32}$`)
+	// labelPattern holds a catalog name such as "ChatGPT" or "OpenAI": no
+	// punctuation a sentence, path or query would need.
+	labelPattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} .&+'()-]{0,39}$`)
+)
+
+// Field limits beyond the patterns.
+const (
+	maxVersionLength = 32
+	maxReasonLength  = 200
 )
 
 // Extension says which extension, browser and profile a message came from.
@@ -118,6 +127,11 @@ type Settings struct {
 	Paused           bool        `json:"paused"`
 	Accepted         int         `json:"accepted"`
 	Rejected         []Rejection `json:"rejected"`
+	// Enrollment is an opaque id of the enrollment the daemon records
+	// under, empty until it has one. When it changes, the extension drops
+	// what it kept for the previous one, so nothing recorded for one
+	// workspace reaches another.
+	Enrollment string `json:"enrollment"`
 }
 
 // MarshalJSON writes empty lists as [], as the schema wants arrays, never
@@ -219,7 +233,7 @@ func DecodeMessage(data []byte) (Message, error) {
 		}
 		return msg, nil
 	default:
-		return Message{}, fmt.Errorf("browser events: unknown message type %q", msg.Type)
+		return Message{}, errors.New("browser events: unknown message type")
 	}
 }
 
@@ -290,6 +304,13 @@ func DecodeCloudResponse(data []byte, sent int) (CloudResponse, error) {
 	if err != nil {
 		return CloudResponse{}, fmt.Errorf("browser events: cloud answer is not an object: %w", err)
 	}
+	// The schema tells the answer apart by having no discriminator: a
+	// settings answer or a batch echoed back is not proof of ingestion.
+	for _, key := range []string{"type", "schema", "contract"} {
+		if _, ok := fields[key]; ok {
+			return CloudResponse{}, fmt.Errorf("browser events: cloud answer carries %s", key)
+		}
+	}
 	accepted, ok := fields.integer("accepted")
 	if !ok || accepted < 0 {
 		return CloudResponse{}, errors.New("browser events: cloud answer without accepted")
@@ -310,7 +331,10 @@ func DecodeCloudResponse(data []byte, sent int) (CloudResponse, error) {
 			return CloudResponse{}, errors.New("browser events: cloud rejection index is out of range or repeated")
 		}
 		seen[index] = true
-		reason, _ := rejection.text("reason")
+		reason, ok := rejection.text("reason")
+		if !ok || utf8.RuneCountInString(reason) > maxReasonLength {
+			return CloudResponse{}, errors.New("browser events: cloud rejection without a reason")
+		}
 		response.Rejected = append(response.Rejected, Rejection{Index: index, Reason: reason})
 	}
 	if accepted+len(response.Rejected) != sent {
@@ -372,13 +396,14 @@ type IndexedRecord struct {
 }
 
 func (e Extension) validate() error {
-	if !versionPattern.MatchString(e.Version) {
+	if len(e.Version) > maxVersionLength || !versionPattern.MatchString(e.Version) {
 		return errors.New("browser events: extension version must be X.Y.Z")
 	}
 	switch e.Browser {
 	case "chrome", "edge", "chromium":
 	default:
-		return fmt.Errorf("browser events: unknown browser %q", e.Browser)
+		// The value stays out of the error: errors reach the logs.
+		return errors.New("browser events: unknown browser")
 	}
 	if !profilePattern.MatchString(e.Profile) {
 		return errors.New("browser events: profile must be a random id of 8 to 64 letters, digits, - or _")
@@ -424,7 +449,7 @@ func (r Record) Validate() error {
 			return errors.New("visit app id is invalid")
 		}
 		if !isLabel(r.AppName) || !isLabel(r.Provider) {
-			return errors.New("visit app_name and provider are required")
+			return errors.New("visit app_name and provider must be catalog names")
 		}
 		if r.Surface != "web" {
 			return errors.New("visit surface must be web")
@@ -499,7 +524,8 @@ func insideDay(day, first, last string) bool {
 	return from.UTC().Format(time.DateOnly) == day && to.UTC().Format(time.DateOnly) == day
 }
 
-// isLabel counts characters, as the schema's maxLength does, not bytes.
+// isLabel holds a name to the catalog's shape. It counts characters, as the
+// schema's maxLength does, not bytes.
 func isLabel(value string) bool {
-	return value != "" && utf8.ValidString(value) && utf8.RuneCountInString(value) <= 80
+	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= 40 && labelPattern.MatchString(value)
 }

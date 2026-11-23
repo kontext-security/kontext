@@ -1,0 +1,19 @@
+{
+  "contract": 1,
+  "type": "records",
+  "extension": { "version": "0.1.0", "browser": "chrome", "profile": "p7Hq2vXkLm9s" },
+  "records": [
+    {
+      "kind": "visit",
+      "day": "2026-11-20",
+      "app": "chatgpt",
+      "app_name": "Quarterly plan: cut the sales team?",
+      "provider": "OpenAI",
+      "surface": "web",
+      "host": "chatgpt.com",
+      "first_seen": "2026-11-20T08:03:12Z",
+      "last_seen": "2026-11-20T09:14:40Z",
+      "requests": 7
+    }
+  ]
+}

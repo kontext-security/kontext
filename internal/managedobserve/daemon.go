@@ -199,7 +199,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		dbPath = DefaultDBPath()
 	}
 
-	_, err = managedconfig.ResolveInstallToken(ctx, loadedConfig.Config.Credentials.InstallTokenRef)
+	startupToken, err := managedconfig.ResolveInstallToken(ctx, loadedConfig.Config.Credentials.InstallTokenRef)
 	if err != nil {
 		// Leave a breadcrumb: under launchd this exit is otherwise invisible
 		// (doctor would only see "daemon: not running" with no cause). A
@@ -313,7 +313,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// now, the store takes nothing until the sender binds it.
 	browserTokens := sameCloudTokenSource(loadedConfig.Config.CloudURL)
 	if browserStore != nil {
-		bindBrowserStore(ctx, browserStore, browserTokens, loadedConfig.Config.CloudURL, installationState.InstallationID, opts.Diagnostic)
+		// With the token read above: a second Keychain read would delay
+		// the socket, and if it failed a reopened store would take records
+		// under its old binding until the sender found out.
+		bindBrowserStore(browserStore, startupToken, loadedConfig.Config.CloudURL, installationState.InstallationID, opts.Diagnostic)
 	}
 	browserChanged := make(chan struct{}, 1)
 	browserHandler := &browserevents.Handler{
@@ -1211,14 +1214,9 @@ func sameCloudTokenSource(cloudURL string) func(context.Context) (string, error)
 	}
 }
 
-// bindBrowserStore binds the store to the enrollment at startup. A token
-// that cannot be read now leaves it to the sender.
-func bindBrowserStore(ctx context.Context, store *browserevents.Store, tokens func(context.Context) (string, error), cloudURL, installationID string, logs diagnostic.Logger) {
-	token, err := tokens(ctx)
-	if err != nil {
-		diagnostic.LogAlways(logs, "browser activity: install token: %v\n", err)
-		return
-	}
+// bindBrowserStore binds the store to the enrollment at startup, with the
+// token the daemon started with.
+func bindBrowserStore(store *browserevents.Store, token, cloudURL, installationID string, logs diagnostic.Logger) {
 	if _, err := store.Bind(browserevents.Binding(cloudURL, installationID, token)); err != nil {
 		diagnostic.LogAlways(logs, "browser activity: bind store: %v\n", err)
 	}

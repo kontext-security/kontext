@@ -28,18 +28,27 @@ Record kinds in v1:
 `day` is the UTC date. A `visit` is a snapshot of the day so far with an
 absolute count, never an increment, so sending it twice is harmless.
 
+`app_name` and `provider` are names from the extension's catalog, such as
+"ChatGPT" and "OpenAI": at most 40 letters, digits, spaces and `. & + ' ( ) -`.
+Page titles, URLs and other text people or pages wrote do not fit that shape
+and are refused. `extension.version` is at most 32 characters.
+
 ## Daemon to extension
 
 Every message gets a `settings` answer: the Data collection step
 (`commands`, `full` or `prompts`, as the dashboard names them), the
-organisation's corporate email domains, `paused`, and which records were
-accepted. While `paused` is true the extension stops every detector and sends
+organisation's corporate email domains, `paused`, which records were
+accepted, and `enrollment`: an opaque id of the enrollment the daemon records
+under, empty until it has one. When `enrollment` changes, the extension drops
+the visits it kept for the previous one, so nothing recorded for one workspace
+reaches another; the daemon drops its own rows on the same change. While `paused` is true the extension stops every detector and sends
 only `hello` and `health`. In v1 the daemon always answers `paused: false` and
 no corporate domains; both get a server source with the endpoint configuration
 (planned before account detection).
 
 A message with another contract version gets an `error` answer with
-`unsupported_contract`.
+`unsupported_contract`. The extension then stops recording until a handshake
+in its own version succeeds.
 
 ## Daemon to cloud
 
@@ -68,7 +77,8 @@ accepts the dev ID that the extension's dev builds carry.
 - The cloud batch is stricter than an extension's message: a record there
   carries only its own kind's fields.
 - The cloud's answer accounts for every record of the batch once: `accepted`
-  plus the distinct indexes in `rejected`. Any other answer is an error and the
-  batch is sent again.
+  plus the distinct indexes in `rejected`, each with a `reason`. It carries no
+  `type`, `schema` or `contract`. Any other answer is an error and the batch is
+  sent again. The daemon does not follow redirects.
 - `fixtures/valid` must decode on both sides; `fixtures/invalid` must be
   rejected. `schema.json` describes the same shapes.

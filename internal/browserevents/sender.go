@@ -47,6 +47,36 @@ type Sender struct {
 	limit int
 }
 
+// MaxResponseBytes bounds the cloud's answer.
+const MaxResponseBytes = 1 << 20
+
+// noRedirects is client without following redirects: a 307 or 308 would send
+// the batch, with the installation id, to wherever it points. A redirect
+// then reads as its status, which SendOnce refuses.
+func noRedirects(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	copied := *client
+	copied.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &copied
+}
+
+// split separates rows the contract allows from rows it does not.
+func (p Pending) split() (valid, invalid Pending) {
+	for i, record := range p.Records {
+		source := Extension{Version: record.ExtensionVersion, Browser: record.Browser, Profile: record.Profile}
+		target := &valid
+		if source.validate() != nil || record.Record.Validate() != nil {
+			target = &invalid
+		}
+		target.Records = append(target.Records, record)
+		target.keys = append(target.keys, p.keys[i])
+		target.versions = append(target.versions, p.versions[i])
+	}
+	return valid, invalid
+}
+
 // WarnEvery spaces out the warnings of a run of failed sends.
 const WarnEvery = time.Hour
 
@@ -109,11 +139,22 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 		return Nothing, nil
 	}
 	now := s.clock()
+	// A row the store kept that the contract no longer allows is dropped on
+	// its own, rather than retried forever; the valid rows go on.
+	pending, invalid := pending.split()
+	if len(invalid.Records) > 0 {
+		if err := s.Store.Ack(invalid); err != nil {
+			return Retry, err
+		}
+		s.logf("browser events: dropped %d stored records the contract does not allow", len(invalid.Records))
+	}
+	if len(pending.Records) == 0 {
+		return Sent, nil
+	}
 	batch := CloudBatch{Schema: CloudSchema, InstallationID: s.InstallationID, SentAt: now().UTC().Format(time.RFC3339), Records: pending.Records}
 	if err := batch.Validate(); err != nil {
-		// A row the store kept that the contract no longer allows: drop the
-		// batch's rows rather than retry them forever.
-		_ = s.Store.Ack(pending)
+		// The batch itself is wrong, such as its installation id: no row
+		// is to blame, so none is marked sent.
 		return Refused, err
 	}
 	body, err := json.Marshal(batch)
@@ -130,12 +171,14 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	}
 	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	request.Header.Set("Content-Type", "application/json")
-	response, err := s.HTTP.Do(request)
+	response, err := noRedirects(s.HTTP).Do(request)
 	if err != nil {
 		return Retry, err
 	}
 	defer response.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(response.Body, 256<<10))
+	// Large enough for a full batch of rejections with the longest reasons
+	// in any script. A cut-off answer would be retried forever.
+	data, _ := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes))
 	switch {
 	case response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated:
 		// Rows are marked sent only when the answer accounts for each of

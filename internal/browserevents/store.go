@@ -1,12 +1,17 @@
 package browserevents
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +24,9 @@ import (
 const (
 	KeepDays = 8
 	MaxRows  = 2000
+	// MaxStoreBytes bounds the file read at startup. MaxRows rows are far
+	// below it; a larger file is damaged and starts over.
+	MaxStoreBytes = 16 << 20
 )
 
 // row is one snapshot: a visit per browser, profile, app and day, or the
@@ -62,15 +70,23 @@ func OpenStore(path string) (*Store, error) {
 
 func openStore(path string, now func() time.Time) (*Store, error) {
 	s := &Store{path: path, now: now, rows: map[string]*row{}}
-	data, err := os.ReadFile(path)
+	data, err := readStoreFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		return s, nil
+	}
+	if errors.Is(err, errOversizedStore) {
+		// Far larger than MaxRows rows: start over, and the next save
+		// replaces it. The extension sends its snapshots again.
 		return s, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	var file storeFile
-	if json.Unmarshal(data, &file) == nil && file.Rows != nil {
+	if json.Unmarshal(data, &file) == nil && file.Rows != nil && file.Binding != "" {
+		// Rows without a binding cannot say which workspace they belong
+		// to, so they are not read: Bind would otherwise give them to the
+		// current one.
 		// A damaged file can hold null rows; they are dropped, not read.
 		for key, r := range file.Rows {
 			if r == nil {
@@ -89,9 +105,44 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	return s, nil
 }
 
-// DefaultStorePath is the store beside the daemon's database.
+var errOversizedStore = errors.New("browser events: store file is too large")
+
+// readStoreFile reads the store without blocking on a FIFO or reading a file
+// of any size: startup waits for it, and hooks start only after it.
+func readStoreFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		// A FIFO would block startup; a folder or link is not ours.
+		return nil, fmt.Errorf("browser events: store %s is not a regular file", path)
+	}
+	if info.Size() > MaxStoreBytes {
+		return nil, errOversizedStore
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, MaxStoreBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxStoreBytes {
+		return nil, errOversizedStore
+	}
+	return data, nil
+}
+
+// DefaultStorePath is the store beside the daemon's database, named after
+// it, so two daemons with their own databases in one folder keep their own
+// stores.
 func DefaultStorePath(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "browser-activity.json")
+	base := filepath.Base(dbPath)
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	return filepath.Join(filepath.Dir(dbPath), base+".browser-activity.json")
 }
 
 func rowKey(r CloudRecord) string {
@@ -192,16 +243,30 @@ func (s *Store) recentDay(day string) bool {
 	return !d.After(today.Add(24*time.Hour)) && today.Sub(d) < KeepDays*24*time.Hour
 }
 
-// pruneLocked drops days past KeepDays and says whether it dropped any.
+// pruneLocked drops visits of days past KeepDays, and the health of
+// profiles not seen for KeepDays, such as deleted ones, so they cannot fill
+// the store. It says whether it dropped any.
 func (s *Store) pruneLocked() bool {
 	pruned := false
 	for key, r := range s.rows {
-		if r.Record.Kind == KindVisit && !s.recentDay(r.Record.Day) {
+		if s.expired(r.Record) {
 			delete(s.rows, key)
 			pruned = true
 		}
 	}
 	return pruned
+}
+
+func (s *Store) expired(r CloudRecord) bool {
+	switch r.Kind {
+	case KindVisit:
+		return !s.recentDay(r.Day)
+	case KindHealth:
+		observed, err := time.Parse(time.RFC3339, r.ObservedAt)
+		return err != nil || s.now().Sub(observed) >= KeepDays*24*time.Hour
+	default:
+		return true
+	}
 }
 
 // Pending is a batch to send: the rows that changed since the cloud last had
@@ -285,6 +350,19 @@ func (s *Store) Flush() error {
 	return s.saveLocked()
 }
 
+// Enrollment is the opaque id of the enrollment the store records under, as
+// the extension gets it, or "" while the store is unbound. It is derived
+// from the binding and reveals nothing of the token.
+func (s *Store) Enrollment() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.binding == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("browser-enrollment\n" + s.binding))
+	return hex.EncodeToString(sum[:8])
+}
+
 // Bound says whether the store knows its enrollment.
 func (s *Store) Bound() bool {
 	s.mu.Lock()
@@ -324,12 +402,31 @@ func (s *Store) saveLocked() error {
 		tmp.Close()
 		return err
 	}
+	// The extension is told a record was taken once this returns, so the
+	// file is on disk before the rename, and the rename before the answer.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp.Name(), s.path); err != nil {
 		return fmt.Errorf("browser events: save store: %w", err)
 	}
+	syncDir(dir)
 	s.dirty = false
 	return nil
+}
+
+// syncDir makes a rename in dir durable. Windows cannot open a folder for
+// that, and NTFS logs the rename itself.
+func syncDir(dir string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 }

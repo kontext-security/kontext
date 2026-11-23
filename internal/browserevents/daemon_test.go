@@ -516,3 +516,134 @@ func TestTheBatchGrowsBackAfterA413(t *testing.T) {
 		t.Fatalf("limit = %d after a success, want 2", sender.limit)
 	}
 }
+
+// Rows in a file without a binding cannot say which workspace recorded them,
+// so they are not given to the enrollment the store is bound to next.
+func TestRowsWithoutABindingAreNotRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "browser-activity.json")
+	file := `{"rows":{"chrome|p7Hq2vXkLm9s|health":{"record":{"browser":"chrome","profile":"p7Hq2vXkLm9s","extension_version":"0.1.0","kind":"health","connected_since":"2026-11-20T08:00:00Z","observed_at":"2026-11-20T09:00:00Z"},"version":1,"sent":0}}}`
+	if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := openStore(path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Bind("current"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 0 {
+		t.Fatalf("an unbound row was kept for the current enrollment: %d rows", s.Len())
+	}
+}
+
+func TestTheHealthOfAProfileNotSeenForAWeekExpires(t *testing.T) {
+	s := openTestStore(t)
+	health := IndexedRecord{Record: Record{Kind: KindHealth, ConnectedSince: "2026-11-01T08:00:00Z", ObservedAt: "2026-11-12T11:00:00Z"}}
+	fresh := IndexedRecord{Index: 1, Record: Record{Kind: KindHealth, ConnectedSince: "2026-11-20T08:00:00Z", ObservedAt: "2026-11-20T11:00:00Z"}}
+	other := testExtension
+	other.Profile = "freshProfile1"
+	if _, err := s.Apply(testExtension, []IndexedRecord{health}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(other, []IndexedRecord{fresh}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 1 {
+		t.Fatalf("rows = %d, want only the profile seen this week", s.Len())
+	}
+}
+
+func TestTheEnrollmentIdChangesWithTheBindingAndHidesIt(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "browser-activity.json"), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Enrollment() != "" {
+		t.Fatal("an unbound store has an enrollment id")
+	}
+	a := Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-a")
+	_, _ = s.Bind(a)
+	first := s.Enrollment()
+	_, _ = s.Bind(Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-b"))
+	second := s.Enrollment()
+	if len(first) != 16 || len(second) != 16 || first == second || strings.Contains(a, first) {
+		t.Fatalf("enrollment ids %q and %q", first, second)
+	}
+	handler := &Handler{Store: s}
+	answer := handler.Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`))
+	if !strings.Contains(string(answer), `"enrollment":"`+second+`"`) {
+		t.Fatalf("hello answer without the enrollment: %s", answer)
+	}
+}
+
+// A stored row the contract no longer allows is dropped alone; the valid
+// rows of its batch are still sent.
+func TestAnInvalidStoredRowDoesNotTakeItsBatchWithIt(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	bad := visit(3, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")
+	bad.Record.App = "claude"
+	_, _ = s.Apply(testExtension, []IndexedRecord{bad})
+	for _, r := range s.rows {
+		if r.Record.App == "claude" {
+			r.Record.AppName = "a stored name: no longer allowed?"
+		}
+	}
+	sender, batches := newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"accepted":1,"rejected":[]}`)
+	})
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent || err != nil {
+		t.Fatalf("outcome = %v, err = %v", outcome, err)
+	}
+	if len(*batches) != 1 || len((*batches)[0].Records) != 1 || (*batches)[0].Records[0].App != "chatgpt" {
+		t.Fatalf("batches = %+v", *batches)
+	}
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Nothing {
+		t.Fatalf("second send = %v, want Nothing", outcome)
+	}
+}
+
+// A redirect would carry the batch and installation id elsewhere.
+func TestTheSenderDoesNotFollowRedirects(t *testing.T) {
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("the batch followed a redirect")
+	}))
+	t.Cleanup(elsewhere.Close)
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	sender, _ := newTestSender(t, s, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+IngestPath, http.StatusTemporaryRedirect)
+	})
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Refused {
+		t.Fatalf("outcome = %v, want Refused", outcome)
+	}
+	if len(s.Pending(10).Records) != 1 {
+		t.Fatal("rows were dropped")
+	}
+}
+
+func TestAStoreThatIsNotAFileIsRefusedWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "browser-activity.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openStore(path, testNow); err == nil {
+		t.Fatal("a folder opened as the store")
+	}
+}
+
+func TestTwoDatabasesInOneFolderKeepTheirOwnStores(t *testing.T) {
+	a := DefaultStorePath("/data/guard.db")
+	b := DefaultStorePath("/data/other.db")
+	if a == b || a == "/data/guard.db" || filepath.Dir(a) != "/data" {
+		t.Fatalf("store paths %q and %q", a, b)
+	}
+}
+
+func TestALongExtensionVersionIsRefused(t *testing.T) {
+	long := `{"contract":1,"type":"hello","extension":{"version":"1.0.` + strings.Repeat("0", 64) + `","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`
+	if _, err := DecodeMessage([]byte(long)); err == nil {
+		t.Fatal("a 70-character version was taken")
+	}
+}

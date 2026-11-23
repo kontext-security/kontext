@@ -36,6 +36,7 @@ func (h *Handler) Answer(_ context.Context, raw json.RawMessage) json.RawMessage
 		return encode(NewError(ErrorUnavailable))
 	}
 	settings := h.settings()
+	settings.Enrollment = h.Store.Enrollment()
 	if msg.Type == TypeHello {
 		return encode(settings)
 	}
