@@ -319,8 +319,21 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		bindBrowserStore(browserStore, startupToken, loadedConfig.Config.CloudURL, installationState.InstallationID, opts.Diagnostic)
 	}
 	browserChanged := make(chan struct{}, 1)
+	browserLogf := func(format string, args ...any) { opts.Diagnostic.Printf(format+"\n", args...) }
+	browserSender := &browserevents.Sender{
+		Store:          browserStore,
+		BaseURL:        loadedConfig.Config.CloudURL,
+		InstallationID: installationState.InstallationID,
+		Tokens:         browserTokens,
+		HTTP:           cloudhttp.NewClient(30 * time.Second),
+		Logf:           browserLogf,
+		Warnf:          func(format string, args ...any) { diagnostic.LogAlways(opts.Diagnostic, format+"\n", args...) },
+	}
 	browserHandler := &browserevents.Handler{
-		Store:       browserStore,
+		Store: browserStore,
+		// A new connection sees an enrollment change at once, not only when
+		// the sender next has rows to upload.
+		Refresh:     func(ctx context.Context) { _, _ = browserSender.Rebind(ctx) },
 		CaptureMode: func() string { return browserCaptureMode(endpointConfigCache.Current()) },
 		Changed: func() {
 			select {
@@ -328,7 +341,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			default:
 			}
 		},
-		Logf: func(format string, args ...any) { opts.Diagnostic.Printf(format+"\n", args...) },
+		Logf: browserLogf,
 	}
 
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
@@ -447,15 +460,6 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		defer background.Done()
 		compactor.Run(policyCtx)
 	}()
-	browserSender := &browserevents.Sender{
-		Store:          browserStore,
-		BaseURL:        loadedConfig.Config.CloudURL,
-		InstallationID: installationState.InstallationID,
-		Tokens:         browserTokens,
-		HTTP:           cloudhttp.NewClient(30 * time.Second),
-		Logf:           browserHandler.Logf,
-		Warnf:          func(format string, args ...any) { diagnostic.LogAlways(opts.Diagnostic, format+"\n", args...) },
-	}
 	if browserStore != nil {
 		background.Add(1)
 		go func() {

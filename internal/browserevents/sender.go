@@ -105,28 +105,30 @@ const (
 	Refused
 )
 
-// SendOnce sends up to one batch of pending rows.
-func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
-	// An unbound store takes no records, so it is bound even with nothing
-	// to send.
-	if s.Store.Bound() && len(s.Store.Pending(1).Records) == 0 {
-		// Days that aged out leave the disk even when nothing is sent.
-		if err := s.Store.Flush(); err != nil {
-			return Retry, err
-		}
-		return Nothing, nil
-	}
-	token, err := s.Tokens(ctx)
+// Rebind reads the current install token and binds the store to it, so an
+// enrollment change is seen before the next record is taken, not only when
+// there is something to send. Rows recorded under the previous enrollment are
+// dropped and never leave with the new token.
+func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
+	token, err = s.Tokens(ctx)
 	if err != nil || strings.TrimSpace(token) == "" {
-		return Retry, fmt.Errorf("browser events: install token: %v", err)
+		return "", fmt.Errorf("browser events: install token: %v", err)
 	}
-	// Rows recorded under another enrollment never leave with this token.
 	dropped, err := s.Store.Bind(Binding(s.BaseURL, s.InstallationID, token))
 	if err != nil {
-		return Retry, err
+		return "", err
 	}
 	if dropped > 0 {
 		s.logf("browser events: the enrollment changed; dropped %d rows recorded under the previous one", dropped)
+	}
+	return token, nil
+}
+
+// SendOnce sends up to one batch of pending rows.
+func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
+	token, err := s.Rebind(ctx)
+	if err != nil {
+		return Retry, err
 	}
 	if s.limit <= 0 || s.limit > MaxRecordsPerBatch {
 		s.limit = MaxRecordsPerBatch
@@ -143,7 +145,7 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	// its own, rather than retried forever; the valid rows go on.
 	pending, invalid := pending.split()
 	if len(invalid.Records) > 0 {
-		if err := s.Store.Ack(invalid); err != nil {
+		if err := s.Store.Drop(invalid); err != nil {
 			return Retry, err
 		}
 		s.logf("browser events: dropped %d stored records the contract does not allow", len(invalid.Records))
@@ -178,7 +180,13 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	defer response.Body.Close()
 	// Large enough for a full batch of rejections with the longest reasons
 	// in any script. A cut-off answer would be retried forever.
-	data, _ := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes))
+	data, err := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
+	if err != nil {
+		return Retry, fmt.Errorf("browser events: read the answer: %w", err)
+	}
+	if len(data) > MaxResponseBytes {
+		return Retry, errors.New("browser events: the answer is too large")
+	}
 	switch {
 	case response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated:
 		// Rows are marked sent only when the answer accounts for each of
