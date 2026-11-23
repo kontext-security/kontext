@@ -520,11 +520,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			logAlways(opts.Diagnostic, "hook inventory: %s\n", describeHookChange(change))
 		}
 	}
-	// A confirmed opt-out drops pending hook results when it is seen, not
+	// A decided opt-out drops pending hook results when it is seen, not
 	// when the hook worker next runs: a restart in between could otherwise
 	// confirm an opt-in first and upload results from before the opt-out.
 	purgeHooksIfOff := func(snapshot endpointconfig.Snapshot) {
-		if snapshot.Confirmed && !snapshot.HookInventoryEnabled() {
+		if snapshot.HookInventoryDecided() && !snapshot.HookInventoryEnabled() {
 			hookEvidence.reset()
 			if err := inventoryStore.DiscardHooks(); err != nil {
 				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
@@ -568,7 +568,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			codexRouting.follow(snapshot)
 			kickHooks()
 			// The hook scan follows the switch now, not at the next hour.
-			if hookWatch.config(snapshot.HookInventoryEnabled(), snapshot.Confirmed) {
+			if hookWatch.config(snapshot.HookInventoryEnabled(), snapshot.HookInventoryDecided()) {
 				purgeHooksIfOff(snapshot)
 				wakeHooks()
 			}
@@ -639,7 +639,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		actions:  hookReconciler,
 		switches: func() (bool, bool) {
 			snapshot := endpointConfigCache.Current()
-			return snapshot.HookInventoryEnabled(), snapshot.Confirmed
+			return snapshot.HookInventoryEnabled(), snapshot.HookInventoryDecided()
 		},
 		// One snapshot says both that the switch is on and that the current
 		// enrolment's own refresh confirmed it: after a re-enrolment the cache
