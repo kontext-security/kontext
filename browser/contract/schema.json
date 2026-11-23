@@ -79,7 +79,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 100000,
-          "description": "Messages sent, approximate: how many of the requests were sends to the app's message endpoint. A regenerate or an edit counts too. Missing reads as 0. At most requests."
+          "description": "Messages sent, approximate: how many of the requests were sends to the app's message endpoint. A regenerate or an edit counts too. Missing reads as 0. At most requests: JSON Schema cannot compare two fields, so the daemon and the cloud check this and refuse a visit with more messages than requests."
         }
       }
     },

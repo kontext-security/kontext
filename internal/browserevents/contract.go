@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"time"
 	"unicode/utf8"
@@ -448,10 +449,16 @@ func (o object) integer(key string) (int, bool) {
 	if o.null(key) {
 		return 0, false
 	}
-	if err := json.Unmarshal(o[key], &value); err != nil {
+	if err := json.Unmarshal(o[key], &value); err == nil {
+		return value, true
+	}
+	// JSON Schema counts 3.0 and 3e0 as integers, so they are read as 3. A
+	// fraction, or a number past what a count can be, is not an integer.
+	var number float64
+	if err := json.Unmarshal(o[key], &number); err != nil || number != math.Trunc(number) || math.Abs(number) > math.MaxInt32 {
 		return 0, false
 	}
-	return value, true
+	return int(number), true
 }
 
 // null reports whether key is missing or null.
