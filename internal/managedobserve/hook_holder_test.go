@@ -403,3 +403,34 @@ func TestHookHolderWatchesOnlyWhileOn(t *testing.T) {
 		t.Fatalf("off: %v", sets)
 	}
 }
+
+// A purge that failed to write runs again on the next refresh, though the
+// switch hasn't changed; a decided on, or an undecided off, never purges.
+func TestAFailedOptOutPurgeRetriesOnAnUnchangedSwitch(t *testing.T) {
+	calls, fail := 0, true
+	p := hookOptOutPurge{discard: func() error {
+		calls++
+		if fail {
+			return errors.New("disk full")
+		}
+		return nil
+	}}
+	p.follow(true, true, false)
+	if calls != 1 {
+		t.Fatalf("first opt-out: %d purges", calls)
+	}
+	fail = false
+	p.follow(false, true, false)
+	if calls != 2 {
+		t.Fatalf("after a failed purge: %d purges, want a retry", calls)
+	}
+	p.follow(false, true, false)
+	if calls != 2 {
+		t.Fatalf("after a purge that worked: %d purges, want none", calls)
+	}
+	p.follow(true, false, false)
+	p.follow(true, true, true)
+	if calls != 2 {
+		t.Fatalf("undecided off or decided on purged: %d purges", calls)
+	}
+}

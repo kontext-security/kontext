@@ -523,15 +523,17 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	// A decided opt-out drops pending hook results when it is seen, not
 	// when the hook worker next runs: a restart in between could otherwise
 	// confirm an opt-in first and upload results from before the opt-out.
-	purgeHooksIfOff := func(snapshot endpointconfig.Snapshot) {
-		if snapshot.HookInventoryDecided() && !snapshot.HookInventoryEnabled() {
-			hookEvidence.reset()
-			if err := inventoryStore.DiscardHooks(); err != nil {
-				opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
-			}
+	// Only the refresher's goroutine touches it after this first purge.
+	hookPurge := hookOptOutPurge{discard: func() error {
+		hookEvidence.reset()
+		err := inventoryStore.DiscardHooks()
+		if err != nil {
+			opts.Diagnostic.Printf("hook inventory: discard pending results: %v\n", err)
 		}
-	}
-	purgeHooksIfOff(endpointConfigCache.Current())
+		return err
+	}}
+	startup := endpointConfigCache.Current()
+	hookPurge.purge(startup.HookInventoryDecided(), startup.HookInventoryEnabled())
 	// An admin's desired state for Kontext's hooks (ADR-0012), only from a
 	// config the current enrolment confirmed: after a re-enrolment the cache
 	// can still hold the previous workspace's.
@@ -568,8 +570,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 			codexRouting.follow(snapshot)
 			kickHooks()
 			// The hook scan follows the switch now, not at the next hour.
-			if hookWatch.config(snapshot.HookInventoryEnabled(), snapshot.HookInventoryDecided()) {
-				purgeHooksIfOff(snapshot)
+			enabled, decided := snapshot.HookInventoryEnabled(), snapshot.HookInventoryDecided()
+			changed := hookWatch.config(enabled, decided)
+			hookPurge.follow(changed, decided, enabled)
+			if changed {
 				wakeHooks()
 			}
 		},

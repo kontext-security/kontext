@@ -339,6 +339,32 @@ func (w *hookSwitchWatch) config(on, confirmed bool) bool {
 	return changed
 }
 
+// hookOptOutPurge drops pending hook results once a config decides the
+// switch is off, and tries again on each later refresh until a purge
+// succeeds: an unchanged switch otherwise never retries one that failed to
+// write, and a later opt-in could upload results from before the opt-out.
+type hookOptOutPurge struct {
+	discard func() error
+	failed  bool
+}
+
+// purge runs for a decided off; it reports whether it ran.
+func (p *hookOptOutPurge) purge(decided, enabled bool) bool {
+	if !decided || enabled {
+		p.failed = false
+		return false
+	}
+	p.failed = p.discard() != nil
+	return true
+}
+
+// follow purges when the switch changed, or when the last purge failed.
+func (p *hookOptOutPurge) follow(changed, decided, enabled bool) {
+	if changed || p.failed {
+		p.purge(decided, enabled)
+	}
+}
+
 func (w *hookSwitchWatch) enrolment(token string) bool {
 	changed := w.token != token
 	w.token = token
