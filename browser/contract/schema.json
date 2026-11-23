@@ -77,33 +77,28 @@
         }
       }
     },
+    "accountKeys": {
+      "$comment": "The only keys an account record may have, so an address, a name or a token cannot pass as an extra field.",
+      "propertyNames": { "enum": ["kind", "day", "app", "host", "account_type", "observed_at"] }
+    },
     "account": {
-      "$comment": "Which kind of account was signed in to an app that UTC day, at its newest observation. Never an address: email_domain is sent only for a corporate account, and a personal account carries no domain.",
+      "$comment": "Which type of account was signed in to an app that UTC day, at its newest observation. Only the type: never a plan, an address, a domain or a name.",
       "type": "object",
-      "required": ["kind", "day", "app", "host", "plan", "observed_at"],
+      "required": ["kind", "day", "app", "host", "account_type", "observed_at"],
       "properties": {
         "kind": { "const": "account" },
         "day": { "$ref": "#/$defs/day" },
         "app": { "$ref": "#/$defs/appId" },
         "host": { "$ref": "#/$defs/host" },
-        "plan": {
-          "enum": ["anonymous", "free", "paid", "team", "enterprise", "unknown"],
-          "description": "anonymous: not signed in. free and paid: a personal account. team and enterprise: an organisation's workspace. unknown: the app's answer could not be read."
+        "account_type": {
+          "enum": ["company", "personal", "none", "unknown"],
+          "description": "company: the active workspace is a managed one (team or enterprise); its owner is not checked. personal: any other signed-in account, also on a work email. none: the app answered that nobody is signed in. unknown: the app's answer could not be read."
         },
-        "corporate": {
-          "type": "boolean",
-          "description": "A team or enterprise workspace, or an account whose email domain is one of corporate_domains. Missing reads as false."
-        },
-        "email_domain": { "$ref": "#/$defs/host" },
         "observed_at": { "$ref": "#/$defs/time" }
-      },
-      "allOf": [
-        { "if": { "required": ["email_domain"] }, "then": { "required": ["corporate"], "properties": { "corporate": { "const": true } } } },
-        { "if": { "properties": { "plan": { "const": "anonymous" } } }, "then": { "not": { "properties": { "corporate": { "const": true } }, "required": ["corporate"] } } }
-      ]
+      }
     },
     "record": {
-      "oneOf": [{ "$ref": "#/$defs/health" }, { "$ref": "#/$defs/visit" }, { "$ref": "#/$defs/account" }]
+      "oneOf": [{ "$ref": "#/$defs/health" }, { "$ref": "#/$defs/visit" }, { "allOf": [{ "$ref": "#/$defs/account" }, { "$ref": "#/$defs/accountKeys" }] }]
     },
     "hello": {
       "type": "object",
@@ -187,17 +182,11 @@
         { "required": ["first_seen"] }, { "required": ["last_seen"] }, { "required": ["requests"] }
       ]
     },
-    "visitOnlyFields": {
-      "anyOf": [
-        { "required": ["app_name"] }, { "required": ["provider"] }, { "required": ["surface"] },
-        { "required": ["first_seen"] }, { "required": ["last_seen"] }, { "required": ["requests"] }
-      ]
-    },
     "accountFields": {
-      "anyOf": [{ "required": ["plan"] }, { "required": ["corporate"] }, { "required": ["email_domain"] }]
+      "anyOf": [{ "required": ["account_type"] }]
     },
     "cloudRecord": {
-      "$comment": "Stricter than an extension's record: the daemon sends only the fields of a record's kind, so a health record with a host, or a visit with a plan, is refused.",
+      "$comment": "Stricter than an extension's record: the daemon sends only the fields of a record's kind, so a health record with a host, a visit with an account type, or an account with any field but its own and the source, is refused.",
       "allOf": [
         { "$ref": "#/$defs/source" },
         {
@@ -219,8 +208,14 @@
             {
               "allOf": [
                 { "$ref": "#/$defs/account" },
-                { "not": { "required": ["connected_since"] } },
-                { "not": { "$ref": "#/$defs/visitOnlyFields" } }
+                {
+                  "propertyNames": {
+                    "enum": [
+                      "kind", "day", "app", "host", "account_type", "observed_at",
+                      "browser", "profile", "extension_version"
+                    ]
+                  }
+                }
               ]
             }
           ]

@@ -690,15 +690,16 @@ func TestALongExtensionVersionIsRefused(t *testing.T) {
 	}
 }
 
-func account(plan, observed string) IndexedRecord {
+func account(accountType, observed string) IndexedRecord {
 	return IndexedRecord{Record: Record{Kind: KindAccount, Day: "2026-11-20", App: "chatgpt", Host: "chatgpt.com",
-		Plan: plan, ObservedAt: observed}}
+		AccountType: accountType, ObservedAt: observed}}
 }
 
 // The account fixture goes through the handler into the store and on to a
-// batch the cloud schema takes; the newest observation of the day wins, and
-// an older one replayed late changes nothing.
-func TestAccountsKeepTheNewestObservationOfTheDay(t *testing.T) {
+// batch the cloud schema takes. Each type seen on a day keeps its row, so a
+// personal account used after a company one stays visible, and an older
+// observation of a type replayed late changes nothing.
+func TestAccountsKeepEachTypeSeenOnADay(t *testing.T) {
 	s := openTestStore(t)
 	h := &Handler{Store: s}
 	data, err := os.ReadFile(filepath.Join(fixtures, "valid", "records-account.json"))
@@ -708,21 +709,33 @@ func TestAccountsKeepTheNewestObservationOfTheDay(t *testing.T) {
 	data = []byte(strings.Replace(string(data), "3f9a1c2b7d4e6f80", s.Enrollment(), 1))
 	var answer Settings
 	_ = json.Unmarshal(h.Answer(context.Background(), data), &answer)
-	if answer.Accepted != 3 || len(answer.Rejected) != 0 {
+	if answer.Accepted != 4 || len(answer.Rejected) != 0 {
 		t.Fatalf("answer = %+v", answer)
 	}
-	for _, r := range []IndexedRecord{account(PlanFree, "2026-11-20T11:30:00Z"), account(PlanTeam, "2026-11-20T08:00:00Z")} {
+	for _, r := range []IndexedRecord{account(AccountPersonal, "2026-11-20T11:30:00Z"), account(AccountCompany, "2026-11-20T08:00:00Z")} {
 		if _, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{r}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	plans := map[string]string{}
+	seen := map[string]string{}
 	p := s.Pending(10)
 	for _, r := range p.Records {
-		plans[r.App] = r.Plan
+		seen[r.App+"|"+r.AccountType] = r.ObservedAt
 	}
-	if len(p.Records) != 2 || plans["chatgpt"] != PlanFree || plans["claude"] != PlanPaid {
+	want := map[string]string{
+		"chatgpt|company":  "2026-11-20T09:14:40Z",
+		"chatgpt|personal": "2026-11-20T11:30:00Z",
+		"chatgpt|none":     "2026-11-20T11:00:00Z",
+		"claude|personal":  "2026-11-20T10:02:11Z",
+		"claude|unknown":   "2026-11-20T12:00:00Z",
+	}
+	if len(p.Records) != len(want) {
 		t.Fatalf("pending = %+v", p.Records)
+	}
+	for key, at := range want {
+		if seen[key] != at {
+			t.Fatalf("%s observed at %q, want %q (pending %+v)", key, seen[key], at, p.Records)
+		}
 	}
 	batch := CloudBatch{Schema: CloudSchema, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", SentAt: "2026-11-20T12:00:00Z", Records: p.Records}
 	if err := batch.Validate(); err != nil {
@@ -732,7 +745,7 @@ func TestAccountsKeepTheNewestObservationOfTheDay(t *testing.T) {
 
 func TestAnAccountRecordedForAnotherEnrollmentIsRefused(t *testing.T) {
 	s := openTestStore(t)
-	rejected, err := s.Apply(testExtension, "0000000000000000", []IndexedRecord{account(PlanTeam, "2026-11-20T09:00:00Z")})
+	rejected, err := s.Apply(testExtension, "0000000000000000", []IndexedRecord{account(AccountCompany, "2026-11-20T09:00:00Z")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,40 +754,30 @@ func TestAnAccountRecordedForAnotherEnrollmentIsRefused(t *testing.T) {
 	}
 }
 
-// A personal account never carries its domain, and a record built in Go
-// with one is refused before it is stored or sent.
-func TestAPersonalAccountCannotCarryADomain(t *testing.T) {
-	r := account(PlanPaid, "2026-11-20T09:00:00Z").Record
-	r.EmailDomain = "gmail.com"
-	if err := r.Validate(); err == nil {
-		t.Fatal("a personal account with a domain validated")
+// An account is the type alone. A record with any other key, an address or
+// a plan above all, is refused whole, and so is a field of the wrong type.
+func TestAnAccountCarriesOnlyItsType(t *testing.T) {
+	ok := `{"kind":"account","day":"2026-11-20","app":"claude","host":"claude.ai","account_type":"personal","observed_at":"2026-11-20T09:00:00Z"`
+	for name, record := range map[string]string{
+		"address":      ok + `,"email":"jane@example.com"}`,
+		"domain":       ok + `,"email_domain":"example.com"}`,
+		"plan":         ok + `,"plan":"paid"}`,
+		"null extra":   ok + `,"name":null}`,
+		"type as list": strings.Replace(ok, `"personal"`, `["personal"]`, 1) + `}`,
+		"plan as type": strings.Replace(ok, `"personal"`, `"paid"`, 1) + `}`,
+	} {
+		valid, rejected, err := DecodeRecords(json.RawMessage(`[` + record + `]`))
+		if err != nil || len(valid) != 0 || len(rejected) != 1 {
+			t.Errorf("%s: valid = %+v, rejected = %+v, err = %v", name, valid, rejected, err)
+		}
 	}
-	r.Corporate = true
-	if err := r.Validate(); err != nil {
-		t.Fatalf("a corporate account with its domain: %v", err)
-	}
-	r.EmailDomain = "jane@example.com"
-	if err := r.Validate(); err == nil {
-		t.Fatal("an address validated as a domain")
+	if valid, _, err := DecodeRecords(json.RawMessage(`[` + ok + `}]`)); err != nil || len(valid) != 1 {
+		t.Fatalf("the plain account: %+v, %v", valid, err)
 	}
 	visit := visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z").Record
-	visit.Plan = PlanFree
+	visit.AccountType = AccountPersonal
 	if err := visit.Validate(); err == nil {
-		t.Fatal("a visit carrying a plan validated")
-	}
-}
-
-func TestCorporateDomainsComeFromTheEnrolledEmail(t *testing.T) {
-	if got := EmailDomains("Jane@Example.COM", "sam@gmail.com", "no-at", ""); len(got) != 1 || got[0] != "example.com" {
-		t.Fatalf("domains = %v", got)
-	}
-	h := &Handler{Store: openTestStore(t), CorporateDomains: func() []string {
-		return []string{"example.com", "EXAMPLE.com", "not a domain", "example.org"}
-	}}
-	var answer Settings
-	_ = json.Unmarshal(h.Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)), &answer)
-	if strings.Join(answer.CorporateDomains, ",") != "example.com,example.org" {
-		t.Fatalf("corporate domains = %v", answer.CorporateDomains)
+		t.Fatal("a visit carrying an account type validated")
 	}
 }
 

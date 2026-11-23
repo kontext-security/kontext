@@ -34,10 +34,8 @@
       "day": "2026-11-20",
       "app": "claude",
       "host": "claude.ai",
-      "plan": "enterprise",
-      "corporate": true,
-      "email_domain": "example.com",
-      "observed_at": "2026-11-20T09:10:00Z"
+      "observed_at": "2026-11-20T09:10:00Z",
+      "account_type": "company"
     }
   ]
 }
