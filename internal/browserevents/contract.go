@@ -174,6 +174,15 @@ type Settings struct {
 	// what it kept for the previous one, so nothing recorded for one
 	// workspace reaches another.
 	Enrollment string `json:"enrollment"`
+	// RecordKinds are the record kinds this daemon takes. A daemon from
+	// before the account kind sends none, so the extension reads no
+	// session for a daemon that would refuse what it read.
+	RecordKinds []string `json:"record_kinds"`
+}
+
+// RecordKinds are the record kinds the daemon takes, in a settings answer.
+func RecordKinds() []string {
+	return []string{KindHealth, KindVisit, KindAccount}
 }
 
 // MarshalJSON writes empty lists as [], as the schema wants arrays, never
@@ -185,6 +194,9 @@ func (s Settings) MarshalJSON() ([]byte, error) {
 	}
 	if s.Rejected == nil {
 		s.Rejected = []Rejection{}
+	}
+	if s.RecordKinds == nil {
+		s.RecordKinds = RecordKinds()
 	}
 	return json.Marshal(plain(s))
 }

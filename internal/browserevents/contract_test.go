@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -103,6 +104,18 @@ func checkSettings(fields object) error {
 	if enrollment, ok := fields.text("enrollment"); !ok || !enrollmentPattern.MatchString(enrollment) {
 		return errors.New("settings enrollment must be empty or 16 hex digits")
 	}
+	// Optional: a daemon from before the account kind sends none.
+	if raw, ok := fields["record_kinds"]; ok {
+		var kinds []string
+		if err := json.Unmarshal(raw, &kinds); err != nil || kinds == nil {
+			return errors.New("settings record_kinds must be an array")
+		}
+		for i, kind := range kinds {
+			if !slices.Contains(RecordKinds(), kind) || slices.Contains(kinds[:i], kind) {
+				return fmt.Errorf("settings record kind %q", kind)
+			}
+		}
+	}
 	return nil
 }
 
@@ -173,56 +186,83 @@ func checkCloudAccountKeys(fields object) error {
 	return nil
 }
 
-// schemaPropertyNames returns every propertyNames enum in the published
-// schema, the one the cloud is built from.
-func schemaPropertyNames() ([][]string, error) {
+// schemaDefs returns the published schema's $defs, the schema the cloud
+// is built from.
+func schemaDefs() (map[string]any, error) {
 	data, err := os.ReadFile("../../browser/contract/schema.json")
 	if err != nil {
 		return nil, err
 	}
-	var schema any
+	var schema struct {
+		Defs map[string]any `json:"$defs"`
+	}
 	if err := json.Unmarshal(data, &schema); err != nil {
 		return nil, err
 	}
-	var found [][]string
-	var walk func(any)
-	walk = func(node any) {
-		switch n := node.(type) {
-		case map[string]any:
-			if names, ok := n["propertyNames"].(map[string]any); ok {
-				if values, ok := names["enum"].([]any); ok {
-					keys := make([]string, 0, len(values))
-					for _, v := range values {
-						if key, ok := v.(string); ok {
-							keys = append(keys, key)
-						}
+	return schema.Defs, nil
+}
+
+// accountBranch returns the allOf parts of the branch of def's oneOf that
+// takes an account: the branch that actually validates an account record.
+func accountBranch(def any) ([]any, error) {
+	var branches []any
+	if d, ok := def.(map[string]any); ok {
+		branches, _ = d["oneOf"].([]any)
+		if branches == nil {
+			// cloudRecord wraps its oneOf in an allOf with the source.
+			parts, _ := d["allOf"].([]any)
+			for _, part := range parts {
+				if p, ok := part.(map[string]any); ok {
+					if b, ok := p["oneOf"].([]any); ok {
+						branches = b
 					}
-					found = append(found, keys)
 				}
-			}
-			for _, child := range n {
-				walk(child)
-			}
-		case []any:
-			for _, child := range n {
-				walk(child)
 			}
 		}
 	}
-	walk(schema)
-	return found, nil
+	for _, branch := range branches {
+		b, _ := branch.(map[string]any)
+		parts, _ := b["allOf"].([]any)
+		for _, part := range parts {
+			if p, ok := part.(map[string]any); ok && p["$ref"] == "#/$defs/account" {
+				return parts, nil
+			}
+		}
+	}
+	return nil, errors.New("no account branch")
 }
 
-// schemaCloudAccountKeys returns the keys the published schema allows in an
-// account record of a cloud batch: the enum naming the source keys. Read
-// from schema.json, so removing that restriction fails the fixtures.
-func schemaCloudAccountKeys() (map[string]bool, error) {
-	lists, err := schemaPropertyNames()
+// enumOf returns the propertyNames enum of a schema part, following one
+// $ref into defs.
+func enumOf(part any, defs map[string]any) []string {
+	p, _ := part.(map[string]any)
+	if ref, ok := p["$ref"].(string); ok {
+		p, _ = defs[strings.TrimPrefix(ref, "#/$defs/")].(map[string]any)
+	}
+	names, _ := p["propertyNames"].(map[string]any)
+	values, _ := names["enum"].([]any)
+	var keys []string
+	for _, v := range values {
+		if key, ok := v.(string); ok {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// branchAccountKeys returns the keys the account branch of def allows, as
+// the published schema applies them.
+func branchAccountKeys(def string) (map[string]bool, error) {
+	defs, err := schemaDefs()
 	if err != nil {
 		return nil, err
 	}
-	for _, keys := range lists {
-		if slices.Contains(keys, "extension_version") && slices.Contains(keys, "account_type") {
+	parts, err := accountBranch(defs[def])
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", def, err)
+	}
+	for _, part := range parts {
+		if keys := enumOf(part, defs); keys != nil {
 			allowed := make(map[string]bool, len(keys))
 			for _, key := range keys {
 				allowed[key] = true
@@ -230,31 +270,45 @@ func schemaCloudAccountKeys() (map[string]bool, error) {
 			return allowed, nil
 		}
 	}
-	return nil, errors.New("schema.json restricts no cloud account keys")
+	return nil, fmt.Errorf("schema.json: the account branch of %s restricts no keys", def)
 }
 
-// The schema's account key lists are the ones the daemon enforces: the
-// native record's, and the cloud's with the source keys added.
-func TestTheSchemaAccountKeysAreTheDaemons(t *testing.T) {
-	lists, err := schemaPropertyNames()
+// schemaCloudAccountKeys returns the keys the published schema allows in an
+// account record of a cloud batch, read from the branch that validates it,
+// so removing that restriction fails the fixtures.
+func schemaCloudAccountKeys() (map[string]bool, error) {
+	return branchAccountKeys("cloudRecord")
+}
+
+// The account branches the schema validates records with restrict their
+// keys to the daemon's: the native record's, and the cloud's with the
+// source keys added.
+func TestTheSchemaAccountBranchesRestrictTheDaemonsKeys(t *testing.T) {
+	defs, err := schemaDefs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	native := make([]string, 0, len(accountKeys))
-	for key := range accountKeys {
-		native = append(native, key)
+	// The messages validate their records with these definitions.
+	records, _ := defs["records"].(map[string]any)
+	batch, _ := defs["cloudBatch"].(map[string]any)
+	for name, def := range map[string]map[string]any{"record": records, "cloudRecord": batch} {
+		props, _ := def["properties"].(map[string]any)
+		list, _ := props["records"].(map[string]any)
+		items, _ := list["items"].(map[string]any)
+		if items["$ref"] != "#/$defs/"+name {
+			t.Fatalf("records are not validated by %s: %v", name, items)
+		}
 	}
-	cloud := append(slices.Clone(native), "browser", "profile", "extension_version")
-	slices.Sort(native)
-	slices.Sort(cloud)
-	var sawNative, sawCloud bool
-	for _, keys := range lists {
-		sorted := slices.Sorted(slices.Values(keys))
-		sawNative = sawNative || slices.Equal(sorted, native)
-		sawCloud = sawCloud || slices.Equal(sorted, cloud)
-	}
-	if !sawNative || !sawCloud {
-		t.Fatalf("schema propertyNames = %v, want %v and %v", lists, native, cloud)
+	native := slices.Sorted(maps.Keys(accountKeys))
+	cloud := slices.Sorted(slices.Values(append(slices.Clone(native), "browser", "profile", "extension_version")))
+	for def, want := range map[string][]string{"record": native, "cloudRecord": cloud} {
+		allowed, err := branchAccountKeys(def)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := slices.Sorted(maps.Keys(allowed)); !slices.Equal(got, want) {
+			t.Errorf("%s account keys = %v, want %v", def, got, want)
+		}
 	}
 }
 
@@ -405,7 +459,7 @@ func TestAnAnswerWithNothingRejectedHasArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"contract":2,"type":"settings","capture_mode":"commands","corporate_domains":[],"paused":false,"accepted":1,"rejected":[],"enrollment":""}`
+	want := `{"contract":2,"type":"settings","capture_mode":"commands","corporate_domains":[],"paused":false,"accepted":1,"rejected":[],"enrollment":"","record_kinds":["health","visit","account"]}`
 	if string(encoded) != want {
 		t.Fatalf("encoded\n%s\nwant\n%s", encoded, want)
 	}
