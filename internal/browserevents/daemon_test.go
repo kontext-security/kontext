@@ -1066,3 +1066,70 @@ func TestAMessageWhoseSaveFailsIsTakenBack(t *testing.T) {
 		t.Fatalf("%d rows of a refused message pending", n)
 	}
 }
+
+// A token read that started before a hello gave up waiting cannot lift the
+// suspension that hello left: the token it read may be older than it.
+func TestAnOlderTokenReadDoesNotUndoANewerSuspension(t *testing.T) {
+	s := openTestStore(t)
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	sender := &Sender{Store: s, BaseURL: "https://app.kontext.dev", InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		Tokens: func(context.Context) (string, error) {
+			close(started)
+			<-finish
+			return "workspace-a", nil
+		}}
+	older := make(chan error, 1)
+	go func() { _, err := sender.Rebind(context.Background()); older <- err }()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := sender.Rebind(ctx); err == nil {
+		t.Fatal("a rebind behind a running read succeeded")
+	}
+	close(finish)
+	if err := <-older; err == nil {
+		t.Fatal("the older read bound the store after a newer suspension")
+	}
+	if _, ok := s.Confirmed(); ok {
+		t.Fatal("the older read lifted the suspension")
+	}
+}
+
+// A caller that gave up waiting does not suspend an enrollment a read
+// confirmed while it waited.
+func TestAWaiterDoesNotSuspendABindingConfirmedMeanwhile(t *testing.T) {
+	s := openTestStore(t)
+	epoch := s.Epoch()
+	if _, err := s.Bind(Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-a")); err != nil {
+		t.Fatal(err)
+	}
+	if s.SuspendAt(epoch) {
+		t.Fatal("a waiter suspended a binding confirmed while it waited")
+	}
+	if _, ok := s.Confirmed(); !ok {
+		t.Fatal("the confirmed binding was suspended")
+	}
+}
+
+// One damaged row does not take the other rows of the file with it.
+func TestADamagedRowDoesNotDiscardTheOthers(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	damaged := strings.Replace(string(data), `"rows":{`, `"rows":{"broken":{"version":"not a number"},`, 1)
+	if err := os.WriteFile(s.path, []byte(damaged), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(s.path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(s.path)
+	if reopened.Len() != 1 || strings.Contains(string(after), "broken") {
+		t.Fatalf("rows = %d, file = %s", reopened.Len(), after)
+	}
+}

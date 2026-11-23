@@ -69,3 +69,25 @@ func ownerOnlyWritable(t *testing.T, mode os.FileMode) {
 		t.Fatalf("%d rows read, want 1", n)
 	}
 }
+
+// An oversized store file others can read is replaced at once, not left
+// readable until the next save.
+func TestAnOversizedStoreOthersCanReadIsReplaced(t *testing.T) {
+	s := openTestStore(t)
+	if err := os.WriteFile(s.path, make([]byte, MaxStoreBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(s.path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openStore(s.path, testNow); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o077 != 0 || info.Size() > MaxStoreBytes {
+		t.Fatalf("mode = %#o, size = %d", info.Mode().Perm(), info.Size())
+	}
+}
