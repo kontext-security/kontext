@@ -326,11 +326,19 @@ func storedKeysAllowed(raw json.RawMessage, kind string) bool {
 
 // hasDuplicateKeys reports whether any object in raw, at any depth, names
 // a key twice, or raw is not valid JSON.
+// foldKey is a key as the JSON decoder matches it to a field: two keys with
+// the same fold, such as "binding" and "Binding", fill the same field.
+func foldKey(key string) string {
+	return strings.ToUpper(strings.ToLower(key))
+}
+
 // repeatsTopLevelKey reports whether the file's object names a key twice,
-// such as two "binding" or two "rows". A file that is not one object does
+// in any case, such as "binding" and "Binding", or names "binding" or
+// "rows" in any spelling but that one. A file that is not one object does
 // not repeat one: it is not read anyway.
 func repeatsTopLevelKey(raw []byte) bool {
 	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
 		return false
 	}
@@ -341,10 +349,14 @@ func repeatsTopLevelKey(raw []byte) bool {
 		if err != nil || !ok {
 			return false
 		}
-		if seen[key] {
+		folded := foldKey(key)
+		if seen[folded] {
 			return true
 		}
-		seen[key] = true
+		if (folded == foldKey("binding") && key != "binding") || (folded == foldKey("rows") && key != "rows") {
+			return true
+		}
+		seen[folded] = true
 		var skip json.RawMessage
 		if dec.Decode(&skip) != nil {
 			return false
@@ -355,6 +367,9 @@ func repeatsTopLevelKey(raw []byte) bool {
 
 func hasDuplicateKeys(raw json.RawMessage) bool {
 	dec := json.NewDecoder(bytes.NewReader(raw))
+	// A number too large for a float, such as a damaged counter, is still
+	// JSON: it is read as text, not taken for a broken file.
+	dec.UseNumber()
 	// One entry per open object or array: the keys seen so far, nil for an
 	// array.
 	var open []map[string]bool
@@ -386,10 +401,10 @@ func hasDuplicateKeys(raw json.RawMessage) bool {
 		case string:
 			if inObject && expectKey {
 				keys := open[len(open)-1]
-				if keys[t] {
+				if keys[foldKey(t)] {
 					return true
 				}
-				keys[t] = true
+				keys[foldKey(t)] = true
 				expectKey = false
 				continue
 			}
