@@ -129,7 +129,9 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 	select {
 	case s.rebind <- struct{}{}:
 	case <-readCtx.Done():
-		// Another read is under way; it decides the binding.
+		// Another read is under way and has not confirmed the enrollment
+		// in time: nothing more is taken until one does, for any profile.
+		s.Store.Suspend()
 		return "", fmt.Errorf("browser events: waiting for the install token: %w", readCtx.Err())
 	}
 	release := func() { <-s.rebind }
@@ -393,7 +395,12 @@ func readToken(ctx context.Context, read func(context.Context) (string, error), 
 	}()
 	select {
 	case r := <-done:
-		return r.token, r.err, false
+		if ctx.Err() == nil {
+			return r.token, r.err, false
+		}
+		// Ready together with the deadline: the deadline wins.
+		abandon()
+		return "", ctx.Err(), false
 	case <-ctx.Done():
 	}
 	mu.Lock()
