@@ -492,3 +492,25 @@ func TestWithWriteLockSerializesWriters(t *testing.T) {
 		t.Fatalf("max concurrent writers = %d, want 1", got)
 	}
 }
+
+// hook_repair false is the local opt-out from hook repair (ADR-0012); absent
+// or true keeps the self-heal.
+func TestHookRepairOptOut(t *testing.T) {
+	base := `{"version":"managed-install-v1","cloud_url":"https://api.kontext.dev","mode":"observe","agent":"claude","credentials":{"install_token_ref":"env:KONTEXT_INSTALL_TOKEN"}`
+	for body, off := range map[string]bool{
+		base + `}`:                     false,
+		base + `,"hook_repair":true}`:  false,
+		base + `,"hook_repair":false}`: true,
+	} {
+		cfg, err := Parse([]byte(body))
+		if err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		if cfg.HookRepairOff() != off {
+			t.Fatalf("%s: HookRepairOff = %v", body, cfg.HookRepairOff())
+		}
+	}
+	if _, err := Parse([]byte(base + `,"hook_repair":"no"}`)); err == nil {
+		t.Fatal("a non-boolean hook_repair was accepted")
+	}
+}

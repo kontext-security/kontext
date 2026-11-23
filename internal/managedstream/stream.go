@@ -118,6 +118,9 @@ type Options struct {
 	OnFlushSuccess func()
 	// Inventory holds per-source results until the cloud acknowledges them.
 	Inventory *InventoryStore
+	// HookActions returns the reconciler's report waiting to go, or nil,
+	// and a func that marks it sent once a post carrying it is accepted.
+	HookActions func() (*HookActions, func())
 }
 
 const (
@@ -144,6 +147,8 @@ type Payload struct {
 	ReceiptChainAnchor  *sqlite.LedgerReceiptChainAnchor  `json:"receipt_chain_anchor,omitempty"`
 	ToolUsage           []sqlite.ToolUsageRecord          `json:"tool_usage,omitempty"`
 	Turns               []sqlite.TurnRecord               `json:"turns,omitempty"`
+	// hookActionsSent marks the hook report this payload carries as sent.
+	hookActionsSent func()
 }
 
 type Device struct {
@@ -173,6 +178,10 @@ type Device struct {
 	// HookInventory is the ADR-0011 block, sent only while the deployment's
 	// endpoint config turns it on, beside its sources in Inventory.
 	HookInventory *agentauthority.HookInventory `json:"hook_inventory,omitempty"`
+	// HookActions is the hook reconciler's last report (ADR-0012), sent only
+	// after an admin acted on this device through a v7 config: a server that
+	// serves none has a strict schema without it.
+	HookActions *HookActions `json:"hook_actions,omitempty"`
 }
 
 // HooksFact is the per-flush answer to "are the Claude Code managed hooks for
@@ -384,6 +393,7 @@ func flushLedger(ctx context.Context, opts Options) error {
 		payload.MerlinAnnotations = merlinAnnotations
 		addAuthority(&payload, opts, state, now)
 		addInventory(&payload, opts)
+		addHookActions(&payload, opts)
 
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -391,11 +401,20 @@ func flushLedger(ctx context.Context, opts Options) error {
 		}
 		// Authority is independently retryable. Do not skip an otherwise valid
 		// minimum ledger batch just because the optional report filled it up.
-		if limit == 1 && len(body) > MaxPayloadBytes && payload.Device != nil && (payload.Device.Authority != nil || payload.Device.HookInventory != nil) {
+		if limit == 1 && len(body) > MaxPayloadBytes && payload.Device != nil && (payload.Device.Authority != nil || payload.Device.HookInventory != nil || payload.Device.HookActions != nil) {
+			// The small hook report goes if it fits once the larger blocks are
+			// off; otherwise it waits for the next post too.
 			dropAuthority(&payload)
 			body, err = json.Marshal(payload)
 			if err != nil {
 				return err
+			}
+			if len(body) > MaxPayloadBytes && payload.Device.HookActions != nil {
+				dropHookActions(&payload)
+				body, err = json.Marshal(payload)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		if reason := payloadLimitViolation(payload, len(body)); reason != "" {
@@ -433,6 +452,7 @@ func flushLedger(ctx context.Context, opts Options) error {
 			return err
 		}
 		ackInventory(opts, payload, result, now)
+		ackHookActions(payload)
 		// Before the cursor moves past this batch, so a crash re-sends it.
 		if err := recordStoredAsSent(ctx, store, &state, batch, result, pageUpdatedAfter, pageActionID); err != nil {
 			return err
@@ -511,6 +531,7 @@ func postHeartbeatIfDue(ctx context.Context, opts Options, statePath string, sta
 	payload := newPayload(opts, nil, nil, nil, nil, nil, now)
 	addAuthority(&payload, opts, state, now)
 	addInventory(&payload, opts)
+	addHookActions(&payload, opts)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -520,6 +541,7 @@ func postHeartbeatIfDue(ctx context.Context, opts Options, statePath string, sta
 		return err
 	}
 	ackInventory(opts, payload, result, now)
+	ackHookActions(payload)
 
 	if opts.OnFlushSuccess != nil {
 		opts.OnFlushSuccess()

@@ -142,12 +142,22 @@ type Config struct {
 	AllowHTTPLoopback bool        `json:"allow_http_loopback,omitempty"`
 	Credentials       Credentials `json:"credentials"`
 	Device            Device      `json:"device,omitempty"`
+	// HookRepair false is the local opt-out from hook repair (ADR-0012): the
+	// daemon writes no hook file, and an admin's install or repair from the
+	// dashboard is reported as turned off here. Absent or true keeps today's
+	// self-heal.
+	HookRepair *bool `json:"hook_repair,omitempty"`
 	// UnsupportedMode carries the raw mode this build did not recognize, after
 	// Mode has already been rewritten to the observe fallback. Empty on every
 	// config whose mode this build understands, so callers can treat a
 	// non-empty value as "the endpoint is running degraded" and say so.
 	UnsupportedMode     string `json:"-"`
 	LegacyCoworkEnabled bool   `json:"-"`
+}
+
+// HookRepairOff reports the local opt-out from hook repair.
+func (c Config) HookRepairOff() bool {
+	return c.HookRepair != nil && !*c.HookRepair
 }
 
 type configFile struct {
@@ -165,6 +175,7 @@ type configFile struct {
 	AllowHTTPLoopback   bool            `json:"allow_http_loopback,omitempty"`
 	Credentials         Credentials     `json:"credentials"`
 	Device              Device          `json:"device,omitempty"`
+	HookRepair          *bool           `json:"hook_repair,omitempty"`
 }
 
 type Credentials struct {
@@ -276,6 +287,7 @@ func Parse(data []byte) (Config, error) {
 		AllowHTTPLoopback:   file.AllowHTTPLoopback,
 		Credentials:         file.Credentials,
 		Device:              file.Device,
+		HookRepair:          file.HookRepair,
 		LegacyCoworkEnabled: legacyCoworkEnabled(file.LegacyCoworkEnabled),
 	})
 }
