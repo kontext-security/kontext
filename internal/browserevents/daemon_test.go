@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1037,7 +1038,7 @@ func TestARowWithDamagedCountersIsSentAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, counters := range []string{`"version":null,"sent":0`, `"version":1,"sent":"1"`, `"version":1,"sent":-0.5`, `"version":9223372036854775807,"sent":9223372036854775807`} {
+	for _, counters := range []string{`"version":null,"sent":0`, `"version":1,"sent":"1"`, `"version":1,"sent":-0.5`, `"version":7,"sent":null`, `"version":9223372036854775807,"sent":9223372036854775807`} {
 		damaged := strings.Replace(string(data), `"version":1,"sent":0`, counters, 1)
 		if damaged == string(data) {
 			t.Fatalf("no counters in %s", data)
@@ -1051,6 +1052,25 @@ func TestARowWithDamagedCountersIsSentAgain(t *testing.T) {
 		}
 		if n := len(reopened.Pending(10).Records); n != 1 {
 			t.Fatalf("%s: pending = %d, want the row sent again", counters, n)
+		}
+	}
+}
+
+// A restored store with more rows than the store takes keeps the newest.
+func TestARestoredStoreOverTheRowCapKeepsTheNewest(t *testing.T) {
+	rows := map[string]*row{}
+	for i := 0; i < MaxRows+5; i++ {
+		at := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		r := CloudRecord{Browser: "chrome", Profile: "p7Hq2vXkLm9s", ExtensionVersion: "0.1.0", Record: visit(1, at, at).Record}
+		rows[fmt.Sprint(i)] = &row{Record: r, Version: 1}
+	}
+	trimRows(rows)
+	if len(rows) != MaxRows {
+		t.Fatalf("rows = %d", len(rows))
+	}
+	for i := 0; i < 5; i++ {
+		if _, ok := rows[fmt.Sprint(i)]; ok {
+			t.Fatalf("row %d, among the oldest, was kept", i)
 		}
 	}
 }

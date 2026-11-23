@@ -39,6 +39,17 @@ type row struct {
 	Sent    int         `json:"sent"`
 }
 
+// counter decodes a stored delivery counter; null, missing or not an int is
+// damaged.
+func counter(raw json.RawMessage, into *int) bool {
+	var n *int
+	if json.Unmarshal(raw, &n) != nil || n == nil {
+		return false
+	}
+	*into = *n
+	return true
+}
+
 // maxRowVersion bounds a stored row's version, so a damaged one can never
 // overflow when the row changes again.
 const maxRowVersion = 1 << 40
@@ -136,7 +147,7 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 			// row is sent again, which changes nothing in the cloud,
 			// rather than taken as delivered and never sent. No answer
 			// in flight outlives the open, so 1 and 0 are safe.
-			if json.Unmarshal(stored.Version, &r.Version) != nil || json.Unmarshal(stored.Sent, &r.Sent) != nil ||
+			if !counter(stored.Version, &r.Version) || !counter(stored.Sent, &r.Sent) ||
 				r.Version < 1 || r.Version > maxRowVersion || r.Sent < 0 || r.Sent > r.Version {
 				r.Version, r.Sent = 1, 0
 				rewrite = true
@@ -151,6 +162,12 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 				continue
 			}
 			rows[key] = r
+		}
+		// A restored file can hold more rows than the store takes: the
+		// oldest leave, so new profiles are not refused until they expire.
+		if len(rows) > MaxRows {
+			trimRows(rows)
+			rewrite = true
 		}
 		s.rows = rows
 		s.binding = file.Binding
@@ -729,4 +746,30 @@ func (e *committedError) Unwrap() error { return e.err }
 func isTempSuffix(s string) bool {
 	n, err := strconv.ParseUint(s, 10, 32)
 	return err == nil && strconv.FormatUint(n, 10) == s
+}
+
+// trimRows removes the oldest rows until at most MaxRows remain.
+func trimRows(rows map[string]*row) {
+	seen := func(r *row) time.Time {
+		at := r.Record.LastSeen
+		if r.Record.Kind == KindHealth {
+			at = r.Record.ObservedAt
+		}
+		t, _ := time.Parse(time.RFC3339Nano, at)
+		return t
+	}
+	keys := make([]string, 0, len(rows))
+	for key := range rows {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := seen(rows[keys[i]]), seen(rows[keys[j]])
+		if !a.Equal(b) {
+			return a.Before(b)
+		}
+		return keys[i] < keys[j]
+	})
+	for _, key := range keys[:len(keys)-MaxRows] {
+		delete(rows, key)
+	}
 }

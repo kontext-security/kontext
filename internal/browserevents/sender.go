@@ -415,12 +415,14 @@ func readToken(ctx context.Context, read func(context.Context) (string, error), 
 	}()
 	select {
 	case r := <-done:
-		if ctx.Err() == nil {
+		// The clock is checked as well as the context, which learns of
+		// its deadline only when its timer runs.
+		if deadline, ok := ctx.Deadline(); ctx.Err() == nil && (!ok || time.Now().Before(deadline)) {
 			return r.token, r.err, false
 		}
 		// Ready together with the deadline: the deadline wins.
 		abandon()
-		return "", ctx.Err(), false
+		return "", context.DeadlineExceeded, false
 	case <-ctx.Done():
 	}
 	mu.Lock()
