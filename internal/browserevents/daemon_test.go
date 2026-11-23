@@ -1020,17 +1020,24 @@ func TestASentRowTheContractNoLongerAllowsIsDroppedAtOpen(t *testing.T) {
 // A token read that ignores its context still ends at the deadline.
 func TestATokenReadEndsAtItsDeadline(t *testing.T) {
 	release := make(chan struct{})
-	defer close(release)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := readToken(ctx, func(context.Context) (string, error) {
+	released := make(chan struct{})
+	_, err, handedOff := readToken(ctx, func(context.Context) (string, error) {
 		<-release
 		return "token", nil
-	})
-	if err == nil || time.Since(start) > time.Second {
-		t.Fatalf("err = %v after %v", err, time.Since(start))
+	}, func() { close(released) })
+	if err == nil || !handedOff || time.Since(start) > time.Second {
+		t.Fatalf("err = %v, handed off %v, after %v", err, handedOff, time.Since(start))
 	}
+	select {
+	case <-released:
+		t.Fatal("released while the read still runs")
+	default:
+	}
+	release <- struct{}{}
+	<-released
 }
 
 // A message whose save fails is taken back, so it cannot go out after the
