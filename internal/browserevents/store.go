@@ -91,6 +91,7 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		return nil, err
 	}
 	var file storeFile
+	rewrite := false
 	// A file that is not owner-only, such as one restored from a backup,
 	// may have been changed by another account: its rows are not read,
 	// so none of them can leave with this enrollment's token.
@@ -110,7 +111,7 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 			source := Extension{Version: r.Record.ExtensionVersion, Browser: r.Record.Browser, Profile: r.Record.Profile}
 			if source.validate() != nil || r.Record.Record.Validate() != nil {
 				delete(file.Rows, key)
-				private = false // written again below
+				rewrite = true
 			}
 		}
 		s.rows = file.Rows
@@ -119,7 +120,7 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	}
 	// A file others can read, such as one restored from a backup, is
 	// written again at once: a save makes a private file.
-	if s.pruneLocked() || !private {
+	if s.pruneLocked() || rewrite || !private {
 		// Days past KeepDays leave the disk now, not at the next message.
 		var committed *committedError
 		if err := s.saveLocked(); err != nil && !errors.As(err, &committed) {
@@ -166,8 +167,9 @@ func readStoreFile(path string) (data []byte, private, trusted bool, err error) 
 	}
 	private, err = fsperm.PrivateFile(path, opened)
 	if err != nil {
-		// Unknown counts as not private: the next save fixes it.
-		private = false
+		// Unknown is not unsafe: the file is left as it is, unread, rather
+		// than replaced by an empty store.
+		return nil, false, false, fmt.Errorf("browser events: store %s permissions: %w", path, err)
 	}
 	// Rows are read from a private file, or one only its owner could have
 	// written, such as a backup restored 0644 or 0400: no other account
