@@ -87,7 +87,7 @@ var (
 	appPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	hostPattern    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 	dayPattern     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
-	timePattern    = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$`)
+	timePattern    = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$`)
 	installPattern = regexp.MustCompile(`^ins_[A-Za-z0-9_-]{32}$`)
 	// enrollmentPattern is Store.Enrollment's shape, or "" for none yet.
 	enrollmentPattern = regexp.MustCompile(`^([0-9a-f]{16})?$`)

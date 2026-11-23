@@ -126,7 +126,7 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 			// A row under another row's key would take that row's
 			// snapshots: it is dropped too.
 			source := Extension{Version: r.Record.ExtensionVersion, Browser: r.Record.Browser, Profile: r.Record.Profile}
-			if source.validate() != nil || r.Record.Record.Validate() != nil || rowKey(r.Record) != key {
+			if source.validate() != nil || r.Record.Record.Validate() != nil || rowKey(r.Record) != key || !storedKeysAllowed(raw, r.Record.Kind) {
 				rewrite = true
 				continue
 			}
@@ -232,6 +232,28 @@ func removeLeftovers(path string) {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
+}
+
+// storedKeysAllowed reports whether a stored account row has only an
+// account's keys and its source's. Decoding drops an unknown key, such as an
+// address restored from a backup, without telling: the row is dropped
+// instead, so the file is rewritten without it.
+func storedKeysAllowed(raw json.RawMessage, kind string) bool {
+	if kind != KindAccount {
+		return true
+	}
+	var stored struct {
+		Record map[string]json.RawMessage `json:"record"`
+	}
+	if json.Unmarshal(raw, &stored) != nil {
+		return false
+	}
+	for key := range stored.Record {
+		if !accountKeys[key] && key != "browser" && key != "profile" && key != "extension_version" {
+			return false
+		}
+	}
+	return true
 }
 
 // DefaultStorePath is the store beside the daemon's database, named after
