@@ -6,9 +6,9 @@ a separate repository and vendors this folder at a pinned commit; this folder
 is the source of truth.
 
 The extension records which AI web apps are used. It never sends what people
-write, URL paths, query strings or tokens: hostnames only. A catalog host
-`*.example.com` sends the full hostname seen, such as `team.example.com`,
-which can name a workspace.
+write, URL paths, query strings or tokens: hostnames only. For a catalog host
+`*.example.com` a visit sends `example.com`, never the name seen below it
+(such as `team.example.com`), which can name a workspace.
 
 Version 2 adds the enrollment id to `settings` and `records`. Version 1 was a
 draft that never shipped; a peer that speaks it gets `unsupported_contract`.
@@ -52,8 +52,8 @@ account's `app` must be a catalog id.
 The catalog is [`catalog.json`](catalog.json), part of this contract: the
 extension is built from it and the daemon checks visits against it. A visit's
 `app` must be a catalog id, `app_name` and `provider` must be that entry's own
-`name` and `provider`, and `host` one of its `hosts` (`*.example.com` matches
-any name below example.com). So no field of a visit can carry a page title, a
+`name` and `provider`, and `host` one of its exact `hosts`, or `example.com`
+for an entry `*.example.com`. So no field of a visit can carry a page title, a
 URL or other text people or pages wrote. The schema holds names to the
 catalog's shape (at most 40 letters, digits, spaces and `. & + ' ( ) -`); a
 catalog entry must fit it too. `extension.version` is at most 32 characters.
