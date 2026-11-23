@@ -84,18 +84,17 @@
       }
     },
     "accountKeys": {
-      "$comment": "The only keys an account record may have, so an address, a name or a token cannot pass as an extra field.",
-      "propertyNames": { "enum": ["kind", "day", "app", "host", "account_type", "observed_at"] }
+      "$comment": "The only keys an account record may have, so an address, a name or a token cannot pass as an extra field. There is no host: the app id names the app, and a tenant subdomain or an email domain has no field to travel in.",
+      "propertyNames": { "enum": ["kind", "day", "app", "account_type", "observed_at"] }
     },
     "account": {
       "$comment": "Which type of account was signed in to an app that UTC day, at its newest observation. Only the type: never a plan, an address, a domain or a name.",
       "type": "object",
-      "required": ["kind", "day", "app", "host", "account_type", "observed_at"],
+      "required": ["kind", "day", "app", "account_type", "observed_at"],
       "properties": {
         "kind": { "const": "account" },
         "day": { "$ref": "#/$defs/day" },
         "app": { "$ref": "#/$defs/appId" },
-        "host": { "$ref": "#/$defs/host" },
         "account_type": {
           "enum": ["company", "personal", "none", "unknown"],
           "description": "company: the active workspace is a managed one (team or enterprise); its owner is not checked. personal: any other signed-in account, also on a work email. none: the app answered that nobody is signed in. unknown: the app's answer could not be read."
@@ -218,7 +217,7 @@
                 {
                   "propertyNames": {
                     "enum": [
-                      "kind", "day", "app", "host", "account_type", "observed_at",
+                      "kind", "day", "app", "account_type", "observed_at",
                       "browser", "profile", "extension_version"
                     ]
                   }

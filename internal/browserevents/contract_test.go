@@ -25,6 +25,9 @@ func decodeFixture(t *testing.T, data []byte) error {
 	_, isBatch := fields["schema"]
 	switch {
 	case isBatch:
+		if err := checkCloudAccountKeys(fields); err != nil {
+			return err
+		}
 		var batch CloudBatch
 		if err := json.Unmarshal(data, &batch); err != nil {
 			return err
@@ -136,6 +139,32 @@ func TestValidFixturesDecode(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+}
+
+// checkCloudAccountKeys refuses a cloud account record with a key it may
+// not have, as the cloud does. Decoding into CloudBatch would drop an extra
+// key before Validate sees it.
+func checkCloudAccountKeys(fields object) error {
+	var records []json.RawMessage
+	if err := json.Unmarshal(fields["records"], &records); err != nil {
+		return err
+	}
+	source := map[string]bool{"browser": true, "profile": true, "extension_version": true}
+	for _, raw := range records {
+		record, err := readObject(raw)
+		if err != nil {
+			return err
+		}
+		if kind, _ := record.text("kind"); kind != KindAccount {
+			continue
+		}
+		for key := range record {
+			if !accountKeys[key] && !source[key] {
+				return errAccountKeys
+			}
+		}
+	}
+	return nil
 }
 
 func TestInvalidFixturesAreRefused(t *testing.T) {

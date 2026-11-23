@@ -60,9 +60,11 @@ const (
 // accountKeys are the only keys an account record may have. An account is
 // read from a signed-in page, so a record with any other key is refused
 // whole rather than read in part: an address or a token never passes as an
-// extra field.
+// extra field. It names its app by catalog id and has no host, so no value
+// on it is free text: a tenant subdomain or an email domain has no field to
+// travel in.
 var accountKeys = map[string]bool{
-	"kind": true, "day": true, "app": true, "host": true, "account_type": true, "observed_at": true,
+	"kind": true, "day": true, "app": true, "account_type": true, "observed_at": true,
 }
 
 // Answers to a message that cannot be taken.
@@ -131,8 +133,8 @@ type Record struct {
 	// too. Missing reads as 0, as from an extension before it.
 	Messages int `json:"messages,omitempty"`
 
-	// account, with day, app, host and observed_at: the type alone, never
-	// a plan, an address, a domain or a name.
+	// account, with day, app and observed_at, and no host: the type alone,
+	// never a plan, an address, a domain or a name.
 	AccountType string `json:"account_type,omitempty"`
 }
 
@@ -357,7 +359,6 @@ func decodeRecord(data []byte) (Record, error) {
 		}
 		record.Day, _ = fields.text("day")
 		record.App, _ = fields.text("app")
-		record.Host, _ = fields.text("host")
 		record.AccountType, _ = fields.text("account_type")
 		record.ObservedAt, _ = fields.text("observed_at")
 	}
@@ -495,7 +496,7 @@ func (r Record) own() Record {
 		return visit
 	case KindAccount:
 		return Record{
-			Kind: r.Kind, Day: r.Day, App: r.App, Host: r.Host, ObservedAt: r.ObservedAt,
+			Kind: r.Kind, Day: r.Day, App: r.App, ObservedAt: r.ObservedAt,
 			AccountType: r.AccountType,
 		}
 	default:
@@ -561,11 +562,8 @@ func (r Record) Validate() error {
 		if !appPattern.MatchString(r.App) {
 			return errors.New("account app id is invalid")
 		}
-		if len(r.Host) > 253 || !hostPattern.MatchString(r.Host) {
-			return errors.New("account host must be a bare hostname")
-		}
-		if app, known := catalog[r.App]; !known || !app.matchesHost(r.Host) {
-			return errors.New("account app and host must be a catalog app and one of its hosts")
+		if _, known := catalog[r.App]; !known {
+			return errors.New("account app is not in the catalog")
 		}
 		if !isTime(r.ObservedAt) || !insideDay(r.Day, r.ObservedAt, r.ObservedAt) {
 			return errors.New("account observed_at must fall on its day")

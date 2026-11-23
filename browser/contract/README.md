@@ -38,14 +38,16 @@ Record kinds in v2:
 absolute count, never an increment, so sending it twice is harmless.
 
 An `account` is the type alone: never a plan, an address, a domain or a name.
-It may have no key but its own six, so an extra field is refused whole. The
-extension decides the type in the page and sends nothing else out of it.
+It may have no key but its own five, so an extra field is refused whole. It
+has no `host`: the catalog `app` id names the app, so a tenant subdomain or an
+email domain has no field to travel in. The extension decides the type in the
+page and sends nothing else out of it.
 `company` says the workspace is managed, not whose it is: it may belong to
 another organisation, so nothing may treat it as the customer's own on this
 value alone. The daemon keeps the newest `account` of each type, app and day
 per profile, so a personal account used beside a company one stays visible,
 and refuses one recorded for another enrollment, as it does visits. An
-account's `app` and `host` are held to the catalog as a visit's are.
+account's `app` must be a catalog id.
 
 The catalog is [`catalog.json`](catalog.json), part of this contract: the
 extension is built from it and the daemon checks visits against it. A visit's
@@ -95,8 +97,10 @@ accepts the dev ID that the extension's dev builds carry.
   `unsupported_contract` whatever the rest looks like; a message without one is
   invalid.
 - Keys match exactly: `Type` is an unknown field, not `type`.
-- Unknown fields are ignored, whatever their type, and so are fields that
-  belong to the other record kind. An unknown record kind is rejected.
+- On `hello`, `settings`, `health` and `visit`, unknown fields are ignored,
+  whatever their type, and so are fields that belong to another record kind.
+  An `account` record with any key but its own is rejected whole. An unknown
+  record kind is rejected.
 - A visit's `first_seen` and `last_seen` fall on its `day` in UTC, in order.
 - Empty lists are `[]`, never `null`.
 - The cloud batch is stricter than an extension's message: a record there
