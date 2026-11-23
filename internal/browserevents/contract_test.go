@@ -152,7 +152,10 @@ func checkCloudAccountKeys(fields object) error {
 	if err := json.Unmarshal(fields["records"], &records); err != nil {
 		return err
 	}
-	source := map[string]bool{"browser": true, "profile": true, "extension_version": true}
+	allowed, err := schemaCloudAccountKeys()
+	if err != nil {
+		return err
+	}
 	for _, raw := range records {
 		record, err := readObject(raw)
 		if err != nil {
@@ -162,12 +165,97 @@ func checkCloudAccountKeys(fields object) error {
 			continue
 		}
 		for key := range record {
-			if !accountKeys[key] && !source[key] {
+			if !allowed[key] {
 				return errAccountKeys
 			}
 		}
 	}
 	return nil
+}
+
+// schemaPropertyNames returns every propertyNames enum in the published
+// schema, the one the cloud is built from.
+func schemaPropertyNames() ([][]string, error) {
+	data, err := os.ReadFile("../../browser/contract/schema.json")
+	if err != nil {
+		return nil, err
+	}
+	var schema any
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return nil, err
+	}
+	var found [][]string
+	var walk func(any)
+	walk = func(node any) {
+		switch n := node.(type) {
+		case map[string]any:
+			if names, ok := n["propertyNames"].(map[string]any); ok {
+				if values, ok := names["enum"].([]any); ok {
+					keys := make([]string, 0, len(values))
+					for _, v := range values {
+						if key, ok := v.(string); ok {
+							keys = append(keys, key)
+						}
+					}
+					found = append(found, keys)
+				}
+			}
+			for _, child := range n {
+				walk(child)
+			}
+		case []any:
+			for _, child := range n {
+				walk(child)
+			}
+		}
+	}
+	walk(schema)
+	return found, nil
+}
+
+// schemaCloudAccountKeys returns the keys the published schema allows in an
+// account record of a cloud batch: the enum naming the source keys. Read
+// from schema.json, so removing that restriction fails the fixtures.
+func schemaCloudAccountKeys() (map[string]bool, error) {
+	lists, err := schemaPropertyNames()
+	if err != nil {
+		return nil, err
+	}
+	for _, keys := range lists {
+		if slices.Contains(keys, "extension_version") && slices.Contains(keys, "account_type") {
+			allowed := make(map[string]bool, len(keys))
+			for _, key := range keys {
+				allowed[key] = true
+			}
+			return allowed, nil
+		}
+	}
+	return nil, errors.New("schema.json restricts no cloud account keys")
+}
+
+// The schema's account key lists are the ones the daemon enforces: the
+// native record's, and the cloud's with the source keys added.
+func TestTheSchemaAccountKeysAreTheDaemons(t *testing.T) {
+	lists, err := schemaPropertyNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := make([]string, 0, len(accountKeys))
+	for key := range accountKeys {
+		native = append(native, key)
+	}
+	cloud := append(slices.Clone(native), "browser", "profile", "extension_version")
+	slices.Sort(native)
+	slices.Sort(cloud)
+	var sawNative, sawCloud bool
+	for _, keys := range lists {
+		sorted := slices.Sorted(slices.Values(keys))
+		sawNative = sawNative || slices.Equal(sorted, native)
+		sawCloud = sawCloud || slices.Equal(sorted, cloud)
+	}
+	if !sawNative || !sawCloud {
+		t.Fatalf("schema propertyNames = %v, want %v and %v", lists, native, cloud)
+	}
 }
 
 func TestInvalidFixturesAreRefused(t *testing.T) {

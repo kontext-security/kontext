@@ -82,7 +82,9 @@ in its own version succeeds.
 `POST /api/v1/browser-activity/batches` with the install token, body
 `browser-activity-v1`. Each record carries the browser, profile and extension
 version it came from. The answer accepts records one by one: a rejected record
-is listed with its index and reason and is dropped, not retried.
+is listed with its index and reason and is dropped, not retried. The one
+exception is a reason that ends in ` in the future`: the endpoint's clock is
+ahead of the cloud's, so the record stays and goes again after a backoff.
 
 ## Who may connect
 

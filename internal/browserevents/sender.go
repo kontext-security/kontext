@@ -73,19 +73,33 @@ func noRedirects(client *http.Client) *http.Client {
 
 // split separates rows the contract allows from rows it does not.
 func (p Pending) split() (valid, invalid Pending) {
-	for i, record := range p.Records {
+	return p.partition(func(_ int, record CloudRecord) bool {
 		source := Extension{Version: record.ExtensionVersion, Browser: record.Browser, Profile: record.Profile}
-		target := &valid
-		if source.validate() != nil || record.Record.Validate() != nil {
-			target = &invalid
+		return source.validate() == nil && record.Record.Validate() == nil
+	})
+}
+
+// partition splits p into the rows keep holds for and the others.
+func (p Pending) partition(keep func(int, CloudRecord) bool) (kept, others Pending) {
+	for i, record := range p.Records {
+		target := &kept
+		if !keep(i, record) {
+			target = &others
 		}
 		target.Records = append(target.Records, record)
 		target.keys = append(target.keys, p.keys[i])
 		target.versions = append(target.versions, p.versions[i])
 	}
-	valid.binding, invalid.binding = p.binding, p.binding
-	valid.generation, invalid.generation = p.generation, p.generation
-	return valid, invalid
+	kept.binding, others.binding = p.binding, p.binding
+	kept.generation, others.generation = p.generation, p.generation
+	return kept, others
+}
+
+// aheadOfTheCloud reports whether the cloud refused a record for a time
+// ahead of its own clock. The endpoint's clock was fast: the same record is
+// taken once the cloud's clock has caught up, so it is not acknowledged.
+func aheadOfTheCloud(reason string) bool {
+	return strings.HasSuffix(reason, " in the future")
 }
 
 // WarnEvery spaces out the warnings of a run of failed sends.
@@ -263,13 +277,27 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 		if err != nil {
 			return Retry, err
 		}
-		if err := s.Store.Ack(pending); err != nil {
+		ahead := map[int]bool{}
+		for _, r := range answer.Rejected {
+			if aheadOfTheCloud(r.Reason) {
+				ahead[r.Index] = true
+			}
+		}
+		// A record refused as ahead of the cloud's clock stays pending and
+		// goes again: acknowledged, it would be lost, as the extension
+		// sends the same observation again without changing the row.
+		taken, held := pending.partition(func(i int, _ CloudRecord) bool { return !ahead[i] })
+		if err := s.Store.Ack(taken); err != nil {
 			return Sent, err
 		}
 		// After a 413 the batch grows back, doubling with each success.
 		s.limit = min(s.limit*2, MaxRecordsPerBatch)
 		for _, r := range answer.Rejected {
 			s.logf("browser events: the cloud rejected record %d: %s", r.Index, r.Reason)
+		}
+		if len(taken.Records) == 0 {
+			// Only held rows: sent again after a backoff, not every second.
+			return Retry, fmt.Errorf("browser events: %d records are ahead of the cloud's clock, sending them again later", len(held.Records))
 		}
 		return Sent, nil
 	case response.StatusCode == http.StatusNotFound:

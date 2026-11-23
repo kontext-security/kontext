@@ -1,6 +1,7 @@
 package browserevents
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -281,6 +282,11 @@ func removeLeftovers(path string) {
 // without telling: the row is dropped instead, so the file is rewritten
 // without it.
 func storedKeysAllowed(raw json.RawMessage, kind string) bool {
+	// A key given twice is decoded as its last value: the row could read
+	// one way here and another way to any other reader.
+	if hasDuplicateKeys(raw) {
+		return false
+	}
 	var wrapper map[string]json.RawMessage
 	if json.Unmarshal(raw, &wrapper) != nil {
 		return false
@@ -305,6 +311,54 @@ func storedKeysAllowed(raw json.RawMessage, kind string) bool {
 		}
 	}
 	return true
+}
+
+// hasDuplicateKeys reports whether any object in raw, at any depth, names
+// a key twice, or raw is not valid JSON.
+func hasDuplicateKeys(raw json.RawMessage) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	// One entry per open object or array: the keys seen so far, nil for an
+	// array.
+	var open []map[string]bool
+	// Whether the next string token in the innermost object is a key.
+	expectKey := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return false
+		}
+		if err != nil {
+			return true
+		}
+		inObject := len(open) > 0 && open[len(open)-1] != nil
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				open = append(open, map[string]bool{})
+				expectKey = true
+			case '[':
+				open = append(open, nil)
+				expectKey = false
+			default:
+				open = open[:len(open)-1]
+				expectKey = len(open) > 0 && open[len(open)-1] != nil
+			}
+			continue
+		case string:
+			if inObject && expectKey {
+				keys := open[len(open)-1]
+				if keys[t] {
+					return true
+				}
+				keys[t] = true
+				expectKey = false
+				continue
+			}
+		}
+		// A value: in an object, a key comes next.
+		expectKey = inObject
+	}
 }
 
 // DefaultStorePath is the store beside the daemon's database, named after
