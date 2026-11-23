@@ -63,6 +63,9 @@ type Store struct {
 	// such as when the configuration names another cloud: no record is
 	// taken and the extension is told there is no enrollment.
 	suspended bool
+	// epoch counts every Bind and Suspend, so a token read that started
+	// before a later one never undoes it.
+	epoch uint64
 	// dirty is set while the file is behind the rows, such as after a failed
 	// save, so the next call saves again rather than report success.
 	dirty bool
@@ -83,14 +86,24 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		return s, nil
 	}
 	if errors.Is(err, errOversizedStore) {
-		// Far larger than MaxRows rows: start over, and the next save
-		// replaces it. The extension sends its snapshots again.
+		// Far larger than MaxRows rows: start over. The extension sends
+		// its snapshots again. A file others can read is replaced now, or
+		// not used; a private one is replaced by the next save.
+		if !private {
+			var committed *committedError
+			if err := s.saveLocked(); err != nil && !errors.As(err, &committed) {
+				return nil, fmt.Errorf("browser events: store %s is not private and cannot be rewritten: %w", path, err)
+			}
+		}
 		return s, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	var file storeFile
+	var file struct {
+		Binding string                     `json:"binding"`
+		Rows    map[string]json.RawMessage `json:"rows"`
+	}
 	rewrite := false
 	// A file that is not owner-only, such as one restored from a backup,
 	// may have been changed by another account: its rows are not read,
@@ -99,25 +112,27 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		// Rows without a binding cannot say which workspace they belong
 		// to, so they are not read: Bind would otherwise give them to the
 		// current one.
-		// A damaged file can hold null rows; they are dropped, not read.
-		for key, r := range file.Rows {
-			if r == nil {
-				delete(file.Rows, key)
+		rows := make(map[string]*row, len(file.Rows))
+		for key, raw := range file.Rows {
+			// Each row is read on its own: a damaged or null one is
+			// dropped, and the others are kept.
+			var r *row
+			if json.Unmarshal(raw, &r) != nil || r == nil {
 				rewrite = true
+				continue
 			}
-		}
-		// A row the contract no longer allows, sent or not, leaves the
-		// disk at open: its text is not kept until it ages out.
-		for key, r := range file.Rows {
-			source := Extension{Version: r.Record.ExtensionVersion, Browser: r.Record.Browser, Profile: r.Record.Profile}
+			// A row the contract no longer allows, sent or not, leaves
+			// the disk at open: its text is not kept until it ages out.
 			// A row under another row's key would take that row's
 			// snapshots: it is dropped too.
+			source := Extension{Version: r.Record.ExtensionVersion, Browser: r.Record.Browser, Profile: r.Record.Profile}
 			if source.validate() != nil || r.Record.Record.Validate() != nil || rowKey(r.Record) != key {
-				delete(file.Rows, key)
 				rewrite = true
+				continue
 			}
+			rows[key] = r
 		}
-		s.rows = file.Rows
+		s.rows = rows
 		s.binding = file.Binding
 		s.generation = 1
 	}
@@ -173,7 +188,7 @@ func readStoreFile(path string) (data []byte, private, trusted bool, err error) 
 	}
 	// Only a file whose permissions are known is replaced for its size.
 	if opened.Size() > MaxStoreBytes {
-		return nil, false, false, errOversizedStore
+		return nil, private, false, errOversizedStore
 	}
 	// Rows are read from a private file, or one only its owner could have
 	// written, such as a backup restored 0644 or 0400: no other account
@@ -184,7 +199,7 @@ func readStoreFile(path string) (data []byte, private, trusted bool, err error) 
 		return nil, false, false, err
 	}
 	if len(data) > MaxStoreBytes {
-		return nil, false, false, errOversizedStore
+		return nil, private, false, errOversizedStore
 	}
 	return data, private, trusted, nil
 }
@@ -536,7 +551,25 @@ func (s *Store) Drop(p Pending) error {
 func (s *Store) Bind(binding string) (dropped int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.bindLocked(binding)
+}
+
+// BindAt binds as Bind does only if no Bind or Suspend has happened since
+// Epoch returned epoch. A token read that started before a later suspension
+// cannot undo it: ok is false and the store stays as it is.
+func (s *Store) BindAt(binding string, epoch uint64) (dropped int, ok bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch != epoch {
+		return 0, false, nil
+	}
+	dropped, err = s.bindLocked(binding)
+	return dropped, true, err
+}
+
+func (s *Store) bindLocked(binding string) (dropped int, err error) {
 	s.suspended = false
+	s.epoch++
 	switch s.binding {
 	case binding:
 		return 0, nil
@@ -557,6 +590,29 @@ func (s *Store) Suspend() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.suspended = true
+	s.epoch++
+}
+
+// SuspendAt suspends as Suspend does only if no Bind or Suspend has happened
+// since Epoch returned epoch, so a caller that gave up waiting does not
+// suspend an enrollment confirmed in the meantime.
+func (s *Store) SuspendAt(epoch uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch != epoch {
+		return false
+	}
+	s.suspended = true
+	s.epoch++
+	return true
+}
+
+// Epoch returns the count of Bind and Suspend calls so far, for BindAt and
+// SuspendAt.
+func (s *Store) Epoch() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.epoch
 }
 
 // Flush writes the store if the file is behind it, such as after a prune
