@@ -126,15 +126,20 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 	// stuck read never holds up the background sender (and its flush).
 	readCtx, cancel := context.WithTimeout(ctx, TokenReadTimeout)
 	defer cancel()
+	waited := s.Store.Epoch()
 	select {
 	case s.rebind <- struct{}{}:
 	case <-readCtx.Done():
 		// Another read is under way and has not confirmed the enrollment
 		// in time: nothing more is taken until one does, for any profile.
-		s.Store.Suspend()
+		// A read that confirmed it while this one waited is not undone.
+		s.Store.SuspendAt(waited)
 		return "", fmt.Errorf("browser events: waiting for the install token: %w", readCtx.Err())
 	}
 	release := func() { <-s.rebind }
+	// Taken with the slot held: a Bind or Suspend after this, such as a
+	// waiter that gave up, is newer than this read, so it is not undone.
+	started := s.Store.Epoch()
 	// A stuck credential read must not hold up its caller past the
 	// deadline. It keeps the slot until it ends, so at most one read is
 	// ever outstanding; later callers wait for it up to their own deadline.
@@ -152,9 +157,14 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 		s.Store.Suspend()
 		return "", fmt.Errorf("browser events: install token: %v", err)
 	}
-	dropped, err := s.Store.Bind(Binding(s.BaseURL, s.InstallationID, token))
+	dropped, ok, err := s.Store.BindAt(Binding(s.BaseURL, s.InstallationID, token), started)
 	if err != nil {
 		return "", err
+	}
+	if !ok {
+		// The store was suspended while this read ran: the token it read
+		// may be older than that suspension, so the next read confirms.
+		return "", errors.New("browser events: the enrollment changed while the install token was read")
 	}
 	if dropped > 0 {
 		s.logf("browser events: the enrollment changed; dropped %d rows recorded under the previous one", dropped)
