@@ -1121,7 +1121,7 @@ func TestATokenReadEndsAtItsDeadline(t *testing.T) {
 	_, err, handedOff := readToken(ctx, func(context.Context) (string, error) {
 		<-release
 		return "token", nil
-	}, func() { close(released) })
+	}, func() { close(released) }, func() {})
 	if err == nil || !handedOff || time.Since(start) > time.Second {
 		t.Fatalf("err = %v, handed off %v, after %v", err, handedOff, time.Since(start))
 	}
