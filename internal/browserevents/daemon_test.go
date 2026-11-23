@@ -886,6 +886,20 @@ func TestAnIntegralMessageCountInAnyNotationIsRead(t *testing.T) {
 			t.Errorf("messages %s: valid = %+v, rejected = %+v, err = %v", notation, valid, rejected, err)
 		}
 	}
+	// A number that only rounds to an integer is not one, and neither is a
+	// huge exponent.
+	for _, notation := range []string{"1.0000000000000001", "1e1000000000", "2147483648", "1.5e0"} {
+		record := message.Records[1]
+		record["messages"] = json.RawMessage(notation)
+		raw, _ := json.Marshal([]any{record})
+		valid, rejected, err := DecodeRecords(raw)
+		if err != nil || len(valid) != 0 || len(rejected) != 1 {
+			t.Errorf("messages %s: valid = %+v, rejected = %+v, err = %v", notation, valid, rejected, err)
+		}
+	}
+	if n, ok := exactInteger("5e-0"); !ok || n != 5 {
+		t.Errorf("5e-0 = %d, %v", n, ok)
+	}
 }
 
 // A hello rebinds the store first, so an enrollment change made while there

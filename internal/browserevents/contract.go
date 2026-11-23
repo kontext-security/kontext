@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -454,11 +457,39 @@ func (o object) integer(key string) (int, bool) {
 	}
 	// JSON Schema counts 3.0 and 3e0 as integers, so they are read as 3. A
 	// fraction, or a number past what a count can be, is not an integer.
-	var number float64
-	if err := json.Unmarshal(o[key], &number); err != nil || number != math.Trunc(number) || math.Abs(number) > math.MaxInt32 {
+	// The number is read exactly, never through a float64, which would
+	// round 3.0000000000000001 to 3.
+	// json.Number also takes a string such as "3", which is not a number.
+	raw := bytes.TrimSpace(o[key])
+	var number json.Number
+	if raw[0] == '"' || json.Unmarshal(raw, &number) != nil {
 		return 0, false
 	}
-	return int(number), true
+	return exactInteger(number.String())
+}
+
+// exactInteger reads a JSON number as an int when its exact value is an
+// integer within the int32 range. A long number or a large exponent is not
+// one, which also keeps the exact arithmetic small.
+func exactInteger(number string) (int, bool) {
+	if len(number) > 64 {
+		return 0, false
+	}
+	if i := strings.IndexAny(number, "eE"); i >= 0 {
+		exponent, err := strconv.Atoi(number[i+1:])
+		if err != nil || exponent < -64 || exponent > 64 {
+			return 0, false
+		}
+	}
+	value, ok := new(big.Rat).SetString(number)
+	if !ok || !value.IsInt() {
+		return 0, false
+	}
+	n := value.Num()
+	if !n.IsInt64() || n.Int64() > math.MaxInt32 || n.Int64() < math.MinInt32 {
+		return 0, false
+	}
+	return int(n.Int64()), true
 }
 
 // null reports whether key is missing or null.
