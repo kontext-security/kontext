@@ -32,17 +32,12 @@ func mustCatalog(raw []byte) map[string]catalogApp {
 	return byID
 }
 
-// matchesHost reports whether host is one of the app's hosts. A pattern
-// "*.example.com" matches any name below example.com, not example.com itself.
+// matchesHost reports whether host is what a visit to the app sends: one of
+// its exact hosts, or for a pattern "*.example.com" the name example.com
+// itself. A name below a pattern can name a workspace, so it never goes out.
 func (a catalogApp) matchesHost(host string) bool {
 	for _, pattern := range a.Hosts {
-		if suffix, ok := strings.CutPrefix(pattern, "*"); ok {
-			if strings.HasSuffix(host, suffix) && len(host) > len(suffix) {
-				return true
-			}
-			continue
-		}
-		if host == pattern {
+		if host == strings.TrimPrefix(pattern, "*.") {
 			return true
 		}
 	}

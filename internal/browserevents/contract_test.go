@@ -222,9 +222,9 @@ func TestAVisitNamesACatalogApp(t *testing.T) {
 		}
 	}
 	n8n := visit
-	n8n.App, n8n.AppName, n8n.Provider, n8n.Host = "n8n-cloud", "n8n cloud", "n8n", "acme.app.n8n.cloud"
+	n8n.App, n8n.AppName, n8n.Provider, n8n.Host = "n8n-cloud", "n8n cloud", "n8n", "app.n8n.cloud"
 	if err := n8n.Validate(); err != nil {
-		t.Errorf("a wildcard host refused: %v", err)
+		t.Errorf("a wildcard entry's own domain refused: %v", err)
 	}
 	refused := map[string]func(*Record){
 		"unknown app":        func(r *Record) { r.App = "qwen" },
@@ -232,8 +232,8 @@ func TestAVisitNamesACatalogApp(t *testing.T) {
 		"other provider":     func(r *Record) { r.Provider = "Anthropic" },
 		"text in a name":     func(r *Record) { r.AppName = "chatgpt.com/c/123" },
 		"another app's host": func(r *Record) { r.Host = "claude.ai" },
-		"host above a wildcard": func(r *Record) {
-			r.App, r.AppName, r.Provider, r.Host = "n8n-cloud", "n8n cloud", "n8n", "app.n8n.cloud"
+		"workspace below a wildcard": func(r *Record) {
+			r.App, r.AppName, r.Provider, r.Host = "n8n-cloud", "n8n cloud", "n8n", "acme.app.n8n.cloud"
 		},
 		"host that only ends alike": func(r *Record) { r.Host = "evilchatgpt.com" },
 	}
