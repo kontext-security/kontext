@@ -2,15 +2,18 @@
   "contract": 1,
   "type": "records",
   "enrollment": "3f9a1c2b7d4e6f80",
-  "extension": { "version": "0.1.0", "browser": "chrome", "profile": "p7Hq2vXkLm9s" },
+  "extension": {
+    "version": "0.1.0",
+    "browser": "chrome",
+    "profile": "p7Hq2vXkLm9s"
+  },
   "records": [
     {
       "kind": "account",
       "day": "2026-11-20",
       "app": "chatgpt",
       "host": "chatgpt.com",
-      "plan": "free",
-      "email_domain": "gmail.com",
+      "account_type": "paid",
       "observed_at": "2026-11-20T09:14:40Z"
     }
   ]

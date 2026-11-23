@@ -154,6 +154,11 @@ func rowKey(r CloudRecord) string {
 	if r.Kind == KindHealth {
 		return r.Browser + "|" + r.Profile + "|health"
 	}
+	if r.Kind == KindAccount {
+		// Each type seen that day has its row, so a personal account used
+		// beside a company one is not hidden by whichever came last.
+		return r.Browser + "|" + r.Profile + "|account|" + r.App + "|" + r.Day + "|" + r.AccountType
+	}
 	return r.Browser + "|" + r.Profile + "|" + r.Kind + "|" + r.App + "|" + r.Day
 }
 
@@ -255,7 +260,7 @@ func merge(current, next CloudRecord) (CloudRecord, bool) {
 			merged.Messages = next.Messages
 		}
 	case KindAccount:
-		// The newest observation of the day says which account it was.
+		// The newest observation of that type on the day.
 		if later(next.ObservedAt, current.ObservedAt) {
 			merged = next
 		}

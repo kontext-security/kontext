@@ -43,17 +43,27 @@ const (
 	KindAccount = "account"
 )
 
-// Plans an account record names: what kind of account was signed in to an
-// app, never which one. Free and paid are personal accounts; team and
-// enterprise are an organisation's workspace.
+// Account types an account record names: which type of account was signed
+// in to an app, never which one, and never its plan. Company is a managed
+// workspace (team or enterprise) whose owner is not checked: it may be
+// another organisation's, so nothing may treat it as the customer's own on
+// this value alone. Personal is any other signed-in account, also on a work
+// email. None is the app's answer that nobody is signed in, and unknown an
+// answer the extension could not read.
 const (
-	PlanAnonymous  = "anonymous"
-	PlanFree       = "free"
-	PlanPaid       = "paid"
-	PlanTeam       = "team"
-	PlanEnterprise = "enterprise"
-	PlanUnknown    = "unknown"
+	AccountCompany  = "company"
+	AccountPersonal = "personal"
+	AccountNone     = "none"
+	AccountUnknown  = "unknown"
 )
+
+// accountKeys are the only keys an account record may have. An account is
+// read from a signed-in page, so a record with any other key is refused
+// whole rather than read in part: an address or a token never passes as an
+// extra field.
+var accountKeys = map[string]bool{
+	"kind": true, "day": true, "app": true, "host": true, "account_type": true, "observed_at": true,
+}
 
 // Answers to a message that cannot be taken.
 const (
@@ -121,12 +131,9 @@ type Record struct {
 	// too. Missing reads as 0, as from an extension before it.
 	Messages int `json:"messages,omitempty"`
 
-	// account, with day, app, host and observed_at. EmailDomain is set only
-	// for a corporate account: a personal account carries no address and no
-	// domain.
-	Plan        string `json:"plan,omitempty"`
-	Corporate   bool   `json:"corporate,omitempty"`
-	EmailDomain string `json:"email_domain,omitempty"`
+	// account, with day, app, host and observed_at: the type alone, never
+	// a plan, an address, a domain or a name.
+	AccountType string `json:"account_type,omitempty"`
 }
 
 // Message is what the extension sends: a hello, or records.
@@ -287,6 +294,10 @@ func DecodeRecords(raw json.RawMessage) ([]IndexedRecord, []Rejection, error) {
 	rejected := []Rejection{}
 	for i, item := range items {
 		record, err := decodeRecord(item)
+		if errors.Is(err, errAccountKeys) {
+			rejected = append(rejected, Rejection{Index: i, Reason: err.Error()})
+			continue
+		}
 		if err != nil {
 			rejected = append(rejected, Rejection{Index: i, Reason: "not a record"})
 			continue
@@ -300,9 +311,14 @@ func DecodeRecords(raw json.RawMessage) ([]IndexedRecord, []Rejection, error) {
 	return valid, rejected, nil
 }
 
+// errAccountKeys refuses an account record with a key the contract does not
+// name for it.
+var errAccountKeys = errors.New("account carries a field the contract does not name")
+
 // decodeRecord reads the kind, then only that kind's fields, so a field the
-// schema does not name for the kind is ignored whatever its type. A field of
-// the wrong type reads as missing, and Validate names it.
+// schema does not name for a health or visit record is ignored whatever its
+// type. An account record may have no other key at all. A field of the
+// wrong type reads as missing, and Validate names it.
 func decodeRecord(data []byte) (Record, error) {
 	fields, err := readObject(data)
 	if err != nil {
@@ -324,14 +340,25 @@ func decodeRecord(data []byte) (Record, error) {
 		record.FirstSeen, _ = fields.text("first_seen")
 		record.LastSeen, _ = fields.text("last_seen")
 		record.Requests, _ = fields.integer("requests")
-		record.Messages, _ = fields.integer("messages")
+		if _, present := fields["messages"]; present {
+			// Optional, but a present count must be one: a wrong type is
+			// refused rather than read as zero.
+			if n, ok := fields.integer("messages"); ok {
+				record.Messages = n
+			} else {
+				record.Messages = -1
+			}
+		}
 	case KindAccount:
+		for key := range fields {
+			if !accountKeys[key] {
+				return Record{}, errAccountKeys
+			}
+		}
 		record.Day, _ = fields.text("day")
 		record.App, _ = fields.text("app")
 		record.Host, _ = fields.text("host")
-		record.Plan, _ = fields.text("plan")
-		record.Corporate, _ = fields.boolean("corporate")
-		record.EmailDomain, _ = fields.text("email_domain")
+		record.AccountType, _ = fields.text("account_type")
 		record.ObservedAt, _ = fields.text("observed_at")
 	}
 	return record, nil
@@ -426,18 +453,6 @@ func (o object) integer(key string) (int, bool) {
 	return value, true
 }
 
-// boolean is the boolean at key, and whether there is one.
-func (o object) boolean(key string) (bool, bool) {
-	var value bool
-	if o.null(key) {
-		return false, false
-	}
-	if err := json.Unmarshal(o[key], &value); err != nil {
-		return false, false
-	}
-	return value, true
-}
-
 // null reports whether key is missing or null.
 func (o object) null(key string) bool {
 	value := bytes.TrimSpace(o[key])
@@ -476,12 +491,12 @@ func (r Record) own() Record {
 	case KindVisit:
 		visit := r
 		visit.ConnectedSince, visit.ObservedAt = "", ""
-		visit.Plan, visit.Corporate, visit.EmailDomain = "", false, ""
+		visit.AccountType = ""
 		return visit
 	case KindAccount:
 		return Record{
 			Kind: r.Kind, Day: r.Day, App: r.App, Host: r.Host, ObservedAt: r.ObservedAt,
-			Plan: r.Plan, Corporate: r.Corporate, EmailDomain: r.EmailDomain,
+			AccountType: r.AccountType,
 		}
 	default:
 		return Record{Kind: r.Kind}
@@ -555,19 +570,12 @@ func (r Record) Validate() error {
 		if !isTime(r.ObservedAt) || !insideDay(r.Day, r.ObservedAt, r.ObservedAt) {
 			return errors.New("account observed_at must fall on its day")
 		}
-		switch r.Plan {
-		case PlanAnonymous, PlanFree, PlanPaid, PlanTeam, PlanEnterprise, PlanUnknown:
+		switch r.AccountType {
+		case AccountCompany, AccountPersonal, AccountNone, AccountUnknown:
+			return nil
 		default:
-			return errors.New("account plan is unknown")
+			return errors.New("account type must be company, personal, none or unknown")
 		}
-		if r.EmailDomain != "" && (!r.Corporate || len(r.EmailDomain) > 253 || !hostPattern.MatchString(r.EmailDomain)) {
-			// A personal account's domain stays in the browser.
-			return errors.New("account email_domain must be a corporate account's bare domain")
-		}
-		if r.Corporate && r.Plan == PlanAnonymous {
-			return errors.New("an anonymous account cannot be corporate")
-		}
-		return nil
 	default:
 		return errors.New("unknown record kind")
 	}
