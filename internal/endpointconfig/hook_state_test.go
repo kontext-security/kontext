@@ -179,7 +179,7 @@ func TestACrossVersionNotModifiedFetchesTheFallbackAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	fallback := fallbackResponse(t, payloadcapture.ModeSummary, false)
-	var suppressed atomic.Bool
+	var suppressed, undecided atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("response_version") == strconv.Itoa(ResponseVersion) {
 			w.WriteHeader(http.StatusNotAcceptable)
@@ -193,6 +193,9 @@ func TestACrossVersionNotModifiedFetchesTheFallbackAgain(t *testing.T) {
 		}
 		// While the retry runs, the refused version's hook state is off.
 		suppressed.Store(cache.Current().HookState().Equal(UnmanagedHookState))
+		// ...and its inventory switch reads undecided, not a confirmed
+		// opt-out that would purge the queued hook results.
+		undecided.Store(!cache.Current().HookInventoryDecided())
 		w.Header().Set("ETag", `"`+fallback.ConfigIdentity+`"`)
 		_ = json.NewEncoder(w).Encode(fallback)
 	}))
@@ -207,6 +210,12 @@ func TestACrossVersionNotModifiedFetchesTheFallbackAgain(t *testing.T) {
 	}
 	if !suppressed.Load() {
 		t.Fatal("the refused version's hook state stayed on during the retry")
+	}
+	if !undecided.Load() {
+		t.Fatal("the retry read as a decided hook inventory switch")
+	}
+	if !cache.Current().HookInventoryDecided() {
+		t.Fatal("the fallback's own config didn't decide the switch")
 	}
 	if got := cache.Current(); got.ConfigIdentity != fallback.ConfigIdentity || got.Status.NewestUnsupported {
 		t.Fatalf("after the retry: identity %s, status %+v", got.ConfigIdentity, got.Status)

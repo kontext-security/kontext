@@ -57,6 +57,15 @@ func (s Snapshot) HookInventoryEnabled() bool {
 	return s.Confirmed && !s.Status.NewestUnsupported && s.Config.HookInventoryEnabled()
 }
 
+// HookInventoryDecided reports whether this snapshot settles the hook
+// inventory switch either way: confirmed, and not since refused by a server
+// that hasn't confirmed another version. While a fallback is negotiated the
+// switch reads off but is undecided, so an off then pauses uploads and never
+// purges what is queued.
+func (s Snapshot) HookInventoryDecided() bool {
+	return s.Confirmed && !s.Status.NewestUnsupported
+}
+
 // HookState is the desired state of Kontext's hooks as far as this snapshot
 // can confirm it (ADR-0012): a confirmed v7 config's, and unmanaged for
 // anything less, so nothing changes on a Mac the cloud hasn't asked about.
