@@ -22,6 +22,18 @@ func visit(requests int, first, last string) IndexedRecord {
 		Provider: "OpenAI", Surface: "web", Host: "chatgpt.com", FirstSeen: first, LastSeen: last, Requests: requests}}
 }
 
+// asApp makes r a visit to another catalog app, with that app's own names
+// and first host.
+func asApp(r IndexedRecord, id string) IndexedRecord {
+	app := catalog[id]
+	r.Record.App, r.Record.AppName, r.Record.Provider = app.ID, app.Name, app.Provider
+	r.Record.Host = strings.TrimPrefix(app.Hosts[0], "*.")
+	if r.Record.Host != app.Hosts[0] {
+		r.Record.Host = "team." + r.Record.Host
+	}
+	return r
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := openStore(filepath.Join(t.TempDir(), "browser-activity.json"), testNow)
@@ -94,7 +106,8 @@ func TestOldDaysArePrunedAndRefused(t *testing.T) {
 	s := openTestStore(t)
 	old := visit(1, "2026-11-01T08:00:00Z", "2026-11-01T08:00:00Z")
 	old.Record.Day = "2026-11-01"
-	rejected, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{old})
+	applied, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{old})
+	rejected := applied.Rejected
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,9 +157,9 @@ func TestHandlerAnswersHelloAndRecords(t *testing.T) {
 	}
 }
 
-// A visit counted under one enrollment is refused under another: the
-// extension's cumulative snapshot from workspace A must not reach B. Its
-// health still counts.
+// Records counted under one enrollment are refused under another: the
+// extension's cumulative snapshot from workspace A must not reach B. The
+// answer names the current enrollment, so the extension switches to it.
 func TestAVisitRecordedForAnotherEnrollmentIsRefused(t *testing.T) {
 	s := openTestStore(t)
 	h := &Handler{Store: s}
@@ -156,13 +169,11 @@ func TestAVisitRecordedForAnotherEnrollmentIsRefused(t *testing.T) {
 	}
 	var answer Settings
 	_ = json.Unmarshal(h.Answer(context.Background(), data), &answer)
-	if answer.Accepted != 1 || len(answer.Rejected) != 1 || answer.Rejected[0].Index != 1 {
+	if answer.Accepted != 0 || len(answer.Rejected) != 2 || answer.Enrollment != s.Enrollment() {
 		t.Fatalf("answer = %+v", answer)
 	}
-	for _, r := range s.rows {
-		if r.Record.Kind == KindVisit {
-			t.Fatal("a visit from another enrollment was kept")
-		}
+	if s.Len() != 0 {
+		t.Fatal("a record from another enrollment was kept")
 	}
 	missing := strings.Replace(string(data), `"enrollment": "3f9a1c2b7d4e6f80",`, "", 1)
 	if got := string(h.Answer(context.Background(), json.RawMessage(missing))); !strings.Contains(got, ErrorInvalidMessage) {
@@ -383,7 +394,8 @@ func TestAnUnboundStoreTakesNoRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rejected, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	applied, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	rejected := applied.Rejected
 	if err != nil || len(rejected) != 1 || s.Len() != 0 {
 		t.Fatalf("rejected = %+v, rows = %d, err = %v", rejected, s.Len(), err)
 	}
@@ -423,9 +435,9 @@ func TestAnAnswerThatDoesNotAccountForTheBatchMarksNothingSent(t *testing.T) {
 
 func TestATooLargeBatchIsHalvedAndATooLargeRowDropped(t *testing.T) {
 	s := openTestStore(t)
-	for _, app := range []string{"chatgpt", "claude", "gemini", "perplexity"} {
+	for _, app := range []string{"chatgpt", "claude", "gemini", "lovable"} {
 		r := visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")
-		r.Record.App = app
+		r = asApp(r, app)
 		_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{r})
 	}
 	sender, batches := newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
@@ -519,7 +531,7 @@ func TestTheBatchGrowsBackAfterA413(t *testing.T) {
 	s := openTestStore(t)
 	for _, app := range []string{"chatgpt", "claude"} {
 		r := visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")
-		r.Record.App = app
+		r = asApp(r, app)
 		_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{r})
 	}
 	calls := 0
@@ -611,7 +623,7 @@ func TestAnInvalidStoredRowDoesNotTakeItsBatchWithIt(t *testing.T) {
 	s := openTestStore(t)
 	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
 	bad := visit(3, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")
-	bad.Record.App = "claude"
+	bad = asApp(bad, "claude")
 	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{bad})
 	for _, r := range s.rows {
 		if r.Record.App == "claude" {
@@ -662,10 +674,12 @@ func TestAStoreThatIsNotAFileIsRefusedWithoutBlocking(t *testing.T) {
 }
 
 func TestTwoDatabasesInOneFolderKeepTheirOwnStores(t *testing.T) {
-	a := DefaultStorePath("/data/guard.db")
-	b := DefaultStorePath("/data/other.db")
-	if a == b || a == "/data/guard.db" || filepath.Dir(a) != "/data" {
-		t.Fatalf("store paths %q and %q", a, b)
+	dir := filepath.Join("data")
+	a := DefaultStorePath(filepath.Join(dir, "guard.db"))
+	b := DefaultStorePath(filepath.Join(dir, "other.db"))
+	c := DefaultStorePath(filepath.Join(dir, "guard.sqlite"))
+	if a == b || a == c || filepath.Dir(a) != dir || filepath.Base(a) != "guard.db.browser-activity.json" {
+		t.Fatalf("store paths %q, %q and %q", a, b, c)
 	}
 }
 
@@ -722,7 +736,7 @@ func TestAnAccountRecordedForAnotherEnrollmentIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rejected) != 1 || s.Len() != 0 {
+	if len(rejected.Rejected) != 1 || s.Len() != 0 {
 		t.Fatalf("rejected = %+v, rows = %d", rejected, s.Len())
 	}
 }
@@ -761,5 +775,16 @@ func TestCorporateDomainsComeFromTheEnrolledEmail(t *testing.T) {
 	_ = json.Unmarshal(h.Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)), &answer)
 	if strings.Join(answer.CorporateDomains, ",") != "example.com,example.org" {
 		t.Fatalf("corporate domains = %v", answer.CorporateDomains)
+	}
+}
+
+// A health row stamped far in the future would never expire, so it is refused.
+func TestAHealthRowFromTheFutureIsRefused(t *testing.T) {
+	s := openTestStore(t)
+	future := IndexedRecord{Record: Record{Kind: KindHealth, ConnectedSince: "2026-11-20T07:00:00Z",
+		ObservedAt: testNow().Add(48 * time.Hour).Format(time.RFC3339)}}
+	applied, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{future})
+	if err != nil || len(applied.Rejected) != 1 || s.Len() != 0 {
+		t.Fatalf("applied = %+v, rows = %d, err = %v", applied, s.Len(), err)
 	}
 }

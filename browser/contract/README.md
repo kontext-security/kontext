@@ -17,8 +17,9 @@ the daemon's answer back.
 - `hello`: sent once per connection. Carries the extension's version, browser
   and profile id (a random id the extension makes; never the profile's email).
 - `records`: up to 200 records, and `enrollment`: the enrollment id from the
-  settings answer the visits were recorded under. The daemon refuses a visit
-  recorded for another enrollment than its own.
+  settings answer the records were made under. The daemon refuses every
+  record of a message made for another enrollment than its own, and its answer
+  names the enrollment it checked them against.
 
 Record kinds in v1:
 
@@ -34,12 +35,17 @@ absolute count, never an increment, so sending it twice is harmless.
 An `account` never carries an address or a name. `email_domain` is sent only
 for a corporate account; a personal account's domain stays in the browser.
 The daemon keeps the newest `account` of each app and day per profile, and
-refuses one recorded for another enrollment, as it does visits.
+refuses one recorded for another enrollment, as it does visits. An account's
+`app` and `host` are held to the catalog as a visit's are.
 
-`app_name` and `provider` are names from the extension's catalog, such as
-"ChatGPT" and "OpenAI": at most 40 letters, digits, spaces and `. & + ' ( ) -`.
-Page titles, URLs and other text people or pages wrote do not fit that shape
-and are refused. `extension.version` is at most 32 characters.
+The catalog is [`catalog.json`](catalog.json), part of this contract: the
+extension is built from it and the daemon checks visits against it. A visit's
+`app` must be a catalog id, `app_name` and `provider` must be that entry's own
+`name` and `provider`, and `host` one of its `hosts` (`*.example.com` matches
+any name below example.com). So no field of a visit can carry a page title, a
+URL or other text people or pages wrote. The schema holds names to the
+catalog's shape (at most 40 letters, digits, spaces and `. & + ' ( ) -`); a
+catalog entry must fit it too. `extension.version` is at most 32 characters.
 
 ## Daemon to extension
 
@@ -49,7 +55,9 @@ organisation's corporate email domains, `paused`, which records were
 accepted, and `enrollment`: an opaque id of the enrollment the daemon records
 under, empty until it has one. When `enrollment` changes, the extension drops
 the visits it kept for the previous one, so nothing recorded for one workspace
-reaches another; the daemon drops its own rows on the same change. While `paused` is true the extension stops every detector and sends
+reaches another; the daemon drops its own rows on the same change. While
+`enrollment` is empty the extension sends only `hello`. While `paused` is true
+the extension stops every detector and sends
 only `hello` and `health`. In v1 the daemon always answers `paused: false`,
 until it gets a server source with the endpoint configuration. Its corporate
 domains are the domain of the enrolled user's email, unless that is a consumer

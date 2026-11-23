@@ -49,16 +49,19 @@ func (h *Handler) Answer(_ context.Context, raw json.RawMessage) json.RawMessage
 		h.logf("browser events: refused records: %v", err)
 		return encode(NewError(ErrorInvalidMessage))
 	}
-	notKept, err := h.Store.Apply(msg.Extension, msg.Enrollment, valid)
+	applied, err := h.Store.Apply(msg.Extension, msg.Enrollment, valid)
 	if err != nil {
 		h.logf("browser events: store: %v", err)
 		return encode(NewError(ErrorUnavailable))
 	}
-	rejected = append(rejected, notKept...)
+	// The answer names the enrollment the records were judged by, so an
+	// extension refused for an old one learns the new one from it.
+	settings.Enrollment = applied.Enrollment
+	rejected = append(rejected, applied.Rejected...)
 	if rejected == nil {
 		rejected = []Rejection{}
 	}
-	settings.Accepted = len(valid) - len(notKept)
+	settings.Accepted = len(valid) - len(applied.Rejected)
 	settings.Rejected = rejected
 	if settings.Accepted > 0 && h.Changed != nil {
 		h.Changed()
