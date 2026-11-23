@@ -130,7 +130,7 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 	case s.rebind <- struct{}{}:
 	case <-readCtx.Done():
 		// Another read is under way; it decides the binding.
-		return "", fmt.Errorf("browser events: waiting for the install token: %w", ctx.Err())
+		return "", fmt.Errorf("browser events: waiting for the install token: %w", readCtx.Err())
 	}
 	release := func() { <-s.rebind }
 	// A stuck credential read must not hold up its caller past the
@@ -399,8 +399,11 @@ func readToken(ctx context.Context, read func(context.Context) (string, error), 
 	mu.Lock()
 	defer mu.Unlock()
 	select {
-	case r := <-done:
-		return r.token, r.err, false
+	case <-done:
+		// It answered, but after the deadline: not taken, so the deadline
+		// holds. The read has ended, so the caller keeps the slot.
+		abandon()
+		return "", ctx.Err(), false
 	default:
 		abandon()
 		abandoned = true
