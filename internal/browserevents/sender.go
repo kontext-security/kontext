@@ -74,6 +74,7 @@ func (p Pending) split() (valid, invalid Pending) {
 		target.keys = append(target.keys, p.keys[i])
 		target.versions = append(target.versions, p.versions[i])
 	}
+	valid.binding, invalid.binding = p.binding, p.binding
 	return valid, invalid
 }
 
@@ -128,12 +129,20 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	token, err := s.Rebind(ctx)
 	if err != nil {
+		// Local retention does not wait for the token: expired days still
+		// leave the disk.
+		_ = s.Store.Flush()
 		return Retry, err
 	}
 	if s.limit <= 0 || s.limit > MaxRecordsPerBatch {
 		s.limit = MaxRecordsPerBatch
 	}
 	pending := s.Store.Pending(s.limit)
+	if pending.binding != Binding(s.BaseURL, s.InstallationID, token) {
+		// A hello bound the store to another enrollment after the token was
+		// read: these rows are not this token's. The next send reads again.
+		return Retry, errors.New("browser events: the enrollment changed during a send")
+	}
 	if len(pending.Records) == 0 {
 		if err := s.Store.Flush(); err != nil {
 			return Retry, err
@@ -180,15 +189,17 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	defer response.Body.Close()
 	// Large enough for a full batch of rejections with the longest reasons
 	// in any script. A cut-off answer would be retried forever.
-	data, err := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
-	if err != nil {
-		return Retry, fmt.Errorf("browser events: read the answer: %w", err)
-	}
-	if len(data) > MaxResponseBytes {
-		return Retry, errors.New("browser events: the answer is too large")
-	}
 	switch {
 	case response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated:
+		// Only an acknowledgement needs its whole body; other answers are
+		// judged by their status.
+		data, err := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
+		if err != nil {
+			return Retry, fmt.Errorf("browser events: read the answer: %w", err)
+		}
+		if len(data) > MaxResponseBytes {
+			return Retry, errors.New("browser events: the answer is too large")
+		}
 		// Rows are marked sent only when the answer accounts for each of
 		// them; {} from a proxy would otherwise mark them all.
 		answer, err := DecodeCloudResponse(data, len(pending.Records))
