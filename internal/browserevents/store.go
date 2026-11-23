@@ -126,6 +126,12 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	// A file that is not owner-only, such as one restored from a backup,
 	// may have been changed by another account: its rows are not read,
 	// so none of them can leave with this enrollment's token.
+	// A file that gives its binding or its rows twice says two things:
+	// which one holds is not this reader's guess, so no row is read and the
+	// file is written again without them.
+	if trusted && repeatsTopLevelKey(data) {
+		trusted, rewrite = false, true
+	}
 	if trusted && json.Unmarshal(data, &file) == nil && file.Rows != nil && file.Binding != "" {
 		// Rows without a binding cannot say which workspace they belong
 		// to, so they are not read: Bind would otherwise give them to the
@@ -320,6 +326,33 @@ func storedKeysAllowed(raw json.RawMessage, kind string) bool {
 
 // hasDuplicateKeys reports whether any object in raw, at any depth, names
 // a key twice, or raw is not valid JSON.
+// repeatsTopLevelKey reports whether the file's object names a key twice,
+// such as two "binding" or two "rows". A file that is not one object does
+// not repeat one: it is not read anyway.
+func repeatsTopLevelKey(raw []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		key, ok := tok.(string)
+		if err != nil || !ok {
+			return false
+		}
+		if seen[key] {
+			return true
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return false
+		}
+	}
+	return false
+}
+
 func hasDuplicateKeys(raw json.RawMessage) bool {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	// One entry per open object or array: the keys seen so far, nil for an
@@ -626,7 +659,7 @@ func (s *Store) Pending(max int) Pending {
 
 // PendingExcept returns the rows to send, leaving out those held says are
 // waiting, so rows held back never take a batch from the rows behind them.
-func (s *Store) PendingExcept(max int, held func(key string, version int) bool) Pending {
+func (s *Store) PendingExcept(max int, held func(binding string, generation uint64, key string, record CloudRecord) bool) Pending {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.pruneLocked() {
@@ -634,7 +667,7 @@ func (s *Store) PendingExcept(max int, held func(key string, version int) bool) 
 	}
 	var keys []string
 	for key, r := range s.rows {
-		if r.Version != r.Sent && (held == nil || !held(key, r.Version)) {
+		if r.Version != r.Sent && (held == nil || !held(s.binding, s.generation, key, r.Record)) {
 			keys = append(keys, key)
 		}
 	}

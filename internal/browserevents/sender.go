@@ -55,13 +55,50 @@ type Sender struct {
 	// each goes again only after its own backoff, and meanwhile the rows
 	// behind it are sent. Only SendOnce reads or writes it.
 	held map[string]heldRow
+	// nextHeld is the earliest end of a wait that the last send skipped a
+	// row for, or set: the next send is due then even if that time passed
+	// before the send was planned.
+	nextHeld time.Time
 }
 
-// heldRow is a row version the cloud refused as in the future.
+// heldRow is a row the cloud refused as in the future, under one binding.
+// The hold stays across updates of the row that leave its latest time as
+// late or later, so a tab in use cannot send the same still-future row
+// again before its wait ends, and its refusals keep counting.
 type heldRow struct {
-	version  int
-	refusals int
-	until    time.Time
+	binding    string
+	generation uint64
+	latest     time.Time
+	refusals   int
+	until      time.Time
+}
+
+// latestTime is the latest time a record names, the one the cloud compares
+// with its clock. A time that does not parse counts as none.
+func latestTime(r CloudRecord) time.Time {
+	var latest time.Time
+	for _, value := range []string{r.Day, r.ConnectedSince, r.ObservedAt, r.FirstSeen, r.LastSeen} {
+		at, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			at, err = time.Parse(time.DateOnly, value)
+		}
+		if err == nil && at.After(latest) {
+			latest = at
+		}
+	}
+	return latest
+}
+
+// covers reports whether h still holds back this row of this binding.
+func (h heldRow) covers(binding string, generation uint64, r CloudRecord) bool {
+	return h.binding == binding && h.generation == generation && !latestTime(r).Before(h.latest)
+}
+
+// noteHeld brings nextHeld forward to until.
+func (s *Sender) noteHeld(until time.Time) {
+	if s.nextHeld.IsZero() || until.Before(s.nextHeld) {
+		s.nextHeld = until
+	}
 }
 
 // TokenReadTimeout bounds one read of the install token.
@@ -113,26 +150,22 @@ func (s *Sender) hold(p Pending, now time.Time) {
 		s.held = map[string]heldRow{}
 	}
 	for i, key := range p.keys {
-		h := s.held[key]
-		if h.version != p.versions[i] {
-			h = heldRow{version: p.versions[i]}
+		h, ok := s.held[key]
+		if !ok || !h.covers(p.binding, p.generation, p.Records[i]) {
+			h = heldRow{binding: p.binding, generation: p.generation}
 		}
+		h.latest = latestTime(p.Records[i])
 		h.refusals++
 		h.until = now.Add(backoff(h.refusals))
 		s.held[key] = h
+		s.noteHeld(h.until)
 	}
 }
 
-// heldDue is when the first row still waiting may go again.
+// heldDue is when the first row the last send held back may go again. It
+// may already have passed: the caller sends no sooner than a second on.
 func (s *Sender) heldDue() (time.Time, bool) {
-	var first time.Time
-	now := s.clock()()
-	for _, h := range s.held {
-		if h.until.After(now) && (first.IsZero() || h.until.Before(first)) {
-			first = h.until
-		}
-	}
-	return first, !first.IsZero()
+	return s.nextHeld, !s.nextHeld.IsZero()
 }
 
 // aheadOfTheCloud reports whether the cloud refused a record for a time
@@ -249,9 +282,14 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 		s.limit = MaxRecordsPerBatch
 	}
 	now := s.clock()
-	pending := s.Store.PendingExcept(s.limit, func(key string, version int) bool {
+	s.nextHeld = time.Time{}
+	pending := s.Store.PendingExcept(s.limit, func(binding string, generation uint64, key string, record CloudRecord) bool {
 		h, ok := s.held[key]
-		return ok && h.version == version && now().Before(h.until)
+		if !ok || !h.covers(binding, generation, record) || !now().Before(h.until) {
+			return false
+		}
+		s.noteHeld(h.until)
+		return true
 	})
 	// A hold kept a day past its wait is for a row that is gone or long
 	// sent; a newer hold keeps counting refusals, so its backoff grows.
