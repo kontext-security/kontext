@@ -47,9 +47,14 @@ type Sender struct {
 	// accepted batch.
 	limit int
 	// rebind makes reading the token and binding to it one step, so an
-	// older read cannot bind the store back after a newer one.
-	rebind sync.Mutex
+	// older read cannot bind the store back after a newer one. It is a
+	// channel so a hello can stop waiting for it at its deadline.
+	rebind     chan struct{}
+	rebindInit sync.Once
 }
+
+// TokenReadTimeout bounds one read of the install token.
+const TokenReadTimeout = 10 * time.Second
 
 // MaxResponseBytes bounds the cloud's answer.
 const MaxResponseBytes = 4 << 20
@@ -116,9 +121,19 @@ const (
 // there is something to send. Rows recorded under the previous enrollment are
 // dropped and never leave with the new token.
 func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
-	s.rebind.Lock()
-	defer s.rebind.Unlock()
-	token, err = s.Tokens(ctx)
+	s.rebindInit.Do(func() { s.rebind = make(chan struct{}, 1) })
+	select {
+	case s.rebind <- struct{}{}:
+	case <-ctx.Done():
+		// Another read is under way; it decides the binding.
+		return "", fmt.Errorf("browser events: waiting for the install token: %w", ctx.Err())
+	}
+	defer func() { <-s.rebind }()
+	// A stuck credential read must not hold the binding for every later
+	// hello.
+	readCtx, cancel := context.WithTimeout(ctx, TokenReadTimeout)
+	defer cancel()
+	token, err = s.Tokens(readCtx)
 	if err != nil || strings.TrimSpace(token) == "" {
 		// The enrollment cannot be confirmed, such as when the
 		// configuration names another cloud: no record is taken until it
@@ -138,11 +153,11 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 
 // SendOnce sends up to one batch of pending rows.
 func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
+	// Local retention does not wait for the token or the cloud: expired
+	// days leave the disk whatever this send's outcome.
+	defer func() { _ = s.Store.Flush() }()
 	token, err := s.Rebind(ctx)
 	if err != nil {
-		// Local retention does not wait for the token: expired days still
-		// leave the disk.
-		_ = s.Store.Flush()
 		return Retry, err
 	}
 	if s.limit <= 0 || s.limit > MaxRecordsPerBatch {
