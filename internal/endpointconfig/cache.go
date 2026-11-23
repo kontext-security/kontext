@@ -44,16 +44,27 @@ type Status struct {
 	// leave the endpoint. Until a config is confirmed again, prompts are
 	// recorded as omitted, so a later opt-in can't recover them.
 	PromptVeto bool
-	// V6Unsupported: the server refused this build's response version and
-	// the older one could not be confirmed, so a v6-only switch is off.
-	V6Unsupported bool
+	// NewestUnsupported: the server refused this build's response version and
+	// the older one could not be confirmed, so the hook switches (v6 and v7)
+	// read as off and unmanaged.
+	NewestUnsupported bool
 }
 
 // HookInventoryEnabled is the hook inventory switch as far as this snapshot
-// can confirm it: a confirmed v6 config that says on, from a server that
-// hasn't since refused v6.
+// can confirm it: a confirmed v6 or v7 config that says on, from a server
+// that hasn't since refused this build's version without confirming another.
 func (s Snapshot) HookInventoryEnabled() bool {
-	return s.Confirmed && !s.Status.V6Unsupported && s.Config.HookInventoryEnabled()
+	return s.Confirmed && !s.Status.NewestUnsupported && s.Config.HookInventoryEnabled()
+}
+
+// HookState is the desired state of Kontext's hooks as far as this snapshot
+// can confirm it (ADR-0012): a confirmed v7 config's, and unmanaged for
+// anything less, so nothing changes on a Mac the cloud hasn't asked about.
+func (s Snapshot) HookState() HookState {
+	if !s.Confirmed || s.Status.NewestUnsupported {
+		return UnmanagedHookState
+	}
+	return s.Config.DesiredHookState()
 }
 
 type Snapshot struct {
@@ -87,10 +98,11 @@ type cacheFile struct {
 	// re-enrolling into another workspace on the same cloud doesn't inherit
 	// it.
 	Owner string `json:"owner,omitempty"`
-	// V6Refused: after Response was confirmed, the server refused v6 and the
-	// older version could not be confirmed. It keeps v6-only switches off
-	// across a restart until a config is confirmed again.
-	V6Refused bool `json:"v6Refused,omitempty"`
+	// NewestRefused: after Response was confirmed, the server refused this
+	// build's version and the older one could not be confirmed. It keeps the
+	// hook switches off across a restart until a config is confirmed again.
+	// The key dates from when v6 was the newest version.
+	NewestRefused bool `json:"v6Refused,omitempty"`
 	// Retained only to decode existing cache files with the strict decoder.
 	GuardrailLLMDirective *bool `json:"guardrailLlmDirective,omitempty"`
 }
@@ -251,7 +263,7 @@ func (c *Cache) Load() error {
 	c.lastGood = cloneResponse(file.Response)
 	// Bound, the file names this enrolment, which confirmed it.
 	c.owner = c.boundOwner
-	c.status = Status{FetchedAt: fetchedAt, Stale: true, V6Unsupported: file.V6Refused}
+	c.status = Status{FetchedAt: fetchedAt, Stale: true, NewestUnsupported: file.NewestRefused}
 	return nil
 }
 
@@ -376,11 +388,11 @@ func (c *Cache) markFailedLocked(err error, attemptedAt time.Time) {
 	}
 }
 
-// markV6Unsupported turns the v6-only switches off until a config is
+// markNewestUnsupported turns the hook switches off until a config is
 // confirmed again.
-func (c *Cache) markV6Unsupported() {
+func (c *Cache) markNewestUnsupported() {
 	c.mu.Lock()
-	c.status.V6Unsupported = true
+	c.status.NewestUnsupported = true
 	c.mu.Unlock()
 	// The refusal is kept with the file, so a restart while configuration
 	// is unavailable doesn't turn v6-only switches back on.
@@ -392,10 +404,10 @@ func (c *Cache) markV6Unsupported() {
 		return
 	}
 	var file cacheFile
-	if decodeStrict(strings.NewReader(string(data)), &file) != nil || file.Response == nil || file.V6Refused {
+	if decodeStrict(strings.NewReader(string(data)), &file) != nil || file.Response == nil || file.NewestRefused {
 		return
 	}
-	file.V6Refused = true
+	file.NewestRefused = true
 	if c.persist(file) != nil {
 		// Without the flag on disk, the file must not restore the switch.
 		// The marker that replaces it keeps the confirmed opt-out.
@@ -617,8 +629,8 @@ func (r *Refresher) fail(err error) error {
 			err = errors.Join(err, r.Cache.rejectAuthority(err, r.now()))
 		} else {
 			r.Cache.MarkFailed(err, r.now())
-			if errors.Is(err, ErrV6Unsupported) {
-				r.Cache.markV6Unsupported()
+			if errors.Is(err, ErrNewestUnsupported) {
+				r.Cache.markNewestUnsupported()
 			}
 		}
 		r.notify()

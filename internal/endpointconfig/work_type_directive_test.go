@@ -13,7 +13,8 @@ import (
 
 func workTypeResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Response {
 	t.Helper()
-	config := Config{PayloadCaptureMode: mode, WorkTypeClassification: enabled, ToolOutputCompaction: boolPtr(false), CodexProxy: boolPtr(true), HookInventory: boolPtr(false)}
+	state := UnmanagedHookState
+	config := Config{PayloadCaptureMode: mode, WorkTypeClassification: enabled, ToolOutputCompaction: boolPtr(false), CodexProxy: boolPtr(true), HookInventory: boolPtr(false), HookState: &state}
 	identity, err := ComputeIdentity(config)
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +24,7 @@ func workTypeResponse(t *testing.T, mode payloadcapture.Mode, enabled *bool) Res
 
 func boolPtr(value bool) *bool { return &value }
 
-// The switch is required under v6: a response without it is rejected rather
+// The switch is required under v7: a response without it is rejected rather
 // than resolved either way, and leaves the confirmed value untouched.
 func TestResponseWithoutTheSwitchIsRejected(t *testing.T) {
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
@@ -36,7 +37,7 @@ func TestResponseWithoutTheSwitchIsRejected(t *testing.T) {
 
 	silent := Response{
 		ResponseVersion: ResponseVersion,
-		Config:          Config{PayloadCaptureMode: payloadcapture.ModeFull, ToolOutputCompaction: boolPtr(false), CodexProxy: boolPtr(true), HookInventory: boolPtr(false)},
+		Config:          Config{PayloadCaptureMode: payloadcapture.ModeFull, ToolOutputCompaction: boolPtr(false), CodexProxy: boolPtr(true), HookInventory: boolPtr(false), HookState: &UnmanagedHookState},
 		ConfigIdentity:  off.ConfigIdentity,
 	}
 	if err := cache.Apply(FetchResult{Response: &silent, ETag: silent.ConfigIdentity}, now.Add(time.Minute)); err == nil {
@@ -162,7 +163,7 @@ func writeCacheFileForTest(t *testing.T, path string, file cacheFile) {
 
 // A cache holding the fallback version's response loads like one of
 // ResponseVersion: its identity is the conditional value for a server that
-// still predates v6.
+// still predates v7.
 func TestFallbackVersionCacheLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "endpoint-config.json")
 	response := fallbackResponse(t, payloadcapture.ModeFull, true)
@@ -185,7 +186,7 @@ func TestFallbackVersionCacheLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "hookInventory") {
-		t.Fatalf("a v5 response was saved with the hook inventory switch: %s", data)
+	if strings.Contains(string(data), "hookState") {
+		t.Fatalf("a v6 response was saved with a hook state: %s", data)
 	}
 }

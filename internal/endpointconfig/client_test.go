@@ -27,7 +27,7 @@ func TestClientFetchAndConditionalRefresh(t *testing.T) {
 			t.Fatalf("path = %q", request.URL.Path)
 		}
 		query := request.URL.Query()
-		if len(query) != 1 || query.Get("response_version") != "6" {
+		if len(query) != 1 || query.Get("response_version") != "7" {
 			t.Fatalf("query = %v", query)
 		}
 		if request.Header.Get("Authorization") != "Bearer token" {
@@ -237,19 +237,19 @@ func TestRefresherLogsFailureTransitions(t *testing.T) {
 	}
 }
 
-// A server that predates v6 refuses it with 406 unsupported_version: the
-// client asks it for v5 instead, whose configuration has no hook inventory
-// switch, which reads as off, and goes on asking for v5 alone for an hour.
-// Conditional refreshes work as before.
-func TestClientFallsBackForAServerThatPredatesV6(t *testing.T) {
+// A server that predates v7 refuses it with 406 unsupported_version: the
+// client asks it for v6 instead, whose configuration has no hook state,
+// which reads as unmanaged, and goes on asking for v6 alone for an hour.
+// Conditional refreshes work as before, and v6's own switches still count.
+func TestClientFallsBackForAServerThatPredatesV7(t *testing.T) {
 	configuration := fallbackResponse(t, payloadcapture.ModeFull, true)
 	var asked []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		version := request.URL.Query().Get("response_version")
 		asked = append(asked, version)
-		if version != "5" {
+		if version != "6" {
 			w.WriteHeader(http.StatusNotAcceptable)
-			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5]}`))
+			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5,6]}`))
 			return
 		}
 		w.Header().Set("ETag", `"`+configuration.ConfigIdentity+`"`)
@@ -270,8 +270,9 @@ func TestClientFallsBackForAServerThatPredatesV6(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Response == nil || result.Response.ResponseVersion != FallbackResponseVersion || result.Response.Config.HookInventory != nil ||
-		result.Response.Config.HookInventoryEnabled() || !result.Response.Config.CodexProxyEnabled() || !result.Response.Config.ToolOutputCompactionEnabled() {
+	if result.Response == nil || result.Response.ResponseVersion != FallbackResponseVersion || result.Response.Config.HookState != nil ||
+		result.Response.Config.DesiredHookState() != UnmanagedHookState || !result.Response.Config.HookInventoryEnabled() ||
+		!result.Response.Config.CodexProxyEnabled() || !result.Response.Config.ToolOutputCompactionEnabled() {
 		t.Fatalf("Fetch() = %#v", result.Response)
 	}
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
@@ -285,19 +286,20 @@ func TestClientFallsBackForAServerThatPredatesV6(t *testing.T) {
 	if err := cache.Apply(result, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := cache.Current(); !snapshot.Confirmed || !snapshot.Config.CodexProxyEnabled() {
+	if snapshot := cache.Current(); !snapshot.Confirmed || !snapshot.Config.CodexProxyEnabled() ||
+		!snapshot.HookInventoryEnabled() || snapshot.HookState() != UnmanagedHookState {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	clock = clock.Add(fallbackFor)
 	if _, err := client.Fetch(context.Background(), "token", testInstallationID, cache.ConditionalIdentity()); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(asked, " "); got != "6 5 5 6 5" {
+	if got := strings.Join(asked, " "); got != "7 6 6 7 6" {
 		t.Fatalf("versions asked = %s", got)
 	}
 }
 
-// Only unsupported_version says the server predates v6. Any other 406, and
+// Only unsupported_version says the server predates v7. Any other 406, and
 // one for the fallback itself, fails the fetch.
 func TestClientFailsOnOtherRefusals(t *testing.T) {
 	for name, refusal := range map[string]struct {
@@ -305,14 +307,14 @@ func TestClientFailsOnOtherRefusals(t *testing.T) {
 		refuses string
 		asked   string
 	}{
-		"another code":          {body: `{"code":"unauthorized"}`, refuses: "6", asked: "6"},
-		"no body":               {refuses: "6", asked: "6"},
-		"the fallback too":      {body: `{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4]}`, refuses: "6 5", asked: "6 5"},
-		"a response of another": {body: `{"code":"unsupported_version"}`, refuses: "6", asked: "6 5"},
+		"another code":          {body: `{"code":"unauthorized"}`, refuses: "7", asked: "7"},
+		"no body":               {refuses: "7", asked: "7"},
+		"the fallback too":      {body: `{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5]}`, refuses: "7 6", asked: "7 6"},
+		"a response of another": {body: `{"code":"unsupported_version"}`, refuses: "7", asked: "7 6"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var asked []string
-			v6 := testResponse(t, payloadcapture.ModeFull)
+			v7 := testResponse(t, payloadcapture.ModeFull)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 				version := request.URL.Query().Get("response_version")
 				asked = append(asked, version)
@@ -321,9 +323,9 @@ func TestClientFailsOnOtherRefusals(t *testing.T) {
 					_, _ = w.Write([]byte(refusal.body))
 					return
 				}
-				// Asked for v5, a server must not answer v6.
-				w.Header().Set("ETag", `"`+v6.ConfigIdentity+`"`)
-				_ = json.NewEncoder(w).Encode(v6)
+				// Asked for v6, a server must not answer v7.
+				w.Header().Set("ETag", `"`+v7.ConfigIdentity+`"`)
+				_ = json.NewEncoder(w).Encode(v7)
 			}))
 			defer server.Close()
 			client, err := NewClient(server.URL, server.Client())
@@ -564,13 +566,16 @@ func TestInstallationNotFoundRejectsTheDirective(t *testing.T) {
 	}
 }
 
-// A server that refuses v6 and then fails the v5 retry leaves no v6-only
-// switch on.
-func TestV6RefusalTurnsHookInventoryOff(t *testing.T) {
+// A server that refuses v7 and then fails the v6 retry leaves no hook switch
+// on: hook inventory off, and the hooks unmanaged.
+func TestNewestRefusalTurnsTheHookSwitchesOff(t *testing.T) {
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
 	on := testResponse(t, payloadcapture.ModeSummary)
 	yes := true
 	on.Config.HookInventory = &yes
+	nonce := "AAAAAAAAAAAAAAAAAAAAAA"
+	installed := HookState{Desired: HookStateInstalled, Generation: 4, RepairNonce: &nonce}
+	on.Config.HookState = &installed
 	identity, err := ComputeIdentity(on.Config)
 	if err != nil {
 		t.Fatal(err)
@@ -579,13 +584,13 @@ func TestV6RefusalTurnsHookInventoryOff(t *testing.T) {
 	if err := cache.Apply(FetchResult{Response: &on}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if !cache.Current().HookInventoryEnabled() {
-		t.Fatal("confirmed switch reads off")
+	if !cache.Current().HookInventoryEnabled() || cache.Current().HookState() != installed {
+		t.Fatal("confirmed switches read off")
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("response_version") == "6" {
+		if r.URL.Query().Get("response_version") == "7" {
 			w.WriteHeader(http.StatusNotAcceptable)
-			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5]}`))
+			_, _ = w.Write([]byte(`{"code":"unsupported_version","supportedResponseVersions":[1,2,3,4,5,6]}`))
 			return
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -596,20 +601,20 @@ func TestV6RefusalTurnsHookInventoryOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	refresher := Refresher{Client: client, Cache: cache, InstallationID: testInstallationID, TokenSource: func(context.Context) (string, error) { return "token", nil }}
-	if err := refresher.Refresh(context.Background()); !errors.Is(err, ErrV6Unsupported) {
+	if err := refresher.Refresh(context.Background()); !errors.Is(err, ErrNewestUnsupported) {
 		t.Fatalf("Refresh() = %v", err)
 	}
 	snapshot := cache.Current()
-	if snapshot.HookInventoryEnabled() || !snapshot.Confirmed {
-		t.Fatalf("after v6 refusal: enabled=%v confirmed=%v", snapshot.HookInventoryEnabled(), snapshot.Confirmed)
+	if snapshot.HookInventoryEnabled() || snapshot.HookState() != UnmanagedHookState || !snapshot.Confirmed {
+		t.Fatalf("after v7 refusal: inventory=%v state=%+v confirmed=%v", snapshot.HookInventoryEnabled(), snapshot.HookState(), snapshot.Confirmed)
 	}
 	// A restart while configuration is still unavailable keeps it off.
 	restarted := NewCache(cache.path)
 	if err := restarted.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if restarted.Current().HookInventoryEnabled() {
-		t.Fatal("restart turned the refused switch back on")
+	if restarted.Current().HookInventoryEnabled() || restarted.Current().HookState() != UnmanagedHookState {
+		t.Fatal("restart turned a refused switch back on")
 	}
 }
 
@@ -756,7 +761,8 @@ func TestARejectionKeepsAnOwedRouteRemoval(t *testing.T) {
 	}
 }
 
-// v5 never carries hookInventory, null included; v4 never carries codexProxy.
+// v6 never carries hookState and v5 never carries hookInventory, null
+// included; v4 never carries codexProxy.
 func TestNullSwitchesAreRefused(t *testing.T) {
 	for _, body := range []string{
 		`{"payloadCaptureMode":"summary","workTypeClassification":false,"toolOutputCompaction":false,"codexProxy":true,"hookInventory":null}`,
@@ -768,6 +774,18 @@ func TestNullSwitchesAreRefused(t *testing.T) {
 		}
 		if err := config.validate(5); err == nil {
 			t.Fatalf("accepted %s", body)
+		}
+	}
+	for _, body := range []string{
+		`{"payloadCaptureMode":"summary","workTypeClassification":false,"toolOutputCompaction":false,"codexProxy":true,"hookInventory":true,"hookState":null}`,
+		`{"payloadCaptureMode":"summary","workTypeClassification":false,"toolOutputCompaction":false,"codexProxy":true,"hookInventory":true,"hookState":{"desired":"unmanaged","generation":0,"repairNonce":null}}`,
+	} {
+		var config Config
+		if err := json.Unmarshal([]byte(body), &config); err != nil {
+			t.Fatal(err)
+		}
+		if err := config.validate(6); err == nil {
+			t.Fatalf("v6 accepted %s", body)
 		}
 	}
 	var config Config
@@ -846,9 +864,9 @@ func mustRead(t *testing.T, path string) []byte {
 	return data
 }
 
-// A v6 refusal that can't be saved with the cache keeps the confirmed
-// opt-out in the marker that replaces it.
-func TestAnUnsavedV6RefusalKeepsTheOptOut(t *testing.T) {
+// A refusal of this build's version that can't be saved with the cache keeps
+// the confirmed opt-out in the marker that replaces it.
+func TestAnUnsavedNewestRefusalKeepsTheOptOut(t *testing.T) {
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
 	optOut := testResponse(t, payloadcapture.ModeOmitted)
 	if err := cache.Apply(FetchResult{Response: &optOut}, time.Now().UTC()); err != nil {
@@ -856,7 +874,7 @@ func TestAnUnsavedV6RefusalKeepsTheOptOut(t *testing.T) {
 	}
 	replaceFile = func(string, string) error { return errors.New("disk full") }
 	defer func() { replaceFile = os.Rename }()
-	cache.markV6Unsupported()
+	cache.markNewestUnsupported()
 	replaceFile = os.Rename
 	restarted := NewCache(cache.path)
 	if err := restarted.Load(); !errors.Is(err, ErrCacheInvalidated) || !restarted.Current().Status.PromptVeto {

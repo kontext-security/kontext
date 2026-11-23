@@ -11,7 +11,7 @@ import (
 
 // The portable fixtures of the versions this build reads. Update a digest
 // only when deliberately revising that fixture's bytes. The cloud pins the
-// same digests (FIXTURE_V5_DIGEST and FIXTURE_V6_DIGEST in packages/shared
+// same digests (FIXTURE_V6_DIGEST and FIXTURE_V7_DIGEST in packages/shared
 // endpoint-config).
 var identityFixtures = []struct {
 	path    string
@@ -19,11 +19,11 @@ var identityFixtures = []struct {
 	version int
 	// vectors is three capture modes crossed with both values of each
 	// switch, which is what makes each switch observably part of the
-	// identity.
+	// identity; v7 adds hook states, generations and nonces on top.
 	vectors int
 }{
-	{path: "testdata/portable/v5/identity-v5.json", sha256: "afd695658eff0cea245ef62267b92b6d5029064d3fc44d4ef67e12d82aed2677", version: FallbackResponseVersion, vectors: 24},
-	{path: "testdata/portable/v6/identity-v6.json", sha256: "89386eade1aa943e41638dc39b2fdb0b9b51e034e316f6344244937c61327f6d", version: ResponseVersion, vectors: 48},
+	{path: "testdata/portable/v6/identity-v6.json", sha256: "89386eade1aa943e41638dc39b2fdb0b9b51e034e316f6344244937c61327f6d", version: FallbackResponseVersion, vectors: 48},
+	{path: "testdata/portable/v7/identity-v7.json", sha256: "8ec670da4cf964cb82aa3c24ea0cc0db3eb045758fd84f18749e3e7ca6eb3ad3", version: ResponseVersion, vectors: 60},
 }
 
 type identityFixture struct {
@@ -82,6 +82,9 @@ func TestPortableIdentityFixture(t *testing.T) {
 					}
 					if vector.Config.HookInventory != nil {
 						fields = append(fields, *vector.Config.HookInventory)
+					}
+					if state := vector.Config.HookState; state != nil {
+						fields = append(fields, state.Desired, state.Generation, state.RepairNonce)
 					}
 					preimage, err := json.Marshal(fields)
 					if err != nil {

@@ -150,7 +150,7 @@ func TestHookHolderWaitsForTheNewEnrolmentsSettings(t *testing.T) {
 	optedIn := map[string]bool{"Bearer token-a": true}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		on, mode, yes, no := optedIn[r.Header.Get("Authorization")], payloadcapture.ModeSummary, true, false
-		config := endpointconfig.Config{PayloadCaptureMode: mode, WorkTypeClassification: &yes, ToolOutputCompaction: &no, CodexProxy: &yes, HookInventory: &on}
+		config := endpointconfig.Config{PayloadCaptureMode: mode, WorkTypeClassification: &yes, ToolOutputCompaction: &no, CodexProxy: &yes, HookInventory: &on, HookState: &endpointconfig.UnmanagedHookState}
 		identity, err := endpointconfig.ComputeIdentity(config)
 		if err != nil {
 			t.Error(err)
@@ -310,7 +310,7 @@ func TestHookAuthorizedNeedsAServerThatStillServesV6(t *testing.T) {
 	if !hookAuthorized(snapshot, "t") {
 		t.Fatal("confirmed opt-in refused")
 	}
-	snapshot.Status.V6Unsupported = true
+	snapshot.Status.NewestUnsupported = true
 	if hookAuthorized(snapshot, "t") {
 		t.Fatal("opt-in kept after a v6 refusal")
 	}

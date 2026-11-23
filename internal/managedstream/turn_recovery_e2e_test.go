@@ -84,7 +84,7 @@ func TestTranscriptTurnRecoveryE2E(t *testing.T) {
 				t.Fatal(err)
 			}
 			on, off := true, false
-			config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off, HookInventory: &off}
+			config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off, HookInventory: &off, HookState: &endpointconfig.UnmanagedHookState}
 			identity, err := endpointconfig.ComputeIdentity(config)
 			if err != nil {
 				t.Fatal(err)
@@ -407,7 +407,7 @@ func TestSkippedPromptRecoveryE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	on, off := true, false
-	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off, HookInventory: &off}
+	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &off, HookInventory: &off, HookState: &endpointconfig.UnmanagedHookState}
 	identity, _ := endpointconfig.ComputeIdentity(config)
 	cache := endpointconfig.NewCache(endpointconfig.DefaultCachePathForDB(dbPath))
 	if err := cache.Apply(endpointconfig.FetchResult{Response: &endpointconfig.Response{ResponseVersion: endpointconfig.ResponseVersion, Config: config, ConfigIdentity: identity}}, time.Now()); err != nil {

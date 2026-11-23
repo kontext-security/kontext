@@ -68,10 +68,10 @@ var errUnsupportedVersion = errors.New("endpoint configuration: response version
 // leave the last directive (full capture, say) in force.
 var ErrNoCommonVersion = errors.New("endpoint configuration: the server supports no response version this build implements")
 
-// ErrV6Unsupported joins a failed fetch of the older version after the
-// server refused ResponseVersion: whatever v6 last confirmed is no longer the
-// server's word.
-var ErrV6Unsupported = errors.New("endpoint configuration: the server refused response version 6")
+// ErrNewestUnsupported joins a failed fetch of the older version after the
+// server refused ResponseVersion: whatever the newer versions last confirmed
+// is no longer the server's word.
+var ErrNewestUnsupported = errors.New("endpoint configuration: the server refused response version " + strconv.Itoa(ResponseVersion))
 
 // Fetch gets the configuration as ResponseVersion has it, or as
 // FallbackResponseVersion has it from a server that predates
@@ -85,7 +85,7 @@ func (c *Client) Fetch(ctx context.Context, installToken, installationID, config
 	fallback := func() (FetchResult, error) {
 		result, err := c.fetch(ctx, FallbackResponseVersion, installToken, installationID, configIdentity)
 		if err != nil && !errors.Is(err, ErrNoCommonVersion) && !errors.Is(err, ErrAuthorityRejected) {
-			err = errors.Join(ErrV6Unsupported, err)
+			err = errors.Join(ErrNewestUnsupported, err)
 		}
 		return result, err
 	}

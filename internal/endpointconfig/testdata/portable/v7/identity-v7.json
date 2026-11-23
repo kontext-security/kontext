@@ -1,0 +1,1086 @@
+{
+  "schemaVersion": "endpoint-config-identity-fixture-v7",
+  "identityDomain": "kontext:endpoint-config:v7",
+  "vectors": [
+    {
+      "name": "omitted-work-type-on-compaction-on-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,true,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "dbff8a8e016da7ca7dba43c5a027591f43d7782ba94543935df41c12a75a30b6"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-on-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,true,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "d308c1cdaa18778f98a92dfe8735b6c3fdb8db47e5fc65b25140984e8742e986"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-on-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,true,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "a60b7aea68c4807c657bb02fea0f64aa6c794ec9498a7d2c6c6552b4ab4d51af"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-on-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,true,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "a5100f3ab4d73c9e467244efe10526b516a70b79b095f44e021d215d3bd50835"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-off-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,false,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "2985897cf2e8a4d32eaf5e55ee2e7e9b1fdd4f46be111aad902c008edd586dbf"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-off-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,false,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "d005bcf4d1cb1b1a68d2e1bfdbe966bbb33b2ae2a7119e6ed4937bbb0195f1a9"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-off-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,false,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "c03a9ae178e1da555b4b114a39ceb83e4df40fee031f2bbb644578bd2cf52c61"
+    },
+    {
+      "name": "omitted-work-type-on-compaction-off-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,false,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "08fb5ae0ffc7a4d0e17ca4434fbb60ee4f6b9865dff9f482634c34db79fbf962"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-on-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",false,true,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "62767386a9546064256812c147714ec824daa3c278b7b5b0563d131169dbdf5e"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-on-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",false,true,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "b8803c3aae525bc2efa6cb39146182584e45f0431bc871bf2432783d3fa9f841"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-on-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",false,true,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "ef3a9a82dd8179f1740537d720f7edf2c106d525a340cee8a176087d0a50edfd"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-on-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",false,true,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "c6c0ea869ab02d81a4278f5317e55c7ca550c37db2f70c3e7b3ce51c89980064"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-off-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",false,false,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "45079d6a120794b5c24a3e4ee489c42505a8bd430a4a8fb7949ba9615ba8d786"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-off-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",false,false,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "94963c53f33f0a5ef815e0002fee8599d1aec6ab59cf99145f1641f3380f2441"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-off-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",false,false,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "e89bb0f13de0f121517fda79242dc9b2f5e078db7a36cd976d8ca9b42330fd45"
+    },
+    {
+      "name": "omitted-work-type-off-compaction-off-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",false,false,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "6ba2ded3c5afc88e44ad33f2dc48525f24017d69e6d4898cd204447a280d4758"
+    },
+    {
+      "name": "summary-work-type-on-compaction-on-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,true,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "944e81d48c7114b760b60aaca286167cb3ae31beb406cbe5984546d7c9f7ed31"
+    },
+    {
+      "name": "summary-work-type-on-compaction-on-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,true,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "aedf38b627585d37bcbc43dacde295c08fa07ccf2d93290cc6d023a45b129e97"
+    },
+    {
+      "name": "summary-work-type-on-compaction-on-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,true,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "f4765ee0accf510a154ee09780b079f5b4bd6debe1cd8e5157767f3bb6b7018c"
+    },
+    {
+      "name": "summary-work-type-on-compaction-on-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,true,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "17359974fd1b964e3046fd60e89cf98d51a37acd69320ddb463feb485491a1c5"
+    },
+    {
+      "name": "summary-work-type-on-compaction-off-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,false,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "10dd88ad4f61db105460360daa3eb8669e8f05437312ccf1bf1f1785cc92add4"
+    },
+    {
+      "name": "summary-work-type-on-compaction-off-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,false,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "74e2127ccbcd7c8efbdd9e91802e58cba2595f2173525cde2aa9e525d50f7b2b"
+    },
+    {
+      "name": "summary-work-type-on-compaction-off-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,false,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "2ef599d1634f050c61b3b7c455afa8ac5bef1542fb1a074f88a02f4a68f6f3aa"
+    },
+    {
+      "name": "summary-work-type-on-compaction-off-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,false,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "0390a856cf8a36c76fb3c144d841f80875e346f387d98f10876bd5e74a127d7f"
+    },
+    {
+      "name": "summary-work-type-off-compaction-on-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",false,true,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "c4e16356a1d2e6a5d23a9de19be92567905dd84e8c65f93bda47f5457b8c247e"
+    },
+    {
+      "name": "summary-work-type-off-compaction-on-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",false,true,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "1a5f4ff3971628ae1695585172c161cbed6df0e28a41f00449c1800c1934b086"
+    },
+    {
+      "name": "summary-work-type-off-compaction-on-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",false,true,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "a4a471665691938a6404fb62b8a5f925ec3acccafd677b554dbf786dc5fcfd44"
+    },
+    {
+      "name": "summary-work-type-off-compaction-on-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",false,true,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "3283423847d76c2c3b98e181bbbc15b7996419b34bceef5aaa4a5e88675557b7"
+    },
+    {
+      "name": "summary-work-type-off-compaction-off-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",false,false,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "c9d067f50ee2a77a0942ceb1429d66cbd474d214939a4c811bf2e500b3aee764"
+    },
+    {
+      "name": "summary-work-type-off-compaction-off-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",false,false,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "ba0287a77c7812e35b5e6a2cc9998168d01167bd3eadc3ff53ff94cb5323fc22"
+    },
+    {
+      "name": "summary-work-type-off-compaction-off-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",false,false,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "be3b4c0375758cb74de6072faa70297579460a44719c51e2edec79a8a2d86b70"
+    },
+    {
+      "name": "summary-work-type-off-compaction-off-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",false,false,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "38a2032542b6cef58a80efc2817c51a88149bb58593fd6547fdcfd055d1f3ac3"
+    },
+    {
+      "name": "full-work-type-on-compaction-on-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,true,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "117bcfec7a138aef5a038b7b15b1a0478472fd18f1a352bdb318c2cb3a2a434d"
+    },
+    {
+      "name": "full-work-type-on-compaction-on-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,true,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "de3e181127c2c7f7efae547184a381ee1b5f7424ef65485c4af7b4879f432f10"
+    },
+    {
+      "name": "full-work-type-on-compaction-on-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,true,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "e126d0ea47131eb1444969fddb6a796c13b60ec2545493647fbe070e00db7508"
+    },
+    {
+      "name": "full-work-type-on-compaction-on-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,true,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "92d2279ffb07ee1c34edd95de21c06a8ddee6f340bf6937ef4a9191e1a6969d5"
+    },
+    {
+      "name": "full-work-type-on-compaction-off-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,false,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "e9e4af1095819216bf3c35ba03b6e3dbe906688661e36311ab971f941f33297b"
+    },
+    {
+      "name": "full-work-type-on-compaction-off-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,false,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "a637643e10e124876368806f98d1e6ba4d0f9d9d64f563da0136d003fc2f1426"
+    },
+    {
+      "name": "full-work-type-on-compaction-off-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,false,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "dff954e1a7b1a7ea1caace9ab6d1ff1a587f74cd31229c9885ae2e1d068137d6"
+    },
+    {
+      "name": "full-work-type-on-compaction-off-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,false,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "f10802257e15c05f329e78705e23852a436444c385645e08c1a6ec1236f89a58"
+    },
+    {
+      "name": "full-work-type-off-compaction-on-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",false,true,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "1da389c6eb50847a5a034db938fadd93a29afa9e1e74bf9e36968b74ff68bd5c"
+    },
+    {
+      "name": "full-work-type-off-compaction-on-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",false,true,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "f383a445aaff8a43c031478bf2822e177d7c196c5e8ab121c1b83d4116d68268"
+    },
+    {
+      "name": "full-work-type-off-compaction-on-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",false,true,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "1ff74051ae0787917acf35a76745247e22a29f679800389d8756f09f098c3f5c"
+    },
+    {
+      "name": "full-work-type-off-compaction-on-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": true,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",false,true,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "55dbb8bd745691337f8c13c6b2ff8837efae135b58686cdce834c6a6a88973f2"
+    },
+    {
+      "name": "full-work-type-off-compaction-off-codex-proxy-on-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",false,false,true,true,\"unmanaged\",0,null]",
+      "configIdentity": "94c1a510a986f0b7dcb443c2d14e24f3c72231e86f3d7b0d1b21232769091a6c"
+    },
+    {
+      "name": "full-work-type-off-compaction-off-codex-proxy-on-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": true,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",false,false,true,false,\"unmanaged\",0,null]",
+      "configIdentity": "0fccd73905a2438b970bc618014057521b16a3c3345ff4267094e65de07d04d3"
+    },
+    {
+      "name": "full-work-type-off-compaction-off-codex-proxy-off-hook-inventory-on-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",false,false,false,true,\"unmanaged\",0,null]",
+      "configIdentity": "7e9d457115ad05133b7a7ba6c697b4960ebe2c6c19c032f40c132e7404c428f6"
+    },
+    {
+      "name": "full-work-type-off-compaction-off-codex-proxy-off-hook-inventory-off-unmanaged",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": false,
+        "toolOutputCompaction": false,
+        "codexProxy": false,
+        "hookInventory": false,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 0,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",false,false,false,false,\"unmanaged\",0,null]",
+      "configIdentity": "427dab2c9a316d7f3165e7106c6c09cc0a800270a830492f891e9cf6c6422936"
+    },
+    {
+      "name": "omitted-all-switches-on-installed-generation-1",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "installed",
+          "generation": 1,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,true,true,true,\"installed\",1,null]",
+      "configIdentity": "486696a894238b1e73b386799d0856bb2af9d08c7b4f4064adf0cab539b45943"
+    },
+    {
+      "name": "omitted-all-switches-on-installed-generation-42-repair",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "installed",
+          "generation": 42,
+          "repairNonce": "rn_0123456789abcdefABCDEF"
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,true,true,true,\"installed\",42,\"rn_0123456789abcdefABCDEF\"]",
+      "configIdentity": "02715985474e13f248d320749ed9c0217e7d119b4dff2a086e990e785861f0d0"
+    },
+    {
+      "name": "omitted-all-switches-on-unmanaged-generation-3-repair",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 3,
+          "repairNonce": "rn-ZYXWVUTSRQPONMLKJIHGFEDCBA_9876543210"
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,true,true,true,\"unmanaged\",3,\"rn-ZYXWVUTSRQPONMLKJIHGFEDCBA_9876543210\"]",
+      "configIdentity": "a87f0cc92b30c27b2b29284f2f7155dd4d5f57aaa171f17d87ab136b7d63de30"
+    },
+    {
+      "name": "omitted-all-switches-on-installed-generation-max",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "omitted",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "installed",
+          "generation": 9007199254740991,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"omitted\",true,true,true,true,\"installed\",9007199254740991,null]",
+      "configIdentity": "249b2f4afbf1841279cbefa1c151ac658422b58e58acde839dff10b7dc863c27"
+    },
+    {
+      "name": "summary-all-switches-on-installed-generation-1",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "installed",
+          "generation": 1,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,true,true,true,\"installed\",1,null]",
+      "configIdentity": "a0fbb6a22feb13e2e391131352bb9ea12a1091ea9a02c3a18d07b9fb6971e030"
+    },
+    {
+      "name": "summary-all-switches-on-installed-generation-42-repair",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "installed",
+          "generation": 42,
+          "repairNonce": "rn_0123456789abcdefABCDEF"
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,true,true,true,\"installed\",42,\"rn_0123456789abcdefABCDEF\"]",
+      "configIdentity": "11fe4aef95a211878e5e3cdfd444ee5aec7ea364d34ff60132a9d66a93e9b5dc"
+    },
+    {
+      "name": "summary-all-switches-on-unmanaged-generation-3-repair",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 3,
+          "repairNonce": "rn-ZYXWVUTSRQPONMLKJIHGFEDCBA_9876543210"
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,true,true,true,\"unmanaged\",3,\"rn-ZYXWVUTSRQPONMLKJIHGFEDCBA_9876543210\"]",
+      "configIdentity": "bb3704f1c5b3daf3bc671e8889b29954143be13365e5abd484286b3be24724c3"
+    },
+    {
+      "name": "summary-all-switches-on-installed-generation-max",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "summary",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "installed",
+          "generation": 9007199254740991,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"summary\",true,true,true,true,\"installed\",9007199254740991,null]",
+      "configIdentity": "aec9964344ad907b3f1ba1ce8b60e92b4dbc8d7de87a8f3190facaeb45de35ba"
+    },
+    {
+      "name": "full-all-switches-on-installed-generation-1",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "installed",
+          "generation": 1,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,true,true,true,\"installed\",1,null]",
+      "configIdentity": "c93772b0a4cca0a2400e1aa0dba092a5de8572bc06b30aaba4a4b80b55156d5c"
+    },
+    {
+      "name": "full-all-switches-on-installed-generation-42-repair",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "installed",
+          "generation": 42,
+          "repairNonce": "rn_0123456789abcdefABCDEF"
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,true,true,true,\"installed\",42,\"rn_0123456789abcdefABCDEF\"]",
+      "configIdentity": "7200d5dcdfac9e856516651a7d07bd8fb2d89e88375f8aa506786669127386ec"
+    },
+    {
+      "name": "full-all-switches-on-unmanaged-generation-3-repair",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "unmanaged",
+          "generation": 3,
+          "repairNonce": "rn-ZYXWVUTSRQPONMLKJIHGFEDCBA_9876543210"
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,true,true,true,\"unmanaged\",3,\"rn-ZYXWVUTSRQPONMLKJIHGFEDCBA_9876543210\"]",
+      "configIdentity": "dcf4391537485cc09e0cdf6cb143a2681d316aa0309215231681d32df15306c0"
+    },
+    {
+      "name": "full-all-switches-on-installed-generation-max",
+      "responseVersion": 7,
+      "config": {
+        "payloadCaptureMode": "full",
+        "workTypeClassification": true,
+        "toolOutputCompaction": true,
+        "codexProxy": true,
+        "hookInventory": true,
+        "hookState": {
+          "desired": "installed",
+          "generation": 9007199254740991,
+          "repairNonce": null
+        }
+      },
+      "preimage": "[\"kontext:endpoint-config:v7\",7,\"full\",true,true,true,true,\"installed\",9007199254740991,null]",
+      "configIdentity": "fc652551a05b11e34edb94fcd2667dd08116e949b99bb9648d34c81d4e6033fb"
+    }
+  ]
+}

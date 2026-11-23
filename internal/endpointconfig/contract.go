@@ -24,12 +24,13 @@ const (
 	// keep getting their shape and identity hashes. v3 dropped the retired
 	// guardrail LLM flag and added the workspace's work-type switch; v4 adds
 	// the endpoint's tool output compaction switch; v5 adds its Codex proxy
-	// switch; v6 adds the hook inventory switch (ADR-0011).
-	ResponseVersion = 6
+	// switch; v6 adds the hook inventory switch (ADR-0011); v7 adds the
+	// desired state of Kontext's hooks (ADR-0012).
+	ResponseVersion = 7
 	// FallbackResponseVersion is what this build asks a server for that
 	// answers ResponseVersion with 406 unsupported_version: one that predates
-	// the hook inventory switch, which then reads as off.
-	FallbackResponseVersion = 5
+	// the desired hook state, which then reads as unmanaged.
+	FallbackResponseVersion = 6
 	MaxResponseBytes        = 64 * 1024
 )
 
@@ -40,6 +41,84 @@ func identityDomain(version int) string {
 }
 
 var sha256HexPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+// The desired states of Kontext's hooks (ADR-0012). There is no removed: the
+// dashboard installs and repairs, and removing Kontext stays local or MDM.
+const (
+	HookStateUnmanaged = "unmanaged"
+	HookStateInstalled = "installed"
+)
+
+// maxHookGeneration is the largest generation both sides read exactly: the
+// cloud's numbers are IEEE doubles.
+const maxHookGeneration = 1<<53 - 1
+
+var repairNoncePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{22,64}$`)
+
+// HookState is what an admin asked for Kontext's hooks on this device.
+type HookState struct {
+	// Desired is HookStateUnmanaged (the daemon's own self-heal, as before
+	// v7) or HookStateInstalled.
+	Desired string `json:"desired"`
+	// Generation goes up with every admin change to this device; the
+	// endpoint acts on a generation newer than the last it reported.
+	Generation int64 `json:"generation"`
+	// RepairNonce, when new, asks for one re-check and repair now. Always
+	// present on the wire, null when no repair was asked for.
+	RepairNonce *string `json:"repairNonce"`
+}
+
+// UnmanagedHookState is the state of a device no admin has acted on.
+var UnmanagedHookState = HookState{Desired: HookStateUnmanaged}
+
+// UnmarshalJSON decodes strictly and requires every key: the identity covers
+// all three, so a missing one can't be guessed.
+func (h *HookState) UnmarshalJSON(data []byte) error {
+	type plain HookState
+	var decoded plain
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return err
+	}
+	for _, key := range []string{"desired", "generation", "repairNonce"} {
+		if _, ok := keys[key]; !ok {
+			return fmt.Errorf("json: hookState.%s is required", key)
+		}
+	}
+	if len(keys) != 3 {
+		return errors.New("json: hookState has unknown fields")
+	}
+	*h = HookState(decoded)
+	return nil
+}
+
+func (h HookState) validate() error {
+	switch h.Desired {
+	case HookStateUnmanaged, HookStateInstalled:
+	default:
+		return fmt.Errorf("endpoint configuration: unsupported desired hook state %q", h.Desired)
+	}
+	if h.Generation < 0 || h.Generation > maxHookGeneration {
+		return fmt.Errorf("endpoint configuration: hook state generation %d out of range", h.Generation)
+	}
+	if h.RepairNonce != nil && !repairNoncePattern.MatchString(*h.RepairNonce) {
+		return errors.New("endpoint configuration: invalid repair nonce")
+	}
+	return nil
+}
+
+// Nonce is the repair nonce, empty when none was asked for.
+func (h HookState) Nonce() string {
+	if h.RepairNonce == nil {
+		return ""
+	}
+	return *h.RepairNonce
+}
 
 type Config struct {
 	PayloadCaptureMode payloadcapture.Mode `json:"payloadCaptureMode"`
@@ -58,6 +137,10 @@ type Config struct {
 	// (ADR-0011). Part of the hashed contract from v6, which always emits it;
 	// v5 never does.
 	HookInventory *bool `json:"hookInventory,omitempty"`
+	// HookState is the desired state of Kontext's hooks on this device
+	// (ADR-0012). Part of the hashed contract from v7, which always emits
+	// it; v6 never does.
+	HookState *HookState `json:"hookState,omitempty"`
 	// nulls names the optional switches the response sent as JSON null,
 	// which a pointer can't tell from absent: a version without the switch
 	// must not carry its key at all.
@@ -86,7 +169,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		}
 	}
 	*c = Config(decoded)
-	for _, key := range []string{"codexProxy", "hookInventory"} {
+	for _, key := range []string{"codexProxy", "hookInventory", "hookState"} {
 		if raw, ok := keys[key]; ok && string(bytes.TrimSpace(raw)) == "null" {
 			c.nulls = append(c.nulls, key)
 		}
@@ -130,6 +213,16 @@ func (c Config) HookInventoryEnabled() bool {
 	return c.HookInventory != nil && *c.HookInventory
 }
 
+// DesiredHookState reports the desired hook state; absent, as from a server
+// that predates v7, reads as unmanaged, so nothing changes until an admin
+// acts.
+func (c Config) DesiredHookState() HookState {
+	if c.HookState == nil {
+		return UnmanagedHookState
+	}
+	return *c.HookState
+}
+
 // Validate checks the config as ResponseVersion has it.
 func (c Config) Validate() error {
 	return c.validate(ResponseVersion)
@@ -166,6 +259,17 @@ func (c Config) validate(version int) error {
 	}
 	if version < 6 && c.HookInventory != nil {
 		return fmt.Errorf("endpoint configuration: hookInventory is not part of version %d", version)
+	}
+	if version >= 7 && c.HookState == nil {
+		return errors.New("endpoint configuration: hookState is required")
+	}
+	if version < 7 && c.HookState != nil {
+		return fmt.Errorf("endpoint configuration: hookState is not part of version %d", version)
+	}
+	if c.HookState != nil {
+		if err := c.HookState.validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -227,6 +331,9 @@ func computeIdentity(version int, config Config) (string, error) {
 	}
 	if version >= 6 {
 		fields = append(fields, *config.HookInventory)
+	}
+	if version >= 7 {
+		fields = append(fields, config.HookState.Desired, config.HookState.Generation, config.HookState.RepairNonce)
 	}
 	preimage, err := json.Marshal(fields)
 	if err != nil {
