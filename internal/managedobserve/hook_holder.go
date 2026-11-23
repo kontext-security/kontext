@@ -210,8 +210,13 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	}
 	scanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	// The scan names its files as it ends; they are watched only once the
+	// checks below pass, so a Mac that opted out mid-scan watches nothing.
+	var toWatch []string
+	named := false
 	agent, result, err := scan(scanCtx, agentauthority.HookScanOptions{
-		Home: home, ConfigDir: configDir, Key: key, AgentVersion: agentVersionOf(inv, "claude_code"), OwnBinary: h.ownBinary, Now: time.Now(), BeginRead: h.beginRead, Watch: h.watch,
+		Home: home, ConfigDir: configDir, Key: key, AgentVersion: agentVersionOf(inv, "claude_code"), OwnBinary: h.ownBinary, Now: time.Now(), BeginRead: h.beginRead,
+		Watch: func(paths []string) { toWatch, named = paths, true },
 	})
 	if errors.Is(err, agentauthority.ErrNoHookKey) || err != nil || ctx.Err() != nil {
 		return
@@ -219,7 +224,11 @@ func (h *hookHolder) refresh(ctx context.Context, inv agentinventory.Inventory) 
 	// The switch may have gone off, or the workspace changed, while the
 	// scan ran.
 	if on, _ := h.switchState(); !on || !h.isAuthorized() || !bytes.Equal(h.keys.get(), key) {
+		h.unwatch()
 		return
+	}
+	if named && h.watch != nil {
+		h.watch(toWatch)
 	}
 	h.evidence.apply(&agent)
 	if h.record != nil {

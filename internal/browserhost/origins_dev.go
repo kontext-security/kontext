@@ -12,5 +12,3 @@ const DevExtensionID = "jbfhbfeilekhmfekihompjpmkecgpfgn"
 func AllowedExtensionIDs() []string {
 	return append(append([]string{}, storeExtensionIDs...), DevExtensionID)
 }
-
-var storeExtensionIDs = []string{}
