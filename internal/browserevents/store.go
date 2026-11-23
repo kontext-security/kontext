@@ -39,6 +39,10 @@ type row struct {
 	Sent    int         `json:"sent"`
 }
 
+// maxRowVersion bounds a stored row's version, so a damaged one can never
+// overflow when the row changes again.
+const maxRowVersion = 1 << 40
+
 type storeFile struct {
 	// Binding names the enrollment the rows were recorded under: a hash of
 	// the cloud, installation and install token. Rows never leave under
@@ -118,10 +122,24 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		for key, raw := range file.Rows {
 			// Each row is read on its own: a damaged or null one is
 			// dropped, and the others are kept.
-			var r *row
-			if json.Unmarshal(raw, &r) != nil || r == nil {
+			var stored *struct {
+				Record  *CloudRecord    `json:"record"`
+				Version json.RawMessage `json:"version"`
+				Sent    json.RawMessage `json:"sent"`
+			}
+			if json.Unmarshal(raw, &stored) != nil || stored == nil || stored.Record == nil {
 				rewrite = true
 				continue
+			}
+			r := &row{Record: *stored.Record}
+			// Damaged delivery counters cannot say what was sent: the
+			// row is sent again, which changes nothing in the cloud,
+			// rather than taken as delivered and never sent. No answer
+			// in flight outlives the open, so 1 and 0 are safe.
+			if json.Unmarshal(stored.Version, &r.Version) != nil || json.Unmarshal(stored.Sent, &r.Sent) != nil ||
+				r.Version < 1 || r.Version > maxRowVersion || r.Sent < 0 || r.Sent > r.Version {
+				r.Version, r.Sent = 1, 0
+				rewrite = true
 			}
 			// A row the contract no longer allows, sent or not, leaves
 			// the disk at open: its text is not kept until it ages out.
@@ -131,13 +149,6 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 			if source.validate() != nil || r.Record.Record.Validate() != nil || rowKey(r.Record) != key {
 				rewrite = true
 				continue
-			}
-			// Damaged delivery counters cannot say what was sent: the
-			// row is kept and sent again, which changes nothing in the
-			// cloud, rather than taken as delivered and never sent.
-			if r.Version < 1 || r.Sent < 0 || r.Sent > r.Version {
-				r.Version, r.Sent = max(r.Version, r.Sent, 0)+1, 0
-				rewrite = true
 			}
 			rows[key] = r
 		}
@@ -189,7 +200,9 @@ func readStoreFile(path string) (data []byte, private, trusted bool, err error) 
 	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		return nil, false, false, fmt.Errorf("browser events: store %s changed while it was opened", path)
 	}
-	private, err = fsperm.PrivateFile(path, opened)
+	// An elevated daemon of this user can leave the file owned by
+	// Administrators; its DACL still grants this user alone.
+	private, err = fsperm.PrivateFileAnyOwner(path, opened)
 	if err != nil {
 		// Unknown is not unsafe: the file is left as it is, unread, rather
 		// than replaced by an empty store.

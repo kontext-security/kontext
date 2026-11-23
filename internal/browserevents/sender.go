@@ -137,12 +137,12 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 		return "", fmt.Errorf("browser events: waiting for the install token: %w", readCtx.Err())
 	}
 	release := func() { <-s.rebind }
-	if readCtx.Err() != nil {
+	if deadline, _ := readCtx.Deadline(); readCtx.Err() != nil || !time.Now().Before(deadline) {
 		// The slot came free together with the deadline: this caller
 		// gave up waiting, so a read confirmed meanwhile is not undone.
 		release()
 		s.Store.SuspendAt(waited)
-		return "", fmt.Errorf("browser events: waiting for the install token: %w", readCtx.Err())
+		return "", fmt.Errorf("browser events: waiting for the install token: %w", context.DeadlineExceeded)
 	}
 	// Taken with the slot held: a Bind or Suspend after this, such as a
 	// waiter that gave up, is newer than this read, so it is not undone.
@@ -152,7 +152,10 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 	// ever outstanding; later callers wait for it up to their own deadline.
 	// The store is suspended before an abandoned read can give up the
 	// slot, so a later successful bind is never undone by this timeout.
-	token, err, handedOff := readToken(readCtx, s.Tokens, release, s.Store.Suspend)
+	// Its own suspensions are fenced too: nothing newer than this read is
+	// undone by it.
+	suspend := func() { s.Store.SuspendAt(started) }
+	token, err, handedOff := readToken(readCtx, s.Tokens, release, suspend)
 	if handedOff {
 		return "", fmt.Errorf("browser events: install token: %v", err)
 	}
@@ -161,7 +164,7 @@ func (s *Sender) Rebind(ctx context.Context) (token string, err error) {
 		// The enrollment cannot be confirmed, such as when the
 		// configuration names another cloud: no record is taken until it
 		// can, so none is counted for the wrong workspace.
-		s.Store.Suspend()
+		suspend()
 		return "", fmt.Errorf("browser events: install token: %v", err)
 	}
 	dropped, ok, err := s.Store.BindAt(Binding(s.BaseURL, s.InstallationID, token), started)

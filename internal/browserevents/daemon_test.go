@@ -1037,18 +1037,20 @@ func TestARowWithDamagedCountersIsSentAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	damaged := strings.Replace(string(data), `"version":1`, `"version":null`, 1)
-	if damaged == string(data) {
-		t.Fatalf("no version in %s", data)
-	}
-	if err := os.WriteFile(s.path, []byte(damaged), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := openStore(s.path, testNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := len(reopened.Pending(10).Records); n != 1 {
-		t.Fatalf("pending = %d, want the row sent again", n)
+	for _, counters := range []string{`"version":null,"sent":0`, `"version":1,"sent":"1"`, `"version":1,"sent":-0.5`, `"version":9223372036854775807,"sent":9223372036854775807`} {
+		damaged := strings.Replace(string(data), `"version":1,"sent":0`, counters, 1)
+		if damaged == string(data) {
+			t.Fatalf("no counters in %s", data)
+		}
+		if err := os.WriteFile(s.path, []byte(damaged), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := openStore(s.path, testNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len(reopened.Pending(10).Records); n != 1 {
+			t.Fatalf("%s: pending = %d, want the row sent again", counters, n)
+		}
 	}
 }
