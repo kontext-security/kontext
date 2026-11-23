@@ -98,6 +98,25 @@ func EnsureSocketDir(socketPath string) error {
 	return ensurePrivateOwner(dir, info)
 }
 
+// CheckSocketDir checks, without changing anything, that the socket's
+// directory is a real directory this user owns and others cannot write to. A
+// client such as the browser host calls it before it dials, so it never sends
+// to a socket another user put in place.
+func CheckSocketDir(socketPath string) error {
+	dir := filepath.Dir(socketPath)
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink", dir)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	return checkPrivateOwner(dir, info)
+}
+
 func agentInventoryIntervalFromEnv() time.Duration {
 	if value := strings.TrimSpace(os.Getenv("KONTEXT_AGENT_INVENTORY_INTERVAL")); value != "" {
 		if interval, err := time.ParseDuration(value); err == nil && interval > 0 {

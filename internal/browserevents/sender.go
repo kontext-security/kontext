@@ -48,7 +48,7 @@ type Sender struct {
 }
 
 // MaxResponseBytes bounds the cloud's answer.
-const MaxResponseBytes = 1 << 20
+const MaxResponseBytes = 4 << 20
 
 // noRedirects is client without following redirects: a 307 or 308 would send
 // the batch, with the installation id, to wherever it points. A redirect
