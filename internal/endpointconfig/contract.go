@@ -86,8 +86,13 @@ func (h *HookState) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	for _, key := range []string{"desired", "generation", "repairNonce"} {
-		if _, ok := keys[key]; !ok {
+		raw, ok := keys[key]
+		if !ok {
 			return fmt.Errorf("json: hookState.%s is required", key)
+		}
+		// Only the nonce may be null: a null generation would decode as 0.
+		if key != "repairNonce" && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("json: hookState.%s must not be null", key)
 		}
 	}
 	if len(keys) != 3 {

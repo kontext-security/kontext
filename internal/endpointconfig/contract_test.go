@@ -83,6 +83,9 @@ func TestDecodeStrictRejectsUnknownAndTrailingFields(t *testing.T) {
 		strings.Replace(valid, `"desired":`, `"Desired":`, 1),
 		strings.Replace(valid, `"repairNonce":null`, `"repairNonce":null,"removeAt":null`, 1),
 		strings.Replace(valid, `{"desired":"unmanaged","generation":0,"repairNonce":null}`, `null`, 1),
+		// Only the nonce may be null; a null generation would read as 0.
+		strings.Replace(valid, `"generation":0`, `"generation":null`, 1),
+		strings.Replace(valid, `"desired":"unmanaged"`, `"desired":null`, 1),
 	} {
 		// Refused on decode, or (a null hook state) on validation.
 		var decoded Response
