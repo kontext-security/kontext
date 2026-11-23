@@ -175,6 +175,14 @@ func aheadOfTheCloud(reason string) bool {
 	return strings.HasSuffix(reason, " in the future")
 }
 
+// tooNewForTheCloud reports whether a cloud from before account records
+// refused an account for its kind: once that cloud is upgraded it takes the
+// same record, so it is held, not acknowledged. It ages out of the store as
+// any row does.
+func tooNewForTheCloud(reason string, record CloudRecord) bool {
+	return reason == "unknown record kind" && record.Kind == KindAccount
+}
+
 // WarnEvery spaces out the warnings of a run of failed sends.
 const WarnEvery = time.Hour
 
@@ -367,13 +375,14 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 		}
 		ahead := map[int]bool{}
 		for _, r := range answer.Rejected {
-			if aheadOfTheCloud(r.Reason) {
+			if aheadOfTheCloud(r.Reason) || tooNewForTheCloud(r.Reason, pending.Records[r.Index]) {
 				ahead[r.Index] = true
 			}
 		}
-		// A record refused as ahead of the cloud's clock stays pending and
-		// goes again: acknowledged, it would be lost, as the extension
-		// sends the same observation again without changing the row.
+		// A record refused as ahead of the cloud's clock, or an account
+		// refused by a cloud from before accounts, stays pending and goes
+		// again: acknowledged, it would be lost, as the extension sends the
+		// same observation again without changing the row.
 		taken, held := pending.partition(func(i int, _ CloudRecord) bool { return !ahead[i] })
 		s.hold(held, now())
 		for _, key := range taken.keys {
@@ -392,7 +401,7 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 			s.logf("browser events: the cloud rejected record %d: %s", r.Index, r.Reason)
 		}
 		if len(held.Records) > 0 {
-			s.logf("browser events: %d records are ahead of the cloud's clock, sending them again later", len(held.Records))
+			s.logf("browser events: %d records are ahead of the cloud's clock or newer than it takes, sending them again later", len(held.Records))
 		}
 		return Sent, nil
 	case response.StatusCode == http.StatusNotFound:
