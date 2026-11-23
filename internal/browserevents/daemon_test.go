@@ -312,6 +312,66 @@ func TestARowAheadOfTheCloudsClockIsSentAgain(t *testing.T) {
 	}
 }
 
+// A tab in use updates the row the cloud refused as in the future, with a
+// later time still: the update does not cut its wait short, and the next
+// refusal waits longer. A wait that ends before the next send is planned
+// still brings that send forward.
+func TestAnUpdatedRowAheadOfTheCloudKeepsItsWait(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+	var batches *[]CloudBatch
+	var sender *Sender
+	sender, batches = newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"accepted":0,"rejected":[{"index":0,"reason":"account observed_at in the future"}]}`)
+	})
+	clock := testNow()
+	sender.now = func() time.Time { return clock }
+	send := func(want Outcome) {
+		t.Helper()
+		if outcome, err := sender.SendOnce(context.Background()); outcome != want {
+			t.Fatalf("send = %v, %v, want %v", outcome, err, want)
+		}
+	}
+	send(Sent) // refused: waits SendDelay
+	clock = clock.Add(SendDelay / 2)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:30:00Z")})
+	send(Nothing)
+	if len(*batches) != 1 {
+		t.Fatalf("the updated row went before its wait ended: %d batches", len(*batches))
+	}
+	due, ok := sender.heldDue()
+	if !ok || !due.Equal(testNow().Add(SendDelay)) {
+		t.Fatalf("held due = %v, %v, want %v", due, ok, testNow().Add(SendDelay))
+	}
+	// The wait ends before the next send is planned: it is still due then.
+	clock = clock.Add(SendDelay)
+	if again, ok := sender.heldDue(); !ok || !again.Equal(due) {
+		t.Fatalf("held due after its wait = %v, %v, want %v", again, ok, due)
+	}
+	send(Sent) // refused a second time: waits twice as long
+	if due, _ := sender.heldDue(); !due.Equal(clock.Add(2 * SendDelay)) {
+		t.Fatalf("held due = %v, want %v", due, clock.Add(2*SendDelay))
+	}
+}
+
+// A hold names the binding it was refused under: the same key under another
+// binding, or a later binding of the same store, is another row.
+func TestAHoldBelongsToItsBinding(t *testing.T) {
+	record := CloudRecord{Record: account(AccountPersonal, "2026-11-20T09:00:00Z").Record}
+	h := heldRow{binding: "a", generation: 1, latest: latestTime(record)}
+	if !h.covers("a", 1, record) {
+		t.Fatal("the hold does not cover its own row")
+	}
+	if h.covers("b", 1, record) || h.covers("a", 2, record) {
+		t.Fatal("the hold covers a row of another binding")
+	}
+	earlier := record
+	earlier.ObservedAt = "2026-11-20T08:00:00Z"
+	if h.covers("a", 1, earlier) {
+		t.Fatal("the hold covers the row once its time is earlier")
+	}
+}
+
 func TestSenderKeepsRowsWhenTheCloudCannotTakeThem(t *testing.T) {
 	for status, want := range map[int]Outcome{404: NotFound, 429: Retry, 503: Retry, 401: Refused} {
 		s := openTestStore(t)
@@ -1238,6 +1298,44 @@ func TestARepeatedRowIDLeavesTheDiskAtOpen(t *testing.T) {
 	data, _ = os.ReadFile(s.path)
 	if reopened.Len() != 1 || strings.Contains(string(data), "jane@example.com") {
 		t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+	}
+}
+
+// A restored file that gives its binding or its rows twice says two things:
+// none of its rows is read, whichever a decoder would keep, and the file is
+// written again without them.
+func TestAFileWithARepeatedBindingOrRowsIsNotRead(t *testing.T) {
+	for name, tamper := range map[string]func(string) string{
+		"binding": func(data string) string {
+			return strings.Replace(data, `"binding":`, `"binding":"other","binding":`, 1)
+		},
+		"rows": func(data string) string {
+			return strings.Replace(data, `"rows":`, `"rows":{},"rows":`, 1)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := openTestStore(t)
+			_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+			s.mu.Lock()
+			_ = s.saveLocked()
+			s.mu.Unlock()
+			data, _ := os.ReadFile(s.path)
+			tampered := tamper(string(data))
+			if tampered == string(data) {
+				t.Fatalf("nothing to repeat in %s", data)
+			}
+			if err := os.WriteFile(s.path, []byte(tampered), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := openStore(s.path, testNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ = os.ReadFile(s.path)
+			if reopened.Len() != 0 || strings.Contains(string(data), AccountPersonal) {
+				t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+			}
+		})
 	}
 }
 
