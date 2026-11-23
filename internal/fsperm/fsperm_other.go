@@ -17,3 +17,6 @@ func RestrictFile(*os.File) error { return errUnsupported }
 
 // PrivateFile reports every file as not private here.
 func PrivateFile(string, os.FileInfo) (bool, error) { return false, errUnsupported }
+
+// PrivateFileAnyOwner reports every file as not private here.
+func PrivateFileAnyOwner(string, os.FileInfo) (bool, error) { return false, errUnsupported }

@@ -39,6 +39,21 @@ type row struct {
 	Sent    int         `json:"sent"`
 }
 
+// counter decodes a stored delivery counter; null, missing or not an int is
+// damaged.
+func counter(raw json.RawMessage, into *int) bool {
+	var n *int
+	if json.Unmarshal(raw, &n) != nil || n == nil {
+		return false
+	}
+	*into = *n
+	return true
+}
+
+// maxRowVersion bounds a stored row's version, so a damaged one can never
+// overflow when the row changes again.
+const maxRowVersion = 1 << 30
+
 type storeFile struct {
 	// Binding names the enrollment the rows were recorded under: a hash of
 	// the cloud, installation and install token. Rows never leave under
@@ -118,10 +133,24 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		for key, raw := range file.Rows {
 			// Each row is read on its own: a damaged or null one is
 			// dropped, and the others are kept.
-			var r *row
-			if json.Unmarshal(raw, &r) != nil || r == nil {
+			var stored *struct {
+				Record  *CloudRecord    `json:"record"`
+				Version json.RawMessage `json:"version"`
+				Sent    json.RawMessage `json:"sent"`
+			}
+			if json.Unmarshal(raw, &stored) != nil || stored == nil || stored.Record == nil {
 				rewrite = true
 				continue
+			}
+			r := &row{Record: *stored.Record}
+			// Damaged delivery counters cannot say what was sent: the
+			// row is sent again, which changes nothing in the cloud,
+			// rather than taken as delivered and never sent. No answer
+			// in flight outlives the open, so 1 and 0 are safe.
+			if !counter(stored.Version, &r.Version) || !counter(stored.Sent, &r.Sent) ||
+				r.Version < 1 || r.Version > maxRowVersion || r.Sent < 0 || r.Sent > r.Version {
+				r.Version, r.Sent = 1, 0
+				rewrite = true
 			}
 			// A row the contract no longer allows, sent or not, leaves
 			// the disk at open: its text is not kept until it ages out.
@@ -132,13 +161,6 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 				rewrite = true
 				continue
 			}
-			// Damaged delivery counters cannot say what was sent: the
-			// row is kept and sent again, which changes nothing in the
-			// cloud, rather than taken as delivered and never sent.
-			if r.Version < 1 || r.Sent < 0 || r.Sent > r.Version {
-				r.Version, r.Sent = max(r.Version, r.Sent, 0)+1, 0
-				rewrite = true
-			}
 			rows[key] = r
 		}
 		s.rows = rows
@@ -147,7 +169,15 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	}
 	// A file others can read, such as one restored from a backup, is
 	// written again at once: a save makes a private file.
-	if s.pruneLocked() || rewrite || !private {
+	pruned := s.pruneLocked()
+	// A restored file can hold more rows than the store takes: after
+	// retention, the oldest leave, so new profiles are not refused until
+	// they expire.
+	if len(s.rows) > MaxRows {
+		trimRows(s.rows)
+		rewrite = true
+	}
+	if pruned || rewrite || !private {
 		// Days past KeepDays leave the disk now, not at the next message.
 		var committed *committedError
 		if err := s.saveLocked(); err != nil && !errors.As(err, &committed) {
@@ -189,7 +219,9 @@ func readStoreFile(path string) (data []byte, private, trusted bool, err error) 
 	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		return nil, false, false, fmt.Errorf("browser events: store %s changed while it was opened", path)
 	}
-	private, err = fsperm.PrivateFile(path, opened)
+	// An elevated daemon of this user can leave the file owned by
+	// Administrators; its DACL still grants this user alone.
+	private, err = fsperm.PrivateFileAnyOwner(path, opened)
 	if err != nil {
 		// Unknown is not unsafe: the file is left as it is, unread, rather
 		// than replaced by an empty store.
@@ -782,4 +814,30 @@ func (e *committedError) Unwrap() error { return e.err }
 func isTempSuffix(s string) bool {
 	n, err := strconv.ParseUint(s, 10, 32)
 	return err == nil && strconv.FormatUint(n, 10) == s
+}
+
+// trimRows removes the oldest rows until at most MaxRows remain.
+func trimRows(rows map[string]*row) {
+	seen := func(r *row) time.Time {
+		at := r.Record.LastSeen
+		if r.Record.Kind == KindHealth {
+			at = r.Record.ObservedAt
+		}
+		t, _ := time.Parse(time.RFC3339Nano, at)
+		return t
+	}
+	keys := make([]string, 0, len(rows))
+	for key := range rows {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := seen(rows[keys[i]]), seen(rows[keys[j]])
+		if !a.Equal(b) {
+			return a.Before(b)
+		}
+		return keys[i] < keys[j]
+	})
+	for _, key := range keys[:len(keys)-MaxRows] {
+		delete(rows, key)
+	}
 }
