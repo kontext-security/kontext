@@ -800,3 +800,64 @@ func TestALeftoverTemporaryCopyIsRemoved(t *testing.T) {
 		t.Fatalf("leftover still there: %v", err)
 	}
 }
+
+// When the enrollment cannot be confirmed, such as when the configuration
+// names another cloud, the store takes nothing and names no enrollment, so
+// nothing seen meanwhile can later reach the old workspace.
+func TestAnUnconfirmedEnrollmentTakesNoRecords(t *testing.T) {
+	s := openTestStore(t)
+	before := s.Enrollment()
+	sender := &Sender{Store: s, BaseURL: "https://app.kontext.dev", InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		Tokens: func(context.Context) (string, error) { return "", errors.New("the configuration names another cloud") }}
+	if _, err := sender.Rebind(context.Background()); err == nil {
+		t.Fatal("Rebind took a failed token read")
+	}
+	applied, err := s.Apply(testExtension, before, []IndexedRecord{visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	if err != nil || len(applied.Rejected) != 1 || s.Enrollment() != "" {
+		t.Fatalf("applied = %+v, enrollment = %q, err = %v", applied, s.Enrollment(), err)
+	}
+	if _, err := s.Bind(Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-a")); err != nil {
+		t.Fatal(err)
+	}
+	if s.Enrollment() != before {
+		t.Fatal("a confirmed enrollment did not lift the suspension")
+	}
+}
+
+// An answer for a batch of A does not mark A's rows of a later binding sent,
+// after A to B and back to A.
+func TestAnAckFromAnEarlierBindingOfTheSameEnrollmentIsIgnored(t *testing.T) {
+	s := openTestStore(t)
+	a := Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-a")
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	old := s.Pending(10)
+	_, _ = s.Bind(Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-b"))
+	_, _ = s.Bind(a)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	_ = s.Ack(old)
+	if len(s.Pending(10).Records) != 1 {
+		t.Fatal("an answer from the earlier binding marked the new row sent")
+	}
+}
+
+// A stored row the contract no longer allows leaves the disk at open, even
+// one already sent.
+func TestASentRowTheContractNoLongerAllowsIsDroppedAtOpen(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	for _, r := range s.rows {
+		r.Record.AppName = "no longer allowed?"
+		r.Sent = r.Version
+	}
+	s.mu.Lock()
+	_ = s.saveLocked()
+	s.mu.Unlock()
+	reopened, err := openStore(s.path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(s.path)
+	if reopened.Len() != 0 || strings.Contains(string(data), "no longer allowed") {
+		t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+	}
+}

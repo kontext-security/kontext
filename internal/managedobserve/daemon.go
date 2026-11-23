@@ -334,6 +334,10 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		// A new connection sees an enrollment change at once, not only when
 		// the sender next has rows to upload.
 		Refresh: func(ctx context.Context) error {
+			// Within the browser host's own deadline: a slow Keychain read
+			// must not hold the connection.
+			ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+			defer cancel()
 			_, err := browserSender.Rebind(ctx)
 			return err
 		},

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +55,13 @@ type Store struct {
 	mu      sync.Mutex
 	rows    map[string]*row
 	binding string
+	// generation counts the bindings, so an answer for rows of an earlier
+	// one never marks rows of a later one, even under the same binding.
+	generation uint64
+	// suspended is set while the current enrollment cannot be confirmed,
+	// such as when the configuration names another cloud: no record is
+	// taken and the extension is told there is no enrollment.
+	suspended bool
 	// dirty is set while the file is behind the rows, such as after a failed
 	// save, so the next call saves again rather than report success.
 	dirty bool
@@ -92,8 +100,18 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 				delete(file.Rows, key)
 			}
 		}
+		// A row the contract no longer allows, sent or not, leaves the
+		// disk at open: its text is not kept until it ages out.
+		for key, r := range file.Rows {
+			source := Extension{Version: r.Record.ExtensionVersion, Browser: r.Record.Browser, Profile: r.Record.Profile}
+			if source.validate() != nil || r.Record.Record.Validate() != nil {
+				delete(file.Rows, key)
+				private = false // written again below
+			}
+		}
 		s.rows = file.Rows
 		s.binding = file.Binding
+		s.generation = 1
 	}
 	// A file others can read, such as one restored from a backup, is
 	// written again at once: a save makes a private file.
@@ -165,9 +183,18 @@ func tempPattern(path string) string {
 // removeLeftovers deletes temporary copies a crash left beside the store:
 // they hold rows that would never be pruned.
 func removeLeftovers(path string) {
-	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(path), tempPattern(path)))
-	for _, match := range matches {
-		_ = os.Remove(match)
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	// Matched literally: the database name may hold glob characters.
+	prefix := "." + filepath.Base(path) + "-"
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.Type().IsRegular() && strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".tmp") {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
 	}
 }
 
@@ -214,7 +241,7 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 		}
 		return applied
 	}
-	if s.binding == "" {
+	if s.binding == "" || s.suspended {
 		// Until the store knows its enrollment, a record could later leave
 		// under another workspace's token, so none is taken.
 		return refuseAll("daemon is not enrolled yet"), nil
@@ -347,8 +374,9 @@ type Pending struct {
 	versions []int
 	// binding is the enrollment the rows were taken under. A batch is sent
 	// only with that enrollment's token, and acknowledged only while the
-	// store is still bound to it.
-	binding string
+	// store is still in the same binding.
+	binding    string
+	generation uint64
 }
 
 // Pending returns the rows to send.
@@ -369,7 +397,7 @@ func (s *Store) Pending(max int) Pending {
 	if len(keys) > max {
 		keys = keys[:max]
 	}
-	p := Pending{binding: s.binding}
+	p := Pending{binding: s.binding, generation: s.generation}
 	for _, key := range keys {
 		p.Records = append(p.Records, s.rows[key].Record)
 		p.keys = append(p.keys, key)
@@ -384,9 +412,9 @@ func (s *Store) Pending(max int) Pending {
 func (s *Store) Ack(p Pending) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p.binding != s.binding {
-		// The store was bound to another enrollment while the batch was out:
-		// its rows are gone, and a row with the same key is another one.
+	if p.binding != s.binding || p.generation != s.generation {
+		// The store was bound again while the batch was out: its rows are
+		// gone, and a row with the same key is another one.
 		return nil
 	}
 	for i, key := range p.keys {
@@ -403,7 +431,7 @@ func (s *Store) Ack(p Pending) error {
 func (s *Store) Drop(p Pending) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p.binding != s.binding {
+	if p.binding != s.binding || p.generation != s.generation {
 		return nil
 	}
 	for i, key := range p.keys {
@@ -420,6 +448,7 @@ func (s *Store) Drop(p Pending) error {
 func (s *Store) Bind(binding string) (dropped int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.suspended = false
 	switch s.binding {
 	case binding:
 		return 0, nil
@@ -429,7 +458,17 @@ func (s *Store) Bind(binding string) (dropped int, err error) {
 		s.rows = map[string]*row{}
 	}
 	s.binding = binding
+	s.generation++
 	return dropped, s.saveLocked()
+}
+
+// Suspend stops the store taking records until the next Bind, for when the
+// current enrollment cannot be confirmed. Its rows stay: they belong to the
+// binding they were taken under and leave only with its token.
+func (s *Store) Suspend() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.suspended = true
 }
 
 // Flush writes the store if the file is behind it, such as after a prune
@@ -456,7 +495,7 @@ func (s *Store) Enrollment() string {
 }
 
 func (s *Store) enrollmentLocked() string {
-	if s.binding == "" {
+	if s.binding == "" || s.suspended {
 		return ""
 	}
 	sum := sha256.Sum256([]byte("browser-enrollment\n" + s.binding))

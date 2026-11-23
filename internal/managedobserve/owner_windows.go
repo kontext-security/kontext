@@ -5,6 +5,7 @@ package managedobserve
 import (
 	"fmt"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -48,17 +49,68 @@ func ensurePrivateOwner(dir string, _ os.FileInfo) error {
 	return nil
 }
 
-// checkPrivateOwner refuses a socket directory unless it is owned by this
-// process's user or the token's default owner and its protected DACL grants
-// access to this user alone, as ensurePrivateOwner leaves it. It changes
+// checkPrivateOwner refuses a socket directory unless its protected DACL
+// grants access to this user alone, as ensurePrivateOwner leaves it, and its
+// owner is this user, the token's default owner, Administrators or
+// LocalSystem. An elevated daemon creates the folder owned by Administrators;
+// the browser host runs without elevation, so its default owner is the user.
+// Administrators and LocalSystem can take any folder anyway. It changes
 // nothing: owning a folder does not mean nobody else can write to it.
-func checkPrivateOwner(dir string, info os.FileInfo) error {
-	private, err := fsperm.PrivateFile(dir, info)
+func checkPrivateOwner(dir string, _ os.FileInfo) error {
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return fmt.Errorf("socket directory %s: read security: %w", dir, err)
 	}
-	if !private {
-		return fmt.Errorf("socket directory %s is not private to this user", dir)
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("socket directory %s: read owner: %w", dir, err)
+	}
+	token := windows.GetCurrentProcessToken()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return fmt.Errorf("socket directory %s: read token user: %w", dir, err)
+	}
+	defaultOwner, err := fsperm.TokenDefaultOwner(token)
+	if err != nil {
+		return fmt.Errorf("socket directory %s: read token owner: %w", dir, err)
+	}
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return err
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return err
+	}
+	if !fsperm.OwnerAllowed(owner, user.User.Sid, defaultOwner, admins, system) {
+		return fmt.Errorf("socket directory %s is owned by %s", dir, owner)
+	}
+	control, _, err := sd.Control()
+	if err != nil {
+		return err
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		return fmt.Errorf("socket directory %s inherits its DACL", dir)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return fmt.Errorf("socket directory %s has no DACL", dir)
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return err
+		}
+		switch ace.Header.AceType {
+		case windows.ACCESS_DENIED_ACE_TYPE:
+		case windows.ACCESS_ALLOWED_ACE_TYPE:
+			if !(*windows.SID)(unsafe.Pointer(&ace.SidStart)).Equals(user.User.Sid) {
+				return fmt.Errorf("socket directory %s grants access to another account", dir)
+			}
+		default:
+			return fmt.Errorf("socket directory %s has an entry this check cannot read", dir)
+		}
 	}
 	return nil
 }
