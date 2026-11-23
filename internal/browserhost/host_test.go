@@ -97,7 +97,7 @@ func TestDaemonFailureAnswersUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readAll(t, &out)
-	if len(got) != 1 || got[0] != `{"contract":1,"type":"error","error":"unavailable"}` {
+	if len(got) != 1 || got[0] != `{"contract":2,"type":"error","error":"unavailable"}` {
 		t.Fatalf("answered %v", got)
 	}
 }

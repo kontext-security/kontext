@@ -14,7 +14,7 @@ import (
 )
 
 // Contract is the version of the browser event contract this build speaks.
-const Contract = 1
+const Contract = 2
 
 // CloudSchema names the batch the daemon sends to the cloud.
 const CloudSchema = "browser-activity-v1"
@@ -36,7 +36,7 @@ const (
 	TypeError    = "error"
 )
 
-// Record kinds in contract v1.
+// Record kinds in contract v2.
 const (
 	KindHealth = "health"
 	KindVisit  = "visit"

@@ -140,7 +140,7 @@ func TestHandlerAnswersHelloAndRecords(t *testing.T) {
 	changed := 0
 	h := &Handler{Store: s, CaptureMode: func() string { return CaptureFull }, Changed: func() { changed++ }}
 	var hello Settings
-	_ = json.Unmarshal(h.Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)), &hello)
+	_ = json.Unmarshal(h.Answer(context.Background(), json.RawMessage(`{"contract":2,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)), &hello)
 	if hello.Type != TypeSettings || hello.CaptureMode != CaptureFull || hello.Paused || hello.Rejected == nil {
 		t.Fatalf("hello answer = %+v", hello)
 	}
@@ -184,7 +184,7 @@ func TestAVisitRecordedForAnotherEnrollmentIsRefused(t *testing.T) {
 func TestHandlerDefaultsToTheMostRestrictiveMode(t *testing.T) {
 	h := &Handler{Store: openTestStore(t), CaptureMode: func() string { return "" }}
 	var answer Settings
-	_ = json.Unmarshal(h.Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)), &answer)
+	_ = json.Unmarshal(h.Answer(context.Background(), json.RawMessage(`{"contract":2,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)), &answer)
 	if answer.CaptureMode != CaptureCommands {
 		t.Fatalf("mode = %q", answer.CaptureMode)
 	}
@@ -192,8 +192,8 @@ func TestHandlerDefaultsToTheMostRestrictiveMode(t *testing.T) {
 
 func TestHandlerNamesAnotherContract(t *testing.T) {
 	h := &Handler{Store: openTestStore(t)}
-	got := string(h.Answer(context.Background(), json.RawMessage(`{"contract":2,"type":"hello"}`)))
-	if got != `{"contract":1,"type":"error","error":"unsupported_contract"}` {
+	got := string(h.Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello"}`)))
+	if got != `{"contract":2,"type":"error","error":"unsupported_contract"}` {
 		t.Fatalf("answer = %s", got)
 	}
 }
@@ -521,7 +521,7 @@ func TestAnOlderSnapshotKeepsTheNewerMetadata(t *testing.T) {
 }
 
 func TestWithoutAStoreTheHandlerAnswersUnavailable(t *testing.T) {
-	answer := (&Handler{}).Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`))
+	answer := (&Handler{}).Answer(context.Background(), json.RawMessage(`{"contract":2,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`))
 	if !strings.Contains(string(answer), `"error":"unavailable"`) {
 		t.Fatalf("answer = %s", answer)
 	}
@@ -611,7 +611,7 @@ func TestTheEnrollmentIdChangesWithTheBindingAndHidesIt(t *testing.T) {
 		t.Fatalf("enrollment ids %q and %q", first, second)
 	}
 	handler := &Handler{Store: s}
-	answer := handler.Answer(context.Background(), json.RawMessage(`{"contract":1,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`))
+	answer := handler.Answer(context.Background(), json.RawMessage(`{"contract":2,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`))
 	if !strings.Contains(string(answer), `"enrollment":"`+second+`"`) {
 		t.Fatalf("hello answer without the enrollment: %s", answer)
 	}
@@ -684,7 +684,7 @@ func TestTwoDatabasesInOneFolderKeepTheirOwnStores(t *testing.T) {
 }
 
 func TestALongExtensionVersionIsRefused(t *testing.T) {
-	long := `{"contract":1,"type":"hello","extension":{"version":"1.0.` + strings.Repeat("0", 64) + `","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`
+	long := `{"contract":2,"type":"hello","extension":{"version":"1.0.` + strings.Repeat("0", 64) + `","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`
 	if _, err := DecodeMessage([]byte(long)); err == nil {
 		t.Fatal("a 70-character version was taken")
 	}
@@ -698,5 +698,57 @@ func TestAHealthRowFromTheFutureIsRefused(t *testing.T) {
 	applied, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{future})
 	if err != nil || len(applied.Rejected) != 1 || s.Len() != 0 {
 		t.Fatalf("applied = %+v, rows = %d, err = %v", applied, s.Len(), err)
+	}
+}
+
+// A hello rebinds the store first, so an enrollment change made while there
+// was nothing to send is advertised at once, and no record of the new
+// workspace is taken under the old id.
+func TestAHelloSeesAnEnrollmentChangeAtOnce(t *testing.T) {
+	s := openTestStore(t)
+	before := s.Enrollment()
+	token := "workspace-b"
+	sender := &Sender{Store: s, BaseURL: "https://app.kontext.dev", InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		Tokens: func(context.Context) (string, error) { return token, nil }}
+	h := &Handler{Store: s, Refresh: func(ctx context.Context) { _, _ = sender.Rebind(ctx) }}
+	var answer Settings
+	_ = json.Unmarshal(h.Answer(context.Background(), json.RawMessage(`{"contract":2,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`)), &answer)
+	if answer.Enrollment == "" || answer.Enrollment == before || answer.Enrollment != s.Enrollment() {
+		t.Fatalf("hello answered %q, store %q, before %q", answer.Enrollment, s.Enrollment(), before)
+	}
+}
+
+// A stored row the contract no longer allows leaves the disk, not only the
+// next batch.
+func TestAnInvalidStoredRowIsDeleted(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	for _, r := range s.rows {
+		r.Record.AppName = "a stored name: no longer allowed?"
+	}
+	sender, _ := newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("nothing valid was left to send")
+	})
+	if _, err := sender.SendOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(s.path)
+	if s.Len() != 0 || strings.Contains(string(data), "no longer allowed") {
+		t.Fatalf("rows = %d, file = %s", s.Len(), data)
+	}
+}
+
+// An answer longer than the limit is not read as a cut-off acknowledgement.
+func TestAnAnswerOverTheLimitIsNotTaken(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
+	sender, _ := newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"accepted":1,"rejected":[]}`+strings.Repeat(" ", MaxResponseBytes))
+	})
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Retry {
+		t.Fatalf("outcome = %v, want Retry", outcome)
+	}
+	if len(s.Pending(10).Records) != 1 {
+		t.Fatal("the row was marked sent")
 	}
 }

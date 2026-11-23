@@ -11,7 +11,7 @@ import (
 func TestABrowserMessageKeepsItsBytesThroughTheSocket(t *testing.T) {
 	// "&", "<" and ">" grow to six bytes each under json.Marshal, which would
 	// push a message under the contract's 1 MiB limit over it.
-	message := json.RawMessage(`{"contract":1,"type":"hello","future":"` + strings.Repeat("&<>", 300_000) + `"}`)
+	message := json.RawMessage(`{"contract":2,"type":"hello","future":"` + strings.Repeat("&<>", 300_000) + `"}`)
 	client, server := net.Pipe()
 	defer client.Close()
 	defer server.Close()

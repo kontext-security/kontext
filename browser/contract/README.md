@@ -1,4 +1,4 @@
-# Browser event contract v1
+# Browser event contract v2
 
 The messages between the Kontext browser extension, `kontext browser-host` and
 the daemon, and the batch the daemon sends to the cloud. The extension lives in
@@ -6,7 +6,12 @@ a separate repository and vendors this folder at a pinned commit; this folder
 is the source of truth.
 
 The extension records which AI web apps are used. It never sends what people
-write, URL paths, query strings or tokens: hostnames only.
+write, URL paths, query strings or tokens: hostnames only. A catalog host
+`*.example.com` sends the full hostname seen, such as `team.example.com`,
+which can name a workspace.
+
+Version 2 adds the enrollment id to `settings` and `records`. Version 1 was a
+draft that never shipped; a peer that speaks it gets `unsupported_contract`.
 
 ## Extension to daemon
 
@@ -21,7 +26,7 @@ the daemon's answer back.
   record of a message made for another enrollment than its own, and its answer
   names the enrollment it checked them against.
 
-Record kinds in v1:
+Record kinds in v2:
 
 | Kind | Meaning |
 |---|---|
@@ -51,7 +56,7 @@ the visits it kept for the previous one, so nothing recorded for one workspace
 reaches another; the daemon drops its own rows on the same change. While
 `enrollment` is empty the extension sends only `hello`. While `paused` is true
 the extension stops every detector and sends
-only `hello` and `health`. In v1 the daemon always answers `paused: false` and
+only `hello` and `health`. In v2 the daemon always answers `paused: false` and
 no corporate domains; both get a server source with the endpoint configuration
 (planned before account detection).
 
