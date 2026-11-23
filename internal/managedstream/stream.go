@@ -85,6 +85,12 @@ type Options struct {
 	// omit both fields so older or unavailable discovery stays unknown.
 	AgentsFact    func() (agentinventory.Inventory, bool)
 	AuthorityFact func() (agentauthority.Report, bool)
+	// HookInventoryEnabled is the endpoint config switch for hook inventory.
+	// Nil or false sends no hook block and no hook source.
+	HookInventoryEnabled func() bool
+	// HookKeyTag names the current K_dev. A pending hook result recorded
+	// under another key is not sent, and none is while this is nil or empty.
+	HookKeyTag func() string
 	// AuthorityScanKnown reports whether the server has ever answered the
 	// authority-scan flag. A server that never did (an older release) has a
 	// strict device schema without authority fields, so the local opt-out
@@ -164,6 +170,9 @@ type Device struct {
 	Agents           *[]agentinventory.Agent `json:"agents,omitempty"`
 	AgentsReportedAt string                  `json:"agents_reported_at,omitempty"`
 	Inventory        *Inventory              `json:"inventory,omitempty"`
+	// HookInventory is the ADR-0011 block, sent only while the deployment's
+	// endpoint config turns it on, beside its sources in Inventory.
+	HookInventory *agentauthority.HookInventory `json:"hook_inventory,omitempty"`
 }
 
 // HooksFact is the per-flush answer to "are the Claude Code managed hooks for
@@ -382,7 +391,7 @@ func flushLedger(ctx context.Context, opts Options) error {
 		}
 		// Authority is independently retryable. Do not skip an otherwise valid
 		// minimum ledger batch just because the optional report filled it up.
-		if limit == 1 && len(body) > MaxPayloadBytes && payload.Device != nil && payload.Device.Authority != nil {
+		if limit == 1 && len(body) > MaxPayloadBytes && payload.Device != nil && (payload.Device.Authority != nil || payload.Device.HookInventory != nil) {
 			dropAuthority(&payload)
 			body, err = json.Marshal(payload)
 			if err != nil {

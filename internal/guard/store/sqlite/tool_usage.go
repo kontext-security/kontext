@@ -202,7 +202,12 @@ func (s *Store) ReconcileToolUsage(ctx context.Context) error {
 			update.fingerprint, update.message, update.errorFingerprint = update.source.fingerprint, readErr.Error(), update.attempted
 		} else {
 			update.fingerprint, update.records, update.prompts = fingerprint, records, prompts
-			if capture.Confirmed {
+			// A held prompt opt-out records the turn as refused, as the
+			// prompt hook would, so a later opt-in can't recover it.
+			if capture.PromptVeto {
+				refused := false
+				update.captureAllowed = &refused
+			} else if capture.Confirmed {
 				allowed := payloadcapture.PromptsAllowed(capture)
 				update.captureAllowed = &allowed
 				if allowed {

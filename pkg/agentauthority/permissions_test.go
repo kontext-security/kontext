@@ -151,7 +151,9 @@ func TestPermissionConfigCacheAndOverrides(t *testing.T) {
 			t.Fatalf("raw names collided: %+v", servers)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	// An already-expired deadline: a 1ns timeout can still be unexpired when
+	// a fast scan finishes on a coarse Windows clock.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 	if !scanner.Scan(ctx, home, Environment{}, agents, fixtureTime).Truncated {
 		t.Fatal("deadline ignored")

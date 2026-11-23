@@ -39,8 +39,11 @@ func applyCaptureConfiguration(store *sqlite.Store, opts Options) {
 		cachePath = endpointconfig.DefaultCachePathForDB(opts.DBPath)
 	}
 	cache := endpointconfig.NewCacheForDB(cachePath, opts.DBPath)
+	cache.Bind(opts.CloudURL, opts.InstallToken)
 	if err := cache.Load(); err != nil {
-		store.SetPayloadCaptureConfiguration(payloadcapture.DefaultRuntimeConfiguration())
+		fallback := payloadcapture.DefaultRuntimeConfiguration()
+		fallback.PromptVeto = cache.Current().Status.PromptVeto
+		store.SetPayloadCaptureConfiguration(fallback)
 	} else {
 		snapshot := cache.Current()
 		store.SetPayloadCaptureConfiguration(payloadcapture.RuntimeConfiguration{

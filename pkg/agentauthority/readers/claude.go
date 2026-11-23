@@ -8,6 +8,9 @@ type ClaudeRoot struct {
 		MCPServers             map[string]MCP `json:"mcpServers"`
 		EnabledMcpjsonServers  []string       `json:"enabledMcpjsonServers"`
 		DisabledMcpjsonServers []string       `json:"disabledMcpjsonServers"`
+		// Whether the person accepted the workspace trust dialog; project
+		// hooks wait for it.
+		HasTrustDialogAccepted *bool `json:"hasTrustDialogAccepted"`
 	} `json:"projects"`
 	// OAuthAccount names the claude.ai account and organization the CLI is
 	// signed in to; Claude Desktop files its session records under both.

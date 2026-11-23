@@ -19,7 +19,7 @@ const TurnExcerptBytes = 64_000
 func CaptureTurnPrompt(prompt string, capture payloadcapture.RuntimeConfiguration) TurnPrompt {
 	capture = payloadcapture.SafeRuntimeConfiguration(capture)
 	chars := int64(utf8.RuneCountInString(prompt))
-	if capture.EffectiveMode == payloadcapture.ModeOmitted {
+	if capture.EffectiveMode == payloadcapture.ModeOmitted || capture.PromptVeto {
 		return SizeOnlyTurnPrompt(TurnPromptOmitted, chars)
 	}
 	if !payloadcapture.PromptsAllowed(capture) || len(prompt) > MaxTurnPromptBytes {

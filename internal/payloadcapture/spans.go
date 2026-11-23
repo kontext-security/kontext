@@ -1,10 +1,8 @@
 package payloadcapture
 
 import (
-	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -18,24 +16,38 @@ type Span struct {
 // keeps, so a caller that replaces the spans with placeholders of its own
 // sends no more of value than RedactText would, and can put them back.
 func RedactedSpans(value string) []Span {
-	_, stretches, _ := redact(value, true)
-	var kept []Span
-	for _, s := range stretches {
-		if s.from >= 0 {
-			kept = append(kept, Span{s.from, s.from + s.len})
+	return redactedSpans(value, compiledValueRules)
+}
+
+func redactedSpans(value string, rules []compiledRule) []Span {
+	_, stretches, _ := redactWith(value, true, rules)
+	var spans []Span
+	for _, span := range removedSpans(len(value), stretches) {
+		if span.Start < span.End {
+			spans = append(spans, span)
 		}
 	}
-	slices.SortFunc(kept, func(a, b Span) int { return a.Start - b.Start })
+	return spans
+}
+
+// removedSpans is the ranges of an original text of length n that
+// stretches do not keep, in order: each run between two kept stretches
+// that a placeholder took, even an empty one ({"token":""}).
+func removedSpans(n int, stretches []stretch) []Span {
 	var removed []Span
-	at := 0
-	for _, k := range kept {
-		if k.Start > at {
-			removed = append(removed, Span{at, k.Start})
+	at, placeholder := 0, false
+	for _, s := range stretches {
+		if s.from < 0 {
+			placeholder = true
+			continue
 		}
-		at = max(at, k.End)
+		if placeholder || s.from > at {
+			removed = append(removed, Span{at, s.from})
+		}
+		placeholder, at = false, s.from+s.len
 	}
-	if at < len(value) {
-		removed = append(removed, Span{at, len(value)})
+	if placeholder || at < n {
+		removed = append(removed, Span{at, n})
 	}
 	return removed
 }
@@ -46,72 +58,219 @@ type stretch struct {
 	from, len int
 }
 
-// redact runs the ruleset's value patterns over value in order, each over
-// what the ones before it left, and reports whether anything changed. With
-// track it also returns where each stretch of the result came from.
+// maxPasses bounds the repeated pass, as in the cloud API: a few passes
+// settle every input seen so far, and if one ever does not, the last pass
+// wins, which only masks more.
+const maxPasses = 4
+
+// redact masks what the ruleset's value patterns find in value. It reports
+// whether anything changed. With track it also returns where each stretch
+// of the result came from.
+//
+// Two readings of the rules each run until the text stops changing, so a
+// placeholder one pass writes can complete a match (AKIA…pwd=SECRET):
+//   - the union: every rule matches the same text and their masks are
+//     unioned, so within a pass no rule can take the text another needs,
+//     and adding a rule never unmasks a byte;
+//   - in order: each rule matches what the ones before it left (the engine
+//     before rules/5), which catches a match that needs another rule's
+//     placeholder first (a URL's userinfo masked, then the assignment
+//     around it).
+//
+// Each pass masks the union of both readings' masks on the text, each
+// merged run as one placeholder, and repeats until nothing changes. So no
+// result masks less than either reading alone.
 func redact(value string, track bool) (string, []stretch, bool) {
+	return redactWith(value, track, compiledValueRules)
+}
+
+func redactWith(value string, track bool, rules []compiledRule) (string, []stretch, bool) {
 	text, changed := value, false
 	var stretches []stretch
 	if track {
 		stretches = appendStretch(nil, stretch{0, len(value)})
 	}
-	folded, foldedNow := "", false
-	for _, rule := range compiledValueRules {
-		if rule.filtered {
-			if !foldedNow {
-				folded, foldedNow = fold(text), true
-			}
-			if !containsAny(folded, rule.needles) {
-				continue
-			}
+	for pass := 0; pass < maxPasses; pass++ {
+		masks := reading(text, rules, unionPass)
+		if masks == nil {
+			// No rule matches text, so the ordered reading, whose text
+			// never changes then, finds nothing either.
+			break
 		}
-		var matches [][]int
-		if rule.groups {
-			matches = rule.re.FindAllStringSubmatchIndex(text, -1)
-		} else {
-			matches = rule.re.FindAllStringIndex(text, -1)
+		masks = settledRuns(text, mergeSpans(append(masks, reading(text, rules, orderedPass)...)))
+		if len(masks) == 0 {
+			break
 		}
-		if len(matches) == 0 {
-			continue
+		next, nextStretches := maskRuns(text, stretches, track, masks)
+		if next == text {
+			break
 		}
-		var next strings.Builder
-		next.Grow(len(text))
-		var nextStretches []stretch
-		var starts []int
-		if track {
-			starts = make([]int, len(stretches))
-			for i := 1; i < len(stretches); i++ {
-				starts[i] = starts[i-1] + stretches[i-1].len
-			}
-		}
-		keep := func(a, b int) {
-			next.WriteString(text[a:b])
-			if track {
-				nextStretches = appendRange(nextStretches, stretches, starts, a, b)
-			}
-		}
-		last := 0
-		for _, match := range matches {
-			keep(last, match[0])
-			for _, p := range rule.pieces {
-				if p.group < 0 {
-					next.WriteString(p.text)
-					if track {
-						nextStretches = appendStretch(nextStretches, stretch{-1, len(p.text)})
-					}
-				} else if 2*p.group+1 < len(match) && match[2*p.group] >= 0 {
-					keep(match[2*p.group], match[2*p.group+1])
-				}
-			}
-			last = match[1]
-		}
-		keep(last, len(text))
-		if result := next.String(); result != text {
-			text, changed, foldedNow = result, true, false
-		}
-		stretches = nextStretches
+		text, stretches, changed = next, nextStretches, true
 	}
 	return text, stretches, changed
+}
+
+// reading is what one reading of the rules (step) masks in text, run until
+// the text stops changing, as spans of text.
+func reading(text string, rules []compiledRule, step func(string, []stretch, []compiledRule) (string, []stretch)) []Span {
+	current := text
+	stretches := appendStretch(nil, stretch{0, len(text)})
+	for pass := 0; pass < maxPasses; pass++ {
+		next, nextStretches := step(current, stretches, rules)
+		if next == current {
+			break
+		}
+		current, stretches = next, nextStretches
+	}
+	if current == text {
+		return nil
+	}
+	return removedSpans(len(text), stretches)
+}
+
+// unionPass runs the command rules and every value rule over the same text
+// and masks the union of what they find.
+func unionPass(text string, stretches []stretch, rules []compiledRule) (string, []stretch) {
+	spans := commandSpans(text)
+	var folded lazyFold
+	for index := range rules {
+		spans = append(spans, rules[index].masks(text, &folded)...)
+	}
+	masks := settledRuns(text, mergeSpans(spans))
+	if len(masks) == 0 {
+		return text, stretches
+	}
+	return maskRuns(text, stretches, true, masks)
+}
+
+// orderedPass runs the command rules, then the value rules in order, each
+// over what the ones before it left.
+func orderedPass(text string, stretches []stretch, rules []compiledRule) (string, []stretch) {
+	if masks := settledRuns(text, mergeSpans(commandSpans(text))); len(masks) > 0 {
+		text, stretches = maskRuns(text, stretches, true, masks)
+	}
+	var folded lazyFold
+	for index := range rules {
+		masks := settledRuns(text, mergeSpans(rules[index].masks(text, &folded)))
+		if len(masks) > 0 {
+			text, stretches = maskRuns(text, stretches, true, masks)
+			folded = lazyFold{}
+		}
+	}
+	return text, stretches
+}
+
+// lazyFold is a text's fold, computed the first time a filtered rule needs
+// it.
+type lazyFold struct {
+	text string
+	done bool
+}
+
+// masks is what the rule masks in text: each match's masked part.
+func (rule *compiledRule) masks(text string, folded *lazyFold) []Span {
+	if rule.filtered {
+		if !folded.done {
+			folded.text, folded.done = fold(text), true
+		}
+		if !containsAny(folded.text, rule.needles) {
+			return nil
+		}
+	}
+	var matches [][]int
+	if rule.groups {
+		matches = rule.re.FindAllStringSubmatchIndex(text, -1)
+	} else {
+		matches = rule.re.FindAllStringIndex(text, -1)
+	}
+	spans := make([]Span, 0, len(matches))
+	for _, match := range matches {
+		spans = append(spans, rule.masked(text, match))
+	}
+	return spans
+}
+
+// masked is the part of a match the rule replaces: the match without what
+// its replacement keeps of its start and end, or all of it when the match
+// does not start and end with that.
+func (rule *compiledRule) masked(text string, match []int) Span {
+	whole := text[match[0]:match[1]]
+	kept := rule.before
+	if rule.groups {
+		kept = string(rule.re.ExpandString(nil, rule.before, text, match))
+	}
+	if len(kept)+len(rule.after) <= len(whole) && strings.HasPrefix(whole, kept) && strings.HasSuffix(whole, rule.after) {
+		return Span{match[0] + len(kept), match[1] - len(rule.after)}
+	}
+	return Span{match[0], match[1]}
+}
+
+// mergeSpans sorts spans and joins those that overlap or touch. An empty
+// span (an empty secret, {"token":""}) stays, and still gets a placeholder.
+func mergeSpans(spans []Span) []Span {
+	slices.SortFunc(spans, func(a, b Span) int {
+		if a.Start != b.Start {
+			return a.Start - b.Start
+		}
+		return a.End - b.End
+	})
+	var merged []Span
+	for _, span := range spans {
+		if n := len(merged); n > 0 && span.Start <= merged[n-1].End {
+			merged[n-1].End = max(merged[n-1].End, span.End)
+			continue
+		}
+		merged = append(merged, span)
+	}
+	return merged
+}
+
+// settledRuns drops the runs that are only placeholders and quotes, which
+// a pass would write back as they are: redacting redacted text changes
+// nothing. Whitespace is not settled: in password=" [REDACTED_SECRET] " the
+// spaces are the secret's.
+func settledRuns(text string, runs []Span) []Span {
+	out := runs[:0]
+	for _, run := range runs {
+		masked := text[run.Start:run.End]
+		if strings.Contains(masked, RedactedPlaceholder) &&
+			strings.Trim(strings.ReplaceAll(masked, RedactedPlaceholder, ""), "'\"`") == "" {
+			continue
+		}
+		out = append(out, run)
+	}
+	return out
+}
+
+// maskRuns writes a placeholder in place of each run (sorted and apart).
+func maskRuns(text string, stretches []stretch, track bool, runs []Span) (string, []stretch) {
+	var next strings.Builder
+	next.Grow(len(text))
+	var nextStretches []stretch
+	var starts []int
+	if track {
+		starts = make([]int, len(stretches))
+		for i := 1; i < len(stretches); i++ {
+			starts[i] = starts[i-1] + stretches[i-1].len
+		}
+	}
+	keep := func(a, b int) {
+		next.WriteString(text[a:b])
+		if track {
+			nextStretches = appendRange(nextStretches, stretches, starts, a, b)
+		}
+	}
+	last := 0
+	for _, run := range runs {
+		keep(last, run.Start)
+		next.WriteString(RedactedPlaceholder)
+		if track {
+			nextStretches = appendStretch(nextStretches, stretch{-1, len(RedactedPlaceholder)})
+		}
+		last = run.End
+	}
+	keep(last, len(text))
+	return next.String(), nextStretches
 }
 
 // appendRange appends the stretches that make up text[a:b], where starts
@@ -143,40 +302,4 @@ func appendStretch(out []stretch, s stretch) []stretch {
 		}
 	}
 	return append(out, s)
-}
-
-// piece is a part of a rule's replacement: text, or when group is not -1 the
-// text the match's capture group of that number matched.
-type piece struct {
-	text  string
-	group int
-}
-
-// pieces splits a replacement template the way Regexp.Expand reads it, by
-// expanding it for a match whose every group matched a marker of its own.
-// The template must not contain a NUL byte, which the markers are made of.
-func pieces(re *regexp.Regexp, template string) []piece {
-	var src strings.Builder
-	var match []int
-	for group := range re.NumSubexp() + 1 {
-		match = append(match, src.Len())
-		src.WriteString("\x00" + strconv.Itoa(group) + "\x00")
-		match = append(match, src.Len())
-	}
-	expanded := string(re.ExpandString(nil, template, src.String(), match))
-	var out []piece
-	for expanded != "" {
-		text, rest, found := strings.Cut(expanded, "\x00")
-		if text != "" {
-			out = append(out, piece{text: text, group: -1})
-		}
-		if !found {
-			break
-		}
-		number, after, _ := strings.Cut(rest, "\x00")
-		group, _ := strconv.Atoi(number)
-		out = append(out, piece{group: group})
-		expanded = after
-	}
-	return out
 }
