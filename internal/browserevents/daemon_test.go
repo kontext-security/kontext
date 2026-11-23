@@ -1227,3 +1227,30 @@ func TestADamagedRowDoesNotDiscardTheOthers(t *testing.T) {
 		t.Fatalf("rows = %d, file = %s", reopened.Len(), after)
 	}
 }
+
+// A stored account row with a key the contract does not allow, such as an
+// address put back by a backup, is dropped at open and leaves the file: a
+// decode would drop the key silently and keep the text on disk.
+func TestAStoredAccountWithAnExtraKeyIsDroppedAtOpen(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+	s.mu.Lock()
+	_ = s.saveLocked()
+	s.mu.Unlock()
+	data, _ := os.ReadFile(s.path)
+	tampered := strings.Replace(string(data), `"kind":"account"`, `"kind":"account","email":"jane@example.com"`, 1)
+	if tampered == string(data) {
+		t.Fatalf("no account row in %s", data)
+	}
+	if err := os.WriteFile(s.path, []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(s.path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(s.path)
+	if reopened.Len() != 0 || strings.Contains(string(data), "jane@example.com") {
+		t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+	}
+}
