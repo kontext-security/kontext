@@ -33,7 +33,6 @@
       "extension_version": "0.1.0",
       "day": "2026-11-20",
       "app": "claude",
-      "host": "claude.ai",
       "observed_at": "2026-11-20T09:10:00Z",
       "account_type": "company"
     }

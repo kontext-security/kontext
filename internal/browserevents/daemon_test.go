@@ -692,7 +692,7 @@ func TestALongExtensionVersionIsRefused(t *testing.T) {
 }
 
 func account(accountType, observed string) IndexedRecord {
-	return IndexedRecord{Record: Record{Kind: KindAccount, Day: "2026-11-20", App: "chatgpt", Host: "chatgpt.com",
+	return IndexedRecord{Record: Record{Kind: KindAccount, Day: "2026-11-20", App: "chatgpt",
 		AccountType: accountType, ObservedAt: observed}}
 }
 
@@ -758,8 +758,11 @@ func TestAnAccountRecordedForAnotherEnrollmentIsRefused(t *testing.T) {
 // An account is the type alone. A record with any other key, an address or
 // a plan above all, is refused whole, and so is a field of the wrong type.
 func TestAnAccountCarriesOnlyItsType(t *testing.T) {
-	ok := `{"kind":"account","day":"2026-11-20","app":"claude","host":"claude.ai","account_type":"personal","observed_at":"2026-11-20T09:00:00Z"`
+	ok := `{"kind":"account","day":"2026-11-20","app":"claude","account_type":"personal","observed_at":"2026-11-20T09:00:00Z"`
 	for name, record := range map[string]string{
+		"host":         ok + `,"host":"claude.ai"}`,
+		"tenant host":  strings.Replace(ok, `"claude"`, `"n8n-cloud"`, 1) + `,"host":"acme.app.n8n.cloud"}`,
+		"unknown app":  strings.Replace(ok, `"claude"`, `"acme-corp"`, 1) + `}`,
 		"address":      ok + `,"email":"jane@example.com"}`,
 		"domain":       ok + `,"email_domain":"example.com"}`,
 		"plan":         ok + `,"plan":"paid"}`,
@@ -779,6 +782,18 @@ func TestAnAccountCarriesOnlyItsType(t *testing.T) {
 	visit.AccountType = AccountPersonal
 	if err := visit.Validate(); err == nil {
 		t.Fatal("a visit carrying an account type validated")
+	}
+}
+
+// The newest account observation of a type wins its day, so one from a clock
+// running ahead would hide the true ones after it. It is refused.
+func TestAnAccountFromAheadOfTheClockIsRefused(t *testing.T) {
+	s := openTestStore(t)
+	ahead := account(AccountCompany, testNow().Add(MaxClockAhead+time.Minute).UTC().Format(time.RFC3339))
+	ahead.Record.Day = testNow().UTC().Format(time.DateOnly)
+	applied, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{ahead})
+	if err != nil || len(applied.Rejected) != 1 || s.Len() != 0 {
+		t.Fatalf("applied = %+v, rows = %d, err = %v", applied, s.Len(), err)
 	}
 }
 

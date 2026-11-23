@@ -261,6 +261,12 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 			applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: record.Kind + " day is too old or in the future"})
 			continue
 		}
+		if record.Kind == KindAccount && !s.notAhead(record.ObservedAt) {
+			// The newest observation of a type wins its day, so one from a
+			// clock running ahead would hide every true one after it.
+			applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: "account observed_at is in the future"})
+			continue
+		}
 		if record.Kind == KindHealth && !s.recentObservation(record.ObservedAt) {
 			applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: "health observed_at is too old or in the future"})
 			continue
@@ -338,6 +344,16 @@ func (s *Store) recentDay(day string) bool {
 	}
 	today := s.now().UTC().Truncate(24 * time.Hour)
 	return !d.After(today.Add(24*time.Hour)) && today.Sub(d) < KeepDays*24*time.Hour
+}
+
+// MaxClockAhead is how far ahead of the daemon's clock an account may be
+// observed, the same allowance the cloud gives.
+const MaxClockAhead = 10 * time.Minute
+
+// notAhead reports whether observed is at most MaxClockAhead after now.
+func (s *Store) notAhead(observed string) bool {
+	at, err := time.Parse(time.RFC3339, observed)
+	return err == nil && !at.After(s.now().Add(MaxClockAhead))
 }
 
 // recentObservation reports whether observed is within KeepDays before now,

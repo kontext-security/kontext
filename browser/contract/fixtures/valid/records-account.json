@@ -12,7 +12,6 @@
       "kind": "account",
       "day": "2026-11-20",
       "app": "chatgpt",
-      "host": "chatgpt.com",
       "account_type": "company",
       "observed_at": "2026-11-20T09:14:40Z"
     },
@@ -20,7 +19,6 @@
       "kind": "account",
       "day": "2026-11-20",
       "app": "claude",
-      "host": "claude.ai",
       "account_type": "personal",
       "observed_at": "2026-11-20T10:02:11Z"
     },
@@ -28,7 +26,6 @@
       "kind": "account",
       "day": "2026-11-20",
       "app": "chatgpt",
-      "host": "chat.openai.com",
       "account_type": "none",
       "observed_at": "2026-11-20T11:00:00Z"
     },
@@ -36,7 +33,6 @@
       "kind": "account",
       "day": "2026-11-20",
       "app": "claude",
-      "host": "claude.ai",
       "account_type": "unknown",
       "observed_at": "2026-11-20T12:00:00Z"
     }
