@@ -4,6 +4,22 @@ Run the test from Claude Desktop on an Apple silicon Mac. Cowork executes the
 sensor inside its local Linux ARM64 VM; the Mac hosts the signed archive and
 device profile. No separate container test is required for this milestone.
 
+**Live-test result, 23 November 2026:** the updated signed archive loaded through
+Claude's EDR mechanism in VM boot `f72602ad-53f5-41f6-a16f-9caa3db5eadd`.
+A real Cowork Bash call (`toolu_018yfMjaAgoeRTrVRUTdNLzx`) reached staging
+under VM installation `ins_4jk5F6qCbeGMtOe_EWP9SQ5YPFqrKZub`, action
+`act_ecbfcd5d-9caf-5c99-afef-5c0c3e81e083`, as a retrospective observation.
+That proof used a foreground import of the actual completed transcript pair.
+
+**Continuous collection is not working:** the signed `collect` client reported
+ready, but no future event arrived after its launching Bash call ended. Cowork
+appears to reap the tool call's background processes; `nohup` is insufficient.
+Do not treat the launch recipe below as a working persistent deployment.
+Prototype a daemon-owned attachment/read handle with real mount-lifetime checks,
+or use a supported Anthropic lifecycle callback, before declaring coverage.
+The Activity UI also hides successful unmatched observation rows; the staging
+dashboard API exposes this exact real record with no decision row.
+
 **VM observation path (internal test):** the agent loop is on macOS, so
 registering a hook only in the VM does not establish a producer. The actual
 local Cowork session exposes its live Claude transcript read-only inside the
@@ -124,7 +140,9 @@ service-owned directory (0755) that other session users cannot modify. Config,
 credential and state are private. The root-owned hook drop-in is
 `/etc/claude-code/managed-settings.d/95-kontext-cowork.json`.
 
-Inside the actual local task, attach the installed client before a separate
+The following attachment recipe was tested and **failed to persist across tool
+calls**. Keep it as a regression scenario. Inside the actual local task, attach
+the installed client before a separate
 harmless tool call. Use the task's transcript UUID (not its `local_` UI ID):
 
 ```sh
@@ -175,3 +193,16 @@ The sensor test runs its core runtime on the Mac against an isolated local API
 fixture. It checks authentication, rejected credentials, the real hook socket,
 ledger upload, fixed observe mode, cross-user socket permissions and the
 restricted request scope. The production command itself accepts Linux only.
+
+## Pre-tool enforcement is a separate integration
+
+Anthropic's Enterprise Inference Hooks support an HTTPS policy endpoint and
+`tool_call` allow/deny checks before execution when Validate tool calls is on:
+https://platform.claude.com/docs/en/manage-claude/inference-hooks
+
+This is separate from both the EDR package loader and local Claude Code hooks.
+The published EDR program currently uses detection mode, without blocking:
+https://claude.com/resources/articles/claude-enterprise-security-updates
+
+Reuse the policy evaluator behind an Enterprise hook endpoint if this is the
+required enforcement channel; signing a VM collector does not create it.
