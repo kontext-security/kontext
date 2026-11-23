@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/kontext-security/kontext/internal/fsperm"
 )
@@ -138,7 +140,7 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		// current one.
 		// A row id given twice decodes as its last row: the file is
 		// written again, so the first one's text leaves the disk.
-		if hasDuplicateKeys(data) {
+		if hasDuplicateKeys(data, false) {
 			rewrite = true
 		}
 		rows := make(map[string]*row, len(file.Rows))
@@ -295,7 +297,7 @@ func removeLeftovers(path string) {
 func storedKeysAllowed(raw json.RawMessage, kind string) bool {
 	// A key given twice is decoded as its last value: the row could read
 	// one way here and another way to any other reader.
-	if hasDuplicateKeys(raw) {
+	if hasDuplicateKeys(raw, true) {
 		return false
 	}
 	var wrapper map[string]json.RawMessage
@@ -326,10 +328,31 @@ func storedKeysAllowed(raw json.RawMessage, kind string) bool {
 
 // hasDuplicateKeys reports whether any object in raw, at any depth, names
 // a key twice, or raw is not valid JSON.
-// foldKey is a key as the JSON decoder matches it to a field: two keys with
-// the same fold, such as "binding" and "Binding", fill the same field.
+// foldKey is a key as encoding/json matches it to a struct field: two keys
+// with the same fold, such as "binding" and "Binding", fill the same field.
+// ASCII letters are upper-cased and any other rune becomes the smallest of
+// its simple case folds, as the decoder does.
 func foldKey(key string) string {
-	return strings.ToUpper(strings.ToLower(key))
+	var b strings.Builder
+	for _, r := range key {
+		if r < utf8.RuneSelf {
+			if 'a' <= r && r <= 'z' {
+				r -= 'a' - 'A'
+			}
+			b.WriteRune(r)
+			continue
+		}
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				r = next
+				break
+			}
+			r = next
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // repeatsTopLevelKey reports whether the file's object names a key twice,
@@ -365,7 +388,10 @@ func repeatsTopLevelKey(raw []byte) bool {
 	return false
 }
 
-func hasDuplicateKeys(raw json.RawMessage) bool {
+// hasDuplicateKeys reports whether an object in raw names a key twice. With
+// fold, keys that fill the same struct field count as the same key; map keys,
+// such as row ids, are compared exactly.
+func hasDuplicateKeys(raw json.RawMessage, fold bool) bool {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	// A number too large for a float, such as a damaged counter, is still
 	// JSON: it is read as text, not taken for a broken file.
@@ -401,10 +427,14 @@ func hasDuplicateKeys(raw json.RawMessage) bool {
 		case string:
 			if inObject && expectKey {
 				keys := open[len(open)-1]
-				if keys[foldKey(t)] {
+				key := t
+				if fold {
+					key = foldKey(t)
+				}
+				if keys[key] {
 					return true
 				}
-				keys[foldKey(t)] = true
+				keys[key] = true
 				expectKey = false
 				continue
 			}

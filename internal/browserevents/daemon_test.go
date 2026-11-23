@@ -313,6 +313,50 @@ func TestARowAheadOfTheCloudsClockIsSentAgain(t *testing.T) {
 	}
 }
 
+// A cloud from before account records refuses an account for its kind and
+// takes the visit beside it: the account stays pending, held like a row
+// ahead of the cloud's clock, and goes once the cloud takes accounts.
+func TestAnAccountAnOlderCloudRefusesIsKept(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{
+		visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z"),
+		account(AccountPersonal, "2026-11-20T09:00:00Z"),
+	})
+	older := true
+	var batches *[]CloudBatch
+	var sender *Sender
+	sender, batches = newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		batch := (*batches)[len(*batches)-1]
+		var rejected []string
+		for i, record := range batch.Records {
+			if older && record.Kind == KindAccount {
+				rejected = append(rejected, fmt.Sprintf(`{"index":%d,"reason":"unknown record kind"}`, i))
+			}
+		}
+		_, _ = fmt.Fprintf(w, `{"accepted":%d,"rejected":[%s]}`, len(batch.Records)-len(rejected), strings.Join(rejected, ","))
+	})
+	clock := testNow()
+	sender.now = func() time.Time { return clock }
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent {
+		t.Fatalf("send = %v, %v", outcome, err)
+	}
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Nothing {
+		t.Fatalf("second send = %v, want Nothing while the account waits", outcome)
+	}
+	older = false
+	clock = clock.Add(SendDelay)
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent {
+		t.Fatalf("send after the upgrade = %v, %v", outcome, err)
+	}
+	last := (*batches)[len(*batches)-1]
+	if len(last.Records) != 1 || last.Records[0].Kind != KindAccount {
+		t.Fatalf("last batch = %+v, want the account alone", last.Records)
+	}
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Nothing {
+		t.Fatalf("a row is still pending: %v", outcome)
+	}
+}
+
 // A tab in use updates the row the cloud refused as in the future, with a
 // later time still: the update does not cut its wait short, and the next
 // refusal waits longer. A wait that ends before the next send is planned
@@ -1650,5 +1694,37 @@ func TestASwitchWhoseSaveFailedIsNotConfirmedUntilSaved(t *testing.T) {
 	}
 	if _, ok := s.Confirmed(); !ok {
 		t.Fatal("a saved switch was not confirmed")
+	}
+}
+
+// foldKey says two keys are the same exactly when encoding/json fills the
+// same struct field with them: "rowſ" fills rows, "bındıng" does not fill
+// binding.
+func TestFoldKeyMatchesTheDecoder(t *testing.T) {
+	for _, key := range []string{"binding", "Binding", "BINDING", "bındıng", "bİnding", "rows", "ROWS", "rowſ", "rowß"} {
+		var into struct {
+			Binding string `json:"binding"`
+			Rows    string `json:"rows"`
+		}
+		if err := json.Unmarshal([]byte(`{"`+key+`":"x"}`), &into); err != nil {
+			t.Fatal(err)
+		}
+		decoded := into.Binding != "" || into.Rows != ""
+		folded := foldKey(key) == foldKey("binding") || foldKey(key) == foldKey("rows")
+		if decoded != folded {
+			t.Errorf("%q: the decoder fills a field: %v, foldKey matches: %v", key, decoded, folded)
+		}
+	}
+}
+
+// Row ids are map keys, compared exactly: two profiles whose ids differ in
+// case are two rows, not a repeat.
+func TestRowIDsDifferingInCaseAreNotARepeat(t *testing.T) {
+	file := json.RawMessage(`{"binding":"b","rows":{"chrome/Profile01/x":{},"chrome/profile01/x":{}}}`)
+	if hasDuplicateKeys(file, false) {
+		t.Fatal("row ids that differ in case read as a repeat")
+	}
+	if !hasDuplicateKeys(json.RawMessage(`{"record":{},"Record":{}}`), true) {
+		t.Fatal("two spellings of one field read as different keys")
 	}
 }
