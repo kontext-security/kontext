@@ -243,11 +243,21 @@ func removeLeftovers(path string) {
 	}
 }
 
-// storedKeysAllowed reports whether a stored account row has only an
-// account's keys and its source's. Decoding drops an unknown key, such as an
-// address restored from a backup, without telling: the row is dropped
-// instead, so the file is rewritten without it.
+// storedKeysAllowed reports whether a stored row has only a row's keys and,
+// for an account, its record only an account's keys and its source's.
+// Decoding drops an unknown key, such as an address restored from a backup,
+// without telling: the row is dropped instead, so the file is rewritten
+// without it.
 func storedKeysAllowed(raw json.RawMessage, kind string) bool {
+	var wrapper map[string]json.RawMessage
+	if json.Unmarshal(raw, &wrapper) != nil {
+		return false
+	}
+	for key := range wrapper {
+		if key != "record" && key != "version" && key != "sent" {
+			return false
+		}
+	}
 	if kind != KindAccount {
 		return true
 	}
@@ -491,8 +501,13 @@ func (s *Store) pruneLocked() bool {
 
 func (s *Store) expired(r CloudRecord) bool {
 	switch r.Kind {
-	case KindVisit, KindAccount:
+	case KindVisit:
 		return !s.recentDay(r.Day)
+	case KindAccount:
+		// Also one too far ahead, as Apply refuses: from a restored file,
+		// or kept while the clock was set back. Its newer time would hide
+		// every later observation of that type, and the cloud refuses it.
+		return !s.recentDay(r.Day) || !s.notAhead(r.ObservedAt)
 	case KindHealth:
 		return !s.recentObservation(r.ObservedAt)
 	default:
