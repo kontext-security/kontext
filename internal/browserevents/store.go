@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -77,7 +78,7 @@ func OpenStore(path string) (*Store, error) {
 func openStore(path string, now func() time.Time) (*Store, error) {
 	s := &Store{path: path, now: now, rows: map[string]*row{}}
 	removeLeftovers(path)
-	data, private, err := readStoreFile(path)
+	data, private, trusted, err := readStoreFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}
@@ -93,7 +94,7 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	// A file that is not owner-only, such as one restored from a backup,
 	// may have been changed by another account: its rows are not read,
 	// so none of them can leave with this enrollment's token.
-	if private && json.Unmarshal(data, &file) == nil && file.Rows != nil && file.Binding != "" {
+	if trusted && json.Unmarshal(data, &file) == nil && file.Rows != nil && file.Binding != "" {
 		// Rows without a binding cannot say which workspace they belong
 		// to, so they are not read: Bind would otherwise give them to the
 		// current one.
@@ -136,45 +137,49 @@ var errOversizedStore = errors.New("browser events: store file is too large")
 
 // readStoreFile reads the store without blocking on a FIFO or reading a file
 // of any size: startup waits for it, and hooks start only after it.
-func readStoreFile(path string) (data []byte, private bool, err error) {
+func readStoreFile(path string) (data []byte, private, trusted bool, err error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if !info.Mode().IsRegular() {
 		// A FIFO would block startup; a folder or link is not ours.
-		return nil, false, fmt.Errorf("browser events: store %s is not a regular file", path)
+		return nil, false, false, fmt.Errorf("browser events: store %s is not a regular file", path)
 	}
 	if info.Size() > MaxStoreBytes {
-		return nil, false, errOversizedStore
+		return nil, false, false, errOversizedStore
 	}
 	// The file can change between Lstat and open, so the opened file is
 	// checked again, and opening it never waits.
 	f, err := os.OpenFile(path, os.O_RDONLY|openNoBlock, 0)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	defer f.Close()
 	opened, err := f.Stat()
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-		return nil, false, fmt.Errorf("browser events: store %s changed while it was opened", path)
+		return nil, false, false, fmt.Errorf("browser events: store %s changed while it was opened", path)
 	}
 	private, err = fsperm.PrivateFile(path, opened)
 	if err != nil {
 		// Unknown counts as not private: the next save fixes it.
 		private = false
 	}
+	// Rows are read from a private file, or one only its owner can use at
+	// all, such as a backup restored read-only: no other account could
+	// have changed it. The second is still written again private.
+	trusted = private || onlyOwnerMode(opened)
 	data, err = io.ReadAll(io.LimitReader(f, MaxStoreBytes+1))
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if len(data) > MaxStoreBytes {
-		return nil, false, errOversizedStore
+		return nil, false, false, errOversizedStore
 	}
-	return data, private, nil
+	return data, private, trusted, nil
 }
 
 // tempPattern names the store's temporary files after the store, so a
@@ -192,7 +197,8 @@ func removeLeftovers(path string) {
 		return
 	}
 	// Matched literally: the database name may hold glob characters. Only
-	// the names CreateTemp makes, digits in place of the star, are removed.
+	// the names CreateTemp makes, a uint32 in decimal in place of the star,
+	// are removed.
 	prefix := "." + filepath.Base(path) + "-"
 	for _, entry := range entries {
 		name := entry.Name()
@@ -200,7 +206,7 @@ func removeLeftovers(path string) {
 		if ok {
 			random, ok = strings.CutSuffix(random, ".tmp")
 		}
-		if entry.Type().IsRegular() && ok && isDigits(random) {
+		if entry.Type().IsRegular() && ok && isTempSuffix(random) {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
@@ -268,6 +274,21 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 		return refuseAll("recorded for another enrollment"), nil
 	}
 	applied := Applied{Enrollment: current}
+	// What each changed row was before, so a message whose save fails is
+	// taken back: the extension is told unavailable and rolls back, and
+	// the row must not go out as if it had been taken.
+	undo := map[string]*row{}
+	keep := func(key string, before *row) {
+		if _, seen := undo[key]; seen {
+			return
+		}
+		if before == nil {
+			undo[key] = nil
+			return
+		}
+		copied := *before
+		undo[key] = &copied
+	}
 	for _, indexed := range records {
 		record := CloudRecord{Browser: ext.Browser, Profile: ext.Profile, ExtensionVersion: ext.Version, Record: indexed.Record}
 		if (record.Kind == KindVisit || record.Kind == KindAccount) && !s.recentDay(record.Day) {
@@ -291,11 +312,13 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 				applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: "daemon store is full"})
 				continue
 			}
+			keep(key, nil)
 			s.rows[key] = &row{Record: record, Version: 1}
 			changed = true
 			continue
 		}
 		if merged, differs := merge(existing.Record, record); differs {
+			keep(key, existing)
 			existing.Record = merged
 			existing.Version++
 			changed = true
@@ -304,7 +327,17 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 	if !changed && !s.dirty {
 		return applied, nil
 	}
-	return applied, s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		for key, before := range undo {
+			if before == nil {
+				delete(s.rows, key)
+				continue
+			}
+			*s.rows[key] = *before
+		}
+		return Applied{}, err
+	}
+	return applied, nil
 }
 
 // merge keeps the widest view of a day: the earliest first sight, the latest
@@ -532,12 +565,15 @@ func (s *Store) Flush() error {
 // unavailable, so it keeps its counts until the enrollment is known again.
 var ErrSuspended = errors.New("browser events: the enrollment cannot be confirmed")
 
-// Suspended says whether the store is bound but cannot confirm that binding
-// now, such as while the install token cannot be read.
-func (s *Store) Suspended() bool {
+// Confirmed returns the enrollment and whether it is confirmed now, in one
+// read, so a suspension between two reads cannot answer an empty enrollment.
+func (s *Store) Confirmed() (enrollment string, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.binding != "" && s.suspended
+	if s.binding != "" && s.suspended {
+		return "", false
+	}
+	return s.enrollmentLocked(), true
 }
 
 // Enrollment is the opaque id of the enrollment the store records under, as
@@ -617,14 +653,7 @@ func (s *Store) saveLocked() error {
 	return nil
 }
 
-func isDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+func isTempSuffix(s string) bool {
+	n, err := strconv.ParseUint(s, 10, 32)
+	return err == nil && strconv.FormatUint(n, 10) == s
 }
