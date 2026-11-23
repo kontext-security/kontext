@@ -401,12 +401,13 @@ func (c *Cache) markFailedLocked(err error, attemptedAt time.Time) {
 func (c *Cache) markNewestUnsupported() {
 	c.mu.Lock()
 	// A config the fallback version confirmed is the server's word: a
-	// later failure to refresh it is only a failure.
-	if c.lastGood != nil && c.lastGood.ResponseVersion < ResponseVersion {
-		c.mu.Unlock()
-		return
+	// later failure to refresh it is only a failure. The file may still
+	// hold the newer version's config, if storage refused the fallback's
+	// write; that file is marked below, so a restart can't restore it.
+	fallbackConfirmed := c.lastGood != nil && c.lastGood.ResponseVersion < ResponseVersion
+	if !fallbackConfirmed {
+		c.status.NewestUnsupported = true
 	}
-	c.status.NewestUnsupported = true
 	c.mu.Unlock()
 	// The refusal is kept with the file, so a restart while configuration
 	// is unavailable doesn't turn v6-only switches back on.
@@ -419,6 +420,9 @@ func (c *Cache) markNewestUnsupported() {
 	}
 	var file cacheFile
 	if decodeStrict(strings.NewReader(string(data)), &file) != nil || file.Response == nil || file.NewestRefused {
+		return
+	}
+	if fallbackConfirmed && file.Response.ResponseVersion < ResponseVersion {
 		return
 	}
 	file.NewestRefused = true
@@ -595,7 +599,17 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	if err != nil {
 		return r.fail(err)
 	}
-	if err := r.Cache.apply(result, r.now(), Owner(token)); err != nil {
+	err = r.Cache.apply(result, r.now(), Owner(token))
+	if err != nil && result.NotModified && errors.Is(err, ErrNewestUnsupported) {
+		// The 304 answered the newer version's identity on the fallback
+		// request, and confirms nothing; asked again without it, the server
+		// sends the fallback's config.
+		result, err = r.Client.Fetch(ctx, token, r.InstallationID, "")
+		if err == nil {
+			err = r.Cache.apply(result, r.now(), Owner(token))
+		}
+	}
+	if err != nil {
 		return r.fail(err)
 	}
 	if r.OnApplied != nil {
