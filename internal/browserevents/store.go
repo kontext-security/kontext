@@ -103,13 +103,16 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		for key, r := range file.Rows {
 			if r == nil {
 				delete(file.Rows, key)
+				rewrite = true
 			}
 		}
 		// A row the contract no longer allows, sent or not, leaves the
 		// disk at open: its text is not kept until it ages out.
 		for key, r := range file.Rows {
 			source := Extension{Version: r.Record.ExtensionVersion, Browser: r.Record.Browser, Profile: r.Record.Profile}
-			if source.validate() != nil || r.Record.Record.Validate() != nil {
+			// A row under another row's key would take that row's
+			// snapshots: it is dropped too.
+			if source.validate() != nil || r.Record.Record.Validate() != nil || rowKey(r.Record) != key {
 				delete(file.Rows, key)
 				rewrite = true
 			}
@@ -148,9 +151,6 @@ func readStoreFile(path string) (data []byte, private, trusted bool, err error) 
 		// A FIFO would block startup; a folder or link is not ours.
 		return nil, false, false, fmt.Errorf("browser events: store %s is not a regular file", path)
 	}
-	if info.Size() > MaxStoreBytes {
-		return nil, false, false, errOversizedStore
-	}
 	// The file can change between Lstat and open, so the opened file is
 	// checked again, and opening it never waits.
 	f, err := os.OpenFile(path, os.O_RDONLY|openNoBlock, 0)
@@ -170,6 +170,10 @@ func readStoreFile(path string) (data []byte, private, trusted bool, err error) 
 		// Unknown is not unsafe: the file is left as it is, unread, rather
 		// than replaced by an empty store.
 		return nil, false, false, fmt.Errorf("browser events: store %s permissions: %w", path, err)
+	}
+	// Only a file whose permissions are known is replaced for its size.
+	if opened.Size() > MaxStoreBytes {
+		return nil, false, false, errOversizedStore
 	}
 	// Rows are read from a private file, or one only its owner could have
 	// written, such as a backup restored 0644 or 0400: no other account
