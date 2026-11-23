@@ -90,7 +90,10 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 		return nil, err
 	}
 	var file storeFile
-	if json.Unmarshal(data, &file) == nil && file.Rows != nil && file.Binding != "" {
+	// A file that is not owner-only, such as one restored from a backup,
+	// may have been changed by another account: its rows are not read,
+	// so none of them can leave with this enrollment's token.
+	if private && json.Unmarshal(data, &file) == nil && file.Rows != nil && file.Binding != "" {
 		// Rows without a binding cannot say which workspace they belong
 		// to, so they are not read: Bind would otherwise give them to the
 		// current one.
@@ -188,11 +191,16 @@ func removeLeftovers(path string) {
 	if err != nil {
 		return
 	}
-	// Matched literally: the database name may hold glob characters.
+	// Matched literally: the database name may hold glob characters. Only
+	// the names CreateTemp makes, digits in place of the star, are removed.
 	prefix := "." + filepath.Base(path) + "-"
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.Type().IsRegular() && strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".tmp") {
+		random, ok := strings.CutPrefix(name, prefix)
+		if ok {
+			random, ok = strings.CutSuffix(random, ".tmp")
+		}
+		if entry.Type().IsRegular() && ok && isDigits(random) {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
@@ -246,7 +254,12 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 		}
 		return applied
 	}
-	if s.binding == "" || s.suspended {
+	if s.suspended {
+		// The enrollment is not confirmed, not changed: an empty enrollment
+		// in the answer would tell the extension to discard its counts.
+		return Applied{}, ErrSuspended
+	}
+	if s.binding == "" {
 		// Until the store knows its enrollment, a record could later leave
 		// under another workspace's token, so none is taken.
 		return refuseAll("daemon is not enrolled yet"), nil
@@ -511,6 +524,19 @@ func (s *Store) Flush() error {
 	return s.saveLocked()
 }
 
+// ErrSuspended is Apply's answer while the store cannot confirm the
+// enrollment it is bound to. The extension is told the daemon is
+// unavailable, so it keeps its counts until the enrollment is known again.
+var ErrSuspended = errors.New("browser events: the enrollment cannot be confirmed")
+
+// Suspended says whether the store is bound but cannot confirm that binding
+// now, such as while the install token cannot be read.
+func (s *Store) Suspended() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.binding != "" && s.suspended
+}
+
 // Enrollment is the opaque id of the enrollment the store records under, as
 // the extension gets it, or "" while the store is unbound. It is derived
 // from the binding and reveals nothing of the token.
@@ -586,4 +612,16 @@ func (s *Store) saveLocked() error {
 	}
 	s.dirty = false
 	return nil
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
