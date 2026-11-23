@@ -799,6 +799,43 @@ func TestALeftoverTemporaryCopyIsRemoved(t *testing.T) {
 	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
 		t.Fatalf("leftover still there: %v", err)
 	}
+	// A file someone saved under a similar name is not the store's.
+	kept := filepath.Join(filepath.Dir(s.path), "."+filepath.Base(s.path)+"-backup.tmp")
+	if err := os.WriteFile(kept, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openStore(s.path, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Fatalf("a file the store did not make was removed: %v", err)
+	}
+}
+
+// A hello does not wait for a stuck token read past its own deadline.
+func TestAHelloDoesNotWaitForAStuckTokenRead(t *testing.T) {
+	s := openTestStore(t)
+	stuck := make(chan struct{})
+	defer close(stuck)
+	sender := &Sender{Store: s, BaseURL: "https://app.kontext.dev", InstallationID: "ins_0123456789abcdefghijklmnopqrstuv",
+		Tokens: func(ctx context.Context) (string, error) {
+			select {
+			case <-stuck:
+			case <-ctx.Done():
+			}
+			return "", errors.New("keychain")
+		}}
+	go func() { _, _ = sender.Rebind(context.Background()) }()
+	time.Sleep(20 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := sender.Rebind(ctx); err == nil {
+		t.Fatal("a rebind behind a stuck read succeeded")
+	}
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("waited %v", waited)
+	}
 }
 
 // When the enrollment cannot be confirmed, such as when the configuration
@@ -813,8 +850,18 @@ func TestAnUnconfirmedEnrollmentTakesNoRecords(t *testing.T) {
 		t.Fatal("Rebind took a failed token read")
 	}
 	applied, err := s.Apply(testExtension, before, []IndexedRecord{visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z")})
-	if err != nil || len(applied.Rejected) != 1 || s.Enrollment() != "" {
+	if !errors.Is(err, ErrSuspended) || len(s.Pending(10).Records) != 0 || s.Enrollment() != "" {
 		t.Fatalf("applied = %+v, enrollment = %q, err = %v", applied, s.Enrollment(), err)
+	}
+	// The extension is told the daemon is unavailable, not that the
+	// enrollment changed: an empty enrollment would make it discard its
+	// counts.
+	h := &Handler{Store: s}
+	records := `{"contract":2,"type":"records","enrollment":"` + before + `","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"},"records":[]}`
+	for _, msg := range []string{records, `{"contract":2,"type":"hello","extension":{"version":"0.1.0","browser":"chrome","profile":"p7Hq2vXkLm9s"}}`} {
+		if got := string(h.Answer(context.Background(), json.RawMessage(msg))); !strings.Contains(got, ErrorUnavailable) {
+			t.Fatalf("answer = %s", got)
+		}
 	}
 	if _, err := s.Bind(Binding("https://app.kontext.dev", "ins_0123456789abcdefghijklmnopqrstuv", "workspace-a")); err != nil {
 		t.Fatal(err)

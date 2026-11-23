@@ -46,6 +46,11 @@ func (h *Handler) Answer(ctx context.Context, raw json.RawMessage) json.RawMessa
 			return encode(NewError(ErrorUnavailable))
 		}
 	}
+	if h.Store.Suspended() {
+		// Not a change of enrollment: the extension keeps its counts and
+		// asks again.
+		return encode(NewError(ErrorUnavailable))
+	}
 	settings := h.settings()
 	settings.Enrollment = h.Store.Enrollment()
 	if msg.Type == TypeHello {
