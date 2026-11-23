@@ -31,6 +31,18 @@ func RestrictFile(file *os.File) error {
 // PrivateFile reports whether the file at path is private to the current user: owned by the user
 // or the token's default owner, with a protected DACL that grants access to that user alone.
 func PrivateFile(path string, _ os.FileInfo) (bool, error) {
+	return privateFile(path, false)
+}
+
+// PrivateFileAnyOwner is PrivateFile that also takes a file owned by
+// Administrators or LocalSystem, such as one an elevated process of this user
+// wrote: they can take any file anyway, and the DACL still grants access to
+// this user alone.
+func PrivateFileAnyOwner(path string, _ os.FileInfo) (bool, error) {
+	return privateFile(path, true)
+}
+
+func privateFile(path string, admins bool) (bool, error) {
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
@@ -48,7 +60,17 @@ func PrivateFile(path string, _ os.FileInfo) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !OwnerAllowed(owner, user, defaultOwner) {
+	allowed := []*windows.SID{user, defaultOwner}
+	if admins {
+		for _, known := range []windows.WELL_KNOWN_SID_TYPE{windows.WinBuiltinAdministratorsSid, windows.WinLocalSystemSid} {
+			sid, err := windows.CreateWellKnownSid(known)
+			if err != nil {
+				return false, err
+			}
+			allowed = append(allowed, sid)
+		}
+	}
+	if !OwnerAllowed(owner, allowed...) {
 		return false, nil
 	}
 	control, _, err := sd.Control()

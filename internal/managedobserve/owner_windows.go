@@ -12,8 +12,8 @@ import (
 	"github.com/kontext-security/kontext/internal/fsperm"
 )
 
-// ensurePrivateOwner refuses a socket directory owned by anyone but this process's user or the
-// token's default owner, then replaces its DACL with a protected one that grants only the user full
+// ensurePrivateOwner refuses a socket directory owned by anyone but this process's user, the
+// token's default owner, Administrators or LocalSystem, then replaces its DACL with a protected one that grants only the user full
 // control, inherited by the socket inside. The default owner counts because an elevated process
 // creates objects owned by its default owner (Administrators) rather than by the user.
 func ensurePrivateOwner(dir string, _ os.FileInfo) error {
@@ -34,8 +34,27 @@ func ensurePrivateOwner(dir string, _ os.FileInfo) error {
 	if err != nil {
 		return fmt.Errorf("socket directory %s: read token owner: %w", dir, err)
 	}
+	// Administrators and LocalSystem can take any folder anyway: one an
+	// elevated daemon of this user created and made private is used again
+	// unelevated.
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return err
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return err
+	}
 	if !fsperm.OwnerAllowed(owner, user.User.Sid, defaultOwner) {
-		return fmt.Errorf("socket directory %s is owned by %s, want %s", dir, owner, user.User.Sid)
+		if !fsperm.OwnerAllowed(owner, admins, system) {
+			return fmt.Errorf("socket directory %s is owned by %s, want %s", dir, owner, user.User.Sid)
+		}
+		// Only a folder an earlier daemon of this user already made
+		// private is adopted: a shared folder of another product keeps
+		// its grants.
+		if err := checkPrivateOwner(dir, nil); err != nil {
+			return fmt.Errorf("socket directory %s is owned by %s and is not private to %s: %w", dir, owner, user.User.Sid, err)
+		}
 	}
 	acl, err := fsperm.OwnerOnlyACL(user.User.Sid, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
 	if err != nil {
