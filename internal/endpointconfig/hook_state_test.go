@@ -174,7 +174,7 @@ func TestAFailedFallbackRefreshKeepsTheFallbacksSwitches(t *testing.T) {
 // fallback's config, rather than sending the same identity every time.
 func TestACrossVersionNotModifiedFetchesTheFallbackAgain(t *testing.T) {
 	cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
-	response, _ := installedResponse(t)
+	response := inventoryOnResponse(t)
 	if err := cache.Apply(FetchResult{Response: &response, Version: ResponseVersion}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +219,56 @@ func TestACrossVersionNotModifiedFetchesTheFallbackAgain(t *testing.T) {
 	}
 	if got := cache.Current(); got.ConfigIdentity != fallback.ConfigIdentity || got.Status.NewestUnsupported {
 		t.Fatalf("after the retry: identity %s, status %+v", got.ConfigIdentity, got.Status)
+	}
+}
+
+// installedResponse with the hook inventory switch on.
+func inventoryOnResponse(t *testing.T) Response {
+	t.Helper()
+	response, _ := installedResponse(t)
+	yes := true
+	response.Config.HookInventory = &yes
+	identity, err := ComputeIdentity(response.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.ConfigIdentity = identity
+	return response
+}
+
+// A confirmed opt-out stays decided while a refused version is negotiated,
+// so a purge that failed can run again; a confirmed opt-in reads off but
+// undecided, so nothing queued is purged.
+func TestAConfirmedOptOutStaysDecidedDuringAFallback(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		inventoryOn bool
+		decided     bool
+	}{
+		{"opt-out", false, true},
+		{"opt-in", true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cache := NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+			response, _ := installedResponse(t)
+			if test.inventoryOn {
+				response = inventoryOnResponse(t)
+			}
+			if err := cache.Apply(FetchResult{Response: &response, Version: ResponseVersion}, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			cache.markNewestUnsupported()
+			got := cache.Current()
+			if !got.Status.NewestUnsupported {
+				t.Fatal("the refusal wasn't marked")
+			}
+			if got.HookInventoryEnabled() {
+				t.Fatal("the switch read on during the fallback")
+			}
+			if got.HookInventoryDecided() != test.decided {
+				t.Fatalf("HookInventoryDecided() = %v, want %v", got.HookInventoryDecided(), test.decided)
+			}
+		})
 	}
 }
 
