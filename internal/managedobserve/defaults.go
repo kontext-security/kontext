@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -96,19 +95,7 @@ func EnsureSocketDir(socketPath string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%s is not a directory", dir)
 	}
-	othersCouldWrite := runtime.GOOS != "windows" && info.Mode().Perm()&0o022 != 0
-	if err := ensurePrivateOwner(dir, info); err != nil {
-		return err
-	}
-	if othersCouldWrite {
-		// Another account could have put a socket here before the repair.
-		// A listener on it would pass every later check, so it goes; a
-		// daemon of ours makes its socket again.
-		if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-	return nil
+	return ensurePrivateOwner(dir, info)
 }
 
 // CheckSocketDir checks, without changing anything, that the socket's
