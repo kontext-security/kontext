@@ -509,7 +509,11 @@ func (r Record) Validate() error {
 		if !appPattern.MatchString(r.App) {
 			return errors.New("visit app id is invalid")
 		}
-		if !isLabel(r.AppName) || !isLabel(r.Provider) {
+		app, known := catalog[r.App]
+		if !known {
+			return errors.New("visit app is not in the catalog")
+		}
+		if !isLabel(r.AppName) || !isLabel(r.Provider) || r.AppName != app.Name || r.Provider != app.Provider {
 			return errors.New("visit app_name and provider must be catalog names")
 		}
 		if r.Surface != "web" {
@@ -517,6 +521,9 @@ func (r Record) Validate() error {
 		}
 		if len(r.Host) > 253 || !hostPattern.MatchString(r.Host) {
 			return errors.New("visit host must be a bare hostname")
+		}
+		if !app.matchesHost(r.Host) {
+			return errors.New("visit host is not one of its app's hosts")
 		}
 		if !isTime(r.FirstSeen) || !isTime(r.LastSeen) {
 			return errors.New("visit needs first_seen and last_seen")
@@ -541,6 +548,9 @@ func (r Record) Validate() error {
 		}
 		if len(r.Host) > 253 || !hostPattern.MatchString(r.Host) {
 			return errors.New("account host must be a bare hostname")
+		}
+		if app, known := catalog[r.App]; !known || !app.matchesHost(r.Host) {
+			return errors.New("account app and host must be a catalog app and one of its hosts")
 		}
 		if !isTime(r.ObservedAt) || !insideDay(r.Day, r.ObservedAt, r.ObservedAt) {
 			return errors.New("account observed_at must fall on its day")

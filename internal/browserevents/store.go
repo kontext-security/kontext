@@ -9,9 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -121,11 +119,20 @@ func readStoreFile(path string) ([]byte, error) {
 	if info.Size() > MaxStoreBytes {
 		return nil, errOversizedStore
 	}
-	f, err := os.Open(path)
+	// The file can change between Lstat and open, so the opened file is
+	// checked again, and opening it never waits.
+	f, err := os.OpenFile(path, os.O_RDONLY|openNoBlock, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, fmt.Errorf("browser events: store %s changed while it was opened", path)
+	}
 	data, err := io.ReadAll(io.LimitReader(f, MaxStoreBytes+1))
 	if err != nil {
 		return nil, err
@@ -140,9 +147,7 @@ func readStoreFile(path string) ([]byte, error) {
 // it, so two daemons with their own databases in one folder keep their own
 // stores.
 func DefaultStorePath(dbPath string) string {
-	base := filepath.Base(dbPath)
-	base = strings.TrimSuffix(base, filepath.Ext(base))
-	return filepath.Join(filepath.Dir(dbPath), base+".browser-activity.json")
+	return dbPath + ".browser-activity.json"
 }
 
 func rowKey(r CloudRecord) string {
@@ -152,42 +157,54 @@ func rowKey(r CloudRecord) string {
 	return r.Browser + "|" + r.Profile + "|" + r.Kind + "|" + r.App + "|" + r.Day
 }
 
-// Apply merges valid records from one extension into the store and returns
-// the ones it could not keep. enrollment is the id the extension recorded its
-// visits under: a visit recorded for another enrollment is refused, so a
-// snapshot counted for one workspace never reaches another. Health says only
-// that the extension runs, and is kept.
-func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord) ([]Rejection, error) {
+// Applied is what Apply did: the records it could not keep, and the
+// enrollment it checked them against, which the answer must name so the
+// extension learns the one its records were judged by.
+type Applied struct {
+	Rejected   []Rejection
+	Enrollment string
+}
+
+// Apply merges valid records from one extension into the store. enrollment is
+// the id the extension recorded under: records sent for another enrollment are
+// all refused, so nothing counted for one workspace reaches another, and the
+// extension learns the current id from the answer.
+func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord) (Applied, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := s.pruneLocked()
-	var rejected []Rejection
+	current := s.enrollmentLocked()
+	refuseAll := func(reason string) Applied {
+		applied := Applied{Enrollment: current}
+		for _, indexed := range records {
+			applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: reason})
+		}
+		return applied
+	}
 	if s.binding == "" {
 		// Until the store knows its enrollment, a record could later leave
 		// under another workspace's token, so none is taken.
-		for _, indexed := range records {
-			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: "daemon is not enrolled yet"})
-		}
-		return rejected, nil
+		return refuseAll("daemon is not enrolled yet"), nil
 	}
-	current := s.enrollmentLocked()
+	if enrollment != current {
+		return refuseAll("recorded for another enrollment"), nil
+	}
+	applied := Applied{Enrollment: current}
 	for _, indexed := range records {
 		record := CloudRecord{Browser: ext.Browser, Profile: ext.Profile, ExtensionVersion: ext.Version, Record: indexed.Record}
-		if record.Kind != KindHealth && enrollment != current {
-			// An account type seen for one workspace must not reach another,
-			// as with visits.
-			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: record.Kind + " recorded for another enrollment"})
+		if (record.Kind == KindVisit || record.Kind == KindAccount) && !s.recentDay(record.Day) {
+			applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: record.Kind + " day is too old or in the future"})
 			continue
 		}
-		if record.Kind != KindHealth && !s.recentDay(record.Day) {
-			rejected = append(rejected, Rejection{Index: indexed.Index, Reason: record.Kind + " day is too old or in the future"})
+		if record.Kind == KindHealth && !s.recentObservation(record.ObservedAt) {
+			applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: "health observed_at is too old or in the future"})
 			continue
 		}
 		key := rowKey(record)
 		existing, ok := s.rows[key]
 		if !ok {
 			if len(s.rows) >= MaxRows {
-				rejected = append(rejected, Rejection{Index: indexed.Index, Reason: "daemon store is full"})
+				applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: "daemon store is full"})
 				continue
 			}
 			s.rows[key] = &row{Record: record, Version: 1}
@@ -201,9 +218,9 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 		}
 	}
 	if !changed && !s.dirty {
-		return rejected, nil
+		return applied, nil
 	}
-	return rejected, s.saveLocked()
+	return applied, s.saveLocked()
 }
 
 // merge keeps the widest view of a day: the earliest first sight, the latest
@@ -261,6 +278,17 @@ func (s *Store) recentDay(day string) bool {
 	return !d.After(today.Add(24*time.Hour)) && today.Sub(d) < KeepDays*24*time.Hour
 }
 
+// recentObservation reports whether observed is within KeepDays before now,
+// and at most a day after it, so a clock far ahead cannot keep a row forever.
+func (s *Store) recentObservation(observed string) bool {
+	at, err := time.Parse(time.RFC3339, observed)
+	if err != nil {
+		return false
+	}
+	now := s.now()
+	return !at.After(now.Add(24*time.Hour)) && now.Sub(at) < KeepDays*24*time.Hour
+}
+
 // pruneLocked drops visits of days past KeepDays, and the health of
 // profiles not seen for KeepDays, such as deleted ones, so they cannot fill
 // the store. It says whether it dropped any.
@@ -280,8 +308,7 @@ func (s *Store) expired(r CloudRecord) bool {
 	case KindVisit, KindAccount:
 		return !s.recentDay(r.Day)
 	case KindHealth:
-		observed, err := time.Parse(time.RFC3339, r.ObservedAt)
-		return err != nil || s.now().Sub(observed) >= KeepDays*24*time.Hour
+		return !s.recentObservation(r.ObservedAt)
 	default:
 		return true
 	}
@@ -436,19 +463,11 @@ func (s *Store) saveLocked() error {
 	if err := os.Rename(tmp.Name(), s.path); err != nil {
 		return fmt.Errorf("browser events: save store: %w", err)
 	}
-	syncDir(dir)
+	// Until the rename is durable the store stays dirty, and the extension
+	// is not told its records were taken.
+	if err := fsperm.SyncDir(dir); err != nil {
+		return fmt.Errorf("browser events: sync store folder: %w", err)
+	}
 	s.dirty = false
 	return nil
-}
-
-// syncDir makes a rename in dir durable. Windows cannot open a folder for
-// that, and NTFS logs the rename itself.
-func syncDir(dir string) {
-	if runtime.GOOS == "windows" {
-		return
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
 }

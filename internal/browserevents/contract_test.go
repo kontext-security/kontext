@@ -205,34 +205,43 @@ func TestHealthRecordKeepsOnlyItsOwnFields(t *testing.T) {
 	}
 }
 
-func TestLabelsCountCharactersNotBytes(t *testing.T) {
-	name := strings.Repeat("智", 40) // 120 bytes, 40 characters
-	visit := Record{Kind: KindVisit, Day: "2026-11-20", App: "qwen", AppName: name, Provider: name, Surface: "web",
-		Host: "chat.qwen.ai", FirstSeen: "2026-11-20T08:00:00Z", LastSeen: "2026-11-20T09:00:00Z", Requests: 1}
-	if err := visit.Validate(); err != nil {
-		t.Fatalf("40 characters refused: %v", err)
-	}
-	visit.AppName += "智"
-	if err := visit.Validate(); err == nil {
-		t.Fatal("41 characters taken")
-	}
-}
-
-// Names come from the extension's catalog. Text a page or a person wrote
-// needs punctuation a catalog name does not, so it is refused.
-func TestLabelsAreCatalogNames(t *testing.T) {
+// A visit names an app of the contract's catalog, with the catalog's own name,
+// provider and one of its hosts. Anything else could carry text a page or a
+// person wrote, so it is refused.
+func TestAVisitNamesACatalogApp(t *testing.T) {
 	visit := Record{Kind: KindVisit, Day: "2026-11-20", App: "chatgpt", AppName: "ChatGPT", Provider: "OpenAI", Surface: "web",
 		Host: "chatgpt.com", FirstSeen: "2026-11-20T08:00:00Z", LastSeen: "2026-11-20T09:00:00Z", Requests: 1}
-	for _, name := range []string{"ChatGPT", "Microsoft Copilot", "n8n", "Le Chat (Mistral)", "AT&T Ask"} {
-		visit.AppName = name
-		if err := visit.Validate(); err != nil {
-			t.Errorf("%q refused: %v", name, err)
+	if err := visit.Validate(); err != nil {
+		t.Fatalf("a catalog visit refused: %v", err)
+	}
+	for _, host := range []string{"chat.openai.com"} {
+		v := visit
+		v.Host = host
+		if err := v.Validate(); err != nil {
+			t.Errorf("host %q refused: %v", host, err)
 		}
 	}
-	for _, name := range []string{"", " ChatGPT", "chatgpt.com/c/123", "a?q=secret", "Plan: cut costs", "line\nbreak", "say \"hi\""} {
-		visit.AppName = name
-		if err := visit.Validate(); err == nil {
-			t.Errorf("%q taken", name)
+	n8n := visit
+	n8n.App, n8n.AppName, n8n.Provider, n8n.Host = "n8n-cloud", "n8n cloud", "n8n", "acme.app.n8n.cloud"
+	if err := n8n.Validate(); err != nil {
+		t.Errorf("a wildcard host refused: %v", err)
+	}
+	refused := map[string]func(*Record){
+		"unknown app":        func(r *Record) { r.App = "qwen" },
+		"other name":         func(r *Record) { r.AppName = "Plan cut costs" },
+		"other provider":     func(r *Record) { r.Provider = "Anthropic" },
+		"text in a name":     func(r *Record) { r.AppName = "chatgpt.com/c/123" },
+		"another app's host": func(r *Record) { r.Host = "claude.ai" },
+		"host above a wildcard": func(r *Record) {
+			r.App, r.AppName, r.Provider, r.Host = "n8n-cloud", "n8n cloud", "n8n", "app.n8n.cloud"
+		},
+		"host that only ends alike": func(r *Record) { r.Host = "evilchatgpt.com" },
+	}
+	for name, change := range refused {
+		v := visit
+		change(&v)
+		if err := v.Validate(); err == nil {
+			t.Errorf("%s taken", name)
 		}
 	}
 }
@@ -304,6 +313,24 @@ func TestTheCloudAnswerMustAccountForTheBatch(t *testing.T) {
 	} {
 		if _, err := DecodeCloudResponse([]byte(data), 3); err == nil {
 			t.Errorf("%s: taken for 3 records", data)
+		}
+	}
+}
+
+// Every catalog entry must pass the contract itself, or the extension would
+// record visits the daemon refuses.
+func TestTheCatalogFitsTheContract(t *testing.T) {
+	if len(catalog) == 0 {
+		t.Fatal("the catalog is empty")
+	}
+	for id, app := range catalog {
+		if !appPattern.MatchString(id) || !isLabel(app.Name) || !isLabel(app.Provider) || len(app.Hosts) == 0 {
+			t.Errorf("catalog entry %q does not fit the contract", id)
+		}
+		for _, host := range app.Hosts {
+			if !hostPattern.MatchString(strings.TrimPrefix(host, "*.")) {
+				t.Errorf("catalog host %q of %q is not a hostname", host, id)
+			}
 		}
 	}
 }
