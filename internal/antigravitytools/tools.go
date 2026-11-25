@@ -43,8 +43,8 @@ var tools = map[string]tool{
 
 // modelVariant matches the effort and routing suffixes Antigravity adds to a
 // model id: its default reports as gemini-3.8-flash-tiered, and the binary also
-// names -extra-low, -low, -medium, -high, -max and -low-thinking variants.
-var modelVariant = regexp.MustCompile(`(-(tiered|extra-low|low|medium|high|max|thinking))+$`)
+// names -extra-low, -low, -medium, -high, -xhigh, -max and -low-thinking variants.
+var modelVariant = regexp.MustCompile(`(-(tiered|extra-low|low|medium|high|xhigh|max|thinking))+$`)
 
 // BaseModel is the id its maker publishes prices under. The variants are one
 // model at one price, and pricing matches ids exactly.
