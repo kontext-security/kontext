@@ -151,6 +151,7 @@ func TestAntigravityTranscriptRecordsThePublishedModelID(t *testing.T) {
 		"gemini-3.5-flash-lite":       "gemini-3.5-flash-lite",
 		"gemini-3.1-flash-lite":       "gemini-3.1-flash-lite",
 		"gemini-4-argon-high":         "gemini-4-argon",
+		"gemini-4-neon-xhigh":         "gemini-4-neon",
 		"gemini-3.5-flash-extra-low":  "gemini-3.5-flash",
 		"gemini-3.1-pro-low-thinking": "gemini-3.1-pro",
 		"claude-opus-5-5-max":         "claude-opus-5-5",
