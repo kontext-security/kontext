@@ -51,6 +51,54 @@ type Sender struct {
 	// channel so a hello can stop waiting for it at its deadline.
 	rebind     chan struct{}
 	rebindInit sync.Once
+	// held are the rows the cloud refused as ahead of its clock, by key:
+	// each goes again only after its own backoff, and meanwhile the rows
+	// behind it are sent. Only SendOnce reads or writes it.
+	held map[string]heldRow
+	// nextHeld is the earliest end of a wait that the last send skipped a
+	// row for, or set: the next send is due then even if that time passed
+	// before the send was planned.
+	nextHeld time.Time
+}
+
+// heldRow is a row the cloud refused as in the future, under one binding.
+// The hold stays across updates of the row that leave its latest time as
+// late or later, so a tab in use cannot send the same still-future row
+// again before its wait ends, and its refusals keep counting.
+type heldRow struct {
+	binding    string
+	generation uint64
+	latest     time.Time
+	refusals   int
+	until      time.Time
+}
+
+// latestTime is the latest time a record names, the one the cloud compares
+// with its clock. A time that does not parse counts as none.
+func latestTime(r CloudRecord) time.Time {
+	var latest time.Time
+	for _, value := range []string{r.Day, r.ConnectedSince, r.ObservedAt, r.FirstSeen, r.LastSeen} {
+		at, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			at, err = time.Parse(time.DateOnly, value)
+		}
+		if err == nil && at.After(latest) {
+			latest = at
+		}
+	}
+	return latest
+}
+
+// covers reports whether h still holds back this row of this binding.
+func (h heldRow) covers(binding string, generation uint64, r CloudRecord) bool {
+	return h.binding == binding && h.generation == generation && !latestTime(r).Before(h.latest)
+}
+
+// noteHeld brings nextHeld forward to until.
+func (s *Sender) noteHeld(until time.Time) {
+	if s.nextHeld.IsZero() || until.Before(s.nextHeld) {
+		s.nextHeld = until
+	}
 }
 
 // TokenReadTimeout bounds one read of the install token.
@@ -73,19 +121,66 @@ func noRedirects(client *http.Client) *http.Client {
 
 // split separates rows the contract allows from rows it does not.
 func (p Pending) split() (valid, invalid Pending) {
-	for i, record := range p.Records {
+	return p.partition(func(_ int, record CloudRecord) bool {
 		source := Extension{Version: record.ExtensionVersion, Browser: record.Browser, Profile: record.Profile}
-		target := &valid
-		if source.validate() != nil || record.Record.Validate() != nil {
-			target = &invalid
+		return source.validate() == nil && record.Record.Validate() == nil
+	})
+}
+
+// partition splits p into the rows keep holds for and the others.
+func (p Pending) partition(keep func(int, CloudRecord) bool) (kept, others Pending) {
+	for i, record := range p.Records {
+		target := &kept
+		if !keep(i, record) {
+			target = &others
 		}
 		target.Records = append(target.Records, record)
 		target.keys = append(target.keys, p.keys[i])
 		target.versions = append(target.versions, p.versions[i])
 	}
-	valid.binding, invalid.binding = p.binding, p.binding
-	valid.generation, invalid.generation = p.generation, p.generation
-	return valid, invalid
+	kept.binding, others.binding = p.binding, p.binding
+	kept.generation, others.generation = p.generation, p.generation
+	return kept, others
+}
+
+// hold notes rows the cloud refused as ahead of its clock: each waits its
+// own backoff, longer with each refusal of the same version.
+func (s *Sender) hold(p Pending, now time.Time) {
+	if s.held == nil {
+		s.held = map[string]heldRow{}
+	}
+	for i, key := range p.keys {
+		h, ok := s.held[key]
+		if !ok || !h.covers(p.binding, p.generation, p.Records[i]) {
+			h = heldRow{binding: p.binding, generation: p.generation}
+		}
+		h.latest = latestTime(p.Records[i])
+		h.refusals++
+		h.until = now.Add(backoff(h.refusals))
+		s.held[key] = h
+		s.noteHeld(h.until)
+	}
+}
+
+// heldDue is when the first row the last send held back may go again. It
+// may already have passed: the caller sends no sooner than a second on.
+func (s *Sender) heldDue() (time.Time, bool) {
+	return s.nextHeld, !s.nextHeld.IsZero()
+}
+
+// aheadOfTheCloud reports whether the cloud refused a record for a time
+// ahead of its own clock. The endpoint's clock was fast: the same record is
+// taken once the cloud's clock has caught up, so it is not acknowledged.
+func aheadOfTheCloud(reason string) bool {
+	return strings.HasSuffix(reason, " in the future")
+}
+
+// tooNewForTheCloud reports whether a cloud from before account records
+// refused an account for its kind: once that cloud is upgraded it takes the
+// same record, so it is held, not acknowledged. It ages out of the store as
+// any row does.
+func tooNewForTheCloud(reason string, record CloudRecord) bool {
+	return reason == "unknown record kind" && record.Kind == KindAccount
 }
 
 // WarnEvery spaces out the warnings of a run of failed sends.
@@ -194,7 +289,23 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 	if s.limit <= 0 || s.limit > MaxRecordsPerBatch {
 		s.limit = MaxRecordsPerBatch
 	}
-	pending := s.Store.Pending(s.limit)
+	now := s.clock()
+	s.nextHeld = time.Time{}
+	pending := s.Store.PendingExcept(s.limit, func(binding string, generation uint64, key string, record CloudRecord) bool {
+		h, ok := s.held[key]
+		if !ok || !h.covers(binding, generation, record) || !now().Before(h.until) {
+			return false
+		}
+		s.noteHeld(h.until)
+		return true
+	})
+	// A hold kept a day past its wait is for a row that is gone or long
+	// sent; a newer hold keeps counting refusals, so its backoff grows.
+	for key, h := range s.held {
+		if now().Sub(h.until) > 24*time.Hour {
+			delete(s.held, key)
+		}
+	}
 	if pending.binding != Binding(s.BaseURL, s.InstallationID, token) {
 		// A hello bound the store to another enrollment after the token was
 		// read: these rows are not this token's. The next send reads again.
@@ -206,7 +317,6 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 		}
 		return Nothing, nil
 	}
-	now := s.clock()
 	// A row the store kept that the contract no longer allows is dropped on
 	// its own, rather than retried forever; the valid rows go on.
 	pending, invalid := pending.split()
@@ -263,13 +373,35 @@ func (s *Sender) SendOnce(ctx context.Context) (Outcome, error) {
 		if err != nil {
 			return Retry, err
 		}
-		if err := s.Store.Ack(pending); err != nil {
-			return Sent, err
+		ahead := map[int]bool{}
+		for _, r := range answer.Rejected {
+			if aheadOfTheCloud(r.Reason) || tooNewForTheCloud(r.Reason, pending.Records[r.Index]) {
+				ahead[r.Index] = true
+			}
+		}
+		// A record refused as ahead of the cloud's clock, or an account
+		// refused by a cloud from before accounts, stays pending and goes
+		// again: acknowledged, it would be lost, as the extension sends the
+		// same observation again without changing the row.
+		taken, held := pending.partition(func(i int, _ CloudRecord) bool { return !ahead[i] })
+		s.hold(held, now())
+		for _, key := range taken.keys {
+			delete(s.held, key)
+		}
+		// Nothing to mark when every row was held: a write would only
+		// rewrite the store.
+		if len(taken.Records) > 0 {
+			if err := s.Store.Ack(taken); err != nil {
+				return Sent, err
+			}
 		}
 		// After a 413 the batch grows back, doubling with each success.
 		s.limit = min(s.limit*2, MaxRecordsPerBatch)
 		for _, r := range answer.Rejected {
 			s.logf("browser events: the cloud rejected record %d: %s", r.Index, r.Reason)
+		}
+		if len(held.Records) > 0 {
+			s.logf("browser events: %d records are ahead of the cloud's clock or newer than it takes, sending them again later", len(held.Records))
 		}
 		return Sent, nil
 	case response.StatusCode == http.StatusNotFound:
@@ -313,6 +445,14 @@ func (s *Sender) Run(ctx context.Context, changed <-chan struct{}) {
 		}
 		outcome, err := s.SendOnce(ctx)
 		plan.after(outcome, now())
+		// With nothing else to send, a held row still goes again at the end
+		// of its backoff, not an hour later.
+		if due, ok := s.heldDue(); ok && (outcome == Nothing || outcome == Sent) && due.Before(plan.due) {
+			plan.due = due
+			if soon := now().Add(time.Second); plan.due.Before(soon) {
+				plan.due = soon
+			}
+		}
 		switch {
 		case outcome == Sent && err != nil:
 			s.logf("%v", err)

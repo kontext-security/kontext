@@ -1,6 +1,7 @@
 package browserevents
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/kontext-security/kontext/internal/fsperm"
 )
@@ -125,10 +128,21 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 	// A file that is not owner-only, such as one restored from a backup,
 	// may have been changed by another account: its rows are not read,
 	// so none of them can leave with this enrollment's token.
+	// A file that gives its binding or its rows twice says two things:
+	// which one holds is not this reader's guess, so no row is read and the
+	// file is written again without them.
+	if trusted && repeatsTopLevelKey(data) {
+		trusted, rewrite = false, true
+	}
 	if trusted && json.Unmarshal(data, &file) == nil && file.Rows != nil && file.Binding != "" {
 		// Rows without a binding cannot say which workspace they belong
 		// to, so they are not read: Bind would otherwise give them to the
 		// current one.
+		// A row id given twice decodes as its last row: the file is
+		// written again, so the first one's text leaves the disk.
+		if hasDuplicateKeys(data, false) {
+			rewrite = true
+		}
 		rows := make(map[string]*row, len(file.Rows))
 		for key, raw := range file.Rows {
 			// Each row is read on its own: a damaged or null one is
@@ -157,7 +171,7 @@ func openStore(path string, now func() time.Time) (*Store, error) {
 			// A row under another row's key would take that row's
 			// snapshots: it is dropped too.
 			source := Extension{Version: r.Record.ExtensionVersion, Browser: r.Record.Browser, Profile: r.Record.Profile}
-			if source.validate() != nil || r.Record.Record.Validate() != nil || rowKey(r.Record) != key {
+			if source.validate() != nil || r.Record.Record.Validate() != nil || rowKey(r.Record) != key || !storedKeysAllowed(raw, r.Record.Kind) {
 				rewrite = true
 				continue
 			}
@@ -275,6 +289,161 @@ func removeLeftovers(path string) {
 	}
 }
 
+// storedKeysAllowed reports whether a stored row has only a row's keys and,
+// for an account, its record only an account's keys and its source's.
+// Decoding drops an unknown key, such as an address restored from a backup,
+// without telling: the row is dropped instead, so the file is rewritten
+// without it.
+func storedKeysAllowed(raw json.RawMessage, kind string) bool {
+	// A key given twice is decoded as its last value: the row could read
+	// one way here and another way to any other reader.
+	if hasDuplicateKeys(raw, true) {
+		return false
+	}
+	var wrapper map[string]json.RawMessage
+	if json.Unmarshal(raw, &wrapper) != nil {
+		return false
+	}
+	for key := range wrapper {
+		if key != "record" && key != "version" && key != "sent" {
+			return false
+		}
+	}
+	if kind != KindAccount {
+		return true
+	}
+	var stored struct {
+		Record map[string]json.RawMessage `json:"record"`
+	}
+	if json.Unmarshal(raw, &stored) != nil {
+		return false
+	}
+	for key := range stored.Record {
+		if !accountKeys[key] && key != "browser" && key != "profile" && key != "extension_version" {
+			return false
+		}
+	}
+	return true
+}
+
+// hasDuplicateKeys reports whether any object in raw, at any depth, names
+// a key twice, or raw is not valid JSON.
+// foldKey is a key as encoding/json matches it to a struct field: two keys
+// with the same fold, such as "binding" and "Binding", fill the same field.
+// ASCII letters are upper-cased and any other rune becomes the smallest of
+// its simple case folds, as the decoder does.
+func foldKey(key string) string {
+	var b strings.Builder
+	for _, r := range key {
+		if r < utf8.RuneSelf {
+			if 'a' <= r && r <= 'z' {
+				r -= 'a' - 'A'
+			}
+			b.WriteRune(r)
+			continue
+		}
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				r = next
+				break
+			}
+			r = next
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// repeatsTopLevelKey reports whether the file's object names a key twice,
+// in any case, such as "binding" and "Binding", or names "binding" or
+// "rows" in any spelling but that one. A file that is not one object does
+// not repeat one: it is not read anyway.
+func repeatsTopLevelKey(raw []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		key, ok := tok.(string)
+		if err != nil || !ok {
+			return false
+		}
+		folded := foldKey(key)
+		if seen[folded] {
+			return true
+		}
+		if (folded == foldKey("binding") && key != "binding") || (folded == foldKey("rows") && key != "rows") {
+			return true
+		}
+		seen[folded] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return false
+		}
+	}
+	return false
+}
+
+// hasDuplicateKeys reports whether an object in raw names a key twice. With
+// fold, keys that fill the same struct field count as the same key; map keys,
+// such as row ids, are compared exactly.
+func hasDuplicateKeys(raw json.RawMessage, fold bool) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	// A number too large for a float, such as a damaged counter, is still
+	// JSON: it is read as text, not taken for a broken file.
+	dec.UseNumber()
+	// One entry per open object or array: the keys seen so far, nil for an
+	// array.
+	var open []map[string]bool
+	// Whether the next string token in the innermost object is a key.
+	expectKey := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return false
+		}
+		if err != nil {
+			return true
+		}
+		inObject := len(open) > 0 && open[len(open)-1] != nil
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				open = append(open, map[string]bool{})
+				expectKey = true
+			case '[':
+				open = append(open, nil)
+				expectKey = false
+			default:
+				open = open[:len(open)-1]
+				expectKey = len(open) > 0 && open[len(open)-1] != nil
+			}
+			continue
+		case string:
+			if inObject && expectKey {
+				keys := open[len(open)-1]
+				key := t
+				if fold {
+					key = foldKey(t)
+				}
+				if keys[key] {
+					return true
+				}
+				keys[key] = true
+				expectKey = false
+				continue
+			}
+		}
+		// A value: in an object, a key comes next.
+		expectKey = inObject
+	}
+}
+
 // DefaultStorePath is the store beside the daemon's database, named after
 // it, so two daemons with their own databases in one folder keep their own
 // stores.
@@ -286,7 +455,12 @@ func rowKey(r CloudRecord) string {
 	if r.Kind == KindHealth {
 		return r.Browser + "|" + r.Profile + "|health"
 	}
-	return r.Browser + "|" + r.Profile + "|visit|" + r.App + "|" + r.Day
+	if r.Kind == KindAccount {
+		// Each type seen that day has its row, so a personal account used
+		// beside a company one is not hidden by whichever came last.
+		return r.Browser + "|" + r.Profile + "|account|" + r.App + "|" + r.Day + "|" + r.AccountType
+	}
+	return r.Browser + "|" + r.Profile + "|" + r.Kind + "|" + r.App + "|" + r.Day
 }
 
 // Applied is what Apply did: the records it could not keep, and the
@@ -349,8 +523,14 @@ func (s *Store) Apply(ext Extension, enrollment string, records []IndexedRecord)
 	}
 	for _, indexed := range records {
 		record := CloudRecord{Browser: ext.Browser, Profile: ext.Profile, ExtensionVersion: ext.Version, Record: indexed.Record}
-		if record.Kind == KindVisit && !s.recentDay(record.Day) {
-			applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: "visit day is too old or in the future"})
+		if (record.Kind == KindVisit || record.Kind == KindAccount) && !s.recentDay(record.Day) {
+			applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: record.Kind + " day is too old or in the future"})
+			continue
+		}
+		if record.Kind == KindAccount && !s.notAhead(record.ObservedAt) {
+			// The newest observation of a type wins its day, so one from a
+			// clock running ahead would hide every true one after it.
+			applied.Rejected = append(applied.Rejected, Rejection{Index: indexed.Index, Reason: "account observed_at is in the future"})
 			continue
 		}
 		if record.Kind == KindHealth && !s.recentObservation(record.ObservedAt) {
@@ -426,6 +606,11 @@ func merge(current, next CloudRecord) (CloudRecord, bool) {
 		if next.Requests > current.Requests {
 			merged.Requests = next.Requests
 		}
+	case KindAccount:
+		// The newest observation of that type on the day.
+		if later(next.ObservedAt, current.ObservedAt) {
+			merged = next
+		}
 	}
 	return merged, merged != current
 }
@@ -443,6 +628,16 @@ func (s *Store) recentDay(day string) bool {
 	}
 	today := s.now().UTC().Truncate(24 * time.Hour)
 	return !d.After(today.Add(24*time.Hour)) && today.Sub(d) < KeepDays*24*time.Hour
+}
+
+// MaxClockAhead is how far ahead of the daemon's clock an account may be
+// observed, the same allowance the cloud gives.
+const MaxClockAhead = 10 * time.Minute
+
+// notAhead reports whether observed is at most MaxClockAhead after now.
+func (s *Store) notAhead(observed string) bool {
+	at, err := time.Parse(time.RFC3339, observed)
+	return err == nil && !at.After(s.now().Add(MaxClockAhead))
 }
 
 // recentObservation reports whether observed is within KeepDays before now,
@@ -474,6 +669,11 @@ func (s *Store) expired(r CloudRecord) bool {
 	switch r.Kind {
 	case KindVisit:
 		return !s.recentDay(r.Day)
+	case KindAccount:
+		// Also one too far ahead, as Apply refuses: from a restored file,
+		// or kept while the clock was set back. Its newer time would hide
+		// every later observation of that type, and the cloud refuses it.
+		return !s.recentDay(r.Day) || !s.notAhead(r.ObservedAt)
 	case KindHealth:
 		return !s.recentObservation(r.ObservedAt)
 	default:
@@ -496,6 +696,12 @@ type Pending struct {
 
 // Pending returns the rows to send.
 func (s *Store) Pending(max int) Pending {
+	return s.PendingExcept(max, nil)
+}
+
+// PendingExcept returns the rows to send, leaving out those held says are
+// waiting, so rows held back never take a batch from the rows behind them.
+func (s *Store) PendingExcept(max int, held func(binding string, generation uint64, key string, record CloudRecord) bool) Pending {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.pruneLocked() {
@@ -503,7 +709,7 @@ func (s *Store) Pending(max int) Pending {
 	}
 	var keys []string
 	for key, r := range s.rows {
-		if r.Version != r.Sent {
+		if r.Version != r.Sent && (held == nil || !held(s.binding, s.generation, key, r.Record)) {
 			keys = append(keys, key)
 		}
 	}
@@ -533,7 +739,10 @@ func (s *Store) Ack(p Pending) error {
 		return nil
 	}
 	for i, key := range p.keys {
-		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
+		// The record too, not only its version: a row pruned while the
+		// batch was out, such as an account ahead of a clock set back, and
+		// recorded again under the same key starts again at version 1.
+		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] && r.Record == p.Records[i] {
 			r.Sent = r.Version
 		}
 	}
@@ -550,7 +759,7 @@ func (s *Store) Drop(p Pending) error {
 		return nil
 	}
 	for i, key := range p.keys {
-		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] {
+		if r, ok := s.rows[key]; ok && r.Version == p.versions[i] && r.Record == p.Records[i] {
 			delete(s.rows, key)
 		}
 	}

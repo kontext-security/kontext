@@ -1,0 +1,23 @@
+{
+  "schema": "browser-activity-v1",
+  "installation_id": "ins_AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+  "sent_at": "2026-11-20T09:20:00Z",
+  "records": [
+    {
+      "kind": "visit",
+      "browser": "chrome",
+      "profile": "p7Hq2vXkLm9s",
+      "extension_version": "0.1.0",
+      "day": "2026-11-20",
+      "app": "claude",
+      "app_name": "Claude",
+      "provider": "Anthropic",
+      "surface": "web",
+      "host": "claude.ai",
+      "first_seen": "2026-11-20T08:30:00Z",
+      "last_seen": "2026-11-20T09:10:00Z",
+      "requests": 3,
+      "account_type": "personal"
+    }
+  ]
+}

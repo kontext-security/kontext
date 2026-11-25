@@ -6,5 +6,6 @@
   "paused": false,
   "accepted": 2,
   "rejected": [],
-  "enrollment": ""
+  "enrollment": "",
+  "record_kinds": ["health", "visit", "account"]
 }

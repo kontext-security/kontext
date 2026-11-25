@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,10 @@ func TestHandlerAnswersHelloAndRecords(t *testing.T) {
 	if hello.Type != TypeSettings || hello.CaptureMode != CaptureFull || hello.Paused || hello.Rejected == nil {
 		t.Fatalf("hello answer = %+v", hello)
 	}
+	// The extension reads accounts only for a daemon that says it takes them.
+	if !slices.Contains(hello.RecordKinds, KindAccount) {
+		t.Fatalf("record kinds = %v, want the account kind", hello.RecordKinds)
+	}
 	data, err := os.ReadFile(filepath.Join(fixtures, "valid", "records.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -236,6 +241,178 @@ func TestSenderAcksABatchTheCloudAnswered(t *testing.T) {
 	// Rejected records are dropped, not retried.
 	if outcome, _ := sender.SendOnce(context.Background()); outcome != Nothing {
 		t.Fatalf("second send = %v, want Nothing", outcome)
+	}
+}
+
+// The endpoint's clock runs ahead of the cloud's: the cloud refuses the
+// account as in the future. The row stays pending and goes again after its
+// own backoff, growing with each refusal, and meanwhile the rows behind it
+// are sent, even when it fills a batch on its own.
+func TestARowAheadOfTheCloudsClockIsSentAgain(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{
+		visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z"),
+		account(AccountPersonal, "2026-11-20T09:00:00Z"),
+	})
+	ahead := true
+	var batches *[]CloudBatch
+	var sender *Sender
+	sender, batches = newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		batch := (*batches)[len(*batches)-1]
+		var rejected []string
+		for i, record := range batch.Records {
+			if ahead && record.Kind == KindAccount {
+				rejected = append(rejected, fmt.Sprintf(`{"index":%d,"reason":"account observed_at in the future"}`, i))
+			}
+		}
+		_, _ = fmt.Fprintf(w, `{"accepted":%d,"rejected":[%s]}`, len(batch.Records)-len(rejected), strings.Join(rejected, ","))
+	})
+	clock := testNow()
+	sender.now = func() time.Time { return clock }
+	// One record per batch: the account comes first and fills it.
+	sender.limit = 1
+	send := func(want Outcome) {
+		t.Helper()
+		if outcome, err := sender.SendOnce(context.Background()); outcome != want {
+			t.Fatalf("send = %v, %v, want %v", outcome, err, want)
+		}
+	}
+	kinds := func() []string {
+		var got []string
+		for _, b := range *batches {
+			for _, r := range b.Records {
+				got = append(got, r.Kind)
+			}
+		}
+		return got
+	}
+	send(Sent) // the account, refused
+	send(Sent) // the visit behind it, taken
+	send(Nothing)
+	if due, ok := sender.heldDue(); !ok || !due.Equal(clock.Add(SendDelay)) {
+		t.Fatalf("held due = %v, %v, want %v", due, ok, clock.Add(SendDelay))
+	}
+	// Its wait is over: refused again, it waits twice as long.
+	clock = clock.Add(SendDelay)
+	send(Sent)
+	if due, _ := sender.heldDue(); !due.Equal(clock.Add(2 * SendDelay)) {
+		t.Fatalf("held due = %v, want %v", due, clock.Add(2*SendDelay))
+	}
+	send(Nothing)
+	// The clocks agree: taken, and not sent again.
+	ahead = false
+	clock = clock.Add(2 * SendDelay)
+	send(Sent)
+	send(Nothing)
+	if got := kinds(); !slices.Equal(got, []string{KindAccount, KindVisit, KindAccount, KindAccount}) {
+		t.Fatalf("sent = %v", got)
+	}
+	if _, ok := sender.heldDue(); ok {
+		t.Fatal("a row is still held")
+	}
+}
+
+// A cloud from before account records refuses an account for its kind and
+// takes the visit beside it: the account stays pending, held like a row
+// ahead of the cloud's clock, and goes once the cloud takes accounts.
+func TestAnAccountAnOlderCloudRefusesIsKept(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{
+		visit(2, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z"),
+		account(AccountPersonal, "2026-11-20T09:00:00Z"),
+	})
+	older := true
+	var batches *[]CloudBatch
+	var sender *Sender
+	sender, batches = newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		batch := (*batches)[len(*batches)-1]
+		var rejected []string
+		for i, record := range batch.Records {
+			if older && record.Kind == KindAccount {
+				rejected = append(rejected, fmt.Sprintf(`{"index":%d,"reason":"unknown record kind"}`, i))
+			}
+		}
+		_, _ = fmt.Fprintf(w, `{"accepted":%d,"rejected":[%s]}`, len(batch.Records)-len(rejected), strings.Join(rejected, ","))
+	})
+	clock := testNow()
+	sender.now = func() time.Time { return clock }
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent {
+		t.Fatalf("send = %v, %v", outcome, err)
+	}
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Nothing {
+		t.Fatalf("second send = %v, want Nothing while the account waits", outcome)
+	}
+	older = false
+	clock = clock.Add(SendDelay)
+	if outcome, err := sender.SendOnce(context.Background()); outcome != Sent {
+		t.Fatalf("send after the upgrade = %v, %v", outcome, err)
+	}
+	last := (*batches)[len(*batches)-1]
+	if len(last.Records) != 1 || last.Records[0].Kind != KindAccount {
+		t.Fatalf("last batch = %+v, want the account alone", last.Records)
+	}
+	if outcome, _ := sender.SendOnce(context.Background()); outcome != Nothing {
+		t.Fatalf("a row is still pending: %v", outcome)
+	}
+}
+
+// A tab in use updates the row the cloud refused as in the future, with a
+// later time still: the update does not cut its wait short, and the next
+// refusal waits longer. A wait that ends before the next send is planned
+// still brings that send forward.
+func TestAnUpdatedRowAheadOfTheCloudKeepsItsWait(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+	var batches *[]CloudBatch
+	var sender *Sender
+	sender, batches = newTestSender(t, s, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"accepted":0,"rejected":[{"index":0,"reason":"account observed_at in the future"}]}`)
+	})
+	clock := testNow()
+	sender.now = func() time.Time { return clock }
+	send := func(want Outcome) {
+		t.Helper()
+		if outcome, err := sender.SendOnce(context.Background()); outcome != want {
+			t.Fatalf("send = %v, %v, want %v", outcome, err, want)
+		}
+	}
+	send(Sent) // refused: waits SendDelay
+	clock = clock.Add(SendDelay / 2)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:30:00Z")})
+	send(Nothing)
+	if len(*batches) != 1 {
+		t.Fatalf("the updated row went before its wait ended: %d batches", len(*batches))
+	}
+	due, ok := sender.heldDue()
+	if !ok || !due.Equal(testNow().Add(SendDelay)) {
+		t.Fatalf("held due = %v, %v, want %v", due, ok, testNow().Add(SendDelay))
+	}
+	// The wait ends before the next send is planned: it is still due then.
+	clock = clock.Add(SendDelay)
+	if again, ok := sender.heldDue(); !ok || !again.Equal(due) {
+		t.Fatalf("held due after its wait = %v, %v, want %v", again, ok, due)
+	}
+	send(Sent) // refused a second time: waits twice as long
+	if due, _ := sender.heldDue(); !due.Equal(clock.Add(2 * SendDelay)) {
+		t.Fatalf("held due = %v, want %v", due, clock.Add(2*SendDelay))
+	}
+}
+
+// A hold names the binding it was refused under: the same key under another
+// binding, or a later binding of the same store, is another row.
+func TestAHoldBelongsToItsBinding(t *testing.T) {
+	record := CloudRecord{Record: account(AccountPersonal, "2026-11-20T09:00:00Z").Record}
+	h := heldRow{binding: "a", generation: 1, latest: latestTime(record)}
+	if !h.covers("a", 1, record) {
+		t.Fatal("the hold does not cover its own row")
+	}
+	if h.covers("b", 1, record) || h.covers("a", 2, record) {
+		t.Fatal("the hold covers a row of another binding")
+	}
+	earlier := record
+	earlier.ObservedAt = "2026-11-20T08:00:00Z"
+	if h.covers("a", 1, earlier) {
+		t.Fatal("the hold covers the row once its time is earlier")
 	}
 }
 
@@ -692,6 +869,112 @@ func TestALongExtensionVersionIsRefused(t *testing.T) {
 	}
 }
 
+func account(accountType, observed string) IndexedRecord {
+	return IndexedRecord{Record: Record{Kind: KindAccount, Day: "2026-11-20", App: "chatgpt",
+		AccountType: accountType, ObservedAt: observed}}
+}
+
+// The account fixture goes through the handler into the store and on to a
+// batch the cloud schema takes. Each type seen on a day keeps its row, so a
+// personal account used after a company one stays visible, and an older
+// observation of a type replayed late changes nothing.
+func TestAccountsKeepEachTypeSeenOnADay(t *testing.T) {
+	s := openTestStore(t)
+	h := &Handler{Store: s}
+	data, err := os.ReadFile(filepath.Join(fixtures, "valid", "records-account.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), "3f9a1c2b7d4e6f80", s.Enrollment(), 1))
+	var answer Settings
+	_ = json.Unmarshal(h.Answer(context.Background(), data), &answer)
+	if answer.Accepted != 4 || len(answer.Rejected) != 0 {
+		t.Fatalf("answer = %+v", answer)
+	}
+	for _, r := range []IndexedRecord{account(AccountPersonal, "2026-11-20T11:30:00Z"), account(AccountCompany, "2026-11-20T08:00:00Z")} {
+		if _, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]string{}
+	p := s.Pending(10)
+	for _, r := range p.Records {
+		seen[r.App+"|"+r.AccountType] = r.ObservedAt
+	}
+	want := map[string]string{
+		"chatgpt|company":  "2026-11-20T09:14:40Z",
+		"chatgpt|personal": "2026-11-20T11:30:00Z",
+		"chatgpt|none":     "2026-11-20T11:00:00Z",
+		"claude|personal":  "2026-11-20T10:02:11Z",
+		"claude|unknown":   "2026-11-20T12:00:00Z",
+	}
+	if len(p.Records) != len(want) {
+		t.Fatalf("pending = %+v", p.Records)
+	}
+	for key, at := range want {
+		if seen[key] != at {
+			t.Fatalf("%s observed at %q, want %q (pending %+v)", key, seen[key], at, p.Records)
+		}
+	}
+	batch := CloudBatch{Schema: CloudSchema, InstallationID: "ins_0123456789abcdefghijklmnopqrstuv", SentAt: "2026-11-20T12:00:00Z", Records: p.Records}
+	if err := batch.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnAccountRecordedForAnotherEnrollmentIsRefused(t *testing.T) {
+	s := openTestStore(t)
+	rejected, err := s.Apply(testExtension, "0000000000000000", []IndexedRecord{account(AccountCompany, "2026-11-20T09:00:00Z")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rejected.Rejected) != 1 || s.Len() != 0 {
+		t.Fatalf("rejected = %+v, rows = %d", rejected, s.Len())
+	}
+}
+
+// An account is the type alone. A record with any other key, an address or
+// a plan above all, is refused whole, and so is a field of the wrong type.
+func TestAnAccountCarriesOnlyItsType(t *testing.T) {
+	ok := `{"kind":"account","day":"2026-11-20","app":"claude","account_type":"personal","observed_at":"2026-11-20T09:00:00Z"`
+	for name, record := range map[string]string{
+		"host":         ok + `,"host":"claude.ai"}`,
+		"tenant host":  strings.Replace(ok, `"claude"`, `"n8n-cloud"`, 1) + `,"host":"acme.app.n8n.cloud"}`,
+		"unknown app":  strings.Replace(ok, `"claude"`, `"acme-corp"`, 1) + `}`,
+		"address":      ok + `,"email":"jane@example.com"}`,
+		"domain":       ok + `,"email_domain":"example.com"}`,
+		"plan":         ok + `,"plan":"paid"}`,
+		"null extra":   ok + `,"name":null}`,
+		"type as list": strings.Replace(ok, `"personal"`, `["personal"]`, 1) + `}`,
+		"plan as type": strings.Replace(ok, `"personal"`, `"paid"`, 1) + `}`,
+	} {
+		valid, rejected, err := DecodeRecords(json.RawMessage(`[` + record + `]`))
+		if err != nil || len(valid) != 0 || len(rejected) != 1 {
+			t.Errorf("%s: valid = %+v, rejected = %+v, err = %v", name, valid, rejected, err)
+		}
+	}
+	if valid, _, err := DecodeRecords(json.RawMessage(`[` + ok + `}]`)); err != nil || len(valid) != 1 {
+		t.Fatalf("the plain account: %+v, %v", valid, err)
+	}
+	visit := visit(1, "2026-11-20T08:00:00Z", "2026-11-20T08:00:00Z").Record
+	visit.AccountType = AccountPersonal
+	if err := visit.Validate(); err == nil {
+		t.Fatal("a visit carrying an account type validated")
+	}
+}
+
+// The newest account observation of a type wins its day, so one from a clock
+// running ahead would hide the true ones after it. It is refused.
+func TestAnAccountFromAheadOfTheClockIsRefused(t *testing.T) {
+	s := openTestStore(t)
+	ahead := account(AccountCompany, testNow().Add(MaxClockAhead+time.Minute).UTC().Format(time.RFC3339))
+	ahead.Record.Day = testNow().UTC().Format(time.DateOnly)
+	applied, err := s.Apply(testExtension, s.Enrollment(), []IndexedRecord{ahead})
+	if err != nil || len(applied.Rejected) != 1 || s.Len() != 0 {
+		t.Fatalf("applied = %+v, rows = %d, err = %v", applied, s.Len(), err)
+	}
+}
+
 // A health row stamped far in the future would never expire, so it is refused.
 func TestAHealthRowFromTheFutureIsRefused(t *testing.T) {
 	s := openTestStore(t)
@@ -1029,6 +1312,159 @@ func TestADamagedRowDoesNotDiscardTheOthers(t *testing.T) {
 	}
 }
 
+// A stored account row with a key the contract does not allow, such as an
+// address put back by a backup, is dropped at open and leaves the file: a
+// decode would drop the key silently and keep the text on disk.
+// A restored file with one row id twice decodes as its last row; the
+// earlier one, with whatever it holds, leaves the disk at open.
+func TestARepeatedRowIDLeavesTheDiskAtOpen(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+	s.mu.Lock()
+	_ = s.saveLocked()
+	s.mu.Unlock()
+	data, _ := os.ReadFile(s.path)
+	text := string(data)
+	start := strings.Index(text, `"rows":{`) + len(`"rows":{`)
+	end := strings.Index(text[start:], `:{"record"`)
+	if start < len(`"rows":{`) || end < 0 {
+		t.Fatalf("no row in %s", text)
+	}
+	id := text[start : start+end]
+	tampered := text[:start] + id + `:{"email":"jane@example.com"},` + text[start:]
+	if err := os.WriteFile(s.path, []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(s.path, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(s.path)
+	if reopened.Len() != 1 || strings.Contains(string(data), "jane@example.com") {
+		t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+	}
+}
+
+// A restored file that gives its binding or its rows twice, in any case,
+// or in another spelling, says two things:
+// none of its rows is read, whichever a decoder would keep, and the file is
+// written again without them.
+func TestAFileWithARepeatedBindingOrRowsIsNotRead(t *testing.T) {
+	for name, tamper := range map[string]func(string) string{
+		"binding": func(data string) string {
+			return strings.Replace(data, `"binding":`, `"binding":"other","binding":`, 1)
+		},
+		"rows": func(data string) string {
+			return strings.Replace(data, `"rows":`, `"rows":{},"rows":`, 1)
+		},
+		// The decoder matches keys in any case: "Binding" fills the same
+		// field as "binding".
+		"binding in another case": func(data string) string {
+			return strings.Replace(data, `"binding":`, `"binding":"other","Binding":`, 1)
+		},
+		"rows in another case": func(data string) string {
+			return strings.Replace(data, `"rows":`, `"Rows":{},"rows":`, 1)
+		},
+		"only a binding in another case": func(data string) string {
+			return strings.Replace(data, `"binding":`, `"BINDING":`, 1)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := openTestStore(t)
+			_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+			s.mu.Lock()
+			_ = s.saveLocked()
+			s.mu.Unlock()
+			data, _ := os.ReadFile(s.path)
+			tampered := tamper(string(data))
+			if tampered == string(data) {
+				t.Fatalf("nothing to repeat in %s", data)
+			}
+			if err := os.WriteFile(s.path, []byte(tampered), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := openStore(s.path, testNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ = os.ReadFile(s.path)
+			if reopened.Len() != 0 || strings.Contains(string(data), AccountPersonal) {
+				t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+			}
+		})
+	}
+}
+
+func TestAStoredAccountWithAnExtraOrRepeatedKeyIsDroppedAtOpen(t *testing.T) {
+	for name, tamper := range map[string]func(string) string{
+		"in the record": func(data string) string {
+			return strings.Replace(data, `"kind":"account"`, `"kind":"account","email":"jane@example.com"`, 1)
+		},
+		"beside the record": func(data string) string {
+			return strings.Replace(data, `"record":{`, `"email":"jane@example.com","record":{`, 1)
+		},
+		// A key given twice reads as its last value here, but may read as
+		// its first anywhere else.
+		"a record key given twice": func(data string) string {
+			return strings.Replace(data, `"account_type":"personal"`, `"account_type":"company","account_type":"personal"`, 1)
+		},
+		"a row key given twice": func(data string) string {
+			return strings.Replace(data, `"sent":0`, `"sent":1,"sent":0`, 1)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := openTestStore(t)
+			_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T09:00:00Z")})
+			s.mu.Lock()
+			_ = s.saveLocked()
+			s.mu.Unlock()
+			data, _ := os.ReadFile(s.path)
+			tampered := tamper(string(data))
+			if tampered == string(data) {
+				t.Fatalf("no account row in %s", data)
+			}
+			if err := os.WriteFile(s.path, []byte(tampered), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := openStore(s.path, testNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ = os.ReadFile(s.path)
+			if reopened.Len() != 0 || strings.Contains(string(data), "jane@example.com") {
+				t.Fatalf("rows = %d, file = %s", reopened.Len(), data)
+			}
+		})
+	}
+}
+
+// An account too far ahead of the clock, kept while the clock was set back
+// or restored from a file, is dropped at open and before a send: its later
+// time would hide every later observation of that type.
+func TestAStoredAccountAheadOfTheClockIsDropped(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T11:55:00Z")})
+	// The clock is set back two hours.
+	earlier := func() time.Time { return testNow().Add(-2 * time.Hour) }
+	s.mu.Lock()
+	s.now = earlier
+	s.mu.Unlock()
+	if n := len(s.Pending(10).Records); n != 0 {
+		t.Fatalf("pending = %d, want the account dropped", n)
+	}
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T10:00:00Z")})
+	if got := s.Pending(10).Records; len(got) != 1 || got[0].ObservedAt != "2026-11-20T10:00:00Z" {
+		t.Fatalf("pending = %+v, want the 10:00 observation", got)
+	}
+	reopened, err := openStore(s.path, func() time.Time { return testNow().Add(-3 * time.Hour) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Len() != 0 {
+		t.Fatalf("rows = %d, want the account dropped at open", reopened.Len())
+	}
+}
+
 // A row whose delivery counters are damaged is sent again, not taken as
 // delivered and never sent.
 func TestARowWithDamagedCountersIsSentAgain(t *testing.T) {
@@ -1038,7 +1474,7 @@ func TestARowWithDamagedCountersIsSentAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, counters := range []string{`"version":null,"sent":0`, `"version":1,"sent":"1"`, `"version":1,"sent":-0.5`, `"version":7,"sent":null`, `"version":9223372036854775807,"sent":9223372036854775807`} {
+	for _, counters := range []string{`"version":null,"sent":0`, `"version":1,"sent":"1"`, `"version":1,"sent":-0.5`, `"version":7,"sent":null`, `"version":9223372036854775807,"sent":9223372036854775807`, `"version":1e400,"sent":0`} {
 		damaged := strings.Replace(string(data), `"version":1,"sent":0`, counters, 1)
 		if damaged == string(data) {
 			t.Fatalf("no counters in %s", data)
@@ -1075,6 +1511,59 @@ func TestARestoredStoreOverTheRowCapKeepsTheNewest(t *testing.T) {
 	}
 }
 
+// With accounts among the rows, the cap still drops the oldest by time: an
+// account sorts by its observation time, never at the zero time.
+func TestARestoredStoreOverTheRowCapKeepsTheNewestAccounts(t *testing.T) {
+	rows := map[string]*row{}
+	source := func(r Record) CloudRecord {
+		return CloudRecord{Browser: "chrome", Profile: "p7Hq2vXkLm9s", ExtensionVersion: "0.1.0", Record: r}
+	}
+	for i := 0; i < MaxRows; i++ {
+		at := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		rows[fmt.Sprint("visit", i)] = &row{Record: source(visit(1, at, at).Record), Version: 1}
+	}
+	// The newest row of all is an account; the oldest is one too.
+	rows["new account"] = &row{Record: source(account(AccountPersonal, "2026-11-20T11:00:00Z").Record), Version: 1}
+	rows["old account"] = &row{Record: source(account(AccountCompany, "2026-11-19T23:00:00Z").Record), Version: 1}
+	trimRows(rows)
+	if len(rows) != MaxRows {
+		t.Fatalf("rows = %d", len(rows))
+	}
+	if _, ok := rows["new account"]; !ok {
+		t.Fatal("the newest row, an account, was dropped")
+	}
+	if _, ok := rows["old account"]; ok {
+		t.Fatal("the oldest row, an account, was kept")
+	}
+	if _, ok := rows["visit0"]; ok {
+		t.Fatal("the oldest visit was kept")
+	}
+}
+
+// An answer to a batch acknowledges only the record it carried: a row
+// pruned while the batch was out and recorded again under the same key, at
+// version 1 again, is still sent.
+func TestAnAnswerDoesNotAcknowledgeARowRecordedAgain(t *testing.T) {
+	s := openTestStore(t)
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T11:55:00Z")})
+	sent := s.Pending(10)
+	if len(sent.Records) != 1 {
+		t.Fatalf("pending = %d", len(sent.Records))
+	}
+	// The clock is set back while the batch is out: the row is dropped as
+	// ahead of the clock, and a new observation takes its key.
+	s.mu.Lock()
+	s.now = func() time.Time { return testNow().Add(-2 * time.Hour) }
+	s.mu.Unlock()
+	_, _ = s.Apply(testExtension, s.Enrollment(), []IndexedRecord{account(AccountPersonal, "2026-11-20T10:00:00Z")})
+	if err := s.Ack(sent); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Pending(10).Records; len(got) != 1 || got[0].ObservedAt != "2026-11-20T10:00:00Z" {
+		t.Fatalf("pending = %+v, want the 10:00 observation still to send", got)
+	}
+}
+
 // A switch whose save failed is not confirmed by the next bind until it is
 // on disk.
 func TestASwitchWhoseSaveFailedIsNotConfirmedUntilSaved(t *testing.T) {
@@ -1108,5 +1597,37 @@ func TestASwitchWhoseSaveFailedIsNotConfirmedUntilSaved(t *testing.T) {
 	}
 	if _, ok := s.Confirmed(); !ok {
 		t.Fatal("a saved switch was not confirmed")
+	}
+}
+
+// foldKey says two keys are the same exactly when encoding/json fills the
+// same struct field with them: "rowſ" fills rows, "bındıng" does not fill
+// binding.
+func TestFoldKeyMatchesTheDecoder(t *testing.T) {
+	for _, key := range []string{"binding", "Binding", "BINDING", "bındıng", "bİnding", "rows", "ROWS", "rowſ", "rowß"} {
+		var into struct {
+			Binding string `json:"binding"`
+			Rows    string `json:"rows"`
+		}
+		if err := json.Unmarshal([]byte(`{"`+key+`":"x"}`), &into); err != nil {
+			t.Fatal(err)
+		}
+		decoded := into.Binding != "" || into.Rows != ""
+		folded := foldKey(key) == foldKey("binding") || foldKey(key) == foldKey("rows")
+		if decoded != folded {
+			t.Errorf("%q: the decoder fills a field: %v, foldKey matches: %v", key, decoded, folded)
+		}
+	}
+}
+
+// Row ids are map keys, compared exactly: two profiles whose ids differ in
+// case are two rows, not a repeat.
+func TestRowIDsDifferingInCaseAreNotARepeat(t *testing.T) {
+	file := json.RawMessage(`{"binding":"b","rows":{"chrome/Profile01/x":{},"chrome/profile01/x":{}}}`)
+	if hasDuplicateKeys(file, false) {
+		t.Fatal("row ids that differ in case read as a repeat")
+	}
+	if !hasDuplicateKeys(json.RawMessage(`{"record":{},"Record":{}}`), true) {
+		t.Fatal("two spellings of one field read as different keys")
 	}
 }

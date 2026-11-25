@@ -38,9 +38,34 @@ const (
 
 // Record kinds in contract v2.
 const (
-	KindHealth = "health"
-	KindVisit  = "visit"
+	KindHealth  = "health"
+	KindVisit   = "visit"
+	KindAccount = "account"
 )
+
+// Account types an account record names: which type of account was signed
+// in to an app, never which one, and never its plan. Company is a managed
+// workspace (team or enterprise) whose owner is not checked: it may be
+// another organisation's, so nothing may treat it as the customer's own on
+// this value alone. Personal is any other signed-in account, also on a work
+// email. None is the app's answer that nobody is signed in, and unknown an
+// answer the extension could not read.
+const (
+	AccountCompany  = "company"
+	AccountPersonal = "personal"
+	AccountNone     = "none"
+	AccountUnknown  = "unknown"
+)
+
+// accountKeys are the only keys an account record may have. An account is
+// read from a signed-in page, so a record with any other key is refused
+// whole rather than read in part: an address or a token never passes as an
+// extra field. It names its app by catalog id and has no host, so no value
+// on it is free text: a tenant subdomain or an email domain has no field to
+// travel in.
+var accountKeys = map[string]bool{
+	"kind": true, "day": true, "app": true, "account_type": true, "observed_at": true,
+}
 
 // Answers to a message that cannot be taken.
 const (
@@ -62,6 +87,7 @@ var (
 	appPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	hostPattern    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
 	dayPattern     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
+	timePattern    = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$`)
 	installPattern = regexp.MustCompile(`^ins_[A-Za-z0-9_-]{32}$`)
 	// enrollmentPattern is Store.Enrollment's shape, or "" for none yet.
 	enrollmentPattern = regexp.MustCompile(`^([0-9a-f]{16})?$`)
@@ -84,8 +110,8 @@ type Extension struct {
 	Profile string `json:"profile"`
 }
 
-// Record is one health or visit record. Fields that belong to the other kind
-// stay empty.
+// Record is one health, visit or account record. Fields that belong to
+// another kind stay empty.
 type Record struct {
 	Kind string `json:"kind"`
 
@@ -103,6 +129,10 @@ type Record struct {
 	FirstSeen string `json:"first_seen,omitempty"`
 	LastSeen  string `json:"last_seen,omitempty"`
 	Requests  int    `json:"requests,omitempty"`
+
+	// account, with day, app and observed_at, and no host: the type alone,
+	// never a plan, an address, a domain or a name.
+	AccountType string `json:"account_type,omitempty"`
 }
 
 // Message is what the extension sends: a hello, or records.
@@ -137,6 +167,15 @@ type Settings struct {
 	// what it kept for the previous one, so nothing recorded for one
 	// workspace reaches another.
 	Enrollment string `json:"enrollment"`
+	// RecordKinds are the record kinds this daemon takes. A daemon from
+	// before the account kind sends none, so the extension reads no
+	// session for a daemon that would refuse what it read.
+	RecordKinds []string `json:"record_kinds"`
+}
+
+// RecordKinds are the record kinds the daemon takes, in a settings answer.
+func RecordKinds() []string {
+	return []string{KindHealth, KindVisit, KindAccount}
 }
 
 // MarshalJSON writes empty lists as [], as the schema wants arrays, never
@@ -148,6 +187,9 @@ func (s Settings) MarshalJSON() ([]byte, error) {
 	}
 	if s.Rejected == nil {
 		s.Rejected = []Rejection{}
+	}
+	if s.RecordKinds == nil {
+		s.RecordKinds = RecordKinds()
 	}
 	return json.Marshal(plain(s))
 }
@@ -263,6 +305,10 @@ func DecodeRecords(raw json.RawMessage) ([]IndexedRecord, []Rejection, error) {
 	rejected := []Rejection{}
 	for i, item := range items {
 		record, err := decodeRecord(item)
+		if errors.Is(err, errAccountKeys) {
+			rejected = append(rejected, Rejection{Index: i, Reason: err.Error()})
+			continue
+		}
 		if err != nil {
 			rejected = append(rejected, Rejection{Index: i, Reason: "not a record"})
 			continue
@@ -276,9 +322,14 @@ func DecodeRecords(raw json.RawMessage) ([]IndexedRecord, []Rejection, error) {
 	return valid, rejected, nil
 }
 
+// errAccountKeys refuses an account record with a key the contract does not
+// name for it.
+var errAccountKeys = errors.New("account carries a field the contract does not name")
+
 // decodeRecord reads the kind, then only that kind's fields, so a field the
-// schema does not name for the kind is ignored whatever its type. A field of
-// the wrong type reads as missing, and Validate names it.
+// schema does not name for a health or visit record is ignored whatever its
+// type. An account record may have no other key at all. A field of the
+// wrong type reads as missing, and Validate names it.
 func decodeRecord(data []byte) (Record, error) {
 	fields, err := readObject(data)
 	if err != nil {
@@ -300,6 +351,16 @@ func decodeRecord(data []byte) (Record, error) {
 		record.FirstSeen, _ = fields.text("first_seen")
 		record.LastSeen, _ = fields.text("last_seen")
 		record.Requests, _ = fields.integer("requests")
+	case KindAccount:
+		for key := range fields {
+			if !accountKeys[key] {
+				return Record{}, errAccountKeys
+			}
+		}
+		record.Day, _ = fields.text("day")
+		record.App, _ = fields.text("app")
+		record.AccountType, _ = fields.text("account_type")
+		record.ObservedAt, _ = fields.text("observed_at")
 	}
 	return record, nil
 }
@@ -431,7 +492,13 @@ func (r Record) own() Record {
 	case KindVisit:
 		visit := r
 		visit.ConnectedSince, visit.ObservedAt = "", ""
+		visit.AccountType = ""
 		return visit
+	case KindAccount:
+		return Record{
+			Kind: r.Kind, Day: r.Day, App: r.App, ObservedAt: r.ObservedAt,
+			AccountType: r.AccountType,
+		}
 	default:
 		return Record{Kind: r.Kind}
 	}
@@ -484,6 +551,25 @@ func (r Record) Validate() error {
 			return errors.New("visit requests out of range")
 		}
 		return nil
+	case KindAccount:
+		if !isDay(r.Day) {
+			return errors.New("account day must be a UTC date")
+		}
+		if !appPattern.MatchString(r.App) {
+			return errors.New("account app id is invalid")
+		}
+		if _, known := catalog[r.App]; !known {
+			return errors.New("account app is not in the catalog")
+		}
+		if !isTime(r.ObservedAt) || !insideDay(r.Day, r.ObservedAt, r.ObservedAt) {
+			return errors.New("account observed_at must fall on its day")
+		}
+		switch r.AccountType {
+		case AccountCompany, AccountPersonal, AccountNone, AccountUnknown:
+			return nil
+		default:
+			return errors.New("account type must be company, personal, none or unknown")
+		}
 	default:
 		return errors.New("unknown record kind")
 	}
@@ -517,6 +603,11 @@ func (b CloudBatch) Validate() error {
 
 func isTime(value string) bool {
 	if value == "" || len(value) > 40 {
+		return false
+	}
+	// time.Parse also takes a comma before the fraction, which RFC 3339 and
+	// the schema's date-time do not.
+	if !timePattern.MatchString(value) {
 		return false
 	}
 	_, err := time.Parse(time.RFC3339, value)

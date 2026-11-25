@@ -13,12 +13,21 @@
   ],
   "$defs": {
     "contract": { "const": 2 },
-    "time": { "type": "string", "format": "date-time", "maxLength": 40 },
+    "time": {
+      "$comment": "The pattern holds the RFC 3339 shape for a validator that does not check formats.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$",
+      "maxLength": 40
+    },
     "day": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
     "browser": { "enum": ["chrome", "edge", "chromium"] },
     "profile": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
     "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$", "maxLength": 32 },
-    "appId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+    "appId": {
+      "$comment": "The ids in catalog.json, in its order; a test in internal/browserevents checks they match.",
+      "enum": ["chatgpt", "claude", "gemini", "copilot", "lovable", "n8n-cloud"]
+    },
     "label": {
       "$comment": "A catalog name such as an app or a provider, never page text: letters, digits, spaces and . & + ' ( ) -.",
       "type": "string",
@@ -77,7 +86,28 @@
         }
       }
     },
-    "record": { "oneOf": [{ "$ref": "#/$defs/health" }, { "$ref": "#/$defs/visit" }] },
+    "accountKeys": {
+      "$comment": "The only keys an account record may have, so an address, a name or a token cannot pass as an extra field. There is no host: the app id names the app, and a tenant subdomain or an email domain has no field to travel in.",
+      "propertyNames": { "enum": ["kind", "day", "app", "account_type", "observed_at"] }
+    },
+    "account": {
+      "$comment": "Which type of account was signed in to an app that UTC day, at its newest observation. Only the type: never a plan, an address, a domain or a name.",
+      "type": "object",
+      "required": ["kind", "day", "app", "account_type", "observed_at"],
+      "properties": {
+        "kind": { "const": "account" },
+        "day": { "$ref": "#/$defs/day" },
+        "app": { "$ref": "#/$defs/appId" },
+        "account_type": {
+          "enum": ["company", "personal", "none", "unknown"],
+          "description": "company: the active workspace is a managed one (team or enterprise); its owner is not checked. personal: any other signed-in account, also on a work email. none: the app answered that nobody is signed in. unknown: the app answered, but its answer could not be classified. A failed read sends no record."
+        },
+        "observed_at": { "$ref": "#/$defs/time" }
+      }
+    },
+    "record": {
+      "oneOf": [{ "$ref": "#/$defs/health" }, { "$ref": "#/$defs/visit" }, { "allOf": [{ "$ref": "#/$defs/account" }, { "$ref": "#/$defs/accountKeys" }] }]
+    },
     "hello": {
       "type": "object",
       "required": ["contract", "type", "extension"],
@@ -129,7 +159,14 @@
         "paused": { "type": "boolean" },
         "accepted": { "type": "integer", "minimum": 0 },
         "rejected": { "type": "array", "items": { "$ref": "#/$defs/rejection" } },
-        "enrollment": { "$ref": "#/$defs/enrollment" }
+        "enrollment": { "$ref": "#/$defs/enrollment" },
+        "record_kinds": {
+          "$comment": "The record kinds the daemon takes. Optional: a daemon from before the account kind sends none, and the extension then reads no account. When present it names health and visit, which every daemon of this contract takes.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["health", "visit", "account"] },
+          "allOf": [{ "contains": { "const": "health" } }, { "contains": { "const": "visit" } }]
+        }
       }
     },
     "error": {
@@ -160,14 +197,42 @@
         { "required": ["first_seen"] }, { "required": ["last_seen"] }, { "required": ["requests"] }
       ]
     },
+    "accountFields": {
+      "anyOf": [{ "required": ["account_type"] }]
+    },
     "cloudRecord": {
-      "$comment": "Stricter than an extension's record: the daemon sends only the fields of a record's kind, so a health record with a host is refused.",
+      "$comment": "Stricter than an extension's record: the daemon sends only the fields of a record's kind, so a health record with a host, a visit with an account type, or an account with any field but its own and the source, is refused.",
       "allOf": [
         { "$ref": "#/$defs/source" },
         {
           "oneOf": [
-            { "allOf": [{ "$ref": "#/$defs/health" }, { "not": { "$ref": "#/$defs/visitFields" } }] },
-            { "allOf": [{ "$ref": "#/$defs/visit" }, { "not": { "$ref": "#/$defs/healthFields" } }] }
+            {
+              "allOf": [
+                { "$ref": "#/$defs/health" },
+                { "not": { "$ref": "#/$defs/visitFields" } },
+                { "not": { "$ref": "#/$defs/accountFields" } }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/visit" },
+                { "not": { "$ref": "#/$defs/healthFields" } },
+                { "not": { "$ref": "#/$defs/accountFields" } }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/account" },
+                {
+                  "propertyNames": {
+                    "enum": [
+                      "kind", "day", "app", "account_type", "observed_at",
+                      "browser", "profile", "extension_version"
+                    ]
+                  }
+                }
+              ]
+            }
           ]
         }
       ]
