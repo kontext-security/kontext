@@ -478,7 +478,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	liveOwner.mu.Unlock()
 	var hookWatch hookSwitchWatch
 	policyRefreshNow := make(chan struct{}, 1)
-	enrolment := &enrolmentRefresh{cache: cedarCache, now: policyRefreshNow, left: maxEnrolmentRefreshes}
+	endpointConfigRefreshNow := make(chan struct{}, 1)
+	enrolment := &enrolmentRefresh{
+		cache: cedarCache, now: policyRefreshNow, left: maxEnrolmentRefreshes,
+		settings: endpointConfigCache, settingsNow: endpointConfigRefreshNow, settingsLeft: maxEnrolmentRefreshes,
+	}
 	cedarRefresher := cedarpolicy.Refresher{
 		InitialRefreshDone: policyReady,
 		RefreshNow:         policyRefreshNow,
@@ -565,6 +569,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		TokenSource:    installTokenSource,
 		InstallationID: installationState.InstallationID,
 		Interval:       opts.EndpointConfigRefreshInterval,
+		RefreshNow:     endpointConfigRefreshNow,
 		OnChanged: func(snapshot endpointconfig.Snapshot) {
 			host.SetPayloadCaptureConfiguration(captureConfiguration(snapshot, liveOwner.get()))
 			codexRouting.follow(snapshot)
@@ -1443,13 +1448,44 @@ const maxEnrolmentRefreshes = 6
 // an installation once a post is accepted, and until the policy says otherwise
 // enforcement allows every call, so waiting for the timer leaves a fresh endpoint
 // ungoverned for up to a minute. Called from the flush goroutine only.
+//
+// The endpoint settings wait on the same thing. A new endpoint's first read is
+// refused as installation_not_found, and until a read confirms the settings,
+// payload capture stays on the default and calls are recorded without their
+// input. On a host that is new every session, that is the start of every
+// session.
 type enrolmentRefresh struct {
 	cache *cedarpolicy.Cache
 	now   chan<- struct{}
 	left  int
+
+	settings     *endpointconfig.Cache
+	settingsNow  chan<- struct{}
+	settingsLeft int
 }
 
 func (e *enrolmentRefresh) afterAcceptedPost() {
+	e.refreshSettings()
+	e.refreshPolicy()
+}
+
+// refreshSettings asks for the endpoint settings ahead of the refresher's
+// backoff while no read in this process has confirmed them.
+func (e *enrolmentRefresh) refreshSettings() {
+	if e.settings == nil || e.settingsLeft == 0 {
+		return
+	}
+	if e.settings.Current().Confirmed {
+		return
+	}
+	select {
+	case e.settingsNow <- struct{}{}:
+		e.settingsLeft--
+	default:
+	}
+}
+
+func (e *enrolmentRefresh) refreshPolicy() {
 	if e.left == 0 {
 		return
 	}

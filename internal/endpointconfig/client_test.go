@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -879,5 +880,77 @@ func TestAnUnsavedNewestRefusalKeepsTheOptOut(t *testing.T) {
 	restarted := NewCache(cache.path)
 	if err := restarted.Load(); !errors.Is(err, ErrCacheInvalidated) || !restarted.Current().Status.PromptVeto {
 		t.Fatalf("%v %+v", err, restarted.Current().Status)
+	}
+}
+
+// A new endpoint's first read is refused until one of its posts has been
+// accepted. A RefreshNow signal reads again at once, so the settings don't wait
+// out the backoff on the default.
+func TestRefreshNowReadsAheadOfTheBackoff(t *testing.T) {
+	configuration := testResponse(t, payloadcapture.ModeFull)
+	var enrolled atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !enrolled.Load() {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"code":"installation_not_found"}`))
+			return
+		}
+		w.Header().Set("ETag", `"`+configuration.ConfigIdentity+`"`)
+		_ = json.NewEncoder(w).Encode(configuration)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := make(chan struct{}, 1)
+	changes := make(chan Snapshot, 16)
+	refresher := Refresher{
+		Client:         client,
+		Cache:          NewCache(""),
+		TokenSource:    func(context.Context) (string, error) { return "token", nil },
+		InstallationID: testInstallationID,
+		// Long enough that only a RefreshNow signal can cause the second read.
+		Interval:   time.Hour,
+		RefreshNow: now,
+		OnChanged:  func(snapshot Snapshot) { changes <- snapshot },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		refresher.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case snapshot := <-changes:
+		if snapshot.Confirmed || snapshot.Config.PayloadCaptureMode != payloadcapture.ModeSummary {
+			t.Fatalf("before enrolment: confirmed = %v, mode = %q, want the unconfirmed default", snapshot.Confirmed, snapshot.Config.PayloadCaptureMode)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no first read")
+	}
+
+	enrolled.Store(true)
+	now <- struct{}{}
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case snapshot := <-changes:
+			if !snapshot.Confirmed {
+				continue
+			}
+			if snapshot.Config.PayloadCaptureMode != payloadcapture.ModeFull {
+				t.Fatalf("after RefreshNow: mode = %q, want %q", snapshot.Config.PayloadCaptureMode, payloadcapture.ModeFull)
+			}
+			return
+		case <-deadline:
+			t.Fatal("settings not confirmed after a RefreshNow signal")
+		}
 	}
 }
