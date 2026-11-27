@@ -23,6 +23,7 @@ import (
 	guardhookruntime "github.com/kontext-security/kontext/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext/internal/guard/stepsafety"
 	"github.com/kontext-security/kontext/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext/internal/hook"
 	"github.com/kontext-security/kontext/internal/installation"
 	"github.com/kontext-security/kontext/internal/instancelock"
 	"github.com/kontext-security/kontext/internal/ledgerping"
@@ -388,6 +389,11 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		snapshot := endpointConfigCache.Current()
 		return snapshot.HookInventoryEnabled() && snapshot.Confirmed
 	}
+	turn := newTurnEnd()
+	observeEvent := func(ctx context.Context, event hook.Event) {
+		compactor.Observe(ctx, event)
+		turn.observe(event)
+	}
 	host, err := runtimehost.Start(ctx, runtimehost.Options{
 		AgentName:          managedconfig.Agent,
 		DBPath:             dbPath,
@@ -418,7 +424,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 		OffersCompaction:       compactor.Offers,
 		CodexProxy:             codexProxyAnswer(compactor),
 		Browser:                browserHandler.Answer,
-		ObserveEvent:           compactor.Observe,
+		ObserveEvent:           observeEvent,
 		HoldFor:                enrolmentHold(started, enrolmentWait(opts.Diagnostic), cedarEnforcement, cedarCache),
 		InterceptEvent:         hookEvidence.intercept,
 		InterceptMarker:        HookVerifyMarker,
@@ -427,6 +433,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 	if err != nil {
 		return err
 	}
+	turn.pending = host.PendingRecords
 	stopDeadline := &stopClock{}
 	defer func() {
 		closeCtx, cancel := stopDeadline.context()
@@ -742,7 +749,7 @@ func RunDaemon(ctx context.Context, opts DaemonOptions) error {
 				return
 			}
 		}
-		streamErr <- runManagedStream(streamCtx, opts, dbPath, startupCloudURL, installationState.InstallationID, inventoryHolder, authorityHolder, hookHolder, enrolment.afterAcceptedPost)
+		streamErr <- runManagedStream(streamCtx, opts, dbPath, startupCloudURL, installationState.InstallationID, inventoryHolder, authorityHolder, hookHolder, enrolment.afterAcceptedPost, turn)
 	}()
 	defer func() {
 		stopPolicyRefresh()
@@ -1197,7 +1204,7 @@ func (s *deviceKeySource) derive(ctx context.Context, cloudURL, token, installat
 	s.resolved = true
 }
 
-func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startupCloudURL, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, hookHolder *hookHolder, afterAcceptedPost func()) error {
+func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startupCloudURL, installationID string, inventoryHolder *agentInventoryHolder, authorityHolder *authorityHolder, hookHolder *hookHolder, afterAcceptedPost func(), turn *turnEnd) error {
 	interval := opts.StreamInterval
 	if interval == 0 {
 		interval = managedstream.DefaultIntervalFromEnv()
@@ -1233,12 +1240,21 @@ func runManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startupCl
 	flush()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	var turnEnded <-chan struct{}
+	if turn != nil {
+		turnEnded = turn.now
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
 			flush()
+		case <-turnEnded:
+			// The turn's last records are written after its hooks are answered.
+			turn.wait(ctx)
+			flush()
+			ticker.Reset(interval)
 		}
 	}
 }
