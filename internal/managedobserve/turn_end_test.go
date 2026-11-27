@@ -1,9 +1,14 @@
 package managedobserve
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -99,10 +104,41 @@ func TestTurnEndWaitIsBounded(t *testing.T) {
 	}
 }
 
-// The upload timer never fires in this test, so a post after the first can
-// only come from the turn ending.
+// turnEndCloud keeps the body of every upload, so a test can tell which
+// upload carried a tool call.
+type turnEndCloud struct {
+	enrolmentCloud
+	mu      sync.Mutex
+	uploads [][]byte
+}
+
+func (c *turnEndCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "authorization-ledger") {
+		body, _ := io.ReadAll(r.Body)
+		c.mu.Lock()
+		c.uploads = append(c.uploads, body)
+		c.mu.Unlock()
+	}
+	c.enrolmentCloud.ServeHTTP(w, r)
+}
+
+// carried reports whether an upload so far names the tool call.
+func (c *turnEndCloud) carried(toolUseID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, body := range c.uploads {
+		if bytes.Contains(body, []byte(toolUseID)) {
+			return true
+		}
+	}
+	return false
+}
+
+// The upload timer never fires in this test, so the turn's tool call can only
+// reach the cloud because the turn ended. A post alone proves nothing: an
+// upload that left the tool call on disk would also be a post.
 func TestTurnEndUploadsWithoutWaitingForTheTick(t *testing.T) {
-	cloud := &enrolmentCloud{alwaysEnrolled: true}
+	cloud := &turnEndCloud{enrolmentCloud: enrolmentCloud{alwaysEnrolled: true}}
 	ctx, cancel := context.WithCancel(context.Background())
 	dir := daemonDir(t)
 	server := httptest.NewTLSServer(cloud)
@@ -138,7 +174,7 @@ func TestTurnEndUploadsWithoutWaitingForTheTick(t *testing.T) {
 	})
 
 	// The daemon uploads once as it starts.
-	waitForPosts(t, cloud)
+	waitForPosts(t, &cloud.enrolmentCloud)
 	time.Sleep(200 * time.Millisecond)
 	afterStart := cloud.posts.Load()
 
@@ -162,12 +198,15 @@ func TestTurnEndUploadsWithoutWaitingForTheTick(t *testing.T) {
 	if got := cloud.posts.Load(); got != afterStart {
 		t.Fatalf("posts = %d after a tool call, want %d: only the timer or a turn end uploads", got, afterStart)
 	}
+	if cloud.carried("turn-end-1") {
+		t.Fatal("the tool call reached the cloud before the turn ended, with the timer an hour away")
+	}
 
 	send(hook.HookStop, "")
 	deadline := time.Now().Add(10 * time.Second)
-	for cloud.posts.Load() == afterStart {
+	for !cloud.carried("turn-end-1") {
 		if time.Now().After(deadline) {
-			t.Fatal("no upload after the turn ended, with the timer an hour away")
+			t.Fatalf("the turn's tool call did not reach the cloud after the turn ended, with the timer an hour away: %d uploads since the start, none with it", cloud.posts.Load()-afterStart)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
