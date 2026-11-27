@@ -585,9 +585,14 @@ type Refresher struct {
 	InstallationID string
 	Interval       time.Duration
 	MaxBackoff     time.Duration
-	Now            func() time.Time
-	Jitter         func(time.Duration) time.Duration
-	OnChanged      func(Snapshot)
+	// RefreshNow, when signalled, runs the next refresh without waiting for
+	// the timer. A new endpoint's first read is refused, because the cloud
+	// only knows an installation once a post is accepted, and the retry would
+	// otherwise wait out the backoff on the default settings.
+	RefreshNow <-chan struct{}
+	Now        func() time.Time
+	Jitter     func(time.Duration) time.Duration
+	OnChanged  func(Snapshot)
 	// OnApplied receives the install token of each refresh the cache took,
 	// a 304 included, so a caller can tell which enrolment the current
 	// settings belong to.
@@ -663,13 +668,25 @@ func (r *Refresher) Run(ctx context.Context) {
 			}
 		}
 		timer := time.NewTimer(r.jitter(delay))
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-r.RefreshNow:
+				// A failed early refresh keeps the timer as it was, so it can't
+				// delay the retry already scheduled or grow the backoff.
+				if err := r.Refresh(ctx); err == nil {
+					timer.Stop()
+					delay = interval
+					timer = time.NewTimer(r.jitter(delay))
+				}
+			case <-timer.C:
+				break wait
 			}
-			return
-		case <-timer.C:
 		}
 	}
 }

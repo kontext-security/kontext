@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext/internal/cedarpolicy"
+	"github.com/kontext-security/kontext/internal/endpointconfig"
 	"github.com/kontext-security/kontext/internal/hermetic"
+	"github.com/kontext-security/kontext/internal/payloadcapture"
 )
 
 const testPolicyState = `{"responseVersion":2,"requestContractVersion":2,"state":"%STATE%"}`
@@ -167,5 +169,78 @@ func TestAcceptedPostRefreshesWhenNoFetchHasWorkedYet(t *testing.T) {
 	case <-now:
 	default:
 		t.Fatal("no refresh after an accepted post with no policy fetched yet")
+	}
+}
+
+// A new endpoint's first settings read is refused, so until a read confirms
+// them the daemon captures on the default and records calls without their
+// input. An accepted post shows the cloud now knows the installation.
+func TestAcceptedPostRefreshesUnconfirmedSettings(t *testing.T) {
+	settingsNow := make(chan struct{}, 1)
+	enrolment := &enrolmentRefresh{
+		cache:    cedarpolicy.NewCache("", time.Hour),
+		settings: endpointconfig.NewCache(filepath.Join(t.TempDir(), "endpoint-config.json")), settingsNow: settingsNow, settingsLeft: maxEnrolmentRefreshes,
+	}
+
+	// A refresh still pending isn't a second one, so it doesn't use up the bound.
+	enrolment.afterAcceptedPost()
+	enrolment.afterAcceptedPost()
+	select {
+	case <-settingsNow:
+	default:
+		t.Fatal("no settings refresh after an accepted post with no settings confirmed yet")
+	}
+	if enrolment.settingsLeft != maxEnrolmentRefreshes-1 {
+		t.Fatalf("settingsLeft = %d after a pending refresh, want %d", enrolment.settingsLeft, maxEnrolmentRefreshes-1)
+	}
+}
+
+func TestAcceptedPostLeavesConfirmedSettingsToTheTimer(t *testing.T) {
+	settings := endpointconfig.NewCache(filepath.Join(t.TempDir(), "endpoint-config.json"))
+	on, off := true, false
+	config := endpointconfig.Config{PayloadCaptureMode: payloadcapture.ModeFull, WorkTypeClassification: &on, ToolOutputCompaction: &off, CodexProxy: &on, HookInventory: &off, HookState: &endpointconfig.UnmanagedHookState}
+	identity, err := endpointconfig.ComputeIdentity(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := endpointconfig.Response{ResponseVersion: endpointconfig.ResponseVersion, Config: config, ConfigIdentity: identity}
+	if err := settings.Apply(endpointconfig.FetchResult{Response: &response, ETag: identity}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	settingsNow := make(chan struct{}, 1)
+	enrolment := &enrolmentRefresh{
+		cache:    cedarpolicy.NewCache("", time.Hour),
+		settings: settings, settingsNow: settingsNow, settingsLeft: maxEnrolmentRefreshes,
+	}
+
+	enrolment.afterAcceptedPost()
+	select {
+	case <-settingsNow:
+		t.Fatal("settings refresh after an accepted post although a read had confirmed them")
+	default:
+	}
+	if enrolment.settingsLeft != maxEnrolmentRefreshes {
+		t.Fatalf("settingsLeft = %d, want %d untouched", enrolment.settingsLeft, maxEnrolmentRefreshes)
+	}
+}
+
+func TestSettingsRefreshesAreBounded(t *testing.T) {
+	settingsNow := make(chan struct{}, 1)
+	enrolment := &enrolmentRefresh{
+		cache:    cedarpolicy.NewCache("", time.Hour),
+		settings: endpointconfig.NewCache(filepath.Join(t.TempDir(), "endpoint-config.json")), settingsNow: settingsNow, settingsLeft: maxEnrolmentRefreshes,
+	}
+
+	refreshes := 0
+	for range 3 * maxEnrolmentRefreshes {
+		enrolment.afterAcceptedPost()
+		select {
+		case <-settingsNow:
+			refreshes++
+		default:
+		}
+	}
+	if refreshes != maxEnrolmentRefreshes {
+		t.Fatalf("refreshes = %d, want the bound of %d for settings that never confirm", refreshes, maxEnrolmentRefreshes)
 	}
 }
