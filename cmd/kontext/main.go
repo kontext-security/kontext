@@ -463,7 +463,16 @@ func (a managedHookAgent) DecodeHookInput(input []byte) (hook.Event, error) {
 	return event, nil
 }
 
+// coworkCloudEntrypoint is what Claude sets as CLAUDE_CODE_ENTRYPOINT for the
+// processes it starts in a Cowork task that runs in Anthropic's cloud.
+const coworkCloudEntrypoint = "remote_cowork"
+
 func isCoworkHookContext(input []byte, event hook.Event) bool {
+	// A Cowork task in the cloud runs in a Linux VM, where no path names
+	// Cowork, so the entrypoint is the only marker a hook has there.
+	if os.Getenv("CLAUDE_CODE_ENTRYPOINT") == coworkCloudEntrypoint {
+		return true
+	}
 	if isCoworkPath(event.CWD) {
 		return true
 	}

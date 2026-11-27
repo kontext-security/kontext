@@ -116,6 +116,7 @@ func TestExpectedHookEventFromArgs(t *testing.T) {
 }
 
 func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "")
 	oldHome := userHomeDir
 	userHomeDir = func() (string, error) { return "/Users/michel", nil }
 	t.Cleanup(func() { userHomeDir = oldHome })
@@ -173,6 +174,7 @@ func TestManagedHookAgentIdentifiesCoworkOnlyInManagedSessionPath(t *testing.T) 
 // Claude Code run there keeps its own MCP configuration; the server labels
 // such sessions at ingest.
 func TestManagedHookAgentCoworkNeedsClaudeAndSessionPath(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "")
 	oldHome := userHomeDir
 	userHomeDir = func() (string, error) { return "/Users/michel", nil }
 	t.Cleanup(func() { userHomeDir = oldHome })
@@ -253,4 +255,41 @@ func Example_newRootCmd() {
 	cmd := newRootCmd()
 	fmt.Println(cmd.Use)
 	// Output: kontext
+}
+
+// A Cowork task in Anthropic's cloud runs in a Linux VM with no Cowork session
+// path, so the entrypoint Claude sets is what tells it from Claude Code.
+func TestManagedHookAgentIdentifiesCoworkCloudByEntrypoint(t *testing.T) {
+	oldHome := userHomeDir
+	userHomeDir = func() (string, error) { return "/root", nil }
+	t.Cleanup(func() { userHomeDir = oldHome })
+	for _, tt := range []struct{ agent, entrypoint, want string }{
+		{"claude", "remote_cowork", "cowork"},
+		{"claude", "", "claude"},
+		{"claude", "cli", "claude"},
+		// Desktop Cowork is recognised by its session path, not by this.
+		{"claude", "local-agent", "claude"},
+		{"claude", "remote_cowork_other", "claude"},
+		// Cowork runs Claude; a Codex event keeps its identity wherever it runs.
+		{"codex", "remote_cowork", "codex"},
+	} {
+		t.Run(tt.agent+"/"+tt.entrypoint, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_ENTRYPOINT", tt.entrypoint)
+			a, ok := agent.Get(tt.agent)
+			if !ok {
+				t.Fatalf("%s agent not registered", tt.agent)
+			}
+			input, err := json.Marshal(map[string]string{"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": "/root"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			event, err := (managedHookAgent{Agent: a}).DecodeHookInput(input)
+			if err != nil {
+				t.Fatalf("DecodeHookInput() error = %v", err)
+			}
+			if event.Agent != tt.want {
+				t.Fatalf("Agent = %q, want %q", event.Agent, tt.want)
+			}
+		})
+	}
 }
