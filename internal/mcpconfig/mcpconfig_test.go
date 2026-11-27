@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -329,5 +331,172 @@ func TestServerForAntigravity(t *testing.T) {
 	}
 	if got, _, _ := r.Server("antigravity", "s", "", "mcp__shadowed__search"); got != "https://global.example/mcp" {
 		t.Errorf("no workspace = %q", got)
+	}
+}
+
+func TestClaudeAccountID(t *testing.T) {
+	const account = "0F8FAD5B-D9CB-469F-A165-70867728950E"
+	for name, tc := range map[string]struct {
+		config string
+		want   string
+	}{
+		"signed in":          {`{"oauthAccount": {"accountUuid": "` + account + `", "emailAddress": "a@example.com"}}`, strings.ToLower(account)},
+		"signed out":         {`{"projects": {}}`, ""},
+		"not an account id":  {`{"oauthAccount": {"accountUuid": "someone@example.com"}}`, ""},
+		"not json":           {`{"oauthAccount": `, ""},
+		"no config file yet": {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			home := t.TempDir()
+			if tc.config != "" {
+				if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(tc.config), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := (&Resolver{Timeout: testLookupTimeout}).ClaudeAccountID(home); got != tc.want {
+				t.Fatalf("ClaudeAccountID() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaudeAccountIDFollowsTheConfigFile(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude.json")
+	write := func(account string, age time.Duration) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(`{"oauthAccount": {"accountUuid": "`+account+`"}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stamp := time.Now().Add(-age)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolver := &Resolver{Timeout: testLookupTimeout}
+	write("0f8fad5b-d9cb-469f-a165-70867728950e", time.Hour)
+	if got := resolver.ClaudeAccountID(home); got != "0f8fad5b-d9cb-469f-a165-70867728950e" {
+		t.Fatalf("first read = %q", got)
+	}
+	// The user signs in to another account while the daemon runs.
+	write("7c9e6679-7425-40de-944b-e07fc1f90ae7", time.Minute)
+	if got := resolver.ClaudeAccountID(home); got != "7c9e6679-7425-40de-944b-e07fc1f90ae7" {
+		t.Fatalf("after the config changed = %q, want the new account", got)
+	}
+}
+
+// stallConfig makes every read of the config at path block until release is
+// called, the way a file on a stalled mount does. started counts the reads
+// that got as far as the file.
+func stallConfig(t *testing.T, path string) (started *atomic.Int64, release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	left := make(chan struct{}, 64)
+	started = &atomic.Int64{}
+	stat := statConfig
+	statConfig = func(name string) (os.FileInfo, error) {
+		if name == path {
+			started.Add(1)
+			<-gate
+			defer func() { left <- struct{}{} }()
+		}
+		return stat(name)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(func() {
+		release()
+		// Every stalled read has left before the real stat is put back.
+		for range started.Load() {
+			<-left
+		}
+		statConfig = stat
+	})
+	return started, release
+}
+
+func writeClaudeAccount(t *testing.T, path, account string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(`{"oauthAccount": {"accountUuid": "`+account+`"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The upload loop asks for the account before every batch. A config on a
+// stalled mount must not hold the batch back, must not make the endpoint look
+// signed out, and must not pile up blocked reads.
+func TestClaudeAccountIDDoesNotWaitForAStalledConfig(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude.json")
+	const account, other = "0f8fad5b-d9cb-469f-a165-70867728950e", "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+	writeClaudeAccount(t, path, account)
+	resolver := &Resolver{Timeout: testLookupTimeout}
+	if got := resolver.ClaudeAccountID(home); got != account {
+		t.Fatalf("before the stall = %q, want %q", got, account)
+	}
+
+	started, release := stallConfig(t, path)
+	resolver.Timeout = 50 * time.Millisecond
+	begin := time.Now()
+	for i := range maxLookups + 4 {
+		if got := resolver.ClaudeAccountID(home); got != account {
+			t.Fatalf("read %d of a stalled config = %q, want the last account read, %q", i+1, got, account)
+		}
+	}
+	if waited := time.Since(begin); waited > 10*time.Second {
+		t.Fatalf("%d reads of a stalled config took %s", maxLookups+4, waited.Round(time.Millisecond))
+	}
+	if got := started.Load(); got != maxLookups {
+		t.Fatalf("%d reads are blocked on the stalled config, want %d", got, maxLookups)
+	}
+
+	// The mount comes back, with another account signed in.
+	writeClaudeAccount(t, path, other)
+	release()
+	resolver.Timeout = testLookupTimeout
+	for deadline := time.Now().Add(10 * time.Second); resolver.ClaudeAccountID(home) != other; {
+		if time.Now().After(deadline) {
+			t.Fatalf("after the stall = %q, want the new account, %q", resolver.ClaudeAccountID(home), other)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// With nothing read before the stall there is no account to report.
+func TestClaudeAccountIDIsEmptyWhenTheFirstReadStalls(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude.json")
+	writeClaudeAccount(t, path, "0f8fad5b-d9cb-469f-a165-70867728950e")
+	stallConfig(t, path)
+	resolver := &Resolver{Timeout: 50 * time.Millisecond}
+	begin := time.Now()
+	if got := resolver.ClaudeAccountID(home); got != "" {
+		t.Fatalf("ClaudeAccountID() = %q, want empty: the config was never read", got)
+	}
+	if waited := time.Since(begin); waited > 10*time.Second {
+		t.Fatalf("the read of a stalled config took %s", waited.Round(time.Millisecond))
+	}
+}
+
+// A signed-out config read after a signed-in one reports no account: the last
+// account is kept only while the config can't be read.
+func TestClaudeAccountIDForgetsAnAccountTheConfigDropped(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude.json")
+	writeClaudeAccount(t, path, "0f8fad5b-d9cb-469f-a165-70867728950e")
+	resolver := &Resolver{Timeout: testLookupTimeout}
+	if got := resolver.ClaudeAccountID(home); got == "" {
+		t.Fatal("no account read from a signed-in config")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolver.ClaudeAccountID(home); got != "" {
+		t.Fatalf("after the config was removed = %q, want empty", got)
 	}
 }
