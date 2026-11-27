@@ -99,6 +99,10 @@ type Options struct {
 	// AuthorityAvailable invalidates the resend cadence after the org switch returns.
 	AuthorityAvailable <-chan struct{}
 	Now                func() time.Time
+	// ClaudeAccountID resolves the claude.ai account of the endpoint's user
+	// per flush, because the user can sign in after the daemon starts. Empty
+	// means unknown and the field is omitted.
+	ClaudeAccountID func() string
 	// DeviceKey resolves the endpoint's stable reconciliation key per flush.
 	// Empty means unknown — the field is omitted, and the hosted side must
 	// read absence as "no key reported", never as "a different device":
@@ -165,6 +169,14 @@ type Device struct {
 	// ledger stays empty either way.
 	HooksPresent     *bool `json:"hooks_present,omitempty"`
 	DisabledAllHooks *bool `json:"disabled_all_hooks,omitempty"`
+	// ClaudeAccountID is the claude.ai account the endpoint's user is signed
+	// in to. A laptop reads it from Claude's own config, and a session Claude
+	// hosts reads it from its environment, where no email is on offer. The
+	// hosted side uses a match between the two to name the user of a hosted
+	// session. Self-reported, like UserEmail: it says who, and proves nothing.
+	// The hosted device schema is strict, so an API that predates the field
+	// refuses every batch that carries it: the API ships first.
+	ClaudeAccountID string `json:"claude_account_id,omitempty"`
 	// DeviceKey is HMAC-SHA256 over the Mac's IOPlatformUUID, keyed with the
 	// organization id (internal/deviceid) — stable when the same Mac
 	// re-enrolls in the same workspace, unlinkable across workspaces, never
@@ -596,6 +608,10 @@ func newPayload(
 	if opts.DeviceKey != nil {
 		deviceKey = strings.TrimSpace(opts.DeviceKey())
 	}
+	claudeAccountID := ""
+	if opts.ClaudeAccountID != nil {
+		claudeAccountID = strings.TrimSpace(opts.ClaudeAccountID())
+	}
 	var agents *[]agentinventory.Agent
 	var agentsReportedAt string
 	if opts.AgentsFact != nil {
@@ -607,7 +623,7 @@ func newPayload(
 			agents, agentsReportedAt = &list, fact.ReportedAt
 		}
 	}
-	if agents != nil || label != "" || deploymentVersion != "" || cliVersion != "" || userEmail != "" || hooksPresent != nil || deviceKey != "" {
+	if agents != nil || label != "" || deploymentVersion != "" || cliVersion != "" || userEmail != "" || hooksPresent != nil || deviceKey != "" || claudeAccountID != "" {
 		payload.Device = &Device{
 			Label:             label,
 			DeploymentVersion: deploymentVersion,
@@ -616,6 +632,7 @@ func newPayload(
 			HooksPresent:      hooksPresent,
 			DisabledAllHooks:  disabledAllHooks,
 			DeviceKey:         deviceKey,
+			ClaudeAccountID:   claudeAccountID,
 			Agents:            agents,
 			AgentsReportedAt:  agentsReportedAt,
 		}

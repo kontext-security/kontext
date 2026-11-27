@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/kontext-security/kontext/internal/ledgerping"
 	"github.com/kontext-security/kontext/internal/managedconfig"
 	"github.com/kontext-security/kontext/internal/managedstream"
+	"github.com/kontext-security/kontext/internal/mcpconfig"
 	"github.com/kontext-security/kontext/internal/payloadcapture"
 	"github.com/kontext-security/kontext/internal/privacyfolder"
 	"github.com/kontext-security/kontext/internal/runtimehost"
@@ -1098,6 +1100,36 @@ func loadManagedConfig(ctx context.Context) (managedconfig.LoadedConfig, string,
 // hatch for a backend that rejects the field before its ingest side deploys.
 const envNoDeviceKey = "KONTEXT_NO_DEVICE_KEY"
 
+// envNoClaudeAccount switches off reporting the claude.ai account id.
+const envNoClaudeAccount = "KONTEXT_NO_CLAUDE_ACCOUNT"
+
+// envClaudeAccount is set by Claude in a session it hosts, such as a Cowork
+// cloud task. Such a session has no config file that names its user.
+const envClaudeAccount = "CLAUDE_CODE_ACCOUNT_UUID"
+
+var claudeAccountPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// claudeConfig caches Claude's config between flushes and reads it again
+// only when the file changes.
+var claudeConfig = &mcpconfig.Resolver{}
+
+// claudeAccountID is the claude.ai account this endpoint's user is signed in
+// to, or "" when it cannot be told. A hosted session says so in its
+// environment and a laptop in Claude's config.
+func claudeAccountID() string {
+	if strings.TrimSpace(os.Getenv(envNoClaudeAccount)) != "" {
+		return ""
+	}
+	if id := strings.ToLower(strings.TrimSpace(os.Getenv(envClaudeAccount))); claudeAccountPattern.MatchString(id) {
+		return id
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return claudeConfig.ClaudeAccountID(home)
+}
+
 // deviceKeyPingTimeout bounds the workspace ping inside a flush. The flush
 // interval is ~10s; a hung ping must not eat the whole cycle.
 const deviceKeyPingTimeout = 10 * time.Second
@@ -1265,6 +1297,7 @@ func flushManagedStream(ctx context.Context, opts DaemonOptions, dbPath, startup
 		InstallToken:                installToken,
 		DeviceLabel:                 loadedConfig.Config.Device.Label,
 		UserEmail:                   loadedConfig.Config.Device.UserEmail,
+		ClaudeAccountID:             claudeAccountID,
 		DeploymentVersion:           deploymentVersionWithFallback(opts.FallbackDeploymentVersion),
 		CLIVersion:                  opts.BinaryVersion,
 		HooksFact:                   func() (managedstream.HooksFact, bool) { return managedObserveHooksFact(loadedConfig.Scope) },

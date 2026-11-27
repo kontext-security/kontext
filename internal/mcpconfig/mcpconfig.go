@@ -413,6 +413,19 @@ func claudeConfigPaths(home string) (configDir, userConfig string) {
 	return filepath.Join(home, ".claude"), filepath.Join(home, ".claude.json")
 }
 
+// ClaudeAccountID is the claude.ai account the Claude Code CLI under home is
+// signed in to, lowercased, or "" when its config names none. Claude files a
+// session it hosts under the same id, so it ties this endpoint to the
+// sessions its user runs elsewhere.
+func (r *Resolver) ClaudeAccountID(home string) string {
+	_, userConfig := claudeConfigPaths(home)
+	root, _ := load(r, userConfig, readers.Claude)
+	if id := root.OAuthAccount.AccountUUID; uuidPattern.MatchString(id) {
+		return strings.ToLower(id)
+	}
+	return ""
+}
+
 // claudeAIConnector resolves a claude.ai connector the Claude Code CLI
 // reports as claude_ai_<Name>. The CLI keeps no connector URLs on disk, but
 // Claude Desktop records the organization's connectors in every session

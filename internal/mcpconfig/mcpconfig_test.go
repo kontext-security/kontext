@@ -331,3 +331,56 @@ func TestServerForAntigravity(t *testing.T) {
 		t.Errorf("no workspace = %q", got)
 	}
 }
+
+func TestClaudeAccountID(t *testing.T) {
+	const account = "0F8FAD5B-D9CB-469F-A165-70867728950E"
+	for name, tc := range map[string]struct {
+		config string
+		want   string
+	}{
+		"signed in":          {`{"oauthAccount": {"accountUuid": "` + account + `", "emailAddress": "a@example.com"}}`, strings.ToLower(account)},
+		"signed out":         {`{"projects": {}}`, ""},
+		"not an account id":  {`{"oauthAccount": {"accountUuid": "someone@example.com"}}`, ""},
+		"not json":           {`{"oauthAccount": `, ""},
+		"no config file yet": {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			home := t.TempDir()
+			if tc.config != "" {
+				if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(tc.config), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := (&Resolver{}).ClaudeAccountID(home); got != tc.want {
+				t.Fatalf("ClaudeAccountID() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaudeAccountIDFollowsTheConfigFile(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude.json")
+	write := func(account string, age time.Duration) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(`{"oauthAccount": {"accountUuid": "`+account+`"}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stamp := time.Now().Add(-age)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolver := &Resolver{}
+	write("0f8fad5b-d9cb-469f-a165-70867728950e", time.Hour)
+	if got := resolver.ClaudeAccountID(home); got != "0f8fad5b-d9cb-469f-a165-70867728950e" {
+		t.Fatalf("first read = %q", got)
+	}
+	// The user signs in to another account while the daemon runs.
+	write("7c9e6679-7425-40de-944b-e07fc1f90ae7", time.Minute)
+	if got := resolver.ClaudeAccountID(home); got != "7c9e6679-7425-40de-944b-e07fc1f90ae7" {
+		t.Fatalf("after the config changed = %q, want the new account", got)
+	}
+}

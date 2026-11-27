@@ -577,6 +577,45 @@ func TestFlushReportsDeviceKeyPerFlush(t *testing.T) {
 	}
 }
 
+func TestFlushReportsClaudeAccountPerFlush(t *testing.T) {
+	_, dbPath := testStore(t)
+
+	var got Payload
+	server := capturePayloadServer(t, &got)
+	t.Cleanup(server.Close)
+
+	// Starts unknown, as on a laptop whose user has not signed in to Claude
+	// yet. A later flush picks the account up without a daemon restart.
+	account := ""
+	flushOpts := func() Options {
+		return Options{
+			DBPath:          dbPath,
+			StatePath:       filepath.Join(t.TempDir(), "stream-state.json"),
+			CloudURL:        server.URL,
+			InstallationID:  "ins_0123456789abcdefghijklmnopqrstuv",
+			InstallToken:    "test-install-token",
+			ClaudeAccountID: func() string { return account },
+			HTTPClient:      server.Client(),
+		}
+	}
+
+	if err := Flush(context.Background(), flushOpts()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got.Device != nil {
+		t.Fatalf("device = %+v, want omitted while the account is unknown", got.Device)
+	}
+
+	account = " 0f8fad5b-d9cb-469f-a165-70867728950e "
+	got = Payload{}
+	if err := Flush(context.Background(), flushOpts()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got.Device == nil || got.Device.ClaudeAccountID != "0f8fad5b-d9cb-469f-a165-70867728950e" {
+		t.Fatalf("device = %+v, want the trimmed claude_account_id on the heartbeat", got.Device)
+	}
+}
+
 func TestFlushDoesNotAdvanceCursorWhenHostedBackendFails(t *testing.T) {
 	store, dbPath := testStore(t)
 	saveTestDecision(t, store, "session-1", "toolu_1")
