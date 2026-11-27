@@ -954,3 +954,108 @@ func TestRefreshNowReadsAheadOfTheBackoff(t *testing.T) {
 		}
 	}
 }
+
+// An early read that fails must leave the retry already scheduled where it
+// was. Three signals arrive late in the backoff and each read is refused. The
+// timer is not replaced, the retry still fires when it was due, and the
+// backoff after it has grown by one step, not by one per signal.
+func TestAFailedRefreshNowKeepsTheScheduledRetry(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":"installation_not_found"}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		interval = time.Hour
+		// How long the first retry really waits. Long enough to send three
+		// signals late in it and still tell "on time" from "pushed back".
+		retryAfter = 2 * time.Second
+		signals    = 3
+	)
+	// Every timer the refresher starts asks Jitter for its delay, so the
+	// delays seen here are the whole schedule.
+	delays := make(chan time.Duration, 16)
+	timers := 0
+	now := make(chan struct{})
+	refresher := Refresher{
+		Client:         client,
+		Cache:          NewCache(""),
+		TokenSource:    func(context.Context) (string, error) { return "token", nil },
+		InstallationID: testInstallationID,
+		Interval:       interval,
+		MaxBackoff:     64 * interval,
+		RefreshNow:     now,
+		Jitter: func(delay time.Duration) time.Duration {
+			delays <- delay
+			timers++
+			if timers == 1 {
+				return retryAfter
+			}
+			return time.Hour
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		refresher.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	var scheduled time.Time
+	select {
+	case delay := <-delays:
+		scheduled = time.Now()
+		if delay != 2*interval {
+			t.Fatalf("backoff after the first refused read = %s, want %s", delay, 2*interval)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no retry scheduled after the first refused read")
+	}
+
+	time.Sleep(time.Until(scheduled.Add(retryAfter * 6 / 10)))
+	for i := range signals {
+		select {
+		case now <- struct{}{}:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("signal %d was not taken", i+1)
+		}
+		want := int64(2 + i)
+		for deadline := time.Now().Add(10 * time.Second); requests.Load() < want; {
+			if time.Now().After(deadline) {
+				t.Fatalf("signal %d caused no read: %d requests, want %d", i+1, requests.Load(), want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	select {
+	case delay := <-delays:
+		t.Fatalf("a refused early read started a new timer with backoff %s", delay)
+	default:
+	}
+
+	select {
+	case delay := <-delays:
+		if waited, limit := time.Since(scheduled), retryAfter*3/2; waited >= limit {
+			t.Fatalf("the scheduled retry came after %s, want about %s: an early read pushed it back", waited.Round(10*time.Millisecond), retryAfter)
+		}
+		if delay != 4*interval {
+			t.Fatalf("backoff after the scheduled retry = %s, want %s: the early reads grew it", delay, 4*interval)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the scheduled retry never ran")
+	}
+	if got, want := requests.Load(), int64(1+signals+1); got != want {
+		t.Fatalf("requests = %d, want %d: the first read, %d early reads and the scheduled retry", got, want, signals)
+	}
+}
