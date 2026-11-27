@@ -1,5 +1,43 @@
 # Changelog
 
+## [1.25.0](https://github.com/kontext-security/kontext/compare/v1.24.1...v1.25.0) (2026-11-27)
+
+
+### Features
+
+* **agentauthority:** honor HTTP hook allowlists from every settings file ([#803](https://github.com/kontext-security/kontext/issues/803)) ([341a6d1](https://github.com/kontext-security/kontext/commit/341a6d14e978da1742ab444e4f78f3d05cfb00b4))
+* **agentauthority:** inventory hooks that skills and subagents declare ([#806](https://github.com/kontext-security/kontext/issues/806)) ([c277e6b](https://github.com/kontext-security/kontext/commit/c277e6bf1a0acc2457ce908a730cd31fe78f7687))
+* **agentauthority:** scan every Claude Code hook and whether it can run ([#797](https://github.com/kontext-security/kontext/issues/797)) ([da468f3](https://github.com/kontext-security/kontext/commit/da468f32252a4e8599617a4553d0f1e578904525))
+* **browser:** accept the Chrome Web Store extension ID ([#812](https://github.com/kontext-security/kontext/issues/812)) ([1f0aa0e](https://github.com/kontext-security/kontext/commit/1f0aa0e6e820c7341208e0b743790bb8bb86dc42))
+* **browser:** event contract v1 for the browser extension ([#793](https://github.com/kontext-security/kontext/issues/793)) ([d3fe859](https://github.com/kontext-security/kontext/commit/d3fe859c49a80d9c9a02894a098e15aebfaff7f1))
+* **browser:** kontext browser-host, the extension's native messaging host ([#794](https://github.com/kontext-security/kontext/issues/794)) ([5242d9e](https://github.com/kontext-security/kontext/commit/5242d9e7faed5237712d69482ee2463f25b2b00b))
+* **browser:** the daemon keeps the extension's records and sends them to the cloud ([#795](https://github.com/kontext-security/kontext/issues/795)) ([db7a751](https://github.com/kontext-security/kontext/commit/db7a7518a60a0042c85e9e69f6a2c970536bbee0))
+* **compaction:** report partial read-backs for file Reads ([#792](https://github.com/kontext-security/kontext/issues/792)) ([93921aa](https://github.com/kontext-security/kontext/commit/93921aae125382ed922b1c2e420e7c86476db262))
+* **endpointconfig:** negotiate response version 6 and read the hook inventory switch ([#796](https://github.com/kontext-security/kontext/issues/796)) ([69b69b2](https://github.com/kontext-security/kontext/commit/69b69b26c8575b618b8b5737d9d85a0f9f0f7367))
+* **endpointconfig:** read the desired hook state from config v7 ([#813](https://github.com/kontext-security/kontext/issues/813)) ([1faae1b](https://github.com/kontext-security/kontext/commit/1faae1b17d6995a58294a0e1e3b21a4cb7341103))
+* **managedobserve:** record hook runtime evidence and add kontext hooks verify ([#805](https://github.com/kontext-security/kontext/issues/805)) ([a427d05](https://github.com/kontext-security/kontext/commit/a427d0523cb2b1aa361ccba6d09406818ba54769))
+* **managedobserve:** report hook inventory while endpoint config turns it on ([#798](https://github.com/kontext-security/kontext/issues/798)) ([e0d7735](https://github.com/kontext-security/kontext/commit/e0d77350ebc15768e20758397e047a7c7f76dcf9))
+* **managedobserve:** rescan hooks within seconds of a config change ([#807](https://github.com/kontext-security/kontext/issues/807)) ([04f82b1](https://github.com/kontext-security/kontext/commit/04f82b10721dfb3788c11146394437ec8d89f0df))
+* **managedobserve:** upload when a turn ends ([#818](https://github.com/kontext-security/kontext/issues/818)) ([fac34eb](https://github.com/kontext-security/kontext/commit/fac34ebbd43f117fac85450989d30c35f4245387))
+* **managedstream:** detect hook changes between scans ([#804](https://github.com/kontext-security/kontext/issues/804)) ([e09a4b5](https://github.com/kontext-security/kontext/commit/e09a4b58c313181b907d2d6163bfaa263f1d85f2))
+* **managedstream:** report the Claude account of the endpoint's user ([#819](https://github.com/kontext-security/kontext/issues/819)) ([bd177b8](https://github.com/kontext-security/kontext/commit/bd177b87eba8ee6e3553f39604d9ead6753999b1))
+* **redaction:** read client passwords with a shell lexer (ENG-1107) ([#802](https://github.com/kontext-security/kontext/issues/802)) ([1d1b000](https://github.com/kontext-security/kontext/commit/1d1b000024abae0d441470879ca2b5ec90d0813d))
+
+
+### Bug Fixes
+
+* **agentauthority:** read hook token shapes from the shared ruleset ([#799](https://github.com/kontext-security/kontext/issues/799)) ([9a72e18](https://github.com/kontext-security/kontext/commit/9a72e18cf0e54d36f9fdec76bd1514a52618c468))
+* **agent:** record Cowork cloud tasks as Cowork ([#817](https://github.com/kontext-security/kontext/issues/817)) ([f1ff654](https://github.com/kontext-security/kontext/commit/f1ff6548288a0aa71dc89c40b530795eef9038fd))
+* **antigravitytools:** strip the -xhigh effort suffix from model ids ([#815](https://github.com/kontext-security/kontext/issues/815)) ([176f236](https://github.com/kontext-security/kontext/commit/176f23601f5a40d628a7f4ee64734a94a152c499))
+* **browser:** scope the extension's records to the enrollment and tighten the contract ([#808](https://github.com/kontext-security/kontext/issues/808)) ([3dba102](https://github.com/kontext-security/kontext/commit/3dba1025e016f7f928a7f9bc0baa5e115af49ced))
+* **configwatch:** refuse links at every watch and rescan after new watches ([#811](https://github.com/kontext-security/kontext/issues/811)) ([00d4af7](https://github.com/kontext-security/kontext/commit/00d4af77e8255f3388b6c7f54a2777d04a524f98))
+* **doctor:** include the unsupported-mode warning in doctor --json ([#790](https://github.com/kontext-security/kontext/issues/790)) ([a0c3114](https://github.com/kontext-security/kontext/commit/a0c3114c5a58d1dbba502f52942cd17616b662a4))
+* **doctor:** one process liveness check on Windows, for doctor and the profile claim ([#791](https://github.com/kontext-security/kontext/issues/791)) ([65c61dd](https://github.com/kontext-security/kontext/commit/65c61dd400e03b8ea7cd5dc8893b1beb251468b9))
+* **endpointconfig:** read the settings again after the first accepted post ([#816](https://github.com/kontext-security/kontext/issues/816)) ([4df656f](https://github.com/kontext-security/kontext/commit/4df656f23ff03fd97460b7d297069ce01a1c8609))
+* **guard:** record the same provider every time for a command that names two ([#789](https://github.com/kontext-security/kontext/issues/789)) ([488867e](https://github.com/kontext-security/kontext/commit/488867e86aa750ff9722fab8b021c4176d933a74))
+* **runtimehost:** make no session folder for a host with a named socket ([#785](https://github.com/kontext-security/kontext/issues/785)) ([1a02dc0](https://github.com/kontext-security/kontext/commit/1a02dc023fdc2d2af51d62d8a408aeb0d913ee50))
+* **setup:** catch a dangling Codex hooks link before setup writes anything ([#788](https://github.com/kontext-security/kontext/issues/788)) ([73463b2](https://github.com/kontext-security/kontext/commit/73463b21c2f84fe801b0fb5b64afcf71d192b709))
+
 ## [1.24.1](https://github.com/kontext-security/kontext/compare/v1.24.0...v1.24.1) (2026-11-14)
 
 
