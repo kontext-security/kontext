@@ -92,6 +92,8 @@ type Resolver struct {
 	scan    func() (agentauthority.Report, bool)
 	once    sync.Once
 	lookups chan struct{}
+	// account is the last account read, and the config it was read from.
+	account struct{ config, id string }
 }
 
 type cachedFile struct {
@@ -121,6 +123,22 @@ func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name str
 	if !strings.HasPrefix(toolName, "mcp__") {
 		return "", "", false
 	}
+	type found struct {
+		url, name string
+		cached    bool
+	}
+	f, _ := bounded(r, func() found {
+		url, name, cached := r.lookup(agent, sessionID, cwd, toolName)
+		return found{url, name, cached}
+	})
+	return f.url, f.name, f.cached
+}
+
+// bounded runs read on a worker and waits for it up to the resolver's
+// timeout. done is false when the read did not finish in time or no worker
+// was free. Such a read may stay blocked on a stalled file, and at most
+// maxLookups of them exist at once.
+func bounded[T any](r *Resolver, read func() T) (value T, done bool) {
 	r.once.Do(func() { r.lookups = make(chan struct{}, maxLookups) })
 	timeout := r.Timeout
 	if timeout <= 0 {
@@ -131,23 +149,18 @@ func (r *Resolver) Server(agent, sessionID, cwd, toolName string) (url, name str
 	select {
 	case r.lookups <- struct{}{}:
 	case <-timer.C:
-		return "", "", false
+		return value, false
 	}
-	type found struct {
-		url, name string
-		cached    bool
-	}
-	result := make(chan found, 1)
+	result := make(chan T, 1)
 	go func() {
 		defer func() { <-r.lookups }()
-		url, name, cached := r.lookup(agent, sessionID, cwd, toolName)
-		result <- found{url, name, cached}
+		result <- read()
 	}()
 	select {
-	case f := <-result:
-		return f.url, f.name, f.cached
+	case value = <-result:
+		return value, true
 	case <-timer.C:
-		return "", "", false
+		return value, false
 	}
 }
 
@@ -417,13 +430,33 @@ func claudeConfigPaths(home string) (configDir, userConfig string) {
 // signed in to, lowercased, or "" when its config names none. Claude files a
 // session it hosts under the same id, so it ties this endpoint to the
 // sessions its user runs elsewhere.
+//
+// The upload loop calls this before every batch, so the read is bounded like
+// a lookup: a config on a stalled mount can't hold a batch back. A read that
+// does not finish in time answers with the last account read from the same
+// config, because a config that can't be read says nothing about who is
+// signed in, and an endpoint that stopped reporting its account would unname
+// its user's hosted sessions.
 func (r *Resolver) ClaudeAccountID(home string) string {
 	_, userConfig := claudeConfigPaths(home)
-	root, _ := load(r, userConfig, readers.Claude)
-	if id := root.OAuthAccount.AccountUUID; uuidPattern.MatchString(id) {
-		return strings.ToLower(id)
+	bounded(r, func() struct{} {
+		root, _ := load(r, userConfig, readers.Claude)
+		id := ""
+		if uuidPattern.MatchString(root.OAuthAccount.AccountUUID) {
+			id = strings.ToLower(root.OAuthAccount.AccountUUID)
+		}
+		// Stored by the read itself, so one that finishes late still counts.
+		r.mu.Lock()
+		r.account.config, r.account.id = userConfig, id
+		r.mu.Unlock()
+		return struct{}{}
+	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.account.config != userConfig {
+		return ""
 	}
-	return ""
+	return r.account.id
 }
 
 // claudeAIConnector resolves a claude.ai connector the Claude Code CLI
@@ -728,6 +761,9 @@ func normalize(name string) string {
 	}, name)
 }
 
+// statConfig is os.Stat. A test replaces it to stall the read of one config.
+var statConfig = os.Stat
+
 // load reads and parses path through the cache. Missing, unreadable,
 // oversized and malformed files yield the zero value: a config the daemon
 // cannot read leaves the server unidentified, never fails the hook.
@@ -742,7 +778,7 @@ func loadHead[T any](r *Resolver, path string, limit int64, parse func([]byte) (
 		return zero, false
 	}
 	key := cacheKey[T](path, limit)
-	info, err := os.Stat(path)
+	info, err := statConfig(path)
 	r.mu.Lock()
 	if r.cache == nil {
 		r.cache = map[string]cachedFile{}

@@ -4,7 +4,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+// patientClaudeConfig lifts the read's time limit, so a slow runner can't
+// turn a test of what the read finds into a timing test.
+func patientClaudeConfig(t *testing.T) {
+	t.Helper()
+	timeout := claudeConfig.Timeout
+	claudeConfig.Timeout = 30 * time.Second
+	t.Cleanup(func() { claudeConfig.Timeout = timeout })
+}
 
 func TestClaudeAccountID(t *testing.T) {
 	const fromConfig = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -20,6 +30,7 @@ func TestClaudeAccountID(t *testing.T) {
 		"the switch turns reporting off":          {session: fromSession, off: "1", want: ""},
 	} {
 		t.Run(name, func(t *testing.T) {
+			patientClaudeConfig(t)
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
@@ -38,6 +49,7 @@ func TestClaudeAccountID(t *testing.T) {
 }
 
 func TestClaudeAccountIDIsEmptyInAHostedSessionWithoutOne(t *testing.T) {
+	patientClaudeConfig(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
